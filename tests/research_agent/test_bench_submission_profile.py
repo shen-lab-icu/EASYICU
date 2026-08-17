@@ -535,6 +535,27 @@ def test_e1_progressive_profile_is_public_and_rejects_strategy_override(
     assert config.planner_strategy == "progressive_v2"
 
 
+def test_e1_20260817_profiles_additively_bind_corrected_sofa2_dictionaries() -> None:
+    from easyicu.research_agent import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17 as public_profile,
+        E1_REVIEWED_DEMO_2026_08_17 as reviewed_profile,
+    )
+    from easyicu.research_agent.concept_dict_audit import (
+        compute_concept_dict_fingerprint,
+    )
+
+    fingerprint = compute_concept_dict_fingerprint()
+
+    assert public_profile.ref == "npj_dm_e1_canary_dev/20260817"
+    assert public_profile.planner_only is True
+    assert public_profile.planner_strategy == "progressive_v2"
+    assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260817"
+    assert reviewed_profile.planner_only is False
+    for profile in (public_profile, reviewed_profile):
+        assert profile.expected_concept_dict_sha == fingerprint.concept_dict_sha
+        assert profile.expected_sofa2_dict_sha == fingerprint.sofa2_dict_sha
+
+
 def test_e1_reviewed_demo_profile_executes_without_paper_authority() -> None:
     from easyicu.research_agent.orchestration.profiles import (
         E1_PLANNER_CANARY_2026_08_14,

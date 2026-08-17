@@ -370,6 +370,29 @@ E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16 = SubmissionProfile(
     planner_strategy="progressive_v2",
 )
 
+E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17 = SubmissionProfile(
+    name="npj_dm_e1_canary_dev",
+    version="20260817",
+    locked_at="2026-08-17T05:31:06Z",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Additive re-lock after the ordinal SOFA-2 motor-response and sedated-GCS
+    # metadata corrections. Preserve the 20260816 profile for exact replay;
+    # this development-only profile binds the corrected dictionary bytes.
+    expected_concept_dict_sha="68b75da37d70c18ff35a11eb7efb9d39a6b6589e933bdf6a89a34469d4493107",
+    expected_sofa2_dict_sha="71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=True,
+    planner_strategy="progressive_v2",
+)
+
 E1_REVIEWED_DEMO_2026_08_15 = SubmissionProfile(
     name="npj_dm_e1_demo_dev",
     version="20260815",
@@ -384,6 +407,31 @@ E1_REVIEWED_DEMO_2026_08_15 = SubmissionProfile(
     # and the public Web route has no selector for it.
     expected_concept_dict_sha="22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a",
     expected_sofa2_dict_sha="998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8",
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=False,
+)
+
+E1_REVIEWED_DEMO_2026_08_17 = SubmissionProfile(
+    name="npj_dm_e1_demo_dev",
+    version="20260817",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.locked_at,
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Execution companion to the 20260817 Planner canary. It remains
+    # development-only and cannot acquire publication authority.
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.expected_sofa2_dict_sha
+    ),
     enable_memory=False,
     enable_experience_bank=False,
     enable_deterministic_code_fallback=False,
@@ -495,7 +543,11 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16.ref: (
         E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16
     ),
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17
+    ),
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
+    E1_REVIEWED_DEMO_2026_08_17.ref: E1_REVIEWED_DEMO_2026_08_17,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
@@ -658,7 +710,9 @@ __all__ = [
     "NPJ_DM_2026_07_19",
     "E1_PLANNER_CANARY_2026_08_14",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17",
     "E1_REVIEWED_DEMO_2026_08_15",
+    "E1_REVIEWED_DEMO_2026_08_17",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
