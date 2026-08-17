@@ -308,40 +308,10 @@ def coerce_cohort_definition(value: Any) -> Optional[CohortDefinition]:
     raise CohortSchemaError(f"unsupported cohort definition type: {type(value)!r}")
 
 
-def _context_cohort_concept_ids(context: Any) -> tuple[str, ...]:
-    values: list[str] = []
-    for variable in getattr(context, "variables", ()) or ():
-        values.extend(
-            str(value).strip()
-            for value in (
-                getattr(variable, "name", None),
-                getattr(variable, "source_concept", None),
-                *(getattr(variable, "derived_from_concepts", ()) or ()),
-            )
-            if str(value or "").strip()
-        )
-    return tuple(dict.fromkeys(values))
-
-
-def ensure_cohort_definition(plan: Any, *, context: Any | None = None) -> Any:
-    """Normalize a plan cohort against its sealed run concept authority.
-
-    A typed plan can legitimately name a physical column materialized only for
-    this run. Re-validating it against the packaged dictionary alone would
-    reject the exact same cohort that Planner compilation already accepted.
-    The optional context provides a temporary, non-leaking registry scope; a
-    caller without run authority retains the original dictionary-only gate.
-    """
-
-    def normalized() -> CohortDefinition:
-        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-        return definition or CohortDefinition(name="primary")
-
-    if context is None:
-        definition = normalized()
-    else:
-        with cohort_concept_id_scope(_context_cohort_concept_ids(context)):
-            definition = normalized()
+def ensure_cohort_definition(plan: Any) -> Any:
+    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+    if definition is None:
+        definition = CohortDefinition(name="primary")
     return plan.model_copy(update={"cohort": definition})
 
 

@@ -206,56 +206,6 @@ def test_cohort_concept_id_scope_restores_even_when_the_block_raises() -> None:
         cohort_contract.clear_cohort_concept_ids()
 
 
-def test_ensure_cohort_definition_revalidates_against_run_context_without_leak() -> (
-    None
-):
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        CohortDescriptor,
-        ConceptDescriptor,
-        ResearchContext,
-    )
-
-    concept_id = "run_specific_materialized_column"
-    with cohort_contract.cohort_concept_id_scope([concept_id]):
-        definition = cohort_contract.CohortDefinition(
-            name="sealed",
-            selection_mode="predicate_filtered",
-            inclusion=(
-                cohort_contract.ConceptPredicate(
-                    concept_id=concept_id,
-                    time_window=cohort_contract.TimeWindow("icu_admit", 0, 24),
-                    aggregation="max",
-                    op=">=",
-                    value=1,
-                ),
-            ),
-        )
-    plan = AnalysisPlan.model_construct(
-        research_question="Use the sealed run-specific column.",
-        steps=[],
-        cohort=definition,
-    )
-    context = ResearchContext(
-        research_question=plan.research_question,
-        cohort=CohortDescriptor(
-            cohort_name="sealed",
-            database="synthetic",
-            n_stays=2,
-            id_columns=["stay_id"],
-        ),
-        variables=[ConceptDescriptor(name=concept_id, dtype="int64")],
-    )
-
-    with pytest.raises(cohort_contract.CohortSchemaError, match="unknown concept_id"):
-        cohort_contract.ensure_cohort_definition(plan)
-
-    revised = cohort_contract.ensure_cohort_definition(plan, context=context)
-
-    assert revised.cohort == definition
-    assert not cohort_contract.concept_id_exists(concept_id)
-
-
 def test_cohort_contract_resolves_packaged_concept_dictionary() -> None:
     assert cohort_contract._CONCEPT_DICT_PATH.is_file()
     assert cohort_contract.known_concept_ids()
@@ -449,3 +399,37 @@ def test_the_batch_runner_scopes_its_cohort_columns_rather_than_registering_them
         "the batch runner must not register cohort columns permanently; "
         "use cohort_concept_id_scope so each case validates against its own cohort"
     )
+
+
+def test_pipeline_scopes_run_concepts_while_revalidating_the_final_cohort() -> None:
+    import ast
+    from pathlib import Path
+
+    source = Path("src/easyicu/research_agent/pipeline.py").read_text()
+    tree = ast.parse(source)
+    pipeline = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ResearchAgentPipeline"
+    )
+    method = next(
+        node
+        for node in pipeline.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_validate_and_persist_plan"
+    )
+    scoped_calls = [
+        called.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.With)
+        and any(
+            isinstance(item.context_expr, ast.Call)
+            and isinstance(item.context_expr.func, ast.Name)
+            and item.context_expr.func.id == "cohort_concept_id_scope"
+            for item in node.items
+        )
+        for called in ast.walk(node)
+        if isinstance(called, ast.Call) and isinstance(called.func, ast.Name)
+    ]
+
+    assert "ensure_cohort_definition" in scoped_calls
