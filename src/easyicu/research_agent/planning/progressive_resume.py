@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
+from pydantic import ValidationError
+
 from ..canonical_json import canonical_sha256
 from ..schema import AnalysisPlan, ResearchContext
 from .progressive_compiler import compile_progressive_plan
@@ -373,11 +375,35 @@ def compile_progressive_prefix(
     """Compile one candidate step and return a new immutable prefix state."""
 
     candidate_steps = (*state.steps, materialization.step)
-    skeleton = assemble_progressive_skeleton(
-        outline=outline,
-        foundation=foundation,
-        steps=candidate_steps,
-    )
+    try:
+        skeleton = assemble_progressive_skeleton(
+            outline=outline,
+            foundation=foundation,
+            steps=candidate_steps,
+        )
+    except ValidationError as exc:
+        findings: list[dict[str, str]] = []
+        for issue in exc.errors(
+            include_context=False,
+            include_input=False,
+            include_url=False,
+        )[:20]:
+            location = ".".join(str(part) for part in issue.get("loc", ()))
+            findings.append(
+                {
+                    "path": location or "steps",
+                    "type": str(issue.get("type") or "value_error")[:80],
+                    "message": str(issue.get("msg") or "invalid prefix")[:500],
+                }
+            )
+        raise ProgressivePlanCompileError(
+            "progressive_prefix_contract_invalid",
+            "current-step materialization violates the typed prefix contract",
+            step_id=materialization.step.step_id,
+            step_index=len(state.steps),
+            path=(findings[0]["path"] if findings else "steps"),
+            findings=findings,
+        ) from exc
     plan, receipt = compile_progressive_plan(
         skeleton=skeleton,
         context=context,

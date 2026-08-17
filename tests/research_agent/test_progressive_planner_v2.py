@@ -43,6 +43,7 @@ from easyicu.research_agent.planning.progressive_artifacts import (
     persist_progressive_planning_authority,
 )
 from easyicu.research_agent.planning.progressive_contract import (
+    ProgressiveFoundationMaterialization,
     ProgressiveOutlineStep,
     ProgressivePlanCompileError,
     ProgressivePlanOutline,
@@ -1955,6 +1956,49 @@ def test_agent_repairs_identical_distribution_contrast_locally() -> None:
     assert agent.last_prompt_metrics["compile_revision_count"] == 1
     assert agent.last_prompt_metrics["step_materialization_count"] == 7
     assert agent.last_prompt_metrics["full_revision_count"] == 0
+
+
+def test_prefix_pydantic_failure_becomes_attributable_compiler_finding() -> None:
+    payload = _payload()
+    outline = ProgressivePlanOutline.model_validate(_outline_payload(payload))
+    foundation = ProgressiveFoundationMaterialization.model_validate(
+        _foundation_payload(payload)
+    ).foundation
+    materializations = [
+        ProgressiveStepMaterialization.model_validate(item)
+        for item in _materialization_payloads(payload)
+    ]
+    earlier_primary = materializations[0].step.model_copy(
+        update={"planned_analysis_role": "primary"}
+    )
+    current_primary = materializations[2].model_copy(
+        update={
+            "step": materializations[2].step.model_copy(
+                update={"planned_analysis_role": "primary"}
+            )
+        }
+    )
+    state = ProgressivePrefixState(steps=(earlier_primary,))
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_prefix(
+            state,
+            current_primary,
+            outline=outline,
+            foundation=foundation,
+            context=_context(),
+            allowed_literature_citation_keys=(),
+            allowed_know_how_decisions=None,
+            reporting_method_source_keys=(),
+        )
+
+    assert caught.value.reason_code == "progressive_prefix_contract_invalid"
+    assert caught.value.step_id == "03_distribution"
+    assert caught.value.step_index == 1
+    assert caught.value.easyicu_safe_diagnostic["owner"] == (
+        "easyicu.planning.progressive_compiler_v1"
+    )
+    assert "at most one primary" in caught.value.details["findings"][0]["message"]
 
 
 def test_agent_stops_after_one_host_compile_repair_and_keeps_attempts() -> None:
