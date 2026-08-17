@@ -632,6 +632,12 @@ def test_current_step_without_available_products_closes_product_inputs() -> None
         "$ref": "#/$defs/ProgressivePlanFoundation"
     }
     step = schema["$defs"]["ProgressiveSkeletonStep"]["properties"]
+    assert step["depends_on"] == {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 0,
+        "maxItems": 0,
+    }
     assert step["product_inputs"]["maxItems"] == 0
 
 

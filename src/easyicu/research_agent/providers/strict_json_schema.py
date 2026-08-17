@@ -54,7 +54,7 @@ def strictify_json_schema(node: Any) -> None:
 
 
 def assert_closed_json_schema(node: Any, *, path: str = "$") -> None:
-    """Fail when a schema contains an open object or unconstrained mapping."""
+    """Fail when a schema is open, unconstrained, or structurally invalid."""
 
     if not isinstance(node, dict):
         return
@@ -86,8 +86,17 @@ def assert_closed_json_schema(node: Any, *, path: str = "$") -> None:
     for key in ("allOf", "anyOf", "oneOf", "prefixItems"):
         values = node.get(key)
         if isinstance(values, list):
+            if not values:
+                raise StrictJsonSchemaError(
+                    f"strict schema keyword {key} must be non-empty at {path}"
+                )
             for index, value in enumerate(values):
                 assert_closed_json_schema(value, path=f"{path}/{key}/{index}")
+    enum_values = node.get("enum")
+    if isinstance(enum_values, list) and not enum_values:
+        raise StrictJsonSchemaError(
+            f"strict schema keyword enum must be non-empty at {path}"
+        )
 
 
 def closed_pydantic_json_schema(
