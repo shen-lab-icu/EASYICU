@@ -546,6 +546,54 @@ def test_typed_descriptive_ceiling_avoids_temporal_inference_claim() -> None:
     assert review.facts["descriptive_only_step_ids"] == ["descriptive_distribution"]
 
 
+def test_registered_descriptive_capability_preserves_typed_claim_ceiling() -> None:
+    step = _absolute_risk_distribution_step().model_copy(
+        update={
+            "scientific_capability": (
+                "descriptive_exposure_outcome_distribution_v1"
+            )
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=_context().research_question,
+        analysis_type="descriptive_study",
+        steps=[step],
+    )
+
+    review = build_plan_scientific_review(
+        context=_context(),
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(_context()),
+    )
+
+    assert review.facts["temporal_inference_required"] is False
+    assert review.facts["descriptive_only_step_ids"] == [
+        "absolute_risk_distribution"
+    ]
+
+
+def test_non_descriptive_capability_cannot_borrow_typed_claim_ceiling() -> None:
+    step = _absolute_risk_distribution_step().model_copy(
+        update={"scientific_capability": "association_freeform_v1"}
+    )
+    plan = AnalysisPlan(
+        research_question=_context().research_question,
+        analysis_type="descriptive_study",
+        steps=[step],
+    )
+
+    review = build_plan_scientific_review(
+        context=_context(),
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(_context()),
+    )
+
+    assert review.facts["temporal_inference_required"] is True
+    assert review.facts["descriptive_only_step_ids"] == []
+
+
 def _absolute_risk_distribution_step(*, descriptive: bool = True) -> AnalysisStep:
     return AnalysisStep(
         step_id="absolute_risk_distribution",
@@ -982,6 +1030,9 @@ def test_counts_only_authority_removes_all_uncertainty_before_review() -> None:
     assert distribution_spec is not None
     distribution_step = distribution_step.model_copy(
         update={
+            "scientific_capability": (
+                "descriptive_exposure_outcome_distribution_v1"
+            ),
             "exposure_outcome_distribution_spec": distribution_spec.model_copy(
                 update={"risk_difference_contrast": None}
             )
@@ -1077,7 +1128,7 @@ def test_counts_only_typed_primary_subsumes_generic_distribution_module() -> Non
     assert "baseline_context" not in contract.required_roles
 
 
-def test_counts_only_authority_rejects_table_one_summaries() -> None:
+def test_counts_only_authority_rejects_inferential_table_one_tests() -> None:
     context = _context().model_copy(
         update={
             "user_preferences": UserPreferences(
@@ -1098,8 +1149,62 @@ def test_counts_only_authority_rejects_table_one_summaries() -> None:
         steps=[_traditional_table_one_step()],
     )
 
-    with pytest.raises(DependenceAuthorityError, match="forbids Table One"):
+    with pytest.raises(
+        DependenceAuthorityError,
+        match="forbids inferential Table One",
+    ):
         bind_context_dependence_authority(plan=plan, context=context)
+
+
+def test_counts_only_authority_accepts_descriptive_smd_table_one_and_report() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                )
+            )
+        }
+    )
+    table_step = _traditional_table_one_step()
+    table_spec = table_step.table_one_spec
+    assert table_spec is not None
+    table_payload = table_spec.model_dump(mode="python")
+    table_payload.update(
+        schema_version="easyicu.table_one/2",
+        p_values_required=False,
+        p_value_adjustment="not_applicable_repeated_units",
+    )
+    for variable in table_payload["variables"]:
+        variable["test"] = "none_descriptive_smd_only"
+    table_step = table_step.model_copy(
+        update={
+            "table_one_spec": type(table_spec).model_validate(table_payload),
+        }
+    )
+    report_step = AnalysisStep(
+        step_id="report",
+        planned_analysis_role="auxiliary",
+        intent="Render the counts-only report.",
+        inputs=["table:table_one"],
+        expected_outputs=["report:strobe_style_report"],
+        method="feasibility_protocol",
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_study",
+        steps=[table_step, report_step],
+    )
+
+    bound = bind_context_dependence_authority(plan=plan, context=context)
+
+    assert bound.steps[0].table_one_spec == table_step.table_one_spec
+    assert bound.steps[1] == report_step
 
 
 def test_counts_only_authority_rejects_untyped_descriptive_summaries() -> None:

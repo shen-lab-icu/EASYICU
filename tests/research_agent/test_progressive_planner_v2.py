@@ -28,6 +28,9 @@ from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
     compile_progressive_plan,
 )
+from easyicu.research_agent.planning.dependence_authority import (
+    bind_context_dependence_authority,
+)
 from easyicu.research_agent.planning.cohort_contract import concept_id_exists
 from easyicu.research_agent.planning.progressive_artifacts import (
     ProgressiveCompileFailureReplay,
@@ -67,6 +70,7 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
     ResearchContext,
+    UserPreferences,
     VariableRole,
 )
 
@@ -934,6 +938,97 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_counts_only_compiler_emits_descriptive_table_and_distribution() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                inferred_analysis_family="descriptive_epidemiology",
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_family": "descriptive_epidemiology",
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                ),
+            )
+        }
+    )
+    payload = _payload()
+    payload["analysis_type"] = "descriptive_epidemiology"
+    payload["robustness_intents"] = []
+    payload["steps"] = payload["steps"][:3]
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=context,
+    )
+    bound = bind_context_dependence_authority(plan=plan, context=context)
+    by_id = {step.step_id: step for step in bound.steps}
+
+    table_one = by_id["02_table_one"].table_one_spec
+    assert table_one is not None
+    assert table_one.schema_version == "easyicu.table_one/2"
+    assert table_one.p_values_required is False
+    distribution = by_id["03_distribution"].exposure_outcome_distribution_spec
+    assert distribution is not None
+    assert distribution.schema_version == "easyicu.exposure_outcome_distribution/3"
+    assert distribution.interval_method == "none_counts_only"
+    assert distribution.confidence_level is None
+    assert distribution.risk_difference_contrast is None
+
+
+def test_counts_only_primary_post_baseline_distribution_gets_typed_ceiling() -> None:
+    base = _context()
+    exposure = base.variable("exposure_flag")
+    context = base.model_copy(
+        update={
+            "variables": [
+                item.model_copy(
+                    update={
+                        "analysis_window": "icu_admission[0,24]h",
+                        "analysis_window_role": "exposure_definition",
+                    }
+                )
+                if item.name == exposure.name
+                else item
+                for item in base.variables
+            ],
+            "user_preferences": UserPreferences(
+                inferred_analysis_family="descriptive_epidemiology",
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_family": "descriptive_epidemiology",
+                            "analysis_unit": "icu_stay",
+                            "variance_estimator": "none_counts_only",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+    payload = _payload()
+    payload["analysis_type"] = "descriptive_epidemiology"
+    payload["robustness_intents"] = []
+    payload["steps"] = payload["steps"][:3]
+    payload["steps"][2]["planned_analysis_role"] = "primary"
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=context,
+    )
+    bound = bind_context_dependence_authority(plan=plan, context=context)
+    distribution_step = bound.steps[2]
+
+    assert distribution_step.descriptive_claim is not None
+    assert distribution_step.descriptive_claim.unresolved_limitations == (
+        "post_baseline_exposure_opportunity_unresolved",
+    )
+    assert exposure_outcome_distribution_executor_owns_step(distribution_step)
+
+
 def test_compiler_scopes_sealed_materialized_columns_for_cohort_validation() -> None:
     context = _context()
     context = context.model_copy(
@@ -1020,6 +1115,47 @@ def test_compiler_wires_product_reference_to_its_unique_host_owner() -> None:
 
     figure = next(step for step in plan.steps if step.step_id == "07_figure")
     assert "table:adjusted_association_estimates" in figure.inputs
+
+
+def test_compiler_keeps_audit_dependencies_out_of_cohort_only_runtime_inputs() -> (
+    None
+):
+    payload = _payload()
+    payload["steps"][2]["product_inputs"] = [
+        {
+            "producer_step_id": "02_table_one",
+            "product_id": "table:table_one",
+        }
+    ]
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=skeleton,
+        context=_context(),
+    )
+
+    distribution = next(step for step in plan.steps if step.step_id == "03_distribution")
+    assert "artifact:analysis_cohort" in distribution.inputs
+    assert "table:table_one" not in distribution.inputs
+    assert exposure_outcome_distribution_executor_owns_step(distribution)
+
+
+def test_cohort_only_module_still_rejects_an_unknown_product_reference() -> None:
+    payload = _payload()
+    payload["steps"][2]["product_inputs"] = [
+        {
+            "producer_step_id": "02_table_one",
+            "product_id": "table:not_registered",
+        }
+    ]
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == "progressive_product_reference_mismatch"
+    assert caught.value.step_id == "03_distribution"
+    assert caught.value.path == "product_inputs"
 
 
 def test_compiler_refuses_product_reference_without_a_host_owner() -> None:

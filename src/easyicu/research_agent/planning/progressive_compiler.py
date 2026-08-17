@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from ..authority.declared_levels import observed_levels_for
 from ..canonical_json import canonical_sha256
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
+from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import ModelTermSpec, level_spelling
 from ..contracts.model_tokens import (
     ASSOCIATION_LOGIT_ESTIMATOR,
@@ -53,6 +54,7 @@ from .cohort_contract import (
     cohort_concept_id_scope,
     validate_cohort_definition,
 )
+from .dependence_authority import context_counts_only_authority
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import method_binding_support
 from .progressive_contract import (
@@ -72,6 +74,7 @@ from .scientific_action_catalog import (
     scientific_action_for_id,
     validate_plan_scientific_action_selections,
 )
+from .scientific_review import post_baseline_exposure
 
 
 _OWNER = "easyicu.planning.progressive_compiler_v1"
@@ -136,6 +139,15 @@ _METHOD_BY_MODULE: Mapping[str, str] = {
     "visualization": "visualization",
     "report": "feasibility_protocol",
 }
+_COHORT_FRAME_ONLY_MODULES = frozenset(
+    {
+        "cohort_definition",
+        "table_one",
+        "exposure_outcome_distribution",
+        "measurement_audit",
+        "adjusted_association",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -576,6 +588,7 @@ def _compile_distribution(
     variables: Mapping[str, Any],
     step: ProgressiveSkeletonStep,
     step_index: int,
+    counts_only: bool = False,
 ) -> ExposureOutcomeDistributionSpec:
     exposure = str(step.primary_exposure or "")
     outcome = str(step.outcome or "")
@@ -595,6 +608,35 @@ def _compile_distribution(
             step=step,
             step_index=step_index,
             path="distribution_variables",
+        )
+    event = _level_at(
+        outcome_levels,
+        step.event_level_index,
+        label="event_level_index",
+        step=step,
+        step_index=step_index,
+    )
+    if counts_only:
+        # The typed StudyContext has already forbidden uncertainty and effect
+        # contrasts. Compile only the observed denominators, counts, and
+        # proportions; model-supplied contrast indexes carry no authority.
+        return ExposureOutcomeDistributionSpec(
+            schema_version="easyicu.exposure_outcome_distribution/3",
+            exposure=exposure,
+            exposure_levels=list(exposure_levels),
+            outcome=outcome,
+            outcome_levels=list(outcome_levels),
+            outcome_positive_value=event,
+            level_match_policy="exact_typed",
+            denominator_policy=step.denominator_policy,
+            missing_exposure_policy=step.missing_exposure_policy,
+            missing_outcome_policy=step.missing_outcome_policy,
+            undeclared_outcome_policy="fail_closed",
+            interval_method="none_counts_only",
+            repeated_unit_interval_method=None,
+            risk_difference_contrast=None,
+            dependence=None,
+            confidence_level=None,
         )
     reference = _level_at(
         exposure_levels,
@@ -621,13 +663,6 @@ def _compile_distribution(
             step_index=step_index,
             path="comparison_exposure_level_index",
         )
-    event = _level_at(
-        outcome_levels,
-        step.event_level_index,
-        label="event_level_index",
-        step=step,
-        step_index=step_index,
-    )
     try:
         return ExposureOutcomeDistributionSpec(
             schema_version="easyicu.exposure_outcome_distribution/2",
@@ -919,11 +954,15 @@ def _compile_inputs(
                 step_index=step_index,
                 path="product_inputs",
             )
-        # Product ids have one preceding owner by construction.  Resolve that
+        # Product ids have one preceding owner by construction. Resolve that
         # owner from the host registry instead of making the model repeat an
-        # already-known edge correctly in two fields.  The product id remains
-        # exact and an absent product still fails closed above.
-        inputs.append(reference.product_id)
+        # already-known edge correctly in two fields. Exact host executors in
+        # ``_COHORT_FRAME_ONLY_MODULES`` read only the sealed cohort plus their
+        # declared raw columns/specification. An outline dependency can order
+        # those steps, but its table/report product must not become a second
+        # data-frame input that the executor neither reads nor receipts.
+        if step.module_id not in _COHORT_FRAME_ONLY_MODULES:
+            inputs.append(reference.product_id)
     inputs = list(dict.fromkeys(inputs))
     consumption = [
         ArtifactConsumptionContract(
@@ -1101,9 +1140,19 @@ def _compile_one_step(
             variables=variables,
             step=step,
             step_index=step_index,
+            counts_only=context_counts_only_authority(context),
         )
         kwargs["exposure_outcome_distribution_spec"] = spec
         kwargs["scientific_capability"] = "descriptive_exposure_outcome_distribution_v1"
+        if (
+            step.planned_analysis_role == "primary"
+            and post_baseline_exposure(context)[0]
+        ):
+            kwargs["descriptive_claim"] = DescriptiveClaimContract(
+                unresolved_limitations=(
+                    "post_baseline_exposure_opportunity_unresolved",
+                )
+            )
         kwargs["inputs"] = list(dict.fromkeys([*inputs, spec.exposure, spec.outcome]))
     elif step.module_id == "measurement_audit":
         kwargs["measurement_audit_spec"] = _compile_measurement_spec(

@@ -23,6 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..canonical_json import canonical_sha256
 from ..concept_availability import normalize_database_name
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.descriptive_execution import (
+    DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
+)
 from ..literature import LiteratureBundle
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
@@ -238,7 +241,7 @@ def descriptive_only_step(step: AnalysisStep) -> bool:
 
     Exact method/product pairs are used because arbitrary table names or prose
     such as "descriptive association" cannot prove that a model/effect estimate
-    is absent.  Any model/capability declaration wins over the ceiling and
+    is absent.  A model or non-descriptive capability wins over the ceiling and
     keeps the plan on the inferential path.
     """
 
@@ -265,7 +268,8 @@ def descriptive_only_step(step: AnalysisStep) -> bool:
         and closed_shape
         and not step.model_requirements
         and step.family_primary_result_requirement is None
-        and step.scientific_capability is None
+        and step.scientific_capability
+        in {None, DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID}
         and sole_typed_cohort_input(step) not in {None, ""}
     )
 
