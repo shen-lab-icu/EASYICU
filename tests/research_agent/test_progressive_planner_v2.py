@@ -2601,6 +2601,58 @@ def test_step_materialization_must_preserve_outline_literature_roster() -> None:
     assert caught.value.path == "literature_bindings"
 
 
+def test_agent_repairs_duplicate_outline_literature_key_without_diagnostic_crash() -> None:
+    payload = _payload()
+    payload["steps"][2]["literature_bindings"] = [
+        {
+            "citation_key": "strobe_2007",
+            "design_elements": ["reporting", "outcome"],
+            "application": "Report the prespecified descriptive comparison.",
+            "divergence": None,
+        },
+        {
+            "citation_key": "record_2015",
+            "design_elements": ["reporting"],
+            "application": "Report the routinely collected data provenance.",
+            "divergence": None,
+        },
+    ]
+    for step_index in (4, 5):
+        payload["steps"][step_index]["literature_bindings"] = [
+            {
+                "citation_key": "strobe_2007",
+                "design_elements": ["reporting"],
+                "application": "Report this prespecified scientific analysis.",
+                "divergence": None,
+            }
+        ]
+    materializations = _materialization_payloads(payload)
+    duplicate = json.loads(json.dumps(materializations[2]))
+    duplicate["step"]["literature_bindings"][1]["citation_key"] = "strobe_2007"
+    responses = [
+        _outline_payload(payload),
+        _foundation_payload(payload),
+        *materializations[:2],
+        duplicate,
+        materializations[2],
+        *materializations[3:],
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(
+        _context(),
+        allowed_literature_citation_keys=["strobe_2007", "record_2015"],
+    )
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    repair_prompt = llm.calls[5][0][-1].content
+    assert "progressive_step_literature_roster_mismatch" in repair_prompt
+
+
 def test_step_transport_requires_each_outline_literature_key_once() -> None:
     outline_step = ProgressiveOutlineStep(
         step_id="04_measurement",
