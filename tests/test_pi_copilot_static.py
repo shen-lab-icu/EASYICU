@@ -75,6 +75,28 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
 
+def test_get_requests_preserve_typed_backend_error_codes() -> None:
+    api_owner = _read("js/api.js")
+    get_json = api_owner.split("async function getJSON(path)", 1)[1].split(
+        "async function postJSON(path, body)", 1
+    )[0]
+
+    assert "payload && payload.detail" in get_json
+    assert "throw apiError(path, res, d)" in get_json
+
+
+def test_transient_codex_catalog_failure_preserves_last_verified_models() -> None:
+    pi_owner = _read("js/screens-guided-pi.js")
+    load_models = pi_owner.split("async function loadCodexModels", 1)[1].split(
+        "async function loadCodexResearchStatus", 1
+    )[0]
+    error_branch = load_models.split("} catch (error) {", 1)[1]
+
+    assert "state.codexModels = []" not in error_branch
+    assert "if (renderAfter) state.error = errorText(error)" in error_branch
+    assert "state.codexLogin = null; state.codexModels = []" in pi_owner
+
+
 def test_guided_project_refresh_continuity_has_a_small_dedicated_owner() -> None:
     index = _read("index.html")
     continuity = _read("js/screens-guided-project-continuity.js")
