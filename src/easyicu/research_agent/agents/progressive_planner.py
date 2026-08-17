@@ -682,6 +682,24 @@ class ProgressivePlannerAgent:
                 "the host will materialize its exact method, inputs, outputs, "
                 "and product edges later."
             )
+        singleton_host_modules = {
+            module_id: [product_id for product_id, _role in products]
+            for module_id, products in PROGRESSIVE_HOST_COMPILED_OUTPUTS.items()
+        }
+        blocks.append(
+            "Host-compiled singleton module ownership:\n"
+            + json.dumps(
+                singleton_host_modules,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\nEach listed module may appear at most once in the outline because "
+            "the host owns its fixed typed products. Combine compatible intents "
+            "for that module into its single step (including all replayable "
+            "robustness intents in one robustness_replay step). A separately "
+            "required nonstandard analysis needs a custom_analysis step with its "
+            "own run-authorized product; never duplicate a singleton module."
+        )
         if know_how_context:
             blocks.append(
                 "Retrieved protocol know-how (record every required claim disposition):\n"
@@ -793,6 +811,36 @@ class ProgressivePlannerAgent:
         allowed_modules = set(
             progressive_module_ids_for_analysis_types((outline.analysis_type,))
         )
+        singleton_owners: dict[str, list[str]] = {}
+        for step in outline.steps:
+            if step.module_id in PROGRESSIVE_HOST_COMPILED_OUTPUTS:
+                singleton_owners.setdefault(step.module_id, []).append(step.step_id)
+        duplicated_singletons = {
+            module_id: step_ids
+            for module_id, step_ids in singleton_owners.items()
+            if len(step_ids) > 1
+        }
+        if duplicated_singletons:
+            findings = tuple(
+                {
+                    "module_id": module_id,
+                    "step_ids": step_ids,
+                    "host_products": [
+                        product_id
+                        for product_id, _role in PROGRESSIVE_HOST_COMPILED_OUTPUTS[
+                            module_id
+                        ]
+                    ],
+                }
+                for module_id, step_ids in sorted(duplicated_singletons.items())
+            )
+            raise ProgressivePlanCompileError(
+                "progressive_outline_host_module_repeated",
+                "host-compiled singleton module(s) appear more than once: "
+                + ", ".join(sorted(duplicated_singletons)),
+                path="steps",
+                findings=findings,
+            )
         if required_custom_products and not any(
             step.module_id == "custom_analysis" for step in outline.steps
         ):
