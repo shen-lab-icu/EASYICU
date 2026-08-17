@@ -326,6 +326,33 @@ def test_table_one_output_gate_accepts_exact_sdk_result(tmp_path):
     assert table_one_output_findings(step=_step(), out_dir=tmp_path) == []
 
 
+def test_table_one_output_gate_preserves_numeric_category_identity(tmp_path):
+    frame = _frame().assign(death=[0, 1, 0, 0, 1, 1])
+    spec = _repeated_unit_spec()
+    spec["variables"].append(
+        {
+            "name": "death",
+            "variable_kind": "categorical",
+            "summary": "count_percent",
+            "test": "none_descriptive_smd_only",
+            "levels": [0, 1],
+        }
+    )
+    build_grouped_table_one(frame, spec).to_csv(
+        tmp_path / "table_one.csv", index=False
+    )
+    step = AnalysisStep(
+        step_id="02_table_one",
+        intent="Describe a binary numeric category without changing its level identity.",
+        inputs=["arm", "age", "sex", "death"],
+        expected_outputs=["table:table_one"],
+        method="table_one",
+        table_one_spec=spec,
+    )
+
+    assert table_one_output_findings(step=step, out_dir=tmp_path) == []
+
+
 def test_table_one_output_gate_rejects_tampered_smd(tmp_path):
     table = build_grouped_table_one(_frame(), _spec())
     table.loc[
