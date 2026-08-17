@@ -397,9 +397,9 @@ def test_web_codex_client_uses_only_reviewed_account_environment(
     assert public["authentication_mode"] == "chatgpt_account"
     assert public["transport_max_attempts"] == 1
     assert public["request_idle_timeout_seconds"] == 240.0
-    assert public["request_hard_timeout_seconds"] == 1800.0
-    assert client._reasoning_effort == "medium"
-    assert public["reasoning_effort"] == "medium"
+    assert public["request_hard_timeout_seconds"] == 480.0
+    assert client._reasoning_effort == "low"
+    assert public["reasoning_effort"] == "low"
     assert public["reasoning_effort_source"] == "easyicu_account_research_default"
     assert public["progress_resets_idle_timeout"] is True
     assert public["strict_json_schema_enabled"] is True
