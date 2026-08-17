@@ -3858,7 +3858,7 @@ def test_web_runner_rejects_invalid_server_owned_image_environment(
     assert exc_info.value.code == "research_pipeline_runner_image_invalid"
 
 
-def test_web_runner_rejects_development_resume_outside_canary(
+def test_web_runner_allows_server_owned_resume_for_full_reviewed_development(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3868,19 +3868,34 @@ def test_web_runner_rejects_development_resume_outside_canary(
         lambda **_kwargs: _foundation_profile(),
     )
     export_path = _write_pipeline_export(tmp_path / "export")
+    checkpoint = (
+        tmp_path
+        / "projects"
+        / "study-workflow"
+        / "run_prior-canary"
+        / "pipeline"
+        / "run_prior"
+        / "progressive_planner_checkpoint_000.json"
+    )
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "load_progressive_planner_checkpoint_chain",
+        lambda **_kwargs: [object()],
+    )
 
-    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc_info:
-        agent_pipeline_runs.make_research_pipeline_run_runner(
-            export_path=str(export_path),
-            study_context=_complete_study(),
-            project_root=str(tmp_path / "projects"),
-            provider={"provider": "openai", "external": True},
-            provider_environment=_PI_PROVIDER_ENVIRONMENT,
-            development_resume_source_job_id="prior-canary",
-            budget_mode="full_reviewed",
-        )
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(export_path),
+        study_context=_complete_study(),
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        development_resume_source_job_id="prior-canary",
+        budget_mode="full_reviewed",
+    )
 
-    assert exc_info.value.code == "research_pipeline_development_resume_canary_only"
+    assert callable(runner)
 
 
 def test_development_resume_selects_one_server_owned_checkpoint_sequence(
