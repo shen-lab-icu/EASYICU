@@ -226,6 +226,81 @@ def test_topic_and_method_sources_can_jointly_bind_one_step() -> None:
     ]
 
 
+def test_dedicated_auxiliary_method_step_closes_plan_wide_layer() -> None:
+    payload = json.loads(_raw(["strobe_2007"]))
+    payload["steps"][0]["intent"] = (
+        "Estimate the primary result with prespecified missing-data handling."
+    )
+    payload["steps"].append(
+        {
+            "step_id": "measurement_audit",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Audit missingness and measurement-process coverage.",
+            "inputs": [],
+            "expected_outputs": ["table:measurement_missingness"],
+            "method": "missing_data",
+            "literature_citation_keys": ["sterne_missing_data_2009"],
+            "literature_design_bindings": [
+                {
+                    "citation_key": "sterne_missing_data_2009",
+                    "design_elements": ["missing_data"],
+                    "application": (
+                        "Apply the prespecified missing-data method to the "
+                        "dedicated measurement audit."
+                    ),
+                }
+            ],
+        }
+    )
+
+    plan = PlannerAgent.__new__(PlannerAgent)._parse(
+        json.dumps(payload),
+        _context(),
+        allowed_literature_citation_keys=[
+            "strobe_2007",
+            "sterne_missing_data_2009",
+        ],
+    )
+
+    assert plan.steps[1].literature_citation_keys == [
+        "sterne_missing_data_2009"
+    ]
+
+
+def test_auxiliary_method_binding_cannot_exceed_its_card() -> None:
+    payload = json.loads(_raw(["strobe_2007"]))
+    payload["steps"].append(
+        {
+            "step_id": "measurement_audit",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Audit missingness and measurement-process coverage.",
+            "inputs": [],
+            "expected_outputs": ["table:measurement_missingness"],
+            "method": "missing_data",
+            "literature_citation_keys": ["sterne_missing_data_2009"],
+            "literature_design_bindings": [
+                {
+                    "citation_key": "sterne_missing_data_2009",
+                    "design_elements": ["adjustment"],
+                    "application": (
+                        "Apply this source outside its curated method-card scope."
+                    ),
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="do not support"):
+        PlannerAgent.__new__(PlannerAgent)._parse(
+            json.dumps(payload),
+            _context(),
+            allowed_literature_citation_keys=[
+                "strobe_2007",
+                "sterne_missing_data_2009",
+            ],
+        )
+
+
 def test_planner_receives_exact_preplan_literature_authority() -> None:
     llm = ScriptedMockLLMClient(
         [_raw(["invented_internal_label"]), _raw(["strobe_2007"])]

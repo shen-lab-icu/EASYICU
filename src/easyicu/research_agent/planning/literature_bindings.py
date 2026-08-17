@@ -146,14 +146,13 @@ def validate_literature_citation_bindings(
         method_source_keys,
         allowed,
     )
+    scientific_step_ids = {
+        step.step_id
+        for step in plan.steps
+        if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+    }
     matched_layers_by_step: dict[str, set[str]] = {}
     for step in plan.steps:
-        if step.planned_analysis_role not in {
-            "primary",
-            "secondary",
-            "sensitivity",
-        }:
-            continue
         matched_layers: set[str] = set()
         for binding in step.literature_design_bindings:
             support = method_binding_support(
@@ -190,7 +189,7 @@ def validate_literature_citation_bindings(
     method_card_unbound = sorted(
         step_id
         for step_id, layers in matched_layers_by_step.items()
-        if not layers
+        if step_id in scientific_step_ids and not layers
     )
     if method_source_keys and method_card_unbound:
         raise ValueError(
