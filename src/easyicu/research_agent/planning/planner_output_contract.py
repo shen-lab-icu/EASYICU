@@ -9,6 +9,9 @@ resulting immutable contracts.
 from __future__ import annotations
 
 from ..schema import AnalysisPlan, ResearchContext
+from ..contracts.descriptive_execution import (
+    DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
+)
 from .scientific_review import post_baseline_exposure
 
 
@@ -62,7 +65,8 @@ def missing_post_baseline_descriptive_claims(
         if (
             step.model_requirements
             or step.family_primary_result_requirement is not None
-            or step.scientific_capability is not None
+            or step.scientific_capability
+            not in {None, DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID}
         ):
             continue
         if step.descriptive_claim is None:

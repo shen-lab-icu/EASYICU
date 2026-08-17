@@ -206,6 +206,56 @@ def test_cohort_concept_id_scope_restores_even_when_the_block_raises() -> None:
         cohort_contract.clear_cohort_concept_ids()
 
 
+def test_ensure_cohort_definition_revalidates_against_run_context_without_leak() -> (
+    None
+):
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        CohortDescriptor,
+        ConceptDescriptor,
+        ResearchContext,
+    )
+
+    concept_id = "run_specific_materialized_column"
+    with cohort_contract.cohort_concept_id_scope([concept_id]):
+        definition = cohort_contract.CohortDefinition(
+            name="sealed",
+            selection_mode="predicate_filtered",
+            inclusion=(
+                cohort_contract.ConceptPredicate(
+                    concept_id=concept_id,
+                    time_window=cohort_contract.TimeWindow("icu_admit", 0, 24),
+                    aggregation="max",
+                    op=">=",
+                    value=1,
+                ),
+            ),
+        )
+    plan = AnalysisPlan.model_construct(
+        research_question="Use the sealed run-specific column.",
+        steps=[],
+        cohort=definition,
+    )
+    context = ResearchContext(
+        research_question=plan.research_question,
+        cohort=CohortDescriptor(
+            cohort_name="sealed",
+            database="synthetic",
+            n_stays=2,
+            id_columns=["stay_id"],
+        ),
+        variables=[ConceptDescriptor(name=concept_id, dtype="int64")],
+    )
+
+    with pytest.raises(cohort_contract.CohortSchemaError, match="unknown concept_id"):
+        cohort_contract.ensure_cohort_definition(plan)
+
+    revised = cohort_contract.ensure_cohort_definition(plan, context=context)
+
+    assert revised.cohort == definition
+    assert not cohort_contract.concept_id_exists(concept_id)
+
+
 def test_cohort_contract_resolves_packaged_concept_dictionary() -> None:
     assert cohort_contract._CONCEPT_DICT_PATH.is_file()
     assert cohort_contract.known_concept_ids()

@@ -3114,7 +3114,7 @@ class ResearchAgentPipeline:
                     long_trajectory_bound=long_trajectory_bound,
                 )
             )
-            plan = ensure_cohort_definition(plan)
+            plan = ensure_cohort_definition(plan, context=context)
             plan = ensure_robustness_specs(plan)
             # Final gate: if the plan implies a cohort but still has no
             # structured inclusion/exclusion (the retry above didn't recover
