@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import easyicu
 from easyicu import SOFA2InputError as PublicSOFA2InputError
 from easyicu.io.ts_utils import change_interval
 from easyicu.resources import load_dictionary
@@ -354,3 +358,55 @@ def test_sofa2_aggregate_ignores_entries_beyond_the_six_components() -> None:
     result = sofa2_score(frames)
 
     assert result["sofa2"].tolist() == [6]
+
+
+def _shipped_concept_payloads() -> dict:
+    """Merge the two shipped dictionaries as raw JSON.
+
+    ``load_dictionary`` drops ``unit``/``min``/``max``, so the ordinal
+    domain is only visible in the payload itself.
+    """
+    data_dir = Path(easyicu.__file__).resolve().parent / "data"
+    merged: dict = {}
+    for name in ("concept-dict.json", "sofa2-dict.json"):
+        raw = json.loads((data_dir / name).read_text(encoding="utf-8"))
+        merged.update(raw.get("concepts", raw))
+    return merged
+
+
+def _sofa2_closure(payloads: dict) -> set[str]:
+    seen: set[str] = set()
+    stack = [name for name in payloads if name.startswith("sofa2")]
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        stack.extend(payloads.get(name, {}).get("concepts") or [])
+    return seen
+
+
+def test_every_ordinal_sofa2_input_declares_its_aggregate() -> None:
+    """Ordinal inputs must not fall through to the numeric median default.
+
+    ``_load_single_concept`` picks ``median`` for any numeric leaf that does
+    not declare an aggregate.  Median is meaningless on an ordinal scale: two
+    readings in the same hour yield a half-step that is not a member of the
+    domain, and it also drops the worst value the severity score is asking
+    for.  This is a class guard — pinning one concept is what let
+    ``sedated_gcs`` sit unnoticed next to ``motor_response``.
+    """
+    payloads = _shipped_concept_payloads()
+    missing = sorted(
+        name
+        for name in _sofa2_closure(payloads)
+        if isinstance(payloads.get(name), dict)
+        and not payloads[name].get("concepts")
+        and str(payloads[name].get("unit", "")).lower() in {"score", "points"}
+        and payloads[name].get("aggregate") is None
+    )
+
+    assert missing == [], (
+        "ordinal SOFA-2 inputs without an explicit aggregate fall back to "
+        f"median, which is off-domain for a score: {missing}"
+    )
