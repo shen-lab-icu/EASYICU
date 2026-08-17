@@ -332,7 +332,7 @@ def _is_retryable_transport_error(exc: Exception) -> bool:
 
 
 def _is_local_openai_compatible_base_url(base_url: Optional[str]) -> bool:
-    from .factory import is_loopback_openai_base_url
+    from .client_trust import is_loopback_openai_base_url
 
     return is_loopback_openai_base_url(base_url)
 
@@ -645,11 +645,11 @@ class OpenAIClient:
         # Mint construction/loopback authority only after every
         # model-dependent dispatch option is finalized.  Recording earlier
         # makes reviewed Qwen/OpenRouter clients look mutated on first use.
-        from .factory import _mark_reviewed_transport_constructed
+        from .client_trust import _mark_reviewed_transport_constructed
 
         _mark_reviewed_transport_constructed(self)
         if _is_local_openai_compatible_base_url(resolved_base_url):
-            from .factory import _register_loopback_provider_client
+            from .client_trust import _register_loopback_provider_client
 
             _register_loopback_provider_client(
                 self,
@@ -660,7 +660,7 @@ class OpenAIClient:
     def _require_outbound_authorization(self) -> None:
         """Reject unmanaged external transports before serializing messages."""
 
-        from .factory import require_provider_client_authorization
+        from .client_trust import require_provider_client_authorization
 
         try:
             require_provider_client_authorization(self)
@@ -699,7 +699,7 @@ class OpenAIClient:
             except Exception:
                 pass
         if getattr(self, "_client", None) is None:
-            from .factory import _refresh_reviewed_transport_dispatch
+            from .client_trust import _refresh_reviewed_transport_dispatch
 
             _refresh_reviewed_transport_dispatch(self)
             return
@@ -725,7 +725,7 @@ class OpenAIClient:
         try:
             new_client = OpenAI(**kwargs)
         except Exception:
-            from .factory import _refresh_reviewed_transport_dispatch
+            from .client_trust import _refresh_reviewed_transport_dispatch
 
             _refresh_reviewed_transport_dispatch(self)
             return
@@ -739,7 +739,7 @@ class OpenAIClient:
         # The old pool is reclaimed by GC once no thread holds it; rebuilds are
         # rare and the client is per-run, so the transient leak is bounded.
         self._client = new_client
-        from .factory import _refresh_reviewed_transport_dispatch
+        from .client_trust import _refresh_reviewed_transport_dispatch
 
         _refresh_reviewed_transport_dispatch(self)
 
@@ -1370,12 +1370,12 @@ class AnthropicMessagesClient:
         self.last_usage: Optional[Dict[str, Any]] = None
         self.last_finish_reason: Optional[str] = None
         self.last_transport_attempts = 0
-        from .factory import _mark_reviewed_transport_constructed
+        from .client_trust import _mark_reviewed_transport_constructed
 
         _mark_reviewed_transport_constructed(self)
 
     def _require_outbound_authorization(self) -> None:
-        from .factory import require_provider_client_authorization
+        from .client_trust import require_provider_client_authorization
 
         try:
             require_provider_client_authorization(self)
@@ -2106,7 +2106,7 @@ class CLIAgentLLMClient:
             ).encode("utf-8")
         ).hexdigest()
         self.name = f"{backend}-cli"
-        from .factory import _mark_reviewed_transport_constructed
+        from .client_trust import _mark_reviewed_transport_constructed
 
         _mark_reviewed_transport_constructed(self)
 
@@ -2168,7 +2168,7 @@ class CLIAgentLLMClient:
     def _require_outbound_authorization(self) -> None:
         """Reject direct/unmanaged CLI transports before process launch."""
 
-        from .factory import require_provider_client_authorization
+        from .client_trust import require_provider_client_authorization
 
         try:
             require_provider_client_authorization(self)
@@ -2312,12 +2312,12 @@ class CodexAppServerLLMClient:
         self.last_finish_reason: Optional[str] = None
         self.last_model: Optional[str] = None
         self.name = "codex-app-server"
-        from .factory import _mark_reviewed_transport_constructed
+        from .client_trust import _mark_reviewed_transport_constructed
 
         _mark_reviewed_transport_constructed(self)
 
     def _require_outbound_authorization(self) -> None:
-        from .factory import require_provider_client_authorization
+        from .client_trust import require_provider_client_authorization
 
         try:
             require_provider_client_authorization(self)

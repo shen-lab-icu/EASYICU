@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .evidence_snapshot import EvidenceAuthorityIntegrityError
-from ..providers.factory import provider_client_is_offline
+from ..providers.client_trust import provider_client_is_offline
 from ..research_context.implementation_identity import metadata_implementation_identity
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .run_input import (

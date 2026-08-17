@@ -8,7 +8,7 @@ from typing import Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..canonical_json import canonical_json as _canonical_json
-from ..providers.factory import provider_authorization_manifest
+from ..providers.client_trust import provider_authorization_manifest
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runtime_artifacts import capture_code_version
 
