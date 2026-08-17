@@ -7,7 +7,10 @@ import re
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..canonical_json import canonical_sha256
-from ..cohort.schema import validate_plan_typed_bindings_against_context
+from ..cohort.schema import (
+    materialized_input_column_authority,
+    validate_plan_typed_bindings_against_context,
+)
 from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
 from ..planning.adjustment_authority import validate_plan_against_adjustment_authority
 from ..planning.analysis_types import (
@@ -134,6 +137,28 @@ def _required_separate_analysis_products(
             if product not in host_products and product not in required:
                 required.append(product)
     return tuple(required)
+
+
+def _complete_case_variable_roster(
+    context: ResearchContext,
+    variable_names: Sequence[str],
+) -> tuple[str, ...]:
+    """Return analysis fields eligible to determine complete-case membership."""
+
+    column_authority = materialized_input_column_authority(context)
+    executable_columns = set(column_authority.executable_columns)
+    return tuple(
+        name
+        for name in variable_names
+        if (
+            not column_authority.sealed_columns or name in executable_columns
+        )
+        and (
+            (descriptor := context.variable(name)) is None
+            or descriptor.observation_semantics is None
+            or descriptor.observation_semantics.kind != "conditional_event_time"
+        )
+    )
 
 
 def _tokens(value: object) -> set[str]:
@@ -1479,15 +1504,9 @@ class ProgressivePlannerAgent:
 
         foundation_schema = None
         if llm_supports_strict_json_schema(self.llm):
-            complete_case_variables = tuple(
-                name
-                for name in variables
-                if (
-                    (descriptor := context.variable(name)) is None
-                    or descriptor.observation_semantics is None
-                    or descriptor.observation_semantics.kind
-                    != "conditional_event_time"
-                )
+            complete_case_variables = _complete_case_variable_roster(
+                context,
+                variables,
             )
             foundation_schema = progressive_foundation_structured_output_request(
                 outline_sha256=outline_sha256,

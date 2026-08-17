@@ -16,6 +16,7 @@ from easyicu.research_agent.agents.progressive_payload import (
 )
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
+    _complete_case_variable_roster,
     candidate_analysis_types,
 )
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
@@ -1183,6 +1184,47 @@ def test_complete_case_rejects_conditional_event_time_as_not_applicable() -> Non
     assert caught.value.path.endswith("complete_case_variables")
 
 
+def test_complete_case_roster_excludes_host_navigation_coordinates() -> None:
+    from types import SimpleNamespace
+
+    context = _context().model_copy(
+        update={
+            "variables": [
+                ConceptDescriptor(
+                    name="stay_id",
+                    role=VariableRole.ID,
+                    dtype="int64",
+                ),
+                *_context().variables,
+            ],
+            "materialized_inputs": SimpleNamespace(
+                cohort=SimpleNamespace(
+                    cohort_columns=[
+                        "stay_id",
+                        "exposure_flag",
+                        "outcome_flag",
+                        "age_years",
+                        "sex_code",
+                    ],
+                    column_bindings={
+                        "exposure_flag": object(),
+                        "outcome_flag": object(),
+                        "age_years": object(),
+                        "sex_code": object(),
+                    },
+                )
+            ),
+        }
+    )
+
+    roster = _complete_case_variable_roster(
+        context,
+        ("stay_id", "exposure_flag", "outcome_flag"),
+    )
+
+    assert roster == ("exposure_flag", "outcome_flag")
+
+
 def test_outline_requires_custom_owner_for_explicit_separate_product() -> None:
     payload = _payload()
     payload["steps"] = [
@@ -1419,6 +1461,10 @@ def test_compiler_keeps_navigation_identity_out_of_executable_step_inputs() -> N
     payload = _payload()
     for step in payload["steps"]:
         step["raw_inputs"] = ["stay_id", *step["raw_inputs"]]
+    payload["robustness_intents"][0]["complete_case_variables"] = [
+        "stay_id",
+        *payload["robustness_intents"][0]["complete_case_variables"],
+    ]
 
     authority = materialized_input_column_authority(context)
     plan, _receipt = compile_progressive_plan(
@@ -1433,6 +1479,10 @@ def test_compiler_keeps_navigation_identity_out_of_executable_step_inputs() -> N
     assert plan.steps[0].cohort_definition_spec.identity_column == "stay_id"
     assert all("stay_id" not in step.inputs for step in plan.steps)
     assert "exposure_flag" in plan.steps[1].inputs
+    assert all(
+        "stay_id" not in (spec.missing_override or {}).get("variables", ())
+        for spec in plan.robustness_specs
+    )
 
 
 def test_compiler_reports_identical_distribution_contrast_at_its_owner() -> None:

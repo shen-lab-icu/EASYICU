@@ -318,14 +318,23 @@ def validate_progressive_foundation(
 def _compile_robustness_intents(
     skeleton: ProgressivePlanSkeleton,
     *,
+    context: ResearchContext,
     variables: Mapping[str, Any],
 ) -> list[RobustnessSpec]:
     compiled: list[RobustnessSpec] = []
+    reserved_coordinates = set(
+        materialized_input_column_authority(context).reserved_navigation_coordinates
+    )
     for item in skeleton.robustness_intents:
         missing_override: Optional[dict[str, Any]] = None
         if item.missing_strategy == "complete_case":
+            complete_case_variables = [
+                name
+                for name in item.complete_case_variables
+                if name not in reserved_coordinates
+            ]
             missing = [
-                name for name in item.complete_case_variables if name not in variables
+                name for name in complete_case_variables if name not in variables
             ]
             if missing:
                 raise _fail(
@@ -335,7 +344,7 @@ def _compile_robustness_intents(
                 )
             missing_override = {
                 "strategy": "complete_case",
-                "variables": list(item.complete_case_variables),
+                "variables": complete_case_variables,
                 "audit_flags": None,
             }
         compiled.append(
@@ -1568,6 +1577,7 @@ def compile_progressive_plan(
     try:
         robustness = _compile_robustness_intents(
             skeleton,
+            context=context,
             variables=variables,
         )
         know_how_decisions = [
