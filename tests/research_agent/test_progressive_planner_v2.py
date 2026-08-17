@@ -591,6 +591,30 @@ def test_progressive_foundation_schema_is_outline_bound_and_has_no_step_fields()
         assert object_schema["additionalProperties"] is False
 
 
+def test_foundation_schema_compiles_robustness_shape_invariant() -> None:
+    request = progressive_foundation_structured_output_request(
+        outline_sha256="a" * 64,
+        variable_names=["exposure_flag", "outcome_flag"],
+    )
+    schema = json.loads(request.schema_json)
+    branches = schema["$defs"]["ProgressiveRobustnessIntent"]["anyOf"]
+
+    assert len(branches) == 2
+    by_strategy = {
+        branch["properties"]["missing_strategy"]["const"]: branch
+        for branch in branches
+    }
+    no_missing = by_strategy["none"]["properties"]
+    assert no_missing["complete_case_variables"]["maxItems"] == 0
+    complete_case = by_strategy["complete_case"]["properties"]
+    assert complete_case["axis"] == {"type": "string", "const": "missing"}
+    assert complete_case["complete_case_variables"]["minItems"] == 1
+    assert complete_case["complete_case_variables"]["items"]["enum"] == [
+        "exposure_flag",
+        "outcome_flag",
+    ]
+
+
 def test_foundation_schema_binds_host_owned_all_input_cohort() -> None:
     request = progressive_foundation_structured_output_request(
         outline_sha256="a" * 64,
