@@ -500,7 +500,8 @@ class PipelineConfig:
     # the guard is set where only a runaway reaches it.
     max_total_steps: int = 16
     # --- replanning convergence guards (2026-06-11) ---------------------
-    # The replanner runs after the probe and after every clean step. A
+    # The replanner runs after the probe, after an agent-authored progressive
+    # step, or when a clean deterministic step explicitly requests revision. A
     # verbose model can return cosmetically-different but substantively
     # identical plans, each costing a full LLM call: the E1 20260611 real
     # run produced revisions 4-6 carrying an identical step DAG, and the

@@ -118,10 +118,33 @@ def test_runtime_suffix_rejects_wrong_coordinate_and_noncontiguous_prefix() -> N
     )
 
 
-def test_progressive_success_requests_observation_replan_without_truthy_coercion() -> None:
+def test_progressive_success_replans_agent_steps_not_fixed_host_steps() -> None:
     assert not _successful_step_requests_replan({"status": "ok"})
     assert _successful_step_requests_replan(
         {"status": "ok"},
+        progressive_observation_loop=True,
+    )
+    assert _successful_step_requests_replan(
+        {"status": "ok", "generation_mode": "llm_coder"},
+        progressive_observation_loop=True,
+    )
+    assert not _successful_step_requests_replan(
+        {"status": "ok", "generation_mode": "deterministic_standard"},
+        progressive_observation_loop=True,
+    )
+    assert not _successful_step_requests_replan(
+        {
+            "status": "ok",
+            "step_authority_kind": "host_deterministic_cohort_materializer",
+        },
+        progressive_observation_loop=True,
+    )
+    assert _successful_step_requests_replan(
+        {
+            "status": "ok",
+            "generation_mode": "deterministic_standard",
+            "step_summary": {"replan_requested": True},
+        },
         progressive_observation_loop=True,
     )
     assert not _successful_step_requests_replan(

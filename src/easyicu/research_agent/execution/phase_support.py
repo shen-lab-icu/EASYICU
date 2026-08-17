@@ -2729,9 +2729,13 @@ def _successful_step_requests_replan(
     model steps have their own bounded directed-replan path. Calling the LLM
     replanner after every ordinary legacy step adds latency and usually
     produces a no-op, so those paths still require an exact boolean request.
-    Progressive v2 explicitly runs an observation loop and therefore opts in
-    after each successful step with a remaining suffix. Strings and other
-    truthy values are intentionally not accepted as explicit requests.
+    Progressive v2 explicitly runs an observation loop for agent-authored
+    steps.  A host-deterministic step has already been compiled, executed, and
+    validated by its typed owner, so repeating an LLM replan after that fixed
+    action adds no observation authority.  Such steps may still request a
+    revision explicitly when their deterministic validator discovers a reason
+    to change the remaining suffix.  Strings and other truthy values are
+    intentionally not accepted as explicit requests.
     """
 
     if str(record.get("status") or "") != "ok":
@@ -2745,7 +2749,14 @@ def _successful_step_requests_replan(
         for container in containers
         for field in _SUCCESS_REPLAN_REQUEST_FIELDS
     )
-    return explicit_request or progressive_observation_loop
+    generation_mode = str(record.get("generation_mode") or "").strip().lower()
+    authority_kind = str(record.get("step_authority_kind") or "").strip().lower()
+    host_deterministic = generation_mode.startswith(
+        "deterministic_"
+    ) or authority_kind.startswith("host_deterministic_")
+    return explicit_request or (
+        progressive_observation_loop and not host_deterministic
+    )
 
 
 def _step_status_from_contract_findings(
