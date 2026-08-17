@@ -2042,6 +2042,8 @@ def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
     assert "matching `requirement_id`" in prompt
     assert "`fit_failure_reason`" in prompt
     assert "not a generic contract for" in prompt
+    assert "omit its now-constant" in prompt
+    assert "Do not silently drop any other" in prompt
 
 
 def test_planner_prompt_declares_typed_model_requirements() -> None:
