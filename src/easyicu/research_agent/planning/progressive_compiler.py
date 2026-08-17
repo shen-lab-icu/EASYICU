@@ -989,6 +989,28 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
+    if step.module_id == "measurement_audit":
+        # Observation semantics are host-verified context authority.  An audit
+        # that receives only the model-selected representative column cannot
+        # re-run the count/flag/status reconciliation and silently reports a
+        # complete event status as ordinary measurement availability.  Carry
+        # the small typed dependency closure mechanically; the model still
+        # chooses whether a measurement-audit module belongs in the plan.
+        for descriptor in context.variables:
+            semantics = descriptor.observation_semantics
+            if semantics is None:
+                continue
+            raw_names.extend(
+                value
+                for value in (
+                    descriptor.name,
+                    semantics.event_count_column,
+                    semantics.measured_column,
+                    semantics.representative_column,
+                    semantics.event_status_column,
+                )
+                if value and value in variables
+            )
     if (
         step.module_id == "custom_analysis"
         and step.planned_analysis_role == "sensitivity"

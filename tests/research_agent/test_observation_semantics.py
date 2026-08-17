@@ -68,6 +68,38 @@ def test_positive_only_event_triad_is_complete_status_not_missingness() -> None:
     assert descriptor.missingness.eligible_n == 4
 
 
+def test_normalized_binary_event_triad_retains_positive_only_semantics() -> None:
+    frame = pd.DataFrame(
+        {
+            "susp_inf_n": [0, 1, 2, 0],
+            "susp_inf_measured": [0, 1, 1, 0],
+            "susp_inf_max": [0, 1, 1, 0],
+        }
+    )
+    descriptors = [
+        _descriptor(
+            "susp_inf_max",
+            source_concept="susp_inf",
+            is_binary=True,
+        )
+    ]
+
+    compiled = compile_observation_semantics(
+        frame=frame,
+        descriptors=descriptors,
+    )
+
+    descriptor = compiled[0]
+    assert descriptor.observation_semantics is not None
+    assert descriptor.observation_semantics.kind == "positive_only_event"
+    assert descriptor.observation_semantics.event_count_column == "susp_inf_n"
+    assert descriptor.observation_semantics.measured_column == "susp_inf_measured"
+    assert descriptor.missingness is not None
+    assert descriptor.missingness.raw_n_missing == 0
+    assert descriptor.missingness.n_missing == 0
+    assert descriptor.missingness.fraction_missing == 0.0
+
+
 def test_conditional_event_time_uses_event_positive_denominator() -> None:
     frame = pd.DataFrame(
         {

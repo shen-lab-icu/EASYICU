@@ -1054,6 +1054,41 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_measurement_compiler_closes_typed_observation_semantics_inputs() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(name="event_n", dtype="int64"),
+                ConceptDescriptor(name="event_measured", dtype="int64"),
+                ConceptDescriptor(
+                    name="event_status",
+                    dtype="int64",
+                    observed_domain={
+                        "n_unique": 2,
+                        "is_binary": True,
+                        "levels": [0, 1],
+                    },
+                    observation_semantics=ObservationSemantics(
+                        kind="positive_only_event",
+                        event_count_column="event_n",
+                        measured_column="event_measured",
+                        representative_column="event_status",
+                    ),
+                ),
+            ]
+        }
+    )
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=_skeleton(),
+        context=context,
+    )
+
+    measurement = next(step for step in plan.steps if step.step_id == "04_measurement")
+    assert {"event_n", "event_measured", "event_status"} <= set(measurement.inputs)
+
+
 def test_counts_only_compiler_emits_descriptive_table_and_distribution() -> None:
     context = _context().model_copy(
         update={
