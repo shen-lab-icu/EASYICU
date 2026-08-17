@@ -95,6 +95,11 @@ def validate_numeric_input(
     # package). Anything else fails closed rather than being coerced.
     if not (
         pd.api.types.is_numeric_dtype(raw)
+        # Arrow-backed booleans are not is_numeric_dtype even though numpy and
+        # nullable booleans are, and this package converts end-to-end through
+        # pyarrow -- component availability/observed receipts routinely arrive
+        # as bool[pyarrow].
+        or pd.api.types.is_bool_dtype(raw)
         or pd.api.types.is_object_dtype(raw)
         or pd.api.types.is_string_dtype(raw)
         or isinstance(raw.dtype, pd.CategoricalDtype)
@@ -120,7 +125,17 @@ def validate_numeric_input(
             invalid_count=int(bad_encoding.sum()),
         )
 
-    nonfinite = numeric.notna() & ~np.isfinite(numeric.astype(float))
+    # Run every arithmetic check against one numpy view. ``pd.to_numeric``
+    # preserves the input's extension backing, and Arrow-backed arrays
+    # implement neither ``%`` ("NotImplementedError: mod not implemented") nor
+    # the float cast the finiteness check needs -- which matters because this
+    # package converts end-to-end through pyarrow, so int64[pyarrow] and
+    # float64[pyarrow] reach here on the ordinary extraction path. The Series
+    # handed back to callers keeps its own dtype.
+    probe = numeric.to_numpy(dtype="float64", na_value=np.nan)
+    present = ~np.isnan(probe)
+
+    nonfinite = present & ~np.isfinite(probe)
     if nonfinite.any():
         raise SOFA2InputError(
             component=component,
@@ -130,13 +145,13 @@ def validate_numeric_input(
             invalid_count=int(nonfinite.sum()),
         )
 
-    out_of_domain = pd.Series(False, index=numeric.index, dtype=bool)
+    out_of_domain = np.zeros(probe.shape, dtype=bool)
     if minimum is not None:
-        below = numeric < minimum if minimum_inclusive else numeric <= minimum
-        out_of_domain |= numeric.notna() & below
+        below = probe < minimum if minimum_inclusive else probe <= minimum
+        out_of_domain |= present & below
     if maximum is not None:
-        above = numeric > maximum if maximum_inclusive else numeric >= maximum
-        out_of_domain |= numeric.notna() & above
+        above = probe > maximum if maximum_inclusive else probe >= maximum
+        out_of_domain |= present & above
     if out_of_domain.any():
         raise SOFA2InputError(
             component=component,
@@ -147,7 +162,7 @@ def validate_numeric_input(
         )
 
     if integer:
-        fractional = numeric.notna() & ((numeric % 1).abs() > 1e-9)
+        fractional = present & (np.abs(probe % 1) > 1e-9)
         if fractional.any():
             raise SOFA2InputError(
                 component=component,

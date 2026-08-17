@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from easyicu import SOFA2InputError as PublicSOFA2InputError
+from easyicu.scores.sofa2_validation import validate_numeric_input
 from easyicu.scores.sofa2 import (
     SOFA2_COMPONENT_NAMES,
     SOFA2InputError,
@@ -285,20 +286,24 @@ def test_sofa2_resp_rejects_a_pafi_unit_error() -> None:
 
     _assert_reason(exc_info, "sofa2_resp_pafi_domain_invalid")
 
-    with pytest.raises(SOFA2InputError) as exc_info:
-        sofa2_resp(pafi=pd.Series([100_000.0]))
-
-    _assert_reason(exc_info, "sofa2_resp_pafi_domain_invalid")
+    # No ceiling on purpose: a high P/F scores 0, so an implausibly high value
+    # is benign, and a ceiling would couple this module to dictionary bounds.
+    assert sofa2_resp(pafi=pd.Series([100_000.0])).tolist() == [0]
 
 
 def test_sofa2_resp_keeps_the_derivable_pafi_range() -> None:
-    # po2 [40, 600] over fio2 [0.21, 1.0] spans the whole dictionary-derivable range.
+    """Valid under the shipped dictionary and under the pending widened bounds.
+
+    fix/concept-clinical-bounds widens po2 to [20, 700], which moves the
+    derivable P/F range to [20, 3333]. The floor must accept both extremes.
+    """
+
     score = sofa2_resp(
-        pafi=pd.Series([40.0, 120.0, 350.0, 2857.0]),
-        adv_resp=pd.Series([True] * 4),
+        pafi=pd.Series([20.0, 40.0, 120.0, 350.0, 2857.0, 3333.4]),
+        adv_resp=pd.Series([True] * 6),
     )
 
-    assert score.tolist() == [4, 3, 0, 0]
+    assert score.tolist() == [4, 4, 3, 0, 0, 0]
 
 
 def test_sofa2_aggregate_ignores_entries_beyond_the_six_components() -> None:
@@ -310,3 +315,58 @@ def test_sofa2_aggregate_ignores_entries_beyond_the_six_components() -> None:
     result = sofa2_score(frames)
 
     assert result["sofa2"].tolist() == [6]
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    ["bool[pyarrow]", "int64[pyarrow]", "float64[pyarrow]", "boolean", "Int64"],
+)
+def test_sofa2_numeric_inputs_accept_arrow_and_nullable_backings(dtype: str) -> None:
+    """The ordinary extraction path is Arrow-backed, so these must not crash.
+
+    pd.to_numeric preserves the input's extension backing, and Arrow arrays
+    raise NotImplementedError on ``%`` and on the float cast the finiteness
+    check used, so an Arrow-backed receipt column killed the aggregate with an
+    untyped error. bool[pyarrow] additionally failed the dtype allow-list
+    because it is not is_numeric_dtype, unlike numpy bool and nullable boolean.
+    """
+
+    value = pd.Series([1, None], dtype=dtype)
+
+    out = validate_numeric_input(
+        value,
+        component="sofa2_aggregate",
+        field="sofa2_resp_available",
+        minimum=0,
+        maximum=1,
+        integer=True,
+    )
+
+    assert out.notna().tolist() == [True, False]
+    assert float(out.dropna().iloc[0]) == 1.0
+
+
+def test_sofa2_arrow_backed_inputs_still_fail_closed() -> None:
+    """Normalising for the arithmetic must not weaken any contract."""
+
+    with pytest.raises(SOFA2InputError) as exc_info:
+        validate_numeric_input(
+            pd.Series([7.0, None], dtype="float64[pyarrow]"),
+            component="sofa2_aggregate",
+            field="sofa2_resp",
+            minimum=0,
+            maximum=4,
+            integer=True,
+        )
+    _assert_reason(exc_info, "sofa2_aggregate_sofa2_resp_domain_invalid")
+
+    with pytest.raises(SOFA2InputError) as exc_info:
+        validate_numeric_input(
+            pd.Series([2.5, None], dtype="float64[pyarrow]"),
+            component="sofa2_aggregate",
+            field="sofa2_resp",
+            minimum=0,
+            maximum=4,
+            integer=True,
+        )
+    _assert_reason(exc_info, "sofa2_aggregate_sofa2_resp_integer_required")
