@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -29,7 +30,17 @@ class CodexAppServerError(RuntimeError):
     """Typed App Server boundary failure with a stable reason code."""
 
     def __init__(self, code: str, message: str = "") -> None:
-        self.code = str(code)
+        raw_code = str(code or "").strip()
+        self.code = (
+            raw_code
+            if re.fullmatch(r"[a-z][a-z0-9_]{2,79}", raw_code)
+            else "codex_app_server_error"
+        )
+        self.reason_code = self.code
+        self.easyicu_safe_diagnostic = {
+            "owner": "easyicu.providers.codex_app_server_v1",
+            "reason_code": self.reason_code,
+        }
         super().__init__(message or self.code)
 
 
