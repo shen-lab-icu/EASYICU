@@ -16,7 +16,6 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Literal, cast
 
-import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from ..canonical_json import canonical_json, canonical_sha256, sha256_bytes
@@ -36,6 +35,7 @@ from ..contracts.prediction_validation import (
 )
 from ..prediction_model_fit_owner import (
     PredictionModelFitBundle,
+    prediction_model_fit_source_projection_bytes,
     revalidate_prediction_model_fit_bundle,
 )
 from ..schema import EvidenceRecord
@@ -262,42 +262,6 @@ def _validate_contract_join(
         )
 
 
-def _source_projection_bytes(
-    source_input: LoadedTypedInput,
-    spec: PredictionModelFitSpec,
-) -> bytes:
-    frame = source_input.to_pandas()
-    columns = (
-        spec.unit_id_column,
-        spec.subject_id_column,
-        spec.split_column,
-        spec.outcome_column,
-        *spec.feature_columns,
-    )
-    buffer = io.StringIO(newline="")
-    writer = csv.writer(buffer, lineterminator="\n")
-    writer.writerow(columns)
-    try:
-        for row in frame.loc[:, list(columns)].itertuples(index=False, name=None):
-            coordinates = (
-                str(row[0]),
-                str(row[1]),
-                str(row[2]),
-                str(int(row[3])),
-            )
-            features = tuple(
-                "" if pd.isna(value) else format(float(value), ".17g")
-                for value in row[4:]
-            )
-            writer.writerow((*coordinates, *features))
-    except (KeyError, TypeError, ValueError, OverflowError) as error:
-        raise PredictionModelFitEvidenceError(
-            PredictionModelFitEvidenceReason.MATERIALIZATION_INVALID,
-            "typed model source cannot be serialized canonically",
-        ) from error
-    return buffer.getvalue().encode("utf-8")
-
-
 def _split_assignment_bytes(
     source_input: LoadedTypedInput,
     spec: PredictionModelFitSpec,
@@ -418,7 +382,10 @@ def register_prediction_model_fit_validation_artifact(
         artifacts=parsed_runtime.artifacts,
     )
 
-    source_bytes = _source_projection_bytes(source_input, parsed_fit_spec)
+    source_bytes = prediction_model_fit_source_projection_bytes(
+        source_input=source_input,
+        spec=parsed_fit_spec,
+    )
     split_bytes = _split_assignment_bytes(source_input, parsed_fit_spec)
     prediction_bytes = fit_bundle.prediction_csv_bytes
     fit_sha256 = fit_bundle.receipt.receipt_sha256
