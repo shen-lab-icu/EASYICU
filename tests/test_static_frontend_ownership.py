@@ -53,14 +53,16 @@ OVER_BUDGET_JS = {
     # 4961 before its session-slot serialisation followed it.
     "screens-guided.js": 4906,
     "screens-viz.js": 4947,
-    "screens-agent.js": 2485,
+    # Project setup/run initiation moved to Guided Copilot; this route is now
+    # a project monitor only.
+    "screens-agent.js": 1974,
     "screens-extraction.js": 2060,
-    "screens-guided-pi.js": 1822,
+    # Browser-safe activity rendering moved to screens-guided-pi-activity.js.
+    "screens-guided-pi.js": 1787,
     "screens-ideas.js": 1504,
 }
 OVER_BUDGET_CSS = {
     "guided.css": 2191,
-    "agent.css": 1010,
     "patient.css": 702,
     "ideas.css": 695,
     "extraction.css": 639,

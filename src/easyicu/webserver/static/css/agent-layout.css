@@ -1,4 +1,4 @@
-/* Agent Projects focus layout. Owner: screens-agent.js / #agent route. */
+/* Project Monitor focus layout. Owner: screens-agent.js / legacy #agent route. */
 
 .ag-wrap.list-collapsed{
   grid-template-columns:minmax(0,1fr);
@@ -16,6 +16,43 @@
   white-space:nowrap;
 }
 
+/* Empty, loading, and failed project-index states are mutually exclusive. The
+   rail stays a quiet status index; the one actionable state lives here. */
+.ag-wrap-blank{ min-height:520px; }
+.ag-detail-blank{ justify-content:center; min-width:0; padding:24px; background:var(--surface); }
+.ag-monitor-state{ width:min(100%,720px); min-height:330px; margin:auto; display:flex; flex-direction:column; justify-content:center; }
+.ag-monitor-state.loading .glyph svg{ animation:ag-monitor-spin 1.2s linear infinite; }
+@keyframes ag-monitor-spin{ to{ transform:rotate(360deg); } }
+
+.ag-list-state{ display:flex; align-items:flex-start; gap:10px; margin-top:2px; padding:14px; border:1px solid var(--hair); border-radius:var(--r-2); background:var(--surface); color:var(--ink-3); }
+.ag-list-state > span{ flex:none; color:var(--ink-4); }
+.ag-list-state strong{ display:block; font-size:12px; color:var(--ink-2); }
+.ag-list-state p{ margin:4px 0 0; font-size:11px; line-height:1.45; }
+.ag-list-state.error{ border-color:color-mix(in srgb,var(--warn) 34%,var(--hair)); background:var(--warn-soft); }
+.ag-list-state.error > span{ color:var(--warn); }
+.ag-list-sync-warning{ display:flex; align-items:center; gap:7px; margin:2px 0 6px; padding:8px 9px; border-radius:var(--r-2); background:var(--warn-soft); color:var(--ink-3); font-size:10.5px; line-height:1.35; }
+.ag-list-sync-warning > span:first-child{ flex:none; color:var(--warn); }
+.ag-list-sync-warning button{ margin-left:auto; padding:0; border:0; background:transparent; color:var(--accent-ink); font:inherit; font-weight:700; cursor:pointer; }
+
+/* Five stages must fit the desktop detail pane without exposing an internal
+   scrollbar. Labels wrap only at words; descriptions collapse on laptops. */
+@media (min-width:721px){
+  .ag-pipe{ overflow:hidden; }
+  .ag-pipe .pstep{ flex:1 1 0; min-width:0; }
+  .ag-pipe .pline{ flex:0 1 30px; min-width:8px; margin-left:7px; margin-right:7px; }
+  .ag-pipe .pmeta{ min-width:0; }
+  .ag-pipe .pt,.ag-pipe .pd{ overflow-wrap:normal; word-break:normal; }
+  .ag-pipe .pt{ white-space:normal; }
+  .ag-pipe .pd{ white-space:normal; }
+}
+
+@media (min-width:721px) and (max-width:1280px){
+  .ag-pipe{ padding-left:12px; padding-right:12px; }
+  .ag-pipe .pstep{ gap:7px; }
+  .ag-pipe .pline{ min-width:5px; margin-left:5px; margin-right:5px; }
+  .ag-pipe .pd{ display:none; }
+}
+
 .ag-wrap.list-collapsed .ag-tabs,
 .ag-wrap.list-collapsed .ag-body{
   min-width:0;
@@ -29,4 +66,13 @@
   .ag-wrap.list-open{
     grid-template-columns:minmax(0,1fr);
   }
+}
+
+@media (max-width:720px){
+  .ag-detail-blank{ padding:14px; }
+  .ag-monitor-state{ min-height:300px; }
+}
+
+@media (prefers-reduced-motion:reduce){
+  .ag-monitor-state.loading .glyph svg{ animation:none; }
 }

@@ -1126,7 +1126,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `The run finished, but evidence verification blocked the Findings step.${reason}${failedEn} Artifacts were retained for review; the manuscript draft remains <strong>locked</strong>.`,
         `运行已结束，但证据核验未通过，因此没有进入 Findings。${reason}${failedZh} Artifacts 已保留供复核；稿件草稿仍保持<strong>锁定</strong>。`,
       );
-      chips = [['Review blocked checks', '@reviewBlocked'], ['Retry analysis', 'toRun'], ['Open Agent Projects', '@openAgent']];
+      chips = [['Review blocked checks', '@reviewBlocked'], ['Retry analysis', 'toRun'], ['Open Project Monitor', '@openAgent']];
       guidedRunChannel.clear(runToken);
       renderThread(); renderAside(); renderChips();
       return;
@@ -1141,8 +1141,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     thread.push({ diff: true });
     renderThread(); renderAside();
     pushBot(
-      `I can open this in Agent Projects now. Manuscript claims remain <strong>locked</strong> until human sign-off.`,
-      `现在可以在 Agent Projects 中打开它。人工签署前，稿件 claims 仍保持<strong>锁定</strong>。`,
+      `I can open this in Project Monitor now. Manuscript claims remain <strong>locked</strong> until human sign-off.`,
+      `现在可以在项目监控中打开它。人工签署前，稿件 claims 仍保持<strong>锁定</strong>。`,
     );
     chips = []; renderThread();
     guidedRunChannel.clear(runToken);
@@ -1159,7 +1159,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       `The run failed closed: <span class="mono">${esc(error)}</span>`,
       `这次 run 已 fail-closed：<span class="mono">${esc(error)}</span>`,
     );
-    chips = [['Retry analysis', 'toRun'], ['Open Agent Projects', '@openAgent']];
+    chips = [['Retry analysis', 'toRun'], ['Open Project Monitor', '@openAgent']];
     guidedRunChannel.clear(runToken);
     renderThread(); renderChips();
   }
@@ -2143,8 +2143,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const src = activeExportSource();
     return src ? t('Ready to run against the active export. No external provider is used.', '可以基于 active export 运行。不会使用外部 provider。') : t('No active export. Prepare/register data first.', '没有 active export。请先准备或注册数据。');
   }
-  // Carry the study the user configured in Copilot into Agent Projects so the
-  // full, reportable run does not start from an empty form. Mirrors the backend
+  // Carry the study configured in Copilot into the governed Research Agent
+  // handoff so a run never starts from an empty form. Mirrors the backend
   // _prefill_for shape so app.js's handoff banner surfaces the same design.
   // Machine-readable config for the Copilot -> classic extraction exit. The
   // banner shows the human hints; this is what the classic form actually
@@ -2227,7 +2227,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <span class="gdx-ico">${icon('agent', 15)}</span>
           <div>
             <strong>${t('Run Agent preflight inside Copilot', '在 Copilot 内运行 Agent 预检')}</strong>
-            <span>${t('Same /api/jobs/agent-run path as Agent Projects, defaulting to local mock/preflight and evidence checks.', '复用 Agent Projects 相同的 /api/jobs/agent-run，默认本地 mock/preflight 与证据核验。')}</span>
+            <span>${t('Uses the governed Research Agent backend, defaulting to local mock/preflight and evidence checks.', '使用受治理的 Research Agent 后端，默认本地 mock/preflight 与证据核验。')}</span>
           </div>
         </div>
         <label class="gda-question">
@@ -2249,11 +2249,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           ${guidedMetricCard(t('Evidence check', '证据核验'), gate.status || 'analysis_only', gate.reason || '')}
           ${guidedMetricCard(t('Artifacts', 'Artifacts'), fmtInt(artCount), result.project_dir ? compactPath(result.project_dir) : '')}
         </div>
-        <div class="note info" style="margin-top:10px;padding:9px 11px;"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="d" style="font-size:10.5px;margin:0;">${t('This was a local, no-cost preflight (mock provider — no external model call): it checks coverage and the evidence contract, but is not a reportable run. Continue in Agent Projects for a provider-backed plan and draft scaffold; that scaffold is still not a complete or reportable analysis. Your question and study design carry over, and external-provider use is always explicit opt-in.', '这是一次本地零成本预检（mock provider —— 不调用外部模型）：它检查覆盖率与证据合约，但不是可报告运行。你可以到 Agent Projects 生成 provider-backed 计划与草稿骨架；该骨架仍不是完整或可报告分析。研究问题与设计会一并带过去，外部 provider 始终需要显式授权。')}</div></div></div>` : ''}
+        <div class="note info" style="margin-top:10px;padding:9px 11px;"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="d" style="font-size:10.5px;margin:0;">${t('This was a local, no-cost preflight (mock provider — no external model call): it checks coverage and the evidence contract, but is not a reportable run. Provider and model selection stay in Guided Copilot; Project Monitor only reviews the resulting run, artifacts, and evidence. External-provider use is always explicit opt-in.', '这是一次本地零成本预检（mock provider —— 不调用外部模型）：它检查覆盖率与证据合约，但不是可报告运行。provider 和模型选择仍在研究引导中完成；项目监控只审阅生成的运行、artifact 和证据。外部 provider 始终需要显式授权。')}</div></div></div>` : ''}
         <div class="gdx-actions">
           <button type="button" class="btn ${guidedAgent.result ? '' : 'primary'}" data-ga-run ${!src || guidedAgent.running ? 'disabled' : ''}>${icon('play', 13)} ${guidedAgent.result ? t('Re-run preflight', '重跑预检') : t('Start local preflight', '启动本地预检')}</button>
           <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare/register data', '准备/注册数据')}</button>
-          ${guidedAgent.result ? `<button type="button" class="btn primary" data-ga-open-agent>${icon('arrow', 13)} ${t('Continue in Agent Projects', '到 Agent Projects 继续')}</button>` : ''}
+          ${guidedAgent.result ? `<button type="button" class="btn primary" data-ga-open-agent>${icon('arrow', 13)} ${t('Open Project Monitor', '打开项目监控')}</button>` : ''}
         </div>
       </div>`;
   }
@@ -3076,8 +3076,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const nounEn = kind === 'run' ? 'Agent run project' : 'guided draft';
     const nounZh = kind === 'run' ? 'Agent run 项目' : '引导草稿';
     thread.push({ bot: true, html: bi(
-      `Opened <strong>${esc(title)}</strong> as this ${nounEn} context. Memory is scoped to <span class="mono">${esc(path)}</span>; Idea Mining and Agent Projects still own their own artifacts.`,
-      `已切换到 <strong>${esc(title)}</strong> 这个${nounZh}上下文。记忆范围限定在 <span class="mono">${esc(path)}</span>；Idea Mining 和 Agent Projects 仍各自管理自己的 artifacts。`,
+      `Opened <strong>${esc(title)}</strong> as this ${nounEn} context. Memory is scoped to <span class="mono">${esc(path)}</span>; Idea Mining and the Research Agent backend still own their artifacts.`,
+      `已切换到 <strong>${esc(title)}</strong> 这个${nounZh}上下文。记忆范围限定在 <span class="mono">${esc(path)}</span>；Idea Mining 和 Research Agent 后端仍各自管理其 artifacts。`,
     ) });
     const restored = session && Array.isArray(session.messages) ? session.messages.map(threadFromSessionMessage).filter(Boolean) : [];
     if (restored.length) {
@@ -3095,17 +3095,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       else if (restoredFlow === 'run_agent' && guidedAgent) thread.push({ guidedAgent: true });
     } else if (!restored.length && kind === 'run') {
       thread.push({ bot: true, html: bi(
-        `This context is attached to an existing Agent run folder. Review artifacts or open Agent Projects; Guided will not rewrite the run outputs.`,
-        `这个上下文关联到已有 Agent run 文件夹。你可以审阅 artifacts 或打开 Agent Projects；Guided 不会改写 run 输出。`,
+        `This context is attached to an existing Agent run folder. Review artifacts here or open Project Monitor; Guided will not rewrite the run outputs.`,
+        `这个上下文关联到已有 Agent run 文件夹。你可以在这里审阅 artifacts 或打开项目监控；Guided 不会改写 run 输出。`,
       ) });
     } else if (!restored.length) {
       thread.push({ bot: true, html: bi(renderGuidedGoalCards(), renderGuidedGoalCards()) });
     }
     chips = kind === 'run'
-      ? [['Review local artifacts', '@reviewLocalRun'], ['Open Agent Projects', '@openAgent'], ['Use active export for a new run', '@activeExport']]
+      ? [['Review local artifacts', '@reviewLocalRun'], ['Open Project Monitor', '@openAgent'], ['Use active export for a new run', '@activeExport']]
       : restoredFlow === 'idea_mining'
         ? []
-        : [['Use active export', '@activeExport'], ['Continue conversation', '@noop'], ['Open Agent Projects', '@openAgent']];
+        : [['Use active export', '@activeExport'], ['Continue conversation', '@noop'], ['Open Project Monitor', '@openAgent']];
     renderThread(); renderChips();
   }
   function startFreshGuidedProjectThread(title, path) {
@@ -3190,7 +3190,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       ['idea_mining', 'spark', t('Find a Study Idea', '找研究想法'), t('Paper, PDF, review topic, or hunch → idea ledger.', '文章、PDF、综述主题或想法 → idea ledger。')],
       ['data_extraction', 'extract', t('Prepare Data', '准备/抽取数据'), t('Choose a local data folder, cohort, modules, and export format.', '选择本地数据文件夹、队列、模块和导出格式。')],
       ['review_data', 'eye', t('Review Data', '审阅已有数据'), t('Open patient, cohort, or Cross-DB review for an active export.', '打开 active export 的患者、队列或跨库审阅。')],
-      ['run_agent', 'agent', t('Run a Research Project', '运行研究项目'), t('Confirm a plan, then hand it to Agent Projects.', '确认计划后交接到研究项目。')],
+      ['run_agent', 'agent', t('Run a Research Project', '运行研究项目'), t('Confirm the plan, provider, and run here; review outputs later in Project Monitor.', '在这里确认计划、provider 与运行；之后到项目监控审阅产出。')],
     ];
     return `
       <div class="gd-frontdoor" data-guided-frontdoor>
@@ -3766,7 +3766,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `已打开 <strong>${esc(review.study_id || row.study_id || '本地研究')}</strong> / <span class="mono">${esc(review.run_id || row.run_id || 'run')}</span>：${esc(readiness)} · ${(review.artifacts || []).length} 个 artifact。除非 Agent 证据核验明确允许，草稿/reportable 仍保持锁定。`,
       );
       thread.push({ diff: true });
-      chips = [['Open in Agent Projects', '@openAgent'], ['Use active export for a new run', '@activeExport']];
+      chips = [['Open in Project Monitor', '@openAgent'], ['Use active export for a new run', '@activeExport']];
       renderThread(); renderChips();
     }).catch(err => {
       pushBot(
@@ -4110,7 +4110,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               handleText(stripTags(b.lastUser));
             } else {
               const routeLabel = b.route && b.route !== 'entry'
-                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-database comparison',agent:'Agent Projects'}[b.route]) || 'the workspace')
+                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-database comparison',agent:'Project Monitor'}[b.route]) || 'the workspace')
                 : '';
               pushBot(
                 `Continuing from the dock${routeLabel ? ` — you were on <strong>${routeLabel}</strong>` : ''}. Want to turn that into a full study?`,

@@ -109,7 +109,7 @@
     { id: 'ideas', label: ['Ideas', '想法'], ico: 'target' },
     { id: 'extraction', label: ['Extract', '抽取'], ico: 'extract' },
     { id: 'patient', label: ['Review', '审阅'], ico: 'patient' },
-    { id: 'agent', label: ['Analyze', '分析'], ico: 'agent' },
+    { id: 'agent', label: ['Monitor', '监控'], ico: 'agent' },
   ];
   const L = (v) => Array.isArray(v) ? t(v[0], v[1]) : v;
   /* A button's accessible name is its concatenated text content, so a title
@@ -272,9 +272,9 @@
         </div>` : ''}
       </div>
       ${navSection('analysis', 'Analysis & Evidence', '分析与证据', progress)}
-      <button type="button" class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent" aria-label="${navLabel(t('Agent Projects', '研究项目'), t('confirmed plan → evidence-checked draft', '确认计划 → 证据核验草稿'))}">
+      <button type="button" class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent" aria-label="${navLabel(t('Project Monitor', '项目监控'), t('runs · outputs · evidence · review', '运行 · 产出 · 证据 · 审阅'))}">
         <span class="cp-ico">${icon('agent', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Agent Projects', '研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-checked draft', '确认计划 → 证据核验草稿')}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('Project Monitor', '项目监控')}</span><span class="cp-d">${t('runs · outputs · evidence · review', '运行 · 产出 · 证据 · 审阅')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
       ${progress.planOnly ? `<div class="shared-note plan-only"><span class="ico">${icon('shield', 11)}</span><span>${t('Cross-DB comparison is plan-only: it can shape an analysis plan, but a reviewed cohort is still required before a draft.', '跨库对比仅用于制定计划：它可以塑造分析方案，但出草稿前仍需要一个已审阅的队列。')}</span></div>` : ''}

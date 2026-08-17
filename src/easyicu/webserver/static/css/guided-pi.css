@@ -202,6 +202,7 @@
 }
 .gpi-disclosure .ic{width:13px;height:13px}
 .gpi-activity[open]>summary .gpi-disclosure{transform:rotate(90deg)}
+.gpi-activity-kicker{flex:0 0 auto;padding:1px 5px;border:1px solid var(--line);border-radius:5px;color:var(--ink-4);font:650 9.5px/1.35 var(--mono);letter-spacing:.02em;text-transform:uppercase}
 .gpi-activity-title{min-width:0;color:var(--ink-3);font-weight:520}
 .gpi-activity.complete summary{color:var(--ink-4)}
 .gpi-activity-live .gpi-activity-title{color:var(--ink-2)}

@@ -32,7 +32,7 @@
       return mk(
         t('Confirm export, cohort, and modules', '确认导出、队列和模块'),
         t('Confirm the real local export, denominator, required modules, and concept mappings with the user.', '和用户确认真实本地导出、分母、所需模块和概念映射。'),
-        t('Export/cohort/module contract for Agent Projects.', '交给研究项目的导出/队列/模块契约。'),
+        t('Export/cohort/module contract for the governed Research Agent handoff.', '交给受治理 Research Agent 的导出/队列/模块契约。'),
         t('MOCK or demo exports are UI rehearsal only.', 'MOCK 或演示导出只能用于界面演练。')
       );
     }
@@ -71,7 +71,7 @@
     if (has('agent projects') || has('handoff')) {
       return mk(
         t('Create a project seed only after confirmation', '确认后再创建研究项目种子'),
-        t('Send the locked question, feasibility table, literature interpretation, and analysis steps to Agent Projects.', '把锁定问题、可行性表、文献解释和分析步骤交给研究项目。'),
+        t('Store the locked question, feasibility table, literature interpretation, and analysis steps as a governed handoff.', '把锁定问题、可行性表、文献解释和分析步骤存为受治理的交接对象。'),
         t('Metadata-only project seed.', '仅元数据的项目种子。'),
         t('Evidence checks and human sign-off remain required.', '仍然需要证据核验和人工签署。')
       );
@@ -143,8 +143,8 @@
         <div class="gdx-actions">
           <button type="button" class="btn" data-gi-replan ${guidedIdea.planning ? 'disabled' : ''}>${guidedIdea.planning ? '<span class="spin"></span>' : icon('refresh', 13)} ${t('Replan from notes', '根据说明重规划')}</button>
           <button type="button" class="btn primary" data-gi-handoff ${guidedIdea.handoffing ? 'disabled' : ''}>${icon('lock', 13)} ${t('Freeze handoff for Agent', '冻结交接给 Agent')}</button>
-          <button type="button" class="btn" data-gi-project ${!guidedIdea.handoff || guidedIdea.projectCreating ? 'disabled' : ''}>${icon('agent', 13)} ${t('Create Agent project', '创建 Agent 项目')}</button>
-          ${guidedIdea.project ? `<button type="button" class="btn" data-open="agent">${t('Open Agent Projects', '打开 Agent Projects')}</button>` : ''}
+          <button type="button" class="btn" data-gi-project ${!guidedIdea.handoff || guidedIdea.projectCreating ? 'disabled' : ''}>${icon('agent', 13)} ${t('Create project seed', '创建项目种子')}</button>
+          ${guidedIdea.project ? `<button type="button" class="btn" data-open="agent">${t('Open Project Monitor', '打开项目监控')}</button>` : ''}
         </div>
       </div>`;
   }

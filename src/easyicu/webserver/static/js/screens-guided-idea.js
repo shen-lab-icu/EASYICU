@@ -182,11 +182,11 @@
     if (guidedIdea.planning) return t('Drafting or revising the pre-Agent study plan...', '正在生成或修订 Agent 前研究计划...');
     if (guidedIdea.priorArting) return t('Checking prior art under explicit opt-in rules...', '正在按显式 opt-in 规则检查 prior art...');
     if (guidedIdea.handoffing) return t('Writing local handoff plan...', '正在写入本地 handoff plan...');
-    if (guidedIdea.projectCreating) return t('Creating metadata-only Agent project seed...', '正在创建 metadata-only Agent project seed...');
+    if (guidedIdea.projectCreating) return t('Creating metadata-only project seed...', '正在创建 metadata-only 项目种子...');
     if (guidedIdea.error) return esc(guidedIdea.error);
     if (guidedIdea.result && !guidedIdea.dataContextConfirmed) return t('Candidate idea found. Confirm a local export/cohort/module context before feasibility assessment or Agent handoff.', '已找到候选 idea。可行性评估或 Agent 交接前，需要先确认本地导出、队列与模块上下文。');
     if (guidedIdea.project) return t('Metadata-only Agent project seed created. It is not an analysis run or manuscript claim.', 'metadata-only Agent 项目种子已创建；这还不是分析运行，也不是稿件结论。');
-    if (guidedIdea.handoff) return t('Handoff draft is frozen. Create a project seed only if you want Agent Projects to continue from this confirmed context.', '交接草稿已冻结。只有在你希望 Agent Projects 从这个已确认上下文继续时，才创建项目种子。');
+    if (guidedIdea.handoff) return t('Handoff draft is frozen. Create a project seed only when you are ready to continue the confirmed setup in Guided Copilot.', '交接草稿已冻结。只有准备在研究引导中继续确认配置时，才创建项目种子。');
     if (guidedIdea.result && guidedIdea.dataContextConfirmed) return t('Data context confirmed. Review feasibility and edit the plan before any Agent handoff.', '数据上下文已确认。请先审阅可行性评估并编辑计划，再做 Agent 交接。');
     if (guidedIdea.resolved) {
       const adapter = guidedIdea.resolved.source_adapter || {};

@@ -2505,9 +2505,9 @@
         <div id="ptbody">${patientTabBody()}</div>
         <div class="nextbar accent mt-16">
           <div class="nb-ico">${icon('arrow', 16)}</div>
-          <div class="grow"><div class="nb-t">${t('Reviewed the data — what\u2019s next?', '\u6570\u636e\u5df2\u5ba1\u9605 \u2014\u2014 \u4e0b\u4e00\u6b65\uff1f')}</div><div class="nb-d">${t('Compare groups in Cohort Statistics, or assemble an auditable analysis and review-ready draft in Agent Projects.', '\u5728\u300c\u961f\u5217\u7edf\u8ba1\u300d\u505a\u7ec4\u95f4\u5bf9\u6bd4\uff0c\u6216\u5728\u300c\u7814\u7a76\u9879\u76ee\u300d\u7ec4\u88c5\u53ef\u5ba1\u8ba1\u5206\u6790\u4e0e\u5f85\u6838\u9a8c\u8349\u7a3f\u3002')}</div></div>
+          <div class="grow"><div class="nb-t">${t('Reviewed the data — what\u2019s next?', '\u6570\u636e\u5df2\u5ba1\u9605 \u2014\u2014 \u4e0b\u4e00\u6b65\uff1f')}</div><div class="nb-d">${t('Compare groups in Cohort Statistics, or ask Guided Copilot to assemble an auditable analysis and review-ready draft.', '\u5728\u300c\u961f\u5217\u7edf\u8ba1\u300d\u505a\u7ec4\u95f4\u5bf9\u6bd4\uff0c\u6216\u8ba9\u300c\u7814\u7a76\u5f15\u5bfc\u300d\u7ec4\u88c5\u53ef\u5ba1\u8ba1\u5206\u6790\u4e0e\u5f85\u6838\u9a8c\u8349\u7a3f\u3002')}</div></div>
           <button class="btn" data-nav="cohort">${icon('cohort', 13)} ${t('Cohort Statistics', '\u961f\u5217\u7edf\u8ba1')}</button>
-          <button class="btn primary" data-study-handoff data-study-source="patient" data-study-target="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','\u8fdb\u5165\u7814\u7a76\u9879\u76ee')}</button>
+          <button class="btn primary" data-study-handoff data-study-source="patient" data-study-target="guided">${icon('agent', 13)} ${t('Continue in Guided Copilot','\u5728\u7814\u7a76\u5f15\u5bfc\u4e2d\u7ee7\u7eed')}</button>
         </div>`;
       }
       /* idle */
@@ -2751,7 +2751,7 @@
       'demo concept set': '演示概念集',
       'manifest parsed · denominators previewed · aggregate payload returned': 'manifest 已解析 · 分母已预览 · 聚合载荷已返回',
       'coverage + denominators ready': '覆盖率 + 分母已就绪',
-      'locked · requires Agent sign-off': '已锁定 · 需要 Agent 签署',
+      'locked · requires reviewer sign-off': '已锁定 · 需要审阅者签署',
       'Analysis table': '分析表',
       'Real cohort aggregate': '真实队列聚合',
       'Local export group contrast': '本地导出分组对照',
@@ -3377,7 +3377,7 @@
           censorMarks: group.censor_marks || [],
         })),
       })}
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, run this cohort in Agent Projects.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入「研究项目」运行分析。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, continue with this cohort in Guided Copilot.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入「研究引导」继续。')}</span></div>
     </div>`;
   }
 
@@ -4232,7 +4232,7 @@
             </div>
           </div>`;
         }).join('')}
-        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Bars compare group summaries (medians / percentages) side by side — descriptive only, no statistical test. To test whether a difference is real, run this cohort in Agent Projects.', '条形图并排对比各组的汇总值（中位数 / 百分比）—— 仅为描述性对比，未做统计检验。想检验差异是否真实，请把该队列带入「研究项目」运行分析。')}</span></div>
+        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Bars compare group summaries (medians / percentages) side by side — descriptive only, no statistical test. To test a difference, continue with this cohort in Guided Copilot.', '条形图并排对比各组的汇总值（中位数 / 百分比）—— 仅为描述性对比，未做统计检验。想检验差异，请把该队列带入「研究引导」继续。')}</span></div>
       </div>`;
   }
 
@@ -4345,7 +4345,7 @@
           </tbody>
         </table>
       </div>
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to adjust for when you run the formal analysis in Agent Projects.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 在「研究项目」跑正式分析时需要校正它们。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 「研究引导」准备正式分析时需要处理它们。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Real local export summary. P-values and manuscript claims are intentionally withheld from this UI preview.', '真实本地导出摘要。此 UI 预览不会直接给出 p 值或稿件声明。')}</p>`;
     }
     const comparisons = {
@@ -4468,7 +4468,7 @@
           </tbody>
         </table>
       </div>
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to adjust for when you run the formal analysis in Agent Projects.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 在「研究项目」跑正式分析时需要校正它们。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 「研究引导」准备正式分析时需要处理它们。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
   }
 
@@ -4755,7 +4755,7 @@
         ],
         [
           cohortText('Draft review'),
-          cohortText('locked · requires Agent sign-off'),
+          cohortText('locked · requires reviewer sign-off'),
           'warn',
           'agent',
         ],
@@ -4763,7 +4763,7 @@
       return head + `
       <div class="card" style="padding:0;overflow:hidden;">
         <div class="row" style="justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--hair);">
-          <span style="font-weight:600;font-size:12.5px;">${cohortText('Agent preflight')}</span>
+          <span style="font-weight:600;font-size:12.5px;">${cohortText('Analysis readiness')}</span>
           <span class="mono" style="font-size:11px;color:var(--ink-4);">${cohortText('current session')}</span>
         </div>
         <div class="preflight">
@@ -4773,7 +4773,7 @@
                 <span class="dot-${s}"></span>${tt}${nav ? `<span style="margin-left:auto;color:var(--ink-4);">${icon('arrow', 12)}</span>` : ''}
               </div>
               <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;">${d}</div>
-              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Agent for evidence-bound draft review.', '聚合载荷已就绪；打开 Agent 做证据绑定草稿核验。') : t('Demo review is local-only; open Agent only after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再打开 Agent。')}</div>` : ''}
+              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Project Monitor for evidence-bound draft review.', '聚合载荷已就绪；打开项目监控做证据绑定草稿核验。') : t('Demo review is local-only; use Guided Copilot after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再使用研究引导。')}</div>` : ''}
             </div>`).join('')}
         </div>
       </div>
@@ -4782,9 +4782,9 @@
       <div id="cohbody">${cohortPanelBody()}</div>
       <div class="nextbar accent mt-16">
         <div class="nb-ico">${icon('arrow', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Compared the groups — what’s next?', '对比完组间差异 —— 下一步？')}</div><div class="nb-d">${t('Assemble an auditable analysis and a review-ready draft in Agent Projects, or benchmark the cohort across databases.', '在「研究项目」组装可审计分析与待核验草稿，或跨数据库对比队列。')}</div></div>
+        <div class="grow"><div class="nb-t">${t('Compared the groups — what’s next?', '对比完组间差异 —— 下一步？')}</div><div class="nb-d">${t('Ask Guided Copilot to assemble an auditable analysis and review-ready draft, or benchmark the cohort across databases.', '让「研究引导」组装可审计分析与待核验草稿，或跨数据库对比队列。')}</div></div>
         <button class="btn" data-nav="crossdb">${icon('benchmark', 13)} ${t('Cross-database comparison', '跨库对比')}</button>
-        <button class="btn primary" data-study-handoff data-study-source="cohort" data-study-target="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','进入研究项目')}</button>
+        <button class="btn primary" data-study-handoff data-study-source="cohort" data-study-target="guided">${icon('agent', 13)} ${t('Continue in Guided Copilot','在研究引导中继续')}</button>
       </div>`;
     },
   };
