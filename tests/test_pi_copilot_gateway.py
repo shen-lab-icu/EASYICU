@@ -656,6 +656,51 @@ def test_sidecar_environment_is_allowlisted_and_workspace_is_private(
     }
 
 
+def test_codex_account_gateway_accepts_only_the_exact_isolated_auth_coordinate(
+    tmp_path: Path,
+) -> None:
+    auth_file = (tmp_path / "codex" / "auth.json").resolve()
+    auth_file.parent.mkdir()
+    auth_file.write_text("{}", encoding="utf-8")
+    auth_file.chmod(0o600)
+    binding = "a" * 64
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path / "home"),
+        "EASYICU_PI_PROVIDER": "openai-codex",
+        "EASYICU_PI_MODEL": "gpt-5.6-luna",
+        "EASYICU_PI_BASE_URL": "https://chatgpt.com/backend-api",
+        "EASYICU_PI_API": "openai-codex-responses",
+        "EASYICU_PI_CODEX_AUTH_FILE": str(auth_file),
+        "EASYICU_PI_CODEX_SESSION_SHA256": binding,
+        "EASYICU_PI_API_KEY": "must-not-be-used",
+    }
+
+    gateway = PiGatewayClient(
+        app_dir=APP_DIR,
+        session_dir=tmp_path / "sessions",
+        environ=environment,
+        account_binding_sha256=binding,
+    )
+
+    assert gateway.account_binding_sha256 == binding
+    assert "EASYICU_PI_API_KEY" not in gateway.environ
+    assert gateway.environ["EASYICU_PI_CODEX_AUTH_FILE"] == str(auth_file)
+    assert gateway.environ["EASYICU_PI_CODEX_SESSION_SHA256"] == binding
+    account_status = gateway.installation_status()
+    assert account_status["provider_connection_verified"] is True
+    assert account_status["provider_configuration"]["inference_verified"] is False
+
+    with pytest.raises(PiCopilotError) as mismatch:
+        PiGatewayClient(
+            app_dir=APP_DIR,
+            session_dir=tmp_path / "other-sessions",
+            environ=environment,
+            account_binding_sha256="b" * 64,
+        )
+    assert mismatch.value.code == "pi_codex_account_authority_invalid"
+
+
 def test_reconfigure_preserves_independent_shell_budget_settings(
     tmp_path: Path,
 ) -> None:

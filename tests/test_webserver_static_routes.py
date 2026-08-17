@@ -880,6 +880,10 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert "data-gpi-codex-login" in provider_js
     assert "data-gpi-codex-device" in provider_js
     assert "data-gpi-codex-model" in provider_js
+    assert "ONE MODEL CONNECTION" in provider_js
+    assert "same selected provider and model powers" in provider_js
+    assert "Conversation model API" not in provider_js
+    assert "Analysis model" not in provider_js
     assert "research_provider: state.researchProvider" in guided_js
     assert "startPiCopilotCodexLogin" in guided_js
     assert "AGENT_PROVIDER_PANEL" not in agent_js
@@ -892,7 +896,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert provider_pos != -1 and main_pos != -1
     assert provider_pos < main_pos
     assert (
-        "js/screens-guided-pi-provider.js?v=20260816-copilot-provider-owner1"
+        "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"
         in index_html
     )
 
