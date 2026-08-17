@@ -79,6 +79,7 @@ from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
+    ObservationSemantics,
     ResearchContext,
     UserPreferences,
     VariableRole,
@@ -641,13 +642,11 @@ def test_foundation_schema_compiles_robustness_shape_invariant() -> None:
     schema = json.loads(request.schema_json)
     branches = schema["$defs"]["ProgressiveRobustnessIntent"]["anyOf"]
 
-    assert len(branches) == 2
+    assert len(branches) == 1
     by_strategy = {
         branch["properties"]["missing_strategy"]["const"]: branch
         for branch in branches
     }
-    no_missing = by_strategy["none"]["properties"]
-    assert no_missing["complete_case_variables"]["maxItems"] == 0
     complete_case = by_strategy["complete_case"]["properties"]
     assert complete_case["axis"] == {"type": "string", "const": "missing"}
     assert complete_case["complete_case_variables"]["minItems"] == 1
@@ -1119,6 +1118,118 @@ def test_descriptive_compiler_rejects_effect_robustness_before_plan_assembly() -
         == "progressive_descriptive_robustness_unavailable"
     )
     assert caught.value.path == "robustness_intents"
+
+
+def test_progressive_foundation_rejects_non_replayable_robustness_intent() -> None:
+    payload = _payload()
+    payload["robustness_intents"] = [
+        {
+            "spec_id": "alternate_population",
+            "axis": "cohort",
+            "description": "Restrict the analysis to an alternate population.",
+            "missing_strategy": "none",
+            "complete_case_variables": [],
+        }
+    ]
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=_context(),
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_robustness_intent_not_replayable"
+    )
+    assert caught.value.path == "robustness_intents.alternate_population"
+
+
+def test_complete_case_rejects_conditional_event_time_as_not_applicable() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="event_time",
+                    role=VariableRole.TIME,
+                    dtype="float64",
+                    observation_semantics=ObservationSemantics(
+                        kind="conditional_event_time",
+                        event_status_column="outcome_flag",
+                        representative_column="event_time",
+                        time_origin="cohort_entry",
+                        time_unit="h",
+                    ),
+                ),
+            ]
+        }
+    )
+    payload = _payload()
+    payload["robustness_intents"][0]["complete_case_variables"].append(
+        "event_time"
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=context,
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_complete_case_includes_not_applicable_time"
+    )
+    assert caught.value.path.endswith("complete_case_variables")
+
+
+def test_outline_requires_custom_owner_for_explicit_separate_product() -> None:
+    payload = _payload()
+    payload["steps"] = [
+        step for step in payload["steps"] if step["module_id"] != "custom_analysis"
+    ]
+    outline = ProgressivePlanOutline.model_validate(_outline_payload(payload))
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            required_custom_products=("table:prespecified_sensitivity",),
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_outline_separate_analysis_owner_missing"
+    )
+    assert caught.value.details["findings"][0]["required_products"] == [
+        "table:prespecified_sensitivity"
+    ]
+
+
+def test_outline_prompt_projects_explicit_separate_product_without_case_rules() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                must_have_outputs=(
+                    "In a separate analysis step, emit "
+                    "table:prespecified_sensitivity."
+                )
+            )
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[1].content
+
+    assert "Host-resolved separate-analysis obligations" in prompt
+    assert '"table:prespecified_sensitivity"' in prompt
+    assert "custom_analysis outline step" in prompt
 
 
 @pytest.mark.parametrize(

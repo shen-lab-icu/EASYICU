@@ -281,6 +281,38 @@ def validate_progressive_foundation(
             "effect-style robustness intents",
             path="robustness_intents",
         )
+    variables = {item.name: item for item in context.variables}
+    for intent in foundation.robustness_intents:
+        if intent.missing_strategy != "complete_case":
+            raise _fail(
+                "progressive_robustness_intent_not_replayable",
+                "the progressive v1 robustness replay can compile only an "
+                "explicit complete-case missing-data specification; timing, "
+                "cohort/readmission, outcome-definition, and functional-form "
+                "analyses require a separate custom_analysis step",
+                path=f"robustness_intents.{intent.spec_id}",
+            )
+        conditional_event_times = [
+            name
+            for name in intent.complete_case_variables
+            if (
+                (descriptor := variables.get(name)) is not None
+                and descriptor.observation_semantics is not None
+                and descriptor.observation_semantics.kind
+                == "conditional_event_time"
+            )
+        ]
+        if conditional_event_times:
+            raise _fail(
+                "progressive_complete_case_includes_not_applicable_time",
+                "complete-case membership cannot require conditional event-time "
+                "columns whose event-absent rows are typed as not applicable: "
+                + ", ".join(conditional_event_times),
+                path=(
+                    f"robustness_intents.{intent.spec_id}."
+                    "complete_case_variables"
+                ),
+            )
 
 
 def _compile_robustness_intents(
@@ -1394,6 +1426,16 @@ def compile_progressive_plan(
             str(exc),
             path="analysis_type",
         ) from exc
+    validate_progressive_foundation(
+        ProgressivePlanFoundation(
+            cohort=skeleton.cohort,
+            display_labels=skeleton.display_labels,
+            robustness_intents=skeleton.robustness_intents,
+            know_how_decisions=skeleton.know_how_decisions,
+        ),
+        context=context,
+        analysis_type=canonical_type,
+    )
     allowed_modules = set(
         progressive_module_ids_for_analysis_types((canonical_type,))
     )
@@ -1407,13 +1449,6 @@ def compile_progressive_plan(
                 step_index=index,
                 path="module_id",
             )
-    if canonical_type == "descriptive_epidemiology" and skeleton.robustness_intents:
-        raise _fail(
-            "progressive_descriptive_robustness_unavailable",
-            "descriptive_epidemiology cannot compile effect-style robustness "
-            "intents without a fitted primary effect and interval",
-            path="robustness_intents",
-        )
     variables = _variable_index(context)
     cohort = _validate_progressive_cohort_intent(
         skeleton.cohort,
