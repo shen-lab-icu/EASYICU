@@ -96,9 +96,11 @@ def sensitivity_output_instruction() -> str:
         f"with exact columns [{columns}] and one row for each analysis_id "
         f"[{rows}]. The landmark row must require survival to 24 hours and "
         "exclude negative death times; the repeated-stay row must restrict to "
-        "non-readmission ICU stays; the flexible row must use non-linear age "
-        "and Charlson terms. Every model row must report n_stays, n_deaths, "
-        "odds_ratio, ci_low, and ci_high."
+        "non-readmission ICU stays, set readmission_restriction to "
+        "non_readmission_only, and use the readmission indicator only for that "
+        "restriction rather than as a now-constant model covariate; the flexible "
+        "row must use non-linear age and Charlson terms. Every model row must "
+        "report finite n_stays, n_deaths, odds_ratio, ci_low, and ci_high."
     )
 
 
@@ -668,11 +670,12 @@ def _validate_sensitivity(
                 "The landmark sensitivity did not prove the 24-hour alive-at-landmark protocol.",
             )
         )
-    if (
-        str(
-            table.loc["non_readmission_icu_stays", "readmission_restriction"]
-        ).strip()
-        != "non_readmission_only"
+    readmission_restriction = table.loc[
+        "non_readmission_icu_stays", "readmission_restriction"
+    ]
+    if not (
+        str(readmission_restriction).strip() == "non_readmission_only"
+        or _truthy(readmission_restriction)
     ):
         issues.append(
             _issue(
