@@ -957,6 +957,7 @@ def _compile_robustness_spec(
 def _compile_inputs(
     *,
     context: ResearchContext,
+    skeleton: ProgressivePlanSkeleton,
     step: ProgressiveSkeletonStep,
     step_index: int,
     variables: Mapping[str, Any],
@@ -966,8 +967,25 @@ def _compile_inputs(
     reserved_coordinates = set(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
+    raw_names = list(step.raw_inputs)
+    if (
+        step.module_id == "custom_analysis"
+        and step.planned_analysis_role == "sensitivity"
+        and step.sensitivity_spec_ids
+    ):
+        primary_producer_ids = {
+            reference.producer_step_id
+            for reference in step.product_inputs
+            if reference.product_id == "table:adjusted_association_estimates"
+        }
+        for upstream in skeleton.steps:
+            if (
+                upstream.step_id in primary_producer_ids
+                and upstream.planned_analysis_role == "primary"
+            ):
+                raw_names.extend(upstream.raw_inputs)
     raw = _require_variables(
-        [name for name in step.raw_inputs if name not in reserved_coordinates],
+        [name for name in raw_names if name not in reserved_coordinates],
         variables=variables,
         step=step,
         step_index=step_index,
@@ -1126,6 +1144,7 @@ def _compile_one_step(
     _validate_outputs(output_pairs, step=step, step_index=step_index)
     inputs, consumption = _compile_inputs(
         context=context,
+        skeleton=skeleton,
         step=step,
         step_index=step_index,
         variables=variables,
