@@ -14,6 +14,18 @@ from easyicu.webserver import provider_adapter
 SESSION_SHA256 = "b" * 64
 
 
+def test_planner_canary_attempt_budget_funds_progressive_boundaries() -> None:
+    canary = provider_adapter.web_research_agent_hard_stop_limits("planner_canary")
+    full = provider_adapter.web_research_agent_hard_stop_limits("full_reviewed")
+
+    assert canary.max_provider_attempts_per_run == 32
+    assert canary.max_provider_attempts_per_batch == 32
+    assert canary.max_provider_attempts_per_run < full.max_provider_attempts_per_run
+    assert canary.max_total_tokens_per_run == 1_200_000
+    assert canary.max_estimated_cost_usd_per_batch == 30.0
+    assert canary.max_wall_clock_seconds_per_task == 1_800.0
+
+
 def _codex_user_environment(tmp_path: Path) -> dict[str, str]:
     home = tmp_path / "user-home"
     codex_home = tmp_path / "user-codex-home"
