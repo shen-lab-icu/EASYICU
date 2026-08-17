@@ -513,10 +513,21 @@ def restore_durable_human_review_pause(
         raise HumanReviewCheckpointError(
             "durable human-review Plan handoff is invalid"
         ) from exc
-    cohort_concept_ids = progressive_cohort_concept_ids(
-        agent_context,
-        tuple(variable.name for variable in agent_context.variables),
+    cohort_concept_ids = tuple(
+        sorted(
+            progressive_cohort_concept_ids(
+                agent_context,
+                tuple(variable.name for variable in agent_context.variables),
+            )
+        )
     )
+    sealed_cohort_concept_ids = tuple(
+        str(item) for item in list(handoff.get("cohort_concept_ids") or ())
+    )
+    if sealed_cohort_concept_ids and sealed_cohort_concept_ids != cohort_concept_ids:
+        raise HumanReviewCheckpointError(
+            "durable human-review cohort concept authority changed after the pause"
+        )
     try:
         with cohort_concept_id_scope(cohort_concept_ids):
             plan = AnalysisPlan.model_validate(handoff["plan"])
@@ -597,6 +608,7 @@ def restore_durable_human_review_pause(
             for item in list(handoff.get("direct_comparator_literature_keys") or ())
         ),
         preplan_literature=preplan_literature,
+        cohort_concept_ids=cohort_concept_ids,
     )
 
     trajectory_binding = None

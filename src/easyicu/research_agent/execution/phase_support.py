@@ -1448,6 +1448,7 @@ def _step_try_materialize_cohort_from_prose(
     universe_columns: Any,
     cohort_path: Path,
     runner: Any,
+    cohort_concept_ids: Sequence[str] = (),
 ) -> Tuple[bool, Path, Any]:
     """Extract the agent's prose 纳排 into typed predicates, materialise the
     filtered analysis cohort, and re-point the runner at it.
@@ -1540,12 +1541,14 @@ def _step_try_materialize_cohort_from_prose(
             prompt_pack_version=prompt_version,
             llm_signature=llm_signature,
             allow_empty_promotion=True,
+            cohort_concept_ids=cohort_concept_ids,
         )
         result = materialize_locked_analysis_cohort(
             run_dir=run_dir,
             plan=materialization_plan,
             universe_path=universe_path,
             context=context,
+            cohort_concept_ids=cohort_concept_ids,
         )
     except MaterializedMetadataError:
         raise

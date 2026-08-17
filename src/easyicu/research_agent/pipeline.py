@@ -3272,6 +3272,10 @@ class ResearchAgentPipeline:
         for planned_step in plan.steps:
             bind_table_one_execution_spec(planned_step, agent_context)
             bind_step_declared_levels(planned_step, agent_context)
+        cohort_concept_ids = progressive_cohort_concept_ids(
+            agent_context,
+            tuple(variable.name for variable in agent_context.variables),
+        )
         normalized_plan = _plan_lifecycle.build_normalized_plan_lineage(
             proposed_plan=generation.proposed_plan,
             proposed_source=plan_generation_mode,
@@ -3282,11 +3286,9 @@ class ResearchAgentPipeline:
                 "resume_with_authority_restore",
             },
             host_scientific_semantics_changed=not reused_prior_plan,
-            cohort_concept_ids=progressive_cohort_concept_ids(
-                agent_context,
-                tuple(variable.name for variable in agent_context.variables),
-            ),
+            cohort_concept_ids=cohort_concept_ids,
         )
+        cohort_concept_ids = normalized_plan.proposed.cohort_concept_ids
         write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
         if not reused_prior_plan:
             plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
@@ -3350,6 +3352,7 @@ class ResearchAgentPipeline:
             evidence=evidence,
             prompt_pack_version=prompt_version,
             llm_signature=llm_signature,
+            cohort_concept_ids=cohort_concept_ids,
         )
         write_locked_robustness_specs(
             run_dir=run_dir,
@@ -3370,6 +3373,7 @@ class ResearchAgentPipeline:
                 plan=plan,
                 universe_path=cohort_path,
                 context=context,
+                cohort_concept_ids=cohort_concept_ids,
             )
             if analysis_cohort["status"] == "applied":
                 findings.append(
@@ -3461,6 +3465,7 @@ class ResearchAgentPipeline:
             allowed_literature_citation_keys=tuple(allowed_literature_citation_keys),
             direct_comparator_literature_keys=tuple(direct_comparator_literature_keys),
             preplan_literature=preplan_literature,
+            cohort_concept_ids=cohort_concept_ids,
         )
 
     def _run_plan_phase(
@@ -4499,6 +4504,7 @@ class ResearchAgentPipeline:
                 if plan_result.preplan_literature is not None
                 else None
             ),
+            "cohort_concept_ids": list(plan_result.cohort_concept_ids),
             "repro_envelope": repro_payload,
         }
         execution_coordinates = {
