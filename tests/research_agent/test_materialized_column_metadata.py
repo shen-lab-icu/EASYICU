@@ -75,12 +75,16 @@ from easyicu.research_agent.authority.run_input import (
 )
 from easyicu.research_agent.research_context.typed import (
     CanonicalColumnBinding,
+    RESEARCH_CONTEXT_V2_SCHEMA_VERSION,
     ResearchContextV2,
+    ResearchContextV3,
     binding_preserves_analysis_range,
     canonical_column_binding,
     descriptor_physical_updates,
     effective_analysis_plausibility_range,
     materialized_input_prompt_attachment,
+    migrate_research_context_v2,
+    parse_research_context,
     resolved_raw_input_contracts,
 )
 
@@ -264,6 +268,66 @@ def _build_v2_context(
     return context
 
 
+def _as_archived_v2_payload(context: ResearchContextV3) -> dict[str, object]:
+    payload = context.model_dump(mode="json")
+    payload["schema_version"] = RESEARCH_CONTEXT_V2_SCHEMA_VERSION
+    for variable in payload["variables"]:
+        if variable.get("analysis_window_role") == "outer_observation_window":
+            variable["analysis_window_role"] = None
+    return payload
+
+
+def test_archived_v2_context_reads_exactly_and_upgrades_explicitly(
+    tmp_path: Path,
+) -> None:
+    current = _build_v2_context(tmp_path)
+    assert isinstance(current, ResearchContextV3)
+    archived_payload = _as_archived_v2_payload(current)
+    original_payload = json.loads(json.dumps(archived_payload))
+
+    archived = parse_research_context(archived_payload)
+
+    assert type(archived) is ResearchContextV2
+    assert archived.model_dump(mode="json") == original_payload
+    assert archived_payload == original_payload
+
+    upgraded = migrate_research_context_v2(archived)
+    assert type(upgraded) is ResearchContextV3
+    assert upgraded.schema_version == "easyicu.research_context/3"
+    assert any(
+        variable.analysis_window_role == "outer_observation_window"
+        for variable in upgraded.variables
+    )
+
+
+def test_v3_rejects_a_missing_or_conflicting_bound_window_role(
+    tmp_path: Path,
+) -> None:
+    current = _build_v2_context(tmp_path)
+    assert isinstance(current, ResearchContextV3)
+    payload = current.model_dump(mode="python")
+    variable = next(
+        item
+        for item in payload["variables"]
+        if item.get("analysis_window_role") == "outer_observation_window"
+    )
+    variable["analysis_window_role"] = None
+
+    with pytest.raises(ValueError, match="analysis_window_role"):
+        ResearchContextV3.model_validate(payload)
+
+    archived_payload = _as_archived_v2_payload(current)
+    archived_variable = next(
+        item
+        for item in archived_payload["variables"]
+        if item.get("analysis_window") is not None
+    )
+    archived_variable["analysis_window_role"] = "exposure_definition"
+    archived = ResearchContextV2.model_validate(archived_payload)
+    with pytest.raises(ValueError, match="conflicts with typed column binding"):
+        migrate_research_context_v2(archived)
+
+
 def test_resolved_raw_input_contracts_bind_domain_and_range_policy(
     tmp_path: Path,
 ) -> None:
@@ -324,7 +388,7 @@ def test_resolved_raw_input_contracts_bind_sealed_observed_levels(
         )
         for variable in context.variables
     ]
-    context = ResearchContextV2.model_validate(
+    context = type(context).model_validate(
         context.model_dump(mode="python") | {"variables": variables}
     )
 
@@ -354,7 +418,7 @@ def test_resolved_raw_input_contracts_reject_unbounded_or_malformed_levels(
             )
             for variable in context.variables
         ]
-        return ResearchContextV2.model_validate(
+        return type(context).model_validate(
             context.model_dump(mode="python") | {"variables": variables}
         )
 
@@ -1050,7 +1114,7 @@ def test_v2_scoped_context_cannot_drop_selected_typed_bindings(
     cohort["column_binding_payload_sha256"] = binding_payload_sha256({})
 
     with pytest.raises(ValueError, match="lack typed cohort bindings"):
-        ResearchContextV2.model_validate(payload)
+        type(context).model_validate(payload)
 
 
 def test_v2_rejects_coerced_numeric_authority_fields(tmp_path: Path) -> None:
@@ -1059,12 +1123,12 @@ def test_v2_rejects_coerced_numeric_authority_fields(tmp_path: Path) -> None:
     payload["materialized_inputs"]["cohort"]["cohort_rows"] = "2"
 
     with pytest.raises(ValueError):
-        ResearchContextV2.model_validate(payload)
+        type(context).model_validate(payload)
 
     payload = context.model_dump(mode="python")
     payload["materialized_inputs"]["cohort"]["cohort_size"] = True
     with pytest.raises(ValueError):
-        ResearchContextV2.model_validate(payload)
+        type(context).model_validate(payload)
 
 
 def test_v2_prompt_revalidates_nested_authority_and_is_bounded(

@@ -1,5 +1,18 @@
 (function () {
-  const COLORS = ['var(--accent)', '#2563eb', '#0f766e', '#b45309', '#7c3aed', '#be123c'];
+  /* Sixth copy of the palette, gone. This fallback runs when the ECharts
+     shell is missing, so it is exactly where a divergence goes unnoticed: its
+     local list still opened with the teal accent next to #2563eb — the
+     converging pair the shared order was changed to break up — and drew every
+     trace with the same stroke. */
+  function colour(index) {
+    return window.EU_PALETTE.color(index);
+  }
+
+  /* SVG equivalent of the ECharts stroke: `[7, 4]` becomes "7 4". */
+  function dashArray(index) {
+    const dash = window.EU_PALETTE.dashPattern(index);
+    return dash ? ` stroke-dasharray="${dash.join(' ')}"` : '';
+  }
   // Only concepts with an absolute, payload-supplied reference are eligible.
   // Relative definitions such as ΔSOFA are intentionally excluded.
   const ABSOLUTE_REFERENCE_FEATURES = new Set([
@@ -125,7 +138,7 @@
     const values = samples.values;
     if (values.length < 2 || !helpers || !helpers.axisSpark) return '';
     const label = signalLabel(sig, helpers);
-    const color = COLORS[index % COLORS.length];
+    const color = colour(index);
     const unit = sig && sig.unit ? sig.unit : '';
     const fallbackChart = helpers.axisSpark(values, 360, 132, color, {
       unit,
@@ -423,7 +436,8 @@
       return {
         trace: { ...trace, values: samples.values, times: samples.times },
         values: samples.values,
-        color: COLORS[index % COLORS.length],
+        color: colour(index),
+        dash: dashArray(index),
       };
     }).filter(row => row.values.length >= 2);
     if (series.length < 2) return '';
@@ -459,7 +473,7 @@
             const points = row.values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(' ');
             const last = row.values[row.values.length - 1];
             return `
-              <polyline points="${points}" fill="none" stroke="${row.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+              <polyline points="${points}" fill="none" stroke="${row.color}"${row.dash} stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
               <circle cx="${x(row.values.length - 1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="4" fill="${row.color}" />`;
           }).join('')}
           <text x="${left}" y="${height - 10}" class="axis">${hEsc(helpers, hT(helpers, 'obs 1', '第1点'))}</text>
@@ -560,7 +574,7 @@
               const last = values[values.length - 1];
               const hidden = Math.max(0, Number(trace.point_count || values.length) - values.length);
               return `<div class="pt-trace-key">
-                <i style="background:${COLORS[index % COLORS.length]};"></i>
+                <i style="background:${colour(index)};"></i>
                 <span>${hEsc(helpers, trace.label || trace.ref || `${hT(helpers, 'Entity', '实体')} ${index + 1}`)}</span>
                 <b>${hEsc(helpers, helpers.fmtNum ? helpers.fmtNum(last, 2) : String(last))}</b>
                 ${hidden ? `<em>+${hFmtInt(helpers, hidden)}</em>` : ''}

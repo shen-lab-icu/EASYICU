@@ -53,14 +53,14 @@ def import_table(
             csv_files.append(data_dir / file_path)
 
     if not csv_files:
-        LOGGER.warning(f"No source files found for table {table_name}")
-        return
+        raise FileNotFoundError(f"No source files configured for table {table_name}")
 
     # Check if files exist
     missing = [f for f in csv_files if not f.exists()]
     if missing:
-        LOGGER.error(f"Missing source files: {missing}")
-        return
+        raise FileNotFoundError(
+            f"Missing source files for table {table_name}: {missing}"
+        )
 
     if verbose:
         LOGGER.info(f"Importing table {table_name} from {len(csv_files)} file(s)")

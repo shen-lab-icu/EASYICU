@@ -88,6 +88,7 @@ from easyicu.webserver.agent_review_recovery import (
 )
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
+_RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
 _MAX_MANUSCRIPT_PREVIEW = 24_000
 _MAX_FIGURE_EMBED_BYTES = 420_000
 _MAX_FIGURE_EMBED_TOTAL = 1_400_000
@@ -2631,6 +2632,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             study = record.study
             credential_source = record.credential_source
             budget_mode = record.budget_mode
+            provider_name = _clean_text(record.provider_meta.get("provider"), 64)
         except WebReviewRecoveryError:
             return None
     else:
@@ -2638,6 +2640,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         study = entry.study
         credential_source = entry.credential_source
         budget_mode = entry.budget_mode
+        provider_name = _clean_text(entry.provider.get("provider"), 64)
     return {
             "run_id": pending.run_id,
             "study_id": _clean_text(study.get("id"), 160),
@@ -2646,6 +2649,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             ),
             "resume_scope": pending.resume_scope,
             "credential_source": credential_source,
+            "provider": provider_name,
             "budget_mode": budget_mode,
             "resumable_here": bool(pending.resumable_here),
             "requests": [
@@ -2762,6 +2766,7 @@ def _recover_pending_run(
             "endpoint_fingerprint",
             "credential_header",
             "base_url_endpoint",
+            "session_binding_sha256",
         ):
             if provider_public.get(key) != record.provider_public.get(key):
                 raise WebReviewRecoveryError(
@@ -2872,6 +2877,34 @@ def _compile_plan_revision_contract(
     return render_agent_plan_revision_contract(parsed_review)
 
 
+def _validated_pipeline_credential_source(
+    credential_source: str,
+    *,
+    provider: Mapping[str, Any],
+) -> str:
+    """Bind one Web credential source to the matching provider family."""
+
+    selected = str(credential_source or "").strip().lower()
+    if selected not in {"pi_verified", "codex_user_auth"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_credential_source_invalid",
+            "Choose one server-verified Research Agent credential source.",
+        )
+    provider_name = _clean_text(provider.get("provider"), 64).lower()
+    account_provider = provider_adapter.is_user_account_provider(provider_name)
+    if selected == "codex_user_auth" and not account_provider:
+        raise ResearchPipelineRunError(
+            "research_pipeline_codex_user_auth_provider_required",
+            "Codex user authentication requires the reviewed Codex account provider.",
+        )
+    if selected == "pi_verified" and account_provider:
+        raise ResearchPipelineRunError(
+            "research_pipeline_codex_user_auth_required",
+            "The Codex account provider requires this browser user's ChatGPT login.",
+        )
+    return selected
+
+
 def make_research_pipeline_run_runner(
     *,
     export_path: str,
@@ -2879,6 +2912,7 @@ def make_research_pipeline_run_runner(
     project_root: Optional[str],
     provider: Mapping[str, Any],
     provider_environment: Optional[Mapping[str, str]] = None,
+    credential_source: str = "pi_verified",
     literature_search_authorized: bool = False,
     plan_revision_source_run_id: str = "",
     budget_mode: str = "planner_canary",
@@ -2958,10 +2992,18 @@ def make_research_pipeline_run_runner(
             "research_pipeline_budget_mode_invalid",
             "Choose an explicit reviewed Research Agent budget mode.",
         ) from exc
+    selected_credential_source = _validated_pipeline_credential_source(
+        credential_source,
+        provider=provider,
+    )
     if provider_environment is None:
         raise ResearchPipelineRunError(
-            "research_pipeline_pi_verified_credentials_required",
-            "A verified Pi provider credential is required for this pipeline.",
+            (
+                "research_pipeline_codex_user_auth_required"
+                if selected_credential_source == "codex_user_auth"
+                else "research_pipeline_pi_verified_credentials_required"
+            ),
+            "A verified provider credential is required for this pipeline.",
         )
     if not project_root:
         raise ResearchPipelineRunError(
@@ -2988,11 +3030,20 @@ def make_research_pipeline_run_runner(
         raise ResearchPipelineRunError(exc.code, exc.message, details=exc.details) from exc
     research_provider_environment = dict(provider_environment)
     source_run_id = _clean_text(plan_revision_source_run_id, 160)
-    selected_runner_image = str(runner_image or "").strip()
-    if runner_image is not None and not selected_runner_image:
+    environment_runner_image = os.environ.get(_RUNNER_IMAGE_ENV)
+    raw_runner_image = (
+        runner_image if runner_image is not None else environment_runner_image
+    )
+    selected_runner_image = str(raw_runner_image or "").strip()
+    if raw_runner_image is not None and (
+        not selected_runner_image
+        or "\n" in selected_runner_image
+        or "\r" in selected_runner_image
+        or "\0" in selected_runner_image
+    ):
         raise ResearchPipelineRunError(
             "research_pipeline_runner_image_invalid",
-            "The server-owned runner image cannot be empty.",
+            "The server-owned runner image must be one non-empty reference.",
         )
 
     def runner(job: Any) -> Dict[str, Any]:
@@ -3146,7 +3197,7 @@ def make_research_pipeline_run_runner(
             submission_profile_ref = (
                 "npj_dm_e1_demo_dev/20260815"
                 if selected_budget_mode == "full_reviewed"
-                else "npj_dm_e1_canary_dev/20260814"
+                else "npj_dm_e1_canary_dev/20260816"
             )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()
@@ -3246,7 +3297,7 @@ def make_research_pipeline_run_runner(
                 ),
                 provider_meta=dict(provider),
                 provider_public=dict(provider_public),
-                credential_source="pi_verified",
+                credential_source=selected_credential_source,
                 budget_mode=selected_budget_mode,
                 prepared_package_binding=prepared_package_binding,
                 pipeline_config=config_payload,
@@ -3331,7 +3382,7 @@ def make_research_pipeline_run_runner(
                     provider=provider_public,
                     acquisition=acquisition,
                     created_at=time.time(),
-                    credential_source="pi_verified",
+                    credential_source=selected_credential_source,
                     budget_mode=selected_budget_mode,
                     prepared_package_binding=prepared_package_binding,
                     provider_hard_stop=provider_hard_stop,

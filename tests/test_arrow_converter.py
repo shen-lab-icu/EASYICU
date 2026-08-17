@@ -88,7 +88,7 @@ def test_id_partition_math_matches_numpy_searchsorted(tmp_path):
 
     # Reference: per-partition expected counts.
     expected = np.bincount(
-        np.searchsorted(breaks, ids, side="right") + 1,
+        np.searchsorted(breaks, ids, side="left") + 1,
         minlength=n_partitions + 2,
     )[1:n_partitions + 1]
 

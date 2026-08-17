@@ -1,4 +1,4 @@
-"""Exact claim boundary for the host-owned descriptive primary executor.
+"""Exact claim boundary for the host-owned descriptive result executor.
 
 The broad ``descriptive_epidemiology`` family also contains agent-authored
 Table One and measurement-audit steps.  Those steps must remain
@@ -34,11 +34,25 @@ def exposure_outcome_distribution_execution_verdict(step: Any) -> OwnershipVerdi
     role = str(getattr(step, "planned_analysis_role", "") or "").strip().casefold()
     method = str(getattr(step, "method", "") or "").strip().casefold()
     claim = getattr(step, "descriptive_claim", None)
+    declared_capability = str(
+        getattr(step, "scientific_capability", "") or ""
+    ).strip()
     primary_is_descriptive = bool(
         role == "primary"
         and method == "descriptive"
         and claim is not None
         and getattr(claim, "claim_ceiling", None) == "descriptive_only"
+    )
+    secondary_is_descriptive = bool(
+        role == "secondary"
+        and method == "descriptive"
+        and (
+            (
+                claim is not None
+                and getattr(claim, "claim_ceiling", None) == "descriptive_only"
+            )
+            or declared_capability == DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID
+        )
     )
     declared_outputs = [
         str(value or "").strip()
@@ -58,13 +72,13 @@ def exposure_outcome_distribution_execution_verdict(step: Any) -> OwnershipVerdi
             reason="the step does not declare a supported exposure/outcome distribution",
         )
     if method not in {"descriptive", "distribution"} or not (
-        role == "auxiliary" or primary_is_descriptive
+        role == "auxiliary" or primary_is_descriptive or secondary_is_descriptive
     ):
         return OwnershipVerdict.wrong_shape(
             EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
             reason=(
-                "the step is neither an auxiliary distribution nor a primary "
-                "descriptive-only result"
+                "the step is neither an auxiliary distribution nor a typed "
+                "primary/secondary descriptive-only result"
             ),
         )
     if declared_outputs != [EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT]:
@@ -77,9 +91,6 @@ def exposure_outcome_distribution_execution_verdict(step: Any) -> OwnershipVerdi
             EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
             reason="the step does not consume exactly one typed cohort authority",
         )
-    declared_capability = str(
-        getattr(step, "scientific_capability", "") or ""
-    ).strip()
     if (
         list(getattr(step, "model_requirements", None) or [])
         or getattr(step, "family_primary_result_requirement", None) is not None

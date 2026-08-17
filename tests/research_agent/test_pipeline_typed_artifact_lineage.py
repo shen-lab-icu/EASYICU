@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import easyicu.research_agent.authority.typed_binding as typed_binding_authority
 import easyicu.research_agent.contracts.typed_schema as typed_schema_contracts
 from easyicu.research_agent.cohort.schema import CohortDefinition
 from easyicu.research_agent.contracts.declared_product import (
@@ -16,6 +18,7 @@ from easyicu.research_agent.authority.evidence_store import (
     EvidenceStore,
     sha256_of_file,
 )
+from easyicu.research_agent.authority.step_runtime import StepAuthorityRuntimeError
 from easyicu.research_agent.execution.phase import (
     _failed_contract_code_can_be_reused_before_coder,
     _plan_scientific_scope_signature,
@@ -254,6 +257,139 @@ def test_typed_artifact_resolves_verified_current_producer_output(
                 "step_id": "producer",
                 "status": "ok",
                 "evidence_ids": [current.evidence_id],
+            }
+        ],
+    )
+
+    assert failure is None
+    assert ref is not None
+    assert ref.evidence_id == current.evidence_id
+
+
+def test_explicit_nonexecuted_capsule_blocks_typed_product_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+
+    def _reject(*_args, **_kwargs):
+        raise StepAuthorityRuntimeError(
+            "explicit successful-step capsule does not seal execution"
+        )
+
+    monkeypatch.setattr(
+        typed_binding_authority,
+        "load_explicit_executed_success_step_capsule",
+        _reject,
+    )
+    ref, failure = _resolve(
+        store=store,
+        tmp_path=tmp_path,
+        records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "step_authority_capsule_ref": {
+                    "schema_version": "easyicu.step_authority_capsule_ref/1",
+                    "step_id": "producer",
+                    "capsule_sha256": "a" * 64,
+                },
+            }
+        ],
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == "producer_execution_capsule_invalid"
+    assert failure["producer_step_id"] == "producer"
+    assert "does not seal execution" in failure["detail"]
+
+
+def test_executed_capsule_output_digest_must_match_typed_product(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+    fake_capsule = SimpleNamespace(
+        capsule=SimpleNamespace(
+            execution=SimpleNamespace(
+                outputs=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(sha256="b" * 64),
+                    )
+                ]
+            )
+        )
+    )
+    monkeypatch.setattr(
+        typed_binding_authority,
+        "load_explicit_executed_success_step_capsule",
+        lambda *_args, **_kwargs: fake_capsule,
+    )
+
+    ref, failure = _resolve(
+        store=store,
+        tmp_path=tmp_path,
+        records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "step_authority_capsule_ref": {
+                    "schema_version": "easyicu.step_authority_capsule_ref/1",
+                    "step_id": "producer",
+                    "capsule_sha256": "a" * 64,
+                },
+            }
+        ],
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == "producer_execution_output_digest_mismatch"
+    assert failure["observed_sha256"] == current.sha256
+    assert failure["sealed_output_count"] == 1
+
+
+def test_matching_executed_capsule_output_digest_authorizes_typed_product(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+    fake_capsule = SimpleNamespace(
+        capsule=SimpleNamespace(
+            execution=SimpleNamespace(
+                outputs=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(sha256=current.sha256),
+                    )
+                ]
+            )
+        )
+    )
+    monkeypatch.setattr(
+        typed_binding_authority,
+        "load_explicit_executed_success_step_capsule",
+        lambda *_args, **_kwargs: fake_capsule,
+    )
+
+    ref, failure = _resolve(
+        store=store,
+        tmp_path=tmp_path,
+        records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "step_authority_capsule_ref": {
+                    "schema_version": "easyicu.step_authority_capsule_ref/1",
+                    "step_id": "producer",
+                    "capsule_sha256": "a" * 64,
+                },
             }
         ],
     )

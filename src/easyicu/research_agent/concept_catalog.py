@@ -69,7 +69,7 @@ _ALIAS_STRIP_WORDS = {
 }
 
 # EasyICU derived concepts that are produced in code (KDIGO AKI, circulatory
-# failure, sepsis-3, urine-output rates) and are absent from the JSON
+# failure, sepsis-3, derived outcomes, urine-output rates) and are absent from the JSON
 # dictionaries. (aliases, is_binary_outcome). Stable EasyICU domain knowledge.
 DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
     "aki": (["acute kidney injury", "AKI"], True),
@@ -146,7 +146,48 @@ DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
         ["persistent critical illness", "prolonged ICU stay"],
         True,
     ),
+    "icu_readmission": (
+        ["ICU readmission", "readmission to the ICU", "return to the ICU"],
+        True,
+    ),
+    "mort_28d": (["28-day mortality", "mortality at 28 days"], True),
+    "mort_90d": (["90-day mortality", "mortality at 90 days"], True),
+    "mort_365d": (
+        ["365-day mortality", "one-year mortality", "1-year mortality"],
+        True,
+    ),
+    "icu_free_days_28": (
+        ["ICU-free days through day 28", "28-day ICU-free days", "ICFD-28"],
+        False,
+    ),
+    "vent_free_days_28": (
+        [
+            "ventilator-free days through day 28",
+            "28-day ventilator-free days",
+            "VFD-28",
+        ],
+        False,
+    ),
+    "culture_positive": (
+        ["positive culture", "culture positivity", "microbiological culture positive"],
+        True,
+    ),
+    "bld_culture_positive": (
+        [
+            "positive blood culture",
+            "blood culture positivity",
+            "bloodstream culture positive",
+        ],
+        True,
+    ),
 }
+
+# ``False`` in DERIVED_CONCEPT_HINTS means only "not a clean 0/1 outcome". Most
+# such entries are measurements or exposures and should remain undeterminable as
+# outcomes. These two are explicit bounded count endpoints, so the host may
+# declare their non-binary determinability without widening that rule to every
+# non-binary derived concept.
+_DERIVED_NON_BINARY_OUTCOMES = frozenset({"icu_free_days_28", "vent_free_days_28"})
 
 # Universal medical-terminology equivalences: UK/US spelling, common brand and
 # abbreviation variants. NOT benchmark-case specific — a group is merged into a
@@ -562,6 +603,8 @@ def load_concept_catalog(
                 aliases[key] = _expand_synonyms(_dedup(hint_aliases))
             if is_binary:
                 _declare_outcome(key)
+            elif key in _DERIVED_NON_BINARY_OUTCOMES:
+                _declare_outcome(key, status="non_binary_determinable")
 
     if extra_aliases:
         for key, extra in extra_aliases.items():

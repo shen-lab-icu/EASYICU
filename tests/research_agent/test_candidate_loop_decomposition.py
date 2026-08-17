@@ -36,12 +36,12 @@ def test_candidate_loop_stages_remain_bounded() -> None:
 
 
 def test_execute_worker_does_not_reabsorb_candidate_state_machine() -> None:
-    source = inspect.getsource(phase.run_execute_phase)
+    source = inspect.getsource(phase._execute_step)
     tree = ast.parse(textwrap.dedent(source))
     execute_one = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_execute_one_step"
+        if isinstance(node, ast.FunctionDef) and node.name == "_execute_step"
     )
 
     assert execute_one.end_lineno - execute_one.lineno + 1 <= 3000

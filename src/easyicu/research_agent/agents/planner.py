@@ -30,7 +30,8 @@ from ..cohort.schema import (
 from ..icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
 )
-from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.protocol import LLMClient, LLMMessage, StructuredOutputRequest
+from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..providers.prompt_budget import (
     CONSERVATIVE_BYTES_PER_TOKEN,
@@ -58,6 +59,7 @@ from ..research_context.prompt_scope import (
     planner_variable_catalog,
     scoped_planner_context,
 )
+from ..research_context.prompt_variables import opaque_level_tokens
 from ..schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
@@ -190,12 +192,619 @@ def _format_ctas_schema_constraints() -> str:
     )
 
 
+def _base_planner_user_prompt(
+    context: ResearchContext,
+    *,
+    planner_context: Any,
+    inferred_analysis_type: Any,
+    sensitivity_guide: str,
+    opaque_binary_json: str,
+    opaque_level_1_json: str,
+    opaque_level_2_json: str,
+    catalog_detail: str,
+) -> str:
+    prompt = (
+    "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
+    "AnalysisPlan schema. First infer the EHR analysis type, "
+    "then choose only the steps justified by that family and "
+    "the available context. The plan must not assume that "
+    "every task needs Table 1, outcome incidence, missingness, "
+    "or a primary association model."
+    + sensitivity_guide
+    + "Table 1 is standard for observational/association and prediction "
+    "families (STROBE item 14 / TRIPOD): include a `table:table_one` step "
+    "describing the analytic cohort before the primary analysis. Omit it "
+    "only for a family that genuinely does not call for one, such as a pure "
+    "feasibility/protocol task or clustering already described per cluster. "
+    "A step that declares the exact output `table:table_one` MUST also "
+    "declare `table_one_spec`: group_by, at least two closed group_levels, "
+    "and a variables roster whose name/kind/summary/test/closed levels "
+    "encode the scientific comparison. THE COLUMN YOU GROUP ON IS NOT ALSO "
+    "A ROW -- it would report each group as 100% itself. Name it in "
+    "`group_by` or in `variables`, never in both. "
+    "That same step's `inputs` must explicitly list its `group_by` and "
+    "every `variables[*].name`, in addition to the typed cohort artifact; "
+    "a column named inside the spec is not implicitly an input. "
+    "Levels follow the variable kind: a "
+    "'categorical' row summarised 'count_percent' requires at least two "
+    "closed levels; an 'ordinal' row summarised numerically may declare "
+    "its closed levels (a 0-4 organ score, a 0-3 stage) and the host then "
+    "stops the step on any value outside them, or may omit levels "
+    "entirely; a 'continuous' row must leave levels empty. Table 1 means "
+    "Overall plus grouped "
+    "columns. Preserve observed scalar types exactly: numeric 0/1 levels "
+    "must be JSON numbers, never the strings '0'/'1'. "
+    "When the variable catalog withholds categorical literals and supplies "
+    "`opaque_levels`, copy those exact opaque tokens into group_levels or a "
+    "categorical variable's levels. The host will bind them locally to the "
+    "digest-verified observed values; never guess a hidden label. For a "
+    f"two-level field the exact token array is `{opaque_binary_json}`; use "
+    "those same tokens for scalar selectors such as an event value or a "
+    "reference/comparison level. "
+    "Report per-group missing n (%), one variable-appropriate P value, "
+    "and the test name. Declare `missing_group_policy`: 'fail_closed' "
+    "stops the step if any row's group_by value is missing, and "
+    "'exclude_and_report' removes those rows from the whole table, Overall "
+    "included, and reports how many were removed. Check the variable "
+    "catalog's missingness for the column you group on: a grouping "
+    "variable derived from measurements is rarely observed on every stay, "
+    "and 'fail_closed' on such a column ends the step with no result. "
+    "A step with `table_one_spec` may declare only "
+    "`table:table_one` plus the optional host-audit outputs "
+    "`table:cohort_flow` and `log:source_row_count_reconciliation`; put "
+    "every other result or figure in a separate step. If only an "
+    "ungrouped cohort description is wanted, "
+    "emit `table:cohort_summary` instead and omit table_one_spec. "
+    "For counts, events, prevalence, absolute risk, or outcome by group BY "
+    "EXPOSURE LEVEL, declare `table:exposure_outcome_distribution` and its "
+    "spec. Another table name sends the same science to generated code: a "
+    "different shape every run that no host figure can consume it. Name the "
+    "step whatever your reader should see; it is the declared OUTPUT that "
+    "decides who computes it.\n\n"
+    "That product covers ONE outcome. A summary of a CONTINUOUS variable by "
+    "the same exposure levels cannot be added to it. Wanting both is not a "
+    "reason to give up the product: put the continuous summary in a separate "
+    "step and keep the event/rate table typed.\n\n"
+    "A host-drawn figure consumes EXACTLY the typed product it renders. "
+    "Adding adjusted estimates, robustness matrices, audit tables, or other "
+    "inputs asks for a composite figure; no host renderer can draw it. Put "
+    "that context in text or put it in its own figure step.\n\n"
+    "A step that declares the exact output "
+    "`table:exposure_outcome_distribution` MUST also declare "
+    "`exposure_outcome_distribution_spec`, and it must consume exactly one "
+    "typed cohort input. Every field is required: the exposure column and "
+    "its closed exposure_levels; the outcome column and its closed "
+    "outcome_levels; the exact outcome_positive_value, which must be one "
+    "of outcome_levels; a level_match_policy of 'exact_typed' or "
+    "'numeric_string_equivalent'; a denominator_policy of "
+    "'all_declared_rows' or 'observed_outcome_rows'; a "
+    "missing_outcome_policy of 'fail_closed', 'exclude_from_denominator' "
+    "(which requires 'observed_outcome_rows') or "
+    "'structural_absence_is_non_event' (which requires "
+    "'all_declared_rows'); a missing_exposure_policy of 'fail_closed' "
+    "(the default: any stay with no exposure value stops the step) or "
+    "'exclude_from_denominator' (complete-case on the exposure, and the "
+    "count that left travels in the table) -- check the catalog's "
+    "missingness for the exposure column, because 'fail_closed' on a "
+    "column derived from measurements ends the step with no result; and a "
+    "confidence_level. " + _payload.counts_only_distribution_guide()
+    + " Close outcome_levels "
+    "over every value the source can actually hold: any other observed "
+    "value stops the step, because an undeclared value would otherwise be "
+    "counted as a non-event and silently deflate every rate. Which "
+    "denominator a prevalence or rate is taken over, what an unobserved "
+    "outcome means, and at what coverage an interval is built are parts of "
+    "the study design, not rendering details, so state them. The host will "
+    "not infer the exposure, the outcome, the event value, or any policy "
+    "from column names or from input order. Preserve observed scalar types "
+    "exactly, as for table_one_spec: a boolean column is never matched by "
+    "a numeric level. When the research question asks for an absolute-risk "
+    "DIFFERENCE, the spec must additionally declare exactly one "
+    "risk_difference_contrast with typed reference_exposure_level and "
+    "comparison_exposure_level (reported as comparison minus reference), "
+    "effect_measure='risk_difference', and "
+    "interval_method='linear_probability_wald'. Do not sort or infer those "
+    "levels. Do not declare `dependence`: when the StudyContext carries a "
+    "typed repeated-unit analysis_design and verified patient grouping, the "
+    "host binds that exact covariance authority after parsing; otherwise an "
+    "invented grouping must fail closed. If a post-baseline exposure remains "
+    "descriptive because exposure opportunity is unresolved, a PRIMARY "
+    "distribution step must carry descriptive_claim with "
+    "claim_ceiling='descriptive_only' and the typed limitation "
+    "'post_baseline_exposure_opportunity_unresolved'; that contract does not "
+    "authorize association or causal language. "
+    + _payload.descriptive_claim_shape_guide()
+    + " "
+    "A primary cohort construction/eligibility + attrition step is also a "
+    "strict execution boundary: it must declare exactly one materialised "
+    "closed cohort product (" + _closed_cohort_product_sentence() + ") "
+    "plus only canonical attrition or "
+    "denominator tables. Do not place a baseline/cohort summary, Table 1, "
+    "model, statistic, figure, or other side output in that raw-universe "
+    "step. Put each such output in a downstream step that consumes the "
+    "declared closed cohort product. "
+    "Table 1 enum values are exact: `variable_kind` is one of "
+    "`continuous`, `categorical`, or `ordinal` (a binary variable is "
+    "`categorical`); `summary` is one of `mean_sd`, `median_iqr`, `both`, "
+    "or `count_percent`; `test` is one of `welch_t_or_anova`, "
+    "`mann_whitney_or_kruskal`, or "
+    "`chi_square_with_fisher_exact_for_sparse_2x2`. Do not emit shorthand "
+    "aliases such as `binary`, `n_percent`, `mann_whitney_u`, or "
+    "`chi_square`. "
+    "The host executes the declared Table 1 design; it does not choose the "
+    "grouping variable or tests for you. The main Table 1 grouping must "
+    "represent the study's primary scientific comparison (for example, an "
+    "exposure group or outcome group). Auxiliary measurement/source-status "
+    "flags belong in a separately named data-quality table and must not be "
+    "used as the main `table:table_one` grouping unless the user explicitly "
+    "requests that comparison. "
+    "If cross-database "
+    "replication is requested, include a cross-database step, "
+    "but mark it as a feasibility / protocol step unless the "
+    "ResearchContext explicitly provides external cohort files. "
+    "Use score-specific QC steps only when a relevant score is "
+    "actually central to the question. Do not put invented "
+    "prefixed variables such as eicu:age in `inputs`. Honor "
+    "explicit user preferences and requested outputs when they "
+    "are compatible with the cohort and analysis family. Similar-study "
+    "eligibility criteria are design candidates, not automatic authority: "
+    "apply one only when it matches the current target population, estimand, "
+    "index time, and available typed fields. Put an unverifiable literature "
+    "criterion in the rationale as unresolved rather than inventing a field "
+    "or silently excluding rows. Never claim first admission, one stay per "
+    "patient, or patient-level deduplication unless a patient identifier and "
+    "the required admission chronology are actually available.\n"
+    "Choose step boundaries that make the analysis reviewable. A figure is "
+    "its own step: declaring a `figure:` product in the same step as the "
+    "table or statistic that feeds it asks one executor for two different "
+    "kinds of work, and the host owns those separately -- so a bundled step "
+    "loses the deterministic owner the result table would otherwise have "
+    "had. Declare the result table in one step and the figure that displays "
+    "it in a downstream visualization step that consumes it. "
+    "Within one plan a bare product name is one answer: never declare the "
+    "same name under two kinds, such as `table:x` together with "
+    "`statistic:x`. A table and a scalar are two different answers and need "
+    "two different names; one name declared twice can only be satisfied by "
+    "handing the same artifact over for both, which tells a reader who "
+    "asked for a number to read a table instead. "
+    "A later step "
+    "may consume an earlier standardized artifact only when that dependency "
+    "is explicit in `inputs` and the producer declares it in "
+    "`expected_outputs`; never rely on hidden in-memory state. Do not force "
+    "prediction, clustering, or any other family into a hard-coded mega-step "
+    "or split it solely to fit a shared pipeline template.\n\n"
+    + primary_result_contract_guide()
+    + "\n\n"
+    "The typed `model_requirements` roster currently covers only a complex "
+    "binary/continuous adjusted-association step whose method is exactly "
+    "`adjusted_association_models` and whose expected outputs include "
+    "`table:adjusted_association_estimates`. For that supported contract, "
+    "record the step's pre-specified estimand in the roster instead of "
+    "leaving the scientific decision only in prose. "
+    "ONE MODEL PER STEP: the roster is that step's own model, so declare "
+    "exactly one entry. A second estimand -- a different outcome, or the "
+    "same one under a different analysis set -- is its own step with its "
+    "own roster entry, and a step declaring two loses the deterministic "
+    "owner its result table would otherwise have had, exactly as a bundled "
+    "figure does. Each "
+    "entry has `requirement_id`, `outcome`, `outcome_type` (binary or "
+    "continuous), `method_family`, `exposure_source`, `analysis_role` "
+    "(primary, secondary, or sensitivity), `analysis_set` (source_aware or "
+    "complete_case), `required_for_step_success`, and `covariates`. You "
+    "decide this roster; "
+    "the execution layer only verifies it. `method_family` is matched "
+    "against an exact set, so here is the set. outcome_type 'binary': "
+    + ", ".join(sorted(ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES))
+    + ". outcome_type 'continuous': "
+    + ", ".join(sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES))
+    + ". No other label passes, and neither does one from the other list. "
+    + _payload.planner_adjusted_association_owner_guidance()
+    +
+    "Primary and secondary entries must be required for step "
+    "success; only a sensitivity entry may be optional. "
+    "AN ORDINAL OR CATEGORICAL EXPOSURE is one model with several "
+    "contrasts, not one number. When the exposure has discrete levels -- a "
+    "severity stage, a grade, a pre-specified quantile band -- declare "
+    "`exposure_levels` (the closed level set, in order), "
+    "`exposure_reference_level` (what every contrast is taken against) and "
+    "`primary_contrast_level` (the ONE contrast the manuscript reports). "
+    "All three together or none: with more than two levels the host will "
+    "not choose which contrast is the headline, because the top level "
+    "against the reference and a per-level trend are different scientific "
+    "claims. Leave all three unset for a binary or continuous exposure, "
+    "which is one contrast and one row. Declaring them makes the host fit "
+    "and report every contrast from a single model; omitting them on a "
+    "multi-level exposure fits it as one linear term, which answers a "
+    "different question.\n\n"
+    "`covariates` is the exact adjustment set for that model: list the "
+    "exact analysis column names you intend to condition on, use `[]` to "
+    "declare a deliberately unadjusted model, and omit it only when you "
+    "genuinely have not fixed the adjustment set. The execution layer will "
+    "not reconstruct an adjustment set from the step inputs -- listing "
+    "columns under `inputs` states what the step may read, not what the "
+    "model conditions on, and the difference between those two is a "
+    "scientific decision that is yours. It must not contain the outcome or "
+    "the exposure. Leave the array empty "
+    "for survival, prediction, "
+    "mixed-effects, clustering, and every other analysis family; those use "
+    "their own family-specific planning and validation contracts.\n\n"
+    "For a counting-only measurement/missingness audit step, set "
+    "`measurement_audit_spec.products`: one entry per declared table "
+    "product, each giving the product's exact `product_id` (the declared "
+    "name without its `table:` prefix) and which `audit` it is. Name your "
+    "products whatever your reader should see; the `audit` field is what "
+    "the execution layer reads, so a descriptive name no longer costs the "
+    "step its deterministic executor. Legal audits are "
+    "`measurement_missingness` (was each concept measured at all, and how "
+    "much of its value column is missing), `missingness_profile` (the same "
+    "counts as a plain missing-n/percent profile), `measurement_source` "
+    "(where each value could have come from, including flag/value "
+    "disagreements), `measurement_process` (how often and when each "
+    "concept was observed), `event_timing` (per event-timed concept: "
+    "present, absent, before the declared origin, time missing), "
+    "`component_completeness` (per component of a composite score), "
+    "`analytic_denominators` (rows surviving each analytic filter) and "
+    "`cohort_flow`. Two products may not name the same audit -- that would "
+    "promise a reader two tables and deliver one twice. Declare only "
+    "audits from this list; if the step needs something else, leave "
+    "`measurement_audit_spec` unset rather than mislabelling it.\n\n"
+    + _payload.planner_descriptive_method_guidance(inferred_analysis_type.key)
+    + "For a step that re-estimates the ALREADY-LOCKED robustness "
+    "specification grid without changing the estimand, set "
+    "`robustness_replay_spec.products`: one entry per declared product, "
+    "each giving the bare `product_id` and which `output` it is. Legal "
+    "outputs are `robustness_matrix` (per locked specification: estimate, "
+    "interval, n), `robustness_summary`, `specification_grid` (the locked "
+    "grid itself), `membership_change` (cohort overlap and attrition "
+    "against the primary set), `outcome_label_executability`, "
+    "`missingness_strategy_notes`, `primary_effect` and `complete_case_n`. "
+    "Two products may not name the same output. Declaring this spec is a "
+    "SCIENTIFIC CLAIM that the step is exactly that replay -- if the step "
+    "introduces new science (a different estimator, a causal-emulation or "
+    "weighting variant, an E-value, a negative control), it is a different "
+    "step and must NOT carry this spec, even though doing so would give it "
+    "a host runner. Name the step and its products whatever your reader "
+    "should see; the `output` field is what the execution layer reads.\n\n"
+    "Use `input_consumption_contracts` when a step consumes typed result "
+    "tables and cardinality matters. Never select the first row or assume "
+    "a table is a singleton merely because one figure consumes it. "
+    + _payload.artifact_consumption_contract_shape_guide()
+    + " "
+    "Leave this array empty when no typed-table cardinality rule is needed.\n\n"
+    + _payload.figure_panel_shape_guide() + " Leave `figure_panels` empty on non-visualization steps.\n\n"
+    "When the ResearchContext carries `materialized_inputs`, every raw "
+    "dataframe field in `steps[*].inputs`, `table_one_spec`, "
+    "`model_requirements` outcome/exposure fields, and robustness "
+    "missingness/outcome fields MUST copy an exact name from the sealed "
+    "cohort column roster. Concept ids belong in typed cohort predicates; "
+    "they are not aliases for raw step inputs. An upstream logical product "
+    "must use its explicit `kind:name` value from a producer's "
+    "`expected_outputs`. Never substitute a human label or a plausible "
+    "synonym for a sealed column. Cohort `id_columns` and `time_columns` "
+    "are HOST NAVIGATION COORDINATES, not executable analysis fields: do "
+    "not list them in step inputs, Table 1, model requirements, or "
+    "robustness fields. Cohort accounting should consume the explicit "
+    "analysis-cohort product and report its denominator; the host owns row "
+    "identity and navigation.\n\n"
+    "When a plan requests a manuscript-facing figure, declare a top-level "
+    "`display_labels` object for every variable, contrast, endpoint, or "
+    "robustness spec id whose human-facing wording matters. Labels are "
+    "presentation metadata only: they must describe the already-selected "
+    "scientific object and must not change its exposure, outcome, method, "
+    "cohort, or estimand. The renderer will not infer that a token such as "
+    "`death` means ICU, hospital, or fixed-day mortality.\n\n"
+    "Keep eligibility separate from exposure: primary-cohort predicates "
+    "must preserve every closed level compared by a downstream Table 1 or "
+    "required primary estimand, including prevalence denominators.\n\n"
+    + _format_concept_id_allowlist(
+        [variable.name for variable in context.variables]
+    )
+    + "\n\n"
+    + _format_ctas_schema_constraints()
+    + "\n\n"
+    "Every cohort/exposure/outcome concept used to define the "
+    "analysis population must be represented as a typed cohort "
+    "definition: concept_id, time_window, aggregation, operator, "
+    'and value. You may write `cohort: {"from_named": "..."}` '
+    "only when the caller has explicitly registered that named "
+    "pattern for this case; otherwise supply the full five-tuple "
+    "predicate. Free-text cohort strings are invalid.\n"
+    "If your plan includes any cohort-definition, eligibility, or "
+    "attrition step, choose exactly one population mode: either set "
+    "`cohort.selection_mode='predicate_filtered'` and provide at least one "
+    "structured `inclusion`/`exclusion` predicate, or explicitly set "
+    "`cohort.selection_mode='all_input_rows'` with both predicate arrays "
+    "empty. A default empty cohort is rejected because it cannot distinguish "
+    "an intentional full-input population from omitted free-text 纳排.\n\n"
+    "If a cohort-definition or eligibility step also reports attrition, "
+    "its `expected_outputs` MUST declare exactly one materialised closed "
+    "primary-cohort product: " + _closed_cohort_product_sentence() + ". "
+    "A definition, "
+    "protocol, or status output such as `artifact:cohort_defined` is not a "
+    "cohort dataset and cannot replace that product. The other outputs in "
+    "that step may only be canonical attrition/flow tables. Every "
+    "downstream step consuming that cohort declares the SAME key in its "
+    "`inputs`; a step whose row authority is the closed cohort product but "
+    "which spells it any other way is executed by nobody.\n\n"
+    # The wide vocabulary above is legal but only one pair is EXECUTABLE by
+    # the host, and a Planner given five equally-endorsed spellings picked
+    # a non-executable one in 64 of 282 recorded plans.
+    #
+    # This paragraph was ~2.8 KB when first written, carrying its measured
+    # motivation ("127 of 127", "59% of every cascade") at full length. On
+    # a synthetic minimal context that left 29 KB of headroom and looked
+    # free; on the real typed contexts it is not. h1 died at 80,071 bytes
+    # against an 80,000 limit -- 71 over, from an addition of 2,819. The
+    # Planner needs the INSTRUCTION; the evidence for it belongs in the
+    # commit message and the tests, which is where it now lives. Measure
+    # any further addition against a REAL large context, never a minimal
+    # one.
+    "Of those spellings, exactly one lets the HOST perform this step "
+    "rather than the code generator: `expected_outputs` is exactly "
+    + _host_executed_cohort_step_sentence()
+    + " and nothing else. The cohort is already materialised and "
+    "digest-bound, so under that declaration the host reads the bound "
+    "rows, writes the attrition table and emits the identity receipt "
+    "itself. Any other spelling of the same two products, or a third "
+    "output beside them, goes to the code generator -- the most expensive "
+    "place in the system to lose the host.\n\n"
+    "When that step has no exclusion left to apply -- the bound cohort IS "
+    "the analysis set -- also declare `cohort_definition_spec`: "
+    "`identity_column` (the row key the receipt hashes; the host will not "
+    "guess it) and one `eligibility_criteria` entry per attrition row, "
+    "each a `criterion_id` plus a `description`. Those entries DOCUMENT "
+    "eligibility the bound cohort already satisfies, so a criterion that "
+    "still has rows to remove does not belong there; a step that must "
+    "genuinely exclude rows omits the spec.\n\n"
+    "When robustness is required, pre-specify one or more executable, "
+    "task-supported `robustness_specs`; never invent an unsupported axis, "
+    "endpoint, or variable. "
+    # "Never invent an unsupported axis" was already here, and the closed
+    # set it refers to was not. A real Planner guessed 'model' on one run
+    # and 'functional_form' on the next, each costing an attempt. Read the
+    # vocabulary off the contract so publishing it cannot drift from
+    # enforcing it. A design that needs a different axis belongs in its own
+    # analysis step, not in a widened robustness axis.
+    "`axis` is closed: use exactly one of "
+    + ", ".join(f"'{value}'" for value in _robustness_axis_vocabulary())
+    + ". A sensitivity that does not fit one of these (for example an "
+    "alternative model form or link function) is a separate analysis "
+    "step, not a new axis value. "
+    # Published because it was enforced and never stated: the worked
+    # example below used to show `{"strategy": "complete_case"}` with no
+    # variable list, and half of all recorded complete-case specs copied
+    # it and were refused at execution. Which variables are held complete
+    # is a scientific choice, so the host asks rather than infers.
+    f"A `missing_override` whose `strategy` is '{_COMPLETE_CASE_STRATEGY}' "
+    f"MUST also carry `{_COMPLETE_CASE_VARIABLES_KEY}`: the exact list of "
+    "column names whose completeness defines the analysed set -- normally "
+    "the exposure, the outcome and every covariate of the primary model. "
+    "The host will not infer them from the model, because restricting on a "
+    "narrower or wider set than the model uses is a different analysis, and "
+    "a spec without them is refused. "
+    "Add an auxiliary post-primary step with "
+    "`method='robustness_sensitivity'` producing "
+    "`table:robustness_matrix` and `statistic:robustness_summary`. "
+    "Variants must not change the primary analysis. "
+    # The step this sentence asks for IS the step that re-estimates the
+    # locked grid, and saying so here is the whole point: a real run
+    # declared the grid, created this step, left robustness_replay_spec
+    # unset because that field is described ninety lines earlier behind a
+    # warning about new science, and ended with "locked robustness
+    # specifications that no step estimated" -- blank panel rows and a step
+    # that blocked itself with n_converged_variants=0 after producing every
+    # other output. Generic refitting is deliberately disabled, so the
+    # declaration is the ONLY route to an estimate.
+    "THAT STEP MUST CARRY `robustness_replay_spec`: declaring "
+    "`robustness_specs` obliges exactly one step to re-estimate them, and "
+    "with no such declaration the locked grid is reported as estimated by "
+    "nobody and the step fails. Its `products[*].product_id` are this "
+    "step's OWN declared output names with the `kind:` prefix removed "
+    "(declare `table:robustness_matrix`, write `product_id` "
+    "'robustness_matrix'), which is a different field from `output` -- "
+    "naming an `output` value the step does not itself declare is "
+    "refused."
+    + _payload.planner_descriptive_robustness_guidance(inferred_analysis_type.key)
+    + locked_analysis_type_guide(inferred_analysis_type)
+    + "\n\n"
+    + _scientific_actions.planner_scientific_action_guide(inferred_analysis_type.key, detail=catalog_detail) + "\n\n"
+    + planner_analysis_family_authority_guide(
+        context, inferred_analysis_type, detail=catalog_detail
+    )
+    + "\n\n"
+    + trajectory_planner_contract_guide(
+        context=context,
+        analysis_type=inferred_analysis_type.key,
+    )
+    + "\n\n"
+    "OUTPUT FORMAT — VERY IMPORTANT:\n"
+    "Return *only* a single JSON object matching the "
+    "AnalysisPlan schema. No prose, no markdown headings, no "
+    "trailing commentary. A ```json … ``` fence is acceptable; "
+    "anything outside that fence will be discarded.\n\n"
+    "Required JSON shape (truncated example):\n"
+    "The example values are illustrative only; do not prefer SOFA or "
+    "any example concept unless the ResearchContext supports it. The "
+    "distribution example is auxiliary so it cannot accidentally become a "
+    "second headline; change it to primary only when it is the plan's sole "
+    "headline estimand. Across the complete plan, at most one step is "
+    "primary.\n"
+    "{\n"
+    '  "research_question": "<copy from context>",\n'
+    '  "display_labels": {"<exact variable or spec id>": "<human-facing label>"},\n'
+    '  "cohort": {\n'
+    '    "name": "primary",\n'
+    '    "inclusion": [\n'
+    "      {\n"
+    '        "concept_id": "<easyicu concept id>",\n'
+    '        "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},\n'
+    '        "aggregation": "max",\n'
+    '        "op": ">=",\n'
+    '        "value": 1\n'
+    "      }\n"
+    "    ],\n"
+    '    "exclusion": []\n'
+    "  },\n"
+    # ResearchContext is the unique endpoint authority. The projection keeps
+    # old plans readable; Planner-authored contents would be a second truth.
+    '  "endpoint": null,\n'
+    '  "steps": [\n'
+    # The cohort-definition step is shown first because it IS first in
+    # every recorded plan, and because prose alone did not convey the
+    # nested criterion objects -- the same lesson the distribution spec
+    # below already paid for. The two product names are literal, not
+    # placeholders: this exact pair is what the host executes.
+    # Only the fields this step's shape actually turns on: the two literal
+    # product names and the nested criterion object. The other keys are
+    # already demonstrated by the two steps below, and every byte here is
+    # a byte taken from the typed context.
+    "    {\n"
+    '      "step_id": "01_define_analysis_cohort",\n'
+    '      "planned_analysis_role": "auxiliary",\n'
+    '      "intent": "<one sentence>",\n'
+    '      "inputs": [],\n'
+    '      "expected_outputs": ["' + COHORT_DEFINITION_COHORT_OUTPUT + '", '
+    '"' + COHORT_DEFINITION_FLOW_OUTPUT + '"],\n'
+    '      "method": "cohort_definition_and_attrition",\n'
+    '      "cohort_definition_spec": {\n'
+    '        "identity_column": "<exact id column from the cohort roster>",\n'
+    '        "eligibility_criteria": [\n'
+    '          {"criterion_id": "<flow-table row key>", '
+    '"description": "<what it required>"}\n'
+    "        ]\n"
+    "      }\n"
+    "    },\n"
+    "    {\n"
+    '      "step_id": "02_table_one",\n'
+    '      "planned_analysis_role": "auxiliary",\n'
+    '      "intent": "<one sentence>",\n'
+    '      "inputs": ["<variable names from context>"],\n'
+    '      "expected_outputs": ["table:table_one"],\n'
+    '      "method": "descriptive",\n'
+    '      "icu_rule_refs": ["aggregation_rule_for"],\n'
+    '      "model_requirements": [],\n'
+    '      "input_consumption_contracts": [],\n'
+    '      "table_one_spec": {\n'
+    '        "group_by": "<declared grouping variable>",\n'
+    '        "group_levels": ' + opaque_binary_json + ",\n"
+    '        "variables": [\n'
+    "          {\n"
+    '            "name": "<declared row variable>",\n'
+    '            "variable_kind": "continuous",\n'
+    '            "summary": "median_iqr",\n'
+    '            "test": "mann_whitney_or_kruskal",\n'
+    '            "levels": []\n'
+    "          }\n"
+    "        ]\n"
+    "      },\n"
+    '      "trajectory_stability_spec": null,\n'
+    '      "exposure_outcome_distribution_spec": null,\n'
+    '      "cohort_definition_spec": null\n'
+    "    },\n"
+    # A second example step exists for one reason: the distribution spec
+    # was described in prose only, and a real Planner then guessed its
+    # shape four different ways in five attempts -- `exposure_column`
+    # instead of `exposure`, and twice an `{"column": ..., "levels": ...}`
+    # object where a plain column name belongs. Prose is enough to convey
+    # which choices are the Planner's; it is not enough to convey a key
+    # name or whether a field nests. Show the shape, as table_one_spec
+    # already does.
+    "    {\n"
+    '      "step_id": "03_exposure_outcome_distribution",\n'
+    '      "planned_analysis_role": "secondary",\n'
+    '      "intent": "<one sentence>",\n'
+    # Exactly one typed input (the cohort artifact, which carries the
+    # digest and product contract), plus the exposure and outcome column
+    # names as bare inputs -- the schema requires both spec columns to be
+    # explicit step inputs, and a bare name is not a second typed input.
+    '      "inputs": ["artifact:analysis_cohort", '
+    '"<declared exposure column name>", '
+    '"<declared outcome column name>"],\n'
+    '      "expected_outputs": ["table:exposure_outcome_distribution"],\n'
+    '      "method": "descriptive",\n'
+    '      "icu_rule_refs": [],\n'
+    '      "model_requirements": [],\n'
+    '      "input_consumption_contracts": [],\n'
+    '      "table_one_spec": null,\n'
+    '      "trajectory_stability_spec": null,\n'
+    '      "exposure_outcome_distribution_spec": {\n'
+    '        "exposure": "<declared exposure column name>",\n'
+    '        "exposure_levels": ' + opaque_binary_json + ",\n"
+    '        "outcome": "<declared outcome column name>",\n'
+    '        "outcome_levels": ' + opaque_binary_json + ",\n"
+    '        "outcome_positive_value": ' + opaque_level_2_json + ",\n"
+    '        "level_match_policy": "exact_typed",\n'
+    '        "denominator_policy": "all_declared_rows",\n'
+    '        "missing_outcome_policy": "structural_absence_is_non_event",\n'
+    '        "risk_difference_contrast": {\n'
+    '          "reference_exposure_level": ' + opaque_level_1_json + ",\n"
+    '          "comparison_exposure_level": ' + opaque_level_2_json + ",\n"
+    '          "effect_measure": "risk_difference",\n'
+    '          "interval_method": "linear_probability_wald"\n'
+    "        },\n"
+    '        "confidence_level": 0.95\n'
+    "      },\n"
+    + _payload.descriptive_claim_example_fragment()
+    + '      "cohort_definition_spec": null\n'
+    "    }\n"
+    "  ],\n"
+    '  "robustness_specs": [\n'
+    "    {\n"
+    '      "spec_id": "alt_cohort_max_during_stay",\n'
+    '      "axis": "cohort",\n'
+    '      "description": "Use stay-level max SOFA instead of admission-window max.",\n'
+    '      "cohort_override": {\n'
+    '        "name": "alt_max_stay",\n'
+    '        "inclusion": [\n'
+    "          {\n"
+    '            "concept_id": "sofa",\n'
+    '            "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 168},\n'
+    '            "aggregation": "max",\n'
+    '            "op": ">=",\n'
+    '            "value": 2\n'
+    "          }\n"
+    "        ],\n"
+    '        "exclusion": []\n'
+    "      },\n"
+    '      "missing_override": null,\n'
+    '      "outcome_override": null\n'
+    "    },\n"
+    "    {\n"
+    '      "spec_id": "alt_missing_complete_case",\n'
+    '      "axis": "missing",\n'
+    '      "description": "Use complete-case handling for required variables.",\n'
+    '      "cohort_override": null,\n'
+    '      "missing_override": {"strategy": "complete_case", '
+    + f'"{_COMPLETE_CASE_VARIABLES_KEY}": '
+    + '["<exposure column>", "<outcome column>", "<each covariate>"]},\n'
+    '      "outcome_override": null\n'
+    "    }\n"
+    "  ],\n"
+    '  "evalue_conversion_spec": null,\n'
+    '  "subgroup_analysis_spec": null,\n'
+    '  "rationale": "<one paragraph>"\n'
+    "}\n\n"
+    + _payload.planner_endpoint_and_optional_science_guidance()
+    +
+    "RESEARCH CONTEXT:\n"
+    + _format_context(
+        planner_context,
+        include_materialized_input_facts=True,
+        compact_method_constraints=True,
+    )
+    + "\n\n"
+    + planner_variable_catalog(context, planner_context)
+    )
+    return prompt
+
+
 def _build_planner_user_prompt(
     context: ResearchContext,
     *,
     know_how_context: str = "",
     planning_contract_context: str = "",
     catalog_detail: str = "full",
+    strict_transport_schema: bool = False,
 ) -> str:
     """Build the planner user prompt with runtime concept-id grounding.
 
@@ -234,612 +843,157 @@ def _build_planner_user_prompt(
             "context are:\n" + "\n".join(rows) + "\n\n"
         )
 
-    prompt = (
-        "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
-        "AnalysisPlan schema. First infer the EHR analysis type, "
-        "then choose only the steps justified by that family and "
-        "the available context. The plan must not assume that "
-        "every task needs Table 1, outcome incidence, missingness, "
-        "or a primary association model."
-        + sensitivity_guide
-        + "That said, a baseline characteristics table (Table 1) IS a reporting standard for "
-        "observational/association and prediction-model families "
-        "(STROBE item 14 / TRIPOD): for those families include a "
-        "baseline characteristics step (e.g. expected_outputs "
-        "['table:table_one']) describing the analytic cohort before "
-        "the primary analysis. Omit it only when the family genuinely "
-        "does not call for one (e.g. a pure feasibility/protocol task, "
-        "or a clustering task whose per-cluster characteristics table "
-        "already carries the descriptive reporting). "
-        "A step that declares the exact output `table:table_one` MUST also "
-        "declare `table_one_spec`: group_by, at least two closed group_levels, "
-        "and a variables roster whose name/kind/summary/test/closed levels "
-        "encode the scientific comparison. THE COLUMN YOU GROUP ON IS NOT ALSO "
-        "A ROW -- it would report each group as 100% itself. Name it in "
-        "`group_by` or in `variables`, never in both. "
-        "That same step's `inputs` must explicitly list its `group_by` and "
-        "every `variables[*].name`, in addition to the typed cohort artifact; "
-        "a column named inside the spec is not implicitly an input. "
-        "Levels follow the variable kind: a "
-        "'categorical' row summarised 'count_percent' requires at least two "
-        "closed levels; an 'ordinal' row summarised numerically may declare "
-        "its closed levels (a 0-4 organ score, a 0-3 stage) and the host then "
-        "stops the step on any value outside them, or may omit levels "
-        "entirely; a 'continuous' row must leave levels empty. Table 1 means "
-        "Overall plus grouped "
-        "columns. Preserve observed scalar types exactly: numeric 0/1 levels "
-        "must be JSON numbers, never the strings '0'/'1'. "
-        "When the variable catalog withholds categorical literals and supplies "
-        "`opaque_levels`, copy those exact opaque tokens into group_levels or a "
-        "categorical variable's levels. The host will bind them locally to the "
-        "digest-verified observed values; never guess a hidden label. "
-        "Report per-group missing n (%), one variable-appropriate P value, "
-        "and the test name. Declare `missing_group_policy`: 'fail_closed' "
-        "stops the step if any row's group_by value is missing, and "
-        "'exclude_and_report' removes those rows from the whole table, Overall "
-        "included, and reports how many were removed. Check the variable "
-        "catalog's missingness for the column you group on: a grouping "
-        "variable derived from measurements is rarely observed on every stay, "
-        "and 'fail_closed' on such a column ends the step with no result. "
-        "A step with `table_one_spec` may declare only "
-        "`table:table_one` plus the optional host-audit outputs "
-        "`table:cohort_flow` and `log:source_row_count_reconciliation`; put "
-        "every other result or figure in a separate step. If only an "
-        "ungrouped cohort description is wanted, "
-        "emit `table:cohort_summary` instead and omit table_one_spec. "
-        "When a step's purpose is to report counts, events and rates BY "
-        "EXPOSURE LEVEL -- prevalence, absolute risk, or outcome by group -- "
-        "declare the exact output `table:exposure_outcome_distribution` with "
-        "its spec. The host computes that table itself against a fixed "
-        "contract and owns the renderer for it, so its figure can be drawn. "
-        "The same science promised under any other table name is written "
-        "instead by the code generator, with a different shape every run, and "
-        "no host figure can consume it -- measured over the recorded runs, 25 "
-        "of 26 such tables had distinct headers and every figure over them "
-        "failed. Name the step whatever your reader should see; it is the "
-        "declared OUTPUT that decides who computes it.\n\n"
-        "That table holds counts, events and rates for ONE outcome whose "
-        "levels you declare. A summary of a CONTINUOUS variable by the same "
-        "exposure levels -- a median, a mean, quartiles, a distribution -- is "
-        "not part of it and cannot be added to it. Wanting one as well is not "
-        "a reason to give up the product: put the continuous summary in a "
-        "separate step and leave the event/rate table typed. Measured over "
-        "the recorded plans, 10 of the 13 by-level risk tables promised under "
-        "some other name had asked for a continuous summary in the same step, "
-        "against 1 of the 16 that stayed typed -- bundling the second outcome "
-        "is what costs the host-computed table and its figure.\n\n"
-        "A host-drawn figure consumes EXACTLY the typed product it renders and "
-        "nothing else. A figure step that also declares adjusted estimates, a "
-        "robustness matrix or an audit table as inputs is asking for a "
-        "different, composite figure, and no host renderer can draw it -- it "
-        "falls to the code generator, which has no contract for the panel. If "
-        "the reader needs that context, put it in its own figure step or in "
-        "the text; do not add inputs to the step whose figure the host owns.\n\n"
-        "A step that declares the exact output "
-        "`table:exposure_outcome_distribution` MUST also declare "
-        "`exposure_outcome_distribution_spec`, and it must consume exactly one "
-        "typed cohort input. Every field is required: the exposure column and "
-        "its closed exposure_levels; the outcome column and its closed "
-        "outcome_levels; the exact outcome_positive_value, which must be one "
-        "of outcome_levels; a level_match_policy of 'exact_typed' or "
-        "'numeric_string_equivalent'; a denominator_policy of "
-        "'all_declared_rows' or 'observed_outcome_rows'; a "
-        "missing_outcome_policy of 'fail_closed', 'exclude_from_denominator' "
-        "(which requires 'observed_outcome_rows') or "
-        "'structural_absence_is_non_event' (which requires "
-        "'all_declared_rows'); a missing_exposure_policy of 'fail_closed' "
-        "(the default: any stay with no exposure value stops the step) or "
-        "'exclude_from_denominator' (complete-case on the exposure, and the "
-        "count that left travels in the table) -- check the catalog's "
-        "missingness for the exposure column, because 'fail_closed' on a "
-        "column derived from measurements ends the step with no result; and a "
-        "confidence_level. " + _payload.counts_only_distribution_guide() + " Close outcome_levels "
-        "over every value the source can actually hold: any other observed "
-        "value stops the step, because an undeclared value would otherwise be "
-        "counted as a non-event and silently deflate every rate. Which "
-        "denominator a prevalence or rate is taken over, what an unobserved "
-        "outcome means, and at what coverage an interval is built are parts of "
-        "the study design, not rendering details, so state them. The host will "
-        "not infer the exposure, the outcome, the event value, or any policy "
-        "from column names or from input order. Preserve observed scalar types "
-        "exactly, as for table_one_spec: a boolean column is never matched by "
-        "a numeric level. When the research question asks for an absolute-risk "
-        "DIFFERENCE, the spec must additionally declare exactly one "
-        "risk_difference_contrast with typed reference_exposure_level and "
-        "comparison_exposure_level (reported as comparison minus reference), "
-        "effect_measure='risk_difference', and "
-        "interval_method='linear_probability_wald'. Do not sort or infer those "
-        "levels. Do not declare `dependence`: when the StudyContext carries a "
-        "typed repeated-unit analysis_design and verified patient grouping, the "
-        "host binds that exact covariance authority after parsing; otherwise an "
-        "invented grouping must fail closed. If a post-baseline exposure remains "
-        "descriptive because exposure opportunity is unresolved, a PRIMARY "
-        "distribution step must carry descriptive_claim with "
-        "claim_ceiling='descriptive_only' and the typed limitation "
-        "'post_baseline_exposure_opportunity_unresolved'; that contract does not "
-        "authorize association or causal language. "
-        + _payload.descriptive_claim_shape_guide()
-        + " "
-        "A primary cohort construction/eligibility + attrition step is also a "
-        "strict execution boundary: it must declare exactly one materialised "
-        "closed cohort product (" + _closed_cohort_product_sentence() + ") "
-        "plus only canonical attrition or "
-        "denominator tables. Do not place a baseline/cohort summary, Table 1, "
-        "model, statistic, figure, or other side output in that raw-universe "
-        "step. Put each such output in a downstream step that consumes the "
-        "declared closed cohort product. "
-        "Table 1 enum values are exact: `variable_kind` is one of "
-        "`continuous`, `categorical`, or `ordinal` (a binary variable is "
-        "`categorical`); `summary` is one of `mean_sd`, `median_iqr`, `both`, "
-        "or `count_percent`; `test` is one of `welch_t_or_anova`, "
-        "`mann_whitney_or_kruskal`, or "
-        "`chi_square_with_fisher_exact_for_sparse_2x2`. Do not emit shorthand "
-        "aliases such as `binary`, `n_percent`, `mann_whitney_u`, or "
-        "`chi_square`. "
-        "The host executes the declared Table 1 design; it does not choose the "
-        "grouping variable or tests for you. The main Table 1 grouping must "
-        "represent the study's primary scientific comparison (for example, an "
-        "exposure group or outcome group). Auxiliary measurement/source-status "
-        "flags belong in a separately named data-quality table and must not be "
-        "used as the main `table:table_one` grouping unless the user explicitly "
-        "requests that comparison. "
-        "If cross-database "
-        "replication is requested, include a cross-database step, "
-        "but mark it as a feasibility / protocol step unless the "
-        "ResearchContext explicitly provides external cohort files. "
-        "Use score-specific QC steps only when a relevant score is "
-        "actually central to the question. Do not put invented "
-        "prefixed variables such as eicu:age in `inputs`. Honor "
-        "explicit user preferences and requested outputs when they "
-        "are compatible with the cohort and analysis family. Similar-study "
-        "eligibility criteria are design candidates, not automatic authority: "
-        "apply one only when it matches the current target population, estimand, "
-        "index time, and available typed fields. Put an unverifiable literature "
-        "criterion in the rationale as unresolved rather than inventing a field "
-        "or silently excluding rows. Never claim first admission, one stay per "
-        "patient, or patient-level deduplication unless a patient identifier and "
-        "the required admission chronology are actually available.\n"
-        "Choose step boundaries that make the analysis reviewable. A figure is "
-        "its own step: declaring a `figure:` product in the same step as the "
-        "table or statistic that feeds it asks one executor for two different "
-        "kinds of work, and the host owns those separately -- so a bundled step "
-        "loses the deterministic owner the result table would otherwise have "
-        "had. Declare the result table in one step and the figure that displays "
-        "it in a downstream visualization step that consumes it. "
-        "Within one plan a bare product name is one answer: never declare the "
-        "same name under two kinds, such as `table:x` together with "
-        "`statistic:x`. A table and a scalar are two different answers and need "
-        "two different names; one name declared twice can only be satisfied by "
-        "handing the same artifact over for both, which tells a reader who "
-        "asked for a number to read a table instead. "
-        "A later step "
-        "may consume an earlier standardized artifact only when that dependency "
-        "is explicit in `inputs` and the producer declares it in "
-        "`expected_outputs`; never rely on hidden in-memory state. Do not force "
-        "prediction, clustering, or any other family into a hard-coded mega-step "
-        "or split it solely to fit a shared pipeline template.\n\n"
-        + primary_result_contract_guide()
-        + "\n\n"
-        "The typed `model_requirements` roster currently covers only a complex "
-        "binary/continuous adjusted-association step whose method is exactly "
-        "`adjusted_association_models` and whose expected outputs include "
-        "`table:adjusted_association_estimates`. For that supported contract, "
-        "record the step's pre-specified estimand in the roster instead of "
-        "leaving the scientific decision only in prose. "
-        "ONE MODEL PER STEP: the roster is that step's own model, so declare "
-        "exactly one entry. A second estimand -- a different outcome, or the "
-        "same one under a different analysis set -- is its own step with its "
-        "own roster entry, and a step declaring two loses the deterministic "
-        "owner its result table would otherwise have had, exactly as a bundled "
-        "figure does. Each "
-        "entry has `requirement_id`, `outcome`, `outcome_type` (binary or "
-        "continuous), `method_family`, `exposure_source`, `analysis_role` "
-        "(primary, secondary, or sensitivity), `analysis_set` (source_aware or "
-        "complete_case), `required_for_step_success`, and `covariates`. You "
-        "decide this roster; "
-        "the execution layer only verifies it. `method_family` is matched "
-        "against an exact set, so here is the set. outcome_type 'binary': "
-        + ", ".join(sorted(ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES))
-        + ". outcome_type 'continuous': "
-        + ", ".join(sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES))
-        + ". No other label passes, and neither does one from the other list. "
-        + _payload.planner_adjusted_association_owner_guidance()
-        +
-        "Primary and secondary entries must be required for step "
-        "success; only a sensitivity entry may be optional. "
-        "AN ORDINAL OR CATEGORICAL EXPOSURE is one model with several "
-        "contrasts, not one number. When the exposure has discrete levels -- a "
-        "severity stage, a grade, a pre-specified quantile band -- declare "
-        "`exposure_levels` (the closed level set, in order), "
-        "`exposure_reference_level` (what every contrast is taken against) and "
-        "`primary_contrast_level` (the ONE contrast the manuscript reports). "
-        "All three together or none: with more than two levels the host will "
-        "not choose which contrast is the headline, because the top level "
-        "against the reference and a per-level trend are different scientific "
-        "claims. Leave all three unset for a binary or continuous exposure, "
-        "which is one contrast and one row. Declaring them makes the host fit "
-        "and report every contrast from a single model; omitting them on a "
-        "multi-level exposure fits it as one linear term, which answers a "
-        "different question.\n\n"
-        "`covariates` is the exact adjustment set for that model: list the "
-        "exact analysis column names you intend to condition on, use `[]` to "
-        "declare a deliberately unadjusted model, and omit it only when you "
-        "genuinely have not fixed the adjustment set. The execution layer will "
-        "not reconstruct an adjustment set from the step inputs -- listing "
-        "columns under `inputs` states what the step may read, not what the "
-        "model conditions on, and the difference between those two is a "
-        "scientific decision that is yours. It must not contain the outcome or "
-        "the exposure. Leave the array empty "
-        "for survival, prediction, "
-        "mixed-effects, clustering, and every other analysis family; those use "
-        "their own family-specific planning and validation contracts.\n\n"
-        "For a counting-only measurement/missingness audit step, set "
-        "`measurement_audit_spec.products`: one entry per declared table "
-        "product, each giving the product's exact `product_id` (the declared "
-        "name without its `table:` prefix) and which `audit` it is. Name your "
-        "products whatever your reader should see; the `audit` field is what "
-        "the execution layer reads, so a descriptive name no longer costs the "
-        "step its deterministic executor. Legal audits are "
-        "`measurement_missingness` (was each concept measured at all, and how "
-        "much of its value column is missing), `missingness_profile` (the same "
-        "counts as a plain missing-n/percent profile), `measurement_source` "
-        "(where each value could have come from, including flag/value "
-        "disagreements), `measurement_process` (how often and when each "
-        "concept was observed), `event_timing` (per event-timed concept: "
-        "present, absent, before the declared origin, time missing), "
-        "`component_completeness` (per component of a composite score), "
-        "`analytic_denominators` (rows surviving each analytic filter) and "
-        "`cohort_flow`. Two products may not name the same audit -- that would "
-        "promise a reader two tables and deliver one twice. Declare only "
-        "audits from this list; if the step needs something else, leave "
-        "`measurement_audit_spec` unset rather than mislabelling it.\n\n"
-        + _payload.planner_descriptive_method_guidance(inferred_analysis_type.key)
-        + "For a step that re-estimates the ALREADY-LOCKED robustness "
-        "specification grid without changing the estimand, set "
-        "`robustness_replay_spec.products`: one entry per declared product, "
-        "each giving the bare `product_id` and which `output` it is. Legal "
-        "outputs are `robustness_matrix` (per locked specification: estimate, "
-        "interval, n), `robustness_summary`, `specification_grid` (the locked "
-        "grid itself), `membership_change` (cohort overlap and attrition "
-        "against the primary set), `outcome_label_executability`, "
-        "`missingness_strategy_notes`, `primary_effect` and `complete_case_n`. "
-        "Two products may not name the same output. Declaring this spec is a "
-        "SCIENTIFIC CLAIM that the step is exactly that replay -- if the step "
-        "introduces new science (a different estimator, a causal-emulation or "
-        "weighting variant, an E-value, a negative control), it is a different "
-        "step and must NOT carry this spec, even though doing so would give it "
-        "a host runner. Name the step and its products whatever your reader "
-        "should see; the `output` field is what the execution layer reads.\n\n"
-        "Use `input_consumption_contracts` when a step consumes typed result "
-        "tables and cardinality matters. `all_rows` preserves the complete "
-        "table; `single_row` is valid only for a true singleton; "
-        "`one_per_role` requires an exact `role_column` and complete "
-        "`expected_roles` roster. Never select the first row or assume a table "
-        "has one result merely because the downstream step renders one figure. "
-        "Every item uses the exact keys `input_key` and `mode`, for example "
-        '`{"input_key":"table:exact_product","mode":"all_rows"}`; never '
-        "rename them to `input` and `cardinality`. "
-        "Leave this array empty when no typed-table cardinality rule is needed.\n\n"
-        + _payload.figure_panel_shape_guide() + " Leave `figure_panels` empty on non-visualization steps.\n\n"
-        "When the ResearchContext carries `materialized_inputs`, every raw "
-        "dataframe field in `steps[*].inputs`, `table_one_spec`, "
-        "`model_requirements` outcome/exposure fields, and robustness "
-        "missingness/outcome fields MUST copy an exact name from the sealed "
-        "cohort column roster. Concept ids belong in typed cohort predicates; "
-        "they are not aliases for raw step inputs. An upstream logical product "
-        "must use its explicit `kind:name` value from a producer's "
-        "`expected_outputs`. Never substitute a human label or a plausible "
-        "synonym for a sealed column. Cohort `id_columns` and `time_columns` "
-        "are HOST NAVIGATION COORDINATES, not executable analysis fields: do "
-        "not list them in step inputs, Table 1, model requirements, or "
-        "robustness fields. Cohort accounting should consume the explicit "
-        "analysis-cohort product and report its denominator; the host owns row "
-        "identity and navigation.\n\n"
-        "When a plan requests a manuscript-facing figure, declare a top-level "
-        "`display_labels` object for every variable, contrast, endpoint, or "
-        "robustness spec id whose human-facing wording matters. Labels are "
-        "presentation metadata only: they must describe the already-selected "
-        "scientific object and must not change its exposure, outcome, method, "
-        "cohort, or estimand. The renderer will not infer that a token such as "
-        "`death` means ICU, hospital, or fixed-day mortality.\n\n"
-        "Keep eligibility separate from exposure: primary-cohort predicates "
-        "must preserve every closed level compared by a downstream Table 1 or "
-        "required primary estimand, including prevalence denominators.\n\n"
-        + _format_concept_id_allowlist(
-            [variable.name for variable in context.variables]
-        )
-        + "\n\n"
-        + _format_ctas_schema_constraints()
-        + "\n\n"
-        "Every cohort/exposure/outcome concept used to define the "
-        "analysis population must be represented as a typed cohort "
-        "definition: concept_id, time_window, aggregation, operator, "
-        'and value. You may write `cohort: {"from_named": "..."}` '
-        "only when the caller has explicitly registered that named "
-        "pattern for this case; otherwise supply the full five-tuple "
-        "predicate. Free-text cohort strings are invalid.\n"
-        "If your plan includes any cohort-definition, eligibility, or "
-        "attrition step, choose exactly one population mode: either set "
-        "`cohort.selection_mode='predicate_filtered'` and provide at least one "
-        "structured `inclusion`/`exclusion` predicate, or explicitly set "
-        "`cohort.selection_mode='all_input_rows'` with both predicate arrays "
-        "empty. A default empty cohort is rejected because it cannot distinguish "
-        "an intentional full-input population from omitted free-text 纳排.\n\n"
-        "If a cohort-definition or eligibility step also reports attrition, "
-        "its `expected_outputs` MUST declare exactly one materialised closed "
-        "primary-cohort product: " + _closed_cohort_product_sentence() + ". "
-        "A definition, "
-        "protocol, or status output such as `artifact:cohort_defined` is not a "
-        "cohort dataset and cannot replace that product. The other outputs in "
-        "that step may only be canonical attrition/flow tables. Every "
-        "downstream step consuming that cohort declares the SAME key in its "
-        "`inputs`; a step whose row authority is the closed cohort product but "
-        "which spells it any other way is executed by nobody.\n\n"
-        # The wide vocabulary above is legal but only one pair is EXECUTABLE by
-        # the host, and a Planner given five equally-endorsed spellings picked
-        # a non-executable one in 64 of 282 recorded plans.
-        #
-        # This paragraph was ~2.8 KB when first written, carrying its measured
-        # motivation ("127 of 127", "59% of every cascade") at full length. On
-        # a synthetic minimal context that left 29 KB of headroom and looked
-        # free; on the real typed contexts it is not. h1 died at 80,071 bytes
-        # against an 80,000 limit -- 71 over, from an addition of 2,819. The
-        # Planner needs the INSTRUCTION; the evidence for it belongs in the
-        # commit message and the tests, which is where it now lives. Measure
-        # any further addition against a REAL large context, never a minimal
-        # one.
-        "Of those spellings, exactly one lets the HOST perform this step "
-        "rather than the code generator: `expected_outputs` is exactly "
-        + _host_executed_cohort_step_sentence()
-        + " and nothing else. The cohort is already materialised and "
-        "digest-bound, so under that declaration the host reads the bound "
-        "rows, writes the attrition table and emits the identity receipt "
-        "itself. Any other spelling of the same two products, or a third "
-        "output beside them, goes to the code generator -- the most expensive "
-        "place in the system to lose the host.\n\n"
-        "When that step has no exclusion left to apply -- the bound cohort IS "
-        "the analysis set -- also declare `cohort_definition_spec`: "
-        "`identity_column` (the row key the receipt hashes; the host will not "
-        "guess it) and one `eligibility_criteria` entry per attrition row, "
-        "each a `criterion_id` plus a `description`. Those entries DOCUMENT "
-        "eligibility the bound cohort already satisfies, so a criterion that "
-        "still has rows to remove does not belong there; a step that must "
-        "genuinely exclude rows omits the spec.\n\n"
-        "When robustness is required, pre-specify one or more executable, "
-        "task-supported `robustness_specs`; never invent an unsupported axis, "
-        "endpoint, or variable. "
-        # "Never invent an unsupported axis" was already here, and the closed
-        # set it refers to was not. A real Planner guessed 'model' on one run
-        # and 'functional_form' on the next, each costing an attempt. Read the
-        # vocabulary off the contract so publishing it cannot drift from
-        # enforcing it. A design that needs a different axis belongs in its own
-        # analysis step, not in a widened robustness axis.
-        "`axis` is closed: use exactly one of "
-        + ", ".join(f"'{value}'" for value in _robustness_axis_vocabulary())
-        + ". A sensitivity that does not fit one of these (for example an "
-        "alternative model form or link function) is a separate analysis "
-        "step, not a new axis value. "
-        # Published because it was enforced and never stated: the worked
-        # example below used to show `{"strategy": "complete_case"}` with no
-        # variable list, and half of all recorded complete-case specs copied
-        # it and were refused at execution. Which variables are held complete
-        # is a scientific choice, so the host asks rather than infers.
-        f"A `missing_override` whose `strategy` is '{_COMPLETE_CASE_STRATEGY}' "
-        f"MUST also carry `{_COMPLETE_CASE_VARIABLES_KEY}`: the exact list of "
-        "column names whose completeness defines the analysed set -- normally "
-        "the exposure, the outcome and every covariate of the primary model. "
-        "The host will not infer them from the model, because restricting on a "
-        "narrower or wider set than the model uses is a different analysis, and "
-        "a spec without them is refused. "
-        "Add an auxiliary post-primary step with "
-        "`method='robustness_sensitivity'` producing "
-        "`table:robustness_matrix` and `statistic:robustness_summary`. "
-        "Variants must not change the primary analysis. "
-        # The step this sentence asks for IS the step that re-estimates the
-        # locked grid, and saying so here is the whole point: a real run
-        # declared the grid, created this step, left robustness_replay_spec
-        # unset because that field is described ninety lines earlier behind a
-        # warning about new science, and ended with "locked robustness
-        # specifications that no step estimated" -- blank panel rows and a step
-        # that blocked itself with n_converged_variants=0 after producing every
-        # other output. Generic refitting is deliberately disabled, so the
-        # declaration is the ONLY route to an estimate.
-        "THAT STEP MUST CARRY `robustness_replay_spec`: declaring "
-        "`robustness_specs` obliges exactly one step to re-estimate them, and "
-        "with no such declaration the locked grid is reported as estimated by "
-        "nobody and the step fails. Its `products[*].product_id` are this "
-        "step's OWN declared output names with the `kind:` prefix removed "
-        "(declare `table:robustness_matrix`, write `product_id` "
-        "'robustness_matrix'), which is a different field from `output` -- "
-        "naming an `output` value the step does not itself declare is "
-        "refused."
-        + _payload.planner_descriptive_robustness_guidance(inferred_analysis_type.key)
-        + locked_analysis_type_guide(inferred_analysis_type)
-        + "\n\n"
-        + _scientific_actions.planner_scientific_action_guide(inferred_analysis_type.key, detail=catalog_detail) + "\n\n"
-        + planner_analysis_family_authority_guide(
-            context, inferred_analysis_type, detail=catalog_detail
-        )
-        + "\n\n"
-        + trajectory_planner_contract_guide(
-            context=context,
-            analysis_type=inferred_analysis_type.key,
-        )
-        + "\n\n"
-        "OUTPUT FORMAT — VERY IMPORTANT:\n"
-        "Return *only* a single JSON object matching the "
-        "AnalysisPlan schema. No prose, no markdown headings, no "
-        "trailing commentary. A ```json … ``` fence is acceptable; "
-        "anything outside that fence will be discarded.\n\n"
-        "Required JSON shape (truncated example):\n"
-        "The example values are illustrative only; do not prefer SOFA or "
-        "any example concept unless the ResearchContext supports it.\n"
-        "{\n"
-        '  "research_question": "<copy from context>",\n'
-        '  "display_labels": {"<exact variable or spec id>": "<human-facing label>"},\n'
-        '  "cohort": {\n'
-        '    "name": "primary",\n'
-        '    "inclusion": [\n'
-        "      {\n"
-        '        "concept_id": "<easyicu concept id>",\n'
-        '        "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},\n'
-        '        "aggregation": "max",\n'
-        '        "op": ">=",\n'
-        '        "value": 1\n'
-        "      }\n"
-        "    ],\n"
-        '    "exclusion": []\n'
-        "  },\n"
-        # ResearchContext is the unique endpoint authority. The projection keeps
-        # old plans readable; Planner-authored contents would be a second truth.
-        '  "endpoint": null,\n'
-        '  "steps": [\n'
-        # The cohort-definition step is shown first because it IS first in
-        # every recorded plan, and because prose alone did not convey the
-        # nested criterion objects -- the same lesson the distribution spec
-        # below already paid for. The two product names are literal, not
-        # placeholders: this exact pair is what the host executes.
-        # Only the fields this step's shape actually turns on: the two literal
-        # product names and the nested criterion object. The other keys are
-        # already demonstrated by the two steps below, and every byte here is
-        # a byte taken from the typed context.
-        "    {\n"
-        '      "step_id": "01_define_analysis_cohort",\n'
-        '      "planned_analysis_role": "auxiliary",\n'
-        '      "intent": "<one sentence>",\n'
-        '      "inputs": [],\n'
-        '      "expected_outputs": ["' + COHORT_DEFINITION_COHORT_OUTPUT + '", '
-        '"' + COHORT_DEFINITION_FLOW_OUTPUT + '"],\n'
-        '      "method": "cohort_definition_and_attrition",\n'
-        '      "cohort_definition_spec": {\n'
-        '        "identity_column": "<exact id column from the cohort roster>",\n'
-        '        "eligibility_criteria": [\n'
-        '          {"criterion_id": "<flow-table row key>", '
-        '"description": "<what it required>"}\n'
-        "        ]\n"
-        "      }\n"
-        "    },\n"
-        "    {\n"
-        '      "step_id": "02_table_one",\n'
-        '      "planned_analysis_role": "auxiliary",\n'
-        '      "intent": "<one sentence>",\n'
-        '      "inputs": ["<variable names from context>"],\n'
-        '      "expected_outputs": ["table:table_one"],\n'
-        '      "method": "descriptive",\n'
-        '      "icu_rule_refs": ["aggregation_rule_for"],\n'
-        '      "model_requirements": [],\n'
-        '      "input_consumption_contracts": [],\n'
-        '      "table_one_spec": {\n'
-        '        "group_by": "<declared grouping variable>",\n'
-        '        "group_levels": ["<closed level 1>", "<closed level 2>"],\n'
-        '        "variables": [\n'
-        "          {\n"
-        '            "name": "<declared row variable>",\n'
-        '            "variable_kind": "continuous",\n'
-        '            "summary": "median_iqr",\n'
-        '            "test": "mann_whitney_or_kruskal",\n'
-        '            "levels": []\n'
-        "          }\n"
-        "        ]\n"
-        "      },\n"
-        '      "trajectory_stability_spec": null,\n'
-        '      "exposure_outcome_distribution_spec": null,\n'
-        '      "cohort_definition_spec": null\n'
-        "    },\n"
-        # A second example step exists for one reason: the distribution spec
-        # was described in prose only, and a real Planner then guessed its
-        # shape four different ways in five attempts -- `exposure_column`
-        # instead of `exposure`, and twice an `{"column": ..., "levels": ...}`
-        # object where a plain column name belongs. Prose is enough to convey
-        # which choices are the Planner's; it is not enough to convey a key
-        # name or whether a field nests. Show the shape, as table_one_spec
-        # already does.
-        "    {\n"
-        '      "step_id": "03_exposure_outcome_distribution",\n'
-        '      "planned_analysis_role": "primary",\n'
-        '      "intent": "<one sentence>",\n'
-        # Exactly one typed input (the cohort artifact, which carries the
-        # digest and product contract), plus the exposure and outcome column
-        # names as bare inputs -- the schema requires both spec columns to be
-        # explicit step inputs, and a bare name is not a second typed input.
-        '      "inputs": ["artifact:analysis_cohort", '
-        '"<declared exposure column name>", '
-        '"<declared outcome column name>"],\n'
-        '      "expected_outputs": ["table:exposure_outcome_distribution"],\n'
-        '      "method": "descriptive",\n'
-        '      "icu_rule_refs": [],\n'
-        '      "model_requirements": [],\n'
-        '      "input_consumption_contracts": [],\n'
-        '      "table_one_spec": null,\n'
-        '      "trajectory_stability_spec": null,\n'
-        '      "exposure_outcome_distribution_spec": {\n'
-        '        "exposure": "<declared exposure column name>",\n'
-        '        "exposure_levels": ["<closed level 1>", "<closed level 2>"],\n'
-        '        "outcome": "<declared outcome column name>",\n'
-        '        "outcome_levels": ["<closed level 1>", "<closed level 2>"],\n'
-        '        "outcome_positive_value": "<exactly one of outcome_levels>",\n'
-        '        "level_match_policy": "exact_typed",\n'
-        '        "denominator_policy": "all_declared_rows",\n'
-        '        "missing_outcome_policy": "structural_absence_is_non_event",\n'
-        '        "risk_difference_contrast": {\n'
-        '          "reference_exposure_level": "<closed level 1>",\n'
-        '          "comparison_exposure_level": "<closed level 2>",\n'
-        '          "effect_measure": "risk_difference",\n'
-        '          "interval_method": "linear_probability_wald"\n'
-        "        },\n"
-        '        "confidence_level": 0.95\n'
-        "      },\n"
-        + _payload.descriptive_claim_example_fragment()
-        + '      "cohort_definition_spec": null\n'
-        "    }\n"
-        "  ],\n"
-        '  "robustness_specs": [\n'
-        "    {\n"
-        '      "spec_id": "alt_cohort_max_during_stay",\n'
-        '      "axis": "cohort",\n'
-        '      "description": "Use stay-level max SOFA instead of admission-window max.",\n'
-        '      "cohort_override": {\n'
-        '        "name": "alt_max_stay",\n'
-        '        "inclusion": [\n'
-        "          {\n"
-        '            "concept_id": "sofa",\n'
-        '            "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 168},\n'
-        '            "aggregation": "max",\n'
-        '            "op": ">=",\n'
-        '            "value": 2\n'
-        "          }\n"
-        "        ],\n"
-        '        "exclusion": []\n'
-        "      },\n"
-        '      "missing_override": null,\n'
-        '      "outcome_override": null\n'
-        "    },\n"
-        "    {\n"
-        '      "spec_id": "alt_missing_complete_case",\n'
-        '      "axis": "missing",\n'
-        '      "description": "Use complete-case handling for required variables.",\n'
-        '      "cohort_override": null,\n'
-        '      "missing_override": {"strategy": "complete_case", '
-        + f'"{_COMPLETE_CASE_VARIABLES_KEY}": '
-        + '["<exposure column>", "<outcome column>", "<each covariate>"]},\n'
-        '      "outcome_override": null\n'
-        "    }\n"
-        "  ],\n"
-        '  "evalue_conversion_spec": null,\n'
-        '  "subgroup_analysis_spec": null,\n'
-        '  "rationale": "<one paragraph>"\n'
-        "}\n\n"
-        + _payload.planner_endpoint_and_optional_science_guidance()
-        +
-        "RESEARCH CONTEXT:\n"
-        + _format_context(
-            planner_context,
-            include_materialized_input_facts=True,
-            compact_method_constraints=True,
-        )
-        + "\n\n"
-        + planner_variable_catalog(context, planner_context)
+    opaque_binary_levels = list(opaque_level_tokens(2))
+    opaque_binary_json = json.dumps(
+        opaque_binary_levels, ensure_ascii=True, separators=(",", ":")
     )
+    opaque_level_1_json = json.dumps(opaque_binary_levels[0], ensure_ascii=True)
+    opaque_level_2_json = json.dumps(opaque_binary_levels[1], ensure_ascii=True)
+
+    prompt = _base_planner_user_prompt(
+        context,
+        planner_context=planner_context,
+        inferred_analysis_type=inferred_analysis_type,
+        sensitivity_guide=sensitivity_guide,
+        opaque_binary_json=opaque_binary_json,
+        opaque_level_1_json=opaque_level_1_json,
+        opaque_level_2_json=opaque_level_2_json,
+        catalog_detail=catalog_detail,
+    )
+    if strict_transport_schema:
+        def replace_wire_section(
+            value: str,
+            *,
+            start: str,
+            end: str,
+            replacement: str,
+        ) -> str:
+            """Replace one syntax-heavy section while retaining its science."""
+
+            start_at = value.find(start)
+            end_at = value.find(end, start_at + len(start))
+            if start_at < 0 or end_at < 0:
+                raise RuntimeError(
+                    "Planner strict-prompt compaction marker is missing: "
+                    f"{start!r} -> {end!r}"
+                )
+            return value[:start_at] + replacement + value[end_at:]
+
+        # The wire schema supplies field names, nullability, enums and nesting.
+        # Keep the scientific decisions and fail-closed semantics here, but do
+        # not make a retry pay a second time for a prose rendering of that same
+        # syntax.  These boundaries are explicit and asserted above: schema
+        # evolution cannot silently delete an instruction during compaction.
+        prompt = replace_wire_section(
+            prompt,
+            start=(
+                "A step that declares the exact output `table:table_one` MUST also "
+            ),
+            end="For counts, events, prevalence",
+            replacement=(
+                "A `table:table_one` step MUST carry `table_one_spec` with "
+                "group_by, closed group_levels and its variable roster. The "
+                "grouping column is not also a row. Its inputs list the cohort "
+                "artifact, group_by and every row variable explicitly. Preserve "
+                "observed scalar types; categorical count/percent rows need "
+                "closed levels, continuous rows have none, and numeric ordinal "
+                "rows may either close their levels or omit them. When literals "
+                f"are hidden, copy the opaque tokens (binary: {opaque_binary_json}) "
+                "and never guess labels. Choose the declared missing-group "
+                "policy from the catalogued coverage, and report grouped plus "
+                "Overall summaries, missing n (%), the test and P value. This "
+                "step emits only `table:table_one` plus allowed host audit "
+                "outputs; use a separate step for every other result or figure, "
+                "and use `table:cohort_summary` for an ungrouped description. "
+            ),
+        )
+        prompt = replace_wire_section(
+            prompt,
+            start=(
+                "A step that declares the exact output "
+                "`table:exposure_outcome_distribution` MUST also declare "
+            ),
+            end=(
+                "A primary cohort construction/eligibility + attrition step is also a "
+            ),
+            replacement=(
+                "A `table:exposure_outcome_distribution` step MUST carry its "
+                "typed spec and exactly one typed cohort input, with the bare "
+                "exposure and outcome columns also listed as inputs. Declare "
+                "closed exposure/outcome levels, the positive outcome value, "
+                "level matching, denominator and both missingness policies, and "
+                "confidence level; the host infers none of them. "
+                + _payload.interval_bearing_distribution_guide()
+                + " "
+                + _payload.counts_only_distribution_guide()
+                + " Close outcome levels over every observed value, preserve "
+                "scalar types, and choose missingness policies from the sealed "
+                "coverage. If absolute-risk DIFFERENCE is requested, declare "
+                "the typed reference and comparison (comparison minus reference), "
+                "risk-difference effect measure and interval method; never sort "
+                "or infer the levels. Do not declare dependence: the host binds "
+                "verified repeated-unit covariance authority. A post-baseline "
+                "primary descriptive distribution with unresolved exposure "
+                "opportunity carries `descriptive_claim`, the descriptive-only "
+                "ceiling and its typed limitation; it never authorizes association "
+                "or causal language. "
+                + _payload.descriptive_claim_shape_guide()
+                + " "
+            ),
+        )
+        prompt = replace_wire_section(
+            prompt,
+            start=(
+                "The typed `model_requirements` roster currently covers only a complex "
+            ),
+            end="For a counting-only measurement/missingness audit step, set ",
+            replacement=(
+                "Use `model_requirements` only for the exact "
+                "`adjusted_association_models` step that emits "
+                "`table:adjusted_association_estimates`. Declare exactly ONE "
+                "model per step; another outcome or analysis set is another step. "
+                "Bind its id, outcome/type, method family, exposure, role, "
+                "analysis set, required status and covariates. Binary methods: "
+                + ", ".join(sorted(ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES))
+                + "; continuous methods: "
+                + ", ".join(sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES))
+                + ". Primary/secondary models are required. For a multilevel "
+                "ordinal/categorical exposure, declare the closed levels, "
+                "reference and single headline contrast together; omit all three "
+                "for binary/continuous exposure. `covariates` is the exact "
+                "adjustment set, excludes exposure/outcome, and is not inferred "
+                "from inputs. Other families leave this roster empty and use "
+                "their own typed contracts. "
+                + _payload.planner_adjusted_association_owner_guidance()
+                + "\n\n"
+            ),
+        )
+
+        # A strict-schema request already carries the complete closed JSON
+        # shape as transport authority.  Replaying the older illustrative
+        # object alongside it wastes retry headroom and, for display_labels,
+        # demonstrates the pre-transport mapping representation rather than
+        # the key/value rows the provider is actually required to emit.  Keep
+        # all scientific guidance that follows the example; remove syntax-only
+        # duplication, never typed context or a design coordinate.
+        example_start = "OUTPUT FORMAT — VERY IMPORTANT:\n"
+        optional_science_guide = _payload.planner_endpoint_and_optional_science_guidance()
+        prefix, marker, remainder = prompt.partition(example_start)
+        if not marker:
+            raise RuntimeError("Planner output-format marker is missing")
+        _example, guide_marker, suffix = remainder.partition(optional_science_guide)
+        if not guide_marker:
+            raise RuntimeError("Planner optional-science guide marker is missing")
+        prompt = (
+            prefix
+            + "OUTPUT FORMAT — HOST-ENFORCED STRICT JSON SCHEMA:\n"
+            + "Return only the single schema-valid object. Populate every "
+            + "required property, using null or an empty array only where the "
+            + "schema permits; preserve every scientific contract above.\n\n"
+            + optional_science_guide
+            + suffix
+        )
+
     if planning_contract_context:
         prompt += (
             "\n\nHOST-DERIVED PRE-PLAN DESIGN PROFILE "
@@ -883,10 +1037,11 @@ def _validate_table_one_observed_levels(
         bind_step_declared_levels(step, context)
 
 
-# The Planner's plan-generation call is the largest prompt this system builds,
-# and it is the one budgeted role ``PromptBudgetClient`` does not wrap (only the
-# Coder transports are, in execution/phase.py). So this constant is that call's
-# ONLY ceiling -- not a second opinion layered on a transport check.
+# The Planner's plan-generation call is the largest prompt this system builds.
+# This value governs its lossless initial assembly; production also wraps the
+# resolved Planner client as the declared ``planner_plan_generation`` consumer,
+# so every structured retry is checked against the same reviewed ceiling after
+# response projections and validator feedback are appended.
 #
 # It used to be a hard-coded 80,000. That number predates the review written
 # down in ``providers/prompt_budget.py``, which asked exactly this question for
@@ -916,7 +1071,7 @@ def _validate_table_one_observed_levels(
 _PLANNER_PROMPT_BYTE_LIMIT = int(
     DEFAULT_MAX_PROMPT_TOKENS * CONSERVATIVE_BYTES_PER_TOKEN
 )
-_PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
+_PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 4_500
 # The Planner emits a complete typed DAG rather than a short answer. A real Web
 # E1 run first proved 4096 too small; a later DeepSeek canary then exhausted all
 # five attempts at exactly 8192 tokens with 36k-38k character responses and
@@ -925,11 +1080,24 @@ _PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
 _PLANNER_MAX_TOKENS = 16384
 
 
+def _structured_output_authority_note(structured_output: Any) -> str:
+    """Render the exact small message-side pointer to wire-schema authority."""
+
+    return (
+        "\n\nHOST STRUCTURED OUTPUT AUTHORITY: "
+        f"name={structured_output.name}; "
+        f"sha256={structured_output.authority_sha256}; strict=true. "
+        "The transport enforces this schema before host validation."
+    )
+
+
 def _planner_prompt_within_budget(
     context: ResearchContext,
     *,
     know_how_context: str = "",
     planning_contract_context: str = "",
+    strict_transport_schema: bool = False,
+    structured_output: StructuredOutputRequest | None = None,
 ) -> Tuple[str, str]:
     """Return ``(user_prompt, catalog_detail)``, shortening the menu before failing.
 
@@ -962,10 +1130,18 @@ def _planner_prompt_within_budget(
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
             catalog_detail=detail,
+            strict_transport_schema=strict_transport_schema,
         )
         total = len((_SYSTEM_GUIDE + _PRINCIPLES_GUIDE).encode("utf-8")) + len(
             prompt.encode("utf-8")
         )
+        if strict_transport_schema:
+            request = (
+                structured_output or _payload.planner_structured_output_request()
+            )
+            total += request.payload_bytes + len(
+                _structured_output_authority_note(request).encode("utf-8")
+            )
         if total <= _PLANNER_PROMPT_BYTE_LIMIT:
             return prompt, detail
     # Still over at the shortest rung: return it and let the budget check raise,
@@ -1025,8 +1201,20 @@ def describe_article_contract_family_switch(*, shown: Any, judged: Any) -> str:
     )
 
 
-def _planner_retry_response_projection(raw: str) -> str:
-    """Keep prior Planner structure without replaying its long prose."""
+def _planner_retry_response_projection(
+    raw: str,
+    *,
+    max_bytes: int = _PLANNER_RETRY_PROJECTION_BYTE_LIMIT,
+) -> str:
+    """Keep prior scientific coordinates without replaying long prose.
+
+    Every projection rung retains the fields whose loss can change scientific
+    authority (action, capability, article role, citation bindings and typed
+    contracts).  Lower rungs shorten prose and secondary structure; they never
+    silently turn an already-bound method or source back into a blank choice.
+    """
+
+    max_bytes = max(1, int(max_bytes))
 
     text = str(raw or "").strip()
     if "```" in text:
@@ -1048,6 +1236,7 @@ def _planner_retry_response_projection(raw: str) -> str:
         "step_id",
         "planned_analysis_role",
         "scientific_action_id",
+        "scientific_capability",
         "inputs",
         "expected_outputs",
         "method",
@@ -1062,9 +1251,9 @@ def _planner_retry_response_projection(raw: str) -> str:
         "trajectory_stability_spec",
         "exposure_outcome_distribution_spec",
         "descriptive_claim",
-        # Omitted here, a spec the previous attempt got right is dropped from
-        # the projection and has to be rediscovered on the retry.
         "cohort_definition_spec",
+        "measurement_audit_spec",
+        "robustness_replay_spec",
     )
     raw_steps = payload.get("steps")
     steps = raw_steps if isinstance(raw_steps, list) else []
@@ -1072,10 +1261,39 @@ def _planner_retry_response_projection(raw: str) -> str:
     robustness_specs = (
         raw_robustness_specs if isinstance(raw_robustness_specs, list) else []
     )
+    def project_step(
+        step: Mapping[str, Any],
+        keys: Sequence[str],
+        *,
+        compact_literature: bool = False,
+        literature_application_chars: int = 240,
+    ) -> Dict[str, Any]:
+        projected = {key: step[key] for key in keys if key in step}
+        if compact_literature and isinstance(
+            projected.get("literature_design_bindings"), list
+        ):
+            compact_bindings = []
+            for binding in projected["literature_design_bindings"]:
+                if not isinstance(binding, dict):
+                    continue
+                compact = {
+                    key: binding.get(key)
+                    for key in ("citation_key", "design_elements")
+                    if key in binding
+                }
+                application = " ".join(str(binding.get("application") or "").split())
+                if application:
+                    compact["application"] = application[
+                        : max(8, int(literature_application_chars))
+                    ]
+                divergence = " ".join(str(binding.get("divergence") or "").split())
+                compact["divergence"] = divergence[:160] if divergence else None
+                compact_bindings.append(compact)
+            projected["literature_design_bindings"] = compact_bindings
+        return projected
+
     projected_steps = [
-        {key: step[key] for key in step_keys if key in step}
-        for step in steps
-        if isinstance(step, dict)
+        project_step(step, step_keys) for step in steps if isinstance(step, dict)
     ]
     projection = {
         "analysis_type": payload.get("analysis_type"),
@@ -1100,24 +1318,31 @@ def _planner_retry_response_projection(raw: str) -> str:
         )
 
     rendered = render(projection)
-    if len(rendered.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+    if len(rendered.encode("utf-8")) <= max_bytes:
         return rendered
 
     minimal_step_keys = (
         "step_id",
         "planned_analysis_role",
         "scientific_action_id",
+        "scientific_capability",
         "inputs",
         "expected_outputs",
         "method",
+        "literature_citation_keys",
+        "literature_design_bindings",
         "sensitivity_spec_ids",
         "model_requirements",
-        "family_primary_result_requirement", "figure_panels",
+        "family_primary_result_requirement",
+        "figure_panels",
         "exposure_outcome_distribution_spec",
         "descriptive_claim",
+        "cohort_definition_spec",
+        "measurement_audit_spec",
+        "robustness_replay_spec",
     )
     projection["steps"] = [
-        {key: step[key] for key in minimal_step_keys if key in step}
+        project_step(step, minimal_step_keys, compact_literature=True)
         for step in projected_steps
     ]
     robustness_keys = (
@@ -1133,32 +1358,99 @@ def _planner_retry_response_projection(raw: str) -> str:
         if isinstance(spec, dict)
     ]
     rendered = render(projection)
-    if len(rendered.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+    if len(rendered.encode("utf-8")) <= max_bytes:
         return rendered
 
-    compact_step_keys = (
+    # Final rung is explicitly a coordinate ledger, not a partial AnalysisPlan.
+    # It keeps the declarations that caused real retries to oscillate while
+    # omitting model-authored explanation.  Using a distinct key for binding
+    # coordinates prevents the model from copying an intentionally prose-free
+    # record as though it were a schema-complete LiteratureDesignBinding.
+    coordinate_columns = (
         "step_id",
-        "planned_analysis_role",
-        "inputs",
-        "expected_outputs",
+        "role",
+        "action",
+        "capability",
         "method",
-        "sensitivity_spec_ids", "figure_panels",
-        "exposure_outcome_distribution_spec",
-        "descriptive_claim",
+        "outputs",
+        "citation_keys",
+        "binding_coordinates",
+        "sensitivity_ids",
     )
-    projection["steps"] = [
-        {key: step[key] for key in compact_step_keys if key in step}
-        for step in projected_steps
-    ]
+    coordinate_strings: list[str] = []
+    coordinate_string_indexes: dict[str, int] = {}
+
+    def coordinate_ref(value: Any) -> Any:
+        """Intern one string without confusing invalid literal scalars."""
+
+        if not isinstance(value, str):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return ["n", value]
+            return value
+        index = coordinate_string_indexes.get(value)
+        if index is None:
+            index = len(coordinate_strings)
+            coordinate_string_indexes[value] = index
+            coordinate_strings.append(value)
+        # Every bare non-negative integer is a string-table reference. Literal
+        # numeric scalars from a non-strict/invalid response are wrapped above,
+        # so the denser representation remains lossless and unambiguous.
+        return index
+
+    def coordinate_refs(value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        return [coordinate_ref(item) for item in value]
+
+    coordinate_steps = []
+    for step in projected_steps:
+        raw_bindings = step.get("literature_design_bindings")
+        binding_coordinates = (
+            [
+                [
+                    coordinate_ref(binding.get("citation_key")),
+                    coordinate_refs(binding.get("design_elements")),
+                ]
+                for binding in raw_bindings
+                if isinstance(binding, dict)
+            ]
+            if isinstance(raw_bindings, list)
+            else []
+        )
+        coordinate_steps.append(
+            [
+                step.get("step_id"),
+                coordinate_ref(step.get("planned_analysis_role")),
+                coordinate_ref(step.get("scientific_action_id")),
+                coordinate_ref(step.get("scientific_capability")),
+                coordinate_ref(step.get("method")),
+                coordinate_refs(step.get("expected_outputs")),
+                coordinate_refs(step.get("literature_citation_keys")),
+                binding_coordinates,
+                coordinate_refs(step.get("sensitivity_spec_ids")),
+            ]
+        )
+    projection.pop("steps", None)
+    projection["coordinate_string_table"] = coordinate_strings
+    projection["step_coordinate_columns"] = list(coordinate_columns)
+    projection["step_coordinates"] = coordinate_steps
+    projection["projection_note"] = (
+        "Inside step_coordinates, bare integers index coordinate_string_table; "
+        "['n',v] preserves a literal numeric scalar. Prior coordinates only: "
+        "emit the complete schema and literature binding applications required "
+        "by the original prompt."
+    )
     projection["robustness_specs"] = [
         {key: spec[key] for key in ("spec_id", "axis") if key in spec}
         for spec in robustness_specs
         if isinstance(spec, dict)
     ]
     rendered = render(projection)
-    if len(rendered.encode("utf-8")) > _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+    if len(rendered.encode("utf-8")) > max_bytes:
         raise PlannerPromptBudgetError(
-            "Planner retry structure exceeds its bounded projection envelope"
+            "Planner retry authority coordinates exceed their bounded "
+            f"projection envelope ({len(rendered.encode('utf-8'))} > "
+            f"{max_bytes} bytes); no scientific coordinate was discarded"
         )
     return rendered
 
@@ -1185,12 +1477,16 @@ class PlannerAgent:
         *,
         know_how_context: str = "",
         planning_contract_context: str = "",
+        strict_transport_schema: bool = False,
+        structured_output: StructuredOutputRequest | None = None,
     ) -> list[LLMMessage]:
         """Build the exact initial Planner request used by ``run``."""
         user_prompt, _ = _planner_prompt_within_budget(
             context,
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
+            structured_output=structured_output,
         )
         return [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
@@ -1204,11 +1500,15 @@ class PlannerAgent:
         *,
         know_how_context: str = "",
         planning_contract_context: str = "",
+        strict_transport_schema: bool = False,
+        structured_output: StructuredOutputRequest | None = None,
     ) -> Dict[str, Any]:
         _, catalog_detail = _planner_prompt_within_budget(
             context,
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
+            structured_output=structured_output,
         )
         try:
             metrics = bounded_request_metrics(
@@ -1217,12 +1517,14 @@ class PlannerAgent:
                     context,
                     planning_contract_context=planning_contract_context,
                     catalog_detail=catalog_detail,
+                    strict_transport_schema=strict_transport_schema,
                 ),
                 full_user_content=_build_planner_user_prompt(
                     context,
                     know_how_context=know_how_context,
                     planning_contract_context=planning_contract_context,
                     catalog_detail=catalog_detail,
+                    strict_transport_schema=strict_transport_schema,
                 ),
                 max_bytes=_PLANNER_PROMPT_BYTE_LIMIT,
             )
@@ -1233,6 +1535,25 @@ class PlannerAgent:
         # A shortened menu is recorded, never silent: the run artifact must say
         # which rung produced the plan it carries.
         metrics["analysis_type_catalog_detail"] = catalog_detail
+        if strict_transport_schema:
+            structured_output = (
+                structured_output or _payload.planner_structured_output_request()
+            )
+            authority_note_bytes = len(
+                _structured_output_authority_note(structured_output).encode("utf-8")
+            )
+            metrics["message_payload_bytes"] = metrics["total_bytes"] + (
+                authority_note_bytes
+            )
+            metrics["structured_output_payload_bytes"] = (
+                structured_output.payload_bytes
+            )
+            metrics["structured_output_authority_sha256"] = (
+                structured_output.authority_sha256
+            )
+            metrics["total_bytes"] += (
+                structured_output.payload_bytes + authority_note_bytes
+            )
         return metrics
 
     def run(
@@ -1279,15 +1600,49 @@ class PlannerAgent:
                 _payload.required_method_layers_for_context(context)
             ),
         )
+        structured_output = None
+        if llm_supports_strict_json_schema(self.llm):
+            structured_output = _payload.planner_structured_output_request(
+                allowed_citation_keys
+            )
+        strict_transport_schema = structured_output is not None
         messages = self.request_messages(
             context,
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
+            structured_output=structured_output,
         )
+        if structured_output is not None:
+            authority_note = _structured_output_authority_note(structured_output)
+            messages[0] = LLMMessage(
+                role=messages[0].role,
+                content=messages[0].content + authority_note,
+            )
         self.last_prompt_metrics = self.request_metrics(
             context,
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
+            strict_transport_schema=strict_transport_schema,
+            structured_output=structured_output,
+        )
+        message_payload_bytes = sum(
+            len(message.content.encode("utf-8")) for message in messages
+        )
+        structured_output_bytes = (
+            structured_output.payload_bytes if structured_output is not None else 0
+        )
+        self.last_prompt_metrics["message_payload_bytes"] = message_payload_bytes
+        self.last_prompt_metrics["structured_output_payload_bytes"] = (
+            structured_output_bytes
+        )
+        self.last_prompt_metrics["structured_output_authority_sha256"] = (
+            structured_output.authority_sha256
+            if structured_output is not None
+            else None
+        )
+        self.last_prompt_metrics["total_bytes"] = (
+            message_payload_bytes + structured_output_bytes
         )
         if self.last_prompt_metrics["total_bytes"] > _PLANNER_PROMPT_BYTE_LIMIT:
             raise PlannerPromptBudgetError(
@@ -1318,40 +1673,56 @@ class PlannerAgent:
             temperature=0.2,
             failed_response_transform=_planner_retry_response_projection,
             progress_callback=progress_callback,
+            structured_output=structured_output,
             format_reminder=(
-                "The JSON must be a single object with keys: "
-                "research_question (string), optional analysis_type (string), "
-                "cohort (object or null), optional display_labels (object), "
-                "robustness_specs (array; non-empty when the binding contract "
-                "requires robustness), optional "
-                "know_how_decisions (claim-level adopted/rejected/unresolved/"
-                "requires_confirmation records using exact retrieved version, SHA, "
-                "claim_id, and citation_ids), "
-                "steps (array of objects "
-                "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
-                "method, optional scientific_action_id, icu_rule_refs, sensitivity_spec_ids, "
-                "optional cohort_definition_spec, "
-                "literature_citation_keys (exact keys from "
-                "the supplied literature bundle that support this step), "
-                "literature_design_bindings (records with citation_key, exact "
-                "design_elements, a concise application, and optional divergence), optional "
-                "model_requirements, optional "
-                "family_primary_result_requirement, optional "
-                "input_consumption_contracts, optional figure_panels, optional "
-                "table_one_spec, optional "
-                "trajectory_stability_spec, optional "
-                "exposure_outcome_distribution_spec, and optional descriptive_claim), "
-                "rationale (string). "
-                "All string values must be plain ASCII or UTF-8 quoted strings; "
-                "do not use special Unicode whitespace inside values."
-                + _payload.literature_citation_retry_suffix(
-                    allowed_citation_keys,
-                    direct_comparator_keys=direct_comparator_keys,
-                    required_method_layers=(
-                        _payload.required_method_layers_for_context(context)
-                    ),
+                (
+                    "The host-enforced strict schema already supplies the full "
+                    "JSON shape. Correct every validator-reported field while "
+                    "retaining prior step ids, article roles, action and "
+                    "capability ids, citation keys and bindings, and typed specs. "
+                    "Do not fix one rejection by undoing an earlier contract."
                 )
-                + _payload.planner_science_retry_guide()
+                if structured_output is not None
+                else (
+                    "The JSON must be a single object with keys: "
+                    "research_question (string), optional analysis_type (string), "
+                    "cohort (object or null), optional display_labels (object), "
+                    "robustness_specs (array; non-empty when the binding contract "
+                    "requires robustness), optional "
+                    "know_how_decisions (claim-level adopted/rejected/unresolved/"
+                    "requires_confirmation records using exact retrieved version, SHA, "
+                    "claim_id, and citation_ids), "
+                    "steps (array of objects "
+                    "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
+                    "method, optional scientific_action_id, icu_rule_refs, sensitivity_spec_ids, "
+                    "optional cohort_definition_spec, "
+                    "literature_citation_keys (exact keys from "
+                    "the supplied literature bundle that support this step), "
+                    "literature_design_bindings (records with citation_key, exact "
+                    "design_elements, a concise application, and optional divergence), optional "
+                    "model_requirements, optional "
+                    "family_primary_result_requirement, optional "
+                    "input_consumption_contracts, optional figure_panels, optional "
+                    "table_one_spec, optional "
+                    "trajectory_stability_spec, optional "
+                    "exposure_outcome_distribution_spec, and optional descriptive_claim), "
+                    "rationale (string). "
+                    "All string values must be plain ASCII or UTF-8 quoted strings; "
+                    "do not use special Unicode whitespace inside values."
+                    + _payload.literature_citation_retry_suffix(
+                        allowed_citation_keys,
+                        direct_comparator_keys=direct_comparator_keys,
+                        required_method_layers=(
+                            _payload.required_method_layers_for_context(context)
+                        ),
+                    )
+                    + _payload.planner_science_retry_guide()
+                    + "\n\n"
+                    + _scientific_actions.planner_scientific_action_guide(
+                        infer_analysis_type(context).key,
+                        detail="names_only",
+                    )
+                )
             ),
         )
 
@@ -1399,6 +1770,7 @@ class PlannerAgent:
             data = json.loads(match)
         if not isinstance(data, dict):
             raise ValueError("Planner JSON root must be an object")
+        data = _payload.decode_planner_transport_payload(data)
         for index, raw_step in enumerate(data.get("steps", []) or []):
             if not isinstance(raw_step, dict):
                 continue

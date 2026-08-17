@@ -22,10 +22,11 @@ import pyarrow.parquet as pq
 from easyicu.research_agent.acquisition.patient_grouping import (
     PatientGroupingBinding,
 )
+from easyicu.webserver import state_paths
 
 
 _PREFIX = "EASYICU_PATIENT_GROUPING_"
-_DEFAULT_CONFIG_PATH = Path.home() / ".easyicu" / "patient-grouping.env"
+_DEFAULT_CONFIG_PATH = state_paths.state_root() / "patient-grouping.env"
 _FIELDS = (
     "EXPORT_ROOT",
     "EXPORT_MANIFEST",

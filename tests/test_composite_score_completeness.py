@@ -57,11 +57,11 @@ def test_sofa2_score_emits_outcome_blind_component_count():
         assert out.loc[1, column] == 6
         assert out.loc[2, column] == 3
         assert out.loc[3, column] == 0
-    # score value unchanged: missing -> 0 (standard), so the all-missing stay
-    # collapses to 0 and is indistinguishable from a true zero by score alone
+    # The component count remains available for outcome-blind QC, while the
+    # aggregate score fails closed unless all six components are available.
     assert out.loc[1, "sofa2"] == 3
-    assert out.loc[2, "sofa2"] == 3
-    assert out.loc[3, "sofa2"] == 0
+    assert pd.isna(out.loc[2, "sofa2"])
+    assert pd.isna(out.loc[3, "sofa2"])
 
 
 def test_composite_score_completeness_is_generic_non_sofa():

@@ -16,8 +16,9 @@ from typing import Any, Dict, List, Mapping, Optional
 from easyicu.research_agent.planning.sensitivity_authority import (
     normalize_prespecified_sensitivities,
 )
+from easyicu.webserver import state_paths
 
-_CONFIG_PATH = Path.home() / ".easyicu" / "webserver_study_contexts.json"
+_CONFIG_PATH = state_paths.state_root() / "webserver_study_contexts.json"
 _LOCK = threading.RLock()
 
 _MAX_CONTEXTS = 80

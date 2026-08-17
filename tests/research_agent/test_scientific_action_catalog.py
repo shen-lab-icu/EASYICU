@@ -27,6 +27,15 @@ def _action(analysis_type: str, method_key: str):
     return next(action for action in catalog.actions if action.method_key == method_key)
 
 
+def test_planner_action_guide_closes_family_and_auxiliary_boundaries():
+    guide = planner_scientific_action_guide("association_study")
+
+    assert "scientific_action_id is either null or exactly one of" in guide
+    assert "association.adjusted_association" in guide
+    assert "Cohort-definition, Table 1, raw distribution" in guide
+    assert "import another family prefix" in guide
+
+
 def test_prediction_methods_bind_reviewed_resources_without_upgrading_owner():
     delong = _action("prediction_model", "delong_ci")
     dca = _action("prediction_model", "decision_curve")

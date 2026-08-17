@@ -743,12 +743,17 @@ def _coerce_prior_art_query_record(
         )
     if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
         hits = [_coerce_prior_art_hit(item) for item in raw]
+        # A bare sequence carries a page, not the true total hit count.
+        # Reporting the page size as hit_count would let a crowded field
+        # (hundreds of hits) look sparse (<= max_results), so fail closed:
+        # keep the hits for evidence but mark the screen unusable.
         return PriorArtQueryRecord(
             query_type=query_type,
             query=query,
             hit_count=len(hits),
             pmids=[hit.pmid for hit in hits],
             top_hits=hits,
+            search_ok=False,
         )
     return PriorArtQueryRecord(
         query_type=query_type,
@@ -934,15 +939,16 @@ def _evidence_map_bucket(
         return "same_exposure_different_outcome"
     if has_outcome and not has_predictor:
         return "same_outcome_different_exposure"
+    _adjacent_tokens = (
+        "icu",
+        "critical illness",
+        "critically ill",
+        "intensive care",
+        "intensive care unit",
+    )
     if any(
-        token in text
-        for token in (
-            "icu",
-            "critical illness",
-            "critically ill",
-            "intensive care",
-            "intensive care unit",
-        )
+        token in text or normalize_concept_name(token) in text
+        for token in _adjacent_tokens
     ):
         return "adjacent_icu_background"
     return "unclear"

@@ -9,15 +9,19 @@ valid-looking design. It normalizes only representation-level aliases.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
-from typing import Any, Dict, List, Sequence, Tuple
+from functools import lru_cache
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from ..contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )
+from ..contracts.product_identity import CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN
+from ..contracts.capability_ids import CAPABILITY_FAMILIES
 from ..planning.method_literature import METHOD_CARDS
 from ..planning.literature_bindings import (
     allowed_method_source_keys,
@@ -25,7 +29,18 @@ from ..planning.literature_bindings import (
     validate_literature_citation_bindings,
 )
 from ..planning.primary_result_contract import model_terms_retry_guide
-from ..planning.robustness_contract import RobustnessSpec
+from ..planning.runtime_suffix import RuntimePlanSuffixRevision
+from ..planning.robustness_contract import (
+    PLANNER_MISSING_OVERRIDE_FIELDS,
+    PLANNER_OUTCOME_OVERRIDE_FIELDS,
+    RobustnessSpec,
+)
+from ..providers.protocol import StructuredOutputRequest
+from ..providers.strict_json_schema import (
+    StrictJsonSchemaError,
+    assert_closed_json_schema,
+    strictify_json_schema,
+)
 from ..planning.scientific_review import (
     required_method_layers_for_context,
     required_method_layers_for_plan,
@@ -34,11 +49,585 @@ from ..schema import (
     AnalysisPlan,
     AnalysisStep,
     ArtifactConsumptionContract,
+    ExposureOutcomeDistributionSpec,
+    ExposureOutcomeRiskDifferenceContrast,
     PlannedFigurePanelSpec,
     PlannedModelRequirement,
     TableOneSpec,
     TableOneVariableSpec,
 )
+from ..research_context.prompt_variables import opaque_level_tokens
+
+
+class PlannerStructuredOutputSchemaError(ValueError):
+    """The host could not derive a closed Planner transport schema."""
+
+
+def _json_scalar_schema() -> Dict[str, Any]:
+    """The exact finite scalar family accepted by closed-level validators."""
+
+    return {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "integer"},
+            {"type": "number"},
+            {"type": "boolean"},
+        ]
+    }
+
+
+def _nullable_string_schema() -> Dict[str, Any]:
+    return {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+
+def _nullable_string_list_schema() -> Dict[str, Any]:
+    return {
+        "anyOf": [
+            {"type": "array", "items": {"type": "string"}},
+            {"type": "null"},
+        ]
+    }
+
+
+def _closed_object_schema(properties: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": dict(properties),
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+def _artifact_consumption_transport_schema(
+    definition: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Compile the host's mode-dependent consumption contract for transport."""
+
+    properties = definition.get("properties")
+    expected = {
+        "schema_version",
+        "input_key",
+        "mode",
+        "role_column",
+        "expected_roles",
+    }
+    if not isinstance(properties, dict) or set(properties) != expected:
+        raise PlannerStructuredOutputSchemaError(
+            "ArtifactConsumptionContract schema drifted from its wire compiler"
+        )
+
+    def branch(
+        mode: str,
+        *,
+        role_column: Dict[str, Any],
+        expected_roles: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        input_key = copy.deepcopy(properties["input_key"])
+        input_key["pattern"] = CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN
+        return _closed_object_schema(
+            {
+                "schema_version": copy.deepcopy(properties["schema_version"]),
+                "input_key": input_key,
+                "mode": {"type": "string", "const": mode},
+                "role_column": role_column,
+                "expected_roles": expected_roles,
+            }
+        )
+
+    empty_roles = {"type": "array", "items": {"type": "string"}, "maxItems": 0}
+    return {
+        "anyOf": [
+            branch(
+                "all_rows",
+                role_column={"type": "null"},
+                expected_roles=copy.deepcopy(empty_roles),
+            ),
+            branch(
+                "single_row",
+                role_column={"type": "null"},
+                expected_roles=copy.deepcopy(empty_roles),
+            ),
+            branch(
+                "one_per_role",
+                role_column={"type": "string", "minLength": 1},
+                expected_roles={
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                },
+            ),
+        ]
+    }
+
+
+def _literature_design_binding_transport_schema(
+    definition: Mapping[str, Any],
+    allowed_keys: Sequence[str],
+) -> Dict[str, Any]:
+    """Compile exact run-bound source/element pairs for strict transport.
+
+    Method sources have a closed host-curated design vocabulary.  Leaving the
+    two fields independent in JSON Schema lets a provider emit combinations
+    that the unchanged literature authority must reject.  Topic and screened
+    comparator sources remain eligible for the full typed design-element
+    vocabulary because their relevance is judged from the sealed source
+    excerpt after transport, not from method cards.
+    """
+
+    properties = definition.get("properties")
+    expected = {
+        "citation_key",
+        "design_elements",
+        "application",
+        "divergence",
+    }
+    if not isinstance(properties, dict) or set(properties) != expected:
+        raise PlannerStructuredOutputSchemaError(
+            "LiteratureDesignBinding schema drifted from its wire compiler"
+        )
+    design_elements = properties["design_elements"]
+    if not isinstance(design_elements, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "LiteratureDesignBinding design_elements schema is not an array"
+        )
+    items = design_elements.get("items")
+    global_elements = items.get("enum") if isinstance(items, dict) else None
+    if not isinstance(global_elements, list) or not global_elements:
+        raise PlannerStructuredOutputSchemaError(
+            "LiteratureDesignBinding design-element vocabulary is not closed"
+        )
+
+    method_elements: dict[str, set[str]] = {}
+    for card in METHOD_CARDS:
+        method_elements.setdefault(card.source_key, set()).update(
+            card.design_elements
+        )
+
+    # Several sources can have the exact same authority (for example the two
+    # time-alignment cards, or all non-method sources whose excerpts are judged
+    # later). Group only identical element sets so the source/element relation
+    # is unchanged while the bounded schema does not repeat the application and
+    # divergence fields once per citation.
+    source_groups: dict[tuple[str, ...], list[str]] = {}
+    for source_key in allowed_keys:
+        allowed_elements = tuple(
+            sorted(method_elements.get(source_key, set(global_elements)))
+        )
+        source_groups.setdefault(allowed_elements, []).append(source_key)
+
+    branches: list[Dict[str, Any]] = []
+    for allowed_elements, source_keys in source_groups.items():
+        branch_elements = copy.deepcopy(design_elements)
+        branch_elements["items"] = {
+            "type": "string",
+            "enum": list(allowed_elements),
+        }
+        branches.append(
+            _closed_object_schema(
+                {
+                    "citation_key": {
+                        "type": "string",
+                        "enum": source_keys,
+                    },
+                    "design_elements": branch_elements,
+                    "application": copy.deepcopy(properties["application"]),
+                    "divergence": copy.deepcopy(properties["divergence"]),
+                }
+            )
+        )
+    if not branches:
+        raise PlannerStructuredOutputSchemaError(
+            "run-bound literature binding schema requires at least one source"
+        )
+    return {"anyOf": branches}
+
+
+def _bind_literature_transport_authority(
+    definitions: Mapping[str, Any],
+    allowed_keys: Sequence[str],
+) -> None:
+    """Bind citation arrays and nested records to one sealed run roster."""
+
+    analysis_step = definitions.get("AnalysisStep")
+    if not isinstance(analysis_step, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "AnalysisStep schema is unavailable for literature authority"
+        )
+    step_properties = analysis_step.get("properties")
+    if not isinstance(step_properties, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "AnalysisStep properties are unavailable for literature authority"
+        )
+    citation_roster = step_properties.get("literature_citation_keys")
+    design_bindings = step_properties.get("literature_design_bindings")
+    if not isinstance(citation_roster, dict) or not isinstance(
+        design_bindings, dict
+    ):
+        raise PlannerStructuredOutputSchemaError(
+            "AnalysisStep literature fields drifted from their wire compiler"
+        )
+
+    keys = tuple(allowed_keys)
+    if not keys:
+        citation_roster["maxItems"] = 0
+        design_bindings["maxItems"] = 0
+        return
+
+    citation_roster["items"] = {"type": "string", "enum": list(keys)}
+    binding_definition = definitions.get("LiteratureDesignBinding")
+    if not isinstance(binding_definition, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "LiteratureDesignBinding schema is unavailable"
+        )
+    definitions["LiteratureDesignBinding"] = (
+        _literature_design_binding_transport_schema(binding_definition, keys)
+    )
+
+
+def _strictify_planner_transport_schema(node: Any) -> None:
+    """Compatibility wrapper over the provider-neutral strict-schema owner."""
+
+    strictify_json_schema(node)
+
+
+def _assert_closed_planner_transport_schema(node: Any, *, path: str = "$") -> None:
+    try:
+        assert_closed_json_schema(node, path=path)
+    except StrictJsonSchemaError as exc:
+        raise PlannerStructuredOutputSchemaError(str(exc)) from exc
+
+
+def _planner_transport_schema(
+    allowed_literature_citation_keys: tuple[str, ...] | None = None,
+) -> Dict[str, Any]:
+    """Return a strict transport schema derived from the authority model.
+
+    Pydantic's validation schema contains three open maps and several ``Any``
+    level values. Those are not representable in strict JSON Schema. The
+    replacements below do not choose science: they expose the exact scalar
+    family and robustness keys already consumed by their owner validators.
+    Presentation-only ``display_labels`` travels as key/value rows and is
+    decoded back to the public mapping before Pydantic validation.
+    """
+
+    schema = copy.deepcopy(AnalysisPlan.model_json_schema(mode="validation"))
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        raise PlannerStructuredOutputSchemaError("AnalysisPlan schema has no $defs")
+    try:
+        robustness = definitions["RobustnessSpec"]["properties"]
+        missing_override = _closed_object_schema(
+            {
+                "strategy": _nullable_string_schema(),
+                "variables": _nullable_string_list_schema(),
+                "audit_flags": _nullable_string_list_schema(),
+            }
+        )
+        outcome_override = _closed_object_schema(
+            {
+                field: _nullable_string_schema()
+                for field in PLANNER_OUTCOME_OVERRIDE_FIELDS
+            }
+        )
+        if tuple(missing_override["properties"]) != tuple(
+            PLANNER_MISSING_OVERRIDE_FIELDS
+        ):
+            raise PlannerStructuredOutputSchemaError(
+                "missingness override schema drifted from its owner contract"
+            )
+        robustness["missing_override"] = {
+            "anyOf": [missing_override, {"type": "null"}]
+        }
+        robustness["outcome_override"] = {
+            "anyOf": [outcome_override, {"type": "null"}]
+        }
+
+        label_entry = _closed_object_schema(
+            {
+                "key": {"type": "string", "minLength": 1, "maxLength": 256},
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                },
+            }
+        )
+        schema["properties"]["display_labels"] = {
+            "type": "array",
+            "items": label_entry,
+        }
+
+        concept_value = definitions["ConceptPredicate"]["properties"]
+        concept_value["value"] = {
+            "anyOf": [
+                _json_scalar_schema(),
+                {"type": "array", "items": _json_scalar_schema()},
+                {"type": "null"},
+            ]
+        }
+        definitions["EndpointSpec"]["properties"]["levels"]["anyOf"][0][
+            "items"
+        ] = _json_scalar_schema()
+        distribution = definitions["ExposureOutcomeDistributionSpec"]["properties"]
+        distribution["outcome_positive_value"] = _json_scalar_schema()
+        distribution["exposure_levels"]["items"] = _json_scalar_schema()
+        distribution["outcome_levels"]["items"] = _json_scalar_schema()
+        contrast = definitions["ExposureOutcomeRiskDifferenceContrast"]["properties"]
+        contrast["reference_exposure_level"] = _json_scalar_schema()
+        contrast["comparison_exposure_level"] = _json_scalar_schema()
+        definitions["TableOneSpec"]["properties"]["group_levels"][
+            "items"
+        ] = _json_scalar_schema()
+        definitions["TableOneVariableSpec"]["properties"]["levels"][
+            "items"
+        ] = _json_scalar_schema()
+        # ``AnalysisStep`` validates this field against the stable capability
+        # owner after transport.  Publishing only ``string | null`` here let a
+        # strict-schema provider spend a complete response on prose labels that
+        # the host was guaranteed to reject.  Derive the wire enum from the
+        # same dependency-neutral vocabulary so transport and host validation
+        # cannot drift into two authorities.
+        definitions["AnalysisStep"]["properties"]["scientific_capability"] = {
+            "anyOf": [
+                {"type": "string", "enum": sorted(CAPABILITY_FAMILIES)},
+                {"type": "null"},
+            ]
+        }
+        definitions["ArtifactConsumptionContract"] = (
+            _artifact_consumption_transport_schema(
+                definitions["ArtifactConsumptionContract"]
+            )
+        )
+        if allowed_literature_citation_keys is not None:
+            _bind_literature_transport_authority(
+                definitions,
+                allowed_literature_citation_keys,
+            )
+    except (KeyError, TypeError) as exc:
+        raise PlannerStructuredOutputSchemaError(
+            "AnalysisPlan schema shape changed; review the transport projection"
+        ) from exc
+
+    _strictify_planner_transport_schema(schema)
+    _assert_closed_planner_transport_schema(schema)
+    return schema
+
+
+@lru_cache(maxsize=64)
+def _planner_structured_output_request_cached(
+    allowed_literature_citation_keys: tuple[str, ...] | None,
+) -> StructuredOutputRequest:
+    """Cache one immutable authority per normalized run-bound source roster."""
+
+    return StructuredOutputRequest.from_schema(
+        name="easyicu_analysis_plan_v1",
+        schema=_planner_transport_schema(allowed_literature_citation_keys),
+        strict=True,
+    )
+
+
+def planner_structured_output_request(
+    allowed_literature_citation_keys: Sequence[str] | None = None,
+) -> StructuredOutputRequest:
+    """Return the strict schema bound to the run's sealed citation roster.
+
+    ``None`` preserves the generic schema for offline inspection and budget
+    baselines.  A Planner run passes an explicit (possibly empty) roster so the
+    provider cannot invent a source or attach a curated method source to an
+    unsupported design element.
+    """
+
+    normalized = (
+        None
+        if allowed_literature_citation_keys is None
+        else normalize_literature_citation_keys(
+            allowed_literature_citation_keys
+        )
+    )
+    return _planner_structured_output_request_cached(normalized)
+
+
+@lru_cache(maxsize=64)
+def _runtime_suffix_structured_output_request_cached(
+    allowed_literature_citation_keys: tuple[str, ...],
+    replace_from_step_id: str,
+    planned_analysis_role: str,
+    allowed_inputs: tuple[str, ...],
+    expected_outputs: tuple[str, ...],
+    scientific_action_ids: tuple[str, ...],
+) -> StructuredOutputRequest:
+    """Compile one strict, coordinate-bound runtime step response schema."""
+
+    plan_schema = _planner_transport_schema(allowed_literature_citation_keys)
+    definitions = plan_schema.get("$defs")
+    if not isinstance(definitions, dict):  # pragma: no cover - owner assertion
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix plan schema has no definitions"
+        )
+    analysis_step = definitions.get("AnalysisStep")
+    if not isinstance(analysis_step, dict) or not isinstance(
+        analysis_step.get("properties"), dict
+    ):
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix AnalysisStep schema is unavailable"
+        )
+    step_properties = analysis_step["properties"]
+    step_properties["step_id"] = {
+        "type": "string",
+        "const": replace_from_step_id,
+    }
+    step_properties["planned_analysis_role"] = {
+        "type": "string",
+        "const": planned_analysis_role,
+    }
+    if allowed_inputs:
+        step_properties["inputs"]["items"] = {
+            "type": "string",
+            "enum": list(allowed_inputs),
+        }
+    else:
+        step_properties["inputs"]["maxItems"] = 0
+    step_properties["expected_outputs"] = {
+        "type": "array",
+        "prefixItems": [
+            {"type": "string", "const": value} for value in expected_outputs
+        ],
+        "minItems": len(expected_outputs),
+        "maxItems": len(expected_outputs),
+    }
+    step_properties["scientific_action_id"] = (
+        {
+            "anyOf": [
+                {
+                    "type": "string",
+                    "enum": list(scientific_action_ids),
+                },
+                {"type": "null"},
+            ]
+        }
+        if scientific_action_ids
+        else {"type": "null"}
+    )
+
+    schema = copy.deepcopy(
+        RuntimePlanSuffixRevision.model_json_schema(mode="validation")
+    )
+    schema["$defs"] = definitions
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):  # pragma: no cover - owner assertion
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix root schema has no properties"
+        )
+    properties["replace_from_step_id"] = {
+        "type": "string",
+        "const": replace_from_step_id,
+    }
+    properties["replacement_step"] = {"$ref": "#/$defs/AnalysisStep"}
+    _strictify_planner_transport_schema(schema)
+    _assert_closed_planner_transport_schema(schema)
+    return StructuredOutputRequest.from_schema(
+        name="easyicu_runtime_plan_suffix_revision_v1",
+        schema=schema,
+        strict=True,
+    )
+
+
+def runtime_suffix_structured_output_request(
+    *,
+    allowed_literature_citation_keys: Sequence[str],
+    replace_from_step_id: str,
+    planned_analysis_role: str,
+    allowed_inputs: Sequence[str],
+    expected_outputs: Sequence[str],
+    scientific_action_ids: Sequence[str],
+) -> StructuredOutputRequest:
+    """Return the run-bound strict schema for one observation-driven next step."""
+
+    normalized_step_id = str(replace_from_step_id or "").strip()
+    if not normalized_step_id:
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix requires one replacement step id"
+        )
+    normalized_role = str(planned_analysis_role or "").strip()
+    if normalized_role not in {"primary", "secondary", "sensitivity", "auxiliary"}:
+        raise PlannerStructuredOutputSchemaError(
+            "runtime suffix requires one valid planned analysis role"
+        )
+    return _runtime_suffix_structured_output_request_cached(
+        normalize_literature_citation_keys(allowed_literature_citation_keys),
+        normalized_step_id,
+        normalized_role,
+        tuple(
+            dict.fromkeys(
+                str(value).strip() for value in allowed_inputs if str(value).strip()
+            )
+        ),
+        tuple(str(value).strip() for value in expected_outputs),
+        tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in scientific_action_ids
+                if str(value).strip()
+            )
+        ),
+    )
+
+
+def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Compile the Planner wire representation before authority validation."""
+
+    decoded: Dict[str, Any] = copy.deepcopy(dict(data))
+    raw_labels = decoded.get("display_labels")
+    if isinstance(raw_labels, list):
+        labels: Dict[str, Any] = {}
+        for index, item in enumerate(raw_labels):
+            if not isinstance(item, dict) or set(item) != {"key", "value"}:
+                raise PlannerStructuredOutputSchemaError(
+                    f"display_labels[{index}] is not one exact key/value row"
+                )
+            key = item.get("key")
+            if key in labels:
+                raise PlannerStructuredOutputSchemaError(
+                    f"display_labels repeats key {key!r}"
+                )
+            labels[key] = item.get("value")
+        decoded["display_labels"] = labels
+
+    raw_specs = decoded.get("robustness_specs")
+    if isinstance(raw_specs, list):
+        for raw_spec in raw_specs:
+            if not isinstance(raw_spec, dict):
+                continue
+            for field in ("missing_override", "outcome_override"):
+                override = raw_spec.get(field)
+                if not isinstance(override, dict):
+                    continue
+                compact = {key: value for key, value in override.items() if value is not None}
+                raw_spec[field] = compact or None
+
+    # A typed design binding already declares which sealed source governs the
+    # step.  ``literature_citation_keys`` is the flat roster consumed by later
+    # validators and signatures, not a second scientific choice.  Compile the
+    # binding coordinate into that roster while retaining every explicitly
+    # cited key; an extra citation with no binding still fails downstream.
+    raw_steps = decoded.get("steps")
+    if isinstance(raw_steps, list):
+        for raw_step in raw_steps:
+            if not isinstance(raw_step, dict):
+                continue
+            citations = raw_step.get("literature_citation_keys")
+            bindings = raw_step.get("literature_design_bindings")
+            if not isinstance(citations, list) or not isinstance(bindings, list):
+                continue
+            compiled = list(citations)
+            for binding in bindings:
+                if not isinstance(binding, dict) or "citation_key" not in binding:
+                    continue
+                citation_key = binding["citation_key"]
+                if citation_key not in compiled:
+                    compiled.append(citation_key)
+            raw_step["literature_citation_keys"] = compiled
+    return decoded
 
 
 def planner_descriptive_method_guidance(analysis_type: str) -> str:
@@ -236,11 +825,13 @@ def bind_literature_citation_authority(
             if direct_keys
             else "\n- screened_direct_comparator_keys: []"
         )
-        + "\n- Every primary, secondary, and sensitivity step MUST bind one or "
-        "more exact values from this list in literature_citation_keys. Do not cite "
-        "an evidence artifact, analysis contract, study-design brief, or invented "
-        "semantic label in that field. Auxiliary steps may use an empty list."
-        + " Every scientific step MUST also emit literature_design_bindings. "
+        + "\n- Every primary, secondary, and sensitivity step MUST choose one or "
+        "more exact values from this list through literature_design_bindings. "
+        "The host compiles each binding's citation_key into that step's "
+        "literature_citation_keys roster. Do not cite an evidence artifact, "
+        "analysis contract, study-design brief, or invented semantic label. "
+        "A citation with no matching design binding remains invalid; auxiliary "
+        "steps may leave both arrays empty. "
         + literature_design_binding_shape_guide()
         + " Do not invent or copy a source quotation; the host joins the sealed "
         "excerpt."
@@ -397,7 +988,7 @@ def literature_design_binding_shape_guide() -> str:
 
     return (
         "Each record must use exactly this JSON shape: "
-        '{"citation_key":"<same exact bound key>",'
+        '{"citation_key":"<exact allowed key>",'
         '"design_elements":["<one or more exact allowed elements>"],'
         '"application":"<how the source shapes this step>",'
         '"divergence":null}. '
@@ -440,6 +1031,20 @@ def counts_only_distribution_guide() -> str:
     )
 
 
+def interval_bearing_distribution_guide() -> str:
+    """Publish the coupled /2 interval fields the transport enum cannot express."""
+
+    return (
+        "For interval-bearing schema /2, the closed design is exact: use "
+        "schema_version='easyicu.exposure_outcome_distribution/2', "
+        "interval_method='wilson', "
+        "repeated_unit_interval_method='patient_cluster_robust_wald', and a "
+        "non-null confidence_level. Keep the repeated-unit interval method "
+        "declared even while dependence is null before host binding; it does "
+        "not invent or authorize a grouping source."
+    )
+
+
 def descriptive_claim_example_fragment() -> str:
     """Render the worked-example fragment from the claim schema owner."""
 
@@ -466,8 +1071,39 @@ def figure_panel_shape_guide() -> str:
     )
 
 
+def artifact_consumption_contract_shape_guide() -> str:
+    """Publish the mode-dependent wire contract without choosing cardinality."""
+
+    all_rows_example = json.dumps(
+        {
+            "schema_version": "easyicu.artifact_consumption/1",
+            "input_key": "table:exact_product",
+            "mode": "all_rows",
+            "role_column": None,
+            "expected_roles": [],
+        },
+        separators=(",", ":"),
+    )
+    return (
+        "`input_consumption_contracts` item: "
+        f"`{all_rows_example}`. "
+        "`input_key` is lowercase `kind:product`. Modes are `all_rows`, "
+        "`single_row`, and `one_per_role`: first two use `role_column:null`, "
+        "`expected_roles:[]`; last uses non-empty role column and complete "
+        "unique roles. "
+        "Never rename `input_key` to `input` or `mode` to `cardinality`. "
+    )
+
+
 def planner_science_retry_guide() -> str:
     """Return schema-owned retry guidance outside the Planner god module."""
+
+    def exact_keys(model: type) -> str:
+        return ", ".join(f"`{name}`" for name in sorted(_declared_field_names(model)))
+
+    opaque_binary = json.dumps(
+        list(opaque_level_tokens(2)), ensure_ascii=True, separators=(",", ":")
+    )
 
     optional_fields = (
         "Contract applicability is exact: `family_primary_result_requirement` is "
@@ -475,21 +1111,17 @@ def planner_science_retry_guide() -> str:
         "or `survival`. An `association_study` must omit that field and declare its "
         "supported adjusted model through `model_requirements`. Optional "
         "collections such as `know_how_decisions` use JSON arrays, never `null`. "
-        "Every `input_consumption_contracts` item has this exact shape: "
-        "`{\"input_key\": \"table:exact_product\", \"mode\": \"all_rows\"}`. "
-        "The only modes are `all_rows`, `single_row`, and `one_per_role`; never "
-        "rename `input_key` to `input` or `mode` to `cardinality`. Only "
-        "`one_per_role` also declares `role_column` and `expected_roles`; "
-        "`schema_version` is optional. "
+        + artifact_consumption_contract_shape_guide()
+        + " "
         + figure_panel_shape_guide()
         + " "
         "Omit `AnalysisPlan.endpoint` or emit null."
     )
     binding_fields = (
-        "A `literature_design_bindings` record never cites a source by itself: "
-        "its `citation_key` must also appear in that same step's "
-        "`literature_citation_keys`. Adding or changing a design binding must "
-        "therefore update both fields together. `model_requirements` is legal "
+        "A `literature_design_bindings` record is the source authority: the "
+        "host compiles its `citation_key` into that same step's "
+        "`literature_citation_keys` roster. A citation with no matching design "
+        "binding remains invalid. `model_requirements` is legal "
         "only on a step whose method is exactly "
         "`adjusted_association_models` and whose expected outputs include "
         "`table:adjusted_association_estimates`; every other step emits "
@@ -498,8 +1130,11 @@ def planner_science_retry_guide() -> str:
     model_representation_fields = (
         "Within `model_requirements`, categorical `exposure_levels`, "
         "`exposure_reference_level`, and `primary_contrast_level` are symbolic "
-        "model-term labels and therefore must be JSON strings, for example "
-        "`[\"0\", \"1\"]`, `\"0\"`, and `\"1\"`. This is deliberately "
+        "model-term labels and therefore must be JSON strings. When the "
+        "variable catalog publishes `opaque_levels`, copy those exact strings "
+        "instead of guessing labels; for a two-level field the published form "
+        f'is `{opaque_binary}`. Otherwise examples such as `["0", "1"]`, '
+        '`"0"`, and `"1"` show the string representation only. This is deliberately '
         "different from `exposure_outcome_distribution_spec`, whose closed "
         "observed values preserve their source scalar types. Every "
         "`robustness_specs` item must include non-empty `spec_id`, `axis`, and "
@@ -517,10 +1152,29 @@ def planner_science_retry_guide() -> str:
         "step must list its exact exposure and outcome in `inputs`. "
         "A `table_one_spec` step must list its `group_by` and every "
         "`variables[*].name` in that same step's `inputs`. "
+        + interval_bearing_distribution_guide()
+        + " "
         "Preserve observed scalar types (JSON numbers remain numbers). On retry retain "
         "every article role and required `robustness_specs`; do not fix one "
         "error by dropping an already-satisfied requirement. "
         + descriptive_claim_shape_guide()
+    )
+    exact_scientific_object_fields = (
+        "Closed scientific objects accept only their schema-declared keys. "
+        "`TableOneSpec` keys are: "
+        + exact_keys(TableOneSpec)
+        + ". `TableOneVariableSpec` keys are: "
+        + exact_keys(TableOneVariableSpec)
+        + ". `ExposureOutcomeDistributionSpec` keys are: "
+        + exact_keys(ExposureOutcomeDistributionSpec)
+        + ". Its `risk_difference_contrast` keys are: "
+        + exact_keys(ExposureOutcomeRiskDifferenceContrast)
+        + ". Standardized differences are selected by the declared "
+        "`standardized_difference_mode`; do not add a second reporting switch "
+        "or any explanatory key inside these closed objects. When a variable "
+        "catalog publishes `opaque_levels`, every corresponding level array "
+        "and scalar selector must copy those exact tokens. Do not translate "
+        "them to yes/no labels or quoted numeric codes."
     )
     return (
         "\n\n"
@@ -533,6 +1187,8 @@ def planner_science_retry_guide() -> str:
         + model_representation_fields
         + "\n\n"
         + representation_fields
+        + "\n\n"
+        + exact_scientific_object_fields
     )
 
 
@@ -669,6 +1325,138 @@ def _require_runtime_supported_product_kinds(
             )
 
 
+def _compile_mixed_figure_panel_steps(
+    raw_steps: object,
+) -> Tuple[object, List[str]]:
+    """Move an exact mixed-step panel contract to a rendering-only child.
+
+    This is structural compilation, not figure selection. It fires only when
+    every declared figure is covered by a panel, every panel names an exact
+    uniquely produced table/statistic source, and the analytic parent retains
+    at least one non-figure output. Any ambiguous shape is left untouched for
+    the schema to reject.
+    """
+
+    if not isinstance(raw_steps, list):
+        return raw_steps, []
+    output_owners: Dict[str, List[int]] = {}
+    occupied_step_ids = {
+        step.get("step_id")
+        for step in raw_steps
+        if isinstance(step, dict)
+        and isinstance(step.get("step_id"), str)
+        and step.get("step_id")
+    }
+    for index, step in enumerate(raw_steps):
+        if not isinstance(step, dict):
+            continue
+        raw_outputs = step.get("expected_outputs")
+        if not isinstance(raw_outputs, list):
+            continue
+        for output in raw_outputs:
+            if isinstance(output, str):
+                output_owners.setdefault(output, []).append(index)
+
+    compiled_steps: List[object] = []
+    normalizations: List[str] = []
+    for step_index, step in enumerate(raw_steps):
+        if not isinstance(step, dict):
+            compiled_steps.append(step)
+            continue
+        raw_method = step.get("method")
+        method_head = (
+            raw_method.strip().casefold().split(" with ", 1)[0]
+            if isinstance(raw_method, str)
+            else ""
+        )
+        panels = step.get("figure_panels")
+        outputs = step.get("expected_outputs")
+        if (
+            not method_head
+            or method_head == "visualization"
+            or not isinstance(panels, list)
+            or not panels
+            or not isinstance(outputs, list)
+            or not all(isinstance(output, str) for output in outputs)
+        ):
+            compiled_steps.append(step)
+            continue
+        figure_outputs = [
+            output
+            for output in outputs
+            if isinstance(output, str)
+            and (_canonical_typed_product(output) or (None, None))[0] == "figure"
+        ]
+        non_figure_outputs = [output for output in outputs if output not in figure_outputs]
+        if not figure_outputs or not non_figure_outputs or not all(
+            isinstance(panel, dict) for panel in panels
+        ):
+            compiled_steps.append(step)
+            continue
+        raw_panel_outputs = [panel.get("figure_output") for panel in panels]
+        if not all(isinstance(output, str) for output in raw_panel_outputs):
+            compiled_steps.append(step)
+            continue
+        panel_outputs = list(dict.fromkeys(raw_panel_outputs))
+        if set(panel_outputs) != set(figure_outputs):
+            compiled_steps.append(step)
+            continue
+        raw_source_lists = [panel.get("source_products") for panel in panels]
+        if not all(
+            isinstance(sources, list)
+            and sources
+            and all(isinstance(source, str) for source in sources)
+            for sources in raw_source_lists
+        ):
+            compiled_steps.append(step)
+            continue
+        source_products = list(
+            dict.fromkeys(source for sources in raw_source_lists for source in sources)
+        )
+        if not source_products or any(
+            (_canonical_typed_product(source) or (None, None))[0]
+            not in {"table", "statistic"}
+            or len(output_owners.get(source, [])) != 1
+            or output_owners[source][0] > step_index
+            for source in source_products
+        ):
+            compiled_steps.append(step)
+            continue
+        raw_step_id = step.get("step_id")
+        step_id = raw_step_id.strip() if isinstance(raw_step_id, str) else ""
+        child_id = f"{step_id}_figure"
+        if not step_id or child_id in occupied_step_ids:
+            compiled_steps.append(step)
+            continue
+        occupied_step_ids.add(child_id)
+        parent = copy.deepcopy(step)
+        parent["expected_outputs"] = non_figure_outputs
+        parent["figure_panels"] = []
+        child = {
+            "step_id": child_id,
+            "planned_analysis_role": "auxiliary",
+            "intent": (
+                "Render the Planner-declared panels from their exact typed "
+                f"source products for step {step_id}."
+            ),
+            "inputs": source_products,
+            "expected_outputs": figure_outputs,
+            "method": "visualization",
+            "icu_rule_refs": ["visualization_rule"],
+            "input_consumption_contracts": [
+                {"input_key": source, "mode": "all_rows"}
+                for source in source_products
+                if (_canonical_typed_product(source) or (None, None))[0] == "table"
+            ],
+            "figure_panels": copy.deepcopy(panels),
+        }
+        compiled_steps.extend((parent, child))
+        normalizations.append(
+            f"{step_id}:mixed_figure_panels_compiled_to:{child_id}"
+        )
+    return compiled_steps, normalizations
+
+
 def _normalise_plan_payload(
     data: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
@@ -690,9 +1478,13 @@ def _normalise_plan_payload(
         "figure_panels": [],
         "table_one_spec": [],
         "robustness_specs": [],
+        "normalizations": [],
     }
     out = {key: value for key, value in data.items() if key in allowed_plan}
     dropped["top_level"] = [str(key) for key in data if key not in allowed_plan]
+    out["steps"], dropped["normalizations"] = _compile_mixed_figure_panel_steps(
+        out.get("steps")
+    )
     steps = []
     for idx, raw_step in enumerate(out.get("steps", []) or []):
         if not isinstance(raw_step, dict):
@@ -958,6 +1750,10 @@ __all__ = [
     "_is_untyped_figure_alias_output",
     "_normalise_plan_payload",
     "PlannerScientificProjectionError",
+    "PlannerStructuredOutputSchemaError",
+    "decode_planner_transport_payload",
+    "planner_structured_output_request",
+    "runtime_suffix_structured_output_request",
     "planner_descriptive_method_guidance",
     "planner_descriptive_robustness_guidance",
     "planner_adjusted_association_owner_guidance",

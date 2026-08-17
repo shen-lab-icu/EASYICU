@@ -14,14 +14,15 @@ Bump-procedure for an intentional schema change:
    removed field, a renamed field, a new required field, a narrowed type, a
    changed default. Update ``EXPECTED_VERSION`` below in the same edit.
 3. Do **not** bump for a purely additive optional field with a default: no
-   stored payload becomes invalid, and the version literal on
-   ``ResearchContextV2`` means a bump would make every previously written V2
-   context unparseable, destroying replay of the runs that are our evidence.
-   ``test_literal_v1_payload_roundtrips_without_rewrite`` asserts the property
-   the version string was standing in for -- an archived payload still parses
-   and no key it carried is rewritten; that assertion, not the string, is the
-   actual protection.
-4. If the change is breaking for downstream consumers (paper.py,
+   stored payload becomes invalid.
+   ``test_literal_v1_payload_roundtrips_without_rewrite`` asserts that an
+   archived payload still parses and no key it carried is rewritten.
+4. A change that narrows a typed version's legal domain requires a new typed
+   model and version. Keep the archived model parseable, add an explicit
+   fail-closed migration when current execution needs the new facts, and make
+   new builders write only the new version. V2 -> V3 window-role binding is the
+   worked example.
+5. If the change is breaking for downstream consumers (paper.py,
    context.py builders, webapp serialization), update them in the
    same commit.
 
@@ -42,7 +43,9 @@ from easyicu.research_agent.schema import (
 )
 from easyicu.research_agent.research_context.typed import (
     RESEARCH_CONTEXT_V2_SCHEMA_VERSION,
+    RESEARCH_CONTEXT_V3_SCHEMA_VERSION,
     ResearchContextV2,
+    ResearchContextV3,
     parse_research_context,
     parse_research_context_json,
 )
@@ -206,10 +209,23 @@ def test_v1_payload_cannot_smuggle_v2_fields():
         )
 
 
-def test_research_context_v2_field_set_is_separate_from_v1():
+def test_typed_research_context_versions_and_field_sets_are_locked():
     assert RESEARCH_CONTEXT_V2_SCHEMA_VERSION == "easyicu.research_context/2"
+    assert RESEARCH_CONTEXT_V3_SCHEMA_VERSION == "easyicu.research_context/3"
     assert tuple(ResearchContext.model_fields) == EXPECTED_FIELDS
     assert tuple(ResearchContextV2.model_fields) == (
         *EXPECTED_FIELDS,
         "materialized_inputs",
+    )
+    assert tuple(ResearchContextV3.model_fields) == (
+        *EXPECTED_FIELDS,
+        "materialized_inputs",
+    )
+    assert (
+        ResearchContextV2.model_fields["schema_version"].default
+        == RESEARCH_CONTEXT_V2_SCHEMA_VERSION
+    )
+    assert (
+        ResearchContextV3.model_fields["schema_version"].default
+        == RESEARCH_CONTEXT_V3_SCHEMA_VERSION
     )

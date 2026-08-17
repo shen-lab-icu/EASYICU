@@ -238,6 +238,7 @@ __all__ = [
     "LLMClient",
     "MockLLMClient",
     "OpenAIClient",
+    "AnthropicMessagesClient",
     "CLIAgentLLMClient",
     "LLMRouter",
     "build_llm_client",
@@ -445,6 +446,7 @@ __all__ = [
     "NPJ_DM_2026_07_17",
     "NPJ_DM_2026_07_18",
     "NPJ_DM_2026_07_19",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
@@ -723,6 +725,7 @@ def __getattr__(name: str):
         return getattr(_mocks, name)
     if name in {
         "OpenAIClient",
+        "AnthropicMessagesClient",
         "CLIAgentLLMClient",
         "LLMRouter",
         "build_llm_client",
@@ -1070,6 +1073,7 @@ def __getattr__(name: str):
         "NPJ_DM_2026_07_17",
         "NPJ_DM_2026_07_18",
         "NPJ_DM_2026_07_19",
+        "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16",
         "NPJ_DM_2026_07_21_KNOW_HOW",
         "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
         "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",

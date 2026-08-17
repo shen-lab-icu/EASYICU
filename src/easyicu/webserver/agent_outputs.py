@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from easyicu.webserver import dataio
+# Aliased: this module binds a local `entity_ids` list in several functions.
+from easyicu.webserver import entity_ids as entity_id_contract
 
 OUTPUT_ARTIFACT_NAMES = [
     "table1_summary.json",
@@ -294,7 +296,7 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
             all_entity_ids = [
                 sid
                 for sid in id_frame[_ENTITY_COLUMN]
-                .map(dataio._norm_id)
+                .map(entity_id_contract.normalize_entity_id)
                 .drop_duplicates()
                 .tolist()
                 if sid
@@ -324,7 +326,7 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
         ):
             continue
         frame = frame.copy()
-        frame[_ENTITY_COLUMN] = frame[_ENTITY_COLUMN].map(dataio._norm_id)
+        frame[_ENTITY_COLUMN] = frame[_ENTITY_COLUMN].map(entity_id_contract.normalize_entity_id)
         frames[module] = frame
     sampled_entities = len(entity_ids)
     total_entities = len(all_entity_ids)

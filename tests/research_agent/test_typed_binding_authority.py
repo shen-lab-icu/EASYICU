@@ -141,7 +141,17 @@ def test_typed_binding_writes_only_its_two_caller_scoped_receipts() -> None:
 
 
 def test_execute_loop_uses_one_typed_resolver_without_nested_implementation() -> None:
-    source = inspect.getsource(execution_phase.run_execute_phase)
+    source = (
+        inspect.getsource(execution_phase.run_execute_phase)
+        + "\n"
+        + inspect.getsource(execution_phase._prepare_execute_phase_authority)
+        + "\n"
+        + inspect.getsource(execution_phase._execute_step)
+        + "\n"
+        + inspect.getsource(execution_phase._step_prepare_execution_authority)
+        + "\n"
+        + inspect.getsource(execution_phase._step_finalize_step)
+    )
     tree = ast.parse(source)
     assert "def _evidence_refs_for_names" not in source
     constructor_calls = [

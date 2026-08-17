@@ -4,6 +4,7 @@ import inspect
 
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.execution.phase import run_execute_phase
+from easyicu.research_agent.execution import phase_support
 from easyicu.research_agent.execution.replan_review import (
     runtime_replan_review_pause,
 )
@@ -93,12 +94,16 @@ def test_pause_transition_never_applies_or_executes_the_revised_plan() -> None:
 
 
 def test_execute_phase_gates_before_registering_or_applying_candidate_plan() -> None:
-    source = inspect.getsource(run_execute_phase)
+    source = inspect.getsource(phase_support._step_maybe_replan)
     review_gate = source.index("replan_review.record_runtime_replan_review_pause")
-    cohort_application = source.index("_resolve_cohort_definition(revised, reason=reason)")
+    cohort_application = source.index(
+        "resolve_cohort_definition(revised, reason=reason)"
+    )
     registration = source.index(
-        "plan_path = _register_plan_revision(revised, reason=reason)"
+        "plan_path = register_plan_revision(revised, reason=reason)"
     )
 
     assert review_gate < cohort_application < registration
-    assert '"runtime_replan_human_review_required"' in source
+    assert '"runtime_replan_human_review_required"' in inspect.getsource(
+        run_execute_phase
+    )

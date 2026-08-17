@@ -15,15 +15,13 @@
   }
 
   function palette(index) {
-    const colors = [
-      'var(--accent)',
-      'oklch(62% 0.11 255)',
-      'oklch(64% 0.10 35)',
-      'oklch(62% 0.10 145)',
-      'oklch(58% 0.10 300)',
-      'oklch(60% 0.10 75)',
-    ];
-    return colors[index % colors.length];
+    return window.EU_PALETTE.color(index);
+  }
+
+  /* SVG equivalent of the ECharts stroke: `[7, 4]` becomes "7 4". */
+  function dashArray(index) {
+    const dash = window.EU_PALETTE.dashPattern(index);
+    return dash ? ` stroke-dasharray="${dash.join(' ')}"` : '';
   }
 
   function begin() {
@@ -92,7 +90,10 @@
         smooth: false,
         connectNulls: false,
         sampling: 'lttb',
-        lineStyle: { width: 2.4, type: index % 3 === 2 ? 'dashed' : 'solid' },
+        /* Shared per-index stroke: the old `index % 3 === 2` rule left series
+           0 and 1 — the common two-database comparison — both solid, so they
+           were separable by colour alone. */
+        lineStyle: chartCore.lineStyle(index, { width: 2.4 }),
         emphasis: { focus: 'series', lineStyle: { width: 3.2 } },
       })),
     });
@@ -113,10 +114,10 @@
     const bottom = 38;
     const xScale = value => left + ((Number(value) - minX) / ((maxX - minX) || 1)) * (width - left - right);
     const yScale = value => top + (1 - Number(value) / maxY) * (height - top - bottom);
-    const paths = series.map(row => {
+    const paths = series.map((row, index) => {
       const points = row.value.points.filter(point => Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.density)));
-      const line = points.map((point, index) => `${index ? 'L' : 'M'}${xScale(point.x).toFixed(1)},${yScale(point.density).toFixed(1)}`).join(' ');
-      return `<path class="xdb-main-density-line" d="${line}" stroke="${row.color}"></path>`;
+      const line = points.map((point, position) => `${position ? 'L' : 'M'}${xScale(point.x).toFixed(1)},${yScale(point.density).toFixed(1)}`).join(' ');
+      return `<path class="xdb-main-density-line" d="${line}" stroke="${row.color}"${dashArray(index)}></path>`;
     }).join('');
     const tickValues = [minX, minX + (maxX - minX) / 2, maxX];
     return `<div class="xdb-main-chart xdb-chart-fallback">

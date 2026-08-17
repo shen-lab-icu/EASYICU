@@ -18,6 +18,8 @@ from typing import Any, Dict, Iterable, List, Tuple
 from easyicu.webserver import dataio
 from easyicu.webserver import entity_ids as entity_id_contract
 from easyicu.webserver import sources as source_store
+from easyicu.webserver import review_labels
+from easyicu.webserver import prepared_frames
 
 _READ_MODULES = (
     "demographics",
@@ -224,7 +226,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         demo = fallback
 
     demo = demo.copy()
-    demo["stay_id"] = demo["stay_id"].map(dataio._norm_id)
+    demo["stay_id"] = demo["stay_id"].map(entity_id_contract.normalize_entity_id)
     demo = demo[demo["stay_id"].astype(bool)].drop_duplicates("stay_id")
     if demo.empty:
         raise CohortReviewError({"error": "no_entity_denominator"})
@@ -570,62 +572,36 @@ def _resolve_registered_source(
     return source, desc
 
 
-def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
-    file_meta = next(
-        (f for f in desc.get("files") or [] if f.get("module") == module), None
-    )
-    if not file_meta:
-        return None
-    file_path = path / str(file_meta.get("file") or "")
-    if (
-        module in _INTERACTIVE_SKIP_MODULES
+def _skip_expensive_whole_module_read(file_meta: Dict[str, Any], file_path: Path) -> bool:
+    """Cohort Statistics reads whole modules, so a huge CSV score table is out.
+
+    Parquet is exempt: the reader projects the wanted columns without
+    materialising the rest of the file.
+    """
+
+    return (
+        str(file_meta.get("module") or "") in _INTERACTIVE_SKIP_MODULES
         and int(file_meta.get("rows") or 0) > _INTERACTIVE_TIME_INDEXED_READ_ROW_LIMIT
         and file_path.suffix.lower() != ".parquet"
-    ):
-        return None
-    available_columns = file_meta.get("columns") or []
-    entity_column = entity_id_contract.resolve_entity_id_column(available_columns)
-    if not entity_column:
-        return None
-    columns = [
-        c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])
-    ]
-    columns = [entity_column] + [c for c in columns if c != entity_column]
-    frame = _read_selected_columns(file_path, columns)
-    return entity_id_contract.canonicalize_entity_frame(frame, entity_column)
+    )
+
+
+def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
+    return prepared_frames.read_module_frame(
+        path,
+        desc,
+        module,
+        _MODULE_COLUMNS[module],
+        skip=_skip_expensive_whole_module_read,
+    )
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
-    file_meta = next(
-        (
-            f
-            for f in desc.get("files") or []
-            if entity_id_contract.resolve_entity_id_column(f.get("columns") or [])
-        ),
-        None,
-    )
-    if not file_meta:
-        return None
-    entity_column = entity_id_contract.resolve_entity_id_column(
-        file_meta.get("columns") or []
-    )
-    if not entity_column:
-        return None
-    frame = _read_selected_columns(
-        path / str(file_meta.get("file") or ""), [entity_column]
-    )
-    return entity_id_contract.canonicalize_entity_frame(frame, entity_column)
+    return prepared_frames.fallback_entity_frame(path, desc)
 
 
 def _read_selected_columns(path: Path, columns: List[str]) -> Any:
-    import pandas as pd
-
-    suffix = path.suffix.lower()
-    if suffix == ".parquet":
-        return pd.read_parquet(path, columns=columns)
-    if suffix == ".xlsx":
-        return pd.read_excel(path, usecols=columns)
-    return pd.read_csv(path, usecols=columns)
+    return prepared_frames.read_selected_columns(path, columns)
 
 
 def _filter_by_entity(frame: Any, entity_ids: set[str]) -> Any:
@@ -1090,8 +1066,8 @@ def _feature_id(module: str, column: str) -> str:
     return f"{module}:{column}"
 
 
-def _module_label(module: str) -> str:
-    return module.replace("_", " ").title()
+def _module_label(module: str, lang: str = "en") -> str:
+    return review_labels.module_label(module, lang)
 
 
 def _feature_label(column: str) -> str:
@@ -1707,7 +1683,7 @@ def _entity_numeric(frame: Any, column: str) -> Dict[str, float]:
         return out
     import pandas as pd
 
-    entity_ids = frame["stay_id"].map(dataio._norm_id)
+    entity_ids = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
     values = pd.to_numeric(frame[column], errors="coerce")
     for entity_id, value in zip(entity_ids, values):
         if entity_id and value is not None:
@@ -1729,7 +1705,7 @@ def _entity_text(frame: Any, column: str) -> Dict[str, str]:
         or column not in frame.columns
     ):
         return out
-    entity_ids = frame["stay_id"].map(dataio._norm_id)
+    entity_ids = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
     for entity_id, raw_value in zip(entity_ids, frame[column]):
         value = dataio._clean(raw_value)
         if entity_id and value:
@@ -2096,7 +2072,7 @@ def _coverage_profile_items(
             {
                 "id": f"coverage_{row.get('module')}",
                 "label": _module_label(str(row.get("module") or "")),
-                "label_zh": _module_label(str(row.get("module") or "")),
+                "label_zh": _module_label(str(row.get("module") or ""), "zh"),
                 "kind": "module_coverage",
                 "status": str(row.get("quality_status") or "unknown"),
                 "pct": row.get("coverage_pct"),
@@ -2742,7 +2718,52 @@ def _km_group_payload(label: str, records: List[Tuple[float, bool]]) -> Dict[str
         "censored": len(records) - events,
         "median_survival": _km_median(points),
         "points": _thin_points(points),
+        # Marks are computed from the unthinned curve so a tick sits on the
+        # step the subject actually left from.
+        "censor_marks": _censor_marks(records, points),
     }
+
+
+def _censor_marks(
+    records: List[Tuple[float, bool]],
+    points: List[Dict[str, Any]],
+    max_marks: int = 40,
+) -> List[Dict[str, Any]]:
+    """Times where a subject left follow-up without the event, placed on the curve.
+
+    A Kaplan-Meier curve without censoring marks hides how much of a flat
+    stretch is real follow-up and how much is attrition, so the marks are part
+    of reading the curve rather than decoration. ``_km_points`` only emits a
+    point at event times, so the censoring times are not otherwise recoverable
+    from the payload.
+
+    Each mark carries the survival value of the step it belongs to — the last
+    point at or before the censoring time — so the renderer places ticks
+    without re-deriving the step function. Disclosure is the same class as the
+    ``points`` and ``number_at_risk`` this payload already returns: aggregate
+    times and counts, never a subject row.
+    """
+
+    censor_times = sorted(
+        {_round_time(time_value) for time_value, event in records if not event}
+    )
+    if not censor_times or not points:
+        return []
+
+    marks: List[Dict[str, Any]] = []
+    index = 0
+    survival = points[0].get("survival", 100.0)
+    for time_value in censor_times:
+        while index < len(points) and points[index]["time"] <= time_value:
+            survival = points[index].get("survival", survival)
+            index += 1
+        marks.append({"time": time_value, "survival": survival})
+
+    if len(marks) <= max_marks:
+        return marks
+    step = (len(marks) - 1) / (max_marks - 1)
+    keep = sorted({0, len(marks) - 1} | {round(i * step) for i in range(max_marks)})
+    return [marks[i] for i in keep]
 
 
 def _km_points(records: List[Tuple[float, bool]]) -> List[Dict[str, Any]]:

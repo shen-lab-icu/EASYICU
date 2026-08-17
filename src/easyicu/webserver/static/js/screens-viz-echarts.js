@@ -38,25 +38,30 @@
     }
   }
 
+  /* Categorical colours and strokes belong to chart-palette.js. This shell
+     owns the chrome (ink, hairlines, surface) and re-exports the series list
+     so route owners keep reading one interface. */
+  function colours() {
+    return window.EU_PALETTE;
+  }
+
   function palette() {
     return {
       accent: cssColor('--accent', '#0f766e'),
-      blue: '#2563eb',
-      violet: '#7c3aed',
-      gold: '#b45309',
-      rose: '#be123c',
       ink: cssColor('--ink', '#17202a'),
       muted: cssColor('--ink-4', '#64748b'),
       hair: cssColor('--hair', '#e2e8f0'),
       surface: cssColor('--surface', '#ffffff'),
-      series: [
-        cssColor('--accent', '#0f766e'),
-        '#2563eb',
-        '#7c3aed',
-        '#b45309',
-        '#be123c',
-      ],
+      series: colours().series(),
     };
+  }
+
+  function dashPattern(index) {
+    return colours().dashPattern(index);
+  }
+
+  function lineStyle(index, options) {
+    return colours().lineStyle(index, options);
   }
 
   function available() {
@@ -194,11 +199,13 @@
     available,
     axis,
     baseOption,
+    dashPattern,
     dispose,
     finite,
     formatNumber,
     grid,
     legend,
+    lineStyle,
     mount,
     palette,
     tooltip,

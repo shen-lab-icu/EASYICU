@@ -20,6 +20,8 @@ from easyicu.webserver.patient_drilldown import eligibility as _eligibility
 from easyicu.webserver import entity_ids as _entity_ids
 from easyicu.webserver.patient_drilldown import feature_detail as _feature_detail
 from easyicu.webserver.patient_drilldown import navigation as _navigation
+from easyicu.webserver import review_labels
+from easyicu.webserver import prepared_frames
 
 _eligibility_flow_payload = _eligibility._eligibility_flow_payload
 _first_int = _eligibility._first_int
@@ -378,7 +380,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         demo = fallback
 
     demo = demo.copy()
-    demo["stay_id"] = demo["stay_id"].map(dataio._norm_id)
+    demo["stay_id"] = demo["stay_id"].map(_entity_ids.normalize_entity_id)
     demo = demo[demo["stay_id"].astype(bool)].drop_duplicates("stay_id")
     if demo.empty:
         raise PatientReviewError({"error": "no_entity_denominator"})
@@ -640,51 +642,13 @@ def _resolve_registered_source(
 def _read_module_frame(
     path: Path, desc: Dict[str, Any], module: str, stay_ids: set[str] | None = None
 ) -> Any:
-    file_meta = next(
-        (f for f in desc.get("files") or [] if f.get("module") == module), None
+    return prepared_frames.read_module_frame(
+        path, desc, module, _MODULE_COLUMNS[module], stay_ids=stay_ids
     )
-    if not file_meta:
-        return None
-    file_name = str(file_meta.get("file") or "")
-    available_columns = [str(column) for column in file_meta.get("columns") or []]
-    entity_column = _entity_ids.resolve_entity_id_column(available_columns)
-    if not entity_column:
-        return None
-    columns = [
-        c
-        for c in _MODULE_COLUMNS[module]
-        if c != "stay_id" and c in available_columns
-    ]
-    columns.insert(0, entity_column)
-    frame = _read_selected_columns(
-        path / file_name,
-        columns,
-        stay_ids=stay_ids,
-        entity_column=entity_column,
-    )
-    return _entity_ids.canonicalize_entity_frame(frame, entity_column)
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
-    file_meta = next(
-        (
-            f
-            for f in desc.get("files") or []
-            if _entity_ids.resolve_entity_id_column(f.get("columns") or [])
-        ),
-        None,
-    )
-    if not file_meta:
-        return None
-    entity_column = _entity_ids.resolve_entity_id_column(
-        file_meta.get("columns") or []
-    )
-    frame = _read_selected_columns(
-        path / str(file_meta.get("file") or ""),
-        [str(entity_column)],
-        entity_column=str(entity_column),
-    )
-    return _entity_ids.canonicalize_entity_frame(frame, str(entity_column))
+    return prepared_frames.fallback_entity_frame(path, desc)
 
 
 def _entity_index_item(desc: Dict[str, Any]) -> Dict[str, Any]:
@@ -740,7 +704,7 @@ def _read_entity_index_rows(
     rows: List[Tuple[int, str, Any]] = []
     seen: set[str] = set()
     for position, (_index, row) in enumerate(frame.iterrows(), start=1):
-        entity_id = dataio._norm_id(row.get(entity_column))
+        entity_id = _entity_ids.normalize_entity_id(row.get(entity_column))
         if not entity_id or entity_id in seen:
             raise PatientReviewError({"error": "unstable_entity_index"})
         seen.add(entity_id)
@@ -765,57 +729,9 @@ def _read_selected_columns(
     *,
     entity_column: str = "stay_id",
 ) -> Any:
-    import pandas as pd
-
-    suffix = path.suffix.lower()
-    if suffix == ".parquet":
-        filters = (
-            _entity_id_filters(path, entity_column, stay_ids)
-            if stay_ids and entity_column in columns
-            else None
-        )
-        if filters:
-            return pd.read_parquet(path, columns=columns, filters=filters)
-        return pd.read_parquet(path, columns=columns)
-    if suffix == ".xlsx":
-        frame = pd.read_excel(path, usecols=columns)
-    else:
-        frame = pd.read_csv(path, usecols=columns)
-    if stay_ids and entity_column in frame.columns:
-        frame = frame.copy()
-        frame[entity_column] = frame[entity_column].map(dataio._norm_id)
-        frame = frame[frame[entity_column].isin(stay_ids)]
-    return frame
-
-
-def _entity_id_filters(
-    path: Path, entity_column: str, stay_ids: set[str]
-) -> List[Tuple[str, str, List[Any]]] | None:
-    values: List[Any]
-    try:
-        import pyarrow.parquet as pq
-        import pyarrow.types as pat
-
-        field = pq.ParquetFile(path).schema_arrow.field(entity_column)
-        if pat.is_integer(field.type):
-            values = [int(value) for value in stay_ids if str(value).isdigit()]
-        elif pat.is_floating(field.type):
-            values = [float(value) for value in stay_ids if _is_number_like(value)]
-        else:
-            values = [str(value) for value in stay_ids if str(value)]
-    except Exception:
-        values = [str(value) for value in stay_ids if str(value)]
-    if not values:
-        return None
-    return [(entity_column, "in", values)]
-
-
-def _is_number_like(value: Any) -> bool:
-    try:
-        float(value)
-        return True
-    except (TypeError, ValueError):
-        return False
+    return prepared_frames.read_selected_columns(
+        path, columns, stay_ids, entity_column=entity_column
+    )
 
 
 def _table_preview_paging(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -881,7 +797,7 @@ def _read_review_frames(
             continue
         frame = _entity_ids.canonicalize_entity_frame(frame, entity_column)
         frame = frame.copy()
-        frame["stay_id"] = frame["stay_id"].map(dataio._norm_id)
+        frame["stay_id"] = frame["stay_id"].map(_entity_ids.normalize_entity_id)
         frame = frame[frame["stay_id"].isin(entity_set)]
         if frame.empty:
             continue
@@ -998,23 +914,15 @@ def _module_profiles(
 
 
 def _module_label(module: str) -> str:
-    label = concept_catalog.CONCEPT_GROUP_NAMES.get(module, (module, module))[0]
-    return _plain_label(label)
+    return review_labels.module_label(module)
 
 
 def _module_label_i18n(module: str) -> Dict[str, str]:
-    labels = concept_catalog.CONCEPT_GROUP_NAMES.get(module, (module, module))
-    return {
-        "en": _plain_label(labels[0] if len(labels) > 0 else module),
-        "zh": _plain_label(labels[1] if len(labels) > 1 else module),
-    }
+    return review_labels.module_label_i18n(module)
 
 
 def _plain_label(label: str) -> str:
-    text = str(label or "").strip()
-    while text and not (text[0].isalnum() or "\u4e00" <= text[0] <= "\u9fff"):
-        text = text[1:].lstrip()
-    return text or str(label or "")
+    return review_labels.plain_label(label)
 
 
 def _concept_label_i18n(feature: str) -> Dict[str, str]:
@@ -1686,7 +1594,7 @@ def _public_preview_rows(
     for _, row in frame.iterrows():
         public: Dict[str, Any] = {}
         if id_col:
-            entity_id = dataio._norm_id(row.get(id_col))
+            entity_id = _entity_ids.normalize_entity_id(row.get(id_col))
             public["entity"] = _entity_ref(path, entity_id) if entity_id else None
         for col in display_columns:
             if col == "entity":
@@ -2467,7 +2375,7 @@ def _row_value(row: Any, key: str) -> Any:
 def _signals_payload(vitals: Any, entity_id: str) -> List[Dict[str, Any]]:
     if vitals is None or vitals.empty or "stay_id" not in vitals.columns:
         return []
-    one = vitals[vitals["stay_id"].map(dataio._norm_id) == str(entity_id)].copy()
+    one = vitals[vitals["stay_id"].map(_entity_ids.normalize_entity_id) == str(entity_id)].copy()
     if one.empty:
         return []
     if "charttime" in one.columns:

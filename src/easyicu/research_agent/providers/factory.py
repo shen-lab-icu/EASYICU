@@ -27,8 +27,15 @@ from easyicu.provider_auth import (
     normalize_openai_auth_header,
 )
 
-DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+from .capabilities import (
+    ANTHROPIC_MESSAGES,
+    OPENAI_CHAT_COMPLETIONS,
+    SUPPORTED_PROVIDER_NAMES,
+    cli_account_profile,
+    provider_profile,
+    user_account_profile,
+)
+
 LOCAL_OPENAI_DUMMY_API_KEY = "easyicu-local-noauth"
 EASYICU_HTTP_REFERER = "https://github.com/shen-lab-icu/easyicu"
 
@@ -52,7 +59,10 @@ def _loopback_forwards_real_key(env: Mapping[str, str]) -> bool:
 
 MISSING_OPENAI_KEY = "missing_openai_key"
 MISSING_OPENROUTER_KEY = "missing_openrouter_key"
+MISSING_PROVIDER_KEY = "missing_provider_key"
+MISSING_PROVIDER_BASE_URL = "missing_provider_base_url"
 INVALID_OPENAI_BASE_URL_OVERRIDE = "invalid_openai_base_url_override"
+INVALID_PROVIDER_BASE_URL_OVERRIDE = "invalid_provider_base_url_override"
 OPENROUTER_BASE_URL_OVERRIDE = "openrouter_base_url_override"
 UNSUPPORTED_PROVIDER = "unsupported_provider"
 EXTERNAL_LLM_NOT_AUTHORIZED = "external_llm_not_authorized"
@@ -61,26 +71,34 @@ OPENAI_AUTH_HEADER_NOT_AUTHORIZED = "openai_auth_header_not_authorized"
 _BASE_URL_UNSET = object()
 
 
-def _openai_auth_header(env: Mapping[str, str]) -> OpenAIAuthHeader:
+def _openai_auth_header(
+    env: Mapping[str, str],
+    *,
+    provider: str = "openai",
+) -> OpenAIAuthHeader:
+    profile = provider_profile(provider)
+    if profile is not None and not profile.supports_auth_header_override:
+        return OpenAIAuthHeader.AUTHORIZATION
     try:
         return normalize_openai_auth_header(env.get(OPENAI_AUTH_HEADER_ENV))
     except ProviderAuthContractError as exc:
         raise ProviderConfigurationError(
             OPENAI_AUTH_HEADER_NOT_AUTHORIZED,
-            "openai",
+            provider,
         ) from exc
 
 
 def _openai_authorization_mode(
     env: Mapping[str, str],
     *,
+    provider: str = "openai",
     loopback: bool,
     has_override: bool,
     api_key: Optional[str],
 ) -> tuple[OpenAIAuthHeader, str]:
     """Validate one wire header against the trusted loopback authority."""
 
-    header = _openai_auth_header(env)
+    header = _openai_auth_header(env, provider=provider)
     if header is OpenAIAuthHeader.X_API_KEY:
         if (
             not loopback
@@ -90,7 +108,7 @@ def _openai_authorization_mode(
         ):
             raise ProviderConfigurationError(
                 OPENAI_AUTH_HEADER_NOT_AUTHORIZED,
-                "openai",
+                provider,
             )
         return header, "local_x_api_key"
     return header, "local_exempt" if loopback else "operator_env"
@@ -193,6 +211,33 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
             str(instance_vars.get("_completion_token_parameter", "")),
             float(instance_vars.get("_request_timeout", 0.0)),
             bool(instance_vars.get("_stream_enabled", False)),
+            bool(instance_vars.get("supports_strict_json_schema", False)),
+            int(instance_vars.get("_max_retries", 0)),
+            (
+                None
+                if instance_vars.get("_retryable_http_status_codes") is None
+                else tuple(
+                    sorted(instance_vars.get("_retryable_http_status_codes") or ())
+                )
+            ),
+        )
+    if _is_reviewed_client_type(client, "AnthropicMessagesClient"):
+        instance_vars = _safe_instance_vars(client)
+        transport = instance_vars.get("_client")
+        if transport is None:
+            raise ProviderConfigurationError(
+                EXTERNAL_LLM_NOT_AUTHORIZED,
+                "anthropic",
+            )
+        return (
+            "anthropic",
+            id(transport),
+            type(transport),
+            str(instance_vars.get("_model", "")),
+            _canonical_endpoint(instance_vars.get("_resolved_base_url", "")),
+            float(instance_vars.get("_request_timeout", 0.0)),
+            bool(instance_vars.get("_stream_enabled", False)),
+            bool(instance_vars.get("supports_strict_json_schema", False)),
             int(instance_vars.get("_max_retries", 0)),
             (
                 None
@@ -209,6 +254,19 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
             str(instance_vars.get("_backend", "")),
             str(instance_vars.get("_command", "")),
             str(instance_vars.get("_model", "")),
+            float(instance_vars.get("_timeout", 0.0)),
+            bool(instance_vars.get("supports_strict_json_schema", False)),
+            str(instance_vars.get("_subprocess_environment_sha256", "")),
+        )
+    if _is_reviewed_client_type(client, "CodexAppServerLLMClient"):
+        instance_vars = _safe_instance_vars(client)
+        return (
+            "codex-app-server",
+            str(instance_vars.get("_model", "")),
+            float(instance_vars.get("_timeout", 0.0)),
+            str(instance_vars.get("_endpoint_identity", "")),
+            str(instance_vars.get("_session_binding_sha256", "")),
+            str(instance_vars.get("_subprocess_environment_sha256", "")),
         )
     return ()
 
@@ -285,7 +343,9 @@ def _mark_reviewed_transport_constructed(client: Any) -> Any:
 
     if not (
         _is_reviewed_client_type(client, "OpenAIClient")
+        or _is_reviewed_client_type(client, "AnthropicMessagesClient")
         or _is_reviewed_client_type(client, "CLIAgentLLMClient")
+        or _is_reviewed_client_type(client, "CodexAppServerLLMClient")
     ) or not _caller_is_exact_constructor(client, skip=1):
         raise ProviderConfigurationError(
             EXTERNAL_LLM_NOT_AUTHORIZED,
@@ -673,7 +733,9 @@ def _attach_provider_authorization(
         return client
     if not (
         _is_reviewed_client_type(client, "OpenAIClient")
+        or _is_reviewed_client_type(client, "AnthropicMessagesClient")
         or _is_reviewed_client_type(client, "CLIAgentLLMClient")
+        or _is_reviewed_client_type(client, "CodexAppServerLLMClient")
     ):
         return client
 
@@ -740,11 +802,17 @@ def authorize_provider_client(
     if destination not in {"external", "local"}:
         raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, provider)
     is_openai = _is_reviewed_client_type(client, "OpenAIClient")
+    is_anthropic = _is_reviewed_client_type(client, "AnthropicMessagesClient")
     is_cli = _is_reviewed_client_type(client, "CLIAgentLLMClient")
-    if not (is_openai or is_cli):
+    is_codex_user = _is_reviewed_client_type(client, "CodexAppServerLLMClient")
+    if not (is_openai or is_anthropic or is_cli or is_codex_user):
         raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
     if is_openai:
-        if str(provider) != "openai":
+        profile_definition = provider_profile(provider)
+        if (
+            profile_definition is None
+            or profile_definition.transport != OPENAI_CHAT_COMPLETIONS
+        ):
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
         live_base_url = str(getattr(client, "_resolved_base_url", None) or "")
         live_model = str(getattr(client, "_model", "") or "")
@@ -754,17 +822,47 @@ def authorize_provider_client(
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
         if (destination == "local") != is_loopback_openai_base_url(live_base_url):
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
-    else:
+    elif is_anthropic:
+        profile_definition = provider_profile(provider)
+        live_base_url = str(getattr(client, "_resolved_base_url", None) or "")
+        live_model = str(getattr(client, "_model", "") or "")
+        if (
+            profile_definition is None
+            or profile_definition.transport != ANTHROPIC_MESSAGES
+            or _canonical_endpoint(live_base_url) != _canonical_endpoint(base_url)
+            or live_model != str(model)
+            or destination != "external"
+        ):
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+    elif is_cli:
         backend = str(getattr(client, "_backend", "") or "")
+        profile_definition = cli_account_profile(backend)
         live_model = str(getattr(client, "_model", "") or "") or "cli-default"
         if (
-            backend not in {"codex", "claude"}
-            or str(provider) != f"{backend}-cli"
-            or str(base_url) != f"cli://{backend}"
+            profile_definition is None
+            or str(provider) != profile_definition.provider_identity
+            or str(base_url) != profile_definition.endpoint_identity
             or str(model) != live_model
         ):
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
         if destination == "local":
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+    else:
+        profile_definition = user_account_profile("codex")
+        live_model = str(getattr(client, "_model", "") or "") or "account-default"
+        live_endpoint = str(getattr(client, "_endpoint_identity", "") or "")
+        session_binding = str(
+            getattr(client, "_session_binding_sha256", "") or ""
+        )
+        if (
+            profile_definition is None
+            or str(provider) != profile_definition.provider_identity
+            or str(base_url) != live_endpoint
+            or str(model) != live_model
+            or not session_binding
+            or not live_endpoint.endswith("/session/" + session_binding)
+            or destination != "external"
+        ):
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
     if destination == "external" and not _external_llm_allowed(env):
         raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
@@ -774,7 +872,9 @@ def authorize_provider_client(
         base_url=str(base_url),
         destination=destination,
         authorization_mode=(
-            "operator_env" if destination == "external" else "local_exempt"
+            "account_session"
+            if is_cli or is_codex_user
+            else ("operator_env" if destination == "external" else "local_exempt")
         ),
     )
     return _attach_provider_authorization(client, authorization)
@@ -783,7 +883,10 @@ def authorize_provider_client(
 def _valid_provider_authorization(value: object) -> bool:
     if not isinstance(value, ProviderAuthorization):
         return False
-    if value.destination == "external" and value.authorization_mode != "operator_env":
+    if value.destination == "external" and value.authorization_mode not in {
+        "operator_env",
+        "account_session",
+    }:
         return False
     if value.destination == "local" and value.authorization_mode not in {
         "local_exempt",
@@ -860,15 +963,47 @@ def _transport_matches_authorization(
             else "authorization"
         )
         return live_auth_header == expected_auth_header
+    if _is_reviewed_client_type(client, "AnthropicMessagesClient"):
+        live_base_url = str(getattr(client, "_resolved_base_url", None) or "")
+        live_model = str(getattr(client, "_model", "") or "")
+        profile_definition = provider_profile(authorization.provider)
+        return (
+            profile_definition is not None
+            and profile_definition.transport == ANTHROPIC_MESSAGES
+            and live_model == authorization.model
+            and _canonical_endpoint(live_base_url)
+            == _canonical_endpoint(authorization.base_url)
+            and authorization.destination == "external"
+            and authorization.authorization_mode == "operator_env"
+        )
     if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
         backend = str(getattr(client, "_backend", "") or "")
+        profile_definition = cli_account_profile(backend)
         live_model = str(getattr(client, "_model", "") or "") or "cli-default"
         return (
-            backend in {"codex", "claude"}
-            and authorization.provider == f"{backend}-cli"
-            and authorization.base_url == f"cli://{backend}"
+            profile_definition is not None
+            and authorization.provider == profile_definition.provider_identity
+            and authorization.base_url == profile_definition.endpoint_identity
             and authorization.model == live_model
             and authorization.destination == "external"
+            and authorization.authorization_mode == "account_session"
+        )
+    if _is_reviewed_client_type(client, "CodexAppServerLLMClient"):
+        profile_definition = user_account_profile("codex")
+        live_model = str(getattr(client, "_model", "") or "") or "account-default"
+        live_endpoint = str(getattr(client, "_endpoint_identity", "") or "")
+        session_binding = str(
+            getattr(client, "_session_binding_sha256", "") or ""
+        )
+        return (
+            profile_definition is not None
+            and authorization.provider == profile_definition.provider_identity
+            and authorization.base_url == live_endpoint
+            and authorization.model == live_model
+            and authorization.destination == "external"
+            and authorization.authorization_mode == "account_session"
+            and bool(session_binding)
+            and live_endpoint.endswith("/session/" + session_binding)
         )
     return False
 
@@ -974,6 +1109,8 @@ def provider_transport_destination(client: Any) -> str:
     if bool(getattr(client, "__easyicu_openai_transport__", False)):
         base_url = getattr(client, "_resolved_base_url", None)
         return "local" if is_loopback_openai_base_url(base_url) else "external"
+    if bool(getattr(client, "__easyicu_anthropic_transport__", False)):
+        return "external"
     # Unknown adapters are never trusted merely because they are in-process:
     # they may forward requests to an arbitrary remote service. Treat them as
     # external so repair prompts receive the structured outbound envelope, and
@@ -988,6 +1125,8 @@ def _configured_transport_policy(
     transport_max_attempts: int,
     retryable_http_status_codes: Optional[Sequence[int]],
     stream_enabled: bool,
+    supports_strict_json_schema: bool,
+    transport: str = "openai_compatible",
 ) -> dict[str, Any]:
     timeout = float(request_timeout)
     if not math.isfinite(timeout) or timeout <= 0:
@@ -1011,12 +1150,32 @@ def _configured_transport_policy(
             statuses.append(status)
         statuses = sorted(set(statuses))
     return {
-        "schema_version": "easyicu.provider_transport_policy/1",
-        "transport": "openai_compatible",
+        "schema_version": "easyicu.provider_transport_policy/2",
+        "transport": str(transport),
         "request_timeout_seconds": timeout,
         "transport_max_attempts": total_attempts,
         "retryable_http_status_codes": statuses,
         "stream_enabled": bool(stream_enabled),
+        "strict_json_schema_enabled": bool(supports_strict_json_schema),
+    }
+
+
+def _configured_cli_transport_policy(
+    *,
+    request_timeout: float,
+    supports_strict_json_schema: bool,
+) -> dict[str, Any]:
+    timeout = float(request_timeout)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("request_timeout must be finite and positive")
+    return {
+        "schema_version": "easyicu.provider_transport_policy/2",
+        "transport": "cli_account",
+        "request_timeout_seconds": timeout,
+        "transport_max_attempts": 1,
+        "retryable_http_status_codes": None,
+        "stream_enabled": False,
+        "strict_json_schema_enabled": bool(supports_strict_json_schema),
     }
 
 
@@ -1027,12 +1186,13 @@ def _provider_transport_policy(
 ) -> dict[str, Any]:
     if record is not None and record.kind == "offline":
         return {
-            "schema_version": "easyicu.provider_transport_policy/1",
+            "schema_version": "easyicu.provider_transport_policy/2",
             "transport": "offline",
             "request_timeout_seconds": None,
             "transport_max_attempts": 0,
             "retryable_http_status_codes": None,
             "stream_enabled": False,
+            "strict_json_schema_enabled": False,
         }
     if _is_reviewed_client_type(client, "OpenAIClient"):
         instance_vars = _safe_instance_vars(client)
@@ -1045,14 +1205,42 @@ def _provider_transport_policy(
                 "_retryable_http_status_codes"
             ),
             stream_enabled=bool(instance_vars.get("_stream_enabled", False)),
+            supports_strict_json_schema=bool(
+                instance_vars.get("supports_strict_json_schema", False)
+            ),
+        )
+    if _is_reviewed_client_type(client, "AnthropicMessagesClient"):
+        instance_vars = _safe_instance_vars(client)
+        return _configured_transport_policy(
+            request_timeout=float(instance_vars.get("_request_timeout", 0.0)),
+            transport_max_attempts=(
+                1 + max(0, int(instance_vars.get("_max_retries", 0)))
+            ),
+            retryable_http_status_codes=instance_vars.get(
+                "_retryable_http_status_codes"
+            ),
+            stream_enabled=False,
+            supports_strict_json_schema=bool(
+                instance_vars.get("supports_strict_json_schema", False)
+            ),
+            transport="anthropic_messages",
+        )
+    if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
+        instance_vars = _safe_instance_vars(client)
+        return _configured_cli_transport_policy(
+            request_timeout=float(instance_vars.get("_timeout", 0.0)),
+            supports_strict_json_schema=bool(
+                instance_vars.get("supports_strict_json_schema", False)
+            ),
         )
     return {
-        "schema_version": "easyicu.provider_transport_policy/1",
+        "schema_version": "easyicu.provider_transport_policy/2",
         "transport": "unmanaged",
         "request_timeout_seconds": None,
         "transport_max_attempts": None,
         "retryable_http_status_codes": None,
         "stream_enabled": None,
+        "strict_json_schema_enabled": None,
     }
 
 
@@ -1141,6 +1329,7 @@ def provider_authorization_for_configuration(
     transport_max_attempts: int = 9,
     retryable_http_status_codes: Optional[Sequence[int]] = None,
     stream_enabled: bool = False,
+    supports_strict_json_schema: bool = False,
 ) -> dict[str, Any]:
     """Mint non-secret identity coordinates without constructing a client."""
 
@@ -1154,6 +1343,7 @@ def provider_authorization_for_configuration(
         transport_max_attempts=transport_max_attempts,
         retryable_http_status_codes=retryable_http_status_codes,
         stream_enabled=stream_enabled,
+        supports_strict_json_schema=supports_strict_json_schema,
     )
     if normalized == "mock":
         return {
@@ -1168,29 +1358,97 @@ def provider_authorization_for_configuration(
                     "authorization_mode": "mock_exempt",
                     "authorization_sha256": "",
                     "transport_policy": {
-                        "schema_version": "easyicu.provider_transport_policy/1",
+                        "schema_version": "easyicu.provider_transport_policy/2",
                         "transport": "offline",
                         "request_timeout_seconds": None,
                         "transport_max_attempts": 0,
                         "retryable_http_status_codes": None,
                         "stream_enabled": False,
+                        "strict_json_schema_enabled": False,
                     },
                 }
             ],
         }
-    if normalized not in {"openai", "openrouter"}:
+    cli_profile = cli_account_profile(normalized)
+    if cli_profile is not None:
+        if profile != "provider_default":
+            raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized)
+        if stream_enabled or transport_max_attempts != 1:
+            raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized)
+        if not _external_llm_allowed(env):
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, normalized)
+        _model_source, configured_model = cli_profile.model(env)
+        selected_model = (
+            str(model or "").strip()
+            or str(configured_model or "").strip()
+            or "cli-default"
+        )
+        authorization = ProviderAuthorization.create(
+            provider=cli_profile.provider_identity,
+            model=selected_model,
+            base_url=cli_profile.endpoint_identity,
+            destination="external",
+            authorization_mode="account_session",
+        )
+        return {
+            "schema_version": "easyicu.provider_authorization_manifest/3",
+            "reasoning_effort_profile": profile,
+            "clients": [
+                {
+                    "provider": authorization.provider,
+                    "model": authorization.model,
+                    "base_url": authorization.base_url,
+                    "destination": authorization.destination,
+                    "authorization_mode": authorization.authorization_mode,
+                    "authorization_sha256": authorization.authorization_sha256,
+                    "transport_policy": _configured_cli_transport_policy(
+                        request_timeout=request_timeout,
+                        supports_strict_json_schema=(
+                            cli_profile.supports_strict_json_schema
+                        ),
+                    ),
+                }
+            ],
+        }
+    profile_definition = provider_profile(normalized)
+    if profile_definition is None:
         raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized)
+    if profile == "adaptive_v1" and profile_definition.transport != OPENAI_CHAT_COMPLETIONS:
+        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized)
+    transport_policy = _configured_transport_policy(
+        request_timeout=request_timeout,
+        transport_max_attempts=transport_max_attempts,
+        retryable_http_status_codes=retryable_http_status_codes,
+        stream_enabled=stream_enabled,
+        supports_strict_json_schema=supports_strict_json_schema,
+        transport=(
+            "anthropic_messages"
+            if profile_definition.transport == ANTHROPIC_MESSAGES
+            else "openai_compatible"
+        ),
+    )
     base_url = resolve_provider_base_url(normalized, environment=env)
-    loopback = normalized == "openai" and is_loopback_openai_base_url(base_url)
+    if not base_url or base_url == "unknown":
+        raise ProviderConfigurationError(MISSING_PROVIDER_BASE_URL, normalized)
+    loopback = (
+        profile_definition.transport == OPENAI_CHAT_COMPLETIONS
+        and normalized != "openrouter"
+        and is_loopback_openai_base_url(base_url)
+    )
     if not loopback and not _external_llm_allowed(env):
         raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, normalized)
     authorization_mode = "operator_env"
-    if normalized == "openai":
+    if (
+        profile_definition.transport == OPENAI_CHAT_COMPLETIONS
+        and normalized != "openrouter"
+    ):
+        _key_name, api_key = profile_definition.api_key(env)
         _header, authorization_mode = _openai_authorization_mode(
             env,
+            provider=normalized,
             loopback=loopback,
             has_override=False,
-            api_key=env.get("OPENAI_API_KEY"),
+            api_key=api_key,
         )
     authorization = ProviderAuthorization.create(
         provider=normalized,
@@ -1226,10 +1484,33 @@ class ProviderConfigurationError(ValueError):
             message = "OPENAI_API_KEY is required for --provider openai"
         elif issue == MISSING_OPENROUTER_KEY:
             message = "OPENROUTER_API_KEY is required for --provider openrouter"
+        elif issue == MISSING_PROVIDER_KEY:
+            profile_definition = provider_profile(provider)
+            names = (
+                profile_definition.api_key_env_names
+                if profile_definition is not None
+                else ()
+            )
+            expected = " or ".join(names) or "a provider API key"
+            message = f"{expected} is required for --provider {provider}"
+        elif issue == MISSING_PROVIDER_BASE_URL:
+            profile_definition = provider_profile(provider)
+            names = (
+                profile_definition.base_url_env_names
+                if profile_definition is not None
+                else ()
+            )
+            expected = " or ".join(names) or "a provider base URL"
+            message = f"{expected} is required for --provider {provider}"
         elif issue == INVALID_OPENAI_BASE_URL_OVERRIDE:
             message = (
                 "a per-call base_url is permitted only for a parsed loopback "
                 "HTTP(S) endpoint"
+            )
+        elif issue == INVALID_PROVIDER_BASE_URL_OVERRIDE:
+            message = (
+                "a per-call base_url is permitted only for a parsed loopback "
+                f"HTTP(S) endpoint for provider={provider}"
             )
         elif issue == OPENROUTER_BASE_URL_OVERRIDE:
             message = (
@@ -1294,12 +1575,21 @@ def resolve_provider_base_url(
     """Resolve the non-secret backend URL used for run provenance."""
 
     env = os.environ if environment is None else environment
-    normalized_provider = str(provider or "").strip().lower()
-    if normalized_provider == "openrouter":
-        return env.get("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE_URL
-    if normalized_provider == "openai":
-        return env.get("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL
-    return "unknown"
+    profile_definition = provider_profile(provider)
+    if profile_definition is None:
+        return "unknown"
+    _source, base_url = profile_definition.base_url(env)
+    if profile_definition.transport == ANTHROPIC_MESSAGES:
+        # The Anthropic SDK appends ``/v1/messages`` itself. Accept the two
+        # endpoint-shaped values operators commonly paste, but bind and pass
+        # only the SDK root so the request cannot become ``/v1/v1/messages``.
+        normalized = str(base_url or "").rstrip("/")
+        for suffix in ("/v1/messages", "/v1"):
+            if normalized.endswith(suffix):
+                normalized = normalized[: -len(suffix)]
+                break
+        base_url = normalized
+    return base_url or "unknown"
 
 
 def build_provider_client(
@@ -1308,26 +1598,93 @@ def build_provider_client(
     model: str,
     request_timeout: float,
     title: str,
-    client_cls: Callable[..., Any],
+    client_cls: Optional[Callable[..., Any]] = None,
     environment: Optional[Mapping[str, str]] = None,
     base_url_override: object = _BASE_URL_UNSET,
     extra_body: Optional[Mapping[str, Any]] = None,
     max_retries: int = 8,
     retryable_http_status_codes: Optional[Sequence[int]] = None,
     stream_enabled: Optional[bool] = None,
+    supports_strict_json_schema: bool = False,
     allow_environment_overrides: bool = True,
 ) -> Any:
-    """Build an OpenAI-compatible client under the canonical key policy.
+    """Build a reviewed API client under the canonical key policy.
 
     ``base_url_override`` represents an untrusted per-request override.  It is
-    accepted only for a parsed loopback OpenAI endpoint and is never accepted
-    for OpenRouter.  Server-owned environment URLs remain configurable, but
-    every non-loopback OpenAI destination requires ``OPENAI_API_KEY``.
+    accepted only for a parsed loopback OpenAI-compatible endpoint and is never
+    accepted for OpenRouter. Server-owned environment URLs remain configurable,
+    while each external provider resolves credentials through its reviewed
+    profile. Strict JSON Schema capability is explicit and is never inferred
+    from the provider name.
     """
 
     env = os.environ if environment is None else environment
     normalized_provider = str(provider or "").strip().lower()
     has_override = base_url_override is not _BASE_URL_UNSET
+    profile_definition = provider_profile(normalized_provider)
+    if profile_definition is None:
+        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized_provider)
+
+    if profile_definition.transport == ANTHROPIC_MESSAGES:
+        if has_override:
+            raise ProviderConfigurationError(
+                INVALID_PROVIDER_BASE_URL_OVERRIDE,
+                normalized_provider,
+            )
+        base_url = resolve_provider_base_url(
+            normalized_provider,
+            environment=env,
+        )
+        if not base_url or base_url == "unknown":
+            raise ProviderConfigurationError(
+                MISSING_PROVIDER_BASE_URL,
+                normalized_provider,
+            )
+        _key_name, api_key = profile_definition.api_key(env)
+        if not api_key:
+            raise ProviderConfigurationError(
+                MISSING_PROVIDER_KEY,
+                normalized_provider,
+            )
+        if not _external_llm_allowed(env):
+            raise ProviderConfigurationError(
+                EXTERNAL_LLM_NOT_AUTHORIZED,
+                normalized_provider,
+            )
+        if stream_enabled:
+            raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized_provider)
+        if extra_body:
+            raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized_provider)
+        selected_client_cls = client_cls
+        if selected_client_cls is None:
+            from .llm import AnthropicMessagesClient
+
+            selected_client_cls = AnthropicMessagesClient
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "api_key": api_key,
+            "base_url": base_url,
+            "request_timeout": float(request_timeout),
+            "max_retries": int(max_retries),
+            "stream_enabled": False,
+            "supports_strict_json_schema": bool(supports_strict_json_schema),
+            "allow_environment_overrides": bool(allow_environment_overrides),
+        }
+        if retryable_http_status_codes is not None:
+            kwargs["retryable_http_status_codes"] = tuple(
+                retryable_http_status_codes
+            )
+        client = selected_client_cls(**kwargs)
+        return _attach_provider_authorization(
+            client,
+            ProviderAuthorization.create(
+                provider=normalized_provider,
+                model=model,
+                base_url=base_url,
+                destination="external",
+                authorization_mode="operator_env",
+            ),
+        )
 
     if normalized_provider == "openrouter":
         if has_override:
@@ -1335,7 +1692,7 @@ def build_provider_client(
                 OPENROUTER_BASE_URL_OVERRIDE,
                 normalized_provider,
             )
-        api_key = env.get("OPENROUTER_API_KEY")
+        _key_name, api_key = profile_definition.api_key(env)
         if not api_key:
             raise ProviderConfigurationError(
                 MISSING_OPENROUTER_KEY,
@@ -1356,6 +1713,7 @@ def build_provider_client(
             "request_timeout": float(request_timeout),
             "max_retries": int(max_retries),
             "stream_enabled": stream_enabled,
+            "supports_strict_json_schema": bool(supports_strict_json_schema),
             "allow_environment_overrides": bool(allow_environment_overrides),
             "extra_headers": {
                 "HTTP-Referer": EASYICU_HTTP_REFERER,
@@ -1363,15 +1721,18 @@ def build_provider_client(
             },
         }
         if retryable_http_status_codes is not None:
-            kwargs["retryable_http_status_codes"] = tuple(
-                retryable_http_status_codes
-            )
+            kwargs["retryable_http_status_codes"] = tuple(retryable_http_status_codes)
         provider_extra_body = _openrouter_reasoning_extra_body(model)
         merged_extra_body = dict(provider_extra_body or {})
         merged_extra_body.update(dict(extra_body or {}))
         if merged_extra_body:
             kwargs["extra_body"] = merged_extra_body
-        client = client_cls(**kwargs)
+        selected_client_cls = client_cls
+        if selected_client_cls is None:
+            from .llm import OpenAIClient
+
+            selected_client_cls = OpenAIClient
+        client = selected_client_cls(**kwargs)
         return _attach_provider_authorization(
             client,
             ProviderAuthorization.create(
@@ -1383,28 +1744,48 @@ def build_provider_client(
             ),
         )
 
-    if normalized_provider == "openai":
+    if (
+        normalized_provider in SUPPORTED_PROVIDER_NAMES
+        and profile_definition.transport == OPENAI_CHAT_COMPLETIONS
+    ):
         if has_override:
             base_url = str(base_url_override or "")
             if not is_loopback_openai_base_url(base_url):
                 raise ProviderConfigurationError(
-                    INVALID_OPENAI_BASE_URL_OVERRIDE,
+                    (
+                        INVALID_OPENAI_BASE_URL_OVERRIDE
+                        if normalized_provider == "openai"
+                        else INVALID_PROVIDER_BASE_URL_OVERRIDE
+                    ),
                     normalized_provider,
                 )
         else:
-            base_url = str(env.get("OPENAI_BASE_URL") or "")
+            base_url = resolve_provider_base_url(
+                normalized_provider,
+                environment=env,
+            )
+        if not base_url or base_url == "unknown":
+            raise ProviderConfigurationError(
+                MISSING_PROVIDER_BASE_URL,
+                normalized_provider,
+            )
 
-        api_key = env.get("OPENAI_API_KEY")
+        _key_name, api_key = profile_definition.api_key(env)
         loopback = is_loopback_openai_base_url(base_url)
         auth_header, authorization_mode = _openai_authorization_mode(
             env,
+            provider=normalized_provider,
             loopback=loopback,
             has_override=has_override,
             api_key=api_key,
         )
         if not loopback and not api_key:
             raise ProviderConfigurationError(
-                MISSING_OPENAI_KEY,
+                (
+                    MISSING_OPENAI_KEY
+                    if normalized_provider == "openai"
+                    else MISSING_PROVIDER_KEY
+                ),
                 normalized_provider,
             )
         if not loopback and not _external_llm_allowed(env):
@@ -1440,12 +1821,11 @@ def build_provider_client(
             "api_key": loopback_key,
             "max_retries": int(max_retries),
             "stream_enabled": stream_enabled,
+            "supports_strict_json_schema": bool(supports_strict_json_schema),
             "allow_environment_overrides": bool(allow_environment_overrides),
         }
         if retryable_http_status_codes is not None:
-            kwargs["retryable_http_status_codes"] = tuple(
-                retryable_http_status_codes
-            )
+            kwargs["retryable_http_status_codes"] = tuple(retryable_http_status_codes)
         if base_url:
             kwargs["base_url"] = base_url
         if extra_body:
@@ -1453,8 +1833,13 @@ def build_provider_client(
         if auth_header is OpenAIAuthHeader.X_API_KEY:
             assert loopback_key is not None
             kwargs["extra_headers"] = {"x-api-key": loopback_key}
-        client = client_cls(**kwargs)
-        resolved_url = str(base_url or DEFAULT_OPENAI_BASE_URL)
+        selected_client_cls = client_cls
+        if selected_client_cls is None:
+            from .llm import OpenAIClient
+
+            selected_client_cls = OpenAIClient
+        client = selected_client_cls(**kwargs)
+        resolved_url = str(base_url)
         return _attach_provider_authorization(
             client,
             ProviderAuthorization.create(

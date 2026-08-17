@@ -168,6 +168,15 @@ PROMPT_TRANSPORT_BUDGETS: Mapping[str, PromptConsumerBudget] = {
             rationale="Cohort definition extraction.",
         ),
         PromptConsumerBudget(
+            consumer="planner_plan_generation",
+            role="planner",
+            rationale=(
+                "Initial AnalysisPlan generation and every structured retry; "
+                "the request carries typed context plus the closed transport "
+                "schema and retry authority projection."
+            ),
+        ),
+        PromptConsumerBudget(
             consumer="coder_initial_generation",
             role="coder",
             rationale=(
@@ -314,8 +323,10 @@ class PromptBudgetClient:
 
         return self._inner
 
-    def _enforce(self, messages: Sequence[Any]) -> None:
+    def _enforce(self, messages: Sequence[Any], structured_output: Any = None) -> None:
         actual_bytes = prompt_payload_bytes(messages)
+        if structured_output is not None:
+            actual_bytes += max(0, int(getattr(structured_output, "payload_bytes", 0)))
         if estimate_prompt_tokens(actual_bytes) > self._budget.limit_tokens:
             raise PromptTransportBudgetError(
                 consumer=self._budget.consumer,
@@ -334,13 +345,13 @@ class PromptBudgetClient:
     def complete(
         self, messages: Sequence[Any], **kwargs: Any
     ) -> Any:  # noqa: D102 - protocol
-        self._enforce(messages)
+        self._enforce(messages, kwargs.get("structured_output"))
         return self._attributed(lambda: self._inner.complete(messages, **kwargs))
 
     def complete_with_usage(
         self, messages: Sequence[Any], **kwargs: Any
     ) -> Any:  # noqa: D102 - protocol
-        self._enforce(messages)
+        self._enforce(messages, kwargs.get("structured_output"))
         return self._attributed(
             lambda: self._inner.complete_with_usage(messages, **kwargs)
         )

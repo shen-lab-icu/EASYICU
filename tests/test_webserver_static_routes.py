@@ -127,7 +127,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260815-mode-history1" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -183,7 +183,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "js/app.js?v=20260812-route-a11y1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
     assert "js/screens-extraction.js?v=20260803-picker-owner" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260816-copilot-provider-owner1" in index_html
     assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
@@ -391,7 +391,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260815-mode-history1" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
     assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
@@ -399,6 +399,10 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     None
 ):
     guided_js = _static_js("screens-guided.js")
+    # The Idea Mining sub-flow has its own owner; these assertions check
+    # ownership, not just presence — a copy left behind in the shell is the
+    # failure mode the split exists to prevent.
+    idea_js = _static_js("screens-guided-idea.js")
     projects_js = _static_js("screens-guided-projects.js")
     provider_js = _static_js("screens-guided-idea-provider.js")
     api_js = _static_js("api.js")
@@ -449,29 +453,11 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "external_llm_opt_in: false" in guided_js
     assert "goal === 'run_agent'" in guided_js
     assert "isGuidedAgentIntent(v)" in guided_js
-    assert "function startGuidedIdeaFlow" in guided_js
-    assert "thread.push({ guidedIdeaApiSetup: true })" in guided_js
-    assert "function renderGuidedIdeaApiSetupCard" in guided_js
-    assert "function showGuidedIdeaSourceForm" in guided_js
-    assert "function showGuidedIdeaApiSetup" in guided_js
-    assert "function renderGuidedIdeaCard" in guided_js
-    assert "function runGuidedIdeaMine" in guided_js
-    assert "function runGuidedIdeaPriorArt" in guided_js
-    assert "function runGuidedIdeaHandoff" in guided_js
-    assert "function runGuidedIdeaCreateProject" in guided_js
-    assert "window.EU_API.mineIdeas" in guided_js
-    assert "window.EU_API.resolveIdeaSource" in guided_js
-    assert "window.EU_API.ingestIdeaPdf" in guided_js
-    assert "window.EU_API.scanIdeaLiteratureFolder" in guided_js
-    assert "window.EU_GUIDED_IDEA_PROVIDER.requestStatus" in guided_js
+    assert "window.EU_GUIDED_IDEA_PROVIDER.requestStatus" in idea_js
     assert "loadAgentProviderStatus" in provider_js
     assert "window.EU_API.saveAgentProviderConfig" in _static_js("api.js")
     assert "saveAgentProviderConfig" in provider_js
-    assert "window.EU_API.checkIdeaPriorArt" in guided_js
-    assert "window.EU_API.handoffIdea" in guided_js
-    assert "window.EU_API.createIdeaAgentProject" in guided_js
     assert "goal === 'idea_mining'" in guided_js
-    assert "isGuidedIdeaIntent(v)" in guided_js
     assert "data-gi-mine" in guided_js
     assert "data-gi-pdf-file" in guided_js
     assert "data-gi-lit-browse" in guided_js
@@ -485,8 +471,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "data-gi-enable-ai" in provider_js
     assert "data-gi-api-continue" in provider_js
     assert "data-gi-api-back" in provider_js
-    assert "function saveGuidedIdeaProviderConfig" in guided_js
-    assert "function requestGuidedIdeaProviderStatus" in guided_js
+    assert "function requestGuidedIdeaProviderStatus" in idea_js
     assert "API readiness setup" in provider_js
     assert "API setup gate" not in guided_js
     assert "API setup gate" not in provider_js
@@ -543,7 +528,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260815-compact-rail2" in index_html
     assert "css/guided-projects.css?v=20260815-mobile-rail1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260815-mode-history1" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     )
@@ -608,10 +593,10 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     assert "window.EU_GUIDED_PROJECTS = {" in projects_js
     assert "window.EU_GUIDED_IDEA_PLAN = {" in guided_plan_js
-    assert "window.EU_GUIDED_IDEA_PLAN.render" in guided_js
+    assert "window.EU_GUIDED_IDEA_PLAN.render" in idea_js
     assert "guidedProjectContext()" in guided_js
-    assert "function runGuidedIdeaPlan" in guided_js
-    assert "window.EU_API.planIdea" in guided_js
+    assert "function runGuidedIdeaPlan" in idea_js
+    assert "window.EU_API.planIdea" in idea_js
     assert "data-gi-plan" in guided_js
     assert "data-gi-replan" in guided_js
     assert "Create a study plan before Agent handoff" in guided_plan_js
@@ -621,26 +606,54 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "Applied replan note" in guided_plan_js
     assert (
         "Generate and review the study plan before freezing an Agent handoff"
-        in guided_js
+        in idea_js
     )
-    assert "restoreGuidedIdeaArtifacts" in guided_js
-    assert "dataContextConfirmed" in guided_js
-    assert "function confirmGuidedIdeaDataContext" in guided_js
+    # Renamed on the move: inside its own owner the guided/idea prefix is
+    # noise. A saved mid-run session still re-fetches that run on restore.
+    assert "function restoreArtifacts(runId)" in idea_js
+    assert "IDEA.restoreSlot(slots.idea);" in guided_js
+    assert "idea: IDEA.slotSnapshot()," in guided_js
+    assert "dataContextConfirmed" in idea_js
+    assert "function confirmGuidedIdeaDataContext" in idea_js
     assert (
-        "This only turns a source clue into a candidate research question" in guided_js
+        "This only turns a source clue into a candidate research question" in idea_js
     )
-    assert "requires explicit data-context confirmation" in guided_js
-    assert "Manual idea mode" in guided_js
-    assert "Article URL mode" in guided_js
-    assert "PDF file mode" in guided_js
-    assert "Literature folder mode" in guided_js
-    assert "Frontier topic mode" in guided_js
-    assert "source-${attr(tab)}" in guided_js
+    assert "requires explicit data-context confirmation" in idea_js
+    assert "Manual idea mode" in idea_js
+    assert "Article URL mode" in idea_js
+    assert "PDF file mode" in idea_js
+    assert "Literature folder mode" in idea_js
+    assert "Frontier topic mode" in idea_js
+    assert "source-${attr(tab)}" in idea_js
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
     assert "js/screens-guided.js?v=20260815-compact-rail2" in index_html
 
+    assert "function startGuidedIdeaFlow" in idea_js
+    assert "function renderGuidedIdeaApiSetupCard" in idea_js
+    assert "function showGuidedIdeaSourceForm" in idea_js
+    assert "function showGuidedIdeaApiSetup" in idea_js
+    assert "function renderGuidedIdeaCard" in idea_js
+    assert "function runGuidedIdeaMine" in idea_js
+    assert "function runGuidedIdeaPriorArt" in idea_js
+    assert "function runGuidedIdeaHandoff" in idea_js
+    assert "function runGuidedIdeaCreateProject" in idea_js
+    assert "window.EU_API.mineIdeas" in idea_js
+    assert "window.EU_API.resolveIdeaSource" in idea_js
+    assert "window.EU_API.ingestIdeaPdf" in idea_js
+    assert "window.EU_API.scanIdeaLiteratureFolder" in idea_js
+    assert "window.EU_API.checkIdeaPriorArt" in idea_js
+    assert "window.EU_API.handoffIdea" in idea_js
+    assert "window.EU_API.createIdeaAgentProject" in idea_js
+    assert "function saveGuidedIdeaProviderConfig" in idea_js
+    assert "host.thread().push({ guidedIdeaApiSetup: true })" in idea_js
+    for moved in ("function runGuidedIdeaMine", "function renderGuidedIdeaCard"):
+        assert moved not in guided_js, f"{moved} is still in the shell too"
+    # The shell reaches the sub-flow only through the published owner.
+    assert "const IDEA = window.EU_GUIDED_IDEA;" in guided_js
+    assert "IDEA.runGuidedIdeaMine(" in guided_js
+    assert "IDEA.isGuidedIdeaIntent(v)" in guided_js
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     agent_js = _static_js("screens-agent.js")
@@ -654,7 +667,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260816-copilot-provider-owner1" in index_html
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -804,7 +817,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260816-copilot-provider-owner1" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -852,6 +865,43 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
     assert "js/screens-agent-render.js?v=20260815-system-validation1" in index_html
+
+
+def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
+    agent_js = _static_js("screens-agent.js")
+    guided_js = _static_js("screens-guided-pi.js")
+    provider_js = _static_js("screens-guided-pi-provider.js")
+    index_html = _static_html("index.html")
+
+    assert "window.EU_GUIDED_PI_PROVIDER =" in provider_js
+    assert "ChatGPT / Codex account" in provider_js
+    assert "DeepSeek API" in provider_js
+    assert "OpenRouter API" in provider_js
+    assert "data-gpi-codex-login" in provider_js
+    assert "data-gpi-codex-device" in provider_js
+    assert "data-gpi-codex-model" in provider_js
+    assert "ONE MODEL CONNECTION" in provider_js
+    assert "same selected provider and model powers" in provider_js
+    assert "Conversation model API" not in provider_js
+    assert "Analysis model" not in provider_js
+    assert "research_provider: state.researchProvider" in guided_js
+    assert "startPiCopilotCodexLogin" in guided_js
+    assert "AGENT_PROVIDER_PANEL" not in agent_js
+    assert "data-ag-codex-login" not in agent_js
+    assert "data-ag-external-run" not in agent_js
+    assert "screens-agent-provider.js" not in index_html
+
+    provider_pos = index_html.find("screens-guided-pi-provider.js?")
+    main_pos = index_html.find("screens-guided-pi.js?")
+    assert provider_pos != -1 and main_pos != -1
+    assert provider_pos < main_pos
+    assert (
+        "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"
+        in index_html
+    )
+
+    for foreign_marker in ("data-ag-", "data-cd-", "data-pt-", "data-idea-"):
+        assert foreign_marker not in provider_js
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -962,7 +1012,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert ".ag-wrap .ag-req-list" in agent_question_css
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "js/screens-agent.js?v=20260816-copilot-provider-owner1" in index_html
 
     for name in (
         "benchmark_scorecard.json",
@@ -2260,7 +2310,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260815-mode-history1" in index_html
+    assert "api.js?v=20260816-copilot-provider-owner1" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2530,7 +2580,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260815-mode-history1" in index_html
+    assert "api.js?v=20260816-copilot-provider-owner1" in index_html
     assert "screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -2547,11 +2597,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
 
 def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     agent_js = _static_js("screens-agent.js")
+    provider_js = _static_js("screens-guided-pi-provider.js")
     api_js = _static_js("api.js")
 
-    assert "DeepSeek-compatible" in agent_js
-    assert "Custom / local OpenAI-compatible" in agent_js
-    assert "Custom/local endpoints must be OpenAI-compatible" in agent_js
+    assert "DeepSeek API" in provider_js
+    assert "Anthropic / Claude API" in provider_js
+    assert "OpenAI-compatible gateway" in provider_js
+    assert "ChatGPT / Codex account" in provider_js
     assert "loadJobSnapshot" in api_js
     assert "cancelJob" in api_js
     assert "getJSON('/api/jobs/' + encodeURIComponent(jobId || ''))" in api_js
@@ -2568,6 +2620,8 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     assert "Restart from active export" in agent_js
     assert "safe continuation is to restart from the active export" in agent_js
     assert "seedGateBlocksRun" in agent_js
+    assert "host.clientWidth < 1040" in agent_js
+    assert "data-ag-" not in provider_js
     assert "project_seed_dir" in agent_js
     assert "Agent preflight checks are not ready" in agent_js
     # The remedy sentences moved out of a regex-over-English table in

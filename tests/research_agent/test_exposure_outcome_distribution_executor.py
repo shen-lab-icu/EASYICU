@@ -293,6 +293,9 @@ def test_a_scientific_or_widened_contract_is_refused() -> None:
         _step(planned_analysis_role="primary")
     )
     assert not exposure_outcome_distribution_executor_owns_step(
+        _step(planned_analysis_role="secondary")
+    )
+    assert not exposure_outcome_distribution_executor_owns_step(
         _step(method="adjusted_association_models")
     )
     assert not exposure_outcome_distribution_executor_owns_step(
@@ -305,6 +308,24 @@ def test_a_scientific_or_widened_contract_is_refused() -> None:
                 unresolved_limitations=(
                     "post_baseline_exposure_opportunity_unresolved",
                 )
+            ),
+        )
+    )
+    assert exposure_outcome_distribution_executor_owns_step(
+        _step(
+            planned_analysis_role="secondary",
+            descriptive_claim=DescriptiveClaimContract(
+                unresolved_limitations=(
+                    "post_baseline_exposure_opportunity_unresolved",
+                )
+            ),
+        )
+    )
+    assert exposure_outcome_distribution_executor_owns_step(
+        _step(
+            planned_analysis_role="secondary",
+            scientific_capability=(
+                "descriptive_exposure_outcome_distribution_v1"
             ),
         )
     )
@@ -404,6 +425,25 @@ def test_the_confidence_level_must_be_declared() -> None:
     payload = {key: value for key, value in _SPEC.items() if key != "confidence_level"}
     with pytest.raises(ValueError):
         ExposureOutcomeDistributionSpec.model_validate(payload)
+
+
+def test_an_incomplete_interval_design_reports_every_coupled_field() -> None:
+    """A Planner retry must be told how to repair the closed /2 tuple."""
+
+    with pytest.raises(ValueError) as raised:
+        ExposureOutcomeDistributionSpec.model_validate(
+            {
+                **_SPEC,
+                "interval_method": "wilson",
+                "repeated_unit_interval_method": None,
+            }
+        )
+
+    message = str(raised.value)
+    assert "interval_method='wilson'" in message
+    assert "repeated_unit_interval_method='patient_cluster_robust_wald'" in message
+    assert "non-null confidence_level" in message
+    assert "repeated_unit_interval_method=None" in message
 
 
 # --------------------------------------------------------------------------

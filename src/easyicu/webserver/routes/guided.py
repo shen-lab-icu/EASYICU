@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 
 from easyicu.webserver import guided_sessions
+from easyicu.webserver.routes.request_parsing import body_int
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ def post_guided_draft(body: Dict[str, Any]) -> dict:
 def post_guided_drafts_list(body: Dict[str, Any] | None = None) -> dict:
     """List metadata-only guided Copilot drafts from local settings storage."""
     return guided_sessions.list_guided_drafts(
-        limit=int((body or {}).get("limit") or 20)
+        limit=body_int(body or {}, "limit", 20, min_value=1, max_value=100)
     )
 
 
@@ -92,7 +93,7 @@ def post_guided_action(body: Dict[str, Any]) -> dict:
 def post_guided_sessions_list(body: Dict[str, Any] | None = None) -> dict:
     """List local metadata-only Guided Copilot session folders."""
     return guided_sessions.list_guided_sessions(
-        limit=int((body or {}).get("limit") or 20)
+        limit=body_int(body or {}, "limit", 20, min_value=1, max_value=100)
     )
 
 

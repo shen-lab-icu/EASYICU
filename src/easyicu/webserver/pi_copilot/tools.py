@@ -2023,7 +2023,10 @@ def _search_literature(
     """Run the existing PubMed Idea Mining owner after one-turn opt-in."""
 
     _require_args(params, allowed=("topic", "journal", "limit"))
-    requested_limit = max(1, min(int(params.get("limit") or 5), 8))
+    try:
+        requested_limit = max(1, min(int(params.get("limit") or 5), 8))
+    except (TypeError, ValueError):
+        requested_limit = 5
     study = _bound_context(context.session.binding) or {}
     topic = str(params.get("topic") or study.get("question") or "").strip()
     if not topic:
@@ -2857,14 +2860,11 @@ def _run(
             ),
             owner="easyicu.webserver.provider_gate",
         )
-    # A Pi full run is bound to the provider configuration already verified by
-    # the host.  Provider display labels such as ``local`` or ``easyicu-local``
-    # are not scientific-provider protocol identifiers and must not let model
-    # output select a second credential authority.  The verified bridge above
-    # currently accepts only OpenAI Chat Completions, so compile that transport
-    # deterministically here.  ``llm_provider`` remains accepted only for older
-    # sidecars; the current public tool schema no longer exposes it.
-    provider = "openai" if run_type == "full" else "mock"
+    # The selected credential authority is frozen when the Copilot session is
+    # created. Model output may request a run, but cannot switch account, API,
+    # or model underneath an already-open research conversation.
+    research_provider = context.session.research_provider
+    provider = research_provider.provider if run_type == "full" else "mock"
     if run_type == "full" and not context.session.external_llm_opt_in:
         return _result(
             context,
@@ -2896,13 +2896,30 @@ def _run(
             ),
             owner="easyicu.webserver.study_contexts",
         )
+    account_environment = None
+    if run_type == "full" and provider == "codex":
+        from easyicu.webserver import codex_account_sessions
+
+        try:
+            account_environment = codex_account_sessions.environment_for_binding(
+                str(research_provider.account_session_sha256 or ""),
+                model=research_provider.model,
+            )
+        except codex_account_sessions.CodexAccountSessionError as exc:
+            return _result(
+                context,
+                status="blocked",
+                code=exc.code,
+                summary="The Codex account bound to this conversation is no longer available; start a new Copilot session after signing in again.",
+                owner="easyicu.webserver.codex_account_sessions",
+            )
     # Import lazily to keep the route-composition module out of this package's
     # import graph. The function remains the one existing run submission path;
     # this adapter does not reconstruct its validation or JobManager behavior.
-    from easyicu.webserver.routes.agent import jobs_agent_run
+    from easyicu.webserver.routes.agent import submit_agent_run
 
     try:
-        submitted = jobs_agent_run(
+        submitted = submit_agent_run(
             {
                 "path": source_path,
                 "study_context_id": study["id"],
@@ -2917,7 +2934,7 @@ def _run(
                 ),
                 **(
                     {
-                        "credential_source": "pi_verified",
+                        "credential_source": research_provider.credential_source,
                     }
                     if run_type == "full"
                     else {}
@@ -2936,7 +2953,8 @@ def _run(
                     if plan_revision_source_run_id
                     else {}
                 ),
-            }
+            },
+            account_environment=account_environment,
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}

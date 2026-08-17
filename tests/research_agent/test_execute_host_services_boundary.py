@@ -227,12 +227,14 @@ def test_staging_renderer_is_explicit_and_all_production_calls_supply_it() -> No
     )
     assert signature.parameters["renderer"].default is inspect.Parameter.empty
 
-    source_path = Path(pipeline_execute.__file__)
-    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    tree = ast.parse(
+        inspect.getsource(pipeline_execute._step_prepare_post_candidate_figures)
+    )
     execute_function = next(
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "run_execute_phase"
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_step_prepare_post_candidate_figures"
     )
     calls = [
         node

@@ -458,6 +458,31 @@ class DataConverter:
             )
         return detected
     
+    def _archive_extraction_complete(self, archive_path: Path) -> bool:
+        """Return True when every regular archive member is present exactly."""
+        try:
+            with tarfile.open(archive_path, 'r:gz') as tar:
+                members = [m for m in tar.getmembers() if m.isfile()]
+        except Exception:
+            return False
+        if not members:
+            return True
+        root = self.data_path.resolve()
+        for member in members:
+            target = self.data_path / member.name
+            try:
+                resolved = target.resolve()
+                if (
+                    not resolved.is_relative_to(root)
+                    or target.is_symlink()
+                    or not target.is_file()
+                    or target.stat().st_size != member.size
+                ):
+                    return False
+            except OSError:
+                return False
+        return True
+
     def _extract_hirid_archives(self) -> List[str]:
         """
         Extract HiRID tar.gz archives if they exist.
@@ -516,14 +541,14 @@ class DataConverter:
                         logger.info(f"Skipping {archive_path.name} - parquet version already extracted")
                         continue
             
-            # Check if extraction is needed
+            # Check if extraction is needed. A non-empty marker directory is
+            # not proof of completeness: an interrupted tar extraction leaves
+            # some part-* files behind and would otherwise be skipped forever.
             needs_extract = True
             if marker_path.exists():
-                if marker_path.is_dir():
-                    if any(marker_path.iterdir()):
-                        needs_extract = False
-                else:
-                    needs_extract = False
+                needs_extract = not self._archive_extraction_complete(
+                    archive_path
+                )
             
             if needs_extract:
                 logger.info(f"Extracting {archive_path.name}...")
@@ -797,14 +822,30 @@ class DataConverter:
                 parent_name = f.parent.name.lower()
                 grandparent = f.parent.parent
                 
-                # Map CSV shard directory to ricu parquet shard directory
+                # Map CSV shard directory to ricu parquet shard directory.
+                # Skipping is only safe when the parquet shard count matches
+                # the source CSV shard count; a partial prior conversion must
+                # keep the remaining source shards eligible for conversion.
                 for csv_dir, parquet_dir in shard_patterns.items():
                     if csv_dir in str(f.parent).lower():
-                        # Check if ricu parquet shards exist
                         shard_dir = self.data_path / parquet_dir
-                        if self._valid_numbered_parquet_shard_count(shard_dir) > 0:
-                            skip = True
-                            break
+                        existing = self._valid_numbered_parquet_shard_count(
+                            shard_dir
+                        )
+                        if existing > 0:
+                            try:
+                                source_shards = sum(
+                                    1
+                                    for child in f.parent.iterdir()
+                                    if child.is_file()
+                                    and child.name.lower().startswith('num_')
+                                    and child.suffix.lower() == '.csv'
+                                )
+                            except OSError:
+                                source_shards = 0
+                            if source_shards and existing == source_shards:
+                                skip = True
+                        break
                 
                 # Also check if parent directory name matches a known shard dir with parquet
                 if not skip and parent_name in ['csv', 'data', 'numericitems_split', 'listitems_split']:
@@ -819,11 +860,20 @@ class DataConverter:
                     }
                     target_dir = mappings.get(table_dir_name, table_dir_name)
                     shard_dir = self.data_path / target_dir
-                    if (
-                        shard_dir != grandparent
-                        and self._valid_numbered_parquet_shard_count(shard_dir) > 0
-                    ):
-                        skip = True
+                    existing = self._valid_numbered_parquet_shard_count(shard_dir)
+                    if existing > 0 and shard_dir != grandparent:
+                        try:
+                            source_shards = sum(
+                                1
+                                for child in f.parent.iterdir()
+                                if child.is_file()
+                                and child.name.lower().startswith('num_')
+                                and child.suffix.lower() == '.csv'
+                            )
+                        except OSError:
+                            source_shards = 0
+                        if source_shards and existing == source_shards:
+                            skip = True
             
             if not skip:
                 filtered_files.append(f)
@@ -1517,14 +1567,9 @@ class DataConverter:
                            'originalamountuom', 'originalrateuom',
                            'originalamount', 'originalrate',
                            'amount', 'rate'],
-        # MIMIC-III NOTEEVENTS — CATEGORY/DESCRIPTION/TEXT all free text;
-        # CHARTTIME/STORETIME are often blank for notes that only carry
-        # CHARTDATE, and pyarrow infers the column as `null` from the first
-        # chunk and then dies on later timestamps. Pin everything textual /
-        # potentially-sparse.
-        'noteevents': ['category', 'description', 'text', 'iserror',
-                       'charttime', 'storetime', 'chartdate',
-                       'hadm_id', 'cgid', 'subject_id', 'row_id'],
+        # MIMIC-III NOTEEVENTS — only genuinely textual fields are pinned.
+        # Timestamp/date columns must remain eligible for temporal inference.
+        'noteevents': ['category', 'description', 'text', 'iserror'],
         # eICU
         'infusiondrug': ['drugrate', 'infusionrate', 'drugamount', 'volumeoffluid'],
         'medication': ['dosage', 'loadingdose', 'frequency'],
@@ -1548,6 +1593,13 @@ class DataConverter:
         'numericitems': ['unit', 'registeredby'],
         'procedureorderitems': ['ordercategoryname'],
         'processitems': ['item'],
+    }
+
+    # Sparse temporal columns need an explicit type in the streaming reader:
+    # a first Arrow block containing only blanks otherwise fixes the schema as
+    # null and fails when a later block contains a real timestamp.
+    TEMPORAL_TYPE_COLUMNS = {
+        'noteevents': ['chartdate', 'charttime', 'storetime'],
     }
     
     def _fix_mixed_type_columns(
@@ -1587,6 +1639,19 @@ class DataConverter:
             except Exception:
                 df[actual] = df[actual].astype(str)
         known_cols = resolved_known
+
+        for col in self.TEMPORAL_TYPE_COLUMNS.get(table_name, []):
+            actual = lower_to_actual.get(col.lower())
+            if actual is None:
+                continue
+            original = df[actual]
+            parsed = pd.to_datetime(original, errors="coerce")
+            invalid = original.notna() & parsed.isna()
+            if invalid.any():
+                raise ValueError(
+                    f"invalid temporal value in {table_name}.{col}"
+                )
+            df[actual] = parsed
         
         # Aggressively convert ALL object columns to string to avoid mixed type issues
         # This is safer for parquet export
@@ -1752,21 +1817,16 @@ class DataConverter:
             total_rows = 0
             writer = None
             chunk_iter = None
-            reference_schema = None
-
-            # Pre-infer stable schema for files with potential type issues
-            file_size_mb = file_size / (1024 * 1024)
-            if file_size_mb > 100:
-                try:
-                    reference_schema = self._infer_stable_schema(
-                        csv_path, sample_chunks=3
-                    )
-                    if self.verbose:
-                        logger.info(
-                            f"  Pre-inferred stable schema with {len(reference_schema)} columns"
-                        )
-                except Exception as e:
-                    logger.warning(f"  Failed to pre-infer schema: {e}")
+            # A ParquetWriter cannot widen its schema after the first chunk.
+            # Scan every pandas chunk before opening the writer so a late
+            # fractional or textual value cannot be truncated or rejected.
+            reference_schema = self._infer_stable_schema(
+                csv_path, sample_chunks=None
+            )
+            if self.verbose:
+                logger.info(
+                    f"  Pre-inferred stable schema with {len(reference_schema)} columns"
+                )
 
             try:
                 chunk_iter = self._read_csv_with_encoding(
@@ -1785,8 +1845,6 @@ class DataConverter:
 
                     # Initialize writer on first chunk
                     if writer is None:
-                        if reference_schema is None:
-                            reference_schema = table.schema
                         writer = pq.ParquetWriter(
                             parquet_path,
                             reference_schema,
@@ -1886,9 +1944,9 @@ class DataConverter:
         partition 2 for breaks[0] < value <= breaks[1], etc.
         """
         import bisect
-        # bisect_right returns the insertion point, which is 0-indexed
-        # We add 1 to get 1-indexed partition numbers
-        return bisect.bisect_right(breaks, value) + 1
+        # bisect_left keeps values equal to a breakpoint in the earlier
+        # partition: partition 1 for values <= breaks[0].
+        return bisect.bisect_left(breaks, value) + 1
     
     def _convert_file_sharded(self, csv_path: Path, result: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -2000,20 +2058,16 @@ class DataConverter:
         
         total_rows = 0
         bad_row_counter = [0]
-        reference_schema = None
-        
-        # Pre-infer stable schema for large files
-        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
-        if file_size_mb > 100:
-            try:
-                # Use only 3 chunks to minimize memory overhead
-                reference_schema = self._infer_stable_schema(csv_path, sample_chunks=3)
-                if self.verbose:
-                    logger.info(f"  Pre-inferred stable schema with {len(reference_schema)} columns")
-                # Force GC after schema inference
-                gc.collect()
-            except Exception as e:
-                logger.warning(f"  Failed to pre-infer schema: {e}")
+        # The writer schema is immutable, so infer across the full source
+        # before opening any partition writer.
+        reference_schema = self._infer_stable_schema(
+            csv_path, sample_chunks=None
+        )
+        if self.verbose:
+            logger.info(
+                f"  Pre-inferred stable schema with {len(reference_schema)} columns"
+            )
+        gc.collect()
         
         def get_partition_path(part_num: int) -> Path:
             return shard_dir / f"{part_num}.parquet"
@@ -2027,10 +2081,6 @@ class DataConverter:
             
             # Convert to PyArrow table
             table = pa.Table.from_pandas(df, preserve_index=False)
-            
-            # Use first table's schema as reference if not pre-inferred
-            if reference_schema is None:
-                reference_schema = table.schema
             
             # Normalize schema if different
             if table.schema != reference_schema:
@@ -2102,7 +2152,7 @@ class DataConverter:
                 col_values = chunk[partition_col].values
                 _np_breaks = np.asarray(breaks)
                 chunk["_partition"] = (
-                    np.searchsorted(_np_breaks, col_values, side="right") + 1
+                    np.searchsorted(_np_breaks, col_values, side="left") + 1
                 )
 
                 # 🚀 perf Z (eicu wide-table cohort speedup): sort each chunk
@@ -2142,6 +2192,19 @@ class DataConverter:
                 # below is sufficient); calling gc every chunk inserts a
                 # 20–100 ms STW pause that compounded on macfuse runs.
                 del chunk
+
+            # Ensure every numbered shard exists, even when a partition
+            # received no rows. The readiness scanner requires contiguous
+            # 1..n parquet files; an interior empty partition otherwise makes
+            # the table look permanently "not converted".
+            if reference_schema is not None:
+                for part_num in range(1, n_partitions + 1):
+                    if part_num not in partition_writers:
+                        partition_writers[part_num] = pq.ParquetWriter(
+                            get_partition_path(part_num),
+                            reference_schema,
+                            compression=self.parquet_compression,
+                        )
 
             # Close all writers
             close_all_writers()
@@ -2205,6 +2268,31 @@ class DataConverter:
                         new_columns.append(col.cast(pa.string(), safe=False))
                     except Exception:
                         new_columns.append(col)
+                elif pa.types.is_integer(ref_type) and (
+                    pa.types.is_floating(col.type)
+                    or pa.types.is_decimal(col.type)
+                ):
+                    # A full pre-scan should have widened the reference. If a
+                    # caller supplied an integer reference anyway, only an
+                    # exact safe cast is allowed; fractional data fails closed.
+                    try:
+                        new_columns.append(col.cast(ref_type, safe=True))
+                    except (
+                        pa.ArrowInvalid,
+                        pa.ArrowNotImplementedError,
+                        pa.ArrowTypeError,
+                    ) as exc:
+                        raise ValueError(
+                            f"schema would truncate fractional values in {col_name!r}"
+                        ) from exc
+                elif pa.types.is_floating(ref_type) and (
+                    pa.types.is_integer(col.type)
+                    or pa.types.is_decimal(col.type)
+                ):
+                    try:
+                        new_columns.append(col.cast(pa.float64(), safe=False))
+                    except Exception:
+                        new_columns.append(col)
                 else:
                     # Try to cast to reference type
                     try:
@@ -2230,9 +2318,13 @@ class DataConverter:
         
         return pa.Table.from_arrays(new_columns, schema=reference_schema)
     
-    def _infer_stable_schema(self, csv_path: Path, sample_chunks: int = 3) -> "pyarrow.Schema":
+    def _infer_stable_schema(
+        self,
+        csv_path: Path,
+        sample_chunks: Optional[int] = None,
+    ) -> "pyarrow.Schema":
         """
-        Infer a stable schema by reading multiple chunks and merging types.
+        Infer a stable schema by reading and merging source chunk types.
         
         This prevents schema mismatch errors when some chunks have null columns.
         Uses minimal memory by only keeping schema objects, not data.
@@ -2248,9 +2340,11 @@ class DataConverter:
         )
         
         try:
-            # Read first few chunks to build stable schema
+            # A bounded sample is useful only to callers that explicitly opt
+            # into it. Conversion paths scan all chunks because late values
+            # must be represented in the immutable writer schema.
             for i, chunk in enumerate(chunk_iter):
-                if i >= sample_chunks:
+                if sample_chunks is not None and i >= sample_chunks:
                     break
                 chunk = self._fix_mixed_type_columns(chunk, csv_path)
                 table = pa.Table.from_pandas(chunk, preserve_index=False)
@@ -2336,20 +2430,14 @@ class DataConverter:
         shard_num = 1
         current_writer = None
         current_shard_rows = 0
-        reference_schema = None
-        
-        # Infer stable schema upfront for large files
-        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
-        if file_size_mb > 100:  # For large files, pre-scan for stable schema
-            try:
-                # Use only 3 chunks to minimize memory overhead
-                reference_schema = self._infer_stable_schema(csv_path, sample_chunks=3)
-                if self.verbose:
-                    logger.info(f"  Pre-inferred stable schema with {len(reference_schema)} columns")
-                # Force GC after schema inference
-                gc.collect()
-            except Exception as e:
-                logger.warning(f"  Failed to pre-infer schema: {e}")
+        reference_schema = self._infer_stable_schema(
+            csv_path, sample_chunks=None
+        )
+        if self.verbose:
+            logger.info(
+                f"  Pre-inferred stable schema with {len(reference_schema)} columns"
+            )
+        gc.collect()
         
         def start_new_shard():
             nonlocal shard_num, current_writer, current_shard_rows
@@ -2381,10 +2469,8 @@ class DataConverter:
                 # Convert to PyArrow table
                 table = pa.Table.from_pandas(chunk, preserve_index=False)
 
-                # Initialize writer if needed (use reference schema if available)
+                # Initialize writer with the full-source reference schema.
                 if current_writer is None:
-                    if reference_schema is None:
-                        reference_schema = table.schema
                     shard_path = shard_dir / f"{shard_num}.parquet"
                     current_writer = pq.ParquetWriter(
                         shard_path,
@@ -2538,17 +2624,21 @@ class DataConverter:
         import pyarrow.csv as pa_csv
 
         pinned = self.MIXED_TYPE_COLUMNS.get(table_name, [])
+        temporal = self.TEMPORAL_TYPE_COLUMNS.get(table_name, [])
         # Match column names case-insensitively. MIMIC-III ships uppercase
         # headers (VALUE, STOPPED, ORIGINALSITE, ...) while MIXED_TYPE_COLUMNS
         # is written lowercase to match MIMIC-IV / eICU / AUMC. Without this
         # mapping the pinning silently misses every MIMIC-III table and Arrow
         # then crashes on the first non-numeric value it encounters.
         col_types: Dict[str, "pa.DataType"] = {}
-        if pinned:
+        if pinned or temporal:
             try:
                 header_cols = self._read_csv_header(csv_path)
             except Exception:
                 header_cols = []
+        else:
+            header_cols = []
+        if pinned:
             pinned_lower = {c.lower(): None for c in pinned}
             if header_cols:
                 for actual in header_cols:
@@ -2560,6 +2650,16 @@ class DataConverter:
                 for c in pinned:
                     col_types[c] = pa.string()
                     col_types[c.upper()] = pa.string()
+        if temporal:
+            temporal_lower = {c.lower() for c in temporal}
+            if header_cols:
+                for actual in header_cols:
+                    if actual.lower() in temporal_lower:
+                        col_types[actual] = pa.timestamp("s")
+            else:
+                for column in temporal:
+                    col_types[column] = pa.timestamp("s")
+                    col_types[column.upper()] = pa.timestamp("s")
 
         source_encoding = self._detect_encoding(csv_path).lower()
         arrow_encoding = (
@@ -2741,8 +2841,8 @@ class DataConverter:
             col = tbl.column(partition_col)
             part_idx = None
             for b in breaks:
-                ge = pc.cast(pc.greater_equal(col, b), pa.int32())
-                part_idx = ge if part_idx is None else pc.add(part_idx, ge)
+                gt = pc.cast(pc.greater(col, b), pa.int32())
+                part_idx = gt if part_idx is None else pc.add(part_idx, gt)
             part_idx = pc.add(part_idx, pa.scalar(1, pa.int32()))
             # Null ids (should not occur for an ID column) -> last partition,
             # so rows are never silently dropped.
@@ -2783,6 +2883,13 @@ class DataConverter:
                         logger.info(f"  Read {total_rows:,} rows...")
             if pending:
                 flush(pa.Table.from_batches(pending, schema))
+            for p in range(1, n_partitions + 1):
+                if p not in writers:
+                    writers[p] = pq.ParquetWriter(
+                        shard_dir / f"{p}.parquet",
+                        schema,
+                        compression=self.parquet_compression,
+                    )
         finally:
             for p, w in writers.items():
                 try:

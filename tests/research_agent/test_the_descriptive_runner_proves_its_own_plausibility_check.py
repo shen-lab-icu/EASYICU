@@ -188,9 +188,13 @@ def test_the_dispatch_site_actually_hands_over_the_scope():
 
     import inspect
 
-    from easyicu.research_agent.execution import phase as execution_phase
+    from easyicu.research_agent.execution import phase_support as execution_phase_support
 
-    tree = ast.parse(inspect.getsource(execution_phase))
+    tree = ast.parse(
+        inspect.getsource(
+            execution_phase_support._step_deterministic_absolute_risk_context_code
+        )
+    )
     calls = [
         node
         for node in ast.walk(tree)

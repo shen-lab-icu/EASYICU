@@ -23,7 +23,7 @@ import json
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Union
 
 from ..authority.secret_redaction import is_sensitive_key, string_contains_secret
 from ..planning.cohort_contract import CohortSelectionMode
@@ -368,6 +368,12 @@ class PipelineConfig:
     max_prompt_tokens_per_call: int = DEFAULT_MAX_PROMPT_TOKENS
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
+    # The legacy Planner emits the complete executable DAG in one response.
+    # Progressive v2 emits a compact scientific skeleton and lets the host
+    # compile exact products, levels, consumption contracts, and methods.
+    planner_strategy: Literal["monolithic_v1", "progressive_v2"] = (
+        "monolithic_v1"
+    )
     enable_deterministic_runner_repair: bool = True
     # --- literature search backends -------------------------------------
     enable_pubmed: bool = False
@@ -530,7 +536,7 @@ class PipelineConfig:
     # the writer via auto-generated hypertargets; our writer was being
     # given the narrower ``preferred_keys`` subset. Widening parity-
     # tests as the "primary" subset, plus a "secondary" block, is the
-    # Phase-1 step toward the more autonomous writer namespace.
+    # Phase-1 step toward the wider writer namespace.
     writer_digest_widened: bool = False
     writer_digest_secondary_cap_per_step: int = 20
 
@@ -602,6 +608,17 @@ class PipelineConfig:
                 "require_reportable_scientific_capability requires "
                 "require_human_plan_review so the pre-execution gate cannot be skipped"
             )
+        if self.planner_strategy not in {"monolithic_v1", "progressive_v2"}:
+            raise ValueError(
+                "planner_strategy must be 'monolithic_v1' or 'progressive_v2'"
+            )
+        from .profiles import require_profile_planner_strategy
+
+        require_profile_planner_strategy(
+            name=self.submission_profile_name,
+            version=self.submission_profile_version,
+            planner_strategy=self.planner_strategy,
+        )
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self.max_step_provider_calls,
             max_code_repair_attempts=self.max_code_repair_attempts,

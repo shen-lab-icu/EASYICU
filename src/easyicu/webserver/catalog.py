@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from easyicu.concept import catalog as cc
+from easyicu.webserver import entity_ids as entity_id_contract
 
 _ACTIVE_COVERAGE_FULL_READ_ROW_LIMIT = 1_000_000
 
@@ -281,9 +282,7 @@ def _file_concept_coverage(
 
     if "stay_id" not in frame.columns:
         return {}
-    from easyicu.webserver import dataio
-
-    norm_stays = frame["stay_id"].map(dataio._norm_id).astype(str)
+    norm_stays = frame["stay_id"].map(entity_id_contract.normalize_entity_id).astype(str)
     valid_frame = frame.assign(_easyicu_stay_id=norm_stays)
     valid_frame = valid_frame[valid_frame["_easyicu_stay_id"].astype(bool)]
     if stay_ids is not None:

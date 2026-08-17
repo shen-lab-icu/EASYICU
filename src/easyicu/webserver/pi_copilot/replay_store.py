@@ -13,6 +13,8 @@ from typing import Any, Dict, Mapping, Optional
 from .contracts import PiCopilotError, utc_now
 from .projections import project_pi_replay_event
 
+from easyicu.webserver import state_paths
+
 SCHEMA_VERSION = "easyicu.pi-conversation-replay/1"
 MAX_REPLAY_BYTES = 8 * 1024 * 1024
 MAX_TURNS = 256
@@ -34,7 +36,7 @@ class PiConversationReplayStore:
         self.root = (
             Path(root)
             if root is not None
-            else Path.home() / ".easyicu" / "pi-copilot-replay"
+            else state_paths.state_root() / "pi-copilot-replay"
         )
         self._lock = threading.RLock()
 

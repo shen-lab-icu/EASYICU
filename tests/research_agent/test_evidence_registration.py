@@ -254,7 +254,10 @@ def test_execute_phase_uses_extracted_registrar_after_success_gate() -> None:
     from easyicu.research_agent.execution import phase as pipeline_execute
 
     module_source = inspect.getsource(pipeline_execute)
-    execute_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    execute_source = (
+        inspect.getsource(pipeline_execute._execute_step)
+        + inspect.getsource(pipeline_execute._step_finalize_step)
+    )
 
     assert "def _filter_success_alias_bindings(" not in module_source
     assert "evidence.publish_step_success_aliases(" not in execute_source

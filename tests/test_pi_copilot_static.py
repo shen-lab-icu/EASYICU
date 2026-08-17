@@ -20,10 +20,15 @@ NODE_APP = STATIC.parent / "pi_copilot" / "node_app"
 def _read(relative: str) -> str:
     return (STATIC / relative).read_text(encoding="utf-8")
 
+# The screen modules destructure `esc` from window.EU_HTML at the top of their
+# IIFE, so these Node harnesses have to install the shared escaping owner into
+# the stub window before evaluating a module — the same order index.html uses.
+_ESCAPE_OWNER = _read("js/html-escape.js")
+
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260812-natural-chat-artifacts1" in index
+    assert "css/guided-pi.css?v=20260816-copilot-provider-owner1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260811-research-docs1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
@@ -34,12 +39,16 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
     assert "js/screens-guided-pi-preview.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-replay.js?v=20260815-mode-resume1" in index
-    assert "js/screens-guided-pi.js?v=20260815-mode-history1" in index
+    assert (
+        "js/screens-guided-pi-provider.js?v=20260816-copilot-provider-owner1"
+        in index
+    )
+    assert "js/screens-guided-pi.js?v=20260816-copilot-provider-owner1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260815-mode-history1" in index
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -54,6 +63,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-preview.js"
     )
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
+        "js/screens-guided-pi-provider.js"
+    )
+    assert index.index("js/screens-guided-pi-provider.js") < index.index(
         "js/screens-guided-pi.js"
     )
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
@@ -79,6 +91,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     guided = _read("js/screens-guided.js")
     projects_owner = _read("js/screens-guided-projects.js")
     pi_owner = _read("js/screens-guided-pi.js")
+    provider_owner = _read("js/screens-guided-pi-provider.js")
     api = _read("js/api.js")
     assert 'id="gdPiShell"' in guided
     assert 'id="gdLegacyShell"' in guided
@@ -127,16 +140,19 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'class="gd-rail"' in projects_owner
     assert 'class="gd-rail"' not in guided
     assert "guidedProjectRenderer('renderShellRail')" in guided
-    assert "data-gpi-provider-form" in pi_owner
-    assert "CLIProxyAPI / Local proxy" in pi_owner
-    assert "gpt-5.6-luna" in pi_owner
-    assert "gpt5.6 luna" not in pi_owner
-    assert "anthropic-messages" in pi_owner
-    assert "google-generative-ai" in pi_owner
+    assert "data-gpi-provider-form" in provider_owner
+    assert '<form class="gpi-provider-section"' not in pi_owner
+    assert "window.EU_GUIDED_PI_PROVIDER" in provider_owner
+    assert "CLIProxyAPI / Local proxy" in provider_owner
+    assert "gpt-5.6-luna" in provider_owner
+    assert "gpt5.6 luna" not in provider_owner
+    assert "anthropic-messages" in provider_owner
+    assert "google-generative-ai" in provider_owner
+    assert "data-ag-" not in provider_owner
     assert "static_preview_no_backend" in pi_owner
     assert "http://127.0.0.1:8765/#guided" in pi_owner
-    assert "gpi-model-options" in pi_owner
-    assert 'type="password"' in pi_owner
+    assert "gpi-model-options" in provider_owner
+    assert 'type="password"' in provider_owner
     assert "savePiCopilotProviderConfig" in pi_owner
     assert "provider_connection_unverified" in pi_owner
     assert "localStorage.setItem('easyicu_pi_api" not in pi_owner
@@ -191,10 +207,13 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
     assert "event.type === 'run_end'" in pi_owner
-    assert "workspace file contents may be sent to this configured service" in pi_owner
+    assert (
+        "workspace file contents may be sent to this configured service"
+        in provider_owner
+    )
     assert (
         "Do not place PHI, patient rows, credentials, or private clinical data"
-        in pi_owner
+        in provider_owner
     )
     assert "data-gpi-confirm-action" in pi_owner
     assert "data-gpi-demo" in pi_owner
@@ -414,6 +433,7 @@ def test_pi_frontend_javascript_parses() -> None:
     if node is None:
         pytest.skip("Node is not installed")
     for relative in (
+        "js/screens-guided-pi-provider.js",
         "js/screens-guided-pi.js",
         "js/screens-guided-pi-preview.js",
         "js/screens-guided-pi-workbench-preview.js",
@@ -461,6 +481,7 @@ def test_pi_project_restore_does_not_let_an_empty_session_hide_history() -> None
     source = _read("js/screens-guided-pi-replay.js")
     script = f"""
       global.window = {{}};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const choose = window.EU_GUIDED_PI_REPLAY.preferredSessionId;
       const sessions = [
@@ -595,6 +616,7 @@ def test_reviewer_demo_contract_completes_all_stages_without_upgrading_authority
     source = _read("js/screens-guided-pi-demo.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const demo = window.EU_GUIDED_PI_DEMO;
       const workflow = demo.workflow();
@@ -634,6 +656,7 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
     source = _read("js/screens-guided-pi-demo.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const demo = window.EU_GUIDED_PI_DEMO;
       const messages = demo.messages();
@@ -762,6 +785,7 @@ def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures()
           '<img src="data:image/png;base64,CCCC">',
         ].join(''),
       }});
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       window.EU_GUIDED_PI_DEMO.previewArtifact('figure_gallery.json').then(item => {{
         console.log(JSON.stringify({{
@@ -849,6 +873,7 @@ def test_literature_renderer_escapes_metadata_and_rejects_unsafe_links() -> None
     source = _read("js/screens-guided-pi-literature.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const html = window.EU_GUIDED_PI_LITERATURE.renderArtifact({{
         search: {{ search_conducted: true }},
@@ -885,6 +910,7 @@ def test_assistant_message_renderer_makes_https_citations_clickable_and_safe() -
     markdown = _read("js/screens-guided-pi-markdown.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({literature!r});
       eval({markdown!r});
       console.log(window.EU_GUIDED_PI_MARKDOWN.render(
@@ -956,6 +982,7 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
         }},
       }};
       global.document = {{ getElementById() {{ return null; }} }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const host = {{
         hidden: false,
