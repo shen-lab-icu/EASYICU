@@ -782,6 +782,21 @@ def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     assert "projectTranscriptMessage" in source
 
 
+def test_study_context_tool_schema_exposes_every_variance_owner_choice() -> None:
+    source = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    analysis_design = source.split(
+        "const analysisDesign = Type.Object({", 1
+    )[1].split("const sensitivitySpec", 1)[0]
+
+    for estimator in (
+        "model_based",
+        "heteroskedasticity_robust",
+        "cluster_robust",
+        "none_counts_only",
+    ):
+        assert f'Type.Literal("{estimator}")' in analysis_design
+
+
 def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
     node = shutil.which("node")
     if not node:
