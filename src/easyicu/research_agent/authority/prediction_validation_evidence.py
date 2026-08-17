@@ -1,0 +1,511 @@
+"""Analysis-only EvidenceStore bridge for prediction validation.
+
+This authority adapter accepts only a host-recomputed validation receipt and a
+closed set of current upstream EvidenceStore records.  It deliberately does
+not publish aliases or manuscript-bindable claims and is not imported by the
+Planner or execution selection path.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from ..contracts.prediction_validation import (
+    PredictionValidationAnalysisBundle,
+    PredictionValidationAnalysisRegistration,
+    PredictionValidationArtifactRole,
+    PredictionValidationError,
+    PredictionValidationFinding,
+    PredictionValidationHostValidationSeal,
+    PredictionValidationReason,
+    PredictionValidationReceipt,
+    PredictionValidationSpec,
+    PredictionValidationUpstreamLineage,
+    prediction_validation_analysis_bundle_sha256,
+    prediction_validation_receipt_sha256,
+    prediction_validation_runtime_identity_sha256,
+    prediction_validation_spec_sha256,
+    prediction_validation_upstream_lineage_sha256,
+)
+from .evidence_store import EvidenceStore
+from .runtime_artifacts import verified_run_evidence_path
+
+
+def _raise(
+    reason_code: PredictionValidationReason,
+    message: str,
+    **detail: Any,
+) -> None:
+    raise PredictionValidationError(reason_code, message, **detail)
+
+
+def _finding(
+    reason_code: PredictionValidationReason,
+    message: str,
+    **detail: Any,
+) -> PredictionValidationFinding:
+    return PredictionValidationFinding(
+        reason_code=reason_code,
+        message=message,
+        detail=detail,
+    )
+
+
+def _model_input(value: Any, model_type: type[Any]) -> Any:
+    return value.model_dump(mode="python") if isinstance(value, model_type) else value
+
+
+def _parse_registration_inputs(
+    *,
+    spec: PredictionValidationSpec | Mapping[str, Any],
+    receipt: PredictionValidationReceipt | Mapping[str, Any],
+    validation_seal: PredictionValidationHostValidationSeal | Mapping[str, Any],
+    lineage: PredictionValidationUpstreamLineage | Mapping[str, Any],
+) -> tuple[
+    PredictionValidationSpec,
+    PredictionValidationReceipt,
+    PredictionValidationHostValidationSeal,
+    PredictionValidationUpstreamLineage,
+]:
+    try:
+        parsed_spec = PredictionValidationSpec.model_validate(
+            _model_input(spec, PredictionValidationSpec)
+        )
+    except ValidationError as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.LINEAGE_SCHEMA_INVALID,
+            "prediction-validation specification is not schema-valid",
+            error_count=error.error_count(),
+        ) from error
+    try:
+        parsed_receipt = PredictionValidationReceipt.model_validate(
+            _model_input(receipt, PredictionValidationReceipt)
+        )
+    except ValidationError as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.RECEIPT_SCHEMA_INVALID,
+            "prediction-validation receipt is not schema-valid",
+            error_count=error.error_count(),
+        ) from error
+    try:
+        parsed_seal = PredictionValidationHostValidationSeal.model_validate(
+            _model_input(validation_seal, PredictionValidationHostValidationSeal)
+        )
+    except ValidationError as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.VALIDATION_SEAL_INVALID,
+            "prediction-validation host seal is not schema-valid",
+            error_count=error.error_count(),
+        ) from error
+    try:
+        parsed_lineage = PredictionValidationUpstreamLineage.model_validate(
+            _model_input(lineage, PredictionValidationUpstreamLineage)
+        )
+    except ValidationError as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.LINEAGE_SCHEMA_INVALID,
+            "prediction-validation upstream lineage is not schema-valid",
+            error_count=error.error_count(),
+        ) from error
+    return parsed_spec, parsed_receipt, parsed_seal, parsed_lineage
+
+
+def _validate_host_seal(
+    *,
+    receipt: PredictionValidationReceipt,
+    seal: PredictionValidationHostValidationSeal,
+    lineage: PredictionValidationUpstreamLineage,
+) -> None:
+    expected = {
+        "receipt_sha256": prediction_validation_receipt_sha256(receipt),
+        "source_artifact_sha256": receipt.source.source_artifact_sha256,
+        "contract_sha256": receipt.contract_sha256,
+        "result_sha256": receipt.result_sha256,
+        "runtime_identity_sha256": prediction_validation_runtime_identity_sha256(
+            lineage.runtime
+        ),
+    }
+    observed = {key: getattr(seal, key) for key in expected}
+    if observed != expected:
+        _raise(
+            PredictionValidationReason.VALIDATION_SEAL_INVALID,
+            "host validation seal does not bind this receipt and runtime",
+            expected=expected,
+            observed=observed,
+        )
+
+
+def _resolve_lineage_artifacts(
+    *,
+    evidence_store: EvidenceStore,
+    lineage: PredictionValidationUpstreamLineage,
+) -> dict[PredictionValidationArtifactRole, Path]:
+    resolved: dict[PredictionValidationArtifactRole, Path] = {}
+    for binding in lineage.artifacts:
+        record = evidence_store.get(binding.evidence_id)
+        if record is None or record.evidence_id != binding.evidence_id:
+            _raise(
+                PredictionValidationReason.LINEAGE_EVIDENCE_MISSING,
+                "one required upstream evidence record is missing",
+                role=binding.role,
+                evidence_id=binding.evidence_id,
+            )
+        observed = {
+            "sha256": record.sha256,
+            "kind": record.kind,
+            "produced_by_step": record.produced_by_step,
+            "run_id": str((record.metadata or {}).get("run_id") or ""),
+        }
+        expected = {
+            "sha256": binding.sha256,
+            "kind": binding.kind,
+            "produced_by_step": binding.produced_by_step,
+            "run_id": lineage.producer_run_id,
+        }
+        if observed != expected:
+            _raise(
+                PredictionValidationReason.LINEAGE_EVIDENCE_MISMATCH,
+                "one upstream evidence record does not match its lineage binding",
+                role=binding.role,
+                evidence_id=binding.evidence_id,
+                expected=expected,
+                observed=observed,
+            )
+        path = verified_run_evidence_path(evidence_store.root, record)
+        if path is None:
+            _raise(
+                PredictionValidationReason.LINEAGE_EVIDENCE_STALE,
+                "one upstream evidence artifact is missing or digest-stale",
+                role=binding.role,
+                evidence_id=binding.evidence_id,
+            )
+        resolved[binding.role] = path
+
+    runtime_path = resolved["runtime_receipt"]
+    try:
+        runtime_payload = runtime_path.read_text(encoding="utf-8")
+        observed_runtime = type(lineage.runtime).model_validate_json(runtime_payload)
+    except (OSError, UnicodeDecodeError, ValidationError) as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.LINEAGE_RUNTIME_MISMATCH,
+            "runtime receipt is not a valid runtime identity",
+            evidence_id=lineage.binding_for("runtime_receipt").evidence_id,
+        ) from error
+    if observed_runtime != lineage.runtime:
+        _raise(
+            PredictionValidationReason.LINEAGE_RUNTIME_MISMATCH,
+            "runtime receipt does not match the declared runtime identity",
+            expected=lineage.runtime.model_dump(mode="json"),
+            observed=observed_runtime.model_dump(mode="json"),
+        )
+    return resolved
+
+
+def _authority_ceiling_finding(
+    *,
+    evidence_store: EvidenceStore,
+    evidence_id: str,
+) -> PredictionValidationFinding | None:
+    published_aliases = sorted(
+        alias
+        for alias, target in evidence_store.aliases().items()
+        if target == evidence_id
+    )
+    numeric_claim_count = sum(
+        claim.evidence_id == evidence_id for claim in evidence_store.numeric_claims()
+    )
+    scientific_claim_count = sum(
+        claim.evidence_id == evidence_id for claim in evidence_store.scientific_claims()
+    )
+    if not published_aliases and not numeric_claim_count and not scientific_claim_count:
+        return None
+    return _finding(
+        PredictionValidationReason.AUTHORITY_CEILING_VIOLATION,
+        "analysis-only prediction validation acquired forbidden authority",
+        evidence_id=evidence_id,
+        published_aliases=published_aliases,
+        numeric_claim_count=numeric_claim_count,
+        scientific_claim_count=scientific_claim_count,
+    )
+
+
+def register_prediction_validation_analysis_artifact(
+    *,
+    evidence_store: EvidenceStore,
+    spec: PredictionValidationSpec | Mapping[str, Any],
+    receipt: PredictionValidationReceipt | Mapping[str, Any],
+    validation_seal: PredictionValidationHostValidationSeal | Mapping[str, Any],
+    lineage: PredictionValidationUpstreamLineage | Mapping[str, Any],
+    validation_step_id: str,
+) -> PredictionValidationAnalysisRegistration:
+    """Register one host-sealed prediction result without claim authority."""
+
+    step_id = str(validation_step_id or "").strip()
+    if not step_id or step_id != validation_step_id:
+        _raise(
+            PredictionValidationReason.LINEAGE_SCHEMA_INVALID,
+            "validation_step_id must be non-empty and whitespace-canonical",
+        )
+    parsed_spec, parsed_receipt, parsed_seal, parsed_lineage = (
+        _parse_registration_inputs(
+            spec=spec,
+            receipt=receipt,
+            validation_seal=validation_seal,
+            lineage=lineage,
+        )
+    )
+    if prediction_validation_spec_sha256(parsed_spec) != parsed_receipt.contract_sha256:
+        _raise(
+            PredictionValidationReason.LINEAGE_EVIDENCE_MISMATCH,
+            "specification digest does not match the validation receipt",
+        )
+    _validate_host_seal(
+        receipt=parsed_receipt,
+        seal=parsed_seal,
+        lineage=parsed_lineage,
+    )
+    _resolve_lineage_artifacts(
+        evidence_store=evidence_store,
+        lineage=parsed_lineage,
+    )
+    try:
+        bundle = PredictionValidationAnalysisBundle(
+            spec=parsed_spec,
+            receipt=parsed_receipt,
+            validation_seal=parsed_seal,
+            lineage=parsed_lineage,
+        )
+    except ValidationError as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.LINEAGE_EVIDENCE_MISMATCH,
+            "prediction-validation bundle bindings do not reconcile",
+            error_count=error.error_count(),
+        ) from error
+
+    bundle_sha256 = prediction_validation_analysis_bundle_sha256(bundle)
+    lineage_sha256 = prediction_validation_upstream_lineage_sha256(parsed_lineage)
+    evidence_id = f"prediction_validation_analysis_{bundle_sha256[:12]}"
+    upstream_ids = tuple(binding.evidence_id for binding in parsed_lineage.artifacts)
+    numeric_before = len(evidence_store.numeric_claims())
+    scientific_before = len(evidence_store.scientific_claims())
+    record = evidence_store.register_json(
+        kind="statistic",
+        description=(
+            "Experimental host-recomputed prediction validation bundle; "
+            "analysis-only and not manuscript-authoritative."
+        ),
+        payload=bundle.model_dump(mode="json"),
+        filename=f"{evidence_id}.json",
+        produced_by_step=step_id,
+        inputs=upstream_ids,
+        evidence_id=evidence_id,
+        producer="prediction_validation",
+        generation_mode="deterministic_skill",
+        metadata={
+            "schema_version": bundle.schema_version,
+            "capability_id": "prediction_validation",
+            "maturity": "experimental",
+            "claim_ceiling": bundle.policy.claim_ceiling,
+            "paper_authorization": bundle.policy.paper_authorization,
+            "planner_selection_authorized": (
+                bundle.policy.planner_selection_authorized
+            ),
+            "numeric_claim_registration_authorized": (
+                bundle.policy.numeric_claim_registration_authorized
+            ),
+            "scientific_claim_registration_authorized": (
+                bundle.policy.scientific_claim_registration_authorized
+            ),
+            "alias_publication_authorized": (
+                bundle.policy.alias_publication_authorized
+            ),
+            "bundle_sha256": bundle_sha256,
+            "lineage_sha256": lineage_sha256,
+            "receipt_sha256": parsed_seal.receipt_sha256,
+            "runtime_identity_sha256": parsed_seal.runtime_identity_sha256,
+            "contract_sha256": parsed_receipt.contract_sha256,
+            "result_sha256": parsed_receipt.result_sha256,
+            "run_id": parsed_lineage.producer_run_id,
+        },
+        publish_aliases=False,
+    )
+    numeric_delta = len(evidence_store.numeric_claims()) - numeric_before
+    scientific_delta = len(evidence_store.scientific_claims()) - scientific_before
+    if numeric_delta or scientific_delta:
+        _raise(
+            PredictionValidationReason.AUTHORITY_CEILING_VIOLATION,
+            "analysis-only registration changed a claim registry",
+            numeric_claim_count_delta=numeric_delta,
+            scientific_claim_count_delta=scientific_delta,
+        )
+    registration = PredictionValidationAnalysisRegistration(
+        evidence_id=record.evidence_id,
+        evidence_sha256=record.sha256,
+        bundle_sha256=bundle_sha256,
+        lineage_sha256=lineage_sha256,
+        producer_run_id=parsed_lineage.producer_run_id,
+        validation_step_id=step_id,
+        upstream_evidence_ids=upstream_ids,
+    )
+    findings = prediction_validation_analysis_registration_findings(
+        evidence_store=evidence_store,
+        registration=registration,
+    )
+    if findings:
+        finding = findings[0]
+        _raise(
+            finding.reason_code,
+            "registered analysis artifact failed authority validation",
+            finding=finding.model_dump(mode="json"),
+        )
+    return registration
+
+
+def prediction_validation_analysis_registration_findings(
+    *,
+    evidence_store: EvidenceStore,
+    registration: PredictionValidationAnalysisRegistration | Mapping[str, Any],
+) -> tuple[PredictionValidationFinding, ...]:
+    """Revalidate one registered bundle and its analysis-only authority ceiling."""
+
+    try:
+        parsed = PredictionValidationAnalysisRegistration.model_validate(
+            _model_input(registration, PredictionValidationAnalysisRegistration)
+        )
+    except ValidationError as error:
+        return (
+            _finding(
+                PredictionValidationReason.LINEAGE_SCHEMA_INVALID,
+                "analysis registration receipt is not schema-valid",
+                error_count=error.error_count(),
+            ),
+        )
+
+    ceiling_finding = _authority_ceiling_finding(
+        evidence_store=evidence_store,
+        evidence_id=parsed.evidence_id,
+    )
+    if ceiling_finding is not None:
+        return (ceiling_finding,)
+
+    record = evidence_store.get(parsed.evidence_id)
+    if record is None or record.evidence_id != parsed.evidence_id:
+        return (
+            _finding(
+                PredictionValidationReason.LINEAGE_EVIDENCE_MISSING,
+                "registered analysis evidence record is missing",
+                evidence_id=parsed.evidence_id,
+            ),
+        )
+    expected_metadata = {
+        "schema_version": "easyicu.prediction_validation_analysis_bundle/1",
+        "capability_id": "prediction_validation",
+        "maturity": "experimental",
+        "claim_ceiling": "analysis_only",
+        "paper_authorization": False,
+        "planner_selection_authorized": False,
+        "numeric_claim_registration_authorized": False,
+        "scientific_claim_registration_authorized": False,
+        "alias_publication_authorized": False,
+        "bundle_sha256": parsed.bundle_sha256,
+        "lineage_sha256": parsed.lineage_sha256,
+        "run_id": parsed.producer_run_id,
+        "aliases_published": False,
+    }
+    observed_metadata = {
+        key: (record.metadata or {}).get(key) for key in expected_metadata
+    }
+    if (
+        record.sha256 != parsed.evidence_sha256
+        or record.kind != "statistic"
+        or record.produced_by_step != parsed.validation_step_id
+        or record.producer != "prediction_validation"
+        or record.generation_mode != "deterministic_skill"
+        or tuple(record.inputs) != parsed.upstream_evidence_ids
+        or observed_metadata != expected_metadata
+    ):
+        return (
+            _finding(
+                PredictionValidationReason.LINEAGE_EVIDENCE_MISMATCH,
+                "registered analysis evidence metadata does not match its receipt",
+                evidence_id=parsed.evidence_id,
+            ),
+        )
+    bundle_path = verified_run_evidence_path(evidence_store.root, record)
+    if bundle_path is None:
+        return (
+            _finding(
+                PredictionValidationReason.LINEAGE_EVIDENCE_STALE,
+                "registered analysis bundle is missing or digest-stale",
+                evidence_id=parsed.evidence_id,
+            ),
+        )
+    try:
+        bundle = PredictionValidationAnalysisBundle.model_validate_json(
+            bundle_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, ValidationError) as error:
+        return (
+            _finding(
+                PredictionValidationReason.LINEAGE_EVIDENCE_MISMATCH,
+                "registered analysis bundle is not schema-valid",
+                evidence_id=parsed.evidence_id,
+                error_type=type(error).__name__,
+            ),
+        )
+    if (
+        prediction_validation_analysis_bundle_sha256(bundle) != parsed.bundle_sha256
+        or prediction_validation_upstream_lineage_sha256(bundle.lineage)
+        != parsed.lineage_sha256
+        or bundle.lineage.producer_run_id != parsed.producer_run_id
+    ):
+        return (
+            _finding(
+                PredictionValidationReason.LINEAGE_EVIDENCE_MISMATCH,
+                "registered analysis bundle digest coordinates do not match",
+                evidence_id=parsed.evidence_id,
+            ),
+        )
+    expected_bundle_metadata = {
+        "receipt_sha256": bundle.validation_seal.receipt_sha256,
+        "runtime_identity_sha256": (bundle.validation_seal.runtime_identity_sha256),
+        "contract_sha256": bundle.receipt.contract_sha256,
+        "result_sha256": bundle.receipt.result_sha256,
+    }
+    observed_bundle_metadata = {
+        key: (record.metadata or {}).get(key) for key in expected_bundle_metadata
+    }
+    if observed_bundle_metadata != expected_bundle_metadata:
+        return (
+            _finding(
+                PredictionValidationReason.LINEAGE_EVIDENCE_MISMATCH,
+                "registered analysis metadata drifted from its sealed bundle",
+                evidence_id=parsed.evidence_id,
+                expected=expected_bundle_metadata,
+                observed=observed_bundle_metadata,
+            ),
+        )
+    try:
+        _resolve_lineage_artifacts(
+            evidence_store=evidence_store,
+            lineage=bundle.lineage,
+        )
+    except PredictionValidationError as error:
+        return (
+            _finding(
+                error.reason_code,
+                "registered analysis bundle has invalid upstream authority",
+                **error.detail,
+            ),
+        )
+    return ()
+
+
+__all__ = [
+    "prediction_validation_analysis_registration_findings",
+    "register_prediction_validation_analysis_artifact",
+]

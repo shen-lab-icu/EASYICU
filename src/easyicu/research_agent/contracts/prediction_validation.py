@@ -39,6 +39,13 @@ class PredictionValidationReason(str, Enum):
     SOURCE_READ_FAILED = "prediction_validation_source_read_failed"
     RECEIPT_SCHEMA_INVALID = "prediction_validation_receipt_schema_invalid"
     RECEIPT_MISMATCH = "prediction_validation_receipt_mismatch"
+    LINEAGE_SCHEMA_INVALID = "prediction_validation_lineage_schema_invalid"
+    LINEAGE_EVIDENCE_MISSING = "prediction_validation_lineage_evidence_missing"
+    LINEAGE_EVIDENCE_MISMATCH = "prediction_validation_lineage_evidence_mismatch"
+    LINEAGE_EVIDENCE_STALE = "prediction_validation_lineage_evidence_stale"
+    LINEAGE_RUNTIME_MISMATCH = "prediction_validation_lineage_runtime_mismatch"
+    VALIDATION_SEAL_INVALID = "prediction_validation_host_seal_invalid"
+    AUTHORITY_CEILING_VIOLATION = "prediction_validation_authority_ceiling_violation"
 
 
 CalibrationStatus = Literal[
@@ -364,6 +371,295 @@ def prediction_validation_receipt_sha256(
     return canonical_sha256(parsed.model_dump(mode="json"))
 
 
+class _StrictFrozenModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class PredictionValidationRuntimeIdentity(_StrictFrozenModel):
+    """Exact clean code and runtime coordinates used for host recomputation."""
+
+    schema_version: Literal["easyicu.prediction_validation_runtime/1"] = (
+        "easyicu.prediction_validation_runtime/1"
+    )
+    git_commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    git_dirty: Literal[False] = False
+    source_tree_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    environment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_kind: Literal["container", "local_process"]
+    container_image_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    python_version: str = Field(min_length=1)
+    package_version: str = Field(min_length=1)
+
+    @field_validator("python_version", "package_version")
+    @classmethod
+    def _canonical_runtime_text(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("runtime version fields must be whitespace-canonical")
+        return value
+
+    @model_validator(mode="after")
+    def _runtime_kind_matches_image(self) -> "PredictionValidationRuntimeIdentity":
+        if self.runtime_kind == "container" and self.container_image_digest is None:
+            raise ValueError("container runtime requires an image digest")
+        if self.runtime_kind == "local_process" and self.container_image_digest:
+            raise ValueError("local_process runtime cannot claim a container image")
+        return self
+
+
+def prediction_validation_runtime_identity_sha256(
+    runtime: PredictionValidationRuntimeIdentity | Mapping[str, Any],
+) -> str:
+    """Return the canonical digest of one exact runtime identity."""
+
+    payload = (
+        runtime.model_dump(mode="python")
+        if isinstance(runtime, PredictionValidationRuntimeIdentity)
+        else runtime
+    )
+    parsed = PredictionValidationRuntimeIdentity.model_validate(payload)
+    return canonical_sha256(parsed.model_dump(mode="json"))
+
+
+PredictionValidationArtifactRole = Literal[
+    "prediction_table",
+    "cohort",
+    "split_assignment",
+    "model_artifact",
+    "code_snapshot",
+    "environment_lock",
+    "runtime_receipt",
+]
+
+_PREDICTION_LINEAGE_ROLE_KINDS = {
+    "prediction_table": "table",
+    "cohort": "table",
+    "split_assignment": "table",
+    "model_artifact": "code",
+    "code_snapshot": "code",
+    "environment_lock": "code",
+    "runtime_receipt": "log",
+}
+
+
+class PredictionValidationArtifactBinding(_StrictFrozenModel):
+    """Exact EvidenceStore record expected for one upstream lineage role."""
+
+    role: PredictionValidationArtifactRole
+    evidence_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    kind: Literal["table", "code", "log"]
+    produced_by_step: str = Field(min_length=1)
+
+    @field_validator("produced_by_step")
+    @classmethod
+    def _canonical_step_id(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("produced_by_step must be whitespace-canonical")
+        return value
+
+    @model_validator(mode="after")
+    def _role_uses_expected_kind(self) -> "PredictionValidationArtifactBinding":
+        if self.kind != _PREDICTION_LINEAGE_ROLE_KINDS[self.role]:
+            raise ValueError(
+                f"{self.role} requires kind {_PREDICTION_LINEAGE_ROLE_KINDS[self.role]}"
+            )
+        return self
+
+
+class PredictionValidationUpstreamLineage(_StrictFrozenModel):
+    """Closed, byte-bound lineage for an already-produced probability table."""
+
+    schema_version: Literal["easyicu.prediction_validation_lineage/1"] = (
+        "easyicu.prediction_validation_lineage/1"
+    )
+    producer_run_id: str = Field(min_length=1)
+    model_identifier: str = Field(min_length=1)
+    evaluation_split: str = Field(min_length=1)
+    split_policy: Literal["subject_disjoint"] = "subject_disjoint"
+    runtime: PredictionValidationRuntimeIdentity
+    artifacts: tuple[PredictionValidationArtifactBinding, ...] = Field(
+        min_length=7,
+        max_length=7,
+    )
+
+    @field_validator("producer_run_id", "model_identifier", "evaluation_split")
+    @classmethod
+    def _canonical_lineage_text(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("lineage text fields must be whitespace-canonical")
+        return value
+
+    @model_validator(mode="after")
+    def _lineage_roles_and_runtime_reconcile(
+        self,
+    ) -> "PredictionValidationUpstreamLineage":
+        by_role = {binding.role: binding for binding in self.artifacts}
+        if set(by_role) != set(_PREDICTION_LINEAGE_ROLE_KINDS):
+            raise ValueError("lineage requires each closed artifact role exactly once")
+        if tuple(binding.role for binding in self.artifacts) != tuple(
+            _PREDICTION_LINEAGE_ROLE_KINDS
+        ):
+            raise ValueError("lineage artifact roles must use canonical order")
+        evidence_ids = [binding.evidence_id for binding in self.artifacts]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("lineage evidence ids must be unique")
+        if by_role["code_snapshot"].sha256 != self.runtime.source_tree_sha256:
+            raise ValueError("code snapshot does not match runtime source tree")
+        if by_role["environment_lock"].sha256 != self.runtime.environment_sha256:
+            raise ValueError("environment lock does not match runtime identity")
+        return self
+
+    def binding_for(
+        self,
+        role: PredictionValidationArtifactRole,
+    ) -> PredictionValidationArtifactBinding:
+        return next(binding for binding in self.artifacts if binding.role == role)
+
+
+def prediction_validation_upstream_lineage_sha256(
+    lineage: PredictionValidationUpstreamLineage | Mapping[str, Any],
+) -> str:
+    """Return the canonical digest of one closed upstream lineage."""
+
+    payload = (
+        lineage.model_dump(mode="python")
+        if isinstance(lineage, PredictionValidationUpstreamLineage)
+        else lineage
+    )
+    parsed = PredictionValidationUpstreamLineage.model_validate(payload)
+    return canonical_sha256(parsed.model_dump(mode="json"))
+
+
+class PredictionValidationHostValidationSeal(_StrictFrozenModel):
+    """Host receipt that a candidate was fully recomputed at one runtime."""
+
+    schema_version: Literal["easyicu.prediction_validation_host_seal/1"] = (
+        "easyicu.prediction_validation_host_seal/1"
+    )
+    validator: Literal["easyicu.prediction_validation_receipt_recompute/1"] = (
+        "easyicu.prediction_validation_receipt_recompute/1"
+    )
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    finding_count: Literal[0] = 0
+    paper_authorization: Literal[False] = False
+
+
+class PredictionValidationAnalysisPolicy(_StrictFrozenModel):
+    """Closed authority ceiling for an incubator EvidenceStore artifact."""
+
+    schema_version: Literal["easyicu.prediction_validation_analysis_policy/1"] = (
+        "easyicu.prediction_validation_analysis_policy/1"
+    )
+    claim_ceiling: Literal["analysis_only"] = "analysis_only"
+    paper_authorization: Literal[False] = False
+    planner_selection_authorized: Literal[False] = False
+    numeric_claim_registration_authorized: Literal[False] = False
+    scientific_claim_registration_authorized: Literal[False] = False
+    alias_publication_authorized: Literal[False] = False
+
+
+class PredictionValidationAnalysisBundle(_StrictFrozenModel):
+    """Self-contained result, lineage, host seal, and authority ceiling."""
+
+    schema_version: Literal["easyicu.prediction_validation_analysis_bundle/1"] = (
+        "easyicu.prediction_validation_analysis_bundle/1"
+    )
+    spec: PredictionValidationSpec
+    receipt: PredictionValidationReceipt
+    validation_seal: PredictionValidationHostValidationSeal
+    lineage: PredictionValidationUpstreamLineage
+    policy: PredictionValidationAnalysisPolicy = Field(
+        default_factory=PredictionValidationAnalysisPolicy
+    )
+
+    @model_validator(mode="after")
+    def _bundle_bindings_reconcile(self) -> "PredictionValidationAnalysisBundle":
+        receipt_sha256 = prediction_validation_receipt_sha256(self.receipt)
+        runtime_sha256 = prediction_validation_runtime_identity_sha256(
+            self.lineage.runtime
+        )
+        if prediction_validation_spec_sha256(self.spec) != self.receipt.contract_sha256:
+            raise ValueError("bundle spec does not match receipt contract")
+        if self.validation_seal.receipt_sha256 != receipt_sha256:
+            raise ValueError("host seal does not match bundle receipt")
+        if (
+            self.validation_seal.source_artifact_sha256
+            != self.receipt.source.source_artifact_sha256
+            or self.validation_seal.contract_sha256 != self.receipt.contract_sha256
+            or self.validation_seal.result_sha256 != self.receipt.result_sha256
+            or self.validation_seal.runtime_identity_sha256 != runtime_sha256
+        ):
+            raise ValueError("host seal coordinates do not match bundle authority")
+        if (
+            self.lineage.binding_for("prediction_table").sha256
+            != self.receipt.source.source_artifact_sha256
+        ):
+            raise ValueError("prediction-table lineage does not match receipt source")
+        if self.lineage.evaluation_split != self.spec.evaluation_split:
+            raise ValueError("lineage evaluation split does not match the contract")
+        return self
+
+
+def prediction_validation_analysis_bundle_sha256(
+    bundle: PredictionValidationAnalysisBundle | Mapping[str, Any],
+) -> str:
+    """Return the canonical digest of one analysis-only evidence bundle."""
+
+    payload = (
+        bundle.model_dump(mode="python")
+        if isinstance(bundle, PredictionValidationAnalysisBundle)
+        else bundle
+    )
+    parsed = PredictionValidationAnalysisBundle.model_validate(payload)
+    return canonical_sha256(parsed.model_dump(mode="json"))
+
+
+class PredictionValidationAnalysisRegistration(_StrictFrozenModel):
+    """EvidenceStore registration receipt for one analysis-only bundle."""
+
+    schema_version: Literal["easyicu.prediction_validation_analysis_registration/1"] = (
+        "easyicu.prediction_validation_analysis_registration/1"
+    )
+    evidence_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bundle_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    lineage_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    producer_run_id: str = Field(min_length=1)
+    validation_step_id: str = Field(min_length=1)
+    upstream_evidence_ids: tuple[str, ...] = Field(min_length=7, max_length=7)
+    claim_ceiling: Literal["analysis_only"] = "analysis_only"
+    paper_authorization: Literal[False] = False
+    planner_selection_authorized: Literal[False] = False
+    aliases_published: Literal[False] = False
+    numeric_claim_count_delta: Literal[0] = 0
+    scientific_claim_count_delta: Literal[0] = 0
+
+    @field_validator("producer_run_id", "validation_step_id")
+    @classmethod
+    def _canonical_registration_text(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("registration text fields must be whitespace-canonical")
+        return value
+
+    @model_validator(mode="after")
+    def _registration_identity_reconciles(
+        self,
+    ) -> "PredictionValidationAnalysisRegistration":
+        expected = f"prediction_validation_analysis_{self.bundle_sha256[:12]}"
+        if self.evidence_id != expected:
+            raise ValueError("registration evidence id does not match bundle digest")
+        if len(self.upstream_evidence_ids) != len(set(self.upstream_evidence_ids)):
+            raise ValueError("registration upstream evidence ids must be unique")
+        return self
+
+
 class PredictionValidationFinding(BaseModel):
     """Structured result-validation finding owned by this boundary."""
 
@@ -379,7 +675,14 @@ class PredictionValidationFinding(BaseModel):
 
 __all__ = [
     "CalibrationStatus",
+    "PredictionValidationAnalysisBundle",
+    "PredictionValidationAnalysisPolicy",
+    "PredictionValidationAnalysisRegistration",
+    "PredictionValidationArtifactBinding",
+    "PredictionValidationArtifactRole",
     "PredictionCalibrationBin",
+    "PredictionValidationHostValidationSeal",
+    "PredictionValidationRuntimeIdentity",
     "PredictionThresholdMetric",
     "PredictionValidationError",
     "PredictionValidationFinding",
@@ -389,7 +692,11 @@ __all__ = [
     "PredictionValidationSourceBinding",
     "PredictionValidationSpec",
     "PredictionValidationSummary",
+    "PredictionValidationUpstreamLineage",
+    "prediction_validation_analysis_bundle_sha256",
     "prediction_validation_receipt_sha256",
     "prediction_validation_result_sha256",
+    "prediction_validation_runtime_identity_sha256",
     "prediction_validation_spec_sha256",
+    "prediction_validation_upstream_lineage_sha256",
 ]

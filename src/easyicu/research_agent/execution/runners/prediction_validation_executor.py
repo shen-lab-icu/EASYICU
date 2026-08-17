@@ -20,13 +20,16 @@ from pydantic import ValidationError
 from ...contracts.prediction_validation import (
     PredictionValidationFinding,
     PredictionValidationError,
+    PredictionValidationHostValidationSeal,
     PredictionValidationReason,
     PredictionValidationReceipt,
     PredictionValidationResult,
+    PredictionValidationRuntimeIdentity,
     PredictionValidationSourceBinding,
     PredictionValidationSpec,
     prediction_validation_receipt_sha256,
     prediction_validation_result_sha256,
+    prediction_validation_runtime_identity_sha256,
     prediction_validation_spec_sha256,
 )
 from ...canonical_json import sha256_bytes
@@ -339,9 +342,65 @@ def prediction_validation_receipt_findings(
     )
 
 
+def seal_prediction_validation_receipt(
+    *,
+    source_path: Path,
+    expected_source_sha256: str,
+    spec: PredictionValidationSpec | Mapping[str, Any],
+    candidate: PredictionValidationReceipt | Mapping[str, Any],
+    runtime_identity: PredictionValidationRuntimeIdentity | Mapping[str, Any],
+) -> PredictionValidationHostValidationSeal:
+    """Seal a receipt only after exact-source host recomputation succeeds."""
+
+    findings = prediction_validation_receipt_findings(
+        source_path=source_path,
+        expected_source_sha256=expected_source_sha256,
+        spec=spec,
+        candidate=candidate,
+    )
+    if findings:
+        finding = findings[0]
+        _raise(
+            finding.reason_code,
+            "candidate receipt cannot receive a host validation seal",
+            finding=finding.model_dump(mode="json"),
+        )
+    candidate_input = (
+        candidate.model_dump(mode="python")
+        if isinstance(candidate, PredictionValidationReceipt)
+        else candidate
+    )
+    parsed_candidate = PredictionValidationReceipt.model_validate(candidate_input)
+    try:
+        runtime_input = (
+            runtime_identity.model_dump(mode="python")
+            if isinstance(runtime_identity, PredictionValidationRuntimeIdentity)
+            else runtime_identity
+        )
+        parsed_runtime = PredictionValidationRuntimeIdentity.model_validate(
+            runtime_input
+        )
+    except ValidationError as error:
+        raise PredictionValidationError(
+            PredictionValidationReason.LINEAGE_SCHEMA_INVALID,
+            "host runtime identity is not schema-valid",
+            error_count=error.error_count(),
+        ) from error
+    return PredictionValidationHostValidationSeal(
+        receipt_sha256=prediction_validation_receipt_sha256(parsed_candidate),
+        source_artifact_sha256=parsed_candidate.source.source_artifact_sha256,
+        contract_sha256=parsed_candidate.contract_sha256,
+        result_sha256=parsed_candidate.result_sha256,
+        runtime_identity_sha256=prediction_validation_runtime_identity_sha256(
+            parsed_runtime
+        ),
+    )
+
+
 __all__ = [
     "prediction_validation_receipt_findings",
     "prediction_validation_result_findings",
     "run_prediction_validation",
     "run_prediction_validation_csv",
+    "seal_prediction_validation_receipt",
 ]
