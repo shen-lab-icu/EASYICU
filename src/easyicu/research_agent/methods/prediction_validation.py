@@ -130,6 +130,15 @@ def _evaluation_arrays(
         )
 
     raw_outcomes = evaluation[spec.outcome_column]
+    if pd.api.types.is_bool_dtype(
+        raw_outcomes.dtype
+    ) or not pd.api.types.is_numeric_dtype(raw_outcomes.dtype):
+        _raise(
+            PredictionValidationReason.OUTCOME_INVALID,
+            "evaluation outcomes must use a numeric, non-boolean dtype",
+            column=spec.outcome_column,
+            observed_dtype=str(raw_outcomes.dtype),
+        )
     outcomes = pd.to_numeric(raw_outcomes, errors="coerce")
     invalid_outcomes = outcomes.isna() | ~outcomes.isin((0, 1))
     if bool(invalid_outcomes.any()):
@@ -140,6 +149,15 @@ def _evaluation_arrays(
             row_count=int(invalid_outcomes.sum()),
         )
     raw_probabilities = evaluation[spec.probability_column]
+    if pd.api.types.is_bool_dtype(
+        raw_probabilities.dtype
+    ) or not pd.api.types.is_numeric_dtype(raw_probabilities.dtype):
+        _raise(
+            PredictionValidationReason.PROBABILITY_INVALID,
+            "evaluation probabilities must use a numeric, non-boolean dtype",
+            column=spec.probability_column,
+            observed_dtype=str(raw_probabilities.dtype),
+        )
     probabilities = pd.to_numeric(raw_probabilities, errors="coerce")
     invalid_probabilities = (
         probabilities.isna()

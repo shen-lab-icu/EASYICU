@@ -135,7 +135,12 @@ def prediction_validation_spec_sha256(
 ) -> str:
     """Return the canonical digest of the exact evaluation declaration."""
 
-    parsed = PredictionValidationSpec.model_validate(spec)
+    payload = (
+        spec.model_dump(mode="python")
+        if isinstance(spec, PredictionValidationSpec)
+        else spec
+    )
+    parsed = PredictionValidationSpec.model_validate(payload)
     return canonical_sha256(parsed.model_dump(mode="json"))
 
 
@@ -205,7 +210,7 @@ class PredictionCalibrationBin(BaseModel):
 class PredictionThresholdMetric(BaseModel):
     """Confusion counts and operating characteristics at one threshold."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     threshold: float = Field(gt=0.0, lt=1.0)
     n: int = Field(ge=1)
@@ -253,7 +258,12 @@ def prediction_validation_result_sha256(
 ) -> str:
     """Return the canonical digest of one normalized result."""
 
-    parsed = PredictionValidationResult.model_validate(result)
+    payload = (
+        result.model_dump(mode="python")
+        if isinstance(result, PredictionValidationResult)
+        else result
+    )
+    parsed = PredictionValidationResult.model_validate(payload)
     return canonical_sha256(parsed.model_dump(mode="json"))
 
 
@@ -267,6 +277,9 @@ class PredictionValidationSourceBinding(BaseModel):
     )
     source_format: Literal["csv_utf8"] = "csv_utf8"
     parser: Literal["pandas.read_csv"] = "pandas.read_csv"
+    parser_profile: Literal["easyicu.prediction_validation_csv_strict/1"] = (
+        "easyicu.prediction_validation_csv_strict/1"
+    )
     parser_version: str
     source_artifact_name: str
     source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -298,9 +311,13 @@ class PredictionValidationSourceBinding(BaseModel):
     @field_validator("source_columns")
     @classmethod
     def _closed_source_columns(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        parsed = tuple(str(value or "").strip() for value in values)
-        if any(not value for value in parsed) or len(parsed) != len(set(parsed)):
-            raise ValueError("source_columns must be non-empty and unique")
+        parsed = tuple(str(value or "") for value in values)
+        if any(not value or value != value.strip() for value in parsed) or len(
+            parsed
+        ) != len(set(parsed)):
+            raise ValueError(
+                "source_columns must be non-empty, whitespace-canonical and unique"
+            )
         return parsed
 
 
@@ -338,7 +355,12 @@ def prediction_validation_receipt_sha256(
 ) -> str:
     """Return the canonical digest of one normalized provenance receipt."""
 
-    parsed = PredictionValidationReceipt.model_validate(receipt)
+    payload = (
+        receipt.model_dump(mode="python")
+        if isinstance(receipt, PredictionValidationReceipt)
+        else receipt
+    )
+    parsed = PredictionValidationReceipt.model_validate(payload)
     return canonical_sha256(parsed.model_dump(mode="json"))
 
 

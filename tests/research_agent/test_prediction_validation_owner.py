@@ -12,6 +12,7 @@ from easyicu.research_agent.contracts.prediction_validation import (
     PredictionValidationError,
     PredictionValidationReason,
     PredictionValidationSpec,
+    prediction_validation_result_sha256,
     prediction_validation_spec_sha256,
 )
 from easyicu.research_agent.execution.runners.prediction_validation_executor import (
@@ -146,6 +147,23 @@ def test_result_validator_rejects_invalid_result_schema() -> None:
     assert findings[0].reason_code is PredictionValidationReason.RESULT_SCHEMA_INVALID
 
 
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
+def test_result_validator_rejects_nonfinite_optional_metrics(
+    nonfinite: float,
+) -> None:
+    candidate = run_prediction_validation(_oracle_frame(), _spec()).model_dump(
+        mode="python"
+    )
+    candidate["threshold_metrics"][0]["positive_predictive_value"] = nonfinite
+
+    findings = prediction_validation_result_findings(
+        _oracle_frame(), _spec(), candidate
+    )
+
+    assert len(findings) == 1
+    assert findings[0].reason_code is PredictionValidationReason.RESULT_SCHEMA_INVALID
+
+
 def test_subject_split_leakage_fails_before_metric_computation() -> None:
     frame = _oracle_frame()
     frame.loc[0, "subject_id"] = frame.loc[2, "subject_id"]
@@ -215,6 +233,49 @@ def test_invalid_inputs_fail_with_owner_diagnostic(
 
 
 @pytest.mark.parametrize(
+    ("outcomes", "probabilities", "reason"),
+    [
+        (
+            [False, True, False, True],
+            [0.1, 0.4, 0.6, 0.9],
+            PredictionValidationReason.OUTCOME_INVALID,
+        ),
+        (
+            ["0", "1", "0", "1"],
+            [0.1, 0.4, 0.6, 0.9],
+            PredictionValidationReason.OUTCOME_INVALID,
+        ),
+        (
+            [0, 1, 0, 1],
+            [False, True, False, True],
+            PredictionValidationReason.PROBABILITY_INVALID,
+        ),
+        (
+            [0, 1, 0, 1],
+            ["0.1", "0.4", "0.6", "0.9"],
+            PredictionValidationReason.PROBABILITY_INVALID,
+        ),
+    ],
+)
+def test_numeric_owner_rejects_implicit_type_coercion(
+    outcomes: list[object],
+    probabilities: list[object],
+    reason: PredictionValidationReason,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "row_id": range(4),
+            "subject_id": [f"subject-{index}" for index in range(4)],
+            "split": ["test"] * 4,
+            "outcome": outcomes,
+            "probability": probabilities,
+        }
+    )
+
+    _assert_reason(frame, reason)
+
+
+@pytest.mark.parametrize(
     ("probabilities", "expected_status", "expected_clipped_n"),
     [
         (
@@ -261,6 +322,19 @@ def test_spec_digest_binds_thresholds_and_spec_is_immutable() -> None:
     ) != prediction_validation_spec_sha256(second)
     with pytest.raises(ValidationError):
         first.evaluation_split = "validation"  # type: ignore[misc]
+    invalid_spec = first.model_copy(update={"thresholds": (2.0,)})
+    with pytest.raises(ValidationError):
+        prediction_validation_spec_sha256(invalid_spec)
+
+
+def test_result_digest_revalidates_model_copies() -> None:
+    result = run_prediction_validation(_oracle_frame(), _spec())
+    invalid_result = result.model_copy(
+        update={"summary": result.summary.model_copy(update={"auroc": 2.0})}
+    )
+
+    with pytest.raises(ValidationError):
+        prediction_validation_result_sha256(invalid_result)
 
 
 def test_experimental_runner_is_not_wired_into_production_selection() -> None:
