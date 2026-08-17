@@ -48,6 +48,7 @@ from .projections import (
     reject_sensitive_message,
     stable_code,
 )
+from .run_authority import list_bound_run_history
 from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
@@ -268,11 +269,16 @@ def _bound_context(binding: AuthorityBinding) -> Optional[Dict[str, Any]]:
 
 
 def _run_rows(context: ToolExecutionContext) -> Sequence[Dict[str, Any]]:
-    history = agent_runs.list_run_history(
-        study_id=context.session.binding.study_context_id,
+    project_root = (
+        context.workspace.project_root(context.session.project_id)
+        if context.session.project_id and context.workspace is not None
+        else None
+    )
+    return list_bound_run_history(
+        study_context_id=context.session.binding.study_context_id,
+        project_root=project_root,
         limit=50,
     )
-    return [row for row in (history.get("runs") or []) if isinstance(row, dict)]
 
 
 def _select_run(
@@ -2811,6 +2817,37 @@ def _start_extraction(
     return result
 
 
+def _account_environment_for_research_provider(
+    context: ToolExecutionContext,
+) -> tuple[Optional[Mapping[str, str]], Optional[Dict[str, Any]]]:
+    """Resolve the immutable Codex account bound to this Copilot session."""
+
+    research_provider = context.session.research_provider
+    if research_provider.provider != "codex":
+        return None, None
+    from easyicu.webserver import codex_account_sessions
+
+    try:
+        return (
+            codex_account_sessions.environment_for_binding(
+                str(research_provider.account_session_sha256 or ""),
+                model=research_provider.model,
+            ),
+            None,
+        )
+    except codex_account_sessions.CodexAccountSessionError as exc:
+        return None, _result(
+            context,
+            status="blocked",
+            code=exc.code,
+            summary=(
+                "The Codex account bound to this conversation is no longer "
+                "available; start a new Copilot session after signing in again."
+            ),
+            owner="easyicu.webserver.codex_account_sessions",
+        )
+
+
 def _run(
     context: ToolExecutionContext,
     params: Mapping[str, Any],
@@ -2897,22 +2934,12 @@ def _run(
             owner="easyicu.webserver.study_contexts",
         )
     account_environment = None
-    if run_type == "full" and provider == "codex":
-        from easyicu.webserver import codex_account_sessions
-
-        try:
-            account_environment = codex_account_sessions.environment_for_binding(
-                str(research_provider.account_session_sha256 or ""),
-                model=research_provider.model,
-            )
-        except codex_account_sessions.CodexAccountSessionError as exc:
-            return _result(
-                context,
-                status="blocked",
-                code=exc.code,
-                summary="The Codex account bound to this conversation is no longer available; start a new Copilot session after signing in again.",
-                owner="easyicu.webserver.codex_account_sessions",
-            )
+    if run_type == "full":
+        account_environment, account_error = (
+            _account_environment_for_research_provider(context)
+        )
+        if account_error is not None:
+            return account_error
     # Import lazily to keep the route-composition module out of this package's
     # import graph. The function remains the one existing run submission path;
     # this adapter does not reconstruct its validation or JobManager behavior.
@@ -3052,10 +3079,15 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
                 summary="The pending plan and its bound research project are required before review can resume.",
                 owner="easyicu.research_agent.pipeline",
             )
-        from easyicu.webserver.routes.agent import jobs_agent_run_review
+        account_environment, account_error = (
+            _account_environment_for_research_provider(context)
+        )
+        if account_error is not None:
+            return account_error
+        from easyicu.webserver.routes.agent import submit_agent_run_review
 
         try:
-            submitted = jobs_agent_run_review(
+            submitted = submit_agent_run_review(
                 {
                     "study_context_id": study["id"],
                     "run_id": run_id,
@@ -3063,7 +3095,8 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
                     "reviewer": params.get("reviewer") or "local_web_reviewer",
                     "note": params.get("note") or "",
                     "external_llm_opt_in": True,
-                }
+                },
+                account_environment=account_environment,
             )
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}

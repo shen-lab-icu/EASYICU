@@ -579,6 +579,10 @@ def test_e1_20260817_profiles_additively_bind_corrected_sofa2_dictionaries() -> 
     assert public_profile.planner_strategy == "progressive_v2"
     assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260817"
     assert reviewed_profile.planner_only is False
+    assert reviewed_profile.planner_strategy == "progressive_v2"
+    assert reviewed_profile.pipeline_options()["planner_strategy"] == (
+        "progressive_v2"
+    )
     for profile in (public_profile, reviewed_profile):
         assert profile.expected_concept_dict_sha == fingerprint.concept_dict_sha
         assert profile.expected_sofa2_dict_sha == fingerprint.sofa2_dict_sha

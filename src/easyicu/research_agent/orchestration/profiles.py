@@ -438,6 +438,7 @@ E1_REVIEWED_DEMO_2026_08_17 = SubmissionProfile(
     enable_deterministic_planner_fallback=False,
     requires_real_provider=True,
     planner_only=False,
+    planner_strategy="progressive_v2",
 )
 
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(

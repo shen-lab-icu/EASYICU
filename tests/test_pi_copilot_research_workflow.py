@@ -3473,15 +3473,22 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     submitted: list[dict[str, Any]] = []
+    account_environments: list[dict[str, str] | None] = []
     monkeypatch.setattr(
         tool_module,
         "_bound_context",
         lambda binding: _complete_study(),
     )
     from easyicu.webserver.routes import agent as agent_route
+    from easyicu.webserver import codex_account_sessions
 
-    def submit(body: dict[str, Any]) -> dict[str, Any]:
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         submitted.append(dict(body))
+        account_environments.append(account_environment)
         return {
             "job_id": "resume-job-1",
             "kind": "agent-run",
@@ -3492,11 +3499,27 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             "study_context_revision": 5,
         }
 
-    monkeypatch.setattr(agent_route, "jobs_agent_run_review", submit)
+    monkeypatch.setattr(agent_route, "submit_agent_run_review", submit)
+    monkeypatch.setattr(
+        codex_account_sessions,
+        "environment_for_binding",
+        lambda binding, *, model: {
+            "CODEX_HOME": "/isolated/account",
+            "EASYICU_CODEX_MODEL": model,
+            "EASYICU_CODEX_ACCOUNT_SESSION_SHA256": binding,
+        },
+    )
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-review",
             external_llm_opt_in=True,
+            research_provider=ResearchProviderBinding(
+                provider="codex",
+                credential_source="codex_user_auth",
+                authentication_mode="chatgpt_account",
+                model="gpt-5.6-luna",
+                account_session_sha256="a" * 64,
+            ),
             binding=AuthorityBinding(
                 study_context_id="study-workflow",
                 study_revision=4,
@@ -3521,6 +3544,13 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             "reviewer": "local reviewer",
             "note": "",
             "external_llm_opt_in": True,
+        }
+    ]
+    assert account_environments == [
+        {
+            "CODEX_HOME": "/isolated/account",
+            "EASYICU_CODEX_MODEL": "gpt-5.6-luna",
+            "EASYICU_CODEX_ACCOUNT_SESSION_SHA256": "a" * 64,
         }
     ]
     with pytest.raises(PiCopilotError) as stale:
@@ -3747,7 +3777,9 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].submission_profile_name == expected_profile_name
     assert calls["config"].submission_profile_version == expected_profile_version
     assert calls["config"].planner_strategy == (
-        "progressive_v2" if budget_mode is None else "monolithic_v1"
+        "progressive_v2"
+        if budget_mode in {None, "full_reviewed"}
+        else "monolithic_v1"
     )
     assert calls["config"].development_progressive_resume_checkpoint_path == (
         expected_resume_path
@@ -4350,6 +4382,25 @@ def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
 
     assert getattr(raised.value, "detail") == {
         "error": "research_pipeline_budget_mode_server_owned"
+    }
+
+
+def test_pipeline_development_execution_mode_is_server_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_route
+
+    monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
+    assert agent_route._server_research_pipeline_budget_mode() == "planner_canary"
+
+    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "1")
+    assert agent_route._server_research_pipeline_budget_mode() == "full_reviewed"
+
+    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "true")
+    with pytest.raises(Exception) as raised:
+        agent_route._server_research_pipeline_budget_mode()
+    assert getattr(raised.value, "detail") == {
+        "error": "research_pipeline_development_mode_invalid"
     }
 
 

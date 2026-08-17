@@ -657,6 +657,54 @@ def test_session_binding_tracks_the_current_run(
     }
 
 
+def test_session_binding_prefers_newer_pipeline_run_in_project_workspace(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str | None] = []
+
+    def history(
+        *,
+        study_id: str,
+        project_root: str | None = None,
+        limit: int,
+    ) -> dict[str, Any]:
+        calls.append(project_root)
+        if project_root is not None:
+            return {
+                "runs": [
+                    {
+                        "run_id": "run-pipeline-new",
+                        "updated_at_epoch": 200.0,
+                    }
+                ]
+            }
+        return {
+            "runs": [
+                {
+                    "run_id": "run-native-old",
+                    "updated_at_epoch": 100.0,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(service_module.agent_runs, "list_run_history", history)
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+
+    created = service.create_session(
+        project_id="project-pipeline-run",
+        external_llm_opt_in=True,
+    )
+
+    assert created["session"]["binding"]["run_id"] == "run-pipeline-new"
+    assert calls[0] is None
+    assert any(call is not None for call in calls)
+
+
 def test_implicit_run_inspection_uses_latest_history_not_stale_session_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
