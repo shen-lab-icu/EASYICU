@@ -81,6 +81,8 @@ from .schema import (
     ArtifactConsumptionContract,
     ClusterSelectionManifest,
     ResearchContext,
+    RobustnessReplayProduct,
+    RobustnessReplaySpec,
     ValidationFinding,
     VariableRole,
 )
@@ -123,6 +125,66 @@ def _migrate_render_step_contract(
 
 
 _REPORT_INPUT_PRODUCT_KINDS = frozenset({"manifest", "statistic", "table"})
+
+# The article contract may add these conventional product identities to an
+# already-declared locked-grid replay.  The value is the deterministic replay
+# output each identity names.  Keeping both halves together lets the mutator
+# update ``expected_outputs`` and ``robustness_replay_spec`` atomically instead
+# of leaving execution to guess what a newly added product means.
+_ROBUSTNESS_CONTRACT_OUTPUT_BINDINGS: tuple[tuple[str, str], ...] = (
+    ("statistic:primary_or", "primary_effect"),
+    ("statistic:complete_case_n", "complete_case_n"),
+    ("table:robustness_summary", "robustness_summary"),
+    ("log:missingness_strategy_notes", "missingness_strategy_notes"),
+)
+_ROBUSTNESS_CONTRACT_OUTPUT_BY_PRODUCT = dict(
+    _ROBUSTNESS_CONTRACT_OUTPUT_BINDINGS
+)
+
+
+def _with_family_contract_outputs(
+    step: AnalysisStep,
+    *,
+    family: str,
+    expected_outputs: Sequence[str],
+) -> AnalysisStep:
+    """Add host-required outputs without desynchronising a typed owner spec."""
+
+    output_list = list(expected_outputs)
+    replay_spec = step.robustness_replay_spec
+    if family != "robustness" or replay_spec is None:
+        return step.model_copy(update={"expected_outputs": output_list})
+
+    products = list(replay_spec.products)
+    declared_product_ids = {item.product_id for item in products}
+    for product in output_list:
+        replay_output = _ROBUSTNESS_CONTRACT_OUTPUT_BY_PRODUCT.get(product)
+        if replay_output is None:
+            continue
+        product_id = product.split(":", 1)[1]
+        if product_id in declared_product_ids:
+            continue
+        products.append(
+            RobustnessReplayProduct(
+                product_id=product_id,
+                output=replay_output,
+            )
+        )
+        declared_product_ids.add(product_id)
+
+    updated_spec = RobustnessReplaySpec.model_validate(
+        {
+            **replay_spec.model_dump(mode="python"),
+            "products": [item.model_dump(mode="python") for item in products],
+        }
+    )
+    return AnalysisStep.model_validate(
+        {
+            **step.model_dump(mode="python"),
+            "expected_outputs": output_list,
+            "robustness_replay_spec": updated_spec.model_dump(mode="python"),
+        }
+    )
 
 
 def _augment_report_typed_product_inputs(
@@ -1164,11 +1226,12 @@ def _enforce_advanced_plan_contract(
         ]
     else:
         required_outputs = [
-            "statistic:primary_or",
-            "statistic:complete_case_n",
-            "table:robustness_summary",
+            *(
+                product
+                for product, _output in _ROBUSTNESS_CONTRACT_OUTPUT_BINDINGS[:3]
+            ),
             "figure:robustness_plot",
-            "log:missingness_strategy_notes",
+            _ROBUSTNESS_CONTRACT_OUTPUT_BINDINGS[3][0],
         ]
 
     if family == "robustness" and _dedicated_renderer_consumes_typed_source(
@@ -1238,14 +1301,15 @@ def _enforce_advanced_plan_contract(
         new_steps: List[AnalysisStep] = []
         for step in plan.steps:
             if step.step_id == contract_step.step_id:
+                expected_outputs = [
+                    *(step.expected_outputs or []),
+                    *missing_outputs,
+                ]
                 new_steps.append(
-                    step.model_copy(
-                        update={
-                            "expected_outputs": [
-                                *(step.expected_outputs or []),
-                                *missing_outputs,
-                            ],
-                        }
+                    _with_family_contract_outputs(
+                        step,
+                        family=family,
+                        expected_outputs=expected_outputs,
                     )
                 )
             else:
@@ -1283,13 +1347,13 @@ def _enforce_advanced_plan_contract(
         owner_index = relevant_indexes[0]
         new_steps = list(plan.steps)
         owner = new_steps[owner_index]
-        new_steps[owner_index] = owner.model_copy(
-            update={
-                "expected_outputs": [
-                    *(owner.expected_outputs or []),
-                    *missing_across_family,
-                ]
-            }
+        new_steps[owner_index] = _with_family_contract_outputs(
+            owner,
+            family=family,
+            expected_outputs=[
+                *(owner.expected_outputs or []),
+                *missing_across_family,
+            ],
         )
         revised = plan.model_copy(
             update={"steps": new_steps, "revision": max(1, plan.revision) + 1}
@@ -1322,7 +1386,11 @@ def _enforce_advanced_plan_contract(
     # Add products only. Never relabel KMeans as generic clustering, PSM as
     # generic causal inference, or a specific Cox/mixed-effects method as a broad
     # family recipe.
-    contract_step = current.model_copy(update={"expected_outputs": combined_outputs})
+    contract_step = _with_family_contract_outputs(
+        current,
+        family=family,
+        expected_outputs=combined_outputs,
+    )
     new_steps: List[AnalysisStep] = []
     inserted = False
     relevant_set = set(relevant_indexes)

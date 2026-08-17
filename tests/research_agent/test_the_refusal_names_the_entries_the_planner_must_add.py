@@ -38,12 +38,24 @@ import pytest
 
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_replay_declaration_verdict,
+    robustness_replay_spec_is_emittable,
 )
 from easyicu.research_agent.execution.owner_declaration import (
     _declared_choice,
     _prohibited_choices,
 )
-from easyicu.research_agent.schema import AnalysisStep, RobustnessReplaySpec
+from easyicu.research_agent.plan_utils import (
+    _enforce_advanced_plan_contract,
+    _split_table_and_figure_outputs_in_plan,
+)
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    CohortDescriptor,
+    ResearchContext,
+    RobustnessReplaySpec,
+    UserPreferences,
+)
 
 
 def _step(outputs, *, products) -> AnalysisStep:
@@ -115,6 +127,48 @@ def test_a_fully_backed_spec_reports_no_gap_at_all() -> None:
         )
     )
     assert not verdict.missing_declarations
+
+
+def test_host_output_augmentation_updates_the_existing_replay_spec_atomically() -> None:
+    step = _step(
+        ["table:robustness_matrix", "table:robustness_summary"],
+        products=_BACKED,
+    )
+    plan = AnalysisPlan(
+        research_question="Replay the prespecified robustness grid.",
+        analysis_type="association_study",
+        steps=[step],
+    )
+    context = ResearchContext(
+        research_question=plan.research_question,
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_stays=100,
+        ),
+        variables=[],
+        user_preferences=UserPreferences(inferred_analysis_family="robustness"),
+    )
+
+    revised, _findings = _enforce_advanced_plan_contract(
+        plan=plan,
+        context=context,
+    )
+
+    revised_step = revised.steps[0]
+    assert revised_step.robustness_replay_spec is not None
+    assert {
+        item.product_id: item.output
+        for item in revised_step.robustness_replay_spec.products
+    } == {
+        "robustness_matrix": "robustness_matrix",
+        "robustness_summary": "robustness_summary",
+        "primary_or": "primary_effect",
+        "complete_case_n": "complete_case_n",
+        "missingness_strategy_notes": "missingness_strategy_notes",
+    }
+    split, _split_findings = _split_table_and_figure_outputs_in_plan(revised)
+    assert robustness_replay_spec_is_emittable(split.steps[0])
 
 
 def test_naming_products_cannot_unforbid_a_scientific_choice() -> None:
