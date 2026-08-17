@@ -45,6 +45,7 @@ class _FakeRuntime:
     auth_url = "https://auth.openai.com/oauth/authorize?state=opaque"
     verification_url = "https://auth.openai.com/codex/device"
     model_rows: list[dict[str, Any]] = []
+    model_list_error = ""
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
@@ -91,6 +92,10 @@ class _FakeRuntime:
             self.__class__.logged_in = False
             return {}
         if method == "model/list":
+            if self.__class__.model_list_error:
+                raise codex_account_sessions.CodexAppServerError(
+                    self.__class__.model_list_error
+                )
             return {"data": [dict(row) for row in self.__class__.model_rows]}
         raise AssertionError(method)
 
@@ -119,6 +124,7 @@ def _isolated_sessions(
     _FakeRuntime.logged_in = False
     _FakeRuntime.auth_url = "https://auth.openai.com/oauth/authorize?state=opaque"
     _FakeRuntime.verification_url = "https://auth.openai.com/codex/device"
+    _FakeRuntime.model_list_error = ""
     _FakeRuntime.model_rows = [
         {
             "model": "gpt-5.6-luna",
@@ -397,6 +403,37 @@ def test_documented_models_fill_an_older_app_server_catalog() -> None:
     ]
     assert catalog["models"][0]["is_default"] is True
     assert catalog["models"][1]["catalog_source"] == ("openai_documented_subscription")
+    assert (
+        codex_account_sessions.validated_model_for_request(
+            request,
+            "gpt-5.6-luna",
+        )
+        == "gpt-5.6-luna"
+    )
+
+
+def test_documented_models_survive_app_server_catalog_failure() -> None:
+    _FakeRuntime.model_list_error = "codex_auth_app_server_request_failed"
+    response = Response()
+    codex_account_sessions.start_login(_request(), response)
+    request = _request(_cookie_from_response(response))
+    _FakeRuntime.logged_in = True
+
+    catalog = codex_account_sessions.models(request)
+
+    assert catalog["catalog_status"] == "documented_fallback"
+    assert catalog["catalog_failure_reason_code"] == (
+        "codex_auth_app_server_request_failed"
+    )
+    assert [row["id"] for row in catalog["models"]] == [
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+    ]
+    assert all(
+        row["catalog_source"] == "openai_documented_subscription"
+        for row in catalog["models"]
+    )
     assert (
         codex_account_sessions.validated_model_for_request(
             request,

@@ -557,7 +557,10 @@ def start_login(
         }
 
 
-def _model_rows(managed: _ManagedRuntime) -> list[dict[str, Any]]:
+def _model_rows(
+    managed: _ManagedRuntime,
+) -> tuple[list[dict[str, Any]], str]:
+    app_server_failure_code = ""
     try:
         result = managed.runtime.request(
             "model/list",
@@ -565,7 +568,12 @@ def _model_rows(managed: _ManagedRuntime) -> list[dict[str, Any]]:
             timeout=20.0,
         )
     except CodexAppServerError as exc:
-        raise CodexAccountSessionError(exc.code) from exc
+        # The authenticated App Server can transiently fail its catalog lookup
+        # even though account turns remain available. Keep the documented
+        # subscription catalog usable and expose the typed degraded reason;
+        # the first real turn remains the final model capability check.
+        result = {}
+        app_server_failure_code = exc.code
     rows: list[dict[str, Any]] = []
     for raw in result.get("data") or []:
         if not isinstance(raw, Mapping) or bool(raw.get("hidden")):
@@ -597,12 +605,12 @@ def _model_rows(managed: _ManagedRuntime) -> list[dict[str, Any]]:
         )
     if not rows:
         raise CodexAccountSessionError("codex_auth_model_catalog_empty")
-    return rows
+    return rows, app_server_failure_code
 
 
 def _validated_model(managed: _ManagedRuntime, model: str) -> str:
     requested = str(model or "").strip()
-    rows = _model_rows(managed)
+    rows, _app_server_failure_code = _model_rows(managed)
     if not requested:
         default = next((row["id"] for row in rows if row["is_default"]), None)
         return str(default or rows[0]["id"])
@@ -617,11 +625,21 @@ def models(request: Request) -> dict[str, Any]:
     with managed.lock:
         if not _status_for_managed(managed).get("authentication_verified"):
             raise CodexAccountSessionError("codex_auth_login_required")
-        rows = _model_rows(managed)
+        rows, app_server_failure_code = _model_rows(managed)
     return {
         "schema_version": "easyicu.codex-user-model-catalog/1",
         "provider": "codex",
         "catalog_authority": _SUBSCRIPTION_MODEL_CATALOG_AUTHORITY,
+        "catalog_status": (
+            "documented_fallback"
+            if app_server_failure_code
+            else "app_server_verified"
+        ),
+        **(
+            {"catalog_failure_reason_code": app_server_failure_code}
+            if app_server_failure_code
+            else {}
+        ),
         "models": rows,
         "secrets_returned": False,
     }
