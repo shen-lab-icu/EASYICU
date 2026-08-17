@@ -325,14 +325,35 @@ def _compile_robustness_intents(
     reserved_coordinates = set(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
+    primary_model_variables = tuple(
+        dict.fromkeys(
+            name
+            for step in skeleton.steps
+            if (
+                step.module_id == "adjusted_association"
+                and step.planned_analysis_role == "primary"
+            )
+            for name in (
+                step.primary_exposure,
+                step.outcome,
+                *(term.name for term in step.model_terms),
+            )
+            if name
+        )
+    )
     for item in skeleton.robustness_intents:
         missing_override: Optional[dict[str, Any]] = None
         if item.missing_strategy == "complete_case":
-            complete_case_variables = [
-                name
-                for name in item.complete_case_variables
-                if name not in reserved_coordinates
-            ]
+            complete_case_variables = list(
+                dict.fromkeys(
+                    name
+                    for name in (
+                        *item.complete_case_variables,
+                        *primary_model_variables,
+                    )
+                    if name not in reserved_coordinates
+                )
+            )
             missing = [
                 name for name in complete_case_variables if name not in variables
             ]
