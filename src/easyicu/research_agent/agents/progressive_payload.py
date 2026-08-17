@@ -818,6 +818,24 @@ def progressive_step_materialization_request(
         scientific_action_ids=normalized_actions,
         allowed_citation_keys=normalized_citations,
     )
+    step_definition = definitions.get("ProgressiveSkeletonStep")
+    step_properties = (
+        step_definition.get("properties")
+        if isinstance(step_definition, dict)
+        else None
+    )
+    if not isinstance(step_properties, dict) or not isinstance(
+        step_properties.get("literature_bindings"), dict
+    ):
+        raise ProgressiveTransportSchemaError(
+            "progressive step literature roster is unavailable"
+        )
+    step_properties["literature_bindings"]["minItems"] = len(
+        normalized_citations
+    )
+    step_properties["literature_bindings"]["maxItems"] = len(
+        normalized_citations
+    )
     _bind_materialization_coordinate(
         schema,
         definitions,

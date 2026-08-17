@@ -872,7 +872,9 @@ class ProgressivePlannerAgent:
         blocks.append(
             "Return one ProgressiveStepMaterialization only. Copy every "
             "outline-owned coordinate exactly. Return foundation=null; the host "
-            "already sealed it. Do not return or rewrite any prefix or future step."
+            "already sealed it. Bind every sealed literature citation exactly "
+            "once with a card-supported design application. Do not return or "
+            "rewrite any prefix or future step."
         )
         return "\n\n".join(blocks)
 
