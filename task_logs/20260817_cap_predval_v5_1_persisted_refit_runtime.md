@@ -111,12 +111,38 @@ The code-complete rehearsal HEAD was
   `16fc06bdc4794fbca493ca907101edb006a19b41338767bf5baf60f52fc5a8e2`.
   Reload re-fitting was stable with 8 records and no aliases or claims.
 
+### Latest committed-head refresh
+
+Before progress documentation was written, the live development branch advanced
+again to clean, remote-synchronized commit
+`415f5bbf5b1b25406db6c2506fe757adea189e19`, then acquired uncommitted edits in
+`progressive_payload.py` and its focused test. Those in-flight edits were not
+touched or copied.
+
+The new committed change was merged into the isolated rehearsal branch without
+conflict. The refreshed combined HEAD was
+`8dab1bad16ad32a92992f077993728fe5df05614`, with Git tree
+`ce13318e530f29948fb03a4f256a24169e5f0877`.
+
+- The exact V1-V5.1/authority/architecture matrix plus the full affected
+  Progressive Planner test file passed: 230 passed in 28.58 s.
+- Capability inventory audit, targeted Ruff and `git diff --check`: passed.
+- The module graph remained 546 modules, 2,159 edges and 0 cycles.
+- The unmocked smoke captured clean commit `8dab1ba`, reloaded and re-fitted to
+  the identical receipt
+  `515fbd8c430241cfff23bb98b9235846c69e6dd0a78eab3931954da8c501c227`,
+  and retained 8 records with no aliases or claims.
+- This refresh proves compatibility with the latest committed development HEAD
+  observed in this task. It deliberately does not claim compatibility with the
+  still-uncommitted development-lane edits.
+
 ## Merge boundary and remaining gates
 
-The capability chain is code-compatible with the exact current development
-branch and is ready for an isolated experimental review/cherry-pick. This task
-did not mutate or merge the live development branch, which remains concurrently
-owned by the Figure 2 lane.
+The capability chain is code-compatible with the latest committed development
+HEAD observed in this task and is ready for an isolated experimental review.
+The live development worktree must first become clean and settle its in-flight
+edits before an actual cherry-pick or merge. This task did not mutate or merge
+that live branch, which remains concurrently owned by the Figure 2 lane.
 
 No full exact-head CI was run. Under the current project policy, focused checks
 remain the iteration gate; a full checkpoint belongs after E1 is 11/11 and the
