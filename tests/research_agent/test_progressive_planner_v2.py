@@ -803,6 +803,36 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_compiler_reports_identical_distribution_contrast_at_its_owner() -> None:
+    payload = _payload()
+    payload["steps"][2]["comparison_exposure_level_index"] = 0
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == (
+        "progressive_distribution_contrast_not_distinct"
+    )
+    assert caught.value.step_id == "03_distribution"
+    assert caught.value.step_index == 2
+    assert caught.value.path == "comparison_exposure_level_index"
+
+
+def test_compiler_contains_distribution_contract_validation() -> None:
+    payload = _payload()
+    payload["steps"][2]["confidence_level"] = 0.5
+    skeleton = ProgressivePlanSkeleton.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    assert caught.value.reason_code == "progressive_distribution_spec_invalid"
+    assert caught.value.step_id == "03_distribution"
+    assert caught.value.step_index == 2
+    assert caught.value.path == "confidence_level"
+
+
 def test_compiler_wires_product_reference_to_its_unique_host_owner() -> None:
     payload = _payload()
     payload["steps"][-1]["product_inputs"][1]["producer_step_id"] = "02_table_one"
@@ -1388,6 +1418,39 @@ def test_agent_repairs_only_the_current_materialization() -> None:
     assert len(
         agent.last_prompt_metrics["step_materialization_attempt_schema_sha256"]
     ) == 8
+    assert agent.last_prompt_metrics["full_revision_count"] == 0
+
+
+def test_agent_repairs_identical_distribution_contrast_locally() -> None:
+    materializations = _materialization_payloads()
+    invalid_distribution = json.loads(json.dumps(materializations[2]))
+    invalid_distribution["step"]["comparison_exposure_level_index"] = 0
+    responses = [
+        _outline_payload(),
+        _foundation_payload(),
+        *materializations[:2],
+        invalid_distribution,
+        materializations[2],
+        *materializations[3:],
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(_context())
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    repair_prompt = llm.calls[5][0][-1].content
+    assert "HOST COMPILER OBSERVATION FOR THIS CURRENT STEP" in repair_prompt
+    assert "progressive_distribution_contrast_not_distinct" in repair_prompt
+    assert '"step_id":"03_distribution"' in repair_prompt
+    assert "CURRENT UNLOCKED SUFFIX" not in repair_prompt
+    assert llm.calls[4][1]["structured_output"].authority_sha256 == (
+        llm.calls[5][1]["structured_output"].authority_sha256
+    )
+    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_prompt_metrics["step_materialization_count"] == 7
     assert agent.last_prompt_metrics["full_revision_count"] == 0
 
 

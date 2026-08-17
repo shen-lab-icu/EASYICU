@@ -536,6 +536,17 @@ def _compile_distribution(
         step=step,
         step_index=step_index,
     )
+    if (
+        step.reference_exposure_level_index
+        == step.comparison_exposure_level_index
+    ):
+        raise _fail(
+            "progressive_distribution_contrast_not_distinct",
+            "risk-difference comparison and reference levels must differ",
+            step=step,
+            step_index=step_index,
+            path="comparison_exposure_level_index",
+        )
     event = _level_at(
         outcome_levels,
         step.event_level_index,
@@ -543,26 +554,38 @@ def _compile_distribution(
         step=step,
         step_index=step_index,
     )
-    return ExposureOutcomeDistributionSpec(
-        schema_version="easyicu.exposure_outcome_distribution/2",
-        exposure=exposure,
-        exposure_levels=list(exposure_levels),
-        outcome=outcome,
-        outcome_levels=list(outcome_levels),
-        outcome_positive_value=event,
-        level_match_policy="exact_typed",
-        denominator_policy=step.denominator_policy,
-        missing_exposure_policy=step.missing_exposure_policy,
-        missing_outcome_policy=step.missing_outcome_policy,
-        undeclared_outcome_policy="fail_closed",
-        interval_method="wilson",
-        repeated_unit_interval_method="patient_cluster_robust_wald",
-        risk_difference_contrast=ExposureOutcomeRiskDifferenceContrast(
-            reference_exposure_level=reference,
-            comparison_exposure_level=comparison,
-        ),
-        confidence_level=step.confidence_level,
-    )
+    try:
+        return ExposureOutcomeDistributionSpec(
+            schema_version="easyicu.exposure_outcome_distribution/2",
+            exposure=exposure,
+            exposure_levels=list(exposure_levels),
+            outcome=outcome,
+            outcome_levels=list(outcome_levels),
+            outcome_positive_value=event,
+            level_match_policy="exact_typed",
+            denominator_policy=step.denominator_policy,
+            missing_exposure_policy=step.missing_exposure_policy,
+            missing_outcome_policy=step.missing_outcome_policy,
+            undeclared_outcome_policy="fail_closed",
+            interval_method="wilson",
+            repeated_unit_interval_method="patient_cluster_robust_wald",
+            risk_difference_contrast=ExposureOutcomeRiskDifferenceContrast(
+                reference_exposure_level=reference,
+                comparison_exposure_level=comparison,
+            ),
+            confidence_level=step.confidence_level,
+        )
+    except ValidationError as exc:
+        finding = exc.errors(include_input=False)[0]
+        field = ".".join(str(value) for value in finding["loc"])
+        raise _fail(
+            "progressive_distribution_spec_invalid",
+            "compiled exposure/outcome distribution violates its typed "
+            f"contract: {finding['msg']}",
+            step=step,
+            step_index=step_index,
+            path=field or "exposure_outcome_distribution",
+        ) from exc
 
 
 def _compile_model_terms(
