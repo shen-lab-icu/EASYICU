@@ -594,6 +594,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       Type.Literal("model_based"),
       Type.Literal("heteroskedasticity_robust"),
       Type.Literal("cluster_robust"),
+      Type.Literal("none_counts_only"),
     ]),
     cluster_unit: Type.Optional(Type.Union([
       Type.Literal("hospital_admission"), Type.Literal("patient"),
