@@ -8,7 +8,7 @@ or reporting owners.
 
 from __future__ import annotations
 
-from typing import List, Literal, Tuple
+from typing import Any, List, Literal, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -83,6 +83,73 @@ GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT = "table:distribution_prevalence"
 MISSINGNESS_MEASUREMENT_AUDIT_INPUT = "table:missingness_measurement_audit"
 MEASUREMENT_PROCESS_AUDIT_INPUT = "table:measurement_process_audit"
 COHORT_FLOW_INPUT = "table:cohort_flow"
+DATA_QUALITY_AUDIT_ROLES = (
+    "measurement_missingness",
+    "measurement_process",
+)
+_CANONICAL_DATA_QUALITY_ROLE_BY_INPUT = {
+    MISSINGNESS_MEASUREMENT_AUDIT_INPUT: "measurement_missingness",
+    MEASUREMENT_PROCESS_AUDIT_INPUT: "measurement_process",
+}
+
+
+def data_quality_audit_source_candidates(
+    steps: Sequence[Any],
+) -> dict[str, list[tuple[str, str]]]:
+    """Return plan-declared table sources grouped by typed audit meaning."""
+
+    candidates: dict[str, list[tuple[str, str]]] = {
+        role: [] for role in DATA_QUALITY_AUDIT_ROLES
+    }
+    for step in steps:
+        audit_spec = getattr(step, "measurement_audit_spec", None)
+        for raw_output in getattr(step, "expected_outputs", ()) or ():
+            output = str(raw_output or "").strip()
+            kind, separator, product = output.partition(":")
+            if kind != "table" or not separator:
+                continue
+            role = audit_spec.audit_for(product) if audit_spec is not None else None
+            if role is None:
+                role = _CANONICAL_DATA_QUALITY_ROLE_BY_INPUT.get(output)
+            if role in candidates:
+                candidates[role].append(
+                    (output, str(getattr(step, "step_id", "") or ""))
+                )
+    return candidates
+
+
+def resolve_data_quality_figure_inputs(
+    inputs: Sequence[Any],
+    *,
+    steps: Sequence[Any] = (),
+) -> dict[str, str] | None:
+    """Resolve one exact missingness/process pair without spelling inference."""
+
+    input_keys = [str(value or "").strip() for value in inputs]
+    if len(input_keys) != 2 or len(set(input_keys)) != 2:
+        return None
+    roles_by_input: dict[str, set[str]] = {}
+    for role, values in data_quality_audit_source_candidates(steps).items():
+        for source, _step_id in values:
+            roles_by_input.setdefault(source, set()).add(role)
+    resolved: dict[str, str] = {}
+    for input_key in input_keys:
+        kind, separator, _product = input_key.partition(":")
+        if kind != "table" or not separator:
+            return None
+        roles = roles_by_input.get(input_key, set())
+        if not roles:
+            canonical_role = _CANONICAL_DATA_QUALITY_ROLE_BY_INPUT.get(input_key)
+            roles = {canonical_role} if canonical_role is not None else set()
+        if len(roles) != 1:
+            return None
+        role = next(iter(roles))
+        if role in resolved:
+            return None
+        resolved[role] = input_key
+    if set(resolved) != set(DATA_QUALITY_AUDIT_ROLES):
+        return None
+    return resolved
 
 EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS = (
     DeterministicFigurePanelTemplate(
@@ -169,6 +236,7 @@ def measurement_availability_figure_panels(
 __all__ = [
     "COHORT_FLOW_FIGURE_PANELS",
     "COHORT_FLOW_INPUT",
+    "DATA_QUALITY_AUDIT_ROLES",
     "DATA_QUALITY_FIGURE_PANELS",
     "DeterministicFigurePanelTemplate",
     "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS",
@@ -179,5 +247,7 @@ __all__ = [
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
     "MISSINGNESS_MEASUREMENT_AUDIT_INPUT",
     "PlannedFigurePanelSpec",
+    "data_quality_audit_source_candidates",
     "measurement_availability_figure_panels",
+    "resolve_data_quality_figure_inputs",
 ]

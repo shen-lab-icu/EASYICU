@@ -15,13 +15,16 @@ from ..contracts.declared_product import typed_product
 from ..contracts.figure_plan import (
     COHORT_FLOW_FIGURE_PANELS,
     COHORT_FLOW_INPUT,
+    DATA_QUALITY_AUDIT_ROLES,
     DATA_QUALITY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
     GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
     GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT,
+    MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    data_quality_audit_source_candidates,
     measurement_availability_figure_panels,
 )
 from ..schema import (
@@ -51,7 +54,6 @@ _PRIMARY_RESULT_FIGURE_TEMPLATES = {
     ),
 }
 
-
 def _method_head(method: str) -> str:
     normalized = re.sub(
         r"[^a-z0-9]+", "_", str(method or "").strip().lower()
@@ -66,24 +68,115 @@ def dedicated_renderer_consumes_typed_source(
 ) -> bool:
     """Return whether one explicit renderer already owns a typed source."""
 
-    source_product = typed_product(source)
-    if source_product is None:
+    if typed_product(source) is None:
         return False
     for step in steps or []:
         if _method_head(str(step.method or "")) != "visualization":
             continue
-        input_products = {
-            product
-            for raw_input in step.inputs or []
-            if (product := typed_product(raw_input)) is not None
-        }
+        inputs = {str(raw_input) for raw_input in step.inputs or []}
         figure_products = [
             product
             for output in step.expected_outputs or []
             if (product := typed_product(output)) is not None
             and product[0] == "figure"
         ]
-        if source_product in input_products and len(figure_products) == 1:
+        all_row_inputs = {
+            str(contract.input_key)
+            for contract in step.input_consumption_contracts or []
+            if contract.mode == "all_rows"
+        }
+        if (
+            inputs == {source}
+            and all_row_inputs == {source}
+            and len(figure_products) == 1
+        ):
+            return True
+    return False
+
+
+def _next_step_id(steps: Sequence[AnalysisStep], suffix: str) -> str:
+    occupied = {str(step.step_id) for step in steps}
+    next_index = len(steps) + 1
+    while (step_id := f"{next_index:02d}_{suffix}") in occupied:
+        next_index += 1
+    return step_id
+
+
+def _next_figure_output(steps: Sequence[AnalysisStep], base: str) -> str:
+    occupied = {
+        str(output) for step in steps for output in step.expected_outputs or []
+    }
+    output = base
+    suffix = 2
+    while output in occupied:
+        output = f"{base}_{suffix}"
+        suffix += 1
+    return output
+
+
+def _closed_data_quality_sources(
+    steps: Sequence[AnalysisStep],
+) -> tuple[
+    tuple[str, str] | None,
+    dict[str, list[tuple[str, str]]],
+    list[str],
+    dict[str, list[tuple[str, str]]],
+]:
+    candidates = data_quality_audit_source_candidates(steps)
+    missing = [role for role, values in candidates.items() if not values]
+    ambiguous = {role: values for role, values in candidates.items() if len(values) > 1}
+    if missing or ambiguous:
+        return None, candidates, missing, ambiguous
+    return (
+        (
+            candidates["measurement_missingness"][0][0],
+            candidates["measurement_process"][0][0],
+        ),
+        candidates,
+        [],
+        {},
+    )
+
+
+def _data_quality_panel_templates(sources: tuple[str, str]):
+    replacements = {
+        MISSINGNESS_MEASUREMENT_AUDIT_INPUT: sources[0],
+        MEASUREMENT_PROCESS_AUDIT_INPUT: sources[1],
+    }
+    return tuple(
+        panel.model_copy(
+            update={
+                "source_products": tuple(
+                    replacements.get(source, source)
+                    for source in panel.source_products
+                )
+            }
+        )
+        for panel in DATA_QUALITY_FIGURE_PANELS
+    )
+
+
+def _dedicated_renderer_consumes_exact_sources(
+    steps: Sequence[AnalysisStep],
+    *,
+    sources: Sequence[str],
+) -> bool:
+    required = {str(source) for source in sources}
+    for step in steps:
+        if _method_head(str(step.method or "")) != "visualization":
+            continue
+        figure_outputs = [
+            str(output)
+            for output in step.expected_outputs or []
+            if str(output).startswith("figure:")
+        ]
+        inputs = {str(value) for value in step.inputs or []}
+        all_row_inputs = {
+            str(contract.input_key)
+            for contract in step.input_consumption_contracts or []
+            if contract.mode == "all_rows"
+        }
+        if inputs == required and all_row_inputs == required and len(figure_outputs) == 1:
             return True
     return False
 
@@ -175,6 +268,63 @@ def ensure_primary_result_figure_step(
     ]
 
 
+def ensure_cohort_accounting_figure_step(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Append the deterministic cohort-flow renderer when its source is closed."""
+
+    steps = list(plan.steps or [])
+    owners = [
+        str(step.step_id)
+        for step in steps
+        if COHORT_FLOW_INPUT in {str(value) for value in step.expected_outputs or []}
+    ]
+    if len(owners) != 1 or dedicated_renderer_consumes_typed_source(
+        steps,
+        source=COHORT_FLOW_INPUT,
+    ):
+        return plan, []
+    step_id = _next_step_id(steps, "cohort_accounting_figure")
+    figure_output = _next_figure_output(steps, "figure:cohort_flow")
+    figure_step = AnalysisStep(
+        step_id=step_id,
+        planned_analysis_role="auxiliary",
+        intent=(
+            "Render the exact cohort-accounting table using its registered "
+            "deterministic article-figure contract. Do not redefine eligibility, "
+            "recalculate attrition, or scan run files."
+        ),
+        method="visualization",
+        inputs=[COHORT_FLOW_INPUT],
+        expected_outputs=[figure_output],
+        icu_rule_refs=["visualization_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(
+                input_key=COHORT_FLOW_INPUT,
+                mode="all_rows",
+            )
+        ],
+    )
+    return plan.model_copy(update={"steps": [*steps, figure_step]}), [
+        ValidationFinding(
+            validator="cohort_accounting_figure_contract",
+            severity="warning",
+            message=(
+                "Bound a rendering-only cohort-accounting figure to the unique "
+                f"typed source {COHORT_FLOW_INPUT!r}."
+            ),
+            detail={
+                "reason_code": "cohort_accounting_figure_bound_to_typed_source",
+                "appended_step_id": step_id,
+                "source_product": COHORT_FLOW_INPUT,
+                "producer_step_id": owners[0],
+                "figure_output": figure_output,
+            },
+        )
+    ]
+
+
 def ensure_data_quality_figure_step(
     *,
     plan: AnalysisPlan,
@@ -189,26 +339,7 @@ def ensure_data_quality_figure_step(
 
     del context
     steps = list(plan.steps or [])
-    required_inputs = tuple(DATA_QUALITY_FIGURE_REQUIRED_INPUTS)
-    for step in steps:
-        outputs = {str(value) for value in step.expected_outputs or []}
-        inputs = {str(value) for value in step.inputs or []}
-        if any(value.startswith("figure:") for value in outputs) and (
-            DATA_QUALITY_FIGURE_PRODUCT in outputs
-            or bool(inputs.intersection(required_inputs))
-        ):
-            return plan, []
-
-    producers = {
-        input_key: [
-            str(step.step_id)
-            for step in steps
-            if input_key in {str(value) for value in step.expected_outputs or []}
-        ]
-        for input_key in required_inputs
-    }
-    missing = [key for key, owners in producers.items() if not owners]
-    ambiguous = {key: owners for key, owners in producers.items() if len(owners) > 1}
+    required_inputs, candidates, missing, ambiguous = _closed_data_quality_sources(steps)
     if missing or ambiguous:
         return plan, [
             ValidationFinding(
@@ -220,15 +351,20 @@ def ensure_data_quality_figure_step(
                 ),
                 detail={
                     "reason_code": "data_quality_figure_source_not_closed",
-                    "required_inputs": list(required_inputs),
+                    "required_audit_roles": list(DATA_QUALITY_AUDIT_ROLES),
                     "missing_inputs": missing,
                     "ambiguous_inputs": ambiguous,
                 },
             )
         ]
+    assert required_inputs is not None
+    if _dedicated_renderer_consumes_exact_sources(steps, sources=required_inputs):
+        return plan, []
+
+    figure_output = _next_figure_output(steps, DATA_QUALITY_FIGURE_PRODUCT)
 
     audit_step = AnalysisStep(
-        step_id=f"{len(steps) + 1:02d}_data_quality_figure",
+        step_id=_next_step_id(steps, "data_quality_figure"),
         planned_analysis_role="auxiliary",
         intent=(
             "Render the exact missingness and measurement-process audit tables "
@@ -237,15 +373,15 @@ def ensure_data_quality_figure_step(
         ),
         method="visualization",
         inputs=list(required_inputs),
-        expected_outputs=[DATA_QUALITY_FIGURE_PRODUCT],
+        expected_outputs=[figure_output],
         icu_rule_refs=["visualization_rule", "missingness_rule"],
         input_consumption_contracts=[
             ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
             for input_key in required_inputs
         ],
         figure_panels=[
-            panel.bind(figure_output=DATA_QUALITY_FIGURE_PRODUCT)
-            for panel in DATA_QUALITY_FIGURE_PANELS
+            panel.bind(figure_output=figure_output)
+            for panel in _data_quality_panel_templates(required_inputs)
         ],
     )
     return plan.model_copy(update={"steps": [*steps, audit_step]}), [
@@ -260,7 +396,10 @@ def ensure_data_quality_figure_step(
                 "reason_code": "data_quality_figure_bound_to_typed_sources",
                 "appended_step_id": audit_step.step_id,
                 "inputs": list(required_inputs),
-                "producer_step_ids": producers,
+                "producer_step_ids": {
+                    role: [step_id for _source, step_id in values]
+                    for role, values in candidates.items()
+                },
             },
         )
     ]
@@ -297,6 +436,9 @@ def bind_deterministic_figure_panels(
         ),
         frozenset(DATA_QUALITY_FIGURE_REQUIRED_INPUTS): DATA_QUALITY_FIGURE_PANELS,
     }
+    data_quality_sources, _candidates, _missing, _ambiguous = (
+        _closed_data_quality_sources(plan.steps)
+    )
     changed = False
     findings: list[ValidationFinding] = []
     steps: list[AnalysisStep] = []
@@ -308,6 +450,11 @@ def bind_deterministic_figure_panels(
         ]
         input_set = frozenset(str(value) for value in step.inputs)
         templates = templates_by_inputs.get(input_set)
+        if (
+            data_quality_sources is not None
+            and input_set == frozenset(data_quality_sources)
+        ):
+            templates = _data_quality_panel_templates(data_quality_sources)
         if input_set == frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}):
             producers = [
                 candidate
@@ -403,6 +550,7 @@ def bind_deterministic_figure_panels(
 __all__ = [
     "bind_deterministic_figure_panels",
     "dedicated_renderer_consumes_typed_source",
+    "ensure_cohort_accounting_figure_step",
     "ensure_data_quality_figure_step",
     "ensure_primary_result_figure_step",
     "step_declares_audit_panel",

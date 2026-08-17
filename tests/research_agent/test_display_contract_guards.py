@@ -21,6 +21,7 @@ from easyicu.research_agent.plan_utils import (
 from easyicu.research_agent.planning.figure_plan_shaping import (
     bind_deterministic_figure_panels,
     dedicated_renderer_consumes_typed_source,
+    ensure_cohort_accounting_figure_step,
     ensure_data_quality_figure_step,
     ensure_primary_result_figure_step,
     step_declares_audit_panel,
@@ -474,6 +475,9 @@ def test_typed_source_detects_one_explicit_renderer_only():
         method="visualization",
         inputs=[source],
         expected_outputs=["figure:robustness"],
+        input_consumption_contracts=[
+            {"input_key": source, "mode": "all_rows"}
+        ],
     )
     assert dedicated_renderer_consumes_typed_source([renderer], source=source)
 
@@ -483,3 +487,111 @@ def test_typed_source_detects_one_explicit_renderer_only():
     assert not dedicated_renderer_consumes_typed_source(
         [ambiguous_renderer], source=source
     )
+
+
+def test_mixed_renderer_does_not_suppress_exact_article_role_renderers() -> None:
+    cohort = AnalysisStep(
+        step_id="cohort_denominator",
+        planned_analysis_role="auxiliary",
+        intent="Define the cohort and account for attrition.",
+        method="cohort_definition_and_attrition",
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+    )
+    audit = AnalysisStep(
+        step_id="measurement_process_audit",
+        planned_analysis_role="auxiliary",
+        intent="Audit source availability and measurement opportunity.",
+        method="missing_data",
+        expected_outputs=[
+            "table:measurement_process_audit",
+            "table:measurement_missingness",
+        ],
+        measurement_audit_spec={
+            "products": [
+                {
+                    "product_id": "measurement_process_audit",
+                    "audit": "measurement_process",
+                },
+                {
+                    "product_id": "measurement_missingness",
+                    "audit": "measurement_missingness",
+                },
+            ]
+        },
+    )
+    primary = AnalysisStep(
+        step_id="exposure_outcome_distribution",
+        planned_analysis_role="primary",
+        intent="Describe the prespecified exposure and outcome.",
+        method="descriptive",
+        expected_outputs=["table:exposure_outcome_distribution"],
+    )
+    mixed = AnalysisStep(
+        step_id="descriptive_figure_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render a broad descriptive display.",
+        method="visualization",
+        inputs=[
+            "exposure",
+            "table:measurement_process_audit",
+            "table:exposure_outcome_distribution",
+        ],
+        expected_outputs=["figure:descriptive_figure_suite"],
+        input_consumption_contracts=[
+            {"input_key": "table:measurement_process_audit", "mode": "all_rows"},
+            {
+                "input_key": "table:exposure_outcome_distribution",
+                "mode": "all_rows",
+            },
+        ],
+    )
+    plan = AnalysisPlan(
+        research_question="Describe the cohort, exposure, outcome, and data quality.",
+        steps=[cohort, audit, primary, mixed],
+    )
+
+    assert not dedicated_renderer_consumes_typed_source(
+        plan.steps,
+        source="table:exposure_outcome_distribution",
+    )
+    shaped, _ = ensure_primary_result_figure_step(plan=plan)
+    shaped, _ = ensure_cohort_accounting_figure_step(plan=shaped)
+    shaped, _ = ensure_data_quality_figure_step(
+        plan=shaped,
+        context=_Ctx(plan.research_question),
+    )
+    shaped, _ = bind_deterministic_figure_panels(plan=shaped)
+
+    exact_renderers = {
+        tuple(step.inputs): step
+        for step in shaped.steps
+        if step.method == "visualization" and len(step.inputs) <= 2
+    }
+    assert set(exact_renderers) == {
+        ("table:exposure_outcome_distribution",),
+        ("table:cohort_flow",),
+        (
+            "table:measurement_missingness",
+            "table:measurement_process_audit",
+        ),
+    }
+    data_quality = exact_renderers[
+        (
+            "table:measurement_missingness",
+            "table:measurement_process_audit",
+        )
+    ]
+    assert [panel.article_role for panel in data_quality.figure_panels] == [
+        "data_quality",
+        "data_quality",
+    ]
+    assert [panel.source_products for panel in data_quality.figure_panels] == [
+        ["table:measurement_missingness"],
+        ["table:measurement_process_audit"],
+    ]
+    assert exact_renderers[("table:cohort_flow",)].figure_panels[0].article_role == (
+        "cohort_accounting"
+    )
+    assert exact_renderers[
+        ("table:exposure_outcome_distribution",)
+    ].figure_panels[0].article_role == "distribution"
