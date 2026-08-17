@@ -17,6 +17,7 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..canonical_json import canonical_sha256
 from ..contracts.product_identity import is_canonical_typed_product_token
 
 
@@ -536,6 +537,23 @@ class ProgressivePlanFoundation(BaseModel):
         return self
 
 
+class ProgressiveFoundationMaterialization(BaseModel):
+    """Plan-wide choices returned separately from any executable step.
+
+    The outline digest is host supplied and transport locked.  Keeping this
+    response separate prevents the first step request from carrying two
+    independent high-entropy contracts at once.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.progressive_plan_foundation/1"] = (
+        "easyicu.progressive_plan_foundation/1"
+    )
+    outline_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    foundation: ProgressivePlanFoundation
+
+
 class ProgressiveStepMaterialization(BaseModel):
     """One outline-bound strict step response, never a full executable DAG."""
 
@@ -547,6 +565,60 @@ class ProgressiveStepMaterialization(BaseModel):
     outline_step_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     foundation: Optional[ProgressivePlanFoundation]
     step: ProgressiveSkeletonStep
+
+
+class ProgressivePlannerCheckpoint(BaseModel):
+    """Append-only state after one host-validated planning boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.progressive_planner_checkpoint/1"] = (
+        "easyicu.progressive_planner_checkpoint/1"
+    )
+    sequence: int = Field(ge=0)
+    stage: Literal["outline", "foundation", "step"]
+    request_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    previous_checkpoint_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    outline: ProgressivePlanOutline
+    foundation: Optional[ProgressiveFoundationMaterialization] = None
+    materializations: tuple[ProgressiveStepMaterialization, ...] = ()
+    prompt_metrics: dict[str, Any]
+    checkpoint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _closed_checkpoint_chain(self) -> "ProgressivePlannerCheckpoint":
+        if self.stage == "outline":
+            if self.sequence != 0 or self.foundation is not None or self.materializations:
+                raise ValueError("outline checkpoint must be sequence 0 without suffix")
+            if self.previous_checkpoint_sha256 is not None:
+                raise ValueError("outline checkpoint cannot name a predecessor")
+        elif self.stage == "foundation":
+            if self.sequence != 1 or self.foundation is None or self.materializations:
+                raise ValueError(
+                    "foundation checkpoint must be sequence 1 without steps"
+                )
+        else:
+            if self.foundation is None or not self.materializations:
+                raise ValueError("step checkpoint requires foundation and prefix")
+            if self.sequence != len(self.materializations) + 1:
+                raise ValueError("step checkpoint sequence must follow prefix length")
+        outline_sha256 = canonical_sha256(self.outline.model_dump(mode="json"))
+        if self.prompt_metrics.get("outline_sha256") != outline_sha256:
+            raise ValueError("checkpoint prompt metrics identify another outline")
+        if self.foundation is not None:
+            if self.foundation.outline_sha256 != outline_sha256:
+                raise ValueError("checkpoint foundation identifies another outline")
+        if any(item.foundation is not None for item in self.materializations):
+            raise ValueError("checkpoint step repeats the separately sealed foundation")
+        if self.sequence and self.previous_checkpoint_sha256 is None:
+            raise ValueError("non-initial checkpoint requires predecessor authority")
+        unsigned = self.model_dump(mode="json", exclude={"checkpoint_sha256"})
+        if canonical_sha256(unsigned) != self.checkpoint_sha256:
+            raise ValueError("progressive checkpoint digest mismatch")
+        return self
 
 
 class ProgressivePlanSkeleton(BaseModel):
@@ -701,6 +773,7 @@ __all__ = [
     "ProgressiveCompiledStepReceipt",
     "ProgressiveCohortIntent",
     "ProgressiveDisplayLabel",
+    "ProgressiveFoundationMaterialization",
     "ProgressiveLiteratureBinding",
     "ProgressiveKnowHowDecision",
     "ProgressiveModelTermIntent",
@@ -710,6 +783,7 @@ __all__ = [
     "ProgressivePlanCompileReceipt",
     "ProgressivePlanFoundation",
     "ProgressivePlanOutline",
+    "ProgressivePlannerCheckpoint",
     "ProgressivePlanSkeleton",
     "ProgressiveProductRef",
     "ProgressiveRobustnessIntent",

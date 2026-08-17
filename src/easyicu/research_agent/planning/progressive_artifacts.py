@@ -17,8 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..canonical_json import canonical_sha256
 from .progressive_contract import (
+    ProgressiveFoundationMaterialization,
     ProgressivePlanCompileReceipt,
     ProgressivePlanOutline,
+    ProgressivePlannerCheckpoint,
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
 )
@@ -48,6 +50,7 @@ class ProgressivePlanningArtifactPaths:
     """Paths for the persisted outline-to-compile authority chain."""
 
     outline: Path
+    foundation: Path
     materializations: Path
     skeleton: Path
     compile_receipt: Path
@@ -71,12 +74,17 @@ class ProgressivePlanningAuthority(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.progressive_planning_authority/1"] = (
-        "easyicu.progressive_planning_authority/1"
+    schema_version: Literal["easyicu.progressive_planning_authority/2"] = (
+        "easyicu.progressive_planning_authority/2"
     )
     planner_strategy: Literal["progressive_v2"] = "progressive_v2"
     outline_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     outline_structured_output_authority_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    foundation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    foundation_structured_output_authority_sha256: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
@@ -86,6 +94,7 @@ class ProgressivePlanningAuthority(BaseModel):
     normalized_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     normalized_plan_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     outline_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    foundation_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     materialization_ledger_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     skeleton_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     compile_receipt_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -104,6 +113,7 @@ class ProgressivePlanningAuthority(BaseModel):
             raise ValueError("progressive planning authority repeats a step id")
         observed_strict = bool(
             self.outline_structured_output_authority_sha256
+            and self.foundation_structured_output_authority_sha256
             and all(
                 item.structured_output_authority_sha256
                 for item in self.ordered_steps
@@ -205,11 +215,76 @@ def _write_and_register_once(
     )
 
 
+def persist_progressive_planner_checkpoint(
+    *,
+    run_dir: Path,
+    evidence: ProgressiveEvidenceRegistrar,
+    checkpoint: ProgressivePlannerCheckpoint,
+    prompt_pack_version: str,
+) -> Path:
+    """Persist one append-only outline/foundation/prefix checkpoint."""
+
+    sequence = int(checkpoint.sequence)
+    evidence_id = f"progressive_planner_checkpoint_{sequence:03d}"
+    inputs = ["research_context"]
+    if sequence:
+        previous_id = f"progressive_planner_checkpoint_{sequence - 1:03d}"
+        previous_bytes, _digest = _verified_source_bytes(
+            run_dir=run_dir,
+            evidence=evidence,
+            evidence_id=previous_id,
+            filename=f"{previous_id}.json",
+        )
+        try:
+            previous = ProgressivePlannerCheckpoint.model_validate_json(
+                previous_bytes
+            )
+        except Exception as exc:
+            raise ProgressivePlanningArtifactError(
+                "progressive_checkpoint_predecessor_invalid",
+                str(exc),
+            ) from exc
+        if (
+            checkpoint.previous_checkpoint_sha256
+            != previous.checkpoint_sha256
+        ):
+            raise ProgressivePlanningArtifactError(
+                "progressive_checkpoint_chain_mismatch",
+                "checkpoint predecessor digest does not match sequence authority",
+            )
+        if (
+            checkpoint.request_authority_sha256
+            != previous.request_authority_sha256
+        ):
+            raise ProgressivePlanningArtifactError(
+                "progressive_checkpoint_request_authority_drift",
+                "checkpoint request authority changed within one planning chain",
+            )
+        inputs.append(previous_id)
+    path = Path(run_dir) / f"{evidence_id}.json"
+    _write_and_register_once(
+        evidence,
+        content=checkpoint.model_dump_json(indent=2),
+        evidence_id=evidence_id,
+        description=(
+            "Append-only Progressive Planner checkpoint after a host-validated "
+            f"{checkpoint.stage} boundary."
+        ),
+        source_path=path,
+        inputs=inputs,
+        producer="progressive_planner_checkpoint",
+        generation_mode="deterministic_skill",
+        prompt_pack_version=prompt_pack_version,
+    )
+    return path
+
+
 def persist_progressive_planning_artifacts(
     *,
     run_dir: Path,
     evidence: ProgressiveEvidenceRegistrar,
     outline: ProgressivePlanOutline,
+    foundation: ProgressiveFoundationMaterialization,
     materializations: Sequence[ProgressiveStepMaterialization],
     skeleton: ProgressivePlanSkeleton,
     compile_receipt: ProgressivePlanCompileReceipt,
@@ -222,12 +297,22 @@ def persist_progressive_planning_artifacts(
             "progressive_materialization_ledger_empty",
             "at least one current-step materialization is required",
         )
+    if any(item.foundation is not None for item in materializations):
+        raise ProgressivePlanningArtifactError(
+            "progressive_step_repeats_sealed_foundation",
+            "step materializations must keep foundation=null after it is sealed",
+        )
 
     observed_outline_sha256 = canonical_sha256(outline.model_dump(mode="json"))
     if prompt_metrics.get("outline_sha256") != observed_outline_sha256:
         raise ProgressivePlanningArtifactError(
             "progressive_outline_identity_mismatch",
             "prompt metrics do not identify the persisted outline",
+        )
+    if foundation.outline_sha256 != observed_outline_sha256:
+        raise ProgressivePlanningArtifactError(
+            "progressive_foundation_outline_identity_mismatch",
+            "plan foundation does not identify the persisted outline",
         )
     if prompt_metrics.get("final_skeleton_sha256") != compile_receipt.skeleton_sha256:
         raise ProgressivePlanningArtifactError(
@@ -253,6 +338,10 @@ def persist_progressive_planning_artifacts(
         prompt_metrics.get("structured_output_authority_sha256"),
         field="outline_schema",
     )
+    foundation_schema_digest = _authority_digest(
+        prompt_metrics.get("foundation_structured_output_authority_sha256"),
+        field="foundation_schema",
+    )
 
     outline_path = run_dir / "progressive_plan_outline.json"
     _write_and_register_once(
@@ -270,16 +359,38 @@ def persist_progressive_planning_artifacts(
         prompt_pack_version=prompt_pack_version,
     )
 
+    foundation_path = run_dir / "progressive_plan_foundation.json"
+    _write_and_register_once(
+        evidence,
+        content=foundation.model_dump_json(indent=2),
+        evidence_id="progressive_plan_foundation",
+        description=(
+            "Outline-bound plan-wide cohort, label, robustness, and know-how "
+            "choices, separated from executable step detail."
+        ),
+        source_path=foundation_path,
+        inputs=("progressive_plan_outline", "research_context"),
+        producer="progressive_planner",
+        generation_mode="llm",
+        prompt_pack_version=prompt_pack_version,
+    )
+
     materializations_path = run_dir / "progressive_step_materializations.json"
     materializations_content = (
         json.dumps(
             {
                 "schema_version": (
-                    "easyicu.progressive_step_materialization_ledger/1"
+                    "easyicu.progressive_step_materialization_ledger/2"
                 ),
                 "outline_sha256": observed_outline_sha256,
                 "outline_structured_output_authority_sha256": (
                     outline_schema_digest
+                ),
+                "foundation_sha256": canonical_sha256(
+                    foundation.model_dump(mode="json")
+                ),
+                "foundation_structured_output_authority_sha256": (
+                    foundation_schema_digest
                 ),
                 "materializations": [
                     {
@@ -307,7 +418,11 @@ def persist_progressive_planning_artifacts(
             "schema authority digests."
         ),
         source_path=materializations_path,
-        inputs=("progressive_plan_outline", "research_context"),
+        inputs=(
+            "progressive_plan_outline",
+            "progressive_plan_foundation",
+            "research_context",
+        ),
         producer="progressive_planner",
         generation_mode="llm",
         prompt_pack_version=prompt_pack_version,
@@ -325,6 +440,7 @@ def persist_progressive_planning_artifacts(
         source_path=skeleton_path,
         inputs=(
             "progressive_plan_outline",
+            "progressive_plan_foundation",
             "progressive_step_materializations",
             "research_context",
         ),
@@ -350,6 +466,7 @@ def persist_progressive_planning_artifacts(
     )
     return ProgressivePlanningArtifactPaths(
         outline=outline_path,
+        foundation=foundation_path,
         materializations=materializations_path,
         skeleton=skeleton_path,
         compile_receipt=receipt_path,
@@ -375,6 +492,12 @@ def persist_progressive_planning_authority(
             evidence=evidence,
             evidence_id="progressive_plan_outline",
             filename="progressive_plan_outline.json",
+        ),
+        "foundation": _verified_source_bytes(
+            run_dir=run_dir,
+            evidence=evidence,
+            evidence_id="progressive_plan_foundation",
+            filename="progressive_plan_foundation.json",
         ),
         "materializations": _verified_source_bytes(
             run_dir=run_dir,
@@ -415,6 +538,9 @@ def persist_progressive_planning_authority(
     }
     try:
         outline = ProgressivePlanOutline.model_validate_json(sources["outline"][0])
+        foundation = ProgressiveFoundationMaterialization.model_validate_json(
+            sources["foundation"][0]
+        )
         ledger = json.loads(sources["materializations"][0])
         skeleton = ProgressivePlanSkeleton.model_validate_json(
             sources["skeleton"][0]
@@ -432,6 +558,13 @@ def persist_progressive_planning_authority(
         raise ProgressivePlanningArtifactError(
             "progressive_authority_source_invalid",
             "materialization ledger and prompt metrics must be objects",
+        )
+    if ledger.get("schema_version") != (
+        "easyicu.progressive_step_materialization_ledger/2"
+    ):
+        raise ProgressivePlanningArtifactError(
+            "progressive_materialization_ledger_version_mismatch",
+            "separate-foundation planning requires materialization ledger v2",
         )
     entries = ledger.get("materializations")
     if not isinstance(entries, list) or not entries:
@@ -455,6 +588,11 @@ def persist_progressive_planning_authority(
             "progressive_materialization_ledger_invalid",
             "every ledger row must be one materialization object",
         )
+    if any(item.foundation is not None for item in materializations):
+        raise ProgressivePlanningArtifactError(
+            "progressive_step_repeats_sealed_foundation",
+            "materialization ledger repeats the separately sealed foundation",
+        )
     outline_step_ids = [item.step_id for item in outline.steps]
     materialized_step_ids = [item.step.step_id for item in materializations]
     skeleton_step_ids = [item.step_id for item in skeleton.steps]
@@ -477,6 +615,28 @@ def persist_progressive_planning_authority(
         raise ProgressivePlanningArtifactError(
             "progressive_outline_identity_mismatch",
             "authority sources disagree on the outline digest",
+        )
+    if foundation.outline_sha256 != outline_sha256:
+        raise ProgressivePlanningArtifactError(
+            "progressive_foundation_outline_identity_mismatch",
+            "foundation and outline digests disagree",
+        )
+    foundation_sha256 = canonical_sha256(foundation.model_dump(mode="json"))
+    if ledger.get("foundation_sha256") != foundation_sha256:
+        raise ProgressivePlanningArtifactError(
+            "progressive_foundation_identity_mismatch",
+            "materialization ledger does not identify the persisted foundation",
+        )
+    if skeleton.cohort != foundation.foundation.cohort or (
+        list(skeleton.display_labels) != list(foundation.foundation.display_labels)
+        or list(skeleton.robustness_intents)
+        != list(foundation.foundation.robustness_intents)
+        or list(skeleton.know_how_decisions)
+        != list(foundation.foundation.know_how_decisions)
+    ):
+        raise ProgressivePlanningArtifactError(
+            "progressive_foundation_skeleton_identity_mismatch",
+            "compiled skeleton plan-wide fields differ from the sealed foundation",
         )
     skeleton_sha256 = canonical_sha256(skeleton.model_dump(mode="json"))
     if (
@@ -503,6 +663,18 @@ def persist_progressive_planning_authority(
         raise ProgressivePlanningArtifactError(
             "progressive_schema_authority_mismatch",
             "outline schema authority differs between ledger and prompt metrics",
+        )
+    foundation_schema_sha256 = _authority_digest(
+        ledger.get("foundation_structured_output_authority_sha256"),
+        field="foundation_schema",
+    )
+    if foundation_schema_sha256 != _authority_digest(
+        prompt_metrics.get("foundation_structured_output_authority_sha256"),
+        field="prompt_metrics.foundation_schema",
+    ):
+        raise ProgressivePlanningArtifactError(
+            "progressive_schema_authority_mismatch",
+            "foundation schema authority differs between ledger and prompt metrics",
         )
     metrics_step_schema = prompt_metrics.get("step_materialization_schema_sha256")
     if not isinstance(metrics_step_schema, list) or len(metrics_step_schema) != len(
@@ -538,10 +710,14 @@ def persist_progressive_planning_authority(
             )
         )
     body: dict[str, Any] = {
-        "schema_version": "easyicu.progressive_planning_authority/1",
+        "schema_version": "easyicu.progressive_planning_authority/2",
         "planner_strategy": "progressive_v2",
         "outline_sha256": outline_sha256,
         "outline_structured_output_authority_sha256": outline_schema_sha256,
+        "foundation_sha256": foundation_sha256,
+        "foundation_structured_output_authority_sha256": (
+            foundation_schema_sha256
+        ),
         "ordered_steps": [item.model_dump(mode="json") for item in ordered_steps],
         "compiled_skeleton_sha256": skeleton_sha256,
         "compiled_analysis_plan_sha256": receipt.analysis_plan_sha256,
@@ -550,6 +726,7 @@ def persist_progressive_planning_authority(
             normalized_plan_authority_sha256
         ),
         "outline_artifact_sha256": sources["outline"][1],
+        "foundation_artifact_sha256": sources["foundation"][1],
         "materialization_ledger_sha256": sources["materializations"][1],
         "skeleton_artifact_sha256": sources["skeleton"][1],
         "compile_receipt_artifact_sha256": sources["compile_receipt"][1],
@@ -558,6 +735,7 @@ def persist_progressive_planning_authority(
         "normalized_plan_artifact_sha256": sources["normalized_plan"][1],
         "strict_transport_bound": bool(
             outline_schema_sha256
+            and foundation_schema_sha256
             and all(
                 item.structured_output_authority_sha256 for item in ordered_steps
             )
@@ -576,6 +754,7 @@ def persist_progressive_planning_authority(
         source_path=Path(run_dir) / "progressive_planning_authority.json",
         inputs=(
             "progressive_plan_outline",
+            "progressive_plan_foundation",
             "progressive_step_materializations",
             "progressive_plan_skeleton",
             "progressive_plan_compile_receipt",
@@ -595,6 +774,7 @@ __all__ = [
     "ProgressivePlanningArtifactPaths",
     "ProgressivePlanningAuthority",
     "ProgressivePlanningStepAuthority",
+    "persist_progressive_planner_checkpoint",
     "persist_progressive_planning_artifacts",
     "persist_progressive_planning_authority",
 ]
