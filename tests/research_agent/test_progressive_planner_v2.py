@@ -1944,6 +1944,32 @@ def test_compiler_materializes_one_host_sealed_reporting_standard() -> None:
     ]
 
 
+def test_compiler_host_binds_interpretation_to_the_model_step() -> None:
+    plan, _receipt = compile_progressive_plan(
+        skeleton=_skeleton(),
+        context=_context(),
+        allowed_literature_citation_keys=["strobe_2007", "record_2015"],
+        host_reporting_method_source_keys=["strobe_2007"],
+    )
+
+    primary = next(step for step in plan.steps if step.step_id == "05_primary")
+    assert primary.literature_citation_keys == ["strobe_2007"]
+    assert [
+        binding.model_dump(mode="json")
+        for binding in primary.literature_design_bindings
+    ] == [
+        {
+            "citation_key": "strobe_2007",
+            "design_elements": ["outcome"],
+            "application": (
+                "Report an absolute outcome measure alongside each model ratio "
+                "estimate so interpretation is not ratio-only."
+            ),
+            "divergence": None,
+        }
+    ]
+
+
 def test_compiler_does_not_guess_between_multiple_reporting_standards() -> None:
     plan, _receipt = compile_progressive_plan(
         skeleton=_skeleton(),
