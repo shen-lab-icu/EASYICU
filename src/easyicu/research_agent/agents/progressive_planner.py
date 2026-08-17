@@ -28,6 +28,7 @@ from ..planning.progressive_compiler import (
     compile_progressive_plan,
 )
 from ..planning.progressive_contract import (
+    ProgressiveCohortIntent,
     ProgressiveFoundationMaterialization,
     ProgressiveOutlineStep,
     ProgressivePlanCompileError,
@@ -319,6 +320,26 @@ def _parse_model(raw: str, model: type[Any]) -> Any:
     if not isinstance(payload, dict):
         raise ValueError("progressive Planner response root must be an object")
     return model.model_validate(payload)
+
+
+def _parse_foundation_materialization(
+    raw: str,
+    *,
+    host_cohort: ProgressiveCohortIntent | None,
+) -> ProgressiveFoundationMaterialization:
+    payload = json.loads(str(raw or "").strip())
+    if not isinstance(payload, dict):
+        raise ValueError("progressive Planner response root must be an object")
+    if host_cohort is not None:
+        foundation = payload.get("foundation")
+        if not isinstance(foundation, dict):
+            raise ValueError("progressive Planner foundation must be an object")
+        payload = dict(payload)
+        payload["foundation"] = {
+            **foundation,
+            "cohort": host_cohort.model_dump(mode="json"),
+        }
+    return ProgressiveFoundationMaterialization.model_validate(payload)
 
 
 def _primary_or_first_step_index(plan: AnalysisPlan) -> int:
@@ -800,6 +821,7 @@ class ProgressivePlannerAgent:
         variables: Sequence[str],
         know_how_context: str,
         planning_contract_context: str,
+        host_cohort: ProgressiveCohortIntent | None,
     ) -> str:
         blocks = [
             "PROGRESSIVE PLAN-FOUNDATION AUTHORITY",
@@ -822,6 +844,12 @@ class ProgressivePlannerAgent:
             )
         if know_how_context:
             blocks.append("Retrieved protocol know-how (binding):\n" + know_how_context)
+        if host_cohort is not None:
+            blocks.append(
+                "Caller-bound cohort authority (host owned; copy exactly and do "
+                "not reinterpret):\n"
+                + host_cohort.model_dump_json()
+            )
         blocks.append(
             "Return one ProgressiveFoundationMaterialization only. Bind cohort "
             "selection, display labels, robustness intents, and any authorized "
@@ -964,12 +992,31 @@ class ProgressivePlannerAgent:
         checkpoint_callback: Optional[
             Callable[[ProgressivePlannerCheckpoint], None]
         ] = None,
+        required_primary_cohort_selection_mode: str | None = None,
     ) -> AnalysisPlan:
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
                 "Progressive Planner know-how authority and prompt must be supplied together"
             )
         article_context = article_contract_context or context
+        if required_primary_cohort_selection_mode not in {
+            None,
+            "all_input_rows",
+            "predicate_filtered",
+        }:
+            raise ValueError(
+                "required_primary_cohort_selection_mode is unavailable"
+            )
+        host_cohort = (
+            ProgressiveCohortIntent(
+                name=context.cohort.cohort_name,
+                selection_mode="all_input_rows",
+                inclusion=[],
+                exclusion=[],
+            )
+            if required_primary_cohort_selection_mode == "all_input_rows"
+            else None
+        )
         allowed_citations = tuple(
             dict.fromkeys(
                 str(value).strip()
@@ -1007,6 +1054,14 @@ class ProgressivePlannerAgent:
                 ),
                 "know_how_context": know_how_context,
                 "planning_contract_context": resolved_planning_contract_context,
+                "required_primary_cohort_selection_mode": (
+                    required_primary_cohort_selection_mode
+                ),
+                "host_cohort": (
+                    host_cohort.model_dump(mode="json")
+                    if host_cohort is not None
+                    else None
+                ),
             }
         )
         checkpoint_sequence = 0
@@ -1111,6 +1166,14 @@ class ProgressivePlannerAgent:
             "candidate_analysis_types": list(analysis_types),
             "selected_scientific_action_ids": list(action_ids),
             "planner_strategy": "progressive_v2",
+            "foundation_cohort_owner": (
+                "host_required_primary_cohort"
+                if host_cohort is not None
+                else "planner"
+            ),
+            "required_primary_cohort_selection_mode": (
+                required_primary_cohort_selection_mode
+            ),
             "compile_revision_count": 0,
             "step_materialization_count": 0,
             "step_materialization_payload_bytes": [],
@@ -1157,6 +1220,14 @@ class ProgressivePlannerAgent:
                 variable_names=variables,
                 cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
                 allowed_know_how_decisions=allowed_know_how_decisions,
+                required_cohort_selection_mode=(
+                    required_primary_cohort_selection_mode
+                ),
+                required_cohort_name=(
+                    context.cohort.cohort_name
+                    if required_primary_cohort_selection_mode is not None
+                    else None
+                ),
             )
         foundation_prompt = self._foundation_prompt(
             context=context,
@@ -1165,6 +1236,7 @@ class ProgressivePlannerAgent:
             variables=variables,
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
+            host_cohort=host_cohort,
         )
         foundation_messages = [
             LLMMessage(role="system", content=_GUIDE),
@@ -1194,7 +1266,10 @@ class ProgressivePlannerAgent:
         foundation_materialization = call_llm_with_structured_retry(
             self.llm,
             foundation_messages,
-            parser=lambda raw: _parse_model(raw, ProgressiveFoundationMaterialization),
+            parser=lambda raw: _parse_foundation_materialization(
+                raw,
+                host_cohort=host_cohort,
+            ),
             role="progressive_planner_foundation",
             max_retries=1,
             max_tokens=_MAX_FOUNDATION_OUTPUT_TOKENS,
@@ -1214,6 +1289,17 @@ class ProgressivePlannerAgent:
                 path="outline_sha256",
             )
         foundation = foundation_materialization.foundation
+        if (
+            required_primary_cohort_selection_mode is not None
+            and foundation.cohort.selection_mode
+            != required_primary_cohort_selection_mode
+        ):
+            raise ProgressivePlanCompileError(
+                "progressive_foundation_cohort_mode_mismatch",
+                "plan foundation did not preserve the caller-bound primary "
+                "cohort selection mode",
+                path="cohort.selection_mode",
+            )
         self.last_foundation = foundation_materialization
         emit_checkpoint(
             stage="foundation",

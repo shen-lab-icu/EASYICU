@@ -585,6 +585,25 @@ def test_progressive_foundation_schema_is_outline_bound_and_has_no_step_fields()
         assert object_schema["additionalProperties"] is False
 
 
+def test_foundation_schema_binds_host_owned_all_input_cohort() -> None:
+    request = progressive_foundation_structured_output_request(
+        outline_sha256="a" * 64,
+        variable_names=["exposure_flag", "outcome_flag"],
+        required_cohort_selection_mode="all_input_rows",
+        required_cohort_name="synthetic",
+    )
+    schema = json.loads(request.schema_json)
+    cohort = schema["$defs"]["ProgressiveCohortIntent"]["properties"]
+
+    assert cohort["name"] == {"type": "string", "const": "synthetic"}
+    assert cohort["selection_mode"] == {
+        "type": "string",
+        "const": "all_input_rows",
+    }
+    assert cohort["inclusion"]["maxItems"] == 0
+    assert cohort["exclusion"]["maxItems"] == 0
+
+
 def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> None:
     outline_step = ProgressiveOutlineStep(
         step_id="05_primary",
@@ -1247,6 +1266,52 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     assert agent.last_foundation is not None
     assert len(agent.last_materializations) == 7
     assert agent.last_skeleton is not None
+
+
+def test_agent_host_compiles_caller_bound_all_input_cohort() -> None:
+    invalid_foundation = _foundation_payload()
+    invalid_foundation["foundation"]["cohort"] = {
+        "name": "model_reinterpreted_cohort",
+        "selection_mode": "predicate_filtered",
+        "inclusion": [
+            {
+                "concept_id": "age_years",
+                "anchor": "ICU admission",
+                "start_offset_hours": 0,
+                "end_offset_hours": 24,
+                "aggregation": "first",
+                "op": ">=",
+                "value": {"mode": "none"},
+            }
+        ],
+        "exclusion": [],
+    }
+    responses = [
+        _outline_payload(),
+        invalid_foundation,
+        *_materialization_payloads(),
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(
+        _context(),
+        required_primary_cohort_selection_mode="all_input_rows",
+    )
+
+    assert plan.cohort.name == "synthetic"
+    assert plan.cohort.selection_mode == "all_input_rows"
+    assert plan.cohort.inclusion == ()
+    assert plan.cohort.exclusion == ()
+    assert agent.last_prompt_metrics["foundation_cohort_owner"] == (
+        "host_required_primary_cohort"
+    )
+    foundation_request = llm.calls[1][1]["structured_output"]
+    foundation_schema = json.loads(foundation_request.schema_json)
+    cohort = foundation_schema["$defs"]["ProgressiveCohortIntent"]["properties"]
+    assert cohort["selection_mode"]["const"] == "all_input_rows"
+    assert cohort["inclusion"]["maxItems"] == 0
 
 
 def test_agent_emits_append_only_validated_prefix_checkpoints() -> None:

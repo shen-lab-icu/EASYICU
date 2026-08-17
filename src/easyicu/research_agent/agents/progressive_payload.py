@@ -224,21 +224,29 @@ def _bind_foundation_authorities(
     variable_names: tuple[str, ...],
     cohort_concept_ids: tuple[str, ...],
     know_how_authority: tuple[tuple[str, str, str, str, tuple[str, ...]], ...],
+    required_cohort_selection_mode: str | None,
+    required_cohort_name: str | None,
 ) -> None:
     foundation = definitions.get("ProgressivePlanFoundation")
+    cohort = definitions.get("ProgressiveCohortIntent")
     robustness = definitions.get("ProgressiveRobustnessIntent")
     predicate = definitions.get("ProgressiveCohortPredicate")
-    if not all(isinstance(value, dict) for value in (foundation, robustness, predicate)):
+    if not all(
+        isinstance(value, dict)
+        for value in (foundation, cohort, robustness, predicate)
+    ):
         raise ProgressiveTransportSchemaError(
             "progressive materialization foundation definitions are unavailable"
         )
     foundation_properties = foundation.get("properties")
+    cohort_properties = cohort.get("properties")
     robustness_properties = robustness.get("properties")
     predicate_properties = predicate.get("properties")
     if not all(
         isinstance(value, dict)
         for value in (
             foundation_properties,
+            cohort_properties,
             robustness_properties,
             predicate_properties,
         )
@@ -250,6 +258,26 @@ def _bind_foundation_authorities(
         variable_names
     )
     predicate_properties["concept_id"] = _string_enum(cohort_concept_ids)
+    if required_cohort_selection_mode is not None:
+        if required_cohort_selection_mode not in {
+            "all_input_rows",
+            "predicate_filtered",
+        }:
+            raise ProgressiveTransportSchemaError(
+                "required cohort selection mode is unavailable"
+            )
+        cohort_properties["selection_mode"] = {
+            "type": "string",
+            "const": required_cohort_selection_mode,
+        }
+        if required_cohort_name:
+            cohort_properties["name"] = {
+                "type": "string",
+                "const": required_cohort_name,
+            }
+        if required_cohort_selection_mode == "all_input_rows":
+            cohort_properties["inclusion"]["maxItems"] = 0
+            cohort_properties["exclusion"]["maxItems"] = 0
     decisions = foundation_properties["know_how_decisions"]
     if not know_how_authority:
         decisions["maxItems"] = 0
@@ -584,6 +612,8 @@ def progressive_foundation_structured_output_request(
     variable_names: Sequence[str],
     cohort_concept_ids: Sequence[str] = (),
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
+    required_cohort_selection_mode: str | None = None,
+    required_cohort_name: str | None = None,
 ) -> StructuredOutputRequest:
     """Return the run-bound plan-wide contract without any step fields."""
 
@@ -625,6 +655,8 @@ def progressive_foundation_structured_output_request(
         variable_names=normalized_variables,
         cohort_concept_ids=normalized_concepts,
         know_how_authority=_authority_rows(allowed_know_how_decisions),
+        required_cohort_selection_mode=required_cohort_selection_mode,
+        required_cohort_name=required_cohort_name,
     )
     return _closed_request(
         name="easyicu_progressive_plan_foundation_v1",

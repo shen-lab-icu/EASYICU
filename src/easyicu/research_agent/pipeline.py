@@ -2773,7 +2773,12 @@ class ResearchAgentPipeline:
                     planning_contract_context=planning_contract_context,
                     progress_callback=planner_progress,
                     **(
-                        {"checkpoint_callback": progressive_checkpoint}
+                        {
+                            "checkpoint_callback": progressive_checkpoint,
+                            "required_primary_cohort_selection_mode": (
+                                self._required_primary_cohort_selection_mode
+                            ),
+                        }
                         if progressive
                         else {}
                     ),
