@@ -913,19 +913,6 @@ def test_current_artifact_module_requires_an_explicit_output(module_id: str) -> 
 @pytest.mark.parametrize(
     ("module_id", "kind", "semantic_roles"),
     [
-        (
-            "measurement_audit",
-            "table",
-            {
-                "measurement_missingness",
-                "missingness_profile",
-                "measurement_source",
-                "measurement_process",
-                "event_timing",
-                "component_completeness",
-                "analytic_denominators",
-            },
-        ),
         ("visualization", "figure", {"figure"}),
         ("report", "report", {"report"}),
     ],

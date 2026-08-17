@@ -155,23 +155,7 @@ def _bind_step_module_shape(
         }:
             properties["outputs"]["minItems"] = 1
         output_properties = output_intent["properties"]
-        if locked_module_id == "measurement_audit":
-            output_properties["product_id"] = {
-                "type": "string",
-                "pattern": r"^table:[a-z][a-z0-9_]*$",
-            }
-            output_properties["semantic_role"] = _string_enum(
-                (
-                    "measurement_missingness",
-                    "missingness_profile",
-                    "measurement_source",
-                    "measurement_process",
-                    "event_timing",
-                    "component_completeness",
-                    "analytic_denominators",
-                )
-            )
-        elif locked_module_id == "visualization":
+        if locked_module_id == "visualization":
             output_properties["product_id"] = {
                 "type": "string",
                 "pattern": r"^figure:[a-z][a-z0-9_]*$",
