@@ -13,7 +13,7 @@ into the shared schema or prompt.
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Literal, Mapping, Optional, Sequence, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -32,6 +32,31 @@ ProgressiveModuleId = Literal[
     "visualization",
     "report",
 ]
+
+
+def progressive_module_ids_for_analysis_types(
+    analysis_types: Sequence[str],
+) -> tuple[str, ...]:
+    """Return the union of modules the selected analysis families can execute.
+
+    Descriptive epidemiology has no fitted primary effect or uncertainty
+    interval.  Its outline must therefore not advertise the adjusted-model or
+    locked-effect replay owners that require those quantities.
+    """
+
+    normalized = {
+        str(value or "").strip().casefold()
+        for value in analysis_types
+        if str(value or "").strip()
+    }
+    modules = list(get_args(ProgressiveModuleId))
+    if normalized and normalized <= {"descriptive_epidemiology"}:
+        modules = [
+            module
+            for module in modules
+            if module not in {"adjusted_association", "robustness_replay"}
+        ]
+    return tuple(modules)
 ProgressiveOutputRole = Literal[
     "analysis_cohort",
     "cohort_flow",
@@ -801,4 +826,5 @@ __all__ = [
     "ProgressiveStepMaterialization",
     "ProgressiveSuffixRevision",
     "ProgressiveTableOneVariable",
+    "progressive_module_ids_for_analysis_types",
 ]

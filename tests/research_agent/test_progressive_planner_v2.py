@@ -68,6 +68,9 @@ from easyicu.research_agent.authority.plan_lifecycle import (
 from easyicu.research_agent.providers.strict_json_schema import (
     closed_pydantic_json_schema,
 )
+from easyicu.research_agent.providers.structured_retry import (
+    StructuredResponseFailure,
+)
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     CohortDescriptor,
@@ -586,6 +589,23 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
         assert object_schema["additionalProperties"] is False
 
 
+def test_descriptive_outline_schema_does_not_advertise_effect_model_owners() -> None:
+    request = progressive_outline_structured_output_request(
+        analysis_types=["descriptive_epidemiology"],
+        variable_names=["exposure_flag", "outcome_flag"],
+        scientific_action_ids=["descriptive.descriptive_summary"],
+    )
+    schema = json.loads(request.schema_json)
+    modules = schema["$defs"]["ProgressiveOutlineStep"]["properties"][
+        "module_id"
+    ]["enum"]
+
+    assert "adjusted_association" not in modules
+    assert "robustness_replay" not in modules
+    assert "measurement_audit" in modules
+    assert "exposure_outcome_distribution" in modules
+
+
 def test_progressive_foundation_schema_is_outline_bound_and_has_no_step_fields() -> None:
     outline = ProgressivePlanOutline.model_validate(_outline_payload())
     outline_sha256 = canonical_sha256(outline.model_dump(mode="json"))
@@ -628,6 +648,20 @@ def test_foundation_schema_compiles_robustness_shape_invariant() -> None:
         "exposure_flag",
         "outcome_flag",
     ]
+
+
+def test_descriptive_foundation_schema_forbids_effect_robustness_intents() -> None:
+    request = progressive_foundation_structured_output_request(
+        outline_sha256="a" * 64,
+        variable_names=["exposure_flag", "outcome_flag"],
+        analysis_type="descriptive_epidemiology",
+    )
+    schema = json.loads(request.schema_json)
+    robustness = schema["$defs"]["ProgressivePlanFoundation"]["properties"][
+        "robustness_intents"
+    ]
+
+    assert robustness["maxItems"] == 0
 
 
 def test_foundation_schema_binds_host_owned_all_input_cohort() -> None:
@@ -980,6 +1014,32 @@ def test_counts_only_compiler_emits_descriptive_table_and_distribution() -> None
     assert distribution.interval_method == "none_counts_only"
     assert distribution.confidence_level is None
     assert distribution.risk_difference_contrast is None
+
+
+def test_descriptive_compiler_rejects_effect_robustness_before_plan_assembly() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                inferred_analysis_family="descriptive_epidemiology",
+            )
+        }
+    )
+    payload = _payload()
+    payload["analysis_type"] = "descriptive_epidemiology"
+    payload["steps"] = payload["steps"][:4]
+    payload["steps"][2]["planned_analysis_role"] = "primary"
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=context,
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_descriptive_robustness_unavailable"
+    )
+    assert caught.value.path == "robustness_intents"
 
 
 def test_counts_only_primary_post_baseline_distribution_gets_typed_ceiling() -> None:
@@ -1612,6 +1672,33 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     assert agent.last_skeleton is not None
 
 
+def test_outline_authority_failure_is_retried_before_foundation() -> None:
+    invalid_outline = _outline_payload()
+    invalid_outline["steps"][0]["variable_names"].append("not_retrieved")
+    responses = [
+        invalid_outline,
+        _outline_payload(),
+        _foundation_payload(),
+        *_materialization_payloads(),
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+
+    plan = ProgressivePlannerAgent(llm).run(_context())
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    assert llm.calls[0][1]["structured_output"].name == (
+        "easyicu_progressive_plan_outline_v1"
+    )
+    assert llm.calls[1][1]["structured_output"].name == (
+        "easyicu_progressive_plan_outline_v1"
+    )
+    assert "progressive_outline_variable_unavailable" in (
+        llm.calls[1][0][-1].content
+    )
+
+
 def test_agent_rejects_invalid_foundation_before_any_step_provider_call() -> None:
     invalid_foundation = _foundation_payload()
     invalid_foundation["foundation"]["cohort"] = {
@@ -1631,18 +1718,25 @@ def test_agent_rejects_invalid_foundation_before_any_step_provider_call() -> Non
         "exclusion": [],
     }
     llm = ScriptedMockLLMClient(
-        [json.dumps(_outline_payload()), json.dumps(invalid_foundation)]
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(invalid_foundation),
+            json.dumps(invalid_foundation),
+        ]
     )
     llm.supports_strict_json_schema = True
     checkpoints = []
     agent = ProgressivePlannerAgent(llm)
 
-    with pytest.raises(ProgressivePlanCompileError) as caught:
+    with pytest.raises(StructuredResponseFailure) as caught:
         agent.run(_context(), checkpoint_callback=checkpoints.append)
 
-    assert caught.value.reason_code == "progressive_foundation_cohort_invalid"
-    assert caught.value.path == "cohort"
-    assert len(llm.calls) == 2
+    assert caught.value.__cause__ is not None
+    assert getattr(caught.value.__cause__, "reason_code", None) == (
+        "progressive_foundation_cohort_invalid"
+    )
+    assert getattr(caught.value.__cause__, "path", None) == "cohort"
+    assert len(llm.calls) == 3
     assert [item.stage for item in checkpoints] == ["outline"]
     assert agent.last_foundation is None
 

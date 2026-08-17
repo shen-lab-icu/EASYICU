@@ -16,6 +16,7 @@ from ..planning.progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
     ProgressiveSuffixRevision,
+    progressive_module_ids_for_analysis_types,
 )
 from ..providers.protocol import StructuredOutputRequest
 from ..providers.strict_json_schema import (
@@ -251,6 +252,9 @@ def _bind_outline_authorities(
             "progressive outline step properties are unavailable"
         )
     properties["analysis_type"] = _string_enum(analysis_types)
+    step_properties["module_id"] = _string_enum(
+        progressive_module_ids_for_analysis_types(analysis_types)
+    )
     step_properties["variable_names"]["items"] = _string_enum(variable_names)
     citations = step_properties["literature_citation_keys"]
     if allowed_citation_keys:
@@ -272,6 +276,7 @@ def _bind_foundation_authorities(
     know_how_authority: tuple[tuple[str, str, str, str, tuple[str, ...]], ...],
     required_cohort_selection_mode: str | None,
     required_cohort_name: str | None,
+    analysis_type: str | None,
 ) -> None:
     foundation = definitions.get("ProgressivePlanFoundation")
     cohort = definitions.get("ProgressiveCohortIntent")
@@ -337,6 +342,8 @@ def _bind_foundation_authorities(
             ),
         ]
     }
+    if str(analysis_type or "").strip().casefold() == "descriptive_epidemiology":
+        foundation_properties["robustness_intents"]["maxItems"] = 0
     predicate_properties["concept_id"] = _string_enum(cohort_concept_ids)
     if required_cohort_selection_mode is not None:
         if required_cohort_selection_mode not in {
@@ -694,6 +701,7 @@ def progressive_foundation_structured_output_request(
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
     required_cohort_selection_mode: str | None = None,
     required_cohort_name: str | None = None,
+    analysis_type: str | None = None,
 ) -> StructuredOutputRequest:
     """Return the run-bound plan-wide contract without any step fields."""
 
@@ -737,6 +745,7 @@ def progressive_foundation_structured_output_request(
         know_how_authority=_authority_rows(allowed_know_how_decisions),
         required_cohort_selection_mode=required_cohort_selection_mode,
         required_cohort_name=required_cohort_name,
+        analysis_type=analysis_type,
     )
     return _closed_request(
         name="easyicu_progressive_plan_foundation_v1",

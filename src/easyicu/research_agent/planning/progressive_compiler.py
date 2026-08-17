@@ -66,6 +66,7 @@ from .progressive_contract import (
     ProgressivePlanFoundation,
     ProgressivePlanSkeleton,
     ProgressiveSkeletonStep,
+    progressive_module_ids_for_analysis_types,
 )
 from .robustness_contract import RobustnessSpec
 from .preplan_know_how import verify_know_how_decisions
@@ -279,10 +280,22 @@ def validate_progressive_foundation(
     foundation: ProgressivePlanFoundation,
     *,
     context: ResearchContext,
+    analysis_type: str,
 ) -> None:
     """Fail before step generation when a sealed Foundation cannot compile."""
 
     _validate_progressive_cohort_intent(foundation.cohort, context=context)
+    if (
+        str(analysis_type or "").strip().casefold() == "descriptive_epidemiology"
+        and foundation.robustness_intents
+    ):
+        raise _fail(
+            "progressive_descriptive_robustness_unavailable",
+            "descriptive_epidemiology has no fitted primary effect or interval; "
+            "use typed measurement and denominator audits instead of "
+            "effect-style robustness intents",
+            path="robustness_intents",
+        )
 
 
 def _compile_robustness_intents(
@@ -1391,6 +1404,26 @@ def compile_progressive_plan(
             str(exc),
             path="analysis_type",
         ) from exc
+    allowed_modules = set(
+        progressive_module_ids_for_analysis_types((canonical_type,))
+    )
+    for index, step in enumerate(skeleton.steps):
+        if step.module_id not in allowed_modules:
+            raise _fail(
+                "progressive_analysis_module_unavailable",
+                f"module {step.module_id!r} is unavailable for analysis type "
+                f"{canonical_type!r}",
+                step=step,
+                step_index=index,
+                path="module_id",
+            )
+    if canonical_type == "descriptive_epidemiology" and skeleton.robustness_intents:
+        raise _fail(
+            "progressive_descriptive_robustness_unavailable",
+            "descriptive_epidemiology cannot compile effect-style robustness "
+            "intents without a fitted primary effect and interval",
+            path="robustness_intents",
+        )
     variables = _variable_index(context)
     cohort = _validate_progressive_cohort_intent(
         skeleton.cohort,
