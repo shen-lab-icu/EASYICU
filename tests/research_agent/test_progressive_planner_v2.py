@@ -569,9 +569,11 @@ def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> 
     assert step["planned_analysis_role"]["const"] == "primary"
     assert step["module_id"]["const"] == "adjusted_association"
     assert step["objective"]["const"] == outline_step.objective
-    assert step["depends_on"]["prefixItems"] == [
-        {"type": "string", "const": "01_cohort"}
-    ]
+    assert step["depends_on"]["items"] == {
+        "type": "string",
+        "const": "01_cohort",
+    }
+    assert "prefixItems" not in request.schema_json
     assert step["scientific_action_id"]["const"] == (
         "association.adjusted_association"
     )
@@ -639,6 +641,40 @@ def test_current_step_without_available_products_closes_product_inputs() -> None
         "maxItems": 0,
     }
     assert step["product_inputs"]["maxItems"] == 0
+    assert step["table_one_group_by"] == {"type": "null"}
+    assert step["table_one_mode"] == {"type": "null"}
+    assert step["table_one_variables"]["maxItems"] == 0
+
+
+def test_current_table_one_step_requires_its_module_fields_in_schema() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="02_table_one",
+        planned_analysis_role="auxiliary",
+        module_id="table_one",
+        objective="Describe baseline variables by the declared exposure groups.",
+        depends_on=["01_cohort"],
+        variable_names=["exposure_flag", "age_years", "sex_code"],
+        literature_citation_keys=[],
+        scientific_action_id=None,
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variable_names=["exposure_flag", "age_years", "sex_code"],
+        scientific_action_ids=[],
+        include_foundation=False,
+        available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
+    )
+    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"][
+        "properties"
+    ]
+
+    assert step["table_one_group_by"] == {
+        "type": "string",
+        "enum": ["exposure_flag", "age_years", "sex_code"],
+    }
+    assert step["table_one_mode"]["type"] == "string"
+    assert step["table_one_variables"]["minItems"] == 1
 
 
 def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:

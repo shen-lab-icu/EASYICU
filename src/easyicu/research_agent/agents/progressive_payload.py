@@ -100,6 +100,20 @@ def _bind_step_module_shape(
     module_ids = list(get_args(ProgressiveModuleId))
     standard_ids = [value for value in module_ids if value != "custom_analysis"]
 
+    if locked_module_id is not None:
+        if locked_module_id == "table_one":
+            properties["table_one_group_by"] = _non_null(
+                properties["table_one_group_by"], field="table_one_group_by"
+            )
+            properties["table_one_mode"] = _non_null(
+                properties["table_one_mode"], field="table_one_mode"
+            )
+            properties["table_one_variables"]["minItems"] = 1
+        else:
+            properties["table_one_group_by"] = {"type": "null"}
+            properties["table_one_mode"] = {"type": "null"}
+            properties["table_one_variables"]["maxItems"] = 0
+
     standard = copy.deepcopy(step)
     standard["properties"]["module_id"] = (
         {"type": "string", "const": locked_module_id}
@@ -153,14 +167,18 @@ def _exact_string_array(values: Sequence[str]) -> dict[str, Any]:
         "maxItems": len(normalized),
     }
     if normalized:
-        schema["prefixItems"] = [
-            {"type": "string", "const": value} for value in normalized
-        ]
+        # OpenAI Structured Outputs supports array cardinality constraints but
+        # not JSON Schema's tuple-only ``prefixItems`` keyword.  Restrict the
+        # item vocabulary here; the progressive compiler's coordinate check
+        # remains the final authority for order, duplicates, and exact values.
+        schema["items"] = (
+            {"type": "string", "const": normalized[0]}
+            if len(normalized) == 1
+            else _string_enum(normalized)
+        )
     else:
-        # JSON Schema 2020-12 and the OpenAI strict-output validator reject an
-        # explicitly empty ``prefixItems`` array.  ``maxItems: 0`` still locks
-        # the value to the exact empty array; retain an item schema so the
-        # array remains closed and provider-portable.
+        # ``maxItems: 0`` locks the value to the exact empty array; retain an
+        # item schema so the array remains closed and provider-portable.
         schema["items"] = {"type": "string"}
     return schema
 
