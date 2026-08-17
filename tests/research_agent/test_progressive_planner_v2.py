@@ -1343,6 +1343,39 @@ def test_outline_rejects_repeated_host_compiled_singleton_module() -> None:
     ]
 
 
+def test_outline_requires_visualization_for_explicit_figure_output() -> None:
+    payload = _outline_payload()
+    payload["steps"] = [
+        step for step in payload["steps"] if step["module_id"] != "visualization"
+    ]
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            required_visualization_step=True,
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_outline_visualization_owner_missing"
+    )
+    assert caught.value.details["findings"] == [
+        {
+            "required_module_id": "visualization",
+            "source": "user_preferences.must_have_outputs",
+        }
+    ]
+
+
 def test_outline_prompt_projects_explicit_separate_product_without_case_rules() -> None:
     context = _context().model_copy(
         update={
@@ -1370,6 +1403,22 @@ def test_outline_prompt_exposes_host_compiled_singleton_ownership() -> None:
     assert '"table:robustness_matrix"' in prompt
     assert "Each listed module may appear at most once" in prompt
     assert "all replayable robustness intents in one robustness_replay step" in prompt
+
+
+def test_outline_prompt_projects_explicit_figure_obligation() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                must_have_outputs="Required outputs: one publication figure."
+            )
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[1].content
+
+    assert "Host-resolved presentation obligation" in prompt
+    assert "Include at least one visualization outline step" in prompt
+    assert "do not delegate the figure to a report step" in prompt
 
 
 @pytest.mark.parametrize(
@@ -1993,6 +2042,35 @@ def test_compiler_host_binds_interpretation_to_the_model_step() -> None:
     ]
 
 
+def test_compiler_closes_interpretation_from_one_model_selected_source() -> None:
+    payload = _payload()
+    payload["steps"][4]["literature_bindings"] = [
+        {
+            "citation_key": "strobe_2007",
+            "design_elements": ["reporting"],
+            "application": "Report the prespecified adjusted association.",
+            "divergence": None,
+        }
+    ]
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=_context(),
+        allowed_literature_citation_keys=["strobe_2007"],
+    )
+
+    primary = next(step for step in plan.steps if step.step_id == "05_primary")
+    assert primary.literature_citation_keys == ["strobe_2007"]
+    assert primary.literature_design_bindings[0].design_elements == [
+        "reporting",
+        "outcome",
+    ]
+    assert primary.literature_design_bindings[0].application == (
+        "Report the prespecified adjusted association.\n"
+        "Report an absolute outcome measure alongside each model ratio estimate "
+        "so interpretation is not ratio-only."
+    )
+
+
 def test_compiler_does_not_guess_between_multiple_reporting_standards() -> None:
     plan, _receipt = compile_progressive_plan(
         skeleton=_skeleton(),
@@ -2261,6 +2339,41 @@ def test_repeated_singleton_outline_is_retried_before_foundation() -> None:
         llm.calls[1][0][-1].content
     )
     assert "Host-compiled singleton module ownership" in (
+        llm.calls[0][0][-1].content
+    )
+
+
+def test_missing_visualization_outline_is_retried_before_foundation() -> None:
+    invalid_outline = _outline_payload()
+    invalid_outline["steps"] = [
+        step
+        for step in invalid_outline["steps"]
+        if step["module_id"] != "visualization"
+    ]
+    responses = [
+        invalid_outline,
+        _outline_payload(),
+        _foundation_payload(),
+        *_materialization_payloads(),
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                must_have_outputs="Required outputs: one publication figure."
+            )
+        }
+    )
+
+    plan = ProgressivePlannerAgent(llm).run(context)
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    assert "progressive_outline_visualization_owner_missing" in (
+        llm.calls[1][0][-1].content
+    )
+    assert "Host-resolved presentation obligation" in (
         llm.calls[0][0][-1].content
     )
 
@@ -2616,7 +2729,7 @@ def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
     ]
     payload["steps"][4]["literature_bindings"] = [
         binding(
-            "strobe_2007",
+            "record_2015",
             ["reporting"],
             "Report the prespecified adjusted association.",
         )
@@ -2665,6 +2778,7 @@ def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
         _context(),
         allowed_literature_citation_keys=[
             "strobe_2007",
+            "record_2015",
             "sterne_missing_data_2009",
             "durrleman_splines_1989",
         ],

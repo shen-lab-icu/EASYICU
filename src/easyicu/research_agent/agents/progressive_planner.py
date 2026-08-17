@@ -107,6 +107,7 @@ _TYPED_PRODUCT_TOKEN = re.compile(
     r"\b(?:artifact|dataset|model|statistic|table):[a-z][a-z0-9_]*\b"
 )
 _SEPARATE_ANALYSIS_STEP = re.compile(r"\bseparate\s+analysis\s+step\b", re.I)
+_EXPLICIT_FIGURE_OUTPUT = re.compile(r"\bfigures?\b", re.I)
 
 
 def _required_separate_analysis_products(
@@ -137,6 +138,14 @@ def _required_separate_analysis_products(
             if product not in host_products and product not in required:
                 required.append(product)
     return tuple(required)
+
+
+def _requires_visualization_step(context: ResearchContext) -> bool:
+    """Return whether the run-bound output request explicitly requires a figure."""
+
+    preferences = context.user_preferences
+    text = str(getattr(preferences, "must_have_outputs", None) or "")
+    return bool(_EXPLICIT_FIGURE_OUTPUT.search(text))
 
 
 def _complete_case_variable_roster(
@@ -682,6 +691,14 @@ class ProgressivePlannerAgent:
                 "the host will materialize its exact method, inputs, outputs, "
                 "and product edges later."
             )
+        if _requires_visualization_step(context):
+            blocks.append(
+                "Host-resolved presentation obligation:\nThe run-bound required "
+                "outputs explicitly require a figure. Include at least one "
+                "visualization outline step; do not delegate the figure to a "
+                "report step. The host will bind its exact typed figure product "
+                "when that step is materialized."
+            )
         singleton_host_modules = {
             module_id: [product_id for product_id, _role in products]
             for module_id, products in PROGRESSIVE_HOST_COMPILED_OUTPUTS.items()
@@ -797,6 +814,7 @@ class ProgressivePlannerAgent:
         variable_names: Sequence[str],
         allowed_literature_citation_keys: Sequence[str],
         required_custom_products: Sequence[str] = (),
+        required_visualization_step: bool = False,
     ) -> None:
         if outline.analysis_type not in set(analysis_types):
             raise ProgressivePlanCompileError(
@@ -840,6 +858,20 @@ class ProgressivePlannerAgent:
                 + ", ".join(sorted(duplicated_singletons)),
                 path="steps",
                 findings=findings,
+            )
+        if required_visualization_step and not any(
+            step.module_id == "visualization" for step in outline.steps
+        ):
+            raise ProgressivePlanCompileError(
+                "progressive_outline_visualization_owner_missing",
+                "the run-bound output contract requires a visualization outline step",
+                path="steps",
+                findings=(
+                    {
+                        "required_module_id": "visualization",
+                        "source": "user_preferences.must_have_outputs",
+                    },
+                ),
             )
         if required_custom_products and not any(
             step.module_id == "custom_analysis" for step in outline.steps
@@ -1366,6 +1398,7 @@ class ProgressivePlannerAgent:
             required_method_layers=required_method_layers_for_context(context),
         )
         required_custom_products = _required_separate_analysis_products(context)
+        required_visualization_step = _requires_visualization_step(context)
         if resume_checkpoint is not None:
             validate_progressive_resume_runtime_dependencies(
                 resume_dependency_context
@@ -1384,6 +1417,7 @@ class ProgressivePlannerAgent:
             "required_primary_cohort_selection_mode": (
                 required_primary_cohort_selection_mode
             ),
+            "required_visualization_step": required_visualization_step,
             "host_cohort": (
                 host_cohort.model_dump(mode="json")
                 if host_cohort is not None
@@ -1476,6 +1510,7 @@ class ProgressivePlannerAgent:
             "required_primary_cohort_selection_mode": (
                 required_primary_cohort_selection_mode
             ),
+            "required_visualization_step": required_visualization_step,
             "resume_dependency_authority_sha256": (
                 checkpoint_authorities.resume_dependency_authority_sha256
             ),
@@ -1509,6 +1544,7 @@ class ProgressivePlannerAgent:
                     variable_names=variables,
                     allowed_literature_citation_keys=allowed_citations,
                     required_custom_products=required_custom_products,
+                    required_visualization_step=required_visualization_step,
                 )
                 return parsed
 
@@ -1535,6 +1571,7 @@ class ProgressivePlannerAgent:
             variable_names=variables,
             allowed_literature_citation_keys=allowed_citations,
             required_custom_products=required_custom_products,
+            required_visualization_step=required_visualization_step,
         )
         self.last_outline = outline
         self.last_foundation = None
