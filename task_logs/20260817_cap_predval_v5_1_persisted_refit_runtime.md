@@ -136,13 +136,32 @@ conflict. The refreshed combined HEAD was
   observed in this task. It deliberately does not claim compatibility with the
   still-uncommitted development-lane edits.
 
+### Final clean development-head gate
+
+The development owner then committed the in-flight edit as `21ee340` and the
+live branch returned to clean, remote-synchronized state. That exact commit was
+merged into the isolated rehearsal without conflict. The final tested combined
+commit was `a4699939fb4a9b9cc937027aa824a8dfd80fc1fc`, with Git tree
+`fb306ff493f2bad538c885bfece62d5e90359466`.
+
+- V1-V5.1, authority, architecture and the full affected Progressive Planner
+  file: 229 passed in 29.34 s. The count decreased from 230 because `21ee340`
+  intentionally removed one obsolete measurement-audit parameterized case;
+  there was no failure or skip.
+- Capability inventory audit, targeted Ruff and `git diff --check`: passed.
+- Module graph: 546 modules, 2,159 edges and 0 cycles.
+- The unmocked runtime smoke captured clean commit `a469993`, reloaded and
+  re-fitted to the identical receipt
+  `e9f5990315396bbe4c3e9c7cfbbeedec45b7c7e865a4e5629c75d9c770fe2bb8`,
+  with 8 records and no aliases or claims.
+- The live development branch remained unmodified by this capability task.
+
 ## Merge boundary and remaining gates
 
-The capability chain is code-compatible with the latest committed development
-HEAD observed in this task and is ready for an isolated experimental review.
-The live development worktree must first become clean and settle its in-flight
-edits before an actual cherry-pick or merge. This task did not mutate or merge
-that live branch, which remains concurrently owned by the Figure 2 lane.
+The capability chain is code-compatible with the current clean, synchronized
+development HEAD `21ee340` and is ready for an explicit experimental
+review/cherry-pick decision. This task did not mutate or merge the live branch,
+which remains owned by the Figure 2 lane.
 
 No full exact-head CI was run. Under the current project policy, focused checks
 remain the iteration gate; a full checkpoint belongs after E1 is 11/11 and the
