@@ -58,6 +58,7 @@ from .dependence_authority import context_counts_only_authority
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import method_binding_support
 from .progressive_contract import (
+    PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCompiledStepReceipt,
     ProgressiveCohortIntent,
     ProgressiveLiteratureBinding,
@@ -79,23 +80,6 @@ from .scientific_review import post_baseline_exposure
 
 
 _OWNER = "easyicu.planning.progressive_compiler_v1"
-_CANONICAL_OUTPUTS: Mapping[str, tuple[tuple[str, str], ...]] = {
-    "cohort_definition": (
-        ("artifact:analysis_cohort", "analysis_cohort"),
-        ("table:cohort_flow", "cohort_flow"),
-    ),
-    "table_one": (("table:table_one", "table_one"),),
-    "exposure_outcome_distribution": (
-        ("table:exposure_outcome_distribution", "exposure_outcome_distribution"),
-    ),
-    "adjusted_association": (
-        ("table:adjusted_association_estimates", "adjusted_association_estimates"),
-    ),
-    "robustness_replay": (
-        ("table:robustness_matrix", "robustness_matrix"),
-        ("table:robustness_summary", "robustness_summary"),
-    ),
-}
 _MODULE_OUTPUT_ROLES: Mapping[str, frozenset[str]] = {
     "cohort_definition": frozenset({"analysis_cohort", "cohort_flow"}),
     "table_one": frozenset({"table_one"}),
@@ -333,7 +317,7 @@ def _compile_robustness_intents(
 
 
 def _canonical_outputs(step: ProgressiveSkeletonStep) -> list[tuple[str, str]]:
-    standard = list(_CANONICAL_OUTPUTS.get(step.module_id, ()))
+    standard = list(PROGRESSIVE_HOST_COMPILED_OUTPUTS.get(step.module_id, ()))
     declared = [(item.product_id, item.semantic_role) for item in step.outputs]
     by_product: dict[str, str] = {}
     for product, role in [*standard, *declared]:

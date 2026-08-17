@@ -43,6 +43,7 @@ from easyicu.research_agent.planning.progressive_artifacts import (
     persist_progressive_planning_authority,
 )
 from easyicu.research_agent.planning.progressive_contract import (
+    PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveFoundationMaterialization,
     ProgressiveOutlineStep,
     ProgressivePlanCompileError,
@@ -818,6 +819,38 @@ def test_current_table_one_step_requires_its_module_fields_in_schema() -> None:
     }
     assert step["table_one_mode"]["type"] == "string"
     assert step["table_one_variables"]["minItems"] == 1
+
+
+@pytest.mark.parametrize(
+    "module_id",
+    sorted(PROGRESSIVE_HOST_COMPILED_OUTPUTS),
+)
+def test_current_host_compiled_module_forbids_model_named_outputs(
+    module_id: str,
+) -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id=f"02_{module_id}",
+        planned_analysis_role="auxiliary",
+        module_id=module_id,
+        objective="Materialize the registered module with host-owned product names.",
+        depends_on=["01_cohort"],
+        variable_names=["exposure_flag", "outcome_flag"],
+        literature_citation_keys=[],
+        scientific_action_id=None,
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variable_names=["exposure_flag", "outcome_flag"],
+        scientific_action_ids=[],
+        available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
+    )
+    outputs = json.loads(request.schema_json)["$defs"][
+        "ProgressiveSkeletonStep"
+    ]["properties"]["outputs"]
+
+    assert outputs["minItems"] == 0
+    assert outputs["maxItems"] == 0
 
 
 def test_current_distribution_step_requires_non_null_contract_fields() -> None:
