@@ -1036,6 +1036,13 @@ class ProgressivePlannerAgent:
                     separators=(",", ":"),
                 )
             )
+        if outline_step.module_id == "adjusted_association":
+            blocks.append(
+                "Adjusted-model term contract: declare the outcome only in the "
+                "outcome field. model_terms must contain exactly one exposure "
+                "matching primary_exposure plus prespecified covariates; never "
+                "include the outcome as a model term or covariate."
+            )
         blocks.append(
             "Return one ProgressiveStepMaterialization only. Copy every "
             "outline-owned coordinate exactly. Return foundation=null; the host "

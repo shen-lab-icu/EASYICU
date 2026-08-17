@@ -895,13 +895,21 @@ def _compile_adjusted_association(
             step_index=step_index,
         )
     )
+    if outcome in covariates:
+        raise _fail(
+            "progressive_model_outcome_is_covariate",
+            "the declared outcome must not also appear as a model covariate",
+            step=step,
+            step_index=step_index,
+            path="model_terms",
+        )
     method_family = (
         ASSOCIATION_LOGIT_ESTIMATOR
         if step.outcome_type == "binary"
         else ASSOCIATION_OLS_ESTIMATOR
     )
-    return [
-        PlannedModelRequirement(
+    try:
+        requirement = PlannedModelRequirement(
             requirement_id=f"{step.step_id}_primary",
             outcome=outcome,
             outcome_type=step.outcome_type,
@@ -916,7 +924,17 @@ def _compile_adjusted_association(
             exposure_reference_level=reference or None,
             primary_contrast_level=primary_contrast or None,
         )
-    ]
+    except ValidationError as exc:
+        issue = exc.errors(include_input=False)[0]
+        raise _fail(
+            "progressive_adjusted_model_contract_invalid",
+            "the adjusted-model requirement violates its typed contract: "
+            + str(issue.get("msg") or "invalid model requirement"),
+            step=step,
+            step_index=step_index,
+            path="model_terms",
+        ) from exc
+    return [requirement]
 
 
 def _compile_measurement_spec(
