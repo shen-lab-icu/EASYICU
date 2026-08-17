@@ -87,7 +87,7 @@ def _parse_registration_inputs(
     return parsed_spec, parsed_lineage
 
 
-def _resolve_artifact_bindings(
+def resolve_prediction_validation_artifact_bindings(
     *,
     evidence_store: EvidenceStore,
     producer_run_id: str,
@@ -190,7 +190,7 @@ def resolve_prediction_validation_runtime_authority(
             PredictionValidationReason.LINEAGE_RUNTIME_MISMATCH,
             "runtime environment does not match the environment lock",
         )
-    resolved = _resolve_artifact_bindings(
+    resolved = resolve_prediction_validation_artifact_bindings(
         evidence_store=evidence_store,
         producer_run_id=producer_run_id,
         artifacts=artifacts,
@@ -208,7 +208,7 @@ def _resolve_lineage_artifacts(
     evidence_store: EvidenceStore,
     lineage: PredictionValidationUpstreamLineage,
 ) -> dict[PredictionValidationArtifactRole, Path]:
-    resolved = _resolve_artifact_bindings(
+    resolved = resolve_prediction_validation_artifact_bindings(
         evidence_store=evidence_store,
         producer_run_id=lineage.producer_run_id,
         artifacts=lineage.artifacts,
@@ -545,5 +545,6 @@ def prediction_validation_analysis_registration_findings(
 __all__ = [
     "prediction_validation_analysis_registration_findings",
     "register_prediction_validation_analysis_artifact",
+    "resolve_prediction_validation_artifact_bindings",
     "resolve_prediction_validation_runtime_authority",
 ]

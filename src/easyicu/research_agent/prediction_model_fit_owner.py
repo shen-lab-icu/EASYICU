@@ -1,11 +1,13 @@
 """Experimental owner for one fixed, train-only binary prediction model.
 
-The owner consumes only a host-issued :class:`LoadedTypedInput`.  It fits
-numeric median imputation, standardization, and L2 logistic regression on the
-declared training subjects, applies that frozen state to every row, and seals
-the model JSON plus prediction CSV in one immutable bundle.  It chooses no
-cohort, split, feature, outcome, threshold, or tuning coordinate and grants no
-Planner, EvidenceStore, claim, or paper authority.
+The fitting route consumes only a host-issued :class:`LoadedTypedInput`.  It
+fits numeric median imputation, standardization, and L2 logistic regression on
+the declared training subjects, applies that frozen state to every row, and
+seals the model JSON plus prediction CSV in one immutable bundle.  The same
+algorithm owner can re-fit a persisted consumed-column projection for an
+authority layer, but that computation-only route registers nothing.  This
+module chooses no cohort, split, feature, outcome, threshold, or tuning
+coordinate and grants no Planner, EvidenceStore, claim, or paper authority.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from sklearn.preprocessing import StandardScaler
 from .authority.typed_input_receipt import (
     TypedInputConsumptionReceipt,
     TypedInputRowIdentity,
+    typed_input_row_identity_sha256,
 )
 from .authority.typed_input_sdk import LoadedTypedInput
 from .canonical_json import canonical_sha256, sha256_bytes
@@ -221,12 +224,29 @@ def _numeric_features(
     )
 
 
-def _prepare_input(
+def _validated_persisted_source_receipt(
+    value: TypedInputConsumptionReceipt | Mapping[str, Any],
+) -> TypedInputConsumptionReceipt:
+    payload = (
+        value.model_dump(mode="python")
+        if isinstance(value, TypedInputConsumptionReceipt)
+        else value
+    )
+    try:
+        return TypedInputConsumptionReceipt.model_validate(payload)
+    except ValidationError as error:
+        raise PredictionModelFitError(
+            PredictionModelFitReason.SOURCE_INPUT_INVALID,
+            "persisted model source receipt is invalid",
+        ) from error
+
+
+def _prepare_frame(
     *,
-    source_input: LoadedTypedInput,
+    frame: pd.DataFrame,
+    receipt: TypedInputConsumptionReceipt,
     spec: PredictionModelFitSpec,
-) -> tuple[_PreparedInput, TypedInputConsumptionReceipt]:
-    receipt = _validated_source_receipt(source_input)
+) -> _PreparedInput:
     if not isinstance(receipt.row_identity, TypedInputRowIdentity):
         _raise(
             PredictionModelFitReason.SOURCE_IDENTITY_MISMATCH,
@@ -239,7 +259,6 @@ def _prepare_input(
             declared_unit_id_column=spec.unit_id_column,
             source_row_identity_column=receipt.row_identity.column,
         )
-    frame = source_input.to_pandas()
     if frame.empty:
         _raise(
             PredictionModelFitReason.EMPTY_INPUT,
@@ -273,6 +292,14 @@ def _prepare_input(
         role="unit_id",
         reason_code=PredictionModelFitReason.IDENTITY_INVALID,
     )
+    if (
+        typed_input_row_identity_sha256(frame[spec.unit_id_column])
+        != receipt.row_identity.sha256
+    ):
+        _raise(
+            PredictionModelFitReason.SOURCE_IDENTITY_MISMATCH,
+            "persisted unit identity does not match the typed-input receipt",
+        )
     subject_ids = _canonical_text_column(
         frame,
         column=spec.subject_id_column,
@@ -353,15 +380,28 @@ def _prepare_input(
         feature_columns=spec.feature_columns,
         training_mask=training_mask,
     )
+    return _PreparedInput(
+        unit_ids=unit_ids,
+        subject_ids=subject_ids,
+        splits=splits,
+        outcomes=outcomes,
+        features=features,
+        training_mask=training_mask,
+        evaluation_mask=evaluation_mask,
+    )
+
+
+def _prepare_input(
+    *,
+    source_input: LoadedTypedInput,
+    spec: PredictionModelFitSpec,
+) -> tuple[_PreparedInput, TypedInputConsumptionReceipt]:
+    receipt = _validated_source_receipt(source_input)
     return (
-        _PreparedInput(
-            unit_ids=unit_ids,
-            subject_ids=subject_ids,
-            splits=splits,
-            outcomes=outcomes,
-            features=features,
-            training_mask=training_mask,
-            evaluation_mask=evaluation_mask,
+        _prepare_frame(
+            frame=source_input.to_pandas(),
+            receipt=receipt,
+            spec=spec,
         ),
         receipt,
     )
@@ -506,6 +546,108 @@ def _prediction_csv_bytes(
             "prediction payload cannot be serialized canonically",
         ) from error
     return buffer.getvalue().encode("utf-8")
+
+
+def _source_projection_csv_bytes(
+    prepared: _PreparedInput,
+    spec: PredictionModelFitSpec,
+) -> bytes:
+    columns = (
+        spec.unit_id_column,
+        spec.subject_id_column,
+        spec.split_column,
+        spec.outcome_column,
+        *spec.feature_columns,
+    )
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(columns)
+    for unit_id, subject_id, split, outcome, feature_row in zip(
+        prepared.unit_ids,
+        prepared.subject_ids,
+        prepared.splits,
+        prepared.outcomes,
+        prepared.features.itertuples(index=False, name=None),
+        strict=True,
+    ):
+        features = tuple(
+            "" if np.isnan(value) else format(float(value), ".17g")
+            for value in feature_row
+        )
+        writer.writerow(
+            (
+                unit_id,
+                subject_id,
+                split,
+                int(outcome),
+                *features,
+            )
+        )
+    return buffer.getvalue().encode("utf-8")
+
+
+def prediction_model_fit_source_projection_bytes(
+    *,
+    source_input: LoadedTypedInput,
+    spec: PredictionModelFitSpec | Mapping[str, Any],
+) -> bytes:
+    """Serialize only the exact model-consumed columns in canonical CSV form."""
+
+    parsed_spec = _parse_spec(spec)
+    prepared, _ = _prepare_input(source_input=source_input, spec=parsed_spec)
+    return _source_projection_csv_bytes(prepared, parsed_spec)
+
+
+def _read_persisted_source_projection(
+    payload: bytes,
+    spec: PredictionModelFitSpec,
+) -> pd.DataFrame:
+    if not isinstance(payload, bytes) or not payload:
+        _raise(
+            PredictionModelFitReason.SOURCE_INPUT_INVALID,
+            "persisted model source must be non-empty immutable bytes",
+        )
+    expected_columns = (
+        spec.unit_id_column,
+        spec.subject_id_column,
+        spec.split_column,
+        spec.outcome_column,
+        *spec.feature_columns,
+    )
+    try:
+        text = payload.decode("utf-8", errors="strict")
+        header = next(csv.reader(io.StringIO(text, newline="")), None)
+    except (UnicodeDecodeError, csv.Error) as error:
+        raise PredictionModelFitError(
+            PredictionModelFitReason.SOURCE_INPUT_INVALID,
+            "persisted model source is not valid UTF-8 CSV",
+        ) from error
+    if header is None or tuple(header) != expected_columns:
+        _raise(
+            PredictionModelFitReason.MISSING_COLUMNS,
+            "persisted model source columns do not match the fit declaration",
+            expected_columns=list(expected_columns),
+            observed_columns=list(header or []),
+        )
+    if len(header) != len(set(header)):
+        _raise(
+            PredictionModelFitReason.MISSING_COLUMNS,
+            "persisted model source contains duplicate columns",
+        )
+    try:
+        return pd.read_csv(
+            io.BytesIO(payload),
+            dtype={
+                spec.unit_id_column: str,
+                spec.subject_id_column: str,
+                spec.split_column: str,
+            },
+        )
+    except (pd.errors.ParserError, UnicodeDecodeError, TypeError, ValueError) as error:
+        raise PredictionModelFitError(
+            PredictionModelFitReason.SOURCE_INPUT_INVALID,
+            "persisted model source cannot be parsed",
+        ) from error
 
 
 def _package_versions() -> tuple[PredictionPackageVersion, ...]:
@@ -694,18 +836,12 @@ class PredictionModelFitBundle:
         return self.__prediction_payload.to_pandas()
 
 
-def fit_binary_prediction_model(
+def _build_prediction_model_fit_bundle(
     *,
-    source_input: LoadedTypedInput,
-    spec: PredictionModelFitSpec | Mapping[str, Any],
+    prepared: _PreparedInput,
+    source_receipt: TypedInputConsumptionReceipt,
+    parsed_spec: PredictionModelFitSpec,
 ) -> PredictionModelFitBundle:
-    """Fit the fixed v1 binary model using training subjects only."""
-
-    parsed_spec = _parse_spec(spec)
-    prepared, source_receipt = _prepare_input(
-        source_input=source_input,
-        spec=parsed_spec,
-    )
     preprocessing, estimator, probabilities = _fit_train_only(prepared, parsed_spec)
     contract_sha256 = prediction_model_fit_spec_sha256(parsed_spec)
     training_subjects = tuple(
@@ -837,6 +973,87 @@ def fit_binary_prediction_model(
     )
 
 
+def fit_binary_prediction_model(
+    *,
+    source_input: LoadedTypedInput,
+    spec: PredictionModelFitSpec | Mapping[str, Any],
+) -> PredictionModelFitBundle:
+    """Fit the fixed v1 binary model using training subjects only."""
+
+    parsed_spec = _parse_spec(spec)
+    prepared, source_receipt = _prepare_input(
+        source_input=source_input,
+        spec=parsed_spec,
+    )
+    return _build_prediction_model_fit_bundle(
+        prepared=prepared,
+        source_receipt=source_receipt,
+        parsed_spec=parsed_spec,
+    )
+
+
+def revalidate_prediction_model_fit_persisted_artifacts(
+    *,
+    source_projection_csv_bytes: bytes,
+    spec: PredictionModelFitSpec | Mapping[str, Any],
+    source_receipt: TypedInputConsumptionReceipt | Mapping[str, Any],
+    expected_fit_receipt: PredictionModelFitReceipt | Mapping[str, Any],
+    model_artifact_bytes: bytes,
+    prediction_csv_bytes: bytes,
+) -> PredictionModelFitReceipt:
+    """Re-fit current persisted bytes without granting evidence authority."""
+
+    parsed_spec = _parse_spec(spec)
+    parsed_source_receipt = _validated_persisted_source_receipt(source_receipt)
+    fit_payload = (
+        expected_fit_receipt.model_dump(mode="python")
+        if isinstance(expected_fit_receipt, PredictionModelFitReceipt)
+        else expected_fit_receipt
+    )
+    try:
+        parsed_fit_receipt = PredictionModelFitReceipt.model_validate(fit_payload)
+    except ValidationError as error:
+        raise PredictionModelFitError(
+            PredictionModelFitReason.BUNDLE_INVALID,
+            "persisted fit receipt is invalid",
+        ) from error
+    if not isinstance(model_artifact_bytes, bytes) or not isinstance(
+        prediction_csv_bytes, bytes
+    ):
+        _raise(
+            PredictionModelFitReason.BUNDLE_INVALID,
+            "persisted model and prediction artifacts must be immutable bytes",
+        )
+    source_frame = _read_persisted_source_projection(
+        source_projection_csv_bytes,
+        parsed_spec,
+    )
+    prepared = _prepare_frame(
+        frame=source_frame,
+        receipt=parsed_source_receipt,
+        spec=parsed_spec,
+    )
+    expected = _build_prediction_model_fit_bundle(
+        prepared=prepared,
+        source_receipt=parsed_source_receipt,
+        parsed_spec=parsed_spec,
+    )
+    mismatched_parts: list[str] = []
+    if prediction_csv_bytes != expected.prediction_csv_bytes:
+        mismatched_parts.append("prediction_csv")
+    if model_artifact_bytes != expected.model_artifact_bytes:
+        mismatched_parts.append("model_artifact")
+    if parsed_fit_receipt != expected.receipt:
+        mismatched_parts.append("receipt")
+    if mismatched_parts:
+        _raise(
+            PredictionModelFitReason.RECOMPUTATION_MISMATCH,
+            "persisted prediction-model evidence does not match full re-fit",
+            mismatched_parts=mismatched_parts,
+        )
+    return expected.receipt
+
+
 def revalidate_prediction_model_fit_bundle(
     *,
     bundle: PredictionModelFitBundle,
@@ -877,5 +1094,7 @@ def revalidate_prediction_model_fit_bundle(
 __all__ = [
     "PredictionModelFitBundle",
     "fit_binary_prediction_model",
+    "prediction_model_fit_source_projection_bytes",
     "revalidate_prediction_model_fit_bundle",
+    "revalidate_prediction_model_fit_persisted_artifacts",
 ]
