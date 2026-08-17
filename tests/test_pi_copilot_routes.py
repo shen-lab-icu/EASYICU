@@ -5,7 +5,10 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from easyicu.webserver.app import app
-from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+from easyicu.webserver.pi_copilot.contracts import (
+    PiCopilotError,
+    ResearchProviderBinding,
+)
 from easyicu.webserver.routes import pi_copilot as route_module
 
 
@@ -15,6 +18,9 @@ class FakeService:
 
     def create_session(self, **kwargs) -> dict:
         return {"ok": True, "received": kwargs}
+
+    def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
+        return ResearchProviderBinding()
 
     def initialize_project(self, **kwargs) -> dict:
         return {"ok": True, "status": "ready", "received": kwargs}

@@ -19,7 +19,8 @@ if TYPE_CHECKING:
     from .workspace import ProjectWorkspace
 
 PROTOCOL_VERSION = "easyicu.pi-copilot/1"
-SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/1"
+LEGACY_SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/1"
+SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/2"
 MAX_MESSAGE_CHARS = 12_000
 AgentMode = Literal["research", "workspace"]
 TURN_CAPABILITIES = frozenset({"workspace_write"})
@@ -74,7 +75,12 @@ class AuthorityBinding(BaseModel):
 
 
 class ResearchProviderBinding(BaseModel):
-    """Immutable credential authority selected before a Copilot session starts."""
+    """Immutable model connection selected before a Copilot session starts.
+
+    Session schema v2 uses this one binding for both the conversational shell
+    and governed Research Agent calls.  The historical class/field name remains
+    readable so v1 sessions keep their original two-provider semantics.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -138,7 +144,10 @@ class PiSessionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["easyicu.pi-copilot-session/1"] = SESSION_SCHEMA_VERSION
+    schema_version: Literal[
+        "easyicu.pi-copilot-session/1",
+        "easyicu.pi-copilot-session/2",
+    ] = SESSION_SCHEMA_VERSION
     session_id: str
     # Product/project ownership is fixed when the Pi AgentSession is created.
     # ``None`` is accepted only so metadata written before project scoping can
@@ -181,6 +190,12 @@ class PiSessionRecord(BaseModel):
     ] = None
     last_turn_allowed_actions: list[str] = Field(default_factory=list, max_length=16)
     pinned_for_presentation: bool = False
+
+    @property
+    def uses_unified_model_connection(self) -> bool:
+        """Whether the frozen provider powers both Copilot and analysis."""
+
+        return self.schema_version == SESSION_SCHEMA_VERSION
 
 
 class PiToolResult(BaseModel):
@@ -356,6 +371,7 @@ __all__ = [
     "AgentMode",
     "AuthorityBinding",
     "HostTurnGrant",
+    "LEGACY_SESSION_SCHEMA_VERSION",
     "MAX_MESSAGE_CHARS",
     "PROTOCOL_VERSION",
     "PiCopilotError",

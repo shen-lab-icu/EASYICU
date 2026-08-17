@@ -33,10 +33,26 @@
   function api() { return window.EU_API || {}; }
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
   function runtimeReady() { return !!(state.runtime && state.runtime.status === 'ready'); }
+  function shellReady() {
+    return !!(state.runtime && (state.runtime.shell_ready === true || state.runtime.status === 'ready'));
+  }
   function apiResearchReady() {
     const runtime = state.runtime || {};
     const config = runtime.configuration || {};
     return runtimeReady() && (config.api_transport || runtime.api_transport) === 'openai-completions';
+  }
+  function connectionConfigured() {
+    if (state.researchProvider !== 'codex') return apiResearchReady();
+    return !!(
+      state.runtime && state.runtime.status !== 'unavailable'
+      && state.codexAuth && state.codexAuth.authentication_verified
+      && state.researchModel
+    );
+  }
+  function connectionReady() {
+    return state.researchProvider === 'codex'
+      ? connectionConfigured() && shellReady()
+      : apiResearchReady();
   }
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
   function agentMode() {
@@ -495,7 +511,7 @@
     if (state.loading) {
       return `<div class="gpi-inline"><span class="gpi-dot waiting"></span>${tr('Checking Pi Copilot…', '正在检查 Pi Copilot…')}</div>`;
     }
-    if (!runtimeReady()) {
+    if (!connectionReady()) {
       const blockers = (state.runtime && state.runtime.blockers) || [];
       const reason = blockers.includes('api_key_configured')
         ? tr('Connect and verify your model service before entering Pi Copilot.', '请先连接并验证模型服务，再进入 Pi Copilot。')
@@ -527,6 +543,7 @@
     return owner.renderSetup({
       state, runtime, config, blockers, runtimeMissing, tr, esc, option,
       providerPreset, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(),
+      connectionConfigured: connectionConfigured(), connectionReady: connectionReady(),
       staticPreview: isStaticPreview(),
     });
   }
@@ -534,7 +551,7 @@
   function providerBindingSummary() {
     const owner = window.EU_GUIDED_PI_PROVIDER;
     return owner && typeof owner.renderBindingSummary === 'function'
-      ? owner.renderBindingSummary({ state, tr, esc, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady() })
+      ? owner.renderBindingSummary({ state, tr, esc, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(), connectionReady: connectionReady() })
       : '';
   }
 
@@ -829,6 +846,7 @@
     const session = state.session || {};
     const model = session.model || {};
     const research = session.research_provider || {};
+    const connection = session.model_connection || null;
     const messages = state.messages.map(messageHtml).join('');
     const stale = sessionIsStale();
     const workspace = agentMode() === 'workspace';
@@ -841,8 +859,9 @@
               <button type="button" data-gpi-mode-switch="research" aria-pressed="${!workspace}">${tr('Research', '研究')}</button>
               <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${workspace}">${tr('Workspace', '工作区')}</button>
             </div>
-            <span title="${tr('Copilot conversation model', 'Copilot 对话模型')}">${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
-            <span title="${tr('Research Agent analysis model', 'Research Agent 分析模型')}">${esc([research.provider, research.model].filter(Boolean).join(' · ') || tr('analysis model', '分析模型'))}</span>
+            ${connection
+              ? `<span title="${tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')}">${esc([connection.provider, connection.model].filter(Boolean).join(' · ') || 'model')}</span>`
+              : `<span title="${tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定')}">${esc([model.id || (state.runtime && state.runtime.model), research.provider, research.model].filter(Boolean).join(' / ') || 'legacy model binding')}</span>`}
             <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Full demo', '完整演示')}</button>
             <button class="gpi-link" type="button" data-gpi-presentation-pin aria-pressed="${session.pinned_for_presentation ? 'true' : 'false'}">${session.pinned_for_presentation ? tr('Saved for presentation', '已保留演示') : tr('Save for presentation', '保留演示')}</button>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
@@ -997,7 +1016,7 @@
     state.host.hidden = false;
     state.host.innerHTML = state.shell === 'legacy'
       ? statusBanner()
-      : (state.demoMode ? demoPanel() : ((state.showSetup || !runtimeReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))));
+      : (state.demoMode ? demoPanel() : ((state.showSetup || !connectionReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))));
     syncProjectWorkflowAside();
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
@@ -1021,7 +1040,7 @@
       if (projectId()) {
         await prepareProject();
       }
-      if (!runtimeReady()) {
+      if (!connectionReady()) {
         state.showSetup = true;
       }
     } catch (error) {
@@ -1077,6 +1096,9 @@
     if (state.codexBusy || !api().startPiCopilotCodexLogin) return;
     state.codexBusy = true; state.error = ''; render();
     try {
+      if (api().saveSetting) await api().saveSetting('ai_enabled', true);
+      const runtimePayload = await api().loadPiCopilotStatus();
+      state.runtime = runtimePayload && runtimePayload.runtime;
       const payload = await api().startPiCopilotCodexLogin(flow || 'browser');
       state.codexAuth = payload && payload.auth ? payload.auth : state.codexAuth;
       state.codexLogin = payload && payload.login_started ? {
@@ -1164,8 +1186,33 @@
     }
   }
 
+  async function finishProviderSetup() {
+    if (!connectionConfigured()) return;
+    state.setupSaving = true; state.error = ''; render();
+    try {
+      if (!shellReady() && api().saveSetting) {
+        await api().saveSetting('ai_enabled', true);
+        const payload = await api().loadPiCopilotStatus();
+        state.runtime = payload && payload.runtime;
+      }
+      if (!connectionReady()) {
+        throw new Error(tr('The selected model connection is not ready yet.', '所选模型连接尚未就绪。'));
+      }
+      state.showSetup = false;
+    } catch (error) {
+      state.error = errorText(error);
+    } finally {
+      state.setupSaving = false; render();
+    }
+  }
+
   async function createSession() {
     if (state.creating || !projectId()) return;
+    if (!connectionReady()) {
+      state.showSetup = true;
+      state.error = tr('Finish the one model connection before starting a conversation.', '请先完成这一套模型连接，再开始对话。');
+      render(); return;
+    }
     if (state.researchProvider === 'codex' && (!state.codexAuth || !state.codexAuth.authentication_verified || !state.researchModel)) {
       state.showSetup = true;
       state.error = tr('Connect your ChatGPT account and select an account model first.', '请先连接 ChatGPT 账户并选择账户模型。');
@@ -1553,7 +1600,7 @@
 
   async function loadProjectSessions() {
     const expectedProjectId = projectId();
-    if (!runtimeReady() || !expectedProjectId) return;
+    if (!connectionReady() || !expectedProjectId) return;
     const listed = await api().loadPiCopilotSessions(100, expectedProjectId);
     if (expectedProjectId !== projectId()) return;
     state.sessions = (listed && listed.sessions) || [];
@@ -1606,7 +1653,7 @@
         state.project = { ...state.project, binding_receipt: null };
       }
       await loadWorkflow();
-      if (runtimeReady()) await loadProjectSessions();
+      if (connectionReady()) await loadProjectSessions();
     } catch (error) {
       if (expectedProjectId !== projectId()) return;
       if (error && error.code === 'pi_project_initialization_required') {
@@ -1883,7 +1930,7 @@
           state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
           render(); return;
         }
-        state.showSetup = false; state.error = ''; render(); return;
+        finishProviderSetup(); return;
       }
       if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
       if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }

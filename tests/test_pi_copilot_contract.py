@@ -21,9 +21,11 @@ from easyicu.webserver import agent_pipeline_runs, guided_sessions, settings
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     HostTurnGrant,
+    LEGACY_SESSION_SCHEMA_VERSION,
     PiCopilotError,
     PiProjectBindingHandoffReceipt,
     ResearchProviderBinding,
+    SESSION_SCHEMA_VERSION,
     PiSessionRecord,
     ToolExecutionContext,
     WorkspaceMutationLimitError,
@@ -127,6 +129,18 @@ def test_research_provider_binding_is_coherent_and_browser_projection_is_safe() 
         "model": "gpt-5.6-luna",
     }
     assert "account_session_sha256" not in binding.public_projection()
+
+
+def test_session_schema_v2_unifies_the_model_connection_without_migrating_v1() -> None:
+    legacy = PiSessionRecord(
+        schema_version=LEGACY_SESSION_SCHEMA_VERSION,
+        session_id="pi-legacy-models",
+    )
+    current = PiSessionRecord(session_id="pi-one-model")
+
+    assert legacy.uses_unified_model_connection is False
+    assert current.schema_version == SESSION_SCHEMA_VERSION
+    assert current.uses_unified_model_connection is True
 
 
 def test_service_rejects_symlinked_gateway_workspace_root(tmp_path: Path) -> None:
@@ -520,6 +534,67 @@ def test_session_requires_both_global_and_per_session_opt_in(
     with pytest.raises(PiCopilotError) as turn_block:
         service.create_session(project_id="project-opt-in", external_llm_opt_in=False)
     assert turn_block.value.code == "external_llm_opt_in_required"
+
+
+def test_new_codex_session_uses_one_account_model_for_chat_and_analysis(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    base_gateway = FakeGateway()
+    account_gateway = FakeGateway()
+
+    class RecordingCodexPool:
+        def __init__(self) -> None:
+            self.calls: list[tuple[ResearchProviderBinding, bool]] = []
+
+        def gateway_for(
+            self,
+            binding: ResearchProviderBinding,
+            *,
+            refresh_account: bool = False,
+        ) -> FakeGateway:
+            self.calls.append((binding, refresh_account))
+            return account_gateway
+
+        def close(self) -> None:
+            return None
+
+    pool = RecordingCodexPool()
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=base_gateway,
+        codex_gateway_pool=pool,  # type: ignore[arg-type]
+    )
+    model_connection = ResearchProviderBinding(
+        provider="codex",
+        credential_source="codex_user_auth",
+        authentication_mode="chatgpt_account",
+        model="gpt-5.6-luna",
+        account_session_sha256="a" * 64,
+    )
+
+    created = service.create_session(
+        project_id="project-one-model",
+        external_llm_opt_in=True,
+        research_provider=model_connection,
+    )
+
+    assert not base_gateway.calls
+    assert account_gateway.calls[0][0] == "session.create"
+    assert pool.calls == [(model_connection, True)]
+    assert created["session"]["model_connection"] == (
+        model_connection.public_projection()
+    )
+    assert created["session"]["research_provider"] == (
+        model_connection.public_projection()
+    )
+
+    record = service._get_record(created["session"]["session_id"])
+    legacy = record.model_copy(
+        update={"schema_version": LEGACY_SESSION_SCHEMA_VERSION}
+    )
+    assert service._conversation_gateway(record) is account_gateway
+    assert service._conversation_gateway(legacy) is base_gateway
 
 
 def test_session_binding_stales_then_rebinds_explicitly(

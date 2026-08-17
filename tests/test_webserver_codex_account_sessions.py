@@ -173,6 +173,35 @@ def test_browser_login_creates_http_only_isolated_user_session() -> None:
     ) in _FakeRuntime.instances[0].calls
 
 
+def test_pi_conversation_projection_returns_only_private_auth_coordinate() -> None:
+    response = Response()
+    codex_account_sessions.start_login(_request(), response)
+    cookie = _cookie_from_response(response)
+    _FakeRuntime.logged_in = True
+    request = _request(cookie)
+    binding = codex_account_sessions.binding_for_request(request)
+    codex_home = Path(_FakeRuntime.instances[0].kwargs["environment"]["CODEX_HOME"])
+    auth_file = codex_home / "auth.json"
+    auth_file.write_text('{"tokens":{"access_token":"not-returned"}}', encoding="utf-8")
+    auth_file.chmod(0o600)
+
+    environment = codex_account_sessions.pi_conversation_environment_for_binding(
+        binding,
+        model="gpt-5.6-luna",
+    )
+
+    assert environment["EASYICU_PI_PROVIDER"] == "openai-codex"
+    assert environment["EASYICU_PI_API"] == "openai-codex-responses"
+    assert environment["EASYICU_PI_MODEL"] == "gpt-5.6-luna"
+    assert environment["EASYICU_PI_CODEX_AUTH_FILE"] == str(auth_file)
+    assert environment["EASYICU_PI_CODEX_SESSION_SHA256"] == binding
+    assert "not-returned" not in str(environment)
+    assert (
+        "account/read",
+        {"refreshToken": True},
+    ) in _FakeRuntime.instances[0].calls
+
+
 def test_two_browser_sessions_never_share_codex_home() -> None:
     first_response = Response()
     second_response = Response()

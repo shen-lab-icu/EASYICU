@@ -1,8 +1,9 @@
 """Per-browser Codex/ChatGPT authentication for the native Web product.
 
 The browser receives only an opaque HttpOnly session cookie. Codex-managed
-tokens stay inside an isolated server-side ``CODEX_HOME`` and are never read,
-serialized, or copied by EasyICU.
+tokens stay inside an isolated server-side ``CODEX_HOME``. They are never
+returned to the browser or copied into a project; the isolated Pi conversation
+process may read the current access credential in memory from that exact home.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _USER_CODE_RE = re.compile(r"[A-Za-z0-9-]{4,32}")
 _MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _SUBSCRIPTION_MODEL_CATALOG_AUTHORITY = "easyicu.codex-subscription-model-catalog/1"
+_MAX_CODEX_AUTH_FILE_BYTES = 256 * 1024
 # Codex App Server releases can lag the subscription backend catalog. These
 # account models are documented by OpenAI and independently shipped by the
 # OpenCode/Pi Codex OAuth providers; the real App Server turn remains the final
@@ -270,6 +272,65 @@ def environment_for_binding(
         selected = _validated_model(managed, model)
     environment = environment_for_coordinates(coordinates)
     environment["EASYICU_CODEX_MODEL"] = selected
+    return environment
+
+
+def _private_auth_file(coordinates: CodexSessionCoordinates) -> Path:
+    candidate = coordinates.codex_home / "auth.json"
+    try:
+        metadata = candidate.lstat()
+    except OSError as exc:
+        raise CodexAccountSessionError("codex_auth_login_required") from exc
+    if (
+        candidate.is_symlink()
+        or not candidate.is_file()
+        or candidate.resolve() != candidate
+        or candidate.parent.resolve() != coordinates.codex_home
+        or metadata.st_size > _MAX_CODEX_AUTH_FILE_BYTES
+        or metadata.st_mode & 0o077
+    ):
+        raise CodexAccountSessionError("codex_auth_file_invalid")
+    return candidate
+
+
+def pi_conversation_environment_for_binding(
+    binding_sha256: str,
+    *,
+    model: str,
+) -> dict[str, str]:
+    """Project one verified account into an isolated Pi conversation process.
+
+    App Server remains the sole login and refresh owner.  Pi receives only the
+    exact private auth-file coordinate and rereads the current access token for
+    each provider call; no credential value crosses this Python contract.
+    """
+
+    coordinates = _coordinates_from_binding(binding_sha256)
+    managed = _runtime_for(coordinates)
+    with managed.lock:
+        try:
+            account = managed.runtime.request(
+                "account/read",
+                {"refreshToken": True},
+                timeout=30.0,
+            ).get("account")
+        except CodexAppServerError as exc:
+            raise CodexAccountSessionError(exc.code) from exc
+        if not isinstance(account, Mapping) or account.get("type") != "chatgpt":
+            raise CodexAccountSessionError("codex_auth_login_required")
+        selected = _validated_model(managed, model)
+        auth_file = _private_auth_file(coordinates)
+    environment = environment_for_coordinates(coordinates)
+    environment.update(
+        {
+            "EASYICU_PI_PROVIDER": "openai-codex",
+            "EASYICU_PI_MODEL": selected,
+            "EASYICU_PI_BASE_URL": "https://chatgpt.com/backend-api",
+            "EASYICU_PI_API": "openai-codex-responses",
+            "EASYICU_PI_CODEX_AUTH_FILE": str(auth_file),
+            "EASYICU_PI_CODEX_SESSION_SHA256": coordinates.binding_sha256,
+        }
+    )
     return environment
 
 
@@ -653,6 +714,7 @@ __all__ = [
     "environment_for_request",
     "logout",
     "models",
+    "pi_conversation_environment_for_binding",
     "shutdown_all",
     "start_login",
     "status",
