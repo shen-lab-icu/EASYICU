@@ -67,6 +67,11 @@ from ..authority.secret_redaction import (
     string_contains_secret,
 )
 from ..orchestration.profiles import is_paper_facing_profile
+from .kernel_identity import (
+    EXECUTION_KERNEL_IDENTITY_SCHEMA,
+    build_execution_kernel_identity,
+    execution_kernel_relative_paths,
+)
 from .method_capabilities import set_runtime_capability_snapshot_provider
 
 _SAFE_INHERITED_ENV_KEYS = (
@@ -98,20 +103,6 @@ _TEARDOWN_ABSENCE_POLL_SECONDS = 2.0
 # RunResult, and evidence logs.
 MAX_RUNNER_CAPTURE_BYTES = 1024 * 1024
 _CAPTURE_TRUNCATED_MARKER = b"[... earlier runner output truncated ...]\n"
-
-
-def _python_source_tree_sha256(root: Path) -> str:
-    """Digest Python sources by relative path and bytes."""
-
-    digest = hashlib.sha256()
-    for path in sorted(Path(root).rglob("*.py")):
-        relative = path.relative_to(root).as_posix().encode("utf-8")
-        digest.update(len(relative).to_bytes(8, "big"))
-        digest.update(relative)
-        payload = path.read_bytes()
-        digest.update(len(payload).to_bytes(8, "big"))
-        digest.update(payload)
-    return digest.hexdigest()
 
 
 # These coordinates are owned by the host runtime.  ``extra_env`` remains a
@@ -2403,8 +2394,11 @@ class DockerRunner:
                 )
             self._retry_stale_container_cleanup("runtime-provenance")
             image_id, repo_digests = self._inspect_image_identity()
-            host_source_sha256 = _python_source_tree_sha256(
-                Path(__file__).resolve().parents[1]
+            package_root = Path(__file__).resolve().parents[2]
+            kernel_paths = execution_kernel_relative_paths(package_root)
+            kernel_identity = build_execution_kernel_identity(
+                package_root,
+                relative_paths=kernel_paths,
             )
 
             distribution_script = (
@@ -2412,22 +2406,38 @@ class DockerRunner:
                 "import os\n"
                 "import sys\n"
                 "from pathlib import Path\n"
-                "import easyicu.research_agent as research_agent\n"
+                "import easyicu\n"
                 "from importlib.metadata import distributions\n"
-                "root = Path(research_agent.__file__).resolve().parent\n"
+                "root = Path(easyicu.__file__).resolve().parent\n"
+                f"relative_paths = {list(kernel_paths)!r}\n"
                 "digest = hashlib.sha256()\n"
-                "for path in sorted(root.rglob('*.py')):\n"
-                "    relative = path.relative_to(root).as_posix().encode('utf-8')\n"
+                "for relative_text in relative_paths:\n"
+                "    path = root / relative_text\n"
+                "    if not path.is_file() or path.is_symlink():\n"
+                "        raise RuntimeError(\n"
+                "            f'EasyICU execution-kernel file unavailable: {relative_text}'\n"
+                "        )\n"
+                "    relative = relative_text.encode('utf-8')\n"
                 "    digest.update(len(relative).to_bytes(8, 'big'))\n"
                 "    digest.update(relative)\n"
                 "    payload = path.read_bytes()\n"
                 "    digest.update(len(payload).to_bytes(8, 'big'))\n"
                 "    digest.update(payload)\n"
-                f"expected = {host_source_sha256!r}\n"
+                f"expected = {kernel_identity.source_sha256!r}\n"
                 "if digest.hexdigest() != expected:\n"
                 "    raise RuntimeError(\n"
-                "        'EasyICU research-agent source mismatch: ' \n"
+                "        'EasyICU execution-kernel source mismatch: ' \n"
                 "        f'expected {expected}, observed {digest.hexdigest()}'\n"
+                "    )\n"
+                "lock_path = Path('/opt/easyicu-runner/requirements.lock')\n"
+                "if not lock_path.is_file() or lock_path.is_symlink():\n"
+                "    raise RuntimeError('EasyICU Runner requirements.lock unavailable')\n"
+                "observed_lock = hashlib.sha256(lock_path.read_bytes()).hexdigest()\n"
+                f"expected_lock = {kernel_identity.requirements_lock_sha256!r}\n"
+                "if observed_lock != expected_lock:\n"
+                "    raise RuntimeError(\n"
+                "        'EasyICU Runner requirements.lock mismatch: ' \n"
+                "        f'expected {expected_lock}, observed {observed_lock}'\n"
                 "    )\n"
                 "rows = {}\n"
                 "for dist in distributions():\n"
@@ -2562,7 +2572,12 @@ class DockerRunner:
                 f"# docker_image_reference={self.image}\n"
                 f"# docker_image_id={image_id}\n"
                 f"# docker_repo_digests={','.join(repo_digests)}\n"
-                f"# research_agent_source_sha256={host_source_sha256}\n"
+                f"# execution_kernel_identity_sha256={kernel_identity.identity_sha256}\n"
+                f"# execution_kernel_identity_schema={EXECUTION_KERNEL_IDENTITY_SCHEMA}\n"
+                f"# execution_kernel_source_sha256={kernel_identity.source_sha256}\n"
+                f"# execution_kernel_files_sha256={kernel_identity.files_sha256}\n"
+                f"# execution_kernel_file_count={kernel_identity.file_count}\n"
+                f"# runner_requirements_lock_sha256={kernel_identity.requirements_lock_sha256}\n"
                 "# capture_method=importlib.metadata.distributions\n"
                 "# generated_by=easyicu.research_agent.execution.runner.DockerRunner\n"
                 f"{requirements}\n"
@@ -2577,6 +2592,14 @@ class DockerRunner:
                 "requirements_sha256": hashlib.sha256(
                     requirements_text.encode("utf-8")
                 ).hexdigest(),
+                "execution_kernel_identity_schema": (EXECUTION_KERNEL_IDENTITY_SCHEMA),
+                "execution_kernel_identity_sha256": kernel_identity.identity_sha256,
+                "execution_kernel_source_sha256": kernel_identity.source_sha256,
+                "execution_kernel_files_sha256": kernel_identity.files_sha256,
+                "execution_kernel_file_count": kernel_identity.file_count,
+                "runner_requirements_lock_sha256": (
+                    kernel_identity.requirements_lock_sha256
+                ),
                 "method_capabilities": method_capabilities,
             }
             self._cached_runtime_provenance = dict(provenance)
@@ -2614,7 +2637,7 @@ class DockerRunner:
 
         provenance, requirements = self._capture_runtime_provenance()
         return {
-            "schema": "easyicu.docker_runtime_preflight/2",
+            "schema": "easyicu.docker_runtime_preflight/3",
             "provenance": dict(provenance),
             "requirements": requirements,
         }
@@ -2624,7 +2647,7 @@ class DockerRunner:
 
         if (
             set(bundle) != {"schema", "provenance", "requirements"}
-            or bundle.get("schema") != "easyicu.docker_runtime_preflight/2"
+            or bundle.get("schema") != "easyicu.docker_runtime_preflight/3"
         ):
             raise RuntimeError("Docker runtime preflight bundle schema mismatch")
         raw_provenance = bundle.get("provenance")
@@ -2640,6 +2663,12 @@ class DockerRunner:
             "network",
             "dependency_capture_method",
             "requirements_sha256",
+            "execution_kernel_identity_schema",
+            "execution_kernel_identity_sha256",
+            "execution_kernel_source_sha256",
+            "execution_kernel_files_sha256",
+            "execution_kernel_file_count",
+            "runner_requirements_lock_sha256",
             "method_capabilities",
         }:
             raise RuntimeError("Docker runtime preflight provenance schema mismatch")

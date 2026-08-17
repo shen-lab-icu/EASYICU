@@ -310,7 +310,7 @@ def _pipeline_with_runtime_image(
         _runner_kind="docker",
         _expected_runner_image_digest=expected,
         _validated_runtime_bundle={
-            "schema": "easyicu.docker_runtime_preflight/2",
+            "schema": "easyicu.docker_runtime_preflight/3",
             "provenance": {"image_id": actual},
         },
         _runner_network="none",

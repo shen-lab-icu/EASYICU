@@ -63,8 +63,10 @@ def test_runner_image_workflow_builds_smokes_and_generates_sbom() -> None:
     assert "--network none" in workflow
     assert "--read-only" in workflow
     assert "--cap-drop ALL" in workflow
-    assert "actions/checkout@11d5960a326750d5838078e36cf38b85af677262" in workflow
+    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
     assert "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" in workflow
+    assert "src/easyicu/research_agent/execution/kernel_identity.py" in workflow
+    assert "tests/research_agent/test_execution_kernel_identity.py" in workflow
     assert "format: cyclonedx-json" in workflow
 
 
@@ -697,7 +699,8 @@ def test_run_invokes_subprocess_and_writes_log(
         cmd for cmd in captured if "importlib.metadata" in " ".join(cmd)
     )
     metadata_script = " ".join(metadata_cmd)
-    assert "EasyICU research-agent source mismatch" in metadata_script
+    assert "EasyICU execution-kernel source mismatch" in metadata_script
+    assert "EasyICU Runner requirements.lock mismatch" in metadata_script
     assert "sys.stdout.flush()" in metadata_script
     assert "os._exit(0)" in metadata_script
     assert "--rm" not in metadata_cmd
@@ -735,12 +738,24 @@ def test_run_invokes_subprocess_and_writes_log(
     )
     assert "lifelines" in provenance["method_capabilities"]
     assert "shap" not in provenance["method_capabilities"]
+    assert provenance["execution_kernel_identity_schema"] == (
+        "easyicu.execution_kernel_identity/1"
+    )
+    assert provenance["execution_kernel_file_count"] > 0
+    for field in (
+        "execution_kernel_identity_sha256",
+        "execution_kernel_source_sha256",
+        "execution_kernel_files_sha256",
+        "runner_requirements_lock_sha256",
+    ):
+        assert len(provenance[field]) == 64
     requirements_text = (result.out_dir / "runner_requirements.lock.txt").read_text(
         encoding="utf-8"
     )
     assert "numpy==2.0.0" in requirements_text
     assert "# capture_method=importlib.metadata.distributions" in requirements_text
-    assert "# research_agent_source_sha256=" in requirements_text
+    assert "# execution_kernel_source_sha256=" in requirements_text
+    assert "# runner_requirements_lock_sha256=" in requirements_text
     assert (
         "# generated_by=easyicu.research_agent.execution.runner.DockerRunner"
         in requirements_text
