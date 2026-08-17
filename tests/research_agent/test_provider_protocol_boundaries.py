@@ -206,8 +206,8 @@ def test_production_prompt_calls_use_the_authorized_delivery_boundary() -> None:
 
     The entitlement is structural and already exists: a delivery boundary is a
     module that registers itself through ``_register_provider_wrapper`` so the
-    wrapped client stays discoverable. Every one of the six files that deliver
-    today does exactly that, so the string set is deleted rather than extended.
+    wrapped client stays discoverable. Every reviewed file that delivers today
+    does exactly that, so the string set is deleted rather than extended.
     The two rules in this file now compose into one contract instead of two
     independent lists: only a reviewed owner may register (the test below), and
     only a registrant may deliver (here).
@@ -248,14 +248,14 @@ def test_provider_trust_registration_is_confined_to_reviewed_owners() -> None:
         # This list IS the right mechanism here: "who may register provider
         # trust" is a review decision, not a structural property. Each entry is
         # a transparent wrapper that delegates to an inner client and publishes
-        # it so mock discovery can still walk through -- the two additions are
-        # the per-consumer prompt-transport envelope and the durable run/batch
-        # stop-loss, both read before being added.
+        # it so mock discovery can still walk through. Each new wrapper is read
+        # as a distinct trust-boundary change before it is added here.
         "_register_provider_wrapper": {
             "src/easyicu/research_agent/providers/llm.py",
             "src/easyicu/research_agent/providers/cost.py",
             "src/easyicu/research_agent/providers/prompt_budget.py",
             "src/easyicu/research_agent/providers/hard_stop.py",
+            "src/easyicu/research_agent/providers/efficiency_budget.py",
             "src/easyicu/research_agent/replication/envelope.py",
             "tools/run_research_know_how_planner_ab.py",
         },

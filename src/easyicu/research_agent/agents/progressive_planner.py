@@ -38,7 +38,11 @@ from ..planning.progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
 )
-from ..planning.progressive_artifacts import ProgressivePlannerCheckpointEmitter
+from ..planning.progressive_artifacts import (
+    ProgressiveCompileReplayAttempt,
+    ProgressiveCompilerFinding,
+    ProgressivePlannerCheckpointEmitter,
+)
 from ..planning.progressive_resume import (
     ProgressivePrefixState,
     assemble_progressive_skeleton,
@@ -75,7 +79,16 @@ from .plan_payload import bind_literature_citation_authority
 
 _GUIDE = load_prompt_pack()["progressive_planner"]
 _MAX_INITIAL_PARSE_RETRIES = 2
-_MAX_COMPILE_REVISIONS = 4
+# A compiler finding gets one targeted repair. Repeating the same expensive
+# current-step generation is less useful than persisting it for local replay.
+_MAX_COMPILE_REVISIONS = 1
+_NON_REPAIRABLE_COORDINATE_FINDINGS = frozenset(
+    {
+        "progressive_step_foundation_coordinate_mismatch",
+        "progressive_step_materialization_mismatch",
+        "progressive_step_outline_digest_mismatch",
+    }
+)
 _MAX_OUTLINE_OUTPUT_TOKENS = 4_000
 _MAX_FOUNDATION_OUTPUT_TOKENS = 4_000
 _MAX_STEP_OUTPUT_TOKENS = 8_000
@@ -483,12 +496,22 @@ class ProgressivePlannerAgent:
         self.last_outline: Optional[ProgressivePlanOutline] = None
         self.last_foundation: Optional[ProgressiveFoundationMaterialization] = None
         self.last_materializations: list[ProgressiveStepMaterialization] = []
+        self.last_compile_failure_attempts: list[
+            ProgressiveCompileReplayAttempt
+        ] = []
         self.last_skeleton: Optional[ProgressivePlanSkeleton] = None
         self.last_resume_validated = False
         self.last_dropped_plan_keys: dict[str, list[str]] = {
             "top_level": [],
             "steps": [],
         }
+
+    def capture_efficiency_metrics(self) -> None:
+        """Copy the active Planner budget receipt into checkpoint metrics."""
+
+        snapshot = getattr(self.llm, "efficiency_snapshot", None)
+        if callable(snapshot) and self.last_prompt_metrics:
+            self.last_prompt_metrics["efficiency_budget"] = snapshot()
 
     @staticmethod
     def _request_authorities(
@@ -946,6 +969,7 @@ class ProgressivePlannerAgent:
                     available_product_refs=prefix_state.available_product_refs,
                 )
             compiler_observation: Mapping[str, Any] | None = None
+            self.last_compile_failure_attempts = []
             for revision in range(_MAX_COMPILE_REVISIONS + 1):
                 materialization_prompt = self._materialization_prompt(
                     context=context,
@@ -1011,13 +1035,14 @@ class ProgressivePlannerAgent:
                         "the current outline coordinate. Never return other steps."
                     ),
                 )
-                validate_progressive_materialization_coordinate(
-                    materialization,
-                    outline_step=outline_step,
-                    outline_step_sha256=outline_step_sha256,
-                    step_index=step_index,
-                )
+                self.capture_efficiency_metrics()
                 try:
+                    validate_progressive_materialization_coordinate(
+                        materialization,
+                        outline_step=outline_step,
+                        outline_step_sha256=outline_step_sha256,
+                        step_index=step_index,
+                    )
                     candidate_state = compile_progressive_prefix(
                         prefix_state,
                         materialization,
@@ -1031,6 +1056,27 @@ class ProgressivePlannerAgent:
                         reporting_method_source_keys=reporting_method_source_keys,
                     )
                 except ProgressivePlanCompileError as exc:
+                    self.last_compile_failure_attempts.append(
+                        ProgressiveCompileReplayAttempt(
+                            revision=revision,
+                            step_schema_authority_sha256=(
+                                step_schema.authority_sha256
+                                if step_schema is not None
+                                else None
+                            ),
+                            materialization=materialization,
+                            materialization_sha256=canonical_sha256(
+                                materialization.model_dump(mode="json")
+                            ),
+                            compiler_finding=(
+                                ProgressiveCompilerFinding.model_validate(
+                                    exc.details
+                                )
+                            ),
+                        )
+                    )
+                    if exc.reason_code in _NON_REPAIRABLE_COORDINATE_FINDINGS:
+                        raise
                     if revision >= _MAX_COMPILE_REVISIONS:
                         raise
                     if exc.step_index is not None and int(exc.step_index) < step_index:
@@ -1050,6 +1096,7 @@ class ProgressivePlannerAgent:
                     compiler_observation = exc.details
                     continue
                 prefix_state = candidate_state
+                self.last_compile_failure_attempts = []
                 self.last_materializations = list(prefix_state.materializations)
                 self.last_prompt_metrics[
                     "step_materialization_payload_bytes"
@@ -1092,6 +1139,7 @@ class ProgressivePlannerAgent:
         required_primary_cohort_selection_mode: str | None = None,
     ) -> AnalysisPlan:
         self.last_resume_validated = False
+        self.last_compile_failure_attempts = []
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
                 "Progressive Planner know-how authority and prompt must be supplied together"
@@ -1288,6 +1336,7 @@ class ProgressivePlannerAgent:
                     "any executable step-detail fields."
                 ),
             )
+            self.capture_efficiency_metrics()
         self._validate_outline_authority(
             outline,
             analysis_types=analysis_types,
@@ -1402,6 +1451,7 @@ class ProgressivePlannerAgent:
                     "to the supplied outline digest."
                 ),
             )
+            self.capture_efficiency_metrics()
         assert foundation_materialization is not None
         if foundation_materialization.outline_sha256 != outline_sha256:
             raise ProgressivePlanCompileError(

@@ -165,6 +165,63 @@ def test_progressive_resume_is_explicitly_development_only(
         )
 
 
+def test_planner_efficiency_budget_is_complete_and_development_only(
+    ra, tmp_path: Path
+) -> None:
+    limits = {
+        "development_planner_efficiency_max_calls": 6,
+        "development_planner_efficiency_max_reported_tokens": 100_000,
+        "development_planner_efficiency_max_wall_seconds": 600.0,
+    }
+
+    with pytest.raises(ValueError, match="configured together"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_diagnostic=True,
+            planner_strategy="progressive_v2",
+            development_planner_efficiency_max_calls=6,
+        )
+    with pytest.raises(ValueError, match="development-only profile"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            planner_strategy="progressive_v2",
+            **limits,
+        )
+    with pytest.raises(ValueError, match="planner_strategy='progressive_v2'"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_diagnostic=True,
+            **limits,
+        )
+    with pytest.raises(ValueError, match="paper-facing submission profile"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_diagnostic=True,
+            planner_strategy="progressive_v2",
+            submission_profile_name="npj_dm",
+            submission_profile_version="20260719",
+            **limits,
+        )
+
+    config = ra.PipelineConfig(
+        workdir=tmp_path,
+        planner_strategy="progressive_v2",
+        submission_profile_name="npj_dm_e1_canary_dev",
+        submission_profile_version="20260817",
+        **limits,
+    )
+
+    assert config.canonical_payload()[
+        "development_planner_efficiency_max_reported_tokens"
+    ] == 100_000
+    recovered = ra.PipelineConfig.from_recovery_payload(
+        config.recovery_payload(),
+        expected_digest=config.canonical_digest(),
+    )
+    assert recovered.development_planner_efficiency_max_calls == 6
+    assert recovered.development_planner_efficiency_max_wall_seconds == 600.0
+
+
 def test_legacy_flat_constructor_is_a_warning_only_adapter(ra, tmp_path: Path) -> None:
     client = ra.MockLLMClient()
 

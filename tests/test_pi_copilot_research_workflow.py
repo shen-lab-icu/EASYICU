@@ -3320,7 +3320,8 @@ def test_planner_failure_artifact_persists_only_safe_attempt_metadata(
 
     assert relative == "diagnostics/research_pipeline_failure.json"
     payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "easyicu.web-research-pipeline-failure/3"
+    assert payload["schema_version"] == "easyicu.web-research-pipeline-failure/4"
+    assert payload["typed_failure"] == {}
     assert payload["structured_attempts"] == [
         {
             "attempt": 1,
@@ -3354,7 +3355,89 @@ def test_pipeline_failure_type_is_a_closed_nonsecret_category(tmp_path: Path) ->
 
     payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
     assert payload["failure_type"] == "error"
+    assert payload["typed_failure"] == {}
     assert "sk_secret" not in json.dumps(payload)
+
+
+def test_pipeline_failure_projects_only_safe_progressive_compiler_coordinates(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.planning.progressive_contract import (
+        ProgressivePlanCompileError,
+    )
+
+    secret = "sk-provider-secret-in-compiler-message"
+    failure = ProgressivePlanCompileError(
+        "progressive_unknown_variable",
+        f"model candidate echoed {secret}",
+        step_id="05_primary",
+        step_index=4,
+        path="model_terms[1]",
+    )
+
+    code = agent_pipeline_runs._pipeline_failure_code(failure)
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path,
+        exc=failure,
+        code=code,
+    )
+
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert code == "research_pipeline_progressive_compile_failed"
+    assert payload["typed_failure"] == {
+        "owner": "easyicu.planning.progressive_compiler_v1",
+        "reason_code": "progressive_unknown_variable",
+        "step_id": "05_primary",
+        "step_index": 4,
+        "path": "model_terms[1]",
+    }
+    assert secret not in json.dumps(payload)
+
+
+def test_pipeline_failure_projects_closed_planner_efficiency_receipt(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.providers.efficiency_budget import (
+        PlannerEfficiencyBudgetExhausted,
+    )
+
+    failure = PlannerEfficiencyBudgetExhausted(
+        reason="reported_token_limit",
+        snapshot={
+            "calls": 5,
+            "reported_tokens": 101_000,
+            "elapsed_seconds": 123.4567891,
+            "limits": {
+                "max_calls": 6,
+                "max_reported_tokens": 100_000,
+                "max_wall_seconds": 600.0,
+            },
+        },
+    )
+
+    code = agent_pipeline_runs._pipeline_failure_code(failure)
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path,
+        exc=failure,
+        code=code,
+    )
+
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert code == "research_pipeline_planner_efficiency_budget_exhausted"
+    assert payload["failure_type"] == "provider_budget"
+    assert payload["typed_failure"] == {
+        "owner": "easyicu.providers.planner_efficiency_budget_v1",
+        "reason_code": "planner_efficiency_budget_exhausted",
+        "reason": "reported_token_limit",
+        "calls": 5,
+        "reported_tokens": 101_000,
+        "elapsed_seconds": 123.456789,
+        "limits": {
+            "max_calls": 6,
+            "max_reported_tokens": 100_000,
+            "max_wall_seconds": 600.0,
+        },
+    }
 
 
 def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
@@ -3633,6 +3716,19 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         "config"
     ].development_progressive_resume_checkpoint_sha256 == (
         hashlib.sha256(b"{}").hexdigest() if expected_resume_path else None
+    )
+    expected_efficiency_calls = 6 if budget_mode != "full_reviewed" else None
+    assert (
+        calls["config"].development_planner_efficiency_max_calls
+        == expected_efficiency_calls
+    )
+    assert (
+        calls["config"].development_planner_efficiency_max_reported_tokens
+        == (100_000 if expected_efficiency_calls else None)
+    )
+    assert (
+        calls["config"].development_planner_efficiency_max_wall_seconds
+        == (600.0 if expected_efficiency_calls else None)
     )
     assert calls["config"].enable_memory is False
     assert calls["config"].enable_experience_bank is False

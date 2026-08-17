@@ -13,6 +13,7 @@ from ..planning.progressive_artifacts import (
     ProgressivePlannerCheckpointRecorder,
     ProgressiveResumePersistenceReceipt,
     load_progressive_planner_checkpoint_chain,
+    persist_progressive_compile_failure_replay,
     persist_progressive_planning_artifacts,
 )
 from ..planning.preplan_know_how import PlannerKnowHowBinding
@@ -108,6 +109,7 @@ def run_progressive_planner(
             },
         )
     except Exception:
+        planner.capture_efficiency_metrics()
         if source_chain and planner.last_resume_validated:
             receipt = recorder.persist_validated_resume()
             finding_sink(
@@ -115,6 +117,17 @@ def run_progressive_planner(
                     receipt=receipt,
                     terminal_artifact_sha256=str(resume_checkpoint_sha256),
                 )
+            )
+        if (
+            planner.last_compile_failure_attempts
+            and recorder.latest_checkpoint is not None
+        ):
+            persist_progressive_compile_failure_replay(
+                run_dir=run_dir,
+                evidence=evidence,
+                attempts=planner.last_compile_failure_attempts,
+                prefix_checkpoint=recorder.latest_checkpoint,
+                prompt_pack_version=prompt_pack_version,
             )
         raise
 
