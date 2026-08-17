@@ -71,7 +71,10 @@ from .agents.core import (
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
-from .agents.progressive_planner import ProgressivePlannerAgent
+from .agents.progressive_planner import (
+    ProgressivePlannerAgent,
+    progressive_cohort_concept_ids,
+)
 from .architecture import architecture_profile_markdown, default_architecture_profile
 from .authority.parent_artifact import (
     _resolve_upstream_manifest_analysis_request,
@@ -167,7 +170,10 @@ from .planning.analysis_blueprint import (
 from .planning.adjustment_authority import (
     validate_plan_against_adjustment_authority,
 )
-from .planning.cohort_contract import cohort_definition_has_explicit_selection
+from .planning.cohort_contract import (
+    cohort_concept_id_scope,
+    cohort_definition_has_explicit_selection,
+)
 from .planning.dependence_authority import (
     DependenceAuthorityError,
     bind_context_dependence_authority,
@@ -3114,7 +3120,13 @@ class ResearchAgentPipeline:
                     long_trajectory_bound=long_trajectory_bound,
                 )
             )
-            plan = ensure_cohort_definition(plan, context=context)
+            with cohort_concept_id_scope(
+                progressive_cohort_concept_ids(
+                    agent_context,
+                    tuple(variable.name for variable in agent_context.variables),
+                )
+            ):
+                plan = ensure_cohort_definition(plan)
             plan = ensure_robustness_specs(plan)
             # Final gate: if the plan implies a cohort but still has no
             # structured inclusion/exclusion (the retry above didn't recover
