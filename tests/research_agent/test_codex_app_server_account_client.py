@@ -32,11 +32,21 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     }
 
 
-def _authorized_client(tmp_path: Path) -> CodexAppServerLLMClient:
+def _authorized_client(
+    tmp_path: Path,
+    *,
+    request_timeout: float = 10,
+    turn_hard_timeout: float | None = None,
+) -> CodexAppServerLLMClient:
     environment = _environment(tmp_path)
+    client_kwargs: dict[str, Any] = {
+        "environment": environment,
+        "request_timeout": request_timeout,
+    }
+    if turn_hard_timeout is not None:
+        client_kwargs["turn_hard_timeout"] = turn_hard_timeout
     client = CodexAppServerLLMClient(
-        environment=environment,
-        request_timeout=10,
+        **client_kwargs,
     )
     profile = user_account_profile("codex")
     assert profile is not None
@@ -56,6 +66,7 @@ class _FakeRuntime:
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.wait_kwargs: dict[str, Any] = {}
         self.__class__.instances.append(self)
 
     def __enter__(self) -> "_FakeRuntime":
@@ -93,6 +104,7 @@ class _FakeRuntime:
         raise AssertionError(method)
 
     def wait_for_notification(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        self.wait_kwargs = dict(_kwargs)
         return {
             "method": "turn/completed",
             "params": {
@@ -176,6 +188,109 @@ def test_codex_app_server_client_uses_chatgpt_account_and_strict_schema(
     turn = runtime.calls[2][1]
     assert turn["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
     assert turn["outputSchema"] == json.loads(structured.schema_json)
+    assert runtime.wait_kwargs["timeout"] == 10
+    assert runtime.wait_kwargs["hard_timeout"] == 10
+    progress_predicate = runtime.wait_kwargs["progress_predicate"]
+    assert progress_predicate(
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"threadId": "thread_1", "turnId": "turn_1", "delta": "{"},
+        }
+    )
+    assert not progress_predicate(
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"threadId": "thread_1", "turnId": "other", "delta": "{"},
+        }
+    )
+
+
+def test_codex_turn_timeouts_are_capped_by_the_task_hard_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.providers import codex_app_server
+    from easyicu.research_agent.providers import llm
+
+    _FakeRuntime.instances.clear()
+    monkeypatch.setattr(codex_app_server, "CodexAppServerRuntime", _FakeRuntime)
+    monkeypatch.setattr(
+        llm,
+        "consume_active_transport_attempt",
+        lambda: 4.0,
+    )
+    client = _authorized_client(
+        tmp_path,
+        request_timeout=10,
+        turn_hard_timeout=60,
+    )
+
+    assert client.complete([LLMMessage(role="user", content="hello")])
+
+    runtime = _FakeRuntime.instances[0]
+    assert client.provider_attempt_budget_aware is True
+    assert runtime.wait_kwargs["timeout"] == pytest.approx(4.0, abs=0.01)
+    assert runtime.wait_kwargs["hard_timeout"] == pytest.approx(4.0, abs=0.01)
+
+
+def test_codex_turn_start_time_is_deducted_from_the_task_hard_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.providers import codex_app_server
+    from easyicu.research_agent.providers import llm
+
+    _FakeRuntime.instances.clear()
+    monkeypatch.setattr(codex_app_server, "CodexAppServerRuntime", _FakeRuntime)
+    monkeypatch.setattr(
+        llm,
+        "consume_active_transport_attempt",
+        lambda: 4.0,
+    )
+    ticks = iter((100.0, 103.0))
+    monkeypatch.setattr(llm.time, "monotonic", lambda: next(ticks))
+    client = _authorized_client(
+        tmp_path,
+        request_timeout=10,
+        turn_hard_timeout=60,
+    )
+
+    assert client.complete([LLMMessage(role="user", content="hello")])
+
+    runtime = _FakeRuntime.instances[0]
+    assert runtime.wait_kwargs["timeout"] == 1.0
+    assert runtime.wait_kwargs["hard_timeout"] == 1.0
+
+
+def test_codex_turn_does_not_wait_after_the_task_hard_stop_expires(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.providers import codex_app_server
+    from easyicu.research_agent.providers import llm
+
+    _FakeRuntime.instances.clear()
+    monkeypatch.setattr(codex_app_server, "CodexAppServerRuntime", _FakeRuntime)
+    monkeypatch.setattr(
+        llm,
+        "consume_active_transport_attempt",
+        lambda: 4.0,
+    )
+    ticks = iter((100.0, 105.0))
+    monkeypatch.setattr(llm.time, "monotonic", lambda: next(ticks))
+    client = _authorized_client(
+        tmp_path,
+        request_timeout=10,
+        turn_hard_timeout=60,
+    )
+
+    with pytest.raises(
+        codex_app_server.CodexAppServerError,
+        match="codex_auth_notification_hard_timeout",
+    ):
+        client.complete([LLMMessage(role="user", content="hello")])
+
+    assert _FakeRuntime.instances[0].wait_kwargs == {}
 
 
 def test_codex_app_server_authorization_binds_the_user_session(tmp_path: Path) -> None:
@@ -209,3 +324,17 @@ def test_unmanaged_codex_app_server_client_is_rejected_before_transport(
     with pytest.raises(PermissionError, match="factory-minted user authorization"):
         client.complete([LLMMessage(role="user", content="hello")])
     assert _FakeRuntime.instances == []
+
+
+def test_authorized_codex_client_rejects_hard_timeout_mutation(
+    tmp_path: Path,
+) -> None:
+    client = _authorized_client(
+        tmp_path,
+        request_timeout=10,
+        turn_hard_timeout=60,
+    )
+    client._turn_hard_timeout = 600.0
+
+    with pytest.raises(PermissionError, match="factory-minted user authorization"):
+        client.complete([LLMMessage(role="user", content="hello")])

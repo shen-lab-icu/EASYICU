@@ -396,6 +396,9 @@ def test_web_codex_client_uses_only_reviewed_account_environment(
     assert "OPENAI_API_KEY" not in client._subprocess_environment
     assert public["authentication_mode"] == "chatgpt_account"
     assert public["transport_max_attempts"] == 1
+    assert public["request_idle_timeout_seconds"] == 240.0
+    assert public["request_hard_timeout_seconds"] == 1800.0
+    assert public["progress_resets_idle_timeout"] is True
     assert public["strict_json_schema_enabled"] is True
     assert "must-not-cross-account-boundary" not in json.dumps(public)
 

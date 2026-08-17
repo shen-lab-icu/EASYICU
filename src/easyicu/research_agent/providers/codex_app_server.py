@@ -103,6 +103,7 @@ class CodexAppServerRuntime:
         self._request_id = 0
         self._pending: dict[int, queue.Queue[dict[str, Any]]] = {}
         self._notifications: list[dict[str, Any]] = []
+        self._notification_offset = 0
         self._stderr: list[str] = []
         self._lifecycle_lock = threading.RLock()
         self._write_lock = threading.Lock()
@@ -113,7 +114,7 @@ class CodexAppServerRuntime:
     @property
     def notification_count(self) -> int:
         with self._state:
-            return len(self._notifications)
+            return self._notification_offset + len(self._notifications)
 
     def start(self) -> None:
         """Spawn, initialize, and prove the exact isolated ``CODEX_HOME``."""
@@ -257,20 +258,36 @@ class CodexAppServerRuntime:
         *,
         after: int = 0,
         timeout: float,
+        hard_timeout: float | None = None,
+        progress_predicate: Callable[[dict[str, Any]], bool] | None = None,
     ) -> dict[str, Any]:
-        deadline = time.monotonic() + max(0.1, float(timeout))
+        if progress_predicate is not None and hard_timeout is None:
+            raise ValueError("progress-aware notification wait requires hard_timeout")
+        started = time.monotonic()
+        idle_timeout = max(0.1, float(timeout))
+        idle_deadline = started + idle_timeout
+        hard_deadline = started + max(
+            0.1,
+            float(timeout if hard_timeout is None else hard_timeout),
+        )
         index = max(0, int(after))
         with self._state:
             while True:
-                for notification in self._notifications[index:]:
+                start = max(0, index - self._notification_offset)
+                for notification in self._notifications[start:]:
                     if predicate(notification):
                         return dict(notification)
-                index = len(self._notifications)
-                remaining = deadline - time.monotonic()
+                    if progress_predicate is not None and progress_predicate(
+                        notification
+                    ):
+                        idle_deadline = time.monotonic() + idle_timeout
+                index = self._notification_offset + len(self._notifications)
+                now = time.monotonic()
+                if now >= hard_deadline:
+                    raise CodexAppServerError("codex_auth_notification_hard_timeout")
+                remaining = min(idle_deadline, hard_deadline) - now
                 if remaining <= 0:
-                    raise CodexAppServerError(
-                        "codex_auth_notification_timeout"
-                    )
+                    raise CodexAppServerError("codex_auth_notification_timeout")
                 process = self._process
                 if process is None or process.poll() is not None:
                     raise CodexAppServerError(
@@ -281,7 +298,8 @@ class CodexAppServerRuntime:
 
     def notifications_since(self, index: int = 0) -> list[dict[str, Any]]:
         with self._state:
-            return [dict(item) for item in self._notifications[max(0, index) :]]
+            start = max(0, int(index) - self._notification_offset)
+            return [dict(item) for item in self._notifications[start:]]
 
     def close(self) -> None:
         with self._lifecycle_lock:
@@ -348,6 +366,7 @@ class CodexAppServerRuntime:
                     self._notifications.append(message)
                     if len(self._notifications) > 1_024:
                         del self._notifications[:512]
+                        self._notification_offset += 512
                     self._state.notify_all()
         with self._state:
             self._state.notify_all()
