@@ -1296,6 +1296,9 @@ def test_compiled_binary_sensitivity_prompt_preserves_ids_and_denominators(ra):
         assert "eligibility" in prompt
         assert "complete-case model filtering" in prompt
         assert "fitted model N" in prompt
+        assert "center before squaring" in prompt
+        assert "optimizer pseudo-convergence" in prompt
+        assert "never publish a fallback null estimate" in prompt
 
 
 def test_prespecified_robustness_refit_prompt_has_effect_authority(ra):
