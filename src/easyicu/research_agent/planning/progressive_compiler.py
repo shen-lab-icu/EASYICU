@@ -57,7 +57,7 @@ from .cohort_contract import (
 )
 from .dependence_authority import context_counts_only_authority
 from .literature_contract import LiteratureDesignBinding
-from .method_literature import method_binding_support
+from .method_literature import METHOD_CARDS, method_binding_support
 from .progressive_contract import (
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCompiledStepReceipt,
@@ -1122,6 +1122,39 @@ def _compile_inputs(
     return inputs, consumption
 
 
+def _unique_host_method_layer_binding(
+    layer: str,
+    *,
+    allowed_citations: frozenset[str],
+) -> tuple[str, tuple[str, ...], str] | None:
+    """Compile one unambiguous run-bound method card into a typed binding."""
+
+    cards = tuple(
+        card
+        for card in METHOD_CARDS
+        if card.layer == layer and card.source_key in allowed_citations
+    )
+    source_keys = tuple(dict.fromkeys(card.source_key for card in cards))
+    if len(source_keys) != 1:
+        return None
+    source_key = source_keys[0]
+    source_cards = tuple(card for card in cards if card.source_key == source_key)
+    elements = tuple(
+        dict.fromkeys(
+            element for card in source_cards for element in card.design_elements
+        )
+    )
+    requirements = tuple(dict.fromkeys(card.requirement for card in source_cards))
+    if not elements or not requirements:
+        return None
+    return (
+        source_key,
+        elements,
+        "Apply the host-compiled run-bound method obligation: "
+        + " ".join(requirements),
+    )
+
+
 def _compile_literature(
     step: ProgressiveSkeletonStep,
     *,
@@ -1129,11 +1162,12 @@ def _compile_literature(
     step_index: int,
     host_reporting_source_key: str | None = None,
     host_interpretation_source_key: str | None = None,
+    host_missing_data_binding: tuple[str, tuple[str, ...], str] | None = None,
 ) -> tuple[list[str], list[LiteratureDesignBinding]]:
     bindings_by_key: dict[str, list[ProgressiveLiteratureBinding]] = {}
     for item in step.literature_bindings:
         bindings_by_key.setdefault(item.citation_key, []).append(item)
-    host_bindings = (
+    host_bindings: list[tuple[str | None, Sequence[str], str]] = [
         (
             host_reporting_source_key,
             ("reporting",),
@@ -1146,7 +1180,9 @@ def _compile_literature(
             "Report an absolute outcome measure alongside each model ratio "
             "estimate so interpretation is not ratio-only.",
         ),
-    )
+    ]
+    if host_missing_data_binding is not None:
+        host_bindings.append(host_missing_data_binding)
     for source_key, required_elements, application in host_bindings:
         if source_key is None:
             continue
@@ -1234,6 +1270,7 @@ def _compile_one_step(
     outputs_by_step: Mapping[str, Sequence[str]],
     host_reporting_source_key: str | None = None,
     host_interpretation_source_key: str | None = None,
+    host_missing_data_binding: tuple[str, tuple[str, ...], str] | None = None,
 ) -> _CompiledStep:
     try:
         output_pairs = _canonical_outputs(step)
@@ -1275,6 +1312,7 @@ def _compile_one_step(
         step_index=step_index,
         host_reporting_source_key=host_reporting_source_key,
         host_interpretation_source_key=host_interpretation_source_key,
+        host_missing_data_binding=host_missing_data_binding,
     )
     method = step.custom_method or _METHOD_BY_MODULE[step.module_id]
     kwargs: dict[str, Any] = {
@@ -1659,6 +1697,22 @@ def compile_progressive_plan(
         )["matched_layers"]
         else None
     )
+    host_missing_data_binding = (
+        _unique_host_method_layer_binding(
+            "missing_data",
+            allowed_citations=allowed_citations,
+        )
+        if any(intent.axis == "missing" for intent in skeleton.robustness_intents)
+        else None
+    )
+    host_missing_data_target_index = next(
+        (
+            index
+            for index, step in enumerate(skeleton.steps)
+            if step.module_id in {"measurement_audit", "robustness_replay"}
+        ),
+        None,
+    )
     _preflight_step_findings(
         skeleton=skeleton,
         context=context,
@@ -1701,6 +1755,11 @@ def compile_progressive_plan(
             host_interpretation_source_key=(
                 host_interpretation_source_key
                 if skeleton_step.model_terms
+                else None
+            ),
+            host_missing_data_binding=(
+                host_missing_data_binding
+                if index == host_missing_data_target_index
                 else None
             ),
         )

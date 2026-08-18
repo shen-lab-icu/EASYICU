@@ -2159,6 +2159,39 @@ def test_compiler_host_binds_interpretation_to_the_model_step() -> None:
     ]
 
 
+def test_compiler_host_binds_unique_missing_data_card_to_its_owner() -> None:
+    plan, _receipt = compile_progressive_plan(
+        skeleton=_skeleton(),
+        context=_context(),
+        allowed_literature_citation_keys=["sterne_missing_data_2009"],
+    )
+
+    measurement = next(step for step in plan.steps if step.step_id == "04_measurement")
+    assert measurement.literature_citation_keys == [
+        "sterne_missing_data_2009"
+    ]
+    assert [
+        binding.model_dump(mode="json")
+        for binding in measurement.literature_design_bindings
+    ] == [
+        {
+            "citation_key": "sterne_missing_data_2009",
+            "design_elements": ["missing_data", "robustness"],
+            "application": (
+                "Apply the host-compiled run-bound method obligation: Report "
+                "the amount and pattern of missingness per variable, and state "
+                "the assumption the chosen handling makes. Complete-case "
+                "analysis is defensible when missingness is negligible or "
+                "plausibly unrelated to the outcome given the covariates; say "
+                "which applies. In routinely collected data, whether a "
+                "measurement exists is itself informative and should be "
+                "examined, not only imputed."
+            ),
+            "divergence": None,
+        }
+    ]
+
+
 def test_compiler_closes_interpretation_from_one_model_selected_source() -> None:
     payload = _payload()
     payload["steps"][4]["literature_bindings"] = [
