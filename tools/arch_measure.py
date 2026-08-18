@@ -685,6 +685,29 @@ def main() -> int:
             for item in (previous.get("baseline_history") or [])
             if isinstance(item, dict)
         ]
+        # Legacy migration. `baseline_history` was added after `baseline_reason`,
+        # and the top-level key mirrors only the newest move. A baseline written
+        # before the history existed therefore carries its ONLY justification in
+        # `baseline_reason`, and appending straight onto an empty history drops
+        # it -- the emit succeeds, the ratchet still moves, and the reason the
+        # previous move was accepted is gone with no error anywhere. Archive it
+        # first, tagged so a reader can tell a migrated entry from one that was
+        # written as history. Compared against the last entry only: that is the
+        # slot the top-level key mirrors, so an unrelated older entry with the
+        # same text must not suppress the migration.
+        previous_reason = str(previous.get("baseline_reason") or "").strip()
+        last_reason = (
+            str(history[-1].get("reason") or "").strip() if history else ""
+        )
+        if previous_reason and previous_reason != last_reason:
+            migrated: Dict[str, Any] = {
+                "reason": previous_reason,
+                "migrated_from": "baseline_reason",
+            }
+            previous_growth = previous.get("baseline_accepted_growth")
+            if isinstance(previous_growth, dict) and previous_growth:
+                migrated["accepted_growth"] = previous_growth
+            history.append(migrated)
         history.append(entry)
         recorded = dict(current)
         recorded["baseline_reason"] = reason

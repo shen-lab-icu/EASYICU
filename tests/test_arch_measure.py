@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -552,3 +553,114 @@ def test_the_history_keys_do_not_reach_the_gate(tmp_path, monkeypatch) -> None:
     grown = {"functions": {}, "files": {"a.py": {"loc": 101}}}
     assert arch_measure.diff(baseline, unchanged) == 0
     assert arch_measure.diff(baseline, grown) == 1
+
+
+def _emit_baseline(path: Path, reason: str) -> dict:
+    """Run the real CLI, so this covers the emit path users actually invoke."""
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOLS_DIR / "arch_measure.py"),
+            "--emit",
+            str(path),
+            "--reason",
+            reason,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=TOOLS_DIR.parent,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_emit_migrates_a_legacy_top_level_reason_into_history(tmp_path: Path) -> None:
+    """A pre-history baseline must not lose its only recorded justification.
+
+    ``baseline_history`` was added after ``baseline_reason``. A baseline written
+    before that carries its whole justification in the top-level key, and
+    appending onto an absent history silently discarded it: the emit succeeded,
+    the ratchet moved, and why the previous move was accepted was simply gone.
+    """
+
+    legacy = {
+        "tool_version": "0.0.0",
+        "tool_sha256": "0" * 64,
+        "shim_import_paths": [],
+        "files": {},
+        "functions": {},
+        "baseline_reason": "legacy justification that predates baseline_history",
+        "baseline_accepted_growth": {"some/file.py": {"loc_was": 1, "loc_now": 2}},
+    }
+    path = tmp_path / "legacy_baseline.json"
+    path.write_text(json.dumps(legacy, indent=2), encoding="utf-8")
+
+    emitted = _emit_baseline(path, "the new move")
+    history = emitted["baseline_history"]
+
+    assert [item["reason"] for item in history] == [
+        "legacy justification that predates baseline_history",
+        "the new move",
+    ]
+    assert history[0]["migrated_from"] == "baseline_reason"
+    assert history[0]["accepted_growth"] == legacy["baseline_accepted_growth"]
+    assert emitted["baseline_reason"] == "the new move"
+
+
+def test_emit_does_not_duplicate_a_reason_already_at_the_history_tail(
+    tmp_path: Path,
+) -> None:
+    """The top-level key mirrors the newest entry; mirroring is not a second move."""
+
+    modern = {
+        "tool_version": "0.0.0",
+        "tool_sha256": "0" * 64,
+        "shim_import_paths": [],
+        "files": {},
+        "functions": {},
+        "baseline_reason": "second move",
+        "baseline_history": [{"reason": "first move"}, {"reason": "second move"}],
+    }
+    path = tmp_path / "modern_baseline.json"
+    path.write_text(json.dumps(modern, indent=2), encoding="utf-8")
+
+    emitted = _emit_baseline(path, "third move")
+
+    assert [item["reason"] for item in emitted["baseline_history"]] == [
+        "first move",
+        "second move",
+        "third move",
+    ]
+    assert not any("migrated_from" in item for item in emitted["baseline_history"])
+
+
+def test_emit_is_append_only_across_repeated_moves(tmp_path: Path) -> None:
+    """No emit may shorten the chain -- that is the whole point of the ratchet."""
+
+    path = tmp_path / "chain.json"
+    lengths = []
+    for index in range(4):
+        emitted = _emit_baseline(path, f"move {index}")
+        lengths.append(len(emitted["baseline_history"]))
+    assert lengths == [1, 2, 3, 4]
+
+
+def test_tracked_baseline_keeps_its_audit_metadata() -> None:
+    """Catch a wiped audit chain however it was wiped.
+
+    On 2026-08-18 the tracked baseline was overwritten with the plain
+    measurement output (``arch_measure.py > baseline.json``), which emits
+    metrics only. That dropped ``baseline_reason`` and all 25 history entries
+    while every other gate stayed green. ``--emit`` is the only sanctioned way
+    to move this file; this asserts the result regardless of the route taken.
+    """
+
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+
+    assert str(baseline.get("baseline_reason") or "").strip()
+    history = baseline.get("baseline_history")
+    assert isinstance(history, list) and history
+    assert all(str(item.get("reason") or "").strip() for item in history)
+    # The top-level key mirrors the newest entry.
+    assert baseline["baseline_reason"] == history[-1]["reason"]
