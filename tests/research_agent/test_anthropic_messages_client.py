@@ -5,6 +5,16 @@ from typing import Any
 
 import pytest
 
+# The native Anthropic adapter is an OPTIONAL provider surface: `anthropic`
+# ships in the `webapp` / `agentic` extras, not in `[project.dependencies]`.
+# research_agent_ci.yml deliberately installs the MINIMUM runtime stack, so a
+# hard import here fails that job for a dependency it is designed not to have.
+# Skipping under the minimum stack is correct; NEVER skipping silently
+# everywhere is what matters -- the `anthropic adapter` job in
+# research_agent_ci.yml installs `.[agentic]` and asserts the SDK imports
+# before running this file, so the coverage cannot quietly evaporate.
+pytest.importorskip("anthropic")
+
 
 class _FakeMessages:
     def __init__(self, responses: list[object]) -> None:

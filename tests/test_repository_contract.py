@@ -80,6 +80,33 @@ def test_parallel_pytest_workflows_install_xdist() -> None:
         assert "-n auto --dist loadfile" in workflow
 
 
+def test_optional_anthropic_adapter_keeps_a_real_coverage_job() -> None:
+    """An importorskip is only safe while some job installs the real SDK.
+
+    ``anthropic`` lives in the ``webapp``/``agentic`` extras, so the minimum
+    dependency stack skips the native adapter tests. Without a job that
+    actually installs the extra, that skip silently removes the Claude
+    Messages transport from CI entirely -- green, and never tested.
+    """
+
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    agentic = pyproject["project"]["optional-dependencies"]["agentic"]
+    assert any(item.startswith("anthropic") for item in agentic)
+
+    adapter_test = (
+        REPO_ROOT / "tests" / "research_agent" / "test_anthropic_messages_client.py"
+    ).read_text(encoding="utf-8")
+    assert 'pytest.importorskip("anthropic")' in adapter_test
+
+    workflow = (WORKFLOW_DIR / "research_agent_ci.yml").read_text(encoding="utf-8")
+    assert "anthropic-adapter:" in workflow
+    assert '".[dev,agentic]"' in workflow
+    # The explicit import assertion is the part that stops a missing extra
+    # from degrading into a skipped file.
+    assert "import anthropic; print" in workflow
+    assert "tests/research_agent/test_anthropic_messages_client.py" in workflow
+
+
 def test_manifest_does_not_reference_missing_optional_payloads() -> None:
     manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
 
