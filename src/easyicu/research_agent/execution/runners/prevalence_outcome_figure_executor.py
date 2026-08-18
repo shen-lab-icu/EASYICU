@@ -26,6 +26,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .figure_input_capability import TypedInputCapability
 
 __all__ = [
@@ -205,14 +206,6 @@ def _load_binding(
     if _canonical_sha256(path) != expected_sha256:
         raise ValueError("absolute-risk table changed while it was being read")
     return frame, binding, "absolute_risk_context.csv"
-
-
-def _finite(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
 
 
 def _integer(value: Any) -> int | None:

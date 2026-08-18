@@ -69,6 +69,21 @@ _FAULT_CODE = (
     "raise RuntimeError('injected preflight coder fault')\n"
 )
 
+_AUXILIARY_DIAGNOSTIC_CODE = """\
+from __future__ import annotations
+import json
+import os
+from pathlib import Path
+
+out_dir = Path(os.environ["STEP_OUT_DIR"])
+out_dir.mkdir(parents=True, exist_ok=True)
+summary = {"status": "diagnostic_only", "output_files": {}}
+(out_dir / "step_summary.json").write_text(
+    json.dumps(summary, indent=2), encoding="utf-8"
+)
+print(json.dumps(summary))
+"""
+
 
 def _survival_preflight_code(case: PreflightCase) -> str:
     """Reviewed local H1 script: real PHReg + auditable diagnostic artifacts."""
@@ -540,7 +555,7 @@ class ScriptedPreflightLLM:
         rules: List[tuple[str, List[str]]] = [
             # Rules are generic -> specific; PatternScriptedMock gives the
             # later matching rule priority.
-            ("WRITE THE PYTHON CODE", ["MOCK RESPONSE — preflight auxiliary"] * 32),
+            ("WRITE THE PYTHON CODE", [_AUXILIARY_DIAGNOSTIC_CODE] * 32),
             (case.primary_step_id, primary_responses),
         ]
         if fault_step is not None and fault_step != case.primary_step_id:

@@ -584,7 +584,7 @@ def _base_planner_user_prompt(
     "a spec without them is refused. "
     "Add an auxiliary post-primary step with "
     "`method='robustness_sensitivity'` producing "
-    "`table:robustness_matrix` and `statistic:robustness_summary`. "
+    "`table:robustness_matrix` and `table:robustness_summary`. "
     "Variants must not change the primary analysis. "
     # The step this sentence asks for IS the step that re-estimates the
     # locked grid, and saying so here is the whole point: a real run
@@ -1947,7 +1947,7 @@ class PlannerAgent:
                     + " Add explicit typed analysis steps and, when robustness "
                     "is required, at least one task-supported robustness spec plus "
                     "a method='robustness_sensitivity' step producing "
-                    "table:robustness_matrix and statistic:robustness_summary. "
+                    "table:robustness_matrix and table:robustness_summary. "
                     "Do not invent an unsupported cohort, outcome, or endpoint."
                 )
         if allowed_know_how_decisions is not None:

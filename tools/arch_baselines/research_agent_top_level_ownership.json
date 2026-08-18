@@ -9,6 +9,10 @@
       "owner": "architecture_contract",
       "reason": "Dependency-neutral architecture receipts and checks."
     },
+    "benchmark_instances.py": {
+      "owner": "frozen_benchmark_facade",
+      "reason": "Thin instance-id facade over the frozen ICUAgentBench suite and scorer authority."
+    },
     "canonical_json.py": {
       "owner": "shared_primitive",
       "reason": "Single canonical serialization primitive used across authorities."
@@ -32,6 +36,10 @@
     "evaluation_scorecard.py": {
       "owner": "frozen_benchmark_authority",
       "reason": "Exact path and digest are bound by the frozen Canonical9 scorer bundle."
+    },
+    "facade.py": {
+      "owner": "public_orchestration_facade",
+      "reason": "Fail-closed one-shot user entry point over the ResearchAgentPipeline."
     },
     "graph.py": {
       "owner": "deprecated_compatibility",
@@ -69,6 +77,14 @@
       "owner": "shared_plan_contract",
       "reason": "Cross-phase plan normalization and projection contract."
     },
+    "prediction_model_fit_owner.py": {
+      "owner": "prediction_model_fit",
+      "reason": "Experimental train-only prediction fit owner with no Planner or paper authority."
+    },
+    "prediction_validation_owner.py": {
+      "owner": "prediction_validation",
+      "reason": "Dependency-neutral host owner for deterministic prediction validation and receipts."
+    },
     "publication_skills.py": {
       "owner": "public_contract",
       "reason": "Dependency-neutral publication-skill registry shared with Web."
@@ -80,6 +96,10 @@
     "replication_cli.py": {
       "owner": "entrypoint",
       "reason": "Configured easyicu-replicate command entry point."
+    },
+    "numeric_scalars.py": {
+      "owner": "shared_primitive",
+      "reason": "Dependency-neutral finite scalar coercion used by execution and figure owners."
     },
     "scalar_utils.py": {
       "owner": "shared_primitive",

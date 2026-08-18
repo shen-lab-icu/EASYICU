@@ -78,6 +78,7 @@ TARGET_FILES: List[Path] = [
     # helpers moved to execution/phase_support.py behind a facade import;
     # run_execute_phase and every test-patched seam stay in phase.py.
     RA / "execution/phase_support.py",
+    RA / "execution/run_coordination.py",
     RA / "pipeline.py",
     # 2026-08-14 pipeline.py decomposition batch: the publication-bundle
     # renderer family moved to reporting/publication_bundles.py behind a
@@ -86,6 +87,7 @@ TARGET_FILES: List[Path] = [
     RA / "reporting" / "publication_bundles.py",
     RA / "reporting" / "readiness.py",
     RA / "authority" / "typed_binding.py",
+    RA / "authority" / "evidence_record_resolution.py",
     RA / "authority" / "plan_authority.py",
     RA / "authority" / "typed_input_receipt.py",
     RA / "authority" / "typed_input_sdk.py",
@@ -120,6 +122,12 @@ TARGET_FILES: List[Path] = [
     RA / "audits" / "publication.py",
     RA / "audits" / "_v_support.py",
     RA / "plan_utils.py",
+    # 2026-08-18 plan/runtime ownership batch: extracted contracts inherit the
+    # ratchet immediately instead of letting legacy facades shrink while new
+    # policy owners grow unmeasured.
+    RA / "planning" / "final_article_design.py",
+    RA / "planning" / "figure_step_contract.py",
+    RA / "planning" / "robustness_plan_mutation.py",
     RA / "agents" / "core.py",
     # 2026-08-14 agents/core.py decomposition batch: the monolith was split
     # into owner modules behind the core.py facade. The facade itself stays
@@ -128,14 +136,21 @@ TARGET_FILES: List[Path] = [
     RA / "agents" / "_support.py",
     RA / "agents" / "planner.py",
     RA / "agents" / "replanner.py",
+    RA / "agents" / "replanner_context.py",
+    RA / "agents" / "runtime_suffix_replanner.py",
     RA / "agents" / "roles.py",
     RA / "agents" / "coder.py",
+    RA / "agents" / "coder_output_contract.py",
     RA / "agents" / "reporting.py",
     # Scientific contract consolidation now makes the compatibility schema an
     # active owner boundary; keep its future growth on the same ratchet.
     RA / "schema.py",
     RA / "contracts" / "declared_product.py",
+    RA / "contracts" / "association_result_findings.py",
+    RA / "contracts" / "capability_declaration.py",
+    RA / "numeric_scalars.py",
     RA / "figures" / "skill.py",
+    RA / "figures" / "promotion_contract.py",
     RA / "authority" / "evidence_store.py",
 ]
 # (file, function name) — first match by name (top-level or nested).

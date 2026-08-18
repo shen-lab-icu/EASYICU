@@ -79,20 +79,20 @@ from .planner import (  # noqa: F401 — re-export facade
     describe_article_contract_family_switch,
 )
 
-from .replanner import (  # noqa: F401 — re-export facade
-    ReplannerAgent,
-    _REPLANNER_FINDING_KEYS,
-    _REPLANNER_FINDING_MESSAGE_CHARS,
-    _REPLANNER_MAX_FINDINGS_PER_LIST,
-    _REPLANNER_PROBE_CHAR_BUDGET,
-    _REPLANNER_RECORD_FINDING_KEYS,
-    _REPLANNER_RECORD_KEEP_KEYS,
-    _REPLANNER_STEP_SUMMARY_CHAR_BUDGET,
-    _REPLANNER_TOTAL_RECORDS_CHAR_BUDGET,
-    _clip_json,
+from .replanner import ReplannerAgent  # noqa: F401 — re-export facade
+from .replanner_context import (  # noqa: F401 — re-export facade
+    REPLANNER_PROBE_CHAR_BUDGET as _REPLANNER_PROBE_CHAR_BUDGET,
+    REPLANNER_STEP_SUMMARY_CHAR_BUDGET as _REPLANNER_STEP_SUMMARY_CHAR_BUDGET,
+    REPLANNER_TOTAL_RECORDS_CHAR_BUDGET as _REPLANNER_TOTAL_RECORDS_CHAR_BUDGET,
+    _FINDING_KEYS as _REPLANNER_FINDING_KEYS,
+    _FINDING_MESSAGE_CHARS as _REPLANNER_FINDING_MESSAGE_CHARS,
+    _MAX_FINDINGS_PER_LIST as _REPLANNER_MAX_FINDINGS_PER_LIST,
+    _RECORD_FINDING_KEYS as _REPLANNER_RECORD_FINDING_KEYS,
+    _RECORD_KEEP_KEYS as _REPLANNER_RECORD_KEEP_KEYS,
     _compact_findings,
-    _slim_completed_records_for_prompt,
-    _slim_record_for_replanner,
+    clip_json as _clip_json,
+    slim_completed_records_for_prompt as _slim_completed_records_for_prompt,
+    slim_record_for_replanner as _slim_record_for_replanner,
 )
 
 from .roles import (  # noqa: F401 — re-export facade

@@ -11,51 +11,11 @@
         "event": "early_validate"
       },
       {
-        "count": 7,
+        "count": 6,
         "event": "seal_hash"
       },
       {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 2,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
+        "count": 6,
         "event": "deferred_history_registration"
       },
       {
@@ -85,51 +45,11 @@
         "event": "early_validate"
       },
       {
-        "count": 7,
+        "count": 6,
         "event": "seal_hash"
       },
       {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 2,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
+        "count": 6,
         "event": "deferred_history_registration"
       },
       {
@@ -159,83 +79,11 @@
         "event": "early_validate"
       },
       {
-        "count": 11,
+        "count": 10,
         "event": "seal_hash"
       },
       {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 2,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
+        "count": 10,
         "event": "deferred_history_registration"
       },
       {
@@ -265,43 +113,11 @@
         "event": "early_validate"
       },
       {
-        "count": 6,
+        "count": 5,
         "event": "seal_hash"
       },
       {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 2,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
-        "event": "deferred_history_registration"
-      },
-      {
-        "count": 1,
-        "event": "seal_hash"
-      },
-      {
-        "count": 1,
+        "count": 5,
         "event": "deferred_history_registration"
       },
       {

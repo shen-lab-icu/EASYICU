@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import easyicu.research_agent.authority.evidence_record_resolution as evidence_resolution
 import easyicu.research_agent.authority.typed_binding as typed_binding_authority
 import easyicu.research_agent.contracts.typed_schema as typed_schema_contracts
 from easyicu.research_agent.cohort.schema import CohortDefinition
@@ -279,7 +280,7 @@ def test_explicit_nonexecuted_capsule_blocks_typed_product_observation(
         )
 
     monkeypatch.setattr(
-        typed_binding_authority,
+        evidence_resolution,
         "load_explicit_executed_success_step_capsule",
         _reject,
     )
@@ -325,7 +326,7 @@ def test_executed_capsule_output_digest_must_match_typed_product(
         )
     )
     monkeypatch.setattr(
-        typed_binding_authority,
+        evidence_resolution,
         "load_explicit_executed_success_step_capsule",
         lambda *_args, **_kwargs: fake_capsule,
     )
@@ -372,7 +373,7 @@ def test_matching_executed_capsule_output_digest_authorizes_typed_product(
         )
     )
     monkeypatch.setattr(
-        typed_binding_authority,
+        evidence_resolution,
         "load_explicit_executed_success_step_capsule",
         lambda *_args, **_kwargs: fake_capsule,
     )

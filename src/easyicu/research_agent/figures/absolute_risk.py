@@ -21,6 +21,7 @@ from typing import Any, Mapping, Optional
 import pandas as pd
 
 from ..contracts.declared_product import read_digest_bound_artifact_snapshot
+from ..numeric_scalars import coerce_optional_finite_float as _finite
 from .publication import (
     add_panel_label,
     apply_publication_style,
@@ -87,14 +88,6 @@ _PREVALENCE_REQUIRED_COLUMNS = {
 
 def _normalise(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
-
-
-def _finite(value: Any) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
 
 
 def _nonnegative_integer(value: Any) -> Optional[int]:

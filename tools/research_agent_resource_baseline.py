@@ -122,6 +122,8 @@ TASK_FIXTURES: tuple[dict[str, Any], ...] = (
 
 SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/agents/core.py",
+    "src/easyicu/research_agent/agents/planner.py",
+    "src/easyicu/research_agent/providers/prompts/v1/system.txt",
     "src/easyicu/research_agent/research_context/outbound.py",
     "src/easyicu/research_agent/know_how/registry.py",
     "src/easyicu/research_agent/planning/analysis_types.py",
@@ -141,6 +143,7 @@ SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/learning/store.py",
     "src/easyicu/research_agent/learning/runtime.py",
     "src/easyicu/research_agent/graph.py",
+    "src/easyicu/research_agent/schema.py",
     "src/easyicu/data/concept-dict.json",
     "src/easyicu/data/sofa2-dict.json",
 )

@@ -23,6 +23,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .schema import AnalysisStep
+from .numeric_scalars import coerce_finite_float
 
 
 def _expected_numeric_annotations_for_step(
@@ -150,6 +151,7 @@ def _first_numeric_effect_from_text(payload: Any) -> Optional[float]:
 
 
 __all__ = [
+    "coerce_finite_float",
     "_expected_numeric_annotations_for_step",
     "_coerce_scalar",
     "_first_present_scalar",

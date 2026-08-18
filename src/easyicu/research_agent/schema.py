@@ -34,11 +34,10 @@ from pydantic import (
     model_validator,
 )
 
-from .contracts.association_execution import (
-    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
-    association_binary_sensitivity_plan_verdict,
+from .contracts.capability_declaration import (
+    validate_scientific_capability_declarations,
+    validate_scientific_capability_id,
 )
-from .contracts.capability_ids import capability_family
 from .contracts.claim_ceiling import DescriptiveClaimContract
 from .contracts.closed_levels import (
     validate_closed_scalar_levels,
@@ -2068,17 +2067,7 @@ class AnalysisStep(BaseModel):
     @field_validator("scientific_capability")
     @classmethod
     def _validate_stable_capability_id(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        cleaned = str(value).strip()
-        if not cleaned:
-            return None
-        if capability_family(cleaned) is None:
-            raise ValueError(
-                "scientific_capability_unknown: "
-                f"{cleaned!r} is not in the stable capability vocabulary"
-            )
-        return cleaned
+        return validate_scientific_capability_id(value)
 
     def required_primary_exposure_sources(self) -> tuple[str, ...]:
         """Return required PRIMARY sources from the Planner-owned model roster."""
@@ -2519,23 +2508,7 @@ class AnalysisPlan(BaseModel):
                 "analysis plan may declare at most one step with "
                 "planned_analysis_role='primary'; found " + ", ".join(primary_step_ids)
             )
-        for step in self.steps:
-            declared_id = str(step.scientific_capability or "").strip()
-            if declared_id and capability_family(declared_id) is None:
-                raise ValueError(
-                    "scientific_capability_unknown: "
-                    f"{declared_id!r} is not in the stable capability vocabulary"
-                )
-            if (
-                declared_id == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
-                and step.planned_analysis_role == "sensitivity"
-            ):
-                verdict = association_binary_sensitivity_plan_verdict(
-                    step,
-                    plan_steps=self.steps,
-                )
-                if not verdict.claimed:
-                    raise ValueError(f"{verdict.reason_code}: {verdict.reason}")
+        validate_scientific_capability_declarations(self.steps)
         for step in self.steps:
             if step.planned_analysis_role != "primary":
                 continue

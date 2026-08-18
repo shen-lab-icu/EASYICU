@@ -43,6 +43,7 @@ import pandas as pd
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
+    RobustnessReplaySpec,
     TableOneSpec,
     TableOneVariableSpec,
     TrajectoryStabilitySpec,
@@ -288,6 +289,7 @@ def _aux_step(
     inputs: List[str],
     expected_outputs: List[str],
     intent: str,
+    robustness_replay_spec: Optional[RobustnessReplaySpec] = None,
 ) -> AnalysisStep:
     """A distinct, task-specific auxiliary step (routed to the Coder offline).
 
@@ -303,6 +305,7 @@ def _aux_step(
         inputs=inputs,
         expected_outputs=expected_outputs,
         method=method,
+        robustness_replay_spec=robustness_replay_spec,
     )
 
 
@@ -315,11 +318,25 @@ def _robustness_step(*, step_id: str) -> AnalysisStep:
         inputs=["table:primary_adjusted_estimate"],
         expected_outputs=[
             "table:robustness_matrix",
-            "statistic:robustness_summary",
+            "table:robustness_summary",
         ],
         intent=(
             "Replay the primary association under the pre-specified baseline-"
             "covariate missingness strategy; never impute the exposure or outcome."
+        ),
+        robustness_replay_spec=RobustnessReplaySpec.model_validate(
+            {
+                "products": [
+                    {
+                        "product_id": "robustness_matrix",
+                        "output": "robustness_matrix",
+                    },
+                    {
+                        "product_id": "robustness_summary",
+                        "output": "robustness_summary",
+                    },
+                ]
+            }
         ),
     )
 
@@ -1196,12 +1213,26 @@ def _h2_plan() -> AnalysisPlan:
                 expected_outputs=[
                     "table:causal_sensitivity",
                     "table:robustness_matrix",
-                    "statistic:robustness_summary",
+                    "table:robustness_summary",
                 ],
                 intent=(
                     "Repeat the declared causal contrast under the pre-specified "
                     "baseline-covariate missingness strategy without changing "
                     "exposure, outcome, time zero, or estimand."
+                ),
+                robustness_replay_spec=RobustnessReplaySpec.model_validate(
+                    {
+                        "products": [
+                            {
+                                "product_id": "robustness_matrix",
+                                "output": "robustness_matrix",
+                            },
+                            {
+                                "product_id": "robustness_summary",
+                                "output": "robustness_summary",
+                            },
+                        ]
+                    }
                 ),
             ),
         ],

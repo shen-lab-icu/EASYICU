@@ -1,12 +1,8 @@
-"""Execution-time boundary between planned and produced step products.
+"""Validate execution products against Planner-owned typed declarations.
 
-The planner owns scientific scope through typed ``kind:product`` entries in
-``AnalysisStep.expected_outputs``.  A successful script must realise those
-products in its machine-readable summary, and it may not silently widen a
-non-figure/non-effect step into a publication figure or effect analysis.
-
-This module only validates declarations and registrations.  It never chooses
-an exposure, outcome, cohort, estimator, or analysis method.
+Successful scripts must realise their declared products without widening the
+scientific scope. This boundary validates declarations and registrations; it
+never chooses exposures, outcomes, cohorts, estimators, or methods.
 """
 
 from __future__ import annotations
@@ -25,7 +21,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ..repair_registry import is_sealed_renderer_repair, repair_metadata_for
 from ..schema import AnalysisStep, ValidationFinding
-from .association_execution import association_binary_sensitivity_result_issues
+from .association_result_findings import association_binary_sensitivity_findings
 from ..trajectory.plan_contract import (
     trajectory_role_result_findings,
     trajectory_role_scope_summary_findings,
@@ -2106,22 +2102,7 @@ def declared_product_contract_findings(
             declared=declared,
         )
     )
-    findings.extend(
-        ValidationFinding(
-            validator="association_binary_sensitivity_contract",
-            severity="error",
-            message=issue.message,
-            detail={
-                "kind": issue.reason_code,
-                "step_id": step.step_id,
-                **dict(issue.detail),
-            },
-        )
-        for issue in association_binary_sensitivity_result_issues(
-            step,
-            step_summary,
-        )
-    )
+    findings.extend(association_binary_sensitivity_findings(step, step_summary))
 
     # Older direct unit fixtures predate ``output_files`` and validate only
     # their own numeric payload.  A real execution supplies ``out_dir`` and is

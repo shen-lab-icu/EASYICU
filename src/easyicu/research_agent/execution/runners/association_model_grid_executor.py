@@ -29,6 +29,7 @@ from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.association_execution import sole_primary_model_requirement
 from ...contracts.model_terms import ModelTermSpec, level_spelling
 from ...schema import AnalysisPlan, AnalysisStep, PlannedModelRequirement
+from ...numeric_scalars import coerce_finite_float
 from .adjusted_association_executor import (
     ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS,
     run_adjusted_association_from_env,
@@ -344,14 +345,11 @@ def _variant_model(
     return derived, covariates, compiled_terms, basis_receipts
 
 
-def _finite(value: Any, *, field: str) -> float:
+def _model_grid_number(value: Any, *, field: str) -> float:
     try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise AssociationModelGridError(f"{field} is not numeric") from exc
-    if not math.isfinite(number):
-        raise AssociationModelGridError(f"{field} is not finite")
-    return number
+        return coerce_finite_float(value, label=field)
+    except ValueError as exc:
+        raise AssociationModelGridError(str(exc)) from exc
 
 
 def _primary_parent_row(frame: Any) -> Mapping[str, Any]:
@@ -368,8 +366,8 @@ def _primary_parent_row(frame: Any) -> Mapping[str, Any]:
 
 def _close(left: Any, right: Any) -> bool:
     return math.isclose(
-        _finite(left, field="reference value"),
-        _finite(right, field="parent value"),
+        _model_grid_number(left, field="reference value"),
+        _model_grid_number(right, field="parent value"),
         rel_tol=1e-10,
         abs_tol=1e-12,
     )
@@ -481,17 +479,19 @@ def run_association_model_grid(
             raise AssociationModelGridError("variant did not converge")
         if contract.get("separation_detected") is not False:
             raise AssociationModelGridError("variant shows separation")
-        estimate = _finite(summary.get("primary_or"), field="odds ratio")
+        estimate = _model_grid_number(summary.get("primary_or"), field="odds ratio")
         interval = summary.get("primary_or_ci")
         if not isinstance(interval, list) or len(interval) != 2:
             raise AssociationModelGridError("variant omitted its confidence interval")
-        low = _finite(interval[0], field="ci_low")
-        high = _finite(interval[1], field="ci_high")
+        low = _model_grid_number(interval[0], field="ci_low")
+        high = _model_grid_number(interval[1], field="ci_high")
         if not (0 < low <= estimate <= high):
             raise AssociationModelGridError("variant effect interval is incoherent")
         standard_error = next(
             (
-                _finite(item.get("standard_error"), field="standard_error")
+                _model_grid_number(
+                    item.get("standard_error"), field="standard_error"
+                )
                 for item in estimate_records
                 if str(item.get("is_primary_contrast")).casefold()
                 in {"true", "1", "yes"}

@@ -29,6 +29,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 
 __all__ = [
     "DESCRIPTIVE_DISTRIBUTION_COLUMNS",
@@ -292,14 +293,6 @@ def _load_binding(
     if _sha256(path) != expected_sha:
         raise ValueError("descriptive figure input digest verification failed")
     return path, binding, mode
-
-
-def _finite(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _write_contract_and_summary(

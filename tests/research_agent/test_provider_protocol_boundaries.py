@@ -102,7 +102,7 @@ def test_production_provider_import_does_not_load_mock_module() -> None:
 import sys
 from easyicu.research_agent.providers.llm import OpenAIClient, llm_is_mockish
 assert 'easyicu.research_agent.providers.mocks' not in sys.modules
-assert OpenAIClient.__module__ == 'easyicu.research_agent.providers.llm'
+assert OpenAIClient.__module__ == 'easyicu.research_agent.providers.clients'
 assert not llm_is_mockish(OpenAIClient.__new__(OpenAIClient))
 assert 'easyicu.research_agent.providers.mocks' not in sys.modules
 """

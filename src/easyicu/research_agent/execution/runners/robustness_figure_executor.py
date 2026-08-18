@@ -80,6 +80,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .deterministic_robustness import (
     _MATRIX_COLUMNS,
     _SPECIFICATION_GRID_COLUMNS,
@@ -616,14 +617,6 @@ def _load_statistic(
     if not isinstance(payload, dict) or "value" not in payload:
         raise ValueError(f"{input_key} sidecar records no value")
     return True, _finite(payload.get("value"))
-
-
-def _finite(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _validated_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, str, bool]:

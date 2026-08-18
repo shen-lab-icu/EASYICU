@@ -343,7 +343,7 @@ def test_agentic_coder_drops_unrelated_parent_secrets(ra, monkeypatch):
     )
 
     assert captured["env"]["COHORT_PARQUET"] == "/tmp/cohort.parquet"
-    assert captured["env"]["OPENAI_API_KEY"] == "required-backend-secret"
+    assert "OPENAI_API_KEY" not in captured["env"]
     assert "AWS_SECRET_ACCESS_KEY" not in captured["env"]
     assert "GITHUB_TOKEN" not in captured["env"]
     assert "DATABASE_URL" not in captured["env"]

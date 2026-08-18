@@ -163,8 +163,30 @@ class PlannerEfficiencyBudgetClient:
         return getattr(self._inner, name)
 
 
+def wrap_planner_efficiency_budget(
+    inner: Any,
+    *,
+    max_calls: int | None,
+    max_reported_tokens: int | None,
+    max_wall_seconds: float | None,
+) -> Any:
+    """Apply the development Planner envelope when it is configured."""
+
+    if max_calls is None:
+        return inner
+    return PlannerEfficiencyBudgetClient(
+        inner,
+        limits=PlannerEfficiencyLimits(
+            max_calls=int(max_calls),
+            max_reported_tokens=int(max_reported_tokens or 0),
+            max_wall_seconds=float(max_wall_seconds or 0.0),
+        ),
+    )
+
+
 __all__ = [
     "PlannerEfficiencyBudgetClient",
     "PlannerEfficiencyBudgetExhausted",
     "PlannerEfficiencyLimits",
+    "wrap_planner_efficiency_budget",
 ]

@@ -41,6 +41,7 @@ from ..authority.plausibility import (
 from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
+    assert_cohort_definition_locked,
 )
 from ..contracts.runtime import ValidationFinding
 
@@ -95,6 +96,7 @@ from ..planning.replan_gate import (
     replan_candidate_rejection_finding,
 )
 from ..robustness.panel import (
+    assert_robustness_specs_locked,
     robustness_specs_for_execution,
 )
 from ..authority.evidence_store import (
@@ -2712,51 +2714,19 @@ def _upsert_current_capsule_checkpoint(
             records.append(record)
         return
     records.append(record)
-_SUCCESS_REPLAN_REQUEST_FIELDS = (
-    "replan_requested",
-    "plan_revision_requested",
-)
+def _assert_execution_plan_locks(
+    run_dir: Path,
+    plan: AnalysisPlan,
+    cohort_concept_ids: Sequence[str],
+) -> None:
+    """Verify both immutable plan-time authorities before execution."""
 
-
-def _successful_step_requests_replan(
-    record: Mapping[str, Any],
-    *,
-    progressive_observation_loop: bool = False,
-) -> bool:
-    """Return whether a clean agent step explicitly requests plan adaptation.
-
-    The deterministic probe already receives one automatic replan and failed
-    model steps have their own bounded directed-replan path. Calling the LLM
-    replanner after every ordinary legacy step adds latency and usually
-    produces a no-op, so those paths still require an exact boolean request.
-    Progressive v2 explicitly runs an observation loop for agent-authored
-    steps.  A host-deterministic step has already been compiled, executed, and
-    validated by its typed owner, so repeating an LLM replan after that fixed
-    action adds no observation authority.  Such steps may still request a
-    revision explicitly when their deterministic validator discovers a reason
-    to change the remaining suffix.  Strings and other truthy values are
-    intentionally not accepted as explicit requests.
-    """
-
-    if str(record.get("status") or "") != "ok":
-        return False
-    containers: List[Mapping[str, Any]] = [record]
-    summary = record.get("step_summary")
-    if isinstance(summary, Mapping):
-        containers.append(summary)
-    explicit_request = any(
-        container.get(field) is True
-        for container in containers
-        for field in _SUCCESS_REPLAN_REQUEST_FIELDS
+    assert_cohort_definition_locked(
+        run_dir=run_dir,
+        plan=plan,
+        cohort_concept_ids=cohort_concept_ids,
     )
-    generation_mode = str(record.get("generation_mode") or "").strip().lower()
-    authority_kind = str(record.get("step_authority_kind") or "").strip().lower()
-    host_deterministic = generation_mode.startswith(
-        "deterministic_"
-    ) or authority_kind.startswith("host_deterministic_")
-    return explicit_request or (
-        progressive_observation_loop and not host_deterministic
-    )
+    assert_robustness_specs_locked(run_dir=run_dir, plan=plan)
 
 
 def _step_status_from_contract_findings(

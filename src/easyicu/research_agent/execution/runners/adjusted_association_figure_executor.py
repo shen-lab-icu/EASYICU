@@ -55,6 +55,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .adjusted_association_executor import ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS
 from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
@@ -231,14 +232,6 @@ def _canonical_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _finite(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _load_estimates(
