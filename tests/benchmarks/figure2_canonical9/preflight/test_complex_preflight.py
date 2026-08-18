@@ -14,6 +14,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from benchmarks.figure2_canonical9.case_scientific_protocol import (
+    ScientificCaseProtocolError,
+    default_case_protocol_path,
+    load_default_case_protocol,
+)
 from benchmarks.figure2_canonical9.preflight.fixtures import (
     COMPLEX_CASES,
     H1,
@@ -41,6 +46,44 @@ from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 CASES = list(COMPLEX_CASES.values())
 
 
+def _sealed_authority_block(case: PreflightCase) -> tuple[str, str] | None:
+    """Name the sealed authority that forbids a primary result, or return None.
+
+    ``validate_required_primary_result`` demands a
+    ``family_primary_result_requirement`` from every ``survival`` /
+    ``causal_inference`` plan that declares an exposure and an outcome. That
+    requirement is a scientific declaration -- estimator, effect scale,
+    population, and for causal families an estimand and comparator -- so it may
+    only come from a reviewed source. This resolves that source per case and
+    returns the blocker code when there is none, so the classification below
+    tracks the sealed protocols rather than a hand-maintained list of ids:
+    publish a reviewed H1 protocol and H1 moves to the finalising set by
+    itself.
+    """
+
+    if case.analysis_type not in {"survival", "causal_inference"}:
+        return None
+    try:
+        default_case_protocol_path(case.task_id)
+    except ScientificCaseProtocolError:
+        return (
+            "SCIENTIFIC_CASE_PROTOCOL_UNKNOWN_TASK",
+            "no reviewed case scientific protocol exists for this task",
+        )
+    protocol = load_default_case_protocol(case.task_id)
+    capture = getattr(protocol, "current_source_capture", None)
+    if capture is not None and capture.causal_contrast_authorized is False:
+        return (
+            capture.reason_code,
+            "the sealed capture contract does not authorize a causal contrast",
+        )
+    return None
+
+
+AUTHORITY_BLOCKED_CASES = [c for c in CASES if _sealed_authority_block(c) is not None]
+FINALISING_CASES = [c for c in CASES if _sealed_authority_block(c) is None]
+
+
 @pytest.fixture(params=CASES, ids=[case.task_id for case in CASES])
 def case(request) -> PreflightCase:
     return request.param
@@ -57,6 +100,26 @@ def _reviewed_primary_code(case: PreflightCase) -> tuple[str, ScriptedPreflightL
         ]
     )
     return code, controller
+
+
+def test_authority_classification_partitions_every_complex_case() -> None:
+    """No case may fall out of both suites.
+
+    The two graph suites are parametrized over disjoint subsets. If
+    ``_sealed_authority_block`` ever returned something unexpected for a case,
+    that case could silently stop being exercised by either suite while the
+    file still reported all-green. This pins the partition instead.
+    """
+
+    blocked = {c.task_id for c in AUTHORITY_BLOCKED_CASES}
+    finalising = {c.task_id for c in FINALISING_CASES}
+
+    assert blocked | finalising == set(COMPLEX_CASES)
+    assert not blocked & finalising
+    assert len(AUTHORITY_BLOCKED_CASES) + len(FINALISING_CASES) == len(COMPLEX_CASES)
+    # Today's expected split, so a change in either direction is a review event
+    # rather than a silent reclassification.
+    assert blocked == {"h1_ventilation_survival", "h2_vasopressor_causal"}
 
 
 def test_complex_registry_is_exact_minimum_family_set() -> None:
@@ -268,17 +331,33 @@ def test_production_evaluator_rejects_each_complex_mock_run(
     assert verdict.issues
 
 
-@pytest.fixture(scope="module", params=CASES, ids=[case.task_id for case in CASES])
-def complex_graph_run(request, tmp_path_factory) -> PreflightRun:
+def _run_complex_case(case: PreflightCase, tmp_path_factory) -> PreflightRun:
     manifest = preflight_runtime_manifest()
     if not manifest.integration_ready:
         pytest.skip(manifest.blocked_reason or "integration_not_ready")
-    case = request.param
     return run_preflight(
         case,
         workdir=tmp_path_factory.mktemp(f"complex_{case.task_id}"),
         n_rows=160,
     )
+
+
+@pytest.fixture(
+    scope="module",
+    params=FINALISING_CASES,
+    ids=[case.task_id for case in FINALISING_CASES],
+)
+def complex_graph_run(request, tmp_path_factory) -> PreflightRun:
+    return _run_complex_case(request.param, tmp_path_factory)
+
+
+@pytest.fixture(
+    scope="module",
+    params=AUTHORITY_BLOCKED_CASES,
+    ids=[case.task_id for case in AUTHORITY_BLOCKED_CASES],
+)
+def authority_blocked_run(request, tmp_path_factory) -> PreflightRun:
+    return _run_complex_case(request.param, tmp_path_factory)
 
 
 def test_complex_real_graph_is_zero_provider_and_finalises(
@@ -290,5 +369,60 @@ def test_complex_real_graph_is_zero_provider_and_finalises(
     assert run.raised is None
     assert run.record(run.case.deterministic_step_id)["status"] == "ok"
     assert run.record(run.case.primary_step_id)
+    assert run.manifest.get("readiness", {}).get("paper_authorized") is not True
+    assert paper_acceptance_verdict(run).status == "invalid"
+
+
+def test_authority_blocked_case_is_refused_by_name_and_produces_nothing(
+    authority_blocked_run: PreflightRun,
+) -> None:
+    """A case with no reviewed scientific authority must be refused, not run.
+
+    H1 and H2 land here, and their preflight *must* fail -- but a bare red test
+    cannot tell "the host correctly refused to invent a scientific contract"
+    apart from "something regressed". This asserts the refusal itself, so a
+    silent change in either direction breaks CI:
+
+    * H1 has no reviewed case scientific protocol at all
+      (``SCIENTIFIC_CASE_PROTOCOL_UNKNOWN_TASK``). ``effect_scale``,
+      ``uncertainty_method`` and ``population`` are required fields with no
+      source, and the sealed survival executor pins only the estimator and the
+      PH diagnostic.
+    * H2 has a protocol, and it records ``causal_contrast_authorized=False`` /
+      ``H2_VERIFIED_NON_USE_UNAVAILABLE`` because verified non-use is
+      unavailable, listing ``construct_binary_control_arm`` as forbidden.
+
+    The refusal is only trustworthy if nothing was fabricated on the way to it,
+    so this also pins zero provider spend and an empty execution record: no
+    step ran, no product exists, and nothing is publishable.
+    """
+
+    run = authority_blocked_run
+    block = _sealed_authority_block(run.case)
+    assert block is not None
+    blocker_code, _detail = block
+
+    # The pipeline really attempted the case; it was refused, not skipped.
+    assert run.pipeline_ran is True
+    assert run.raised is not None
+
+    # Refused for the declared reason, naming the contract it could not source.
+    assert "family_primary_result_requirement" in run.raised
+    assert run.case.analysis_type in run.raised
+
+    # The blocker is the sealed authority's own code, not a test-local string.
+    if blocker_code != "SCIENTIFIC_CASE_PROTOCOL_UNKNOWN_TASK":
+        protocol = load_default_case_protocol(run.case.task_id)
+        assert protocol.current_source_capture.reason_code == blocker_code
+        assert protocol.current_source_capture.causal_contrast_authorized is False
+    else:
+        with pytest.raises(ScientificCaseProtocolError, match=blocker_code):
+            default_case_protocol_path(run.case.task_id)
+
+    # Nothing was spent and nothing was fabricated.
+    assert run.external_provider_calls == 0
+    assert run.step_ids == []
+    assert run.record(run.case.primary_step_id) == {}
+    assert run.record(run.case.deterministic_step_id) == {}
     assert run.manifest.get("readiness", {}).get("paper_authorized") is not True
     assert paper_acceptance_verdict(run).status == "invalid"
