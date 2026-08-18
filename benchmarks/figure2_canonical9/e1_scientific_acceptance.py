@@ -85,6 +85,179 @@ def e1_scientific_acceptance_contract() -> dict[str, Any]:
     }
 
 
+def build_e1_model_grid_runtime_projection(
+    contract: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compile E1's case contract into the generic verified-tool authority.
+
+    E1-specific columns and variant labels stay in this benchmark owner.  The
+    installed Agent receives only the generic model-grid contract and executes
+    every row through its shared adjusted-association adapter.
+    """
+
+    from benchmarks.figure2_canonical9.case_scientific_protocol import (
+        RuntimeScientificProjection,
+    )
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        build_current_case_scientific_runtime_authority,
+    )
+
+    expected = e1_scientific_acceptance_contract()
+    supplied = dict(contract or expected)
+    if supplied != expected:
+        raise ValueError("E1 model-grid projection requires the exact case contract")
+    canonical_protocol_json = json.dumps(
+        supplied,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    authority = build_current_case_scientific_runtime_authority(
+        {
+            "schema_version": (
+                "easyicu.association_model_grid_runtime_authority/1"
+            ),
+            "authority_kind": "association_model_grid",
+            "protocol_content_sha256": hashlib.sha256(
+                canonical_protocol_json.encode("utf-8")
+            ).hexdigest(),
+            "plan_method": "verified_association_model_grid",
+            "plan_intent": (
+                "Execute the prespecified adjusted-association sensitivity "
+                "grid through the verified host model adapter."
+            ),
+            "cohort_product": supplied["analysis_cohort_input"],
+            "parent_product": supplied["primary_model_product"],
+            "output_product": supplied["sensitivity_product"],
+            "reference_variant_id": "primary_full_cohort",
+            "metadata_columns": [
+                "landmark_hours",
+                "alive_at_landmark_required",
+                "negative_event_times_excluded",
+                "readmission_restriction",
+                "age_form",
+                "charlson_form",
+            ],
+            "output_aliases": {
+                "n_events": "n_deaths",
+                "estimate": "odds_ratio",
+            },
+            "variants": [
+                {
+                    "analysis_id": "primary_full_cohort",
+                    "filters": [],
+                    "nonlinear_terms": [],
+                    "metadata": {
+                        "landmark_hours": None,
+                        "alive_at_landmark_required": False,
+                        "negative_event_times_excluded": False,
+                        "readmission_restriction": "all_stays",
+                        "age_form": "linear",
+                        "charlson_form": "linear",
+                    },
+                },
+                {
+                    "analysis_id": "landmark_alive_at_24h",
+                    "filters": [
+                        {
+                            "filter_kind": "alive_at_landmark",
+                            "outcome_column": supplied["outcome_column"],
+                            "event_time_column": supplied["event_time_column"],
+                            "landmark_hours": float(supplied["landmark_hours"]),
+                            "exclude_negative_event_times": True,
+                        }
+                    ],
+                    "nonlinear_terms": [],
+                    "metadata": {
+                        "landmark_hours": float(supplied["landmark_hours"]),
+                        "alive_at_landmark_required": True,
+                        "negative_event_times_excluded": True,
+                        "readmission_restriction": "all_stays",
+                        "age_form": "linear",
+                        "charlson_form": "linear",
+                    },
+                },
+                {
+                    "analysis_id": "non_readmission_icu_stays",
+                    "filters": [
+                        {
+                            "filter_kind": "level_in",
+                            "column": supplied["readmission_column"],
+                            "declared_levels": ["0", "1"],
+                            "retained_levels": ["0"],
+                        }
+                    ],
+                    "nonlinear_terms": [],
+                    "metadata": {
+                        "landmark_hours": None,
+                        "alive_at_landmark_required": False,
+                        "negative_event_times_excluded": False,
+                        "readmission_restriction": "non_readmission_only",
+                        "age_form": "linear",
+                        "charlson_form": "linear",
+                    },
+                },
+                {
+                    "analysis_id": "flexible_age_charlson",
+                    "filters": [],
+                    "nonlinear_terms": [
+                        {
+                            "source_column": "age",
+                            "basis": "natural_cubic_spline",
+                            "degrees_of_freedom": 3,
+                            "center_before_basis": True,
+                        },
+                        {
+                            "source_column": "charlson_max",
+                            "basis": "natural_cubic_spline",
+                            "degrees_of_freedom": 3,
+                            "center_before_basis": True,
+                        },
+                    ],
+                    "metadata": {
+                        "landmark_hours": None,
+                        "alive_at_landmark_required": False,
+                        "negative_event_times_excluded": False,
+                        "readmission_restriction": "all_stays",
+                        "age_form": "natural_cubic_spline_df3",
+                        "charlson_form": "natural_cubic_spline_df3",
+                    },
+                },
+            ],
+        }
+    )
+    body = {
+        "schema_version": "easyicu.figure2_runtime_scientific_projection/1",
+        "task_id": TASK_ID,
+        "protocol_version": "e1-scientific-acceptance-v1",
+        "protocol_content_sha256": hashlib.sha256(
+            canonical_protocol_json.encode("utf-8")
+        ).hexdigest(),
+        "canonical_protocol_json": canonical_protocol_json,
+        "agent_visible_required_outputs": (supplied["sensitivity_product"],),
+        "agent_visible_guardrails": (
+            "Use the primary adjusted-association model as the exact parent; "
+            "the Host compiles product wiring and executes every variant.",
+            "The landmark, non-readmission, and flexible-form coordinates are "
+            "prespecified; no generated-code fallback may replace them.",
+        ),
+        "deterministic_execution_contract": authority.model_dump(mode="json"),
+    }
+    return RuntimeScientificProjection(
+        **body,
+        runtime_projection_sha256=hashlib.sha256(
+            json.dumps(
+                body,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest(),
+    ).model_dump(mode="json")
+
+
 def sensitivity_output_instruction() -> str:
     """Return the exact public artifact instruction sent only to the E1 task."""
 
@@ -1027,6 +1200,7 @@ __all__ = [
     "RECEIPT_SCHEMA",
     "SENSITIVITY_PRODUCT",
     "TASK_ID",
+    "build_e1_model_grid_runtime_projection",
     "display_label_instruction",
     "measurement_products_instruction",
     "e1_scientific_acceptance_contract",

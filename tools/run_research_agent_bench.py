@@ -140,6 +140,9 @@ def _bind_runtime_scientific_projection_options(
         "easyicu.source_feasibility_runtime_authority/1": (
             "current_case_scientific_runtime_authority"
         ),
+        "easyicu.association_model_grid_runtime_authority/1": (
+            "current_case_scientific_runtime_authority"
+        ),
     }
     try:
         authority_option = authority_option_by_schema[schema_version]
@@ -1445,9 +1448,24 @@ def _run_one_arm(
         # mortality_prediction task while the scorecard expected TRIPOD+AI — so
         # reporting_completeness was silently NA on a run that did reach the write
         # phase (detector/emitter contract mismatch, G-2).
+        scientific_contract = getattr(item, "scientific_acceptance_contract", None)
+        runtime_projection = getattr(item, "runtime_scientific_projection", None)
+        if (
+            runtime_projection is None
+            and isinstance(scientific_contract, Mapping)
+            and scientific_contract.get("schema_version")
+            == "easyicu.e1_scientific_acceptance_contract/1"
+        ):
+            from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
+                build_e1_model_grid_runtime_projection,
+            )
+
+            runtime_projection = build_e1_model_grid_runtime_projection(
+                scientific_contract
+            )
         opts = _bind_runtime_scientific_projection_options(
             pipeline_options,
-            getattr(item, "runtime_scientific_projection", None),
+            runtime_projection,
         )
         opts.setdefault(
             "reporting_checklist_names",
@@ -1457,7 +1475,6 @@ def _run_one_arm(
         # trajectory-item applicability by kind (cross-sectional clustering vs
         # longitudinal) instead of fragile manuscript wording (M3 false-open).
         opts.setdefault("task_kind", getattr(item, "kind", None))
-        scientific_contract = getattr(item, "scientific_acceptance_contract", None)
         if isinstance(scientific_contract, Mapping):
             required_cohort_mode = str(
                 scientific_contract.get("primary_cohort_selection_mode") or ""
