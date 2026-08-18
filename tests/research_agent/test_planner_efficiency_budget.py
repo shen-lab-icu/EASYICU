@@ -11,6 +11,7 @@ from easyicu.research_agent.providers.efficiency_budget import (
     PlannerEfficiencyBudgetClient,
     PlannerEfficiencyBudgetExhausted,
     PlannerEfficiencyLimits,
+    wrap_planner_efficiency_budget,
 )
 
 
@@ -129,3 +130,29 @@ def test_planner_efficiency_limits_must_be_positive(
 ) -> None:
     with pytest.raises(ValueError, match="must be positive"):
         PlannerEfficiencyLimits(**limits)
+
+
+def test_planner_efficiency_wrapper_is_disabled_without_a_call_limit() -> None:
+    inner = _UsageClient([])
+
+    assert (
+        wrap_planner_efficiency_budget(
+            inner,
+            max_calls=None,
+            max_reported_tokens=None,
+            max_wall_seconds=None,
+        )
+        is inner
+    )
+
+
+def test_planner_efficiency_wrapper_compiles_configured_limits() -> None:
+    wrapped = wrap_planner_efficiency_budget(
+        _UsageClient([{"total_tokens": 1}]),
+        max_calls=2,
+        max_reported_tokens=100,
+        max_wall_seconds=60.0,
+    )
+
+    assert isinstance(wrapped, PlannerEfficiencyBudgetClient)
+    assert wrapped.limits == PlannerEfficiencyLimits(2, 100, 60.0)

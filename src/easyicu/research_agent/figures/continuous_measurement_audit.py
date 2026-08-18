@@ -27,6 +27,7 @@ from ..contracts.declared_product import (
     read_digest_bound_artifact_snapshot,
     typed_product,
 )
+from ..numeric_scalars import coerce_optional_finite_float as _finite
 from .publication import (
     add_panel_label,
     apply_publication_style,
@@ -103,14 +104,6 @@ def _safe_csv_name(value: Any) -> Optional[str]:
     if not name or path.name != name or path.suffix.lower() != ".csv":
         return None
     return name
-
-
-def _finite(value: Any) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
 
 
 def _integer(value: Any) -> Optional[int]:

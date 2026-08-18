@@ -23,6 +23,7 @@ from easyicu.research_agent.execution.development_sample import (
     DevelopmentSampleError,
     materialize_development_execution_sample,
 )
+
 # 8268d27..02c864f moved this owner out of execution.phase; the test follows the
 # symbol rather than re-exporting it back into the phase module.
 from easyicu.research_agent.execution.cohort_routing import (
@@ -349,6 +350,7 @@ def test_submission_profile_cannot_enable_development_sample(tmp_path: Path) -> 
         ResearchAgentPipeline(
             workdir=tmp_path,
             submission_profile_name="npj_dm",
+            submission_profile_version="20260719",
             development_sample_size=1000,
         )
 

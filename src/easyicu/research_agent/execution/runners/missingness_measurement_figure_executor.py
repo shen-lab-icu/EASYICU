@@ -43,6 +43,7 @@ from ...contracts.figure_plan import (
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .deterministic_missingness import measurement_audit_product_filename
 from .figure_input_capability import TypedInputCapability
 
@@ -669,14 +670,6 @@ def _load_single_measurement_binding(
         inputs=inputs,
         input_key=input_key,
     )
-
-
-def _finite(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
 
 
 def _integer(value: Any) -> int | None:

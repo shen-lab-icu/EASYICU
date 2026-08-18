@@ -7,7 +7,7 @@ import json
 import pytest
 
 from easyicu.research_agent.agents.replanner import ReplannerAgent
-from easyicu.research_agent.execution.phase_support import (
+from easyicu.research_agent.execution.run_coordination import (
     _successful_step_requests_replan,
 )
 from easyicu.research_agent.planning.runtime_suffix import (

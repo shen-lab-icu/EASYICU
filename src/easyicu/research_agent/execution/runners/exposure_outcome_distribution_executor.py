@@ -56,6 +56,7 @@ from ...contracts.descriptive_execution import (
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
 from ...schema import AnalysisStep, ExposureOutcomeDistributionSpec, _typed_level_key
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .plausibility_receipt import host_plausibility_receipt_injected
 from .typed_input_binding import (
     load_typed_cohort,
@@ -344,14 +345,6 @@ def exposure_outcome_distribution_executor_code(
         scope=plausibility_scope,
         already_satisfied=False,
     )
-
-
-def _finite(value: Any) -> Optional[float]:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def percentage(numerator: int, denominator: int) -> Optional[float]:

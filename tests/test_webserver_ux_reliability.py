@@ -59,7 +59,7 @@ def test_agent_projects_has_no_provider_controls_or_fake_exports() -> None:
     agent = _js("screens-agent.js")
     provider = _js("screens-guided-pi-provider.js")
 
-    assert "Research Projects only shows the resulting run and evidence" in provider
+    assert "you do not configure a second analysis model elsewhere" in provider
     assert "data-gpi-research-provider" in provider
     assert "data-ag-external-run" not in agent
     assert "AGENT_PROVIDER_PANEL" not in agent

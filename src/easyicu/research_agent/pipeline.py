@@ -183,6 +183,9 @@ from .reporting.article_contract import (
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
+from .planning.final_article_design import (
+    materialize_final_article_design_authority,
+)
 from .planning.progressive_artifacts import persist_progressive_planning_authority
 from .orchestration.progressive_planning import run_progressive_planner
 from .planning.scientific_review import (
@@ -483,6 +486,7 @@ from .planning.study_design import (
     build_study_design_brief,
     validate_plan_against_study_design_brief,
 )
+from .providers.efficiency_budget import wrap_planner_efficiency_budget
 from .skills import ClinicalSkill, get_skill, list_skills
 from .authority.runtime_artifacts import (
     AuditLogger,
@@ -1685,7 +1689,7 @@ def _run_preplan_literature_and_hypothesis(
                     findings=findings,
                     reason="hypothesis_blueprint_blocked",
                 )
-                return _PlanPhaseResult(
+                terminal_result = _PlanPhaseResult(
                     context=context,
                     agent_context=agent_context,
                     context_path=context_path,
@@ -1707,6 +1711,7 @@ def _run_preplan_literature_and_hypothesis(
                     resume_state=resume_state,
                     aborted_result=aborted,
                 )
+                return terminal_result, agent_context, allowed_literature_citation_keys, direct_comparator_literature_keys, preplan_literature
             note = render_hypothesis_blueprint_for_prompt(
                 blueprint,
                 literature=preplan_literature,
@@ -2743,39 +2748,27 @@ class ResearchAgentPipeline:
             progressive = self._planner_strategy == "progressive_v2"
             plan_generation_mode = "llm_progressive_v2" if progressive else "llm"
             planner_class = ProgressivePlannerAgent if progressive else PlannerAgent
-            planner_client = budgeted_role_client(
-                role_resolver,
-                "planner",
-                "planner_plan_generation",
-                limit_tokens=self._max_prompt_tokens_per_call,
-            )
-            if (
-                progressive
-                and self._config.development_planner_efficiency_max_calls
-                is not None
-            ):
-                from .providers.efficiency_budget import (
-                    PlannerEfficiencyBudgetClient,
-                    PlannerEfficiencyLimits,
-                )
-
-                planner_client = PlannerEfficiencyBudgetClient(
-                    planner_client,
-                    limits=PlannerEfficiencyLimits(
-                        max_calls=int(
-                            self._config.development_planner_efficiency_max_calls
-                        ),
-                        max_reported_tokens=int(
-                            self._config.development_planner_efficiency_max_reported_tokens
-                            or 0
-                        ),
-                        max_wall_seconds=float(
-                            self._config.development_planner_efficiency_max_wall_seconds
-                            or 0.0
-                        ),
+            planner = planner_class(
+                wrap_planner_efficiency_budget(
+                    budgeted_role_client(
+                        role_resolver,
+                        "planner",
+                        "planner_plan_generation",
+                        limit_tokens=self._max_prompt_tokens_per_call,
+                    ),
+                    max_calls=(
+                        self._config.development_planner_efficiency_max_calls
+                        if progressive
+                        else None
+                    ),
+                    max_reported_tokens=(
+                        self._config.development_planner_efficiency_max_reported_tokens
+                    ),
+                    max_wall_seconds=(
+                        self._config.development_planner_efficiency_max_wall_seconds
                     ),
                 )
-            planner = planner_class(planner_client)
+            )
 
             planner_progress = planner_retry_progress_callback(
                 emit_progress, run_id=run_id
@@ -3177,69 +3170,16 @@ class ResearchAgentPipeline:
                 # has selected a valid analysis type, seal a separate final
                 # contract instead of letting provisional inference retain
                 # scientific headline authority.
-                final_brief = build_study_design_brief(
-                    context,
+                final_design = materialize_final_article_design_authority(
+                    context=context,
                     analysis_type=plan.analysis_type,
+                    run_dir=run_dir,
+                    evidence=evidence,
                 )
-                final_contract = build_article_analysis_contract(
-                    context,
-                    brief=final_brief,
-                    analysis_type=plan.analysis_type,
-                )
-                final_strategy = build_article_figure_strategy(
-                    context,
-                    analysis_family=final_brief.analysis_family,
-                )
-                final_blueprint = build_analysis_blueprint(
-                    context,
-                    brief=final_brief,
-                    contract=final_contract,
-                    figure_strategy=final_strategy,
-                )
-                final_payloads = (
-                    (
-                        "study_design_brief_final",
-                        "study_design_brief.final.json",
-                        final_brief,
-                    ),
-                    (
-                        "article_analysis_contract_final",
-                        "article_analysis_contract.final.json",
-                        final_contract,
-                    ),
-                    (
-                        "article_figure_strategy_final",
-                        "article_figure_strategy.final.json",
-                        final_strategy,
-                    ),
-                    (
-                        "analysis_blueprint_final",
-                        "analysis_blueprint.final.json",
-                        final_blueprint,
-                    ),
-                )
-                for evidence_id, filename, payload in final_payloads:
-                    final_path = run_dir / filename
-                    final_path.write_text(
-                        payload.model_dump_json(indent=2),
-                        encoding="utf-8",
-                    )
-                    if evidence.get(evidence_id) is None:
-                        evidence.register_file(
-                            kind="log",
-                            description=(
-                                "Planner-final article design authority bound to "
-                                f"analysis_type={plan.analysis_type}."
-                            ),
-                            source_path=final_path,
-                            evidence_id=evidence_id,
-                            producer="planner_contract_finalizer",
-                            generation_mode="deterministic_skill",
-                        )
-                study_design_brief = final_brief
-                article_contract = final_contract
-                article_figure_strategy = final_strategy
-                analysis_blueprint = final_blueprint
+                study_design_brief = final_design.brief
+                article_contract = final_design.contract
+                article_figure_strategy = final_design.figure_strategy
+                analysis_blueprint = final_design.blueprint
             findings.extend(
                 validate_plan_against_study_design_brief(
                     plan=plan,
@@ -3747,9 +3687,6 @@ class ResearchAgentPipeline:
                     generation_mode="system",
                 )
 
-        allowed_literature_citation_keys: list[str] = []
-        direct_comparator_literature_keys: list[str] = []
-        preplan_literature: Optional[LiteratureBundle] = None
         (
             preplan_terminal_result,
             agent_context,

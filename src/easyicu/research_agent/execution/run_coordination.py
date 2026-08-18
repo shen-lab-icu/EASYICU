@@ -9,9 +9,61 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Literal, Optional, Sequence
+from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
 from ..schema import AnalysisStep
+
+_SUCCESS_REPLAN_REQUEST_FIELDS = (
+    "replan_requested",
+    "plan_revision_requested",
+)
+
+
+def _successful_step_requests_replan(
+    record: Mapping[str, Any],
+    *,
+    progressive_observation_loop: bool = False,
+) -> bool:
+    """Decide whether a successful observation authorizes suffix revision."""
+
+    if str(record.get("status") or "") != "ok":
+        return False
+    containers = [record]
+    summary = record.get("step_summary")
+    if isinstance(summary, Mapping):
+        containers.append(summary)
+    explicit_request = any(
+        container.get(field) is True
+        for container in containers
+        for field in _SUCCESS_REPLAN_REQUEST_FIELDS
+    )
+    generation_mode = str(record.get("generation_mode") or "").strip().lower()
+    authority_kind = str(record.get("step_authority_kind") or "").strip().lower()
+    host_deterministic = generation_mode.startswith(
+        "deterministic_"
+    ) or authority_kind.startswith("host_deterministic_")
+    return explicit_request or (
+        progressive_observation_loop and not host_deterministic
+    )
+
+
+def _successful_run_transition_requests_replan(
+    pipeline: Any,
+    record: Mapping[str, Any],
+    has_remaining: bool,
+) -> bool:
+    """Apply host strategy and queue guards to one clean observation."""
+
+    return bool(
+        pipeline._enable_replanning
+        and has_remaining
+        and _successful_step_requests_replan(
+            record,
+            progressive_observation_loop=(
+                getattr(pipeline, "_planner_strategy", None) == "progressive_v2"
+            ),
+        )
+    )
 
 
 @dataclass(slots=True)

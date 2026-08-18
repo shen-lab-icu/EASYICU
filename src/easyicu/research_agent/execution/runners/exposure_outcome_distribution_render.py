@@ -42,6 +42,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .exposure_outcome_distribution_executor import (
     COUNTS_ONLY_COVARIANCE,
     EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
@@ -209,14 +210,6 @@ def _load_binding(
         require_consumption_contract=True,
         minimum_row_count=3,
     )
-
-
-def _finite(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
 
 
 def _close(left: Any, right: Any) -> bool:

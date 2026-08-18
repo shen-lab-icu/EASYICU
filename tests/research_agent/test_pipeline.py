@@ -1311,7 +1311,7 @@ def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
 ):
     import re
 
-    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import phase_support as pipeline_phase_support
     from easyicu.research_agent.authority.step_runtime import (
         StepAuthorityRuntimeError,
     )
@@ -1360,7 +1360,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         ]
     )
 
-    original_write = pipeline_execute.write_run_checkpoint
+    original_write = pipeline_phase_support.write_run_checkpoint
 
     def fail_target_checkpoint(path, payload):  # noqa: ANN001, ANN202
         statuses = {
@@ -1373,7 +1373,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         return original_write(path, payload)
 
     monkeypatch.setattr(
-        pipeline_execute,
+        pipeline_phase_support,
         "write_run_checkpoint",
         fail_target_checkpoint,
     )
@@ -9635,6 +9635,91 @@ def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
         == "preserved_figure_parent_output_contract"
         for finding in findings
     )
+
+
+def test_preserved_robustness_parent_outputs_update_the_owner_spec(ra):
+    """Restoring a render edge must keep the deterministic owner in sync."""
+    from easyicu.research_agent.pipeline import _preserve_figure_steps_after_replan
+    from easyicu.research_agent.schema import RobustnessReplaySpec
+
+    base_spec = RobustnessReplaySpec.model_validate(
+        {
+            "products": [
+                {
+                    "product_id": "robustness_matrix",
+                    "output": "robustness_matrix",
+                },
+                {
+                    "product_id": "robustness_summary",
+                    "output": "robustness_summary",
+                },
+            ]
+        }
+    )
+    full_spec = RobustnessReplaySpec.model_validate(
+        {
+            "products": [
+                *base_spec.model_dump(mode="python")["products"],
+                {"product_id": "primary_or", "output": "primary_effect"},
+                {
+                    "product_id": "complete_case_n",
+                    "output": "complete_case_n",
+                },
+            ]
+        }
+    )
+    current_parent = ra.AnalysisStep(
+        step_id="05_robustness",
+        planned_analysis_role="sensitivity",
+        intent="Replay the locked robustness grid.",
+        method="robustness_sensitivity",
+        expected_outputs=[
+            "table:robustness_matrix",
+            "table:robustness_summary",
+            "statistic:primary_or",
+            "statistic:complete_case_n",
+        ],
+        robustness_replay_spec=full_spec,
+    )
+    current_figure = ra.AnalysisStep(
+        step_id="05_robustness_figure",
+        intent="Render the publication figure(s) declared by step '05_robustness'.",
+        method="visualization",
+        inputs=["statistic:primary_or", "statistic:complete_case_n"],
+        expected_outputs=["figure:robustness_forest"],
+    )
+    current = ra.AnalysisPlan(
+        research_question="Audit robustness.",
+        steps=[current_parent, current_figure],
+    )
+    revised = ra.AnalysisPlan(
+        research_question="Audit robustness.",
+        steps=[
+            current_parent.model_copy(
+                update={
+                    "expected_outputs": [
+                        "table:robustness_matrix",
+                        "table:robustness_summary",
+                    ],
+                    "robustness_replay_spec": base_spec,
+                }
+            )
+        ],
+        revision=2,
+    )
+
+    preserved, _findings = _preserve_figure_steps_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+    parent = next(step for step in preserved.steps if step.step_id == "05_robustness")
+    assert parent.robustness_replay_spec is not None
+    mapped = {
+        item.product_id: item.output for item in parent.robustness_replay_spec.products
+    }
+    assert mapped["primary_or"] == "primary_effect"
+    assert mapped["complete_case_n"] == "complete_case_n"
 
 
 def test_preserve_figure_steps_after_replan_does_not_invent_missing_parent(ra):

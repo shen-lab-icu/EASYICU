@@ -33,7 +33,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import math
 import os
 import textwrap
 from pathlib import Path
@@ -71,6 +70,7 @@ from ...schema import (
     AnalysisStep,
     PlannedModelRequirement,
 )
+from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import load_step_cohort_frame, sole_typed_cohort_input
 
@@ -396,14 +396,6 @@ def adjusted_association_executor_code(
         step,
         plausibility_scope=plausibility_scope,
     ).assembled()
-
-
-def _finite(value: Any) -> Optional[float]:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _coefficient_rows(

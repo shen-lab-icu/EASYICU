@@ -115,7 +115,6 @@ from .import_repair import (
     patch_known_host_helper_import,
 )
 from .input_scope import (
-    patch_planner_declared_raw_input_projection,
     patch_raw_contract_document_fallback,
     patch_raw_contract_list_type_assertion,
     patch_raw_contract_mapping_iteration,

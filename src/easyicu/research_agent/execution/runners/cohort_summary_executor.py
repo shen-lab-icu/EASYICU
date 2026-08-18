@@ -10,7 +10,6 @@ model, or report an effect estimate.
 from __future__ import annotations
 
 import json
-import math
 import os
 import textwrap
 from pathlib import Path
@@ -26,6 +25,7 @@ from ...gates.plausibility_receipt import (
     RECEIPT_TOTAL_FIELD,
 )
 from ...schema import AnalysisStep
+from ...numeric_scalars import coerce_optional_finite_float as _finite_number
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import (
     load_step_cohort_frame,
@@ -272,14 +272,6 @@ def _variable_metadata(context: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             continue
         by_name[name] = item
     return by_name
-
-
-def _finite_number(value: Any) -> Optional[float]:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _row(

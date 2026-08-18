@@ -45,9 +45,10 @@ from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
 )
-from ..authority.step_runtime import (
-    StepAuthorityRuntimeError,
-    load_explicit_executed_success_step_capsule,
+from .evidence_record_resolution import (
+    _current_verified_evidence_record,
+    _evidence_record_field,
+    executed_product_evidence_authority,
 )
 from ..schema import (
     AnalysisPlan,
@@ -259,29 +260,6 @@ def _typed_artifact_name(value: Any) -> Optional[str]:
     if typed_product is None or typed_product[0] != "artifact":
         return None
     return typed_product[1]
-
-
-def _evidence_record_field(record: Any, name: str) -> Any:
-    if isinstance(record, Mapping):
-        return record.get(name)
-    return getattr(record, name, None)
-
-
-def _current_verified_evidence_record(
-    evidence_store: Any,
-    name: str,
-    per_step_records: Sequence[Mapping[str, Any]],
-) -> Any:
-    """Resolve an alias only when its producer is current and successful."""
-
-    record = evidence_store.get(name)
-    if record is None:
-        return None
-    current_ids = {
-        item.evidence_id
-        for item in evidence_store.current_verified_records(per_step_records)
-    }
-    return record if record.evidence_id in current_ids else None
 
 
 def _registered_source_name(record: Any, verified_path: Path) -> Optional[str]:
@@ -511,41 +489,15 @@ def _resolve_typed_input_evidence(
             "producer_status": producer_status or "missing",
         }
 
-    # New step-authority records name an immutable capsule explicitly.  Once
-    # that coordinate exists, a plain outer ``status=ok`` is insufficient:
-    # downstream materialization may observe products only from the exact
-    # successful sandbox execution sealed by that record.  Older deterministic
-    # host producers have no capsule ref and retain their existing typed
-    # EvidenceStore path; an invalid explicit ref never falls back to it.
-    executed_output_sha256s: Optional[frozenset[str]] = None
-    if (producer_record or {}).get("step_authority_capsule_ref") is not None:
-        try:
-            executed_capsule = load_explicit_executed_success_step_capsule(
-                run_dir,
-                step_id=producer_id,
-                record=producer_record or {},
-            )
-        except StepAuthorityRuntimeError as exc:
-            return None, {
-                "input": str(input_name),
-                **product_fields,
-                "reason": "producer_execution_capsule_invalid",
-                "producer_step_id": producer_id,
-                "detail": str(exc),
-            }
-        if executed_capsule is None:  # pragma: no cover - status/ref checked above
-            return None, {
-                "input": str(input_name),
-                **product_fields,
-                "reason": "producer_execution_capsule_missing",
-                "producer_step_id": producer_id,
-            }
-        execution = executed_capsule.capsule.execution
-        if execution is None:  # pragma: no cover - loader enforces this
-            raise RuntimeError("executed capsule loader returned no execution seal")
-        executed_output_sha256s = frozenset(
-            output.content.sha256 for output in execution.outputs
-        )
+    executed_authority = executed_product_evidence_authority(
+        run_dir=run_dir,
+        producer_id=producer_id,
+        producer_record=producer_record or {},
+        input_name=str(input_name),
+        product_fields=product_fields,
+    )
+    if executed_authority.failure is not None:
+        return None, executed_authority.failure
 
     active_producer_step = next(
         step for step in plan.steps if str(step.step_id) == producer_id
@@ -964,20 +916,10 @@ def _resolve_typed_input_evidence(
         }
 
     record, verified_path = candidates[0]
-    if executed_output_sha256s is not None:
-        observed_sha256 = sha256_of_file(verified_path)
-        if observed_sha256 not in executed_output_sha256s:
-            return None, {
-                "input": str(input_name),
-                **product_fields,
-                "reason": "producer_execution_output_digest_mismatch",
-                "producer_step_id": producer_id,
-                "evidence_id": str(
-                    _evidence_record_field(record, "evidence_id") or ""
-                ),
-                "observed_sha256": observed_sha256,
-                "sealed_output_count": len(executed_output_sha256s),
-            }
+    if failure := executed_authority.path_failure(
+        verified_path, evidence_record=record
+    ):
+        return None, failure
     return (
         EvidenceRef(
             evidence_id=str(_evidence_record_field(record, "evidence_id") or ""),

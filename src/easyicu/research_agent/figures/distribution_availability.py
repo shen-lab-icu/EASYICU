@@ -28,6 +28,7 @@ from ..contracts.declared_product import (
     typed_product,
 )
 from ..schema import AnalysisStep
+from ..numeric_scalars import coerce_optional_finite_float as _finite_number
 from .publication import (
     add_panel_label,
     apply_publication_style,
@@ -232,14 +233,6 @@ def _metric_alias_names(
     if len({_normalise(name) for name in aliases}) != len(aliases):
         return ()
     return aliases
-
-
-def _finite_number(value: Any) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
 
 
 def _nonnegative_integer(value: Any) -> Optional[int]:

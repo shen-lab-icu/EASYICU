@@ -180,7 +180,6 @@ from ..authority.plausibility import (
 from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
-    assert_cohort_definition_locked,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
@@ -419,7 +418,6 @@ from ..contracts.robustness_execution import (
 )
 from ..robustness.panel import (
     RobustnessSpec,
-    assert_robustness_specs_locked,
     robustness_specs_for_execution,
     robustness_specs_sha,
 )
@@ -499,7 +497,13 @@ from ..authority.run_input import (
     verify_legacy_trajectory_capsule_receipt,
     validator_code_sha256,
 )
-from .run_coordination import RunCoordinator, RunExecutionState, RunTransition
+from .run_coordination import (
+    RunCoordinator,
+    RunExecutionState,
+    RunTransition,
+    _successful_run_transition_requests_replan,
+    _successful_step_requests_replan,
+)
 from .cohort_adoption import (
     adopt_existing_host_cohort_materialization,
     commit_staged_cohort_plan,
@@ -587,7 +591,7 @@ from .phase_support import (  # noqa: F401 — owner module
     _ROBUSTNESS_SENSITIVITY_METHODS,
     _SEALED_AUTHORITY_SUMMARY_MARKERS,
     _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS,
-    _SUCCESS_REPLAN_REQUEST_FIELDS,
+    _assert_execution_plan_locks,
     _absolute_risk_context_runner_owns_step,
     _actionable_validator_messages,
     _append_terminal_step_record,
@@ -666,7 +670,6 @@ from .phase_support import (  # noqa: F401 — owner module
     _step_requires_publication_figure_exports,
     _step_status_from_contract_findings,
     _submit_in_current_context,
-    _successful_step_requests_replan,
     _terminal_publication_repair_replan_skip_detail,
     _trajectory_clustering_step_matches,
     _unowned_sealed_authority_markers,
@@ -1132,12 +1135,7 @@ def _prepare_execute_phase_authority(
     )
     prompt_version = plan_result.prompt_version
     prompt_files = plan_result.prompt_files
-    assert_cohort_definition_locked(
-        run_dir=run_dir,
-        plan=plan,
-        cohort_concept_ids=plan_result.cohort_concept_ids,
-    )
-    assert_robustness_specs_locked(run_dir=run_dir, plan=plan)
+    _assert_execution_plan_locks(run_dir, plan, plan_result.cohort_concept_ids)
     return _ExecutePhasePreparation(
         services=services,
         context=context,
@@ -1475,7 +1473,6 @@ def run_execute_phase(
         _step_no_analysis_step_has_run,
         per_step_records=per_step_records,
     )
-
     _universe_columns = functools.partial(
         _step_universe_columns,
         run_input_authority_state=run_input_authority_state,
@@ -1513,7 +1510,6 @@ def run_execute_phase(
             cohort_concept_ids=plan_result.cohort_concept_ids,
         )
         return success
-
     _enforce_cohort_contract_on_executing_plan = functools.partial(
         _step_enforce_cohort_contract_on_executing_plan,
         _replan_state=_replan_state,
@@ -3245,7 +3241,7 @@ def _step_run_concept_repair_phase(
         )
     )
     if concept_repair_result.terminal_record is not None:
-        return runtime_state, concept_repair_result.terminal_record
+        return concept_repair_result.terminal_record, None
     code = concept_repair_result.code
     concept_approved_code_digest = (
         concept_repair_result.concept_approved_code_sha256
@@ -4556,17 +4552,7 @@ def _step_resolve_run_transition(
             directed_plan,
             rerun_current_step=True,
         )
-    if (
-        pipeline._enable_replanning
-        and record.get("status") == "ok"
-        and _successful_step_requests_replan(
-            record,
-            progressive_observation_loop=(
-                getattr(pipeline, "_planner_strategy", None) == "progressive_v2"
-            ),
-        )
-        and has_remaining
-    ):
+    if _successful_run_transition_requests_replan(pipeline, record, has_remaining):
         revised_plan = _maybe_replan(
             current_plan=plan,
             reason=step.step_id,

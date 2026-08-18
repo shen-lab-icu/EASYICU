@@ -953,7 +953,7 @@ def test_openai_transport_retries_do_not_consume_the_step_allowance(monkeypatch)
     5 calls for 2 logical generations.
 
     The retry bound did not live here -- ``manual_attempts`` in
-    ``providers/llm.py`` bounds retries, and the run/batch hard stop bounds
+    ``providers/clients.py`` bounds retries, and the run/batch hard stop bounds
     spend -- so this charge only converted a transport failure into a
     scientific one. See
     ``test_a_retried_request_is_not_a_second_repair.py``.

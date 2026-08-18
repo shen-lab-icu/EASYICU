@@ -179,16 +179,16 @@ def test_two_logical_calls_are_two_charges():
 def test_the_transport_retry_bound_lives_elsewhere_and_is_unchanged():
     """Proof that dropping the charge weakens no bound.
 
-    ``providers/llm.py`` bounds retries with its own ``manual_attempts`` loop,
+    ``providers/clients.py`` bounds retries with its own ``manual_attempts`` loop,
     which this change does not touch. No part of the retry path consults the
     step allowance any more -- neither to attempt nor to back off.
     """
 
     import inspect
 
-    from easyicu.research_agent.providers import llm
+    from easyicu.research_agent.providers import clients
 
-    source = inspect.getsource(llm)
+    source = inspect.getsource(clients)
     assert (
         'manual_attempts = 1 + max(0, int(getattr(self, "_max_retries", 8)))'
         in source

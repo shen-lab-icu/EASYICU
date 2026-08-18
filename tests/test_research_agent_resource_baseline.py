@@ -41,6 +41,16 @@ def test_offline_resource_measurement_covers_exact_canonical9_order() -> None:
     assert measured["summary"]["task_count"] == 9
 
 
+def test_resource_measurement_binds_live_planner_schema_and_prompt_sources() -> None:
+    tool = _load_tool()
+
+    assert {
+        "src/easyicu/research_agent/agents/planner.py",
+        "src/easyicu/research_agent/providers/prompts/v1/system.txt",
+        "src/easyicu/research_agent/schema.py",
+    } <= set(tool.SOURCE_FILES)
+
+
 def test_offline_resource_measurement_is_byte_deterministic() -> None:
     tool = _load_tool()
 

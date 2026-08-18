@@ -36,6 +36,10 @@ from pydantic import ValidationError
 
 from .authority.step_recovery import StepRecoverySignature
 from .contracts.association_execution import association_binary_sensitivity_contract
+from .planning.robustness_plan_mutation import (
+    ROBUSTNESS_ARTICLE_OUTPUT_BINDINGS,
+    with_family_contract_outputs,
+)
 from .contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
@@ -65,6 +69,12 @@ from .planning.endpoint_contract import endpoint_contract_findings as endpoint_c
 from .planning.figure_plan_shaping import (
     dedicated_renderer_consumes_typed_source as _dedicated_renderer_consumes_typed_source,
 )
+from .planning.figure_step_contract import (
+    _output_declares_figure,
+    _parent_step_id_for_figure_step,
+    _preserve_figure_steps_after_replan,  # noqa: F401 - compatibility export
+    _step_produces_figure,
+)
 from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
@@ -82,8 +92,6 @@ from .schema import (
     ArtifactConsumptionContract,
     ClusterSelectionManifest,
     ResearchContext,
-    RobustnessReplayProduct,
-    RobustnessReplaySpec,
     ValidationFinding,
     VariableRole,
 )
@@ -132,62 +140,6 @@ _REPORT_INPUT_PRODUCT_KINDS = frozenset({"manifest", "statistic", "table"})
 # output each identity names.  Keeping both halves together lets the mutator
 # update ``expected_outputs`` and ``robustness_replay_spec`` atomically instead
 # of leaving execution to guess what a newly added product means.
-_ROBUSTNESS_CONTRACT_OUTPUT_BINDINGS: tuple[tuple[str, str], ...] = (
-    ("statistic:primary_or", "primary_effect"),
-    ("statistic:complete_case_n", "complete_case_n"),
-    ("table:robustness_summary", "robustness_summary"),
-    ("log:missingness_strategy_notes", "missingness_strategy_notes"),
-)
-_ROBUSTNESS_CONTRACT_OUTPUT_BY_PRODUCT = dict(
-    _ROBUSTNESS_CONTRACT_OUTPUT_BINDINGS
-)
-
-
-def _with_family_contract_outputs(
-    step: AnalysisStep,
-    *,
-    family: str,
-    expected_outputs: Sequence[str],
-) -> AnalysisStep:
-    """Add host-required outputs without desynchronising a typed owner spec."""
-
-    output_list = list(expected_outputs)
-    replay_spec = step.robustness_replay_spec
-    if family != "robustness" or replay_spec is None:
-        return step.model_copy(update={"expected_outputs": output_list})
-
-    products = list(replay_spec.products)
-    declared_product_ids = {item.product_id for item in products}
-    for product in output_list:
-        replay_output = _ROBUSTNESS_CONTRACT_OUTPUT_BY_PRODUCT.get(product)
-        if replay_output is None:
-            continue
-        product_id = product.split(":", 1)[1]
-        if product_id in declared_product_ids:
-            continue
-        products.append(
-            RobustnessReplayProduct(
-                product_id=product_id,
-                output=replay_output,
-            )
-        )
-        declared_product_ids.add(product_id)
-
-    updated_spec = RobustnessReplaySpec.model_validate(
-        {
-            **replay_spec.model_dump(mode="python"),
-            "products": [item.model_dump(mode="python") for item in products],
-        }
-    )
-    return AnalysisStep.model_validate(
-        {
-            **step.model_dump(mode="python"),
-            "expected_outputs": output_list,
-            "robustness_replay_spec": updated_spec.model_dump(mode="python"),
-        }
-    )
-
-
 def _augment_report_typed_product_inputs(
     *,
     plan: AnalysisPlan,
@@ -296,20 +248,6 @@ def _problematic_metric_keys(
 
     walk(payload)
     return problems
-
-
-def _parent_step_id_for_figure_step(step: AnalysisStep) -> Optional[str]:
-    step_id = str(step.step_id or "")
-    if step_id.endswith("_figure") and len(step_id) > len("_figure"):
-        return step_id[: -len("_figure")]
-    match = re.search(
-        r"declared by step ['`]([^'`]+)['`]",
-        str(step.intent or ""),
-        flags=re.IGNORECASE,
-    )
-    if match:
-        return match.group(1)
-    return None
 
 
 def _step_expects_figure(step: AnalysisStep) -> bool:
@@ -1231,10 +1169,10 @@ def _enforce_advanced_plan_contract(
         required_outputs = [
             *(
                 product
-                for product, _output in _ROBUSTNESS_CONTRACT_OUTPUT_BINDINGS[:3]
+                for product, _output in ROBUSTNESS_ARTICLE_OUTPUT_BINDINGS[:3]
             ),
             "figure:robustness_plot",
-            _ROBUSTNESS_CONTRACT_OUTPUT_BINDINGS[3][0],
+            ROBUSTNESS_ARTICLE_OUTPUT_BINDINGS[3][0],
         ]
 
     if family == "robustness" and _dedicated_renderer_consumes_typed_source(
@@ -1309,7 +1247,7 @@ def _enforce_advanced_plan_contract(
                     *missing_outputs,
                 ]
                 new_steps.append(
-                    _with_family_contract_outputs(
+                    with_family_contract_outputs(
                         step,
                         family=family,
                         expected_outputs=expected_outputs,
@@ -1350,7 +1288,7 @@ def _enforce_advanced_plan_contract(
         owner_index = relevant_indexes[0]
         new_steps = list(plan.steps)
         owner = new_steps[owner_index]
-        new_steps[owner_index] = _with_family_contract_outputs(
+        new_steps[owner_index] = with_family_contract_outputs(
             owner,
             family=family,
             expected_outputs=[
@@ -1389,7 +1327,7 @@ def _enforce_advanced_plan_contract(
     # Add products only. Never relabel KMeans as generic clustering, PSM as
     # generic causal inference, or a specific Cox/mixed-effects method as a broad
     # family recipe.
-    contract_step = _with_family_contract_outputs(
+    contract_step = with_family_contract_outputs(
         current,
         family=family,
         expected_outputs=combined_outputs,
@@ -1509,26 +1447,6 @@ _FIGURE_METHODS = frozenset(
         "chart_generation",
     }
 )
-_FIGURE_OUTPUT_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
-_FIGURE_FILE_SUFFIXES = (".png", ".svg", ".pdf", ".tif", ".tiff")
-
-
-def _output_declares_figure(output: str) -> bool:
-    token = str(output or "").strip().lower()
-    if not token:
-        return False
-    kind, separator, name = token.partition(":")
-    if separator:
-        # A typed declaration's artifact kind is authoritative.  Do not let a
-        # table/model product such as ``table:figure_summary`` become a figure
-        # merely because its product name contains a presentation word.
-        return kind.strip() in _FIGURE_OUTPUT_KINDS and bool(name.strip())
-    if token.endswith(_FIGURE_FILE_SUFFIXES):
-        return True
-    words = set(filter(None, re.split(r"[^a-z0-9]+", token)))
-    return bool(words & {"figure", "plot", "chart", "heatmap"})
-
-
 def _output_declares_auxiliary_log(output: str) -> bool:
     """Return whether an output is an explicitly typed, non-scientific log."""
 
@@ -2331,138 +2249,6 @@ def _ensure_publication_figure_step_in_plan(
             detail={"appended_step_id": fallback_step.step_id},
         )
     ]
-    return preserved, findings
-
-
-def _step_produces_figure(step: AnalysisStep) -> bool:
-    """True if the step's expected_outputs declare a figure/plot artefact."""
-    return any(
-        _output_declares_figure(output) for output in step.expected_outputs or []
-    )
-
-
-def _preserve_figure_steps_after_replan(
-    *,
-    current: AnalysisPlan,
-    revised: AnalysisPlan,
-) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Re-add figure-producing steps that the replanner silently dropped.
-
-    The replanner is an LLM call and can rationalise away figure steps when
-    upstream context (e.g. ICU narrative) is missing. Task contracts in the
-    EasyICU experiment runner still require figure artefacts regardless of
-    the planner's framing, so we treat any step whose ``expected_outputs``
-    declare a figure/plot as load-bearing: if such a step is present in the
-    *current* plan but absent from the *revised* plan, append it back to
-    the revised plan and emit a warning so the manifest preserves the audit
-    trail.
-    """
-    revised_ids = {step.step_id for step in revised.steps}
-    dropped_figure_steps = [
-        step
-        for step in current.steps
-        if step.step_id not in revised_ids and _step_produces_figure(step)
-    ]
-    new_steps = list(revised.steps) + list(dropped_figure_steps)
-
-    # A host-split render child carries exact typed inputs from its direct
-    # parent.  A replanner may echo the original, pre-normalised parent while
-    # dropping the split child.  Re-attaching only the child would then create
-    # an impossible DAG: the child asks for products that the echoed parent no
-    # longer declares.  Restore only products that were already declared by
-    # that same direct parent in ``current``.  This is structural contract
-    # preservation, not authority to choose a new table, model, or estimand.
-    current_output_owners: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
-    for step in current.steps:
-        for raw_output in step.expected_outputs or []:
-            product = typed_product(raw_output)
-            if product is not None:
-                current_output_owners.setdefault(product, []).append(
-                    (str(step.step_id), str(raw_output))
-                )
-
-    resulting_producers: Dict[Tuple[str, str], Set[str]] = {}
-    for step in new_steps:
-        for raw_output in step.expected_outputs or []:
-            product = typed_product(raw_output)
-            if product is not None:
-                resulting_producers.setdefault(product, set()).add(str(step.step_id))
-
-    result_ids = {str(step.step_id) for step in new_steps}
-    current_figure_ids = {
-        str(step.step_id) for step in current.steps if _step_produces_figure(step)
-    }
-    restored_by_parent: Dict[str, List[str]] = {}
-    for figure_step in new_steps:
-        if str(figure_step.step_id) not in current_figure_ids:
-            continue
-        parent_id = _parent_step_id_for_figure_step(figure_step)
-        if not parent_id or parent_id not in result_ids:
-            continue
-        for raw_input in figure_step.inputs or []:
-            product = typed_product(raw_input)
-            if product is None or resulting_producers.get(product):
-                continue
-            prior_owners = current_output_owners.get(product, [])
-            if len(prior_owners) != 1 or prior_owners[0][0] != parent_id:
-                continue
-            restored_output = prior_owners[0][1]
-            restored_by_parent.setdefault(parent_id, []).append(restored_output)
-            resulting_producers.setdefault(product, set()).add(parent_id)
-
-    if restored_by_parent:
-        repaired_steps: List[AnalysisStep] = []
-        for step in new_steps:
-            additions = restored_by_parent.get(str(step.step_id), [])
-            if not additions:
-                repaired_steps.append(step)
-                continue
-            repaired_steps.append(
-                step.model_copy(
-                    update={
-                        "expected_outputs": list(
-                            dict.fromkeys([*(step.expected_outputs or []), *additions])
-                        )
-                    }
-                )
-            )
-        new_steps = repaired_steps
-
-    if not dropped_figure_steps and not restored_by_parent:
-        return revised, []
-
-    preserved = revised.model_copy(update={"steps": new_steps})
-    findings: List[ValidationFinding] = []
-    if dropped_figure_steps:
-        findings.append(
-            ValidationFinding(
-                validator="replanner",
-                severity="warning",
-                message=(
-                    "Replanner attempted to drop "
-                    f"{len(dropped_figure_steps)} figure-producing step(s); "
-                    "they were re-attached to preserve task contract."
-                ),
-                detail={
-                    "preserved_step_ids": [s.step_id for s in dropped_figure_steps],
-                },
-            )
-        )
-    if restored_by_parent:
-        findings.append(
-            ValidationFinding(
-                validator="replanner",
-                severity="warning",
-                message=(
-                    "Restored exact typed outputs on existing direct parent "
-                    "steps so preserved figure children retain a valid product DAG."
-                ),
-                detail={
-                    "reason": "preserved_figure_parent_output_contract",
-                    "restored_outputs_by_parent": restored_by_parent,
-                },
-            )
-        )
     return preserved, findings
 
 

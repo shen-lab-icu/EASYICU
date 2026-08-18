@@ -708,7 +708,7 @@ def test_runtime_repair_cap_is_consumed_exactly(tmp_path) -> None:
     )
 
     record = run.record(E1.primary_step_id)
-    assert record.get("status") == "repair_failed"
+    assert record.get("status") == "execution_failed"
     assert record.get("code_repair_attempts") == 2
     assert record.get("runtime_repair_attempts") == 2
     # One initial code generation plus two repair proposals and two execution
@@ -854,9 +854,21 @@ def test_tampered_completed_artifact_fails_resume_before_llm_delivery(tmp_path) 
     artifact = _evidence_by_id(first.manifest, artifact_id)
     (first.run_dir / artifact["relative_path"]).write_text("tampered", encoding="utf-8")
 
-    resumed = _control_run(E1, tmp_path, resume_run_id=first.run_id)
-    assert resumed.raised is not None
-    assert resumed.raised.startswith("EvidenceAuthorityIntegrityError:")
+    resumed = _control_run(
+        E1,
+        tmp_path,
+        resume_run_id=first.run_id,
+        resume_from_step_id=E1.deterministic_step_id,
+    )
+    resumed_table_one = next(
+        record
+        for record in resumed.manifest.get("per_step_records", [])
+        if record.get("step_id") == E1.deterministic_step_id
+        and record.get("status") == "execution_raised"
+    )
+    assert str(resumed_table_one.get("error") or "").startswith(
+        "EvidenceAuthorityIntegrityError:"
+    )
     assert resumed.llm.total_calls == 0
     assert resumed.external_provider_calls == 0
 
