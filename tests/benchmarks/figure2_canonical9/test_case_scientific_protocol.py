@@ -167,3 +167,85 @@ def test_h3_protocol_rejects_post_hoc_candidate_k_drift(tmp_path) -> None:
             path,
             expected_task_id="h3_trajectory_clustering",
         )
+
+
+def test_h2_has_no_authority_for_a_causal_primary_result_contract() -> None:
+    """H2 must never gain a causal headline by having its blanks filled in.
+
+    ``validate_required_primary_result`` demands a
+    ``family_primary_result_requirement`` from every ``causal_inference`` plan
+    with a declared exposure and outcome. That requirement IS a treatment-effect
+    contract: estimand, comparator, adjustment strategy, effect scale. The
+    tempting way to make H2's preflight go green is to supply those values.
+
+    The sealed H2 protocol forbids exactly that. Its reviewed capture decision
+    is ``fail_closed`` with ``causal_contrast_authorized=False`` because
+    verified non-use is unavailable, so a control arm cannot be identified from
+    the recorded administrations at all -- ``construct_binary_control_arm`` and
+    ``fit_psm_or_iptw_before_capture_authority`` are named forbidden actions.
+    A contract invented to satisfy a validator would be a treatment effect the
+    data cannot identify, which is the one failure mode the whole capture
+    review exists to prevent.
+
+    So this asserts the absence is authoritative, not an oversight: nothing in
+    the sealed protocol supplies these coordinates, and H2's own recorded
+    scientific result is that the contrast is not identifiable. H2's preflight
+    failure is therefore the correct outcome, and any future host compilation
+    of ``family_primary_result_requirement`` must keep excluding H2 until a new
+    clinical-and-methods review changes the capture contract.
+    """
+
+    h2 = load_default_case_protocol("h2_vasopressor_causal")
+    capture = h2.current_source_capture
+
+    assert capture.decision == "fail_closed"
+    assert capture.causal_contrast_authorized is False
+    assert (
+        h2.current_scientific_result
+        == "treatment_contrast_not_identifiable_from_available_capture_contract"
+    )
+    for forbidden in (
+        "construct_binary_control_arm",
+        "fit_psm_or_iptw_before_capture_authority",
+        "convert_missing_vasopressor_record_to_verified_non_use",
+    ):
+        assert forbidden in h2.forbidden_actions
+
+    # The coordinates a causal family-primary contract needs are absent from
+    # the sealed protocol, so there is no source to compile them from.
+    payload = json.loads(
+        default_case_protocol_path("h2_vasopressor_causal").read_text(encoding="utf-8")
+    )
+    flattened = json.dumps(payload).casefold()
+    for coordinate in ("estimand", "comparator", "adjustment_strategy", "effect_scale"):
+        assert coordinate not in flattened, (
+            f"{coordinate!r} appeared in the sealed H2 protocol; re-review whether "
+            "a causal contrast is now authorized instead of assuming it is"
+        )
+
+    # Unblocking is a review decision, not a default.
+    assert h2.future_unblock_contract.new_clinical_and_methods_review_required is True
+
+
+def test_h1_has_no_sealed_scientific_protocol_to_compile_from() -> None:
+    """H1's survival coordinates have no authority, so it must stay fail-closed.
+
+    ``FamilyPrimaryResultRequirement`` requires ``effect_scale``,
+    ``uncertainty_method`` and ``population`` -- none of which is pinned by the
+    sealed survival executor (it fixes only the estimator and the PH
+    diagnostic) or derivable from the typed endpoint contract. The sealed
+    case protocols cover e2/h2/h3 only, so for H1 there is no reviewed source
+    for them at all.
+
+    This test exists so that "H1's preflight is red" cannot quietly be fixed by
+    inventing those three strings in a fixture. Making H1 pass requires a
+    reviewed H1 case scientific protocol, and this assertion is what will fail
+    when one is added -- at which point the compilation can be written against
+    it rather than against a guess.
+    """
+
+    with pytest.raises(
+        ScientificCaseProtocolError,
+        match="SCIENTIFIC_CASE_PROTOCOL_UNKNOWN_TASK: h1_ventilation_survival",
+    ):
+        default_case_protocol_path("h1_ventilation_survival")
