@@ -85,6 +85,7 @@ from .scientific_review import post_baseline_exposure
 
 
 _OWNER = "easyicu.planning.progressive_compiler_v1"
+_MAX_VISUALIZATION_SOURCE_PRODUCTS = 4
 _MODULE_OUTPUT_ROLES: Mapping[str, frozenset[str]] = {
     "cohort_definition": frozenset({"analysis_cohort", "cohort_flow"}),
     "table_one": frozenset({"table_one"}),
@@ -153,14 +154,18 @@ def _fail(
     step: ProgressiveSkeletonStep | None = None,
     step_index: int | None = None,
     path: str | None = None,
+    detail: Mapping[str, Any] | None = None,
 ) -> ProgressivePlanCompileError:
-    return ProgressivePlanCompileError(
+    error = ProgressivePlanCompileError(
         code,
         message,
         step_id=step.step_id if step is not None else None,
         step_index=step_index,
         path=path,
     )
+    if detail:
+        error.details.update(dict(detail))
+    return error
 
 
 def _variable_index(context: ResearchContext) -> dict[str, Any]:
@@ -1116,6 +1121,24 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
+    visualization_raw_names = [
+        name for name in raw_names if name not in reserved_coordinates
+    ]
+    if step.module_id == "visualization" and visualization_raw_names:
+        raise _fail(
+            "progressive_visualization_raw_input_forbidden",
+            "a rendering-only visualization must consume digest-bound result "
+            "products rather than raw cohort columns",
+            step=step,
+            step_index=step_index,
+            path="raw_inputs",
+            detail={
+                "raw_inputs": visualization_raw_names,
+                "repair": "set raw_inputs=[] and select exact typed result sources",
+            },
+        )
+    if step.module_id == "visualization":
+        raw_names = []
     if step.module_id == "measurement_audit":
         # Observation semantics are host-verified context authority.  An audit
         # that receives only the model-selected representative column cannot
@@ -1163,7 +1186,7 @@ def _compile_inputs(
     )
     inputs = list(raw)
     if (
-        step.module_id != "cohort_definition"
+        step.module_id not in {"cohort_definition", "visualization"}
         and "artifact:analysis_cohort" in producers
     ):
         inputs.append("artifact:analysis_cohort")
@@ -1195,6 +1218,45 @@ def _compile_inputs(
         if step.module_id not in _COHORT_FRAME_ONLY_MODULES:
             inputs.append(reference.product_id)
     inputs = list(dict.fromkeys(inputs))
+    if step.module_id == "visualization":
+        invalid_sources = [
+            value
+            for value in inputs
+            if (parsed := typed_product(value)) is None
+            or parsed[0] not in {"table", "statistic"}
+        ]
+        if invalid_sources:
+            raise _fail(
+                "progressive_visualization_source_kind_invalid",
+                "a rendering-only visualization may bind only typed table or "
+                "statistic result products",
+                step=step,
+                step_index=step_index,
+                path="product_inputs",
+                detail={
+                    "invalid_sources": invalid_sources,
+                    "allowed_source_kinds": ["table", "statistic"],
+                },
+            )
+        if len(inputs) > _MAX_VISUALIZATION_SOURCE_PRODUCTS:
+            raise _fail(
+                "progressive_visualization_source_budget_exceeded",
+                "a rendering-only visualization binds too many direct result "
+                "sources for one independently traceable figure",
+                step=step,
+                step_index=step_index,
+                path="product_inputs",
+                detail={
+                    "source_products": inputs,
+                    "source_product_count": len(inputs),
+                    "max_source_products": _MAX_VISUALIZATION_SOURCE_PRODUCTS,
+                    "repair": (
+                        "select only products that contribute reader-visible "
+                        "values to this figure; use separate rendering steps "
+                        "for other article roles"
+                    ),
+                },
+            )
     consumption = [
         ArtifactConsumptionContract(
             input_key=value,

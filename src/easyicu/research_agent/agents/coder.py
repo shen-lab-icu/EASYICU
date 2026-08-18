@@ -232,6 +232,11 @@ def _association_binary_sensitivity_output_contract(step: AnalysisStep) -> str:
         "- n_stays and n_deaths describe the row-specific eligibility set before "
         "complete-case model filtering. Do not relabel fitted model N as the "
         "eligibility denominator; report model N separately if useful.\n"
+        "- Numerically condition every non-linear continuous adjustment before "
+        "basis expansion (for example, center before squaring or use a stable "
+        "spline basis). Treat overflow, divide-by-zero, invalid Hessian/standard "
+        "errors, or optimizer pseudo-convergence as a failed model; never publish "
+        "a fallback null estimate such as OR=1.\n"
     )
 
 
@@ -636,6 +641,11 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
                 "- n_stays/n_deaths are row eligibility denominators before "
                 "complete-case model filtering, not fitted model N; preserve "
                 "positive coherent odds_ratio/ci_low/ci_high values.",
+                "- Numerically condition non-linear continuous terms (center "
+                "before squaring or use a stable spline basis). Treat overflow, "
+                "invalid Hessian/standard errors, and optimizer pseudo-convergence "
+                "as model failure; never publish a fallback null estimate such "
+                "as OR=1.",
             ]
         )
     if typed_cohort:

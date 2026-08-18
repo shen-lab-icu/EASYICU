@@ -1132,7 +1132,6 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
 
     figure = by_id["07_figure"]
     assert figure.inputs == [
-        "artifact:analysis_cohort",
         "table:exposure_outcome_distribution",
         "table:adjusted_association_estimates",
     ]
@@ -1141,6 +1140,87 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
         "table:adjusted_association_estimates",
     }
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
+
+
+def test_progressive_visualization_rejects_raw_cohort_inputs() -> None:
+    payload = _payload()
+    payload["steps"][-1]["raw_inputs"] = ["exposure_flag"]
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=_context(),
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_visualization_raw_input_forbidden"
+    )
+    assert caught.value.step_id == "07_figure"
+    assert caught.value.path == "raw_inputs"
+
+
+def test_progressive_visualization_rejects_untraceably_wide_source_bundle() -> None:
+    payload = _payload()
+    payload["steps"][-1]["product_inputs"] = [
+        {
+            "producer_step_id": "02_table_one",
+            "product_id": "table:table_one",
+        },
+        {
+            "producer_step_id": "03_distribution",
+            "product_id": "table:exposure_outcome_distribution",
+        },
+        {
+            "producer_step_id": "04_measurement",
+            "product_id": "table:measurement_missingness",
+        },
+        {
+            "producer_step_id": "04_measurement",
+            "product_id": "table:measurement_process",
+        },
+        {
+            "producer_step_id": "05_primary",
+            "product_id": "table:adjusted_association_estimates",
+        },
+    ]
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=_context(),
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_visualization_source_budget_exceeded"
+    )
+    assert caught.value.step_id == "07_figure"
+    assert caught.value.path == "product_inputs"
+    assert caught.value.details["findings"][0]["source_product_count"] == 5
+
+
+def test_progressive_visualization_rejects_analysis_cohort_artifact_source() -> None:
+    payload = _payload()
+    payload["steps"][-1]["product_inputs"] = [
+        {
+            "producer_step_id": "01_cohort",
+            "product_id": "artifact:analysis_cohort",
+        }
+    ]
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=_context(),
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_visualization_source_kind_invalid"
+    )
+    assert caught.value.step_id == "07_figure"
+    assert caught.value.path == "product_inputs"
+    assert caught.value.details["findings"][0]["invalid_sources"] == [
+        "artifact:analysis_cohort"
+    ]
 
 
 def test_measurement_compiler_closes_typed_observation_semantics_inputs() -> None:

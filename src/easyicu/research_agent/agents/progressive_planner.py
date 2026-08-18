@@ -1084,6 +1084,16 @@ class ProgressivePlannerAgent:
                     separators=(",", ":"),
                 )
             )
+        if outline_step.module_id == "visualization":
+            blocks.append(
+                "Rendering-only source contract: set raw_inputs=[] and do not "
+                "bind artifact:analysis_cohort or any raw cohort column. Select "
+                "at most four direct table:/statistic: product_inputs. Every "
+                "selected parent must contribute reader-visible values to this "
+                "figure and must retain its own independently traceable "
+                "source-data projection; move other article roles to separate "
+                "rendering steps instead of binding unused context."
+            )
         if outline_step.module_id == "adjusted_association":
             reserved_coordinates = tuple(
                 name
