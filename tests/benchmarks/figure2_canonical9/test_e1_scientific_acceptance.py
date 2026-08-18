@@ -305,6 +305,8 @@ def test_e1_sensitivity_instruction_publishes_its_restriction_encoding() -> None
     assert "readmission_restriction to non_readmission_only" in instruction
     assert "now-constant model covariate" in instruction
     assert "finite n_stays" in instruction
+    assert "eligibility set before complete-case model filtering" in instruction
+    assert "Do not substitute the fitted model's complete-case N" in instruction
 
 
 def test_e1_scientific_acceptance_rejects_obsolete_table_one_schema(

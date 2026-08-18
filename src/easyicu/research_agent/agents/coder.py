@@ -37,6 +37,7 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )
+from ..contracts.association_execution import association_binary_sensitivity_contract
 from ..contracts.result_envelope import STATISTIC_PAYLOAD_KEY_ALIASES
 from ..plan_utils import (
     _cohort_predicate_partition_safety_rules,
@@ -66,7 +67,15 @@ from ..schema import (
 )
 from .coder_generation import generate_initial_coder_candidate
 
-from ._support import _CODER_GUIDE, _coder_relevant_notes, _coder_system_messages, _format_context, _looks_like_python_script, _outbound_repair_diagnosis, _strip_code_fence
+from ._support import (
+    _CODER_GUIDE,
+    _coder_relevant_notes,
+    _coder_system_messages,
+    _format_context,
+    _looks_like_python_script,
+    _outbound_repair_diagnosis,
+    _strip_code_fence,
+)
 
 # ---------------------------------------------------------------------------
 # Coder
@@ -201,6 +210,31 @@ def _statistic_payload_shape_directive(products: Sequence[str]) -> str:
     )
 
 
+def _association_binary_sensitivity_output_contract(step: AnalysisStep) -> str:
+    """Render the host-owned boundary for an agent-coded sensitivity grid."""
+
+    contract = association_binary_sensitivity_contract(step)
+    if contract is None:
+        return ""
+    return (
+        "ASSOCIATION BINARY SENSITIVITY CONTRACT (binding):\n"
+        "- scientific_capability=association_freeform_v1 under the closed "
+        "binary-sensitivity contract; inherit "
+        f"the estimand from {contract.parent_product}; do not replace its "
+        "exposure, outcome, effect measure, or adjustment set.\n"
+        "- Emit exactly one result row for each sensitivity_spec_id and no "
+        "undeclared variants: "
+        f"{json.dumps(list(contract.sensitivity_ids), ensure_ascii=False)}.\n"
+        "- Register the one planned output table and mirror its rows in "
+        "step_summary.analysis_rows. Every row requires analysis_id, n_stays, "
+        "n_deaths, odds_ratio, ci_low, and ci_high; counts must be coherent and "
+        "the positive odds ratio must lie inside its finite interval.\n"
+        "- n_stays and n_deaths describe the row-specific eligibility set before "
+        "complete-case model filtering. Do not relabel fitted model N as the "
+        "eligibility denominator; report model N separately if useful.\n"
+    )
+
+
 def _declared_output_scope_contract(step: AnalysisStep) -> str:
     """Keep code generation inside the plan's typed product boundary.
 
@@ -253,7 +287,9 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
             "- This step declares no figure product. Do not render, save, or register "
             "figures; leave presentation to a separately declared figure step."
         )
-    return "\n".join(lines) + "\n"
+    return (
+        "\n".join(lines) + "\n" + _association_binary_sensitivity_output_contract(step)
+    )
 
 
 def _declares_no_measurement_provenance_pair(step: AnalysisStep) -> bool:
@@ -585,6 +621,23 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
                 "and their uncertainty remain allowed within declared scope.",
             ]
         )
+    sensitivity_contract = association_binary_sensitivity_contract(step)
+    if sensitivity_contract is not None:
+        lines.extend(
+            [
+                "ASSOCIATION BINARY SENSITIVITY CONTRACT (binding): minimal patch",
+                "- Preserve scientific_capability=association_freeform_v1 under "
+                "the closed binary-sensitivity contract and exactly one result "
+                "row per sensitivity_spec_id: "
+                + json.dumps(
+                    list(sensitivity_contract.sensitivity_ids), ensure_ascii=False
+                )
+                + ".",
+                "- n_stays/n_deaths are row eligibility denominators before "
+                "complete-case model filtering, not fitted model N; preserve "
+                "positive coherent odds_ratio/ci_low/ci_high values.",
+            ]
+        )
     if typed_cohort:
         lines.append(
             "- A declared cohort:* input is this consumer's row-membership "
@@ -688,6 +741,8 @@ class CoderAgent:
             f"Step intent: {step.intent}\n"
             f"Step inputs: {step.inputs}\n"
             f"Expected outputs: {step.expected_outputs}\n"
+            f"Scientific capability: {step.scientific_capability}\n"
+            f"Sensitivity specification ids: {step.sensitivity_spec_ids}\n"
             "Model requirements: "
             f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
             "Family primary-result requirement: "
@@ -933,6 +988,8 @@ class CoderAgent:
             f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
             "Family primary-result requirement: "
             f"{json.dumps(step.family_primary_result_requirement.model_dump(mode='json') if step.family_primary_result_requirement is not None else None, ensure_ascii=False)}\n"
+            f"Scientific capability: {step.scientific_capability}\n"
+            f"Sensitivity specification ids: {step.sensitivity_spec_ids}\n"
             f"Method: {step.method or '(unspecified)'}\n\n"
         )
         mechanical_guardrails = (

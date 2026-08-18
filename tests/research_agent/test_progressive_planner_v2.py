@@ -407,7 +407,7 @@ def _payload() -> dict:
                 "missing_exposure_policy": None,
                 "missing_outcome_policy": None,
                 "confidence_level": None,
-                "sensitivity_spec_ids": [],
+                "sensitivity_spec_ids": ["flexible_form"],
                 "literature_bindings": [],
             },
             {
@@ -1722,6 +1722,37 @@ def test_custom_sensitivity_inherits_its_primary_model_inputs() -> None:
     ]
     assert "artifact:analysis_cohort" in compiled.inputs
     assert "table:adjusted_association_estimates" in compiled.inputs
+    assert compiled.scientific_capability == "association_freeform_v1"
+
+
+def test_scientific_sensitivity_requires_closed_ids_and_a_binary_primary_parent() -> None:
+    missing_ids = _payload()
+    missing_ids["steps"][5]["sensitivity_spec_ids"] = []
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(missing_ids),
+            context=_context(),
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_association_sensitivity_contract_invalid"
+    )
+    assert caught.value.step_id == "06_sensitivity"
+
+    continuous_parent = _payload()
+    continuous_parent["steps"][4]["outcome_type"] = "continuous"
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(continuous_parent),
+            context=_context(),
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_association_sensitivity_parent_invalid"
+    )
+    assert caught.value.step_id == "06_sensitivity"
 
 
 def test_compiler_reports_identical_distribution_contrast_at_its_owner() -> None:

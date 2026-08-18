@@ -34,6 +34,10 @@ from pydantic import (
     model_validator,
 )
 
+from .contracts.association_execution import (
+    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+    association_binary_sensitivity_plan_verdict,
+)
 from .contracts.capability_ids import capability_family
 from .contracts.claim_ceiling import DescriptiveClaimContract
 from .contracts.closed_levels import (
@@ -1896,10 +1900,11 @@ class AnalysisStep(BaseModel):
     scientific_capability: Optional[str] = Field(
         default=None,
         description=(
-            "Which registered scientific capability this primary step executes, "
-            "when its family has more than one. Only ``association`` does: the "
-            "host-owned exact single-model contract and the agent-coded "
-            "free-form kernel (interactions, splines, multiple models). "
+            "Which registered scientific capability this result step executes. "
+            "For an association primary step this selects the host-owned exact "
+            "single-model contract or an agent-coded free-form kernel. A "
+            "host-compiled binary sensitivity child may reuse the agent-coded "
+            "association capability under a narrower inherited contract. "
             "Null selects the family default, which for association is the "
             "deterministic contract -- so an under-declared plan cannot obtain "
             "the looser agent-coded obligations by simply not declaring the "
@@ -2521,6 +2526,16 @@ class AnalysisPlan(BaseModel):
                     "scientific_capability_unknown: "
                     f"{declared_id!r} is not in the stable capability vocabulary"
                 )
+            if (
+                declared_id == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                and step.planned_analysis_role == "sensitivity"
+            ):
+                verdict = association_binary_sensitivity_plan_verdict(
+                    step,
+                    plan_steps=self.steps,
+                )
+                if not verdict.claimed:
+                    raise ValueError(f"{verdict.reason_code}: {verdict.reason}")
         for step in self.steps:
             if step.planned_analysis_role != "primary":
                 continue
