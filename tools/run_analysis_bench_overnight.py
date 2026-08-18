@@ -8,7 +8,7 @@ and then performs a final reuse-only aggregation pass.
 Typical usage::
 
     python tools/run_analysis_bench_overnight.py
-    python tools/run_analysis_bench_overnight.py --models z-ai/glm-4.5-air:free
+    python tools/run_analysis_bench_overnight.py --models openai/gpt-oss-120b:free
     python tools/run_analysis_bench_overnight.py --provider mock
 
 The wrapper stores:
@@ -239,7 +239,7 @@ def main() -> int:
                         help="Subset of analysis bench items (default: all 10).")
     parser.add_argument("--provider", choices=["openrouter", "openai", "mock"], default="openrouter")
     parser.add_argument("--model",
-                        default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "z-ai/glm-4.5-air:free"),
+                        default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"),
                         help="Single model to use when --models is not set.")
     parser.add_argument("--models", nargs="+", default=None,
                         help="Optional multiple models to run sequentially.")
