@@ -98,3 +98,38 @@ jobs:
             pytest tests/research_agent -q -m "" -n auto --dist loadfile \
               -k "contract or boundary or package or schema or import" \
               --ignore=tests/research_agent/test_runner.py
+
+  # The `test` job above proves the MINIMUM dependency stack, which by design
+  # has no `anthropic`, so tests/research_agent/test_anthropic_messages_client.py
+  # importorskips there. That skip is only safe while some job still exercises
+  # the real adapter -- otherwise CI goes green while the native Claude
+  # Messages transport is never tested at all. This job is that guarantee: it
+  # installs the `agentic` extra, ASSERTS the SDK actually imports (so the
+  # importorskip can never quietly swallow the whole file), and then runs the
+  # adapter tests. tests/test_repository_contract.py locks this job in place.
+  anthropic-adapter:
+    name: anthropic adapter (agentic extra)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install EasyICU with the agentic extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,agentic]"
+
+      - name: Assert the optional Anthropic SDK is present
+        run: |
+          # Fail loudly here rather than let importorskip turn a missing extra
+          # into a silent skip inside the test run below.
+          python -c "import anthropic; print('anthropic', anthropic.__version__)"
+
+      - name: Run the native Anthropic adapter tests
+        run: |
+          pytest tests/research_agent/test_anthropic_messages_client.py -q -m ""
