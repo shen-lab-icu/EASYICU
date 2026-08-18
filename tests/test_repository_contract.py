@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import subprocess
 
+import yaml
+
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.9/3.10 test runtime
@@ -188,12 +190,41 @@ def test_repository_includes_ci_workflow() -> None:
 
 
 def test_ci_workflow_runs_supported_python_matrix() -> None:
-    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    """CI must still prove every supported Python, and prove it unfiltered.
 
-    assert 'python-version: ["3.10", "3.11", "3.12"]' in workflow
+    2026-08-17: the matrix became event-conditional so a pull request gates on
+    one version while ``main`` / ``workflow_dispatch`` keep the full sweep. The
+    old assertion pinned the literal list ``["3.10", "3.11", "3.12"]``, so it
+    failed on formatting rather than on lost coverage. This asserts the two
+    properties that actually matter: every supported version is still reachable
+    in the matrix, and the suite runs with the marker filter cancelled (the
+    pytest.ini dev default is ``-m "not slow"``, which must never silently
+    narrow a CI run).
+    """
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    parsed = yaml.safe_load(workflow)
+
+    matrix_versions = parsed["jobs"]["test"]["strategy"]["matrix"]["python-version"]
+    rendered = matrix_versions if isinstance(matrix_versions, str) else str(matrix_versions)
+    for version in ("3.10", "3.11", "3.12"):
+        assert version in rendered, f"CI no longer reaches Python {version}"
+
     assert "python-version: ${{ matrix.python-version }}" in workflow
     assert "ruff check src tests" in workflow
-    assert "pytest -q" in workflow
+
+    # Every pytest invocation in CI must cancel the dev-default marker filter.
+    unfiltered = [
+        line.strip()
+        for line in workflow.splitlines()
+        if "pytest" in line
+        and not line.strip().startswith("#")
+        and '"pytest' not in line
+        and "pip install" not in line
+    ]
+    assert unfiltered, "ci.yml runs no pytest at all"
+    for line in unfiltered:
+        assert '-m ""' in line, f"CI pytest call is marker-filtered: {line}"
 
 
 def test_external_workflow_actions_are_immutable() -> None:
