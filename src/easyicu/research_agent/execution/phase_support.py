@@ -42,6 +42,7 @@ from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
     assert_cohort_definition_locked,
+    register_cohort_concept_ids,
 )
 from ..contracts.runtime import ValidationFinding
 
@@ -450,6 +451,20 @@ def _extract_cohort_definition_with_provider_budget(
             name=name,
         ),
     )
+    if definition is not None:
+        # The repaired definition names pre-materialised universe columns, not
+        # dictionary concepts, and the execution receipt re-validates it later
+        # outside any scope (``phase.py`` -> ``coerce_cohort_definition``). The
+        # extractor no longer registers these globally as a side effect, so the
+        # layer that owns the run states the registration itself, where the run
+        # boundary is visible.
+        #
+        # KNOWN DEBT: this registration is still process-permanent, so two
+        # runs in one process accumulate each other's universe columns --
+        # the pre-existing hole documented on ``_EXTRA_COHORT_CONCEPT_IDS``.
+        # Closing it needs a run-scoped registry owned by the pipeline, not
+        # another caller-side workaround here.
+        register_cohort_concept_ids(universe_columns)
     snapshot = budget.snapshot()
     return definition, {
         "budget_owner_step_id": budget_owner_step_id,

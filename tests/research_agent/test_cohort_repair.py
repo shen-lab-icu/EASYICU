@@ -166,3 +166,61 @@ def test_missing_operator_needs_no_value():
     assert definition is not None
     assert definition.inclusion[0].op == "not_missing"
     assert definition.inclusion[0].value is None
+
+
+def test_extraction_does_not_leak_universe_columns_into_process_state():
+    """Extraction must answer a question, not permanently widen validation.
+
+    ``extract_cohort_definition_from_prose`` used to call
+    ``register_cohort_concept_ids(columns)`` -- a permanent process-wide
+    registration -- so that the definition it had just built could pass
+    ``validate_cohort_definition``. Every caller therefore leaked its universe
+    columns into every later validation in the same process.
+
+    Measured 2026-08-18 at ``4868315``: running this module left
+    ``{age, death, los_icu, sofa2, stay_id}`` registered for the rest of the
+    process, and ``tests/research_agent/test_plan_lifecycle_authority.py``
+    then stopped raising on an unsealed materialized ``stay_id`` -- two
+    fail-closed assertions passing only because nothing had touched cohort
+    repair first. That is the failure this test exists to keep dead: the
+    minimal ordered reproduction was exactly these two files, in this order.
+
+    The run-lifetime registration the execution layer genuinely needs is now
+    made explicitly by ``execution/phase_support.py``, which owns the run.
+    """
+
+    from easyicu.research_agent.planning import cohort_contract
+
+    cohort_contract.clear_cohort_concept_ids()
+    assert not cohort_contract.concept_id_exists("stay_id")
+
+    llm = _stub(
+        json.dumps(
+            {
+                "inclusion": [{"concept_id": "age", "op": ">=", "value": 18}],
+                "exclusion": [],
+            }
+        )
+    )
+    definition = extract_cohort_definition_from_prose(
+        cohort_prose="adults",
+        universe_columns=_COLUMNS,
+        llm=llm,
+    )
+
+    # The validation still had to succeed -- the scope is what makes the
+    # pre-materialised columns visible *while* validating.
+    assert definition is not None
+    assert [pred.concept_id for pred in definition.inclusion] == ["age"]
+
+    # ... and none of it survives the call. Only ``stay_id`` is checkable
+    # through the public reader -- age/los_icu/sofa2/death are genuine
+    # dictionary concepts, so they answer True either way and would make this
+    # assertion vacuous. ``stay_id`` is the pre-materialised column, which is
+    # exactly the id whose leak silenced the lifecycle guards.
+    assert not cohort_contract.concept_id_exists(
+        "stay_id"
+    ), "stay_id leaked into process-global cohort concept state"
+    # The extra registry is the leak surface itself: assert it is untouched so
+    # a future dictionary addition cannot make the check above vacuous too.
+    assert cohort_contract._EXTRA_COHORT_CONCEPT_IDS == set()
