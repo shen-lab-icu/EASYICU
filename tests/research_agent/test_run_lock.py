@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import queue
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,34 @@ def _try_lock_in_child(workdir: str, run_id: str, result_queue: Any) -> None:
         result_queue.put(("blocked", time.monotonic() - started, str(exc)))
 
 
+#: How long the PARENT waits for a spawned child to boot and report back.
+#:
+#: This is transport plumbing, not the contract under test. A "spawn" child
+#: starts a fresh interpreter and imports easyicu before it can even attempt
+#: the lock, and CI now runs the suite under ``-n auto``: on a loaded machine
+#: that boot alone exceeded the previous 10s and the queue read raised
+#: ``_queue.Empty``, which reads exactly like a lock regression while being
+#: nothing of the sort (observed twice in the 2026-08-18 exact-head xdist runs,
+#: 588s and 826s wall clock; the same tests pass 3/3 under ``-n auto`` when the
+#: machine is idle).
+#:
+#: The atomicity assertion is deliberately NOT this number. Each test asserts
+#: ``elapsed < 1.0``, measured inside the child around
+#: ``acquire_run_execution_lock`` itself, so a lock that actually became slow
+#: still fails no matter how long the child took to start. Widening the wait
+#: below cannot hide that.
+_CHILD_REPORT_TIMEOUT_SECONDS = 120
+
+#: How long we wait for a child that has ALREADY reported to exit.
+#:
+#: Deliberately short and deliberately separate from the boot wait above. Once
+#: the result is on the queue the child has nothing left to do but unwind, so a
+#: slow exit here is a real hang, not a busy machine -- reusing the 120s boot
+#: budget would make a genuinely stuck teardown cost two minutes per test to
+#: discover.
+_CHILD_EXIT_TIMEOUT_SECONDS = 10
+
+
 def _child_lock_result(tmp_path: Path, run_id: str) -> tuple[str, float, str]:
     context = multiprocessing.get_context("spawn")
     result_queue = context.Queue()
@@ -30,10 +59,29 @@ def _child_lock_result(tmp_path: Path, run_id: str) -> tuple[str, float, str]:
         target=_try_lock_in_child,
         args=(str(tmp_path), run_id, result_queue),
     )
+    started = time.monotonic()
     process.start()
-    result = result_queue.get(timeout=10)
-    process.join(timeout=10)
-    assert process.exitcode == 0
+    try:
+        result = result_queue.get(timeout=_CHILD_REPORT_TIMEOUT_SECONDS)
+    except queue.Empty:  # pragma: no cover - only on a genuine child failure
+        waited = time.monotonic() - started
+        alive = process.is_alive()
+        exitcode = process.exitcode
+        process.kill()
+        process.join(timeout=10)
+        pytest.fail(
+            "the run-lock child never reported: "
+            f"waited={waited:.1f}s limit={_CHILD_REPORT_TIMEOUT_SECONDS}s "
+            f"alive_at_timeout={alive} exitcode_at_timeout={exitcode} "
+            f"run_id={run_id!r} workdir={tmp_path}. "
+            "alive_at_timeout=True means the child was still booting or hung "
+            "rather than the lock misbehaving; a non-zero exitcode means it "
+            "crashed before it could report."
+        )
+    process.join(timeout=_CHILD_EXIT_TIMEOUT_SECONDS)
+    assert process.exitcode == 0, (
+        f"run-lock child exited {process.exitcode!r} after reporting {result!r}"
+    )
     result_queue.close()
     return result
 
