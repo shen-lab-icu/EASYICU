@@ -21,6 +21,116 @@ _RAW_CONTRACT_SHAPE_ERROR = re.compile(
     r"raw_input_contracts(?:\.|\[\s*['\"])contracts",
     re.IGNORECASE,
 )
+_PLANNER_RAW_INPUT_PROJECTION_ERROR = "indexerror: list index out of range"
+
+
+def _planner_declared_input_names(tree: ast.AST) -> set[str]:
+    """Return locals bound directly to ``planner_declared_inputs``."""
+
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            continue
+        value = node.value
+        is_declared_input_lookup = (
+            isinstance(value, ast.Subscript)
+            and isinstance(value.slice, ast.Constant)
+            and value.slice.value == "planner_declared_inputs"
+        ) or (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "get"
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+            and value.args[0].value == "planner_declared_inputs"
+        )
+        if is_declared_input_lookup:
+            names.add(node.targets[0].id)
+    return names
+
+
+def patch_planner_declared_raw_input_projection(code: str, run_log: str) -> str:
+    """Project raw coordinates without indexing a nonexistent ``kind:`` suffix.
+
+    The resolved-input contract is deliberately mixed: typed products use
+    ``kind:name`` while raw columns are bare names. Generated code has
+    occasionally filtered out known product prefixes and then evaluated
+    ``item.split(":", 1)[1]`` for the remaining bare names. This exact shape
+    raises before analysis starts. Replace one unambiguous set-comprehension
+    with the schema-owned projection (tokens without a colon), preserving every
+    declared raw name and introducing no data or scientific choice.
+    """
+
+    if _PLANNER_RAW_INPUT_PROJECTION_ERROR not in str(run_log or "").lower():
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    declared_input_names = _planner_declared_input_names(tree)
+    candidates: list[tuple[ast.SetComp, str, str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.SetComp)
+            and len(node.generators) == 1
+            and isinstance(node.generators[0].target, ast.Name)
+            and isinstance(node.generators[0].iter, ast.Name)
+            and node.generators[0].iter.id in declared_input_names
+            and isinstance(node.elt, ast.Subscript)
+            and isinstance(node.elt.slice, ast.Constant)
+            and node.elt.slice.value == 1
+            and isinstance(node.elt.value, ast.Call)
+            and isinstance(node.elt.value.func, ast.Attribute)
+            and node.elt.value.func.attr == "split"
+            and isinstance(node.elt.value.func.value, ast.Name)
+            and node.elt.value.func.value.id == node.generators[0].target.id
+            and len(node.elt.value.args) == 2
+            and isinstance(node.elt.value.args[0], ast.Constant)
+            and node.elt.value.args[0].value == ":"
+            and isinstance(node.elt.value.args[1], ast.Constant)
+            and node.elt.value.args[1].value == 1
+        ):
+            continue
+        candidates.append(
+            (
+                node,
+                node.generators[0].target.id,
+                node.generators[0].iter.id,
+            )
+        )
+    if len(candidates) != 1:
+        return code
+
+    candidate, item_name, iterable_name = candidates[0]
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    start = _absolute_offset(candidate.lineno, candidate.col_offset)
+    end = _absolute_offset(candidate.end_lineno, candidate.end_col_offset)
+    replacement = (
+        f"{{{item_name} for {item_name} in {iterable_name} "
+        f"if ':' not in {item_name}}}"
+    )
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def _physical_columns_owner(node: ast.AST) -> Optional[ast.AST]:
@@ -437,6 +547,7 @@ def patch_raw_contract_document_fallback(code: str, run_log: str) -> str:
 
 
 __all__ = [
+    "patch_planner_declared_raw_input_projection",
     "patch_raw_contract_document_fallback",
     "patch_raw_contract_list_type_assertion",
     "patch_raw_contract_mapping_iteration",
