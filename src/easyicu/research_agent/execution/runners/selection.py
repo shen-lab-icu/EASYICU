@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...authority.current_case_scientific_runtime import (
+    AssociationModelGridRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
     SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
@@ -21,6 +22,11 @@ from .adjusted_association_executor import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     adjusted_association_executor_code,
     adjusted_association_executor_verdict,
+)
+from .association_model_grid_executor import (
+    ASSOCIATION_MODEL_GRID_ANALYSIS_KIND,
+    association_model_grid_executor_code,
+    association_model_grid_executor_owns_step,
 )
 from .exposure_outcome_distribution_render import (
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT,
@@ -299,7 +305,36 @@ def select_standard_executor(
             current_case_scientific_runtime_authority
         )
         projection_digest = str(scientific_runtime_projection_sha256 or "")
-        if isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
+        if isinstance(sealed_current, AssociationModelGridRuntimeAuthority):
+            if association_model_grid_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind=ASSOCIATION_MODEL_GRID_ANALYSIS_KIND,
+                        selection_reason=(
+                            "signed_association_model_grid_contract_preflight"
+                        ),
+                        progress_message=(
+                            "Using verified adjusted-association model-grid adapter"
+                        ),
+                        code=association_model_grid_executor_code(
+                            step,
+                            plan=plan,
+                            authority=sealed_current,
+                            runtime_projection_sha256=projection_digest,
+                            plausibility_scope=plausibility_scope,
+                        ),
+                        consumed_input_keys=(
+                            sealed_current.cohort_product,
+                            sealed_current.parent_product,
+                        ),
+                    )
+                )
+            _missed(ASSOCIATION_MODEL_GRID_ANALYSIS_KIND)
+        elif isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
             if landmark_spline_executor_owns_step(
                 step,
                 plan=plan,

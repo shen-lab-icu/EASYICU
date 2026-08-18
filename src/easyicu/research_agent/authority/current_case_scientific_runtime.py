@@ -1,23 +1,28 @@
 """Digest-bound current-run scientific authority for caller-reviewed cases.
 
-The shared engine does not know E2 or H2.  It knows two small execution shapes:
-one frozen landmark spline association and one source-feasibility result that
-must fail closed without estimating an effect.  A benchmark-local compiler
-chooses the columns and scientific constants, seals them, and passes the
-immutable value object here.  Plan validation and deterministic executors then
-consume the same object, so signed rules cannot stop at prompt prose.
+The shared engine does not know E1, E2 or H2.  It knows three execution shapes:
+one composed grid of already-supported adjusted-association fits, one frozen
+landmark spline association, and one source-feasibility result that must fail
+closed without estimating an effect.  A benchmark-local compiler chooses the
+columns and scientific constants, seals them, and passes the immutable value
+object here.  Plan validation and deterministic executors then consume the
+same object, so signed rules cannot stop at prompt prose.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Annotated, Any, Literal, Mapping, Union
+from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from ..contracts.association_execution import (
+    association_execution_verdict,
+    sole_primary_model_requirement,
+)
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
-from ..schema import AnalysisPlan, AnalysisStep
+from ..schema import AnalysisPlan, AnalysisStep, ArtifactConsumptionContract
 
 
 class CurrentCaseScientificAuthorityError(ValueError):
@@ -73,6 +78,324 @@ class _AuthorityBase(BaseModel):
             raise CurrentCaseScientificAuthorityError(
                 "governed plan step lacks the signed scientific runtime digest"
             )
+
+
+class AssociationModelGridLandmarkFilter(BaseModel):
+    """Retain rows alive at one declared landmark."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    filter_kind: Literal["alive_at_landmark"]
+    outcome_column: str = Field(min_length=1)
+    event_time_column: str = Field(min_length=1)
+    landmark_hours: float = Field(gt=0)
+    exclude_negative_event_times: Literal[True]
+
+
+class AssociationModelGridLevelFilter(BaseModel):
+    """Retain declared levels of one categorical/binary source column."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    filter_kind: Literal["level_in"]
+    column: str = Field(min_length=1)
+    declared_levels: Tuple[str, ...] = Field(min_length=2)
+    retained_levels: Tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _closed_levels(self) -> "AssociationModelGridLevelFilter":
+        if len(self.declared_levels) != len(set(self.declared_levels)):
+            raise ValueError("model-grid declared filter levels must be unique")
+        if len(self.retained_levels) != len(set(self.retained_levels)):
+            raise ValueError("model-grid retained filter levels must be unique")
+        if not set(self.retained_levels).issubset(self.declared_levels):
+            raise ValueError("model-grid retained levels must be declared levels")
+        return self
+
+
+AssociationModelGridFilter = Annotated[
+    Union[
+        AssociationModelGridLandmarkFilter,
+        AssociationModelGridLevelFilter,
+    ],
+    Field(discriminator="filter_kind"),
+]
+
+
+class AssociationModelGridNonlinearTerm(BaseModel):
+    """One stable host-generated basis replacing a declared linear covariate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source_column: str = Field(min_length=1)
+    basis: Literal["natural_cubic_spline"]
+    degrees_of_freedom: int = Field(ge=3, le=8)
+    center_before_basis: Literal[True]
+
+
+ModelGridMetadataValue = Union[str, float, int, bool, None]
+
+
+class AssociationModelGridVariant(BaseModel):
+    """One prespecified eligibility/model-form variant in a composed grid."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    analysis_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    filters: Tuple[AssociationModelGridFilter, ...] = ()
+    nonlinear_terms: Tuple[AssociationModelGridNonlinearTerm, ...] = ()
+    metadata: Dict[str, ModelGridMetadataValue]
+
+    @model_validator(mode="after")
+    def _unique_owned_coordinates(self) -> "AssociationModelGridVariant":
+        level_columns = [
+            item.column
+            for item in self.filters
+            if isinstance(item, AssociationModelGridLevelFilter)
+        ]
+        if len(level_columns) != len(set(level_columns)):
+            raise ValueError("model-grid level filters must target unique columns")
+        landmarks = [
+            item
+            for item in self.filters
+            if isinstance(item, AssociationModelGridLandmarkFilter)
+        ]
+        if len(landmarks) > 1:
+            raise ValueError("one model-grid variant may declare at most one landmark")
+        nonlinear_sources = [item.source_column for item in self.nonlinear_terms]
+        if len(nonlinear_sources) != len(set(nonlinear_sources)):
+            raise ValueError("model-grid nonlinear sources must be unique")
+        return self
+
+
+class AssociationModelGridRuntimeAuthority(_AuthorityBase):
+    """Compose a closed variant grid from the existing verified model adapter.
+
+    This authority owns no regression algorithm.  It binds one already-verified
+    adjusted-association parent, declares row filters and stable basis
+    transformations, and requires every variant to be executed through the same
+    host adapter as the primary model.
+    """
+
+    schema_version: Literal["easyicu.association_model_grid_runtime_authority/1"]
+    authority_kind: Literal["association_model_grid"]
+    plan_method: Literal["verified_association_model_grid"]
+    plan_intent: str = Field(min_length=1)
+    cohort_product: Literal["artifact:analysis_cohort"]
+    parent_product: Literal["table:adjusted_association_estimates"]
+    output_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
+    reference_variant_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    metadata_columns: Tuple[str, ...]
+    output_aliases: Dict[str, str] = Field(default_factory=dict)
+    variants: Tuple[AssociationModelGridVariant, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _closed_contract(self) -> "AssociationModelGridRuntimeAuthority":
+        ids = [item.analysis_id for item in self.variants]
+        if len(ids) != len(set(ids)):
+            raise ValueError("association model-grid analysis ids must be unique")
+        if self.reference_variant_id not in ids:
+            raise ValueError("model-grid reference variant must be declared")
+        if len(self.metadata_columns) != len(set(self.metadata_columns)):
+            raise ValueError("model-grid metadata columns must be unique")
+        if any(
+            not value or not value.replace("_", "a").isalnum()
+            for value in self.metadata_columns
+        ):
+            raise ValueError("model-grid metadata columns must be stable identifiers")
+        for variant in self.variants:
+            if set(variant.metadata) != set(self.metadata_columns):
+                raise ValueError(
+                    "every model-grid variant must populate the exact metadata columns"
+                )
+        allowed_aliases = {"n_events", "estimate"}
+        if not set(self.output_aliases).issubset(allowed_aliases):
+            raise ValueError("model-grid output aliases may rename only core results")
+        alias_values = list(self.output_aliases.values())
+        if len(alias_values) != len(set(alias_values)) or any(
+            not value or not value.replace("_", "a").isalnum()
+            for value in alias_values
+        ):
+            raise ValueError("model-grid output aliases must be unique identifiers")
+        reserved = {
+            "analysis_id",
+            "n_stays",
+            "n_events",
+            "estimate",
+            "ci_low",
+            "ci_high",
+            "effect_measure",
+            "fit_n",
+            "fit_events",
+            "standard_error",
+            "converged",
+            "separation_detected",
+        }
+        if set(self.metadata_columns) & (reserved | set(alias_values)):
+            raise ValueError("model-grid metadata columns collide with result columns")
+        self._verify_digest()
+        return self
+
+    @property
+    def sensitivity_ids(self) -> Tuple[str, ...]:
+        return tuple(item.analysis_id for item in self.variants)
+
+    def _parent(self, plan: AnalysisPlan) -> AnalysisStep:
+        parents = [
+            step
+            for step in plan.steps
+            if self.parent_product in set(step.expected_outputs)
+        ]
+        if len(parents) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid requires one adjusted-association parent"
+            )
+        parent = parents[0]
+        verdict = association_execution_verdict(parent)
+        requirement = sole_primary_model_requirement(parent)
+        if (
+            parent.planned_analysis_role != "primary"
+            or not verdict.claimed
+            or requirement is None
+            or requirement.outcome_type != "binary"
+        ):
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid parent is not one host-owned binary model: "
+                + verdict.reason
+            )
+        return parent
+
+    def _candidate(self, plan: AnalysisPlan) -> AnalysisStep:
+        by_output = [
+            step for step in plan.steps if self.output_product in step.expected_outputs
+        ]
+        candidates = by_output or [
+            step
+            for step in plan.steps
+            if step.planned_analysis_role == "sensitivity"
+            and tuple(step.sensitivity_spec_ids) == self.sensitivity_ids
+        ]
+        if len(candidates) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid requires one exact sensitivity step"
+            )
+        return candidates[0]
+
+    def required_columns_from_requirement(self, requirement: Any) -> Tuple[str, ...]:
+        """Return exact cohort columns for one already-validated parent model."""
+
+        values = [
+            requirement.exposure_source,
+            requirement.outcome,
+            *(item.name for item in requirement.model_terms or ()),
+        ]
+        if requirement.dependence is not None:
+            values.append(requirement.dependence.group_source)
+        for variant in self.variants:
+            for item in variant.filters:
+                if isinstance(item, AssociationModelGridLandmarkFilter):
+                    values.extend((item.outcome_column, item.event_time_column))
+                else:
+                    values.append(item.column)
+            values.extend(item.source_column for item in variant.nonlinear_terms)
+        return tuple(dict.fromkeys(str(value) for value in values if value))
+
+    def required_columns(self, plan: AnalysisPlan) -> Tuple[str, ...]:
+        parent = self._parent(plan)
+        requirement = sole_primary_model_requirement(parent)
+        assert requirement is not None
+        return self.required_columns_from_requirement(requirement)
+
+    def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
+        """Compile host-owned products and exact inputs into the draft plan."""
+
+        parent = self._parent(plan)
+        candidate = self._candidate(plan)
+        parent_index = next(
+            index for index, step in enumerate(plan.steps) if step is parent
+        )
+        candidate_index = next(
+            index for index, step in enumerate(plan.steps) if step is candidate
+        )
+        if parent_index >= candidate_index:
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid parent must precede its sensitivity child"
+            )
+        inputs = [
+            *self.required_columns(plan),
+            self.cohort_product,
+            self.parent_product,
+        ]
+        bound = candidate.model_copy(
+            update={
+                "planned_analysis_role": "sensitivity",
+                "intent": self.plan_intent,
+                "inputs": list(dict.fromkeys(inputs)),
+                "expected_outputs": [self.output_product],
+                "method": self.plan_method,
+                "scientific_capability": "association_adjusted_v1",
+                "icu_rule_refs": list(
+                    dict.fromkeys([*candidate.icu_rule_refs, self.plan_rule_ref])
+                ),
+                "sensitivity_spec_ids": list(self.sensitivity_ids),
+                "model_requirements": [],
+                "family_primary_result_requirement": None,
+                "input_consumption_contracts": [
+                    ArtifactConsumptionContract(
+                        input_key=self.parent_product,
+                        mode="all_rows",
+                    )
+                ],
+            }
+        )
+        steps = [bound if step is candidate else step for step in plan.steps]
+        return plan.model_copy(update={"steps": steps})
+
+    def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        parent = self._parent(plan)
+        step = self._candidate(plan)
+        parent_index = next(index for index, item in enumerate(plan.steps) if item is parent)
+        step_index = next(index for index, item in enumerate(plan.steps) if item is step)
+        issues: list[str] = []
+        if parent_index >= step_index:
+            issues.append("parent_order")
+        if step.planned_analysis_role != "sensitivity":
+            issues.append("planned_analysis_role")
+        if step.method != self.plan_method:
+            issues.append("method")
+        if step.intent != self.plan_intent:
+            issues.append("intent")
+        if step.scientific_capability != "association_adjusted_v1":
+            issues.append("scientific_capability")
+        if tuple(step.expected_outputs) != (self.output_product,):
+            issues.append("expected_outputs")
+        if tuple(step.sensitivity_spec_ids) != self.sensitivity_ids:
+            issues.append("sensitivity_spec_ids")
+        required_inputs = set(
+            (*self.required_columns(plan), self.cohort_product, self.parent_product)
+        )
+        if set(step.inputs) != required_inputs:
+            issues.append("inputs")
+        contracts = {
+            item.input_key: item for item in step.input_consumption_contracts
+        }
+        if (
+            set(contracts) != {self.parent_product}
+            or contracts[self.parent_product].mode != "all_rows"
+        ):
+            issues.append("input_consumption_contracts")
+        if step.model_requirements or step.family_primary_result_requirement is not None:
+            issues.append("nested_model_contract")
+        if issues:
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid plan drifted from signed authority: "
+                + ", ".join(issues)
+            )
+        self._require_rule_ref(step)
+        return step
+
+    def validate_plan(self, plan: AnalysisPlan) -> None:
+        self.governed_step(plan)
 
 
 class LandmarkSplineRuntimeAuthority(_AuthorityBase):
@@ -250,7 +573,11 @@ class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
 
 
 CurrentCaseScientificRuntimeAuthority = Annotated[
-    Union[LandmarkSplineRuntimeAuthority, SourceFeasibilityRuntimeAuthority],
+    Union[
+        AssociationModelGridRuntimeAuthority,
+        LandmarkSplineRuntimeAuthority,
+        SourceFeasibilityRuntimeAuthority,
+    ],
     Field(discriminator="authority_kind"),
 ]
 _AUTHORITY_ADAPTER = TypeAdapter(CurrentCaseScientificRuntimeAuthority)
@@ -260,7 +587,12 @@ def load_current_case_scientific_runtime_authority(
     value: CurrentCaseScientificRuntimeAuthority | Mapping[str, Any],
 ) -> CurrentCaseScientificRuntimeAuthority:
     if isinstance(
-        value, (LandmarkSplineRuntimeAuthority, SourceFeasibilityRuntimeAuthority)
+        value,
+        (
+            AssociationModelGridRuntimeAuthority,
+            LandmarkSplineRuntimeAuthority,
+            SourceFeasibilityRuntimeAuthority,
+        ),
     ):
         return value
     return _AUTHORITY_ADAPTER.validate_json(
@@ -281,6 +613,12 @@ def build_current_case_scientific_runtime_authority(
 
 
 __all__ = [
+    "AssociationModelGridFilter",
+    "AssociationModelGridLandmarkFilter",
+    "AssociationModelGridLevelFilter",
+    "AssociationModelGridNonlinearTerm",
+    "AssociationModelGridRuntimeAuthority",
+    "AssociationModelGridVariant",
     "CurrentCaseScientificAuthorityError",
     "CurrentCaseScientificRuntimeAuthority",
     "LandmarkSplineRuntimeAuthority",
