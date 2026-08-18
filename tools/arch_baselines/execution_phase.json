@@ -1,17 +1,17 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "39ff52160ba2dd7b68ed45f2d212e5ac670732e52e44205807dec07f3e750d5d",
+  "tool_sha256": "d6a120b548221315b277521a62c184d0df06411d6ea5f334abac9d2f477453c4",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
       "loc": 5673,
-      "sha256": "6eb74aaa02ddcaca0f97f29762c6b5b88d5f56919557a2cf5f4491b021893292",
+      "sha256": "4f6b6e8a3125d2795796d60da1e7d81fbbdd575b751a745d0dabaec11c385acf",
       "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 3675,
-      "sha256": "672689c12e15faee068d1604ba6ea65ca35f4b289c451a1bb9d0cc15263eb5d0",
+      "loc": 3682,
+      "sha256": "1f61dd6422e75f74d94cdf1c4a323a76d554408c81930be82afd373f98852cf4",
       "intra_package_import_edges": 55,
       "shim_bypass_violations": []
     },
@@ -22,8 +22,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8747,
-      "sha256": "75a71988d35db7c2f507f0ce14f540523215a0e1a0f12c3cd020d5fe89b5996b",
+      "loc": 8745,
+      "sha256": "dd01d95d41a6b8bdd58fb16ba903d50cc039f75145a3309215dc1ea91dadc258",
       "intra_package_import_edges": 122,
       "shim_bypass_violations": []
     },
@@ -347,7 +347,7 @@
     },
     "pipeline.py::run": {
       "lines": 672,
-      "line_start": 4624,
+      "line_start": 4622,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 107,
@@ -357,7 +357,7 @@
     },
     "pipeline.py::_generate_or_resume_plan": {
       "lines": 446,
-      "line_start": 2548,
+      "line_start": 2549,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 48,
@@ -366,8 +366,8 @@
       "callable_closure_captured_names": 0
     },
     "pipeline.py::_run_plan_phase": {
-      "lines": 623,
-      "line_start": 3419,
+      "lines": 620,
+      "line_start": 3420,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 83,
@@ -376,7 +376,13 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Add the dependency-neutral numeric_scalars owner to the architecture ratchet after consolidating twelve byte-equivalent local finite-float coercers. Existing domain-specific boolean, range, nonnegative, and exception contracts remain separate; previously gated metrics do not regress.",
+  "baseline_reason": "Accept a seven-line growth in execution/phase_support.py (3675 -> 3682) so the run-lifetime cohort-column registration is stated by the layer that owns the run. Its previous home, cohort/repair.py, performed the same registration as a permanent process-wide side effect of merely extracting a definition, which silently disabled two 091384c fail-closed authority assertions whenever anything touched cohort repair first. The seven lines are one import, one None-guard, one call and four lines of rationale; the KNOWN DEBT narrative was moved to the registry that owns it in planning/cohort_contract.py to keep this as small as it can be while still saying why. This entry also corrects a pre-existing drift: the committed baseline recorded pipeline.py at 8747 and _run_plan_phase at 623 while the 4868315 tree had 8745 and 620, leaving that ratchet two lines looser than intended. No other gated metric changes.",
+  "baseline_accepted_growth": {
+    "execution/phase_support.py": {
+      "loc_was": 3675,
+      "loc_now": 3682
+    }
+  },
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -650,6 +656,15 @@
     },
     {
       "reason": "Add the dependency-neutral numeric_scalars owner to the architecture ratchet after consolidating twelve byte-equivalent local finite-float coercers. Existing domain-specific boolean, range, nonnegative, and exception contracts remain separate; previously gated metrics do not regress."
+    },
+    {
+      "reason": "Accept a seven-line growth in execution/phase_support.py (3675 -> 3682) so the run-lifetime cohort-column registration is stated by the layer that owns the run. Its previous home, cohort/repair.py, performed the same registration as a permanent process-wide side effect of merely extracting a definition, which silently disabled two 091384c fail-closed authority assertions whenever anything touched cohort repair first. The seven lines are one import, one None-guard, one call and four lines of rationale; the KNOWN DEBT narrative was moved to the registry that owns it in planning/cohort_contract.py to keep this as small as it can be while still saying why. This entry also corrects a pre-existing drift: the committed baseline recorded pipeline.py at 8747 and _run_plan_phase at 623 while the 4868315 tree had 8745 and 620, leaving that ratchet two lines looser than intended. No other gated metric changes.",
+      "accepted_growth": {
+        "execution/phase_support.py": {
+          "loc_was": 3675,
+          "loc_now": 3682
+        }
+      }
     }
   ]
 }
