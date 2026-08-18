@@ -302,6 +302,49 @@ def _run(run_dir: Path, manifest: dict) -> tuple[Path, dict]:
     return out_dir, summary
 
 
+def test_two_panel_entrypoint_preserves_typed_missingness_alias(tmp_path: Path) -> None:
+    alias = "table:measurement_missingness"
+    run_dir = tmp_path / "run"
+    manifest = {
+        "schema_version": "2.1",
+        "step_id": STEP_ID,
+        "inputs": {
+            alias: _register(
+                run_dir,
+                _audit_frame(),
+                input_key=alias,
+                product="measurement_missingness",
+            ),
+            MEASUREMENT_PROCESS_AUDIT_INPUT: _register(
+                run_dir,
+                _process_frame(),
+                input_key=MEASUREMENT_PROCESS_AUDIT_INPUT,
+                product="measurement_process_audit",
+            ),
+        },
+    }
+    out_dir = run_dir / "steps" / STEP_ID / "outputs"
+
+    summary = run_missingness_measurement_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=STEP_ID,
+        figure_product=PRODUCT,
+        missingness_input=alias,
+        process_input=MEASUREMENT_PROCESS_AUDIT_INPUT,
+    )
+    contract = json.loads(
+        (out_dir / f"{PRODUCT}.figure_contract.json").read_text(encoding="utf-8")
+    )
+
+    assert summary["source_inputs"] == [alias, MEASUREMENT_PROCESS_AUDIT_INPUT]
+    assert contract["panels"][0]["metadata"]["source_products"] == [alias]
+    assert contract["panels"][1]["metadata"]["source_products"] == [
+        MEASUREMENT_PROCESS_AUDIT_INPUT
+    ]
+
+
 def test_exact_closed_contract_selects_standard_executor() -> None:
     step = _step()
     assert _owns(step)
@@ -315,6 +358,59 @@ def test_exact_closed_contract_selects_standard_executor() -> None:
     assert selection is not None
     assert selection.analysis_kind == "missingness_measurement_figure"
     assert selection.consumed_input_keys == MISSINGNESS_MEASUREMENT_FIGURE_INPUTS
+
+
+def test_typed_measurement_alias_selects_the_same_closed_pair_renderer() -> None:
+    alias = "table:measurement_missingness"
+    producer = AnalysisStep(
+        step_id="04_measurement_audit",
+        planned_analysis_role="auxiliary",
+        intent="Audit source availability and measurement opportunity.",
+        method="missing_data",
+        expected_outputs=[MEASUREMENT_PROCESS_AUDIT_INPUT, alias],
+        measurement_audit_spec={
+            "products": [
+                {
+                    "product_id": "measurement_process_audit",
+                    "audit": "measurement_process",
+                },
+                {
+                    "product_id": "measurement_missingness",
+                    "audit": "measurement_missingness",
+                },
+            ]
+        },
+    )
+    step = _step(
+        inputs=[alias, MEASUREMENT_PROCESS_AUDIT_INPUT],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=key, mode="all_rows")
+            for key in (alias, MEASUREMENT_PROCESS_AUDIT_INPUT)
+        ],
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[producer, step])
+    bindings = {
+        alias: {"product_contract": {"columns": list(_AUDIT_COLUMNS)}},
+        MEASUREMENT_PROCESS_AUDIT_INPUT: {
+            "product_contract": {"columns": list(_PROCESS_COLUMNS)}
+        },
+    }
+
+    assert missingness_measurement_figure_executor_owns_step(
+        step,
+        plan=plan,
+        resolved_bindings=bindings,
+    )
+    selection = select_standard_executor(
+        step,
+        plan=plan,
+        resolved_bindings=bindings,
+    )
+
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_measurement_figure"
+    assert selection.consumed_input_keys == (alias, MEASUREMENT_PROCESS_AUDIT_INPUT)
+    assert f"missingness_input={alias!r}" in selection.code
 
 
 def test_owner_is_order_insensitive_but_never_widened() -> None:

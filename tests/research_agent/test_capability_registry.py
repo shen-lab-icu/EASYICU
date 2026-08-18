@@ -20,6 +20,7 @@ import textwrap
 from typing import get_args
 
 from easyicu.research_agent.execution import phase as pipeline_execute
+from easyicu.research_agent.execution.runners import selection
 from easyicu.research_agent.figures import FAMILY_RENDERERS
 from easyicu.research_agent.planning import capability_registry as cr
 from easyicu.research_agent.execution.phase import (
@@ -326,38 +327,25 @@ def test_only_exact_typed_descriptive_primary_selects_the_reportable_owner(ra):
 def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
     """Inspect actual execute assignments, not a second hand-maintained set."""
 
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(pipeline_execute.run_execute_phase))
-    )
-    active: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
-            continue
-        if not isinstance(node.value.value, str):
-            continue
-        for target in node.targets:
-            if not isinstance(target, ast.Subscript):
-                continue
-            key = target.slice
-            if (
-                isinstance(key, ast.Constant)
-                and key.value == "deterministic_standard_analysis"
-            ):
-                active.add(node.value.value)
     documented = {runner.name for runner in cr.AUXILIARY_DETERMINISTIC_RUNNERS}
-    # Dedicated executors consume an already-bound standard-analysis marker
-    # instead of assigning it inside run_execute_phase.  Count those exact
-    # dispatch comparisons as live wiring too.
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Compare):
-            continue
-        constants = {
-            child.value
-            for child in ast.walk(node)
-            if isinstance(child, ast.Constant) and isinstance(child.value, str)
-        }
-        if "deterministic_standard_analysis" in constants:
-            active.update(constants & documented)
+
+    execute_source = (
+        inspect.getsource(pipeline_execute.run_execute_phase)
+        + "\n"
+        + inspect.getsource(pipeline_execute._step_settle_initial_code)
+    )
+    assert "select_standard_executor(" in execute_source
+    assert 'step_record["deterministic_standard_analysis"] = (' in execute_source
+
+    # Every documented runner must define its registry-declared entrypoint
+    # in the module the registry points to.
+    active: set[str] = set()
+    for runner in cr.AUXILIARY_DETERMINISTIC_RUNNERS:
+        module = importlib.import_module(
+            f"easyicu.research_agent.{runner.module}"
+        )
+        if runner.entrypoint in inspect.getsource(module):
+            active.add(runner.name)
     assert active == documented
 
 

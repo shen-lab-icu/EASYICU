@@ -9,9 +9,15 @@ Two modes are supported:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Dict, Optional, Sequence
+
+from .providers.capabilities import (
+    SUPPORTED_CLI_ACCOUNT_NAMES,
+    SUPPORTED_PROVIDER_NAMES,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -42,14 +48,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--llm",
-        choices=["mock", "openai"],
+        choices=["mock", *SUPPORTED_CLI_ACCOUNT_NAMES, *SUPPORTED_PROVIDER_NAMES],
         default=None,
         help="LLM backend for paper-aware replication mode.",
     )
     parser.add_argument(
+        "--model",
         "--openai-model",
-        default="gpt-4o-mini",
-        help="Model name when --llm openai is used.",
+        dest="model",
+        default=None,
+        help=(
+            "Exact model name for the selected real provider. OpenAI retains "
+            "the legacy gpt-4o-mini default; account-backed CLI engines may "
+            "use their logged-in default; API providers require a value."
+        ),
+    )
+    parser.add_argument(
+        "--external-llm-opt-in",
+        action="store_true",
+        help=(
+            "Explicitly authorize this run to send prompts to an external LLM. "
+            "Required with every non-mock provider."
+        ),
     )
     parser.add_argument(
         "--target",
@@ -108,7 +128,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _parse_targets(raw_targets: Sequence[str], pending: Sequence[str]) -> Dict[str, Optional[Path]]:
+def _parse_targets(
+    raw_targets: Sequence[str], pending: Sequence[str]
+) -> Dict[str, Optional[Path]]:
     targets: Dict[str, Optional[Path]] = {}
     for raw in raw_targets:
         if "=" not in raw:
@@ -149,23 +171,55 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not args.cohort or not args.database:
             raise SystemExit("--paper mode requires --cohort and --database.")
         if args.llm is None:
-            raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`) for --paper mode.")
+            raise SystemExit(
+                "Choose an explicit --llm backend (`mock` or a real provider) for --paper mode."
+            )
+        if args.llm != "mock":
+            from easyicu import ai_optin
+
+            try:
+                ai_optin.check_external_llm_opt_in(
+                    args.llm,
+                    ai_enabled=args.external_llm_opt_in,
+                    language="en",
+                )
+            except ai_optin.AIOptInError as exc:
+                raise SystemExit(str(exc)) from exc
         from .providers.factory import build_provider_client
-        from .providers.llm import OpenAIClient
         from .providers.mocks import MockLLMClient
         from .pipeline import ResearchAgentPipeline
 
-        llm = (
-            build_provider_client(
-                provider="openai",
-                model=args.openai_model,
-                request_timeout=120.0,
-                title="EasyICU research replication",
-                client_cls=OpenAIClient,
-            )
-            if args.llm == "openai"
-            else MockLLMClient()
-        )
+        if args.llm != "mock":
+            provider_environment = dict(os.environ)
+            provider_environment["EASYICU_ALLOW_EXTERNAL_LLM"] = "1"
+            if args.llm in SUPPORTED_CLI_ACCOUNT_NAMES:
+                from .providers.llm import build_llm_client
+
+                llm = build_llm_client(
+                    prefer=args.llm,
+                    model=args.model,
+                    allow_mock=False,
+                    ladder=[args.llm],
+                    request_timeout=120.0,
+                    environment=provider_environment,
+                ).client
+            else:
+                selected_model = args.model or (
+                    "gpt-4o-mini" if args.llm == "openai" else None
+                )
+                if not selected_model:
+                    raise SystemExit(
+                        f"--model is required when --llm {args.llm} is selected."
+                    )
+                llm = build_provider_client(
+                    provider=args.llm,
+                    model=selected_model,
+                    request_timeout=120.0,
+                    title="EasyICU research replication",
+                    environment=provider_environment,
+                )
+        else:
+            llm = MockLLMClient()
         pipeline = ResearchAgentPipeline(
             workdir=args.output,
             llm=llm,
@@ -196,14 +250,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         targets.update(discover_easyicu_exports([Path(p) for p in args.discover_root]))
 
     build_targets = _parse_pairs(args.build_target, "--build-target")
-    export_root = Path(args.export_root) if args.export_root else Path(args.output) / "generated_exports"
+    export_root = (
+        Path(args.export_root)
+        if args.export_root
+        else Path(args.output) / "generated_exports"
+    )
     for database, data_path in build_targets.items():
         generated = export_lactate_map_vaso_concepts_from_easyicu(
             database=database,
             data_path=data_path,
             output_dir=export_root / database,
             max_patients=args.max_patients,
-            groups=LACTATE_MAP_VASO_MINIMAL_EXPORT_GROUPS if args.minimal_export else None,
+            groups=LACTATE_MAP_VASO_MINIMAL_EXPORT_GROUPS
+            if args.minimal_export
+            else None,
         )
         targets[database] = generated
 
@@ -212,7 +272,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if database:
             targets.setdefault(database, None)
     if not targets:
-        raise SystemExit("Provide at least one --target, --build-target, --discover-root, or --pending database.")
+        raise SystemExit(
+            "Provide at least one --target, --build-target, --discover-root, or --pending database."
+        )
 
     paths = run_lactate_map_vaso_replication(
         targets,

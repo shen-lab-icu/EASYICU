@@ -5481,7 +5481,8 @@ class ConceptResolver:
                     aggregation=agg_method,
                     fill_gaps=fill_missing,
                     fill_method=fill_method,
-                    copy=False
+                    copy=False,
+                    time_unit="hours",
                 )
                 
                 # Extract data if ICUTable is returned
@@ -6710,7 +6711,8 @@ class ConceptResolver:
                         aggregation=agg_method,
                         fill_gaps=fill_missing,
                         fill_method=fill_method,
-                        copy=False
+                        copy=False,
+                        time_unit="hours",
                     )
                     
                     # Extract data if ICUTable is returned

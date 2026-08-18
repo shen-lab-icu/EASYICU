@@ -4,6 +4,7 @@
    the full conversational Copilot; longer study planning belongs in Guided
    Copilot. Body-level so it survives route re-renders. */
 (function () {
+  const { esc } = window.EU_HTML;
   let dock, fab, backdrop, scroll, suggestEl, input;
   let thread = [];
   let busy = false;
@@ -196,8 +197,8 @@
       chips: [[bi('Load the benchmark', '加载跨库比较'), '@loadcross', 'act'], [bi('Which databases overlap?', '哪些数据库有重叠？'), '@say:overlap'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
     },
     agent: {
-      label: bi('Agent Projects', '研究项目'),
-      hi: bi(`The Research Agent runs an auditable pipeline and drafts findings — but the draft stays locked until checks pass. Want the run, or the reasoning?`, `Research Agent 会运行可审计 pipeline 并生成 findings 草稿，但检查通过前草稿保持锁定。你想看运行，还是想看核验逻辑？`),
+      label: bi('Project Monitor', '项目监控'),
+      hi: bi(`Project Monitor shows existing Research Agent runs, outputs, evidence, and review state. Start or change an analysis in Guided Copilot.`, `项目监控用于查看已有 Research Agent 运行、产出、证据与审阅状态。开始或修改分析请使用研究引导。`),
       chips: [[bi('Why is the draft locked?', '为什么草稿锁定？'), '@say:gate'], [bi('Show a completed run', '查看已完成 run'), '@agentrun', 'act'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
     },
     states: { label: bi('Workspace States', '工作区状态'), hi: bi(`This is the states reference — loading, empty, no-data, error, blocked, success. Use the shortcuts below or open Guided Copilot.`, `这里是工作区状态参考：加载、空、无数据、错误、阻断、成功。可用下方快捷操作，或打开研究引导。`), chips: [[bi('When do states show?', '状态什么时候出现？'), '@say:states'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']] },
@@ -205,7 +206,7 @@
     tutorial: { label: bi('Get Started', '快速上手'), hi: bi(`Get Started orients you to the workflow. Open Guided Copilot for the full conversational path.`, `快速上手会介绍整个流程；完整对话式路径请打开研究引导。`), chips: [[bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how']] },
     ideas: {
       label: bi('Idea Mining', '想法挖掘'),
-      hi: bi(`Idea Mining turns a paper, PDF, or topic into an evidence-bound idea ledger with a feasibility verdict. Mining decides what is worth running; Agent Projects runs confirmed analyses.`, `想法挖掘把文章、PDF 或主题变成证据绑定的 idea 台账，并给出可行性判定。挖掘决定什么值得做；确认后的分析由研究项目运行。`),
+      hi: bi(`Idea Mining turns a paper, PDF, or topic into an evidence-bound idea ledger with a feasibility verdict. Mining decides what is worth running; Guided Copilot collects the confirmed analysis setup.`, `想法挖掘把文章、PDF 或主题变成证据绑定的 idea 台账，并给出可行性判定。挖掘决定什么值得做；确认后的分析配置由研究引导收集。`),
       chips: [[bi('What do the feasibility tiers mean?', '可行性分层是什么意思？'), '@say:tiers'], [bi('Where does a passed idea go next?', '通过的想法下一步去哪？'), '@say:ideanext'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
     },
     dictionary: {
@@ -233,7 +234,7 @@
     states: bi(`Every data surface passes through the same six: loading (skeletons), empty (first run), no-data (0 results), error (recoverable), blocked (gated), success. The reference page lets you preview each.`, `每个数据界面都经过六种状态：加载、空、无数据、错误、阻断和成功。参考页可以预览这些状态。`),
     privacy: bi(`No. EasyICU is local-first and the guarantee is enforced — extraction, review, and analysis run on your machine. Only the agent’s plan text can ever leave, and only if you explicitly enable it. Never patient rows.`, `不会。EasyICU 是本地优先：抽取、审阅和分析都在你的机器上运行。只有你明确启用时，Agent 的计划文本才可能离开本机，患者行永远不会发送。`),
     tiers: bi(`Feasibility answers four different questions, one tier each: can the idea be computed from concepts already in your export (ready now); is it in the dictionary but missing from this export (needs re-extraction); is it not derivable from this database at all (choose another database or question); and is the sample/coverage strong enough to be worth running. A held idea always states which tier blocked it and what to do next.`, `可行性评估分层回答四个不同的问题：想法能否用当前导出里已有的概念直接计算（可以直接做）；字典里有但当前导出缺（需要补抽取）；这个数据库根本推导不出来（换库或换问题）；以及样本量/覆盖率是否值得做。被搁置的想法都会写明卡在哪一层、下一步做什么。`),
-    ideanext: bi(`Once an idea passes feasibility, generate its plan, then "Freeze handoff for Agent" and "Create Agent project" — the seed carries your question, cohort, and evidence links into Agent Projects, where the confirmed analysis actually runs.`, `想法通过可行性评估后：先生成计划，然后"冻结交接"并"创建研究项目"——种子会把问题、队列和证据链接带进研究项目，确认后的分析在那里运行。`),
+    ideanext: bi(`Once an idea passes feasibility, freeze its handoff, then continue in Guided Copilot to confirm the data, model, and run. Project Monitor is only for reviewing runs and evidence afterward.`, `想法通过可行性评估后，先冻结交接，再到研究引导中确认数据、模型和运行。项目监控只用于事后查看运行与证据。`),
     concept: bi(`A concept is EasyICU's database-neutral name for one clinical variable (e.g. lactate, MAP, SOFA). You analyze concepts, and EasyICU maps each one to the right tables and units in each of the six databases.`, `概念（concept）是 EasyICU 对一个临床变量的跨库统一命名（如乳酸、MAP、SOFA）。你面向概念做分析，EasyICU 负责把它映射到六个数据库各自的表和单位。`),
   };
 
@@ -262,7 +263,6 @@
       return `<button class="suggest-chip ${cls}" data-cp-action="${action}">${esc(chipText(chip))}</button>`;
     }).join('');
   }
-  function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
   function botSay(html, chips) {
     busy = true; thread.push({ typing: true }); render();
@@ -285,7 +285,7 @@
       case '@load': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#patient'); return bi('Loaded a demo workspace — Patient Review is populated. Tabs are live on the left.', '已加载演示工作区，Patient Review 已填充。左侧标签页可以直接查看。');
       case '@loadcross': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#crossdb'); return bi('Loaded the benchmark — Cross-DB is on the left with the availability matrix.', '已加载跨库比较，跨库页面会显示可用性矩阵。');
       case '@cohortrun': nav('#cohort'); setTimeout(() => { const b = document.querySelector('[data-cohort-run]'); if (b) b.click(); }, 240); return bi('Re-running cohort statistics — watch the panel recompute on the left.', '正在重新运行队列统计，请看左侧面板重新计算。');
-      case '@agentrun': try { window.__euAgentPreset && window.__euAgentPreset(); } catch (e) {} nav('#agent'); return bi('Opened a completed Research Agent run — the Summary gate is on the left.', '已打开一个完成的 Research Agent run，左侧是 Summary gate。');
+      case '@agentrun': try { window.__euAgentPreset && window.__euAgentPreset(); } catch (e) {} nav('#agent'); return bi('Opened a completed Research Agent run in Project Monitor — the Summary gate is on the left.', '已在项目监控中打开一个完成的 Research Agent run，左侧是 Summary gate。');
     }
     return null;
   }

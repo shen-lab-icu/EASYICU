@@ -1,6 +1,6 @@
 """RunMemory — cross-run lessons.
 
-An autonomous research agent should learn from its failures: a
+An LLM-assisted research agent should learn from its failures: a
 successful run, a buggy script, a spurious finding all become
 training data for the next run's planner. Here the storage stays
 trivial, inspectable and entirely off the LLM:

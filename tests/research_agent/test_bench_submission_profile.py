@@ -122,6 +122,45 @@ def test_benchmark_options_enable_preplan_pubmed_explicitly() -> None:
     assert enabled["enable_pubmed"] is True
 
 
+def test_benchmark_options_bind_progressive_planner_strategy() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        planner_strategy="progressive_v2",
+    )
+
+    assert options["planner_strategy"] == "progressive_v2"
+
+
+def test_benchmark_options_bind_paired_development_progressive_resume(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "progressive_planner_checkpoint_004.json"
+    with pytest.raises(SystemExit, match="must be supplied together"):
+        _benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+            development_progressive_resume_checkpoint_path=checkpoint,
+        )
+
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        planner_strategy="progressive_v2",
+        development_diagnostic=True,
+        development_progressive_resume_checkpoint_path=checkpoint,
+        development_progressive_resume_checkpoint_sha256="a" * 64,
+    )
+
+    assert options["development_progressive_resume_checkpoint_path"] == checkpoint
+    assert options["development_progressive_resume_checkpoint_sha256"] == (
+        "a" * 64
+    )
+
+
 def test_benchmark_options_enable_post_qc_development_sample_explicitly() -> None:
     full_data = _benchmark_pipeline_options(
         max_total_steps=None,
@@ -471,6 +510,82 @@ def test_e1_planner_canary_profile_binds_current_dictionaries_without_publicatio
         "998a14c70c8a983c71ce6af2da8408fe22063cc042e8cde69f572083880bdaf8"
     )
     assert is_paper_facing_profile(profile.name) is False
+
+
+def test_e1_progressive_planner_canary_is_additive_and_strategy_locked() -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PLANNER_CANARY_2026_08_14,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16,
+        is_paper_facing_profile,
+    )
+
+    profile = E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16
+
+    assert E1_PLANNER_CANARY_2026_08_14.ref == (
+        "npj_dm_e1_canary_dev/20260814"
+    )
+    assert profile.ref == "npj_dm_e1_canary_dev/20260816"
+    assert profile.planner_only is True
+    assert profile.planner_strategy == "progressive_v2"
+    assert profile.pipeline_options()["planner_strategy"] == "progressive_v2"
+    assert profile.expected_concept_dict_sha == (
+        E1_PLANNER_CANARY_2026_08_14.expected_concept_dict_sha
+    )
+    assert profile.expected_sofa2_dict_sha == (
+        E1_PLANNER_CANARY_2026_08_14.expected_sofa2_dict_sha
+    )
+    assert is_paper_facing_profile(profile.name) is False
+
+
+def test_e1_progressive_profile_is_public_and_rejects_strategy_override(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16 as public_profile,
+    )
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+
+    assert public_profile.ref == "npj_dm_e1_canary_dev/20260816"
+    with pytest.raises(ValueError, match="pins planner_strategy='progressive_v2'"):
+        PipelineConfig(
+            workdir=tmp_path / "mismatch",
+            submission_profile_name=public_profile.name,
+            submission_profile_version=public_profile.version,
+            planner_strategy="monolithic_v1",
+        )
+
+    config = PipelineConfig(
+        workdir=tmp_path / "matching",
+        submission_profile_name=public_profile.name,
+        submission_profile_version=public_profile.version,
+        planner_strategy="progressive_v2",
+    )
+    assert config.planner_strategy == "progressive_v2"
+
+
+def test_e1_20260817_profiles_additively_bind_corrected_sofa2_dictionaries() -> None:
+    from easyicu.research_agent import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17 as public_profile,
+        E1_REVIEWED_DEMO_2026_08_17 as reviewed_profile,
+    )
+    from easyicu.research_agent.concept_dict_audit import (
+        compute_concept_dict_fingerprint,
+    )
+
+    fingerprint = compute_concept_dict_fingerprint()
+
+    assert public_profile.ref == "npj_dm_e1_canary_dev/20260817"
+    assert public_profile.planner_only is True
+    assert public_profile.planner_strategy == "progressive_v2"
+    assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260817"
+    assert reviewed_profile.planner_only is False
+    assert reviewed_profile.planner_strategy == "progressive_v2"
+    assert reviewed_profile.pipeline_options()["planner_strategy"] == (
+        "progressive_v2"
+    )
+    for profile in (public_profile, reviewed_profile):
+        assert profile.expected_concept_dict_sha == fingerprint.concept_dict_sha
+        assert profile.expected_sofa2_dict_sha == fingerprint.sofa2_dict_sha
 
 
 def test_e1_reviewed_demo_profile_executes_without_paper_authority() -> None:

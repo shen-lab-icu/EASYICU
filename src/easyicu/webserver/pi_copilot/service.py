@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -19,6 +19,7 @@ from easyicu.extensions import (
     ExtensionRegistryError,
 )
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import (
     agent_pipeline_runs,
     agent_runs,
@@ -37,9 +38,11 @@ from .contracts import (
     PiCopilotError,
     PiProjectBindingHandoffReceipt,
     PiSessionRecord,
+    ResearchProviderBinding,
     ToolExecutionContext,
     utc_now,
 )
+from .codex_gateway import CodexPiGatewayPool
 from .gateway import PiGatewayClient
 from .project_authority import (
     ProjectAuthorityStore,
@@ -48,6 +51,7 @@ from .project_authority import (
 from .provider_config import PiProviderConfigStore
 from .projections import project_job, project_pi_replay_event, reject_sensitive_message
 from .replay_store import PiConversationReplayStore
+from .run_authority import latest_bound_run_id
 from .workspace import ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
@@ -92,17 +96,21 @@ class PiCopilotService:
         extension_registry: Optional[ExtensionRegistry] = None,
         replay_store: Optional[PiConversationReplayStore] = None,
         review_snapshot_store: Optional[DataPackageReviewSnapshotStore] = None,
+        codex_gateway_pool: Optional[CodexPiGatewayPool] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
             if store_path is not None
-            else Path.home() / ".easyicu" / "pi_copilot_sessions.json"
+            else state_paths.state_root() / "pi_copilot_sessions.json"
         )
         self.gateway = gateway or PiGatewayClient()
         self.provider_store = (
             provider_store
             or getattr(self.gateway, "provider_store", None)
             or PiProviderConfigStore()
+        )
+        self.codex_gateway_pool = codex_gateway_pool or CodexPiGatewayPool(
+            template_gateway=self.gateway,
         )
         self.project_store = project_store or ProjectAuthorityStore(
             None
@@ -282,6 +290,32 @@ class PiCopilotService:
             self._retire_record(retired)
         return record
 
+    def _conversation_gateway_for_binding(
+        self,
+        binding: ResearchProviderBinding,
+        *,
+        unified: bool,
+        refresh_account: bool = False,
+    ) -> PiGatewayClient:
+        if unified and binding.provider == "codex":
+            return self.codex_gateway_pool.gateway_for(
+                binding,
+                refresh_account=refresh_account,
+            )
+        return self.gateway
+
+    def _conversation_gateway(
+        self,
+        record: PiSessionRecord,
+        *,
+        refresh_account: bool = False,
+    ) -> PiGatewayClient:
+        return self._conversation_gateway_for_binding(
+            record.research_provider,
+            unified=record.uses_unified_model_connection,
+            refresh_account=refresh_account,
+        )
+
     def _retire_record(self, record: PiSessionRecord) -> None:
         """Dispose an evicted Pi session and remove only its private JSONL."""
 
@@ -290,15 +324,21 @@ class PiCopilotService:
                 self._pending_retirements[record.session_id] = record
                 return
         self.replay_store.retire(record.session_id)
+        gateway: Any = self.gateway
         try:
-            self.gateway.request(
+            gateway = self._conversation_gateway(record)
+            gateway.request(
                 "session.dispose",
                 {"session_id": record.session_id},
                 timeout=5,
             )
         except (OSError, PiCopilotError):
             pass
-        session_root = getattr(self.gateway, "session_dir", None)
+        session_root = getattr(
+            gateway,
+            "session_dir",
+            None,
+        )
         if session_root is None or not record.pi_session_file:
             return
         candidate = Path(record.pi_session_file).resolve()
@@ -322,16 +362,22 @@ class PiCopilotService:
         if record is not None:
             self._retire_record(record)
 
-    def _provider_gate(self, *, external_llm_opt_in: bool) -> Dict[str, Any]:
+    def _provider_gate(
+        self,
+        *,
+        external_llm_opt_in: bool,
+        provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
         current_settings = settings.load_settings()
-        provider = str(
-            getattr(self.gateway, "environ", {}).get("EASYICU_PI_PROVIDER")
+        selected_provider = str(
+            provider
+            or getattr(self.gateway, "environ", {}).get("EASYICU_PI_PROVIDER")
             or "easyicu-local"
         )
         try:
             return provider_gate.resolve_provider_gate(
                 run_type="full",
-                llm_provider=provider,
+                llm_provider=selected_provider,
                 external_llm_opt_in=bool(external_llm_opt_in),
                 ai_enabled=bool(current_settings.get("ai_enabled")),
                 language=str(current_settings.get("language") or "en"),
@@ -386,6 +432,9 @@ class PiCopilotService:
             "runtime_integrity_verified",
             "base_url_configured",
         }
+        shell_ready = not runtime_blockers.intersection(blockers) and bool(
+            current_settings.get("ai_enabled")
+        )
         if not blockers:
             runtime_state = "ready"
         elif runtime_blockers.intersection(blockers):
@@ -396,6 +445,7 @@ class PiCopilotService:
             "ok": True,
             "runtime": {
                 "status": runtime_state,
+                "shell_ready": shell_ready,
                 "blockers": blockers,
                 "pi_package_version": "0.84.1",
                 "pi_source_commit": "9dd90a49711d088b86fdd9b4aea575913a8328a8",
@@ -465,6 +515,20 @@ class PiCopilotService:
             "secrets_returned": False,
         }
 
+    def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
+        """Compile the verified Pi API config into a secret-free run binding."""
+
+        self.provider_store.research_agent_environment(
+            external_llm_opt_in=True,
+        )
+        status = self.provider_store.public_status()
+        return ResearchProviderBinding(
+            provider="openai",
+            credential_source="pi_verified",
+            authentication_mode="api_key",
+            model=str(status.get("model") or "configured_provider_model"),
+        )
+
     @staticmethod
     def _binding_for_context(
         context: Optional[Mapping[str, Any]], *, run_id: Optional[str] = None
@@ -482,15 +546,19 @@ class PiCopilotService:
             ),
         )
 
-    @staticmethod
-    def _latest_run_id(study_context_id: Optional[str]) -> Optional[str]:
-        if not study_context_id:
-            return None
-        history = agent_runs.list_run_history(study_id=study_context_id, limit=1)
-        rows = history.get("runs") or []
-        if rows and isinstance(rows[0], dict):
-            return str(rows[0].get("run_id") or "") or None
-        return None
+    def _latest_run_id(
+        self,
+        study_context_id: Optional[str],
+        *,
+        project_id: Optional[str] = None,
+    ) -> Optional[str]:
+        project_root = (
+            self.workspace.project_root(project_id) if project_id else None
+        )
+        return latest_bound_run_id(
+            study_context_id=study_context_id,
+            project_root=project_root,
+        )
 
     @staticmethod
     def _explicit_context_binding_receipt(
@@ -794,7 +862,10 @@ class PiCopilotService:
                     )
                 record.binding = self._binding_for_context(
                     context,
-                    run_id=self._latest_run_id(str(context["id"])),
+                    run_id=self._latest_run_id(
+                        str(context["id"]),
+                        project_id=clean_project,
+                    ),
                 )
                 record.updated_at = utc_now()
                 migrated += 1
@@ -862,6 +933,7 @@ class PiCopilotService:
         thinking_level: str = "off",
         study_context_id: Optional[str] = None,
         external_llm_opt_in: bool = False,
+        research_provider: Optional[ResearchProviderBinding] = None,
     ) -> Dict[str, Any]:
         clean_project_id = str(project_id or "").strip()
         if not clean_project_id:
@@ -870,9 +942,18 @@ class PiCopilotService:
                 "Select or create an EasyICU research project before starting a Pi conversation.",
                 status_code=409,
             )
-        self._provider_gate(external_llm_opt_in=external_llm_opt_in)
+        selected_model_connection = research_provider or ResearchProviderBinding()
+        self._provider_gate(
+            external_llm_opt_in=external_llm_opt_in,
+            provider=selected_model_connection.provider,
+        )
         resolved_mode = "workspace" if agent_mode == "workspace" else "research"
-        install = self.gateway.installation_status()
+        conversation_gateway = self._conversation_gateway_for_binding(
+            selected_model_connection,
+            unified=True,
+            refresh_account=True,
+        )
+        install = conversation_gateway.installation_status()
         if not install.get("api_key_configured"):
             raise PiCopilotError(
                 "pi_api_key_missing",
@@ -899,7 +980,10 @@ class PiCopilotService:
         session_id = f"pi_{secrets.token_hex(10)}"
         binding = self._binding_for_context(
             context,
-            run_id=self._latest_run_id(str(context.get("id")) if context else None),
+            run_id=self._latest_run_id(
+                str(context.get("id")) if context else None,
+                project_id=clean_project_id,
+            ),
         )
         try:
             extension_activation = self.extension_registry.snapshot()
@@ -916,7 +1000,7 @@ class PiCopilotService:
                 skills=extension_activation.skills,
                 mcp_servers=(),
             )
-        state = self.gateway.request(
+        state = conversation_gateway.request(
             "session.create",
             {
                 "session_id": session_id,
@@ -937,6 +1021,7 @@ class PiCopilotService:
             thinking_level=resolved_thinking,
             external_llm_opt_in=True,
             extension_activation=extension_activation,
+            research_provider=selected_model_connection,
             binding=binding,
         )
         self._save_record(record)
@@ -952,6 +1037,7 @@ class PiCopilotService:
         transcript_cursor: Optional[str] = None,
         transcript_limit: int = 100,
     ) -> Dict[str, Any]:
+        gateway = self._conversation_gateway(record)
         state_params: Dict[str, Any] = {
             "session_id": record.session_id,
             "transcript_limit": max(1, min(200, int(transcript_limit))),
@@ -959,7 +1045,7 @@ class PiCopilotService:
         if transcript_cursor is not None:
             state_params["transcript_cursor"] = str(transcript_cursor)
         try:
-            return self.gateway.request(
+            return gateway.request(
                 "session.state",
                 state_params,
                 timeout=5,
@@ -967,7 +1053,7 @@ class PiCopilotService:
         except PiCopilotError as exc:
             if exc.code != "pi_session_not_open":
                 raise
-        opened = self.gateway.request(
+        opened = gateway.request(
             "session.create",
             {
                 "session_id": record.session_id,
@@ -982,7 +1068,7 @@ class PiCopilotService:
         )
         if transcript_cursor is None and int(transcript_limit) == 100:
             return opened
-        return self.gateway.request("session.state", state_params, timeout=5)
+        return gateway.request("session.state", state_params, timeout=5)
 
     def _binding_stale_details(
         self,
@@ -1035,7 +1121,10 @@ class PiCopilotService:
         current_job = (
             str(current.get("active_job_id")) if current.get("active_job_id") else None
         )
-        current_run = self._latest_run_id(binding.study_context_id)
+        current_run = self._latest_run_id(
+            binding.study_context_id,
+            project_id=project_id,
+        )
         mismatches = {}
         if current_revision != binding.study_revision:
             mismatches["study_revision"] = {
@@ -1088,7 +1177,10 @@ class PiCopilotService:
             )
         record.binding = self._binding_for_context(
             context,
-            run_id=self._latest_run_id(str(context.get("id")) if context else None),
+            run_id=self._latest_run_id(
+                str(context.get("id")) if context else None,
+                project_id=record.project_id,
+            ),
         )
         self._save_record(record)
         state = self._ensure_open(record)
@@ -1107,7 +1199,10 @@ class PiCopilotService:
         allowed_actions: Iterable[str] = (),
     ) -> Dict[str, Any]:
         record = self._scoped_record(session_id, project_id=project_id)
-        self._provider_gate(external_llm_opt_in=record.external_llm_opt_in)
+        self._provider_gate(
+            external_llm_opt_in=record.external_llm_opt_in,
+            provider=record.research_provider.provider,
+        )
         text = str(message or "").strip()
         if not text:
             raise PiCopilotError(
@@ -1163,6 +1258,10 @@ class PiCopilotService:
             self._busy_sessions.add(record.session_id)
 
         def runner(job: jobs.Job) -> Dict[str, Any]:
+            conversation_gateway = self._conversation_gateway(
+                record,
+                refresh_account=True,
+            )
             with self._lock:
                 self._active_message_jobs[record.session_id] = job.id
 
@@ -1216,7 +1315,7 @@ class PiCopilotService:
                         "allowed_actions": sorted(requested_actions),
                     }
                 )
-                state = self.gateway.request(
+                state = conversation_gateway.request(
                     "session.prompt",
                     {"session_id": record.session_id, "message": text},
                     event_sink=emit,
@@ -1438,7 +1537,7 @@ class PiCopilotService:
         target_job_id = str(active_job_id or "").strip()
         job = jobs.MANAGER.get(target_job_id) if target_job_id else None
         cancel_requested = bool(job and job.request_cancel("pi_copilot_user_abort"))
-        state = self.gateway.request(
+        state = self._conversation_gateway(record).request(
             "session.abort",
             {"session_id": record.session_id},
             timeout=15,
@@ -2008,6 +2107,12 @@ class PiCopilotService:
                 else {}
             ),
             "binding": record.binding.model_dump(mode="json"),
+            "research_provider": record.research_provider.public_projection(),
+            "model_connection": (
+                record.research_provider.public_projection()
+                if record.uses_unified_model_connection
+                else None
+            ),
             "stale": self._stale_details(record),
             "created_at": record.created_at,
             "updated_at": record.updated_at,
@@ -2081,6 +2186,7 @@ class PiCopilotService:
 
     def close(self) -> None:
         self.gateway.close()
+        self.codex_gateway_pool.close()
 
 
 _SERVICE: Optional[PiCopilotService] = None

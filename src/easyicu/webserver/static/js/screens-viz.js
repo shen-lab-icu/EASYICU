@@ -1,5 +1,6 @@
 /* Screens: Data Visualization — Patient Review, Cohort Statistics, Cross-database comparison */
 (function () {
+  const { esc } = window.EU_HTML;
   const S = (window.SCREENS = window.SCREENS || {});
   // demo/fixture data layer lives in screens-viz-demo.js (loaded first);
   // rebind its exports so existing call sites stay unchanged.
@@ -125,9 +126,6 @@
   let cohortSofaMatrixGranularity = 'medium'; // coarse | medium | fine | exact
   let vizErr = null;
 
-  function esc(v) {
-    return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-  }
   function displayDataMode() {
     return window.getDataMode
       ? window.getDataMode()
@@ -359,7 +357,7 @@
       <div class="patient-flow-card mt-16" data-patient-eligibility-flow>
         <div class="patient-flow-head">
           <div>
-            <div class="patient-flow-title">${esc(title)}</div>
+            <h2 class="patient-flow-title">${esc(title)}</h2>
             <div class="patient-flow-sub">${esc(subtitle)}</div>
           </div>
           <span class="pill ${flow.has_stepwise_report ? 'ok' : 'warn'}" style="height:22px;">${flow.has_stepwise_report ? t('stepwise', '逐步') : t('summary only', '仅摘要')}</span>
@@ -1851,14 +1849,28 @@
       const hasPrevious = Boolean(previewPage.has_previous || activePreview && activePreview.has_previous);
       const hasNext = Boolean(previewPage.has_next || activePreview && activePreview.has_next);
       const pageSize = Number(previewPage.page_size || activePreview && activePreview.page_size || tableState.pageSize || 24);
-      const basisScope = drill.demo ? 'clinically constrained synthetic aggregate' : 'demographics aggregate';
+      /* Labels and provenance captions both go through t(): this table is the
+         only place in Patient Review that still rendered bare English in the
+         Chinese locale. The caption states what each number is computed from,
+         so it has to read in the user's language, not just the label. */
+      const basisScope = drill.demo
+        ? t('clinically constrained synthetic aggregate', '临床约束合成聚合值')
+        : t('demographics aggregate', '人口学聚合值');
       const rows = [
-        ['Entities', fmtInt(s.entities), drill.demo ? 'synthetic fallback denominator' : 'cohort denominator from active export'],
-        ['Mean age', fmtNum(s.mean_age, 1), basisScope],
-        ['Female', fmtPct(s.female_pct), basisScope],
-        ['Mortality', fmtPct(s.mortality), drill.demo ? 'synthetic fallback outcome' : 'outcome aggregate'],
-        ['Median SOFA-2', fmtNum(s.median_sofa2, 1), drill.demo ? 'synthetic fallback score' : 'score aggregate'],
-        ['Sepsis-3 positive', fmtPct(s.sepsis_pct), drill.demo ? 'synthetic fallback event' : 'event aggregate'],
+        [t('Entities', '实体'), fmtInt(s.entities), drill.demo
+          ? t('synthetic fallback denominator', '合成兜底分母')
+          : t('cohort denominator from active export', '来自当前导出的队列分母')],
+        [t('Mean age', '平均年龄'), fmtNum(s.mean_age, 1), basisScope],
+        [t('Female', '女性'), fmtPct(s.female_pct), basisScope],
+        [t('Mortality', '病死率'), fmtPct(s.mortality), drill.demo
+          ? t('synthetic fallback outcome', '合成兜底结局')
+          : t('outcome aggregate', '结局聚合值')],
+        [t('Median SOFA-2', 'SOFA-2 中位数'), fmtNum(s.median_sofa2, 1), drill.demo
+          ? t('synthetic fallback score', '合成兜底评分')
+          : t('score aggregate', '评分聚合值')],
+        [t('Sepsis-3 positive', 'Sepsis-3 阳性'), fmtPct(s.sepsis_pct), drill.demo
+          ? t('synthetic fallback event', '合成兜底事件')
+          : t('event aggregate', '事件聚合值')],
       ];
       const reviewModules = (dt.modules && dt.modules.length ? dt.modules : modules).slice(0, drill.demo ? 32 : 64);
       const activeModule = reviewModules.find(m => m.module === tableState.module) || reviewModules[0] || {};
@@ -1964,7 +1976,7 @@
       ${patientMatrixAudit(drill)}
       <div class="note info mt-16">
         <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><span class="t">${esc(detailGate.title || 'Source records are optional')}</span> <span class="d" style="display:inline;">— ${esc(detailGate.reason || 'Native Patient Review exposes cohort aggregates and one pseudonymous entity drilldown. Direct identifier tables stay out of the browser payload.')}</span></div>
+        <div class="body"><span class="t">${esc(patientI18nLabel(detailGate.title_i18n, detailGate.title || t('Source records are optional', '源始记录是可选的')))}</span> <span class="d" style="display:inline;">— ${esc(patientI18nLabel(detailGate.reason_i18n, detailGate.reason || t('Native Patient Review exposes cohort aggregates and one pseudonymous entity drilldown. Direct identifier tables stay out of the browser payload.', '原生患者审阅只暴露队列聚合值和单个假名化实体的下钻。直接标识表不会进入浏览器载荷。')))}</span></div>
       </div>`;
     }
     const ws = window.EU_VIZ_WORKSPACE;
@@ -2417,8 +2429,16 @@
         ? window.getDataMode()
         : (window.EU_DATA === 'real' ? 'real' : 'demo');
       const realMode = dataMode === 'real';
+      /* Every render branch below opens with this. Patient Review is a dense
+         workspace whose visible title lives in the card eyebrow and the loaded
+         bar, so the route heading is screen-reader-only — same treatment the
+         Guided fullscreen route uses. It is not decoration: app.js resolves
+         both the document title and the post-navigation focus target from the
+         route's h1, and without one this screen rendered with no heading of
+         any level at all. */
+      const patientHeading = `<h1 class="shell-sr-only" tabindex="-1">${t('Patient Review', '患者审阅')}</h1>`;
       if (patientView === 'loading') {
-        return `${guidedNote}<div class="card pad">${skeletonWorkspace(window.EU_DATA)}</div>`;
+        return `${patientHeading}${guidedNote}<div class="card pad">${skeletonWorkspace(window.EU_DATA)}</div>`;
       }
       if (patientView === 'loaded') {
         const drill = patientDrilldown();
@@ -2472,6 +2492,7 @@
           <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
         </div>` : '';
         return `
+        ${patientHeading}
         <div class="loaded-bar">
           <span class="pill ok"><span class="dot"></span>${t('Loaded', '已加载')}</span>
           <div class="grow"><span style="font-weight:600;font-size:13px;">${readyTitle}</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${readyStats}</span></div>
@@ -2484,9 +2505,9 @@
         <div id="ptbody">${patientTabBody()}</div>
         <div class="nextbar accent mt-16">
           <div class="nb-ico">${icon('arrow', 16)}</div>
-          <div class="grow"><div class="nb-t">${t('Reviewed the data — what\u2019s next?', '\u6570\u636e\u5df2\u5ba1\u9605 \u2014\u2014 \u4e0b\u4e00\u6b65\uff1f')}</div><div class="nb-d">${t('Compare groups in Cohort Statistics, or assemble an auditable analysis and review-ready draft in Agent Projects.', '\u5728\u300c\u961f\u5217\u7edf\u8ba1\u300d\u505a\u7ec4\u95f4\u5bf9\u6bd4\uff0c\u6216\u5728\u300c\u7814\u7a76\u9879\u76ee\u300d\u7ec4\u88c5\u53ef\u5ba1\u8ba1\u5206\u6790\u4e0e\u5f85\u6838\u9a8c\u8349\u7a3f\u3002')}</div></div>
+          <div class="grow"><div class="nb-t">${t('Reviewed the data — what\u2019s next?', '\u6570\u636e\u5df2\u5ba1\u9605 \u2014\u2014 \u4e0b\u4e00\u6b65\uff1f')}</div><div class="nb-d">${t('Compare groups in Cohort Statistics, or ask Guided Copilot to assemble an auditable analysis and review-ready draft.', '\u5728\u300c\u961f\u5217\u7edf\u8ba1\u300d\u505a\u7ec4\u95f4\u5bf9\u6bd4\uff0c\u6216\u8ba9\u300c\u7814\u7a76\u5f15\u5bfc\u300d\u7ec4\u88c5\u53ef\u5ba1\u8ba1\u5206\u6790\u4e0e\u5f85\u6838\u9a8c\u8349\u7a3f\u3002')}</div></div>
           <button class="btn" data-nav="cohort">${icon('cohort', 13)} ${t('Cohort Statistics', '\u961f\u5217\u7edf\u8ba1')}</button>
-          <button class="btn primary" data-study-handoff data-study-source="patient" data-study-target="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','\u8fdb\u5165\u7814\u7a76\u9879\u76ee')}</button>
+          <button class="btn primary" data-study-handoff data-study-source="patient" data-study-target="guided">${icon('agent', 13)} ${t('Continue in Guided Copilot','\u5728\u7814\u7a76\u5f15\u5bfc\u4e2d\u7ee7\u7eed')}</button>
         </div>`;
       }
       /* idle */
@@ -2495,12 +2516,16 @@
         ? demoSourceOwner.render({ t, esc })
         : `<div class="note warn"><div class="body"><div class="d">${t('Official demo-source controls are unavailable; the clinically constrained synthetic fallback remains usable.', '官方演示数据源控件暂不可用；仍可使用带临床约束的合成兜底。')}</div></div><button class="btn sm" data-gen>${t('Load synthetic fallback', '加载合成兜底')}</button></div>`;
       return `
+      ${patientHeading}
       ${guidedNote}
       <div class="card pad">
         <div class="panel-head">
           <div>
             <div class="eyebrow">${t('Patient Review', '患者审阅')}</div>
-            <div class="panel-title" style="margin-top:4px;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</div>
+            <!-- h2, not div: this is the section title under the route's h1.
+                 margin-bottom is zeroed because there is no global heading
+                 reset, and the UA default would otherwise add ~14px here. -->
+            <h2 class="panel-title" style="margin-top:4px;margin-bottom:0;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</h2>
             <div class="panel-sub">${realMode ? t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。') : t('Choose an official deidentified ICU demo, or use the offline synthetic fallback for interaction rehearsal only.', '选择官方去标识化 ICU 演示数据，或仅在离线界面演练时使用合成兜底。')}</div>
           </div>
         </div>
@@ -2726,7 +2751,7 @@
       'demo concept set': '演示概念集',
       'manifest parsed · denominators previewed · aggregate payload returned': 'manifest 已解析 · 分母已预览 · 聚合载荷已返回',
       'coverage + denominators ready': '覆盖率 + 分母已就绪',
-      'locked · requires Agent sign-off': '已锁定 · 需要 Agent 签署',
+      'locked · requires reviewer sign-off': '已锁定 · 需要审阅者签署',
       'Analysis table': '分析表',
       'Real cohort aggregate': '真实队列聚合',
       'Local export group contrast': '本地导出分组对照',
@@ -3326,15 +3351,33 @@
         yLabel: cohortText('Survival probability'),
         groupLabel: cohortText('Group'),
         eventsLabel: cohortText('events'),
+        censoredLabel: t('censored', '删失'),
         finalLabel: t('Final survival', '末次生存率'),
+        atRiskLabel: t('Number at risk', '风险人数'),
+        /* The backend declares the display window; passing it through is what
+           lets the number-at-risk columns line up with the axis ticks. */
+        horizon: curve.display_horizon_days,
+        /* Row labels go through cohortText like the group labels do, so the
+           risk table and the group rows key off the same translated string. */
+        atRisk: curve.number_at_risk
+          ? {
+            times: curve.number_at_risk.times || [],
+            rows: (curve.number_at_risk.rows || []).map(row => ({
+              label: cohortText(row.label),
+              values: row.values || [],
+            })),
+          }
+          : null,
         groups: (curve.groups || []).map(group => ({
           label: cohortText(group.label),
           n: fmtInt(group.n),
           events: fmtInt(group.events),
+          censored: group.censored == null ? null : fmtInt(group.censored),
           points: group.points || [],
+          censorMarks: group.censor_marks || [],
         })),
       })}
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, run this cohort in Agent Projects.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入「研究项目」运行分析。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, continue with this cohort in Guided Copilot.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入「研究引导」继续。')}</span></div>
     </div>`;
   }
 
@@ -4172,7 +4215,9 @@
     const cols = columns || [];
     const metrics = (rows || []).filter(r => (r.values || []).some(v => typeof v === 'number' && Number.isFinite(v)));
     if (!metrics.length || !cols.length) return '';
-    const colors = ['#0f766e', '#2563eb', '#8b5cf6', '#b45309'];
+    /* One palette, from the owner. This list used to put #2563eb beside
+       #8b5cf6 — the adjacency the shared palette was reordered to remove. */
+    const colors = window.EU_PALETTE.series();
     return `
       <div class="cgc">
         <div class="cgc-legend">${cols.map((c, i) => `<span><i style="background:${colors[i % colors.length]};"></i>${esc(cohortText(c))}</span>`).join('')}</div>
@@ -4187,7 +4232,7 @@
             </div>
           </div>`;
         }).join('')}
-        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Bars compare group summaries (medians / percentages) side by side — descriptive only, no statistical test. To test whether a difference is real, run this cohort in Agent Projects.', '条形图并排对比各组的汇总值（中位数 / 百分比）—— 仅为描述性对比，未做统计检验。想检验差异是否真实，请把该队列带入「研究项目」运行分析。')}</span></div>
+        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Bars compare group summaries (medians / percentages) side by side — descriptive only, no statistical test. To test a difference, continue with this cohort in Guided Copilot.', '条形图并排对比各组的汇总值（中位数 / 百分比）—— 仅为描述性对比，未做统计检验。想检验差异，请把该队列带入「研究引导」继续。')}</span></div>
       </div>`;
   }
 
@@ -4300,7 +4345,7 @@
           </tbody>
         </table>
       </div>
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to adjust for when you run the formal analysis in Agent Projects.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 在「研究项目」跑正式分析时需要校正它们。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 「研究引导」准备正式分析时需要处理它们。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Real local export summary. P-values and manuscript claims are intentionally withheld from this UI preview.', '真实本地导出摘要。此 UI 预览不会直接给出 p 值或稿件声明。')}</p>`;
     }
     const comparisons = {
@@ -4423,7 +4468,7 @@
           </tbody>
         </table>
       </div>
-      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to adjust for when you run the formal analysis in Agent Projects.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 在「研究项目」跑正式分析时需要校正它们。')}</span></div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to address when Guided Copilot prepares the formal analysis.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 「研究引导」准备正式分析时需要处理它们。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
   }
 
@@ -4710,7 +4755,7 @@
         ],
         [
           cohortText('Draft review'),
-          cohortText('locked · requires Agent sign-off'),
+          cohortText('locked · requires reviewer sign-off'),
           'warn',
           'agent',
         ],
@@ -4718,7 +4763,7 @@
       return head + `
       <div class="card" style="padding:0;overflow:hidden;">
         <div class="row" style="justify-content:space-between;padding:11px 16px;border-bottom:1px solid var(--hair);">
-          <span style="font-weight:600;font-size:12.5px;">${cohortText('Agent preflight')}</span>
+          <span style="font-weight:600;font-size:12.5px;">${cohortText('Analysis readiness')}</span>
           <span class="mono" style="font-size:11px;color:var(--ink-4);">${cohortText('current session')}</span>
         </div>
         <div class="preflight">
@@ -4728,7 +4773,7 @@
                 <span class="dot-${s}"></span>${tt}${nav ? `<span style="margin-left:auto;color:var(--ink-4);">${icon('arrow', 12)}</span>` : ''}
               </div>
               <div style="font-size:12.5px;color:var(--ink-2);margin-top:6px;">${d}</div>
-              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Agent for evidence-bound draft review.', '聚合载荷已就绪；打开 Agent 做证据绑定草稿核验。') : t('Demo review is local-only; open Agent only after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再打开 Agent。')}</div>` : ''}
+              ${nav ? `<div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${review ? t('Aggregate payload is ready; open Project Monitor for evidence-bound draft review.', '聚合载荷已就绪；打开项目监控做证据绑定草稿核验。') : t('Demo review is local-only; use Guided Copilot after choosing a real export.', '演示审阅仅限本地预览；选择真实导出后再使用研究引导。')}</div>` : ''}
             </div>`).join('')}
         </div>
       </div>
@@ -4737,9 +4782,9 @@
       <div id="cohbody">${cohortPanelBody()}</div>
       <div class="nextbar accent mt-16">
         <div class="nb-ico">${icon('arrow', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Compared the groups — what’s next?', '对比完组间差异 —— 下一步？')}</div><div class="nb-d">${t('Assemble an auditable analysis and a review-ready draft in Agent Projects, or benchmark the cohort across databases.', '在「研究项目」组装可审计分析与待核验草稿，或跨数据库对比队列。')}</div></div>
+        <div class="grow"><div class="nb-t">${t('Compared the groups — what’s next?', '对比完组间差异 —— 下一步？')}</div><div class="nb-d">${t('Ask Guided Copilot to assemble an auditable analysis and review-ready draft, or benchmark the cohort across databases.', '让「研究引导」组装可审计分析与待核验草稿，或跨数据库对比队列。')}</div></div>
         <button class="btn" data-nav="crossdb">${icon('benchmark', 13)} ${t('Cross-database comparison', '跨库对比')}</button>
-        <button class="btn primary" data-study-handoff data-study-source="cohort" data-study-target="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','进入研究项目')}</button>
+        <button class="btn primary" data-study-handoff data-study-source="cohort" data-study-target="guided">${icon('agent', 13)} ${t('Continue in Guided Copilot','在研究引导中继续')}</button>
       </div>`;
     },
   };

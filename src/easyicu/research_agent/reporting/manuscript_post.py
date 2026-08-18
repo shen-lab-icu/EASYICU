@@ -639,6 +639,10 @@ _NUMERIC_BIND_SKIP_CONTEXTS = (
 
 _SEMANTIC_HINTS = (
     (
+        (re.compile(r"\babsolute\s+risk\b", re.IGNORECASE),),
+        (re.compile(r"outcome_absolute_risks", re.IGNORECASE),),
+    ),
+    (
         (
             re.compile(r"\bodds\s+ratio\b", re.IGNORECASE),
             re.compile(r"\baOR\b"),

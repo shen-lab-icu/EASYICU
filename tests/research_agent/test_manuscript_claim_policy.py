@@ -96,6 +96,24 @@ def test_policy_preserves_provenance_metadata_with_evidence_token() -> None:
     assert result.filtered_sentences == ()
 
 
+def test_policy_ignores_numeric_literature_key_but_not_numeric_result() -> None:
+    context = (
+        "The declared clinical framework used an exact run-bound source "
+        "[@paper_2024]."
+    )
+    result = filter_evidence_bound_scaffold(context, resolve_claim=_resolver)
+    blocked = filter_evidence_bound_scaffold(
+        "Mortality was 20% [@paper_2024].",
+        resolve_claim=_resolver,
+    )
+
+    assert result.scaffold == context + "\n"
+    assert blocked.scaffold == "\n"
+    assert blocked.removed_result_sentences == (
+        "Mortality was 20% [@paper_2024].",
+    )
+
+
 def test_policy_preserves_scientific_noun_phrases_in_keyword_metadata() -> None:
     sentence = "Keywords: survival benefit, protective factors, ICU mortality"
 

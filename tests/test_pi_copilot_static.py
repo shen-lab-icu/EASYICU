@@ -20,10 +20,15 @@ NODE_APP = STATIC.parent / "pi_copilot" / "node_app"
 def _read(relative: str) -> str:
     return (STATIC / relative).read_text(encoding="utf-8")
 
+# The screen modules destructure `esc` from window.EU_HTML at the top of their
+# IIFE, so these Node harnesses have to install the shared escaping owner into
+# the stub window before evaluating a module — the same order index.html uses.
+_ESCAPE_OWNER = _read("js/html-escape.js")
+
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260812-natural-chat-artifacts1" in index
+    assert "css/guided-pi.css?v=20260817-visible-activity1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260811-research-docs1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
@@ -34,12 +39,17 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
     assert "js/screens-guided-pi-preview.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-replay.js?v=20260815-mode-resume1" in index
-    assert "js/screens-guided-pi.js?v=20260815-mode-history1" in index
+    assert "js/screens-guided-pi-activity.js?v=20260817-visible-activity2" in index
+    assert (
+        "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"
+        in index
+    )
+    assert "js/screens-guided-pi.js?v=20260817-visible-activity2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260815-mode-history1" in index
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -54,9 +64,37 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-preview.js"
     )
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
+        "js/screens-guided-pi-activity.js"
+    )
+    assert index.index("js/screens-guided-pi-activity.js") < index.index(
+        "js/screens-guided-pi-provider.js"
+    )
+    assert index.index("js/screens-guided-pi-provider.js") < index.index(
         "js/screens-guided-pi.js"
     )
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
+
+
+def test_get_requests_preserve_typed_backend_error_codes() -> None:
+    api_owner = _read("js/api.js")
+    get_json = api_owner.split("async function getJSON(path)", 1)[1].split(
+        "async function postJSON(path, body)", 1
+    )[0]
+
+    assert "payload && payload.detail" in get_json
+    assert "throw apiError(path, res, d)" in get_json
+
+
+def test_transient_codex_catalog_failure_preserves_last_verified_models() -> None:
+    pi_owner = _read("js/screens-guided-pi.js")
+    load_models = pi_owner.split("async function loadCodexModels", 1)[1].split(
+        "async function loadCodexResearchStatus", 1
+    )[0]
+    error_branch = load_models.split("} catch (error) {", 1)[1]
+
+    assert "state.codexModels = []" not in error_branch
+    assert "if (renderAfter) state.error = errorText(error)" in error_branch
+    assert "state.codexLogin = null; state.codexModels = []" in pi_owner
 
 
 def test_guided_project_refresh_continuity_has_a_small_dedicated_owner() -> None:
@@ -79,6 +117,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     guided = _read("js/screens-guided.js")
     projects_owner = _read("js/screens-guided-projects.js")
     pi_owner = _read("js/screens-guided-pi.js")
+    activity_owner = _read("js/screens-guided-pi-activity.js")
+    provider_owner = _read("js/screens-guided-pi-provider.js")
     api = _read("js/api.js")
     assert 'id="gdPiShell"' in guided
     assert 'id="gdLegacyShell"' in guided
@@ -127,16 +167,19 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'class="gd-rail"' in projects_owner
     assert 'class="gd-rail"' not in guided
     assert "guidedProjectRenderer('renderShellRail')" in guided
-    assert "data-gpi-provider-form" in pi_owner
-    assert "CLIProxyAPI / Local proxy" in pi_owner
-    assert "gpt-5.6-luna" in pi_owner
-    assert "gpt5.6 luna" not in pi_owner
-    assert "anthropic-messages" in pi_owner
-    assert "google-generative-ai" in pi_owner
+    assert "data-gpi-provider-form" in provider_owner
+    assert '<form class="gpi-provider-section"' not in pi_owner
+    assert "window.EU_GUIDED_PI_PROVIDER" in provider_owner
+    assert "CLIProxyAPI / Local proxy" in provider_owner
+    assert "gpt-5.6-luna" in provider_owner
+    assert "gpt5.6 luna" not in provider_owner
+    assert "anthropic-messages" in provider_owner
+    assert "google-generative-ai" in provider_owner
+    assert "data-ag-" not in provider_owner
     assert "static_preview_no_backend" in pi_owner
     assert "http://127.0.0.1:8765/#guided" in pi_owner
-    assert "gpi-model-options" in pi_owner
-    assert 'type="password"' in pi_owner
+    assert "gpi-model-options" in provider_owner
+    assert 'type="password"' in provider_owner
     assert "savePiCopilotProviderConfig" in pi_owner
     assert "provider_connection_unverified" in pi_owner
     assert "localStorage.setItem('easyicu_pi_api" not in pi_owner
@@ -165,24 +208,32 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "function reconcileSettledSession()" in pi_owner
     assert "state.session.streaming !== false" in pi_owner
     assert pi_owner.count("reconcileSettledSession();") == 2
-    assert (
-        "['submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction']"
-        in pi_owner
-    )
+    assert "const VISIBLE_KINDS = new Set([" in activity_owner
+    for kind in (
+        "'submitted'",
+        "'agent'",
+        "'turn'",
+        "'assistant'",
+        "'tool'",
+        "'pipeline'",
+        "'retry'",
+        "'compaction'",
+    ):
+        assert kind in activity_owner
     assert "Live progress connection stopped" in pi_owner
-    assert "private chain-of-thought" in pi_owner
+    assert "private chain-of-thought" in activity_owner
     assert "loadPiCopilotProjectWorkflow" in pi_owner
     assert "gpi-workflow" in pi_owner
     assert "Research workflow" in pi_owner
-    assert "Used ${toolSteps.length} EasyICU tools" in pi_owner
-    assert "gpi-activity-live" in pi_owner
-    assert "completedToolLabel" in pi_owner
+    assert "Used ${toolSteps.length} EasyICU tools" in activity_owner
+    assert "gpi-activity-live" in activity_owner
+    assert "completedToolLabel" in activity_owner
     assert "initializePiCopilotProject" in pi_owner
     assert "history-activity-" in pi_owner
     assert "closeHistoryActivity" in pi_owner
     assert "row.role === 'activity'" in pi_owner
     assert "gpi-avatar" not in pi_owner
-    assert "private chain-of-thought" in pi_owner
+    assert "private chain-of-thought" in activity_owner
     assert "assistantTextHtml" in pi_owner
     assert (
         "row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)"
@@ -191,11 +242,12 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
     assert "event.type === 'run_end'" in pi_owner
-    assert "workspace file contents may be sent to this configured service" in pi_owner
     assert (
-        "Do not place PHI, patient rows, credentials, or private clinical data"
-        in pi_owner
+        "workspace file contents may be sent to this service"
+        in provider_owner
     )
+    assert "PHI-safe summaries" in provider_owner
+    assert "patient rows, credentials, or arbitrary host files" in pi_owner
     assert "data-gpi-confirm-action" in pi_owner
     assert "data-gpi-demo" in pi_owner
     assert "data-gpi-demo-exit" in pi_owner
@@ -209,7 +261,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "重新生成计划" in pi_owner
     assert "operator_plan_approval_required" in pi_owner
     assert "hydrateProjectedJob" in pi_owner
-    assert "visibleSteps.length} steps" in pi_owner
+    assert "visibleSteps.length} steps" in activity_owner
     for method in (
         "loadPiCopilotStatus",
         "savePiCopilotProviderConfig",
@@ -313,6 +365,7 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert ".gpi-panel" in owner
     assert ".gpi-activity" in owner
     assert ".gpi-activity-live" in owner
+    assert ".gpi-activity-kicker" in owner
     assert ".gpi-activity-step-copy>span" in owner
     assert ".gpi-access-menu" in owner
     assert ".gpi-confirmation" in owner
@@ -414,6 +467,8 @@ def test_pi_frontend_javascript_parses() -> None:
     if node is None:
         pytest.skip("Node is not installed")
     for relative in (
+        "js/screens-guided-pi-activity.js",
+        "js/screens-guided-pi-provider.js",
         "js/screens-guided-pi.js",
         "js/screens-guided-pi-preview.js",
         "js/screens-guided-pi-workbench-preview.js",
@@ -430,8 +485,69 @@ def test_pi_frontend_javascript_parses() -> None:
         )
 
 
+def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    source = _read("js/screens-guided-pi-activity.js")
+    script = f"""
+      global.window = {{}};
+      eval({source!r});
+      const activity = window.EU_GUIDED_PI_ACTIVITY.create({{
+        tr: (en, _zh) => en,
+        esc: value => String(value == null ? '' : value),
+        iconHtml: () => '',
+        resourceName: resource => resource && resource.name || '',
+        resourceKey: resource => resource && resource.name || '',
+        resourceButton: (resource, label) => '<button>' + (label || resource.name) + '</button>',
+      }});
+      const html = activity.render({{
+        status: 'complete', expanded: true, startedAt: 1000, endedAt: 3500,
+        steps: [
+          {{kind: 'assistant', phase: 1, status: 'complete', startedAt: 1000, endedAt: 1500}},
+          {{
+            kind: 'tool', toolName: 'easyicu_read_project_file', status: 'complete',
+            startedAt: 1500, endedAt: 2500, resource: {{name: 'plan.json'}},
+            arguments: 'secret-token', reasoning: 'secret-thought',
+          }},
+          {{kind: 'retry', status: 'complete', label: 'Plan contract retry', startedAt: 2500, endedAt: 2500}},
+        ],
+      }});
+      process.stdout.write(JSON.stringify({{
+        activity: html.includes('Activity'),
+        expanded: html.includes(' open>'),
+        modelPhase: html.includes('Model analysis and response phase 1 finished'),
+        readTool: html.includes('Read project file · plan.json'),
+        retryLabel: html.includes('Plan contract retry') && !html.includes('undefined'),
+        stepDuration: html.includes('500 ms') && html.includes('1.0s'),
+        totalDuration: html.includes('2.5s'),
+        privacyNotice: html.includes('private chain-of-thought is never displayed'),
+        leaked: html.includes('secret-token') || html.includes('secret-thought'),
+      }}));
+    """
+    result = subprocess.run(
+        [node, "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "activity": True,
+        "expanded": True,
+        "modelPhase": True,
+        "readTool": True,
+        "retryLabel": True,
+        "stepDuration": True,
+        "totalDuration": True,
+        "privacyNotice": True,
+        "leaked": False,
+    }
+
+
 def test_pi_project_reopens_latest_session_and_replays_safe_lifecycle() -> None:
     owner = _read("js/screens-guided-pi.js")
+    activity_owner = _read("js/screens-guided-pi-activity.js")
     replay = _read("js/screens-guided-pi-replay.js")
     assert "state.session.active_message_job_id" in owner
     assert "watchJob(activeMessageJob)" in owner
@@ -448,10 +564,10 @@ def test_pi_project_reopens_latest_session_and_replays_safe_lifecycle() -> None:
     assert "childJobPresentation" in replay
     assert "Analysis plan ready for review" in replay
     assert "activity.displayTitle" in owner
-    assert "row.durationKnown === false" in owner
+    assert "row.durationKnown === false" in activity_owner
     assert "data-gpi-presentation-pin" in owner
     assert "pinPiCopilotPresentation" in owner
-    assert "private chain-of-thought" in owner
+    assert "private chain-of-thought" in activity_owner
 
 
 def test_pi_project_restore_does_not_let_an_empty_session_hide_history() -> None:
@@ -461,6 +577,7 @@ def test_pi_project_restore_does_not_let_an_empty_session_hide_history() -> None
     source = _read("js/screens-guided-pi-replay.js")
     script = f"""
       global.window = {{}};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const choose = window.EU_GUIDED_PI_REPLAY.preferredSessionId;
       const sessions = [
@@ -595,6 +712,7 @@ def test_reviewer_demo_contract_completes_all_stages_without_upgrading_authority
     source = _read("js/screens-guided-pi-demo.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const demo = window.EU_GUIDED_PI_DEMO;
       const workflow = demo.workflow();
@@ -634,6 +752,7 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
     source = _read("js/screens-guided-pi-demo.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const demo = window.EU_GUIDED_PI_DEMO;
       const messages = demo.messages();
@@ -762,6 +881,7 @@ def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures()
           '<img src="data:image/png;base64,CCCC">',
         ].join(''),
       }});
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       window.EU_GUIDED_PI_DEMO.previewArtifact('figure_gallery.json').then(item => {{
         console.log(JSON.stringify({{
@@ -849,6 +969,7 @@ def test_literature_renderer_escapes_metadata_and_rejects_unsafe_links() -> None
     source = _read("js/screens-guided-pi-literature.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const html = window.EU_GUIDED_PI_LITERATURE.renderArtifact({{
         search: {{ search_conducted: true }},
@@ -885,6 +1006,7 @@ def test_assistant_message_renderer_makes_https_citations_clickable_and_safe() -
     markdown = _read("js/screens-guided-pi-markdown.js")
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
+      eval({_ESCAPE_OWNER!r});
       eval({literature!r});
       eval({markdown!r});
       console.log(window.EU_GUIDED_PI_MARKDOWN.render(
@@ -956,6 +1078,7 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
         }},
       }};
       global.document = {{ getElementById() {{ return null; }} }};
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const host = {{
         hidden: false,

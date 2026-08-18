@@ -109,9 +109,16 @@
     { id: 'ideas', label: ['Ideas', '想法'], ico: 'target' },
     { id: 'extraction', label: ['Extract', '抽取'], ico: 'extract' },
     { id: 'patient', label: ['Review', '审阅'], ico: 'patient' },
-    { id: 'agent', label: ['Analyze', '分析'], ico: 'agent' },
+    { id: 'agent', label: ['Monitor', '监控'], ico: 'agent' },
   ];
   const L = (v) => Array.isArray(v) ? t(v[0], v[1]) : v;
+  /* A button's accessible name is its concatenated text content, so a title
+     span followed by a sublabel span was announced as one run-together string
+     ("Patient Reviewtables · trends · patients"). Rejoin them with a real
+     separator instead of hiding the sublabel — it carries information the
+     sighted user gets. The visible title stays first so voice control still
+     matches on it (WCAG 2.5.3 Label in Name). */
+  const navLabel = (label, sub) => `${L(label)} — ${L(sub)}`;
   const CRUMB_LABELS = {
     Home: ['Home', '首页'],
     'Get Started': ['Get Started', '快速上手'],
@@ -218,21 +225,24 @@
       || { started: false, stale: false, planOnly: false, stages: [], byId: {} };
 
     const rail = scr.rail ? scr.rail() : '';
+    const guidedSub = window.EU_HASWORK
+      ? t('continue the current workflow by chat', '用对话继续当前流程')
+      : t('plan a study by conversation', '用对话规划研究');
 
     return `
     <aside class="sidebar" aria-label="${t('Application sidebar', '应用侧边栏')}">
-      <button type="button" class="brand" data-nav="entry">
+      <button type="button" class="brand" data-nav="entry" aria-label="${navLabel('EasyICU', t('ICU Research Workspace', 'ICU 研究工作台'))}">
         <span class="mark">${icon('flask', 18)}</span>
         <span><span class="name">EasyICU</span><span class="tag">${t('ICU Research Workspace', 'ICU 研究工作台')}</span></span>
       </button>
       <nav class="shell-nav" aria-label="${t('Primary navigation', '主导航')}">
       ${navSection('discovery', 'Discovery & Plan', '发现与计划', progress)}
-      <button type="button" class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided">
+      <button type="button" class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided" aria-label="${navLabel(t('Guided Copilot', '研究引导'), guidedSub)}">
         <span class="cp-ico">${icon('spark', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Guided Copilot', '研究引导')}</span><span class="cp-d">${window.EU_HASWORK ? t('continue the current workflow by chat', '用对话继续当前流程') : t('plan a study by conversation', '用对话规划研究')}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('Guided Copilot', '研究引导')}</span><span class="cp-d">${guidedSub}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
-      <button type="button" class="cp-entry ideas-entry ${route === 'ideas' ? 'on' : ''}" data-nav="ideas">
+      <button type="button" class="cp-entry ideas-entry ${route === 'ideas' ? 'on' : ''}" data-nav="ideas" aria-label="${navLabel(t('Idea Mining', '想法挖掘'), t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划'))}">
         <span class="cp-ico">${icon('target', 16)}</span>
         <span class="cp-body"><span class="cp-t">${t('Idea Mining', '想法挖掘')}</span><span class="cp-d">${t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
@@ -255,16 +265,16 @@
           ${CLASSIC.map((c, i) => `
             ${c.role === 'reads' && CLASSIC[i - 1] && CLASSIC[i - 1].role === 'produces'
               ? `<div class="wsg-step">${t('then, from that export', '然后，基于该导出')}</div>` : ''}
-            <button type="button" class="wsitem ${route === c.id ? 'active' : ''} ws-${c.role}" data-nav="${c.id}">
+            <button type="button" class="wsitem ${route === c.id ? 'active' : ''} ws-${c.role}" data-nav="${c.id}" aria-label="${navLabel(c.label, c.sub)}">
               <span class="ico">${icon(c.ico, 15)}</span>
               <span class="wsi-copy"><span class="wsi-t">${L(c.label)}</span><span class="wsi-sub">${L(c.sub)}</span></span>
             </button>`).join('')}
         </div>` : ''}
       </div>
       ${navSection('analysis', 'Analysis & Evidence', '分析与证据', progress)}
-      <button type="button" class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent">
+      <button type="button" class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent" aria-label="${navLabel(t('Project Monitor', '项目监控'), t('runs · outputs · evidence · review', '运行 · 产出 · 证据 · 审阅'))}">
         <span class="cp-ico">${icon('agent', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Agent Projects', '研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-checked draft', '确认计划 → 证据核验草稿')}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('Project Monitor', '项目监控')}</span><span class="cp-d">${t('runs · outputs · evidence · review', '运行 · 产出 · 证据 · 审阅')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
       ${progress.planOnly ? `<div class="shared-note plan-only"><span class="ico">${icon('shield', 11)}</span><span>${t('Cross-DB comparison is plan-only: it can shape an analysis plan, but a reviewed cohort is still required before a draft.', '跨库对比仅用于制定计划：它可以塑造分析方案，但出草稿前仍需要一个已审阅的队列。')}</span></div>` : ''}

@@ -1380,6 +1380,195 @@ def test_e1_typed_distribution_without_authorized_contrast_fails_closed(ra):
     assert arbitrary_numeric.empty
 
 
+def test_counts_only_descriptive_bundle_is_promoted_without_invented_contrast(
+    ra,
+    tmp_path: Path,
+):
+    from PIL import Image
+
+    from easyicu.research_agent.contracts.figure_plan import (
+        EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
+    )
+    from easyicu.research_agent.planning.study_design import (
+        infer_study_design_family,
+    )
+
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    primary_step_id = "primary_exposure_outcome_distribution"
+    figure_step_id = "05_primary_result_figure"
+
+    distribution = tmp_path / "exposure_outcome_distribution.csv"
+    counts_only = _e1_typed_distribution_frame(
+        include_risk_difference=False
+    ).assign(
+        ci_low_pct=pd.NA,
+        ci_high_pct=pd.NA,
+    )
+    counts_only.to_csv(distribution, index=False)
+    evidence.register_file(
+        kind="table",
+        description="Counts-only E1 exposure/outcome distribution.",
+        source_path=distribution,
+        evidence_id="table_step_artifact_distribution",
+        produced_by_step=primary_step_id,
+        producer="runner",
+        generation_mode="deterministic_standard",
+    )
+
+    outputs = run_dir / "steps" / figure_step_id / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+    svg = outputs / "primary_result.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="340">'
+        '<rect width="720" height="340" fill="white"/>'
+        '<text x="20" y="30">Counts-only descriptive result</text>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    png = outputs / "primary_result.png"
+    Image.new("RGB", (720, 340), "white").save(png)
+    source = outputs / "primary_result_input_source_data.csv"
+    counts_only.to_csv(source, index=False)
+    templates = EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS
+    contract = make_figure_contract(
+        figure_id="figure:primary_result",
+        core_claim=(
+            "Exposure prevalence and observed outcome rates are reproduced "
+            "from one registered counts-only distribution table."
+        ),
+        panels=[
+            {
+                "panel_id": template.panel_id,
+                "title": (
+                    "Exposure distribution"
+                    if index == 0
+                    else "Outcome rate by exposure"
+                ),
+                "role": template.article_role,
+                "chart_type": template.chart_type,
+                "claim": "Observed counts and denominators are displayed.",
+                "evidence_ids": [source.name],
+            }
+            for index, template in enumerate(templates)
+        ],
+        source_data=[source.name],
+        statistics_note=(
+            "Counts and observed percentages only; no uncertainty or contrast "
+            "is computed."
+        ),
+    )
+    contract_path = outputs / "primary_result.figure_contract.json"
+    contract_path.write_text(contract.to_json(indent=2), encoding="utf-8")
+    metadata = {
+        "figure_role": "publication_figure",
+        "step_id": figure_step_id,
+    }
+    for path, kind, evidence_id in (
+        (svg, "figure", "figure_primary_result_svg"),
+        (png, "figure", "figure_primary_result_png"),
+        (contract_path, "log", "log_primary_result_contract"),
+        (source, "table", "table_primary_result_source"),
+    ):
+        evidence.register_file(
+            kind=kind,
+            description="Registered counts-only E1 result bundle.",
+            source_path=path,
+            evidence_id=evidence_id,
+            produced_by_step=figure_step_id,
+            producer="runner",
+            generation_mode="deterministic_standard",
+            metadata=metadata if kind != "table" else {"step_id": figure_step_id},
+        )
+
+    context = ra.ResearchContext(
+        research_question=(
+            "Describe exposure prevalence and observed outcome rates across "
+            "the declared exposure levels."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="MIMIC-IV ICU stays",
+            database="mimiciv",
+            n_patients=65_366,
+            n_stays=94_458,
+        ),
+        variables=[],
+        primary_exposure="sep3_sofa2_max",
+        target_outcome="death",
+    )
+    assert infer_study_design_family(context) == "descriptive"
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id=primary_step_id,
+                intent="Report the declared counts-only distribution.",
+                expected_outputs=["table:exposure_outcome_distribution"],
+                planned_analysis_role="primary",
+            ),
+            ra.AnalysisStep(
+                step_id=figure_step_id,
+                intent="Render the primary descriptive result.",
+                inputs=["table:exposure_outcome_distribution"],
+                expected_outputs=["figure:primary_result"],
+                planned_analysis_role="auxiliary",
+            ),
+        ],
+    )
+
+    from easyicu.research_agent.figures.skill import (
+        _PrimaryLineageEvidenceView,
+        _bundle_primary_strategy_ready,
+        _declared_primary_lineage_step_ids,
+        _select_existing_step_publication_figure_bundle,
+    )
+
+    lineage = _PrimaryLineageEvidenceView(
+        evidence,
+        _declared_primary_lineage_step_ids(plan),
+    )
+    bundle = _select_existing_step_publication_figure_bundle(lineage)
+    assert bundle is not None
+    assert _bundle_primary_strategy_ready(context, bundle), bundle[
+        "contract_payload"
+    ]
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    assert not (
+        run_dir
+        / "publication_figures"
+        / "publication_figure_source_primary_association.csv"
+    ).exists()
+    summary = json.loads(
+        (
+            run_dir
+            / "evidence"
+            / "publication_figure_skill_summary__publication_figure_skill_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert summary["generation_mode"] == "promoted_step_publication_figure"
+    promoted = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert [panel["role"] for panel in promoted["panels"]] == [
+        "distribution",
+        "descriptive_result",
+    ]
+    assert "no uncertainty or contrast is computed" in promoted["statistics_note"]
+
+
 def test_e1_typed_distribution_panel_b_uses_rate_ci_and_outcome_denominator(ra):
     from easyicu.research_agent.figures.skill import _draw_strata_panel
     from easyicu.research_agent.figures.strata import normalise_strata_frame

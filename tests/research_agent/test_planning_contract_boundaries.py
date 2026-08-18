@@ -399,3 +399,37 @@ def test_the_batch_runner_scopes_its_cohort_columns_rather_than_registering_them
         "the batch runner must not register cohort columns permanently; "
         "use cohort_concept_id_scope so each case validates against its own cohort"
     )
+
+
+def test_pipeline_scopes_run_concepts_while_revalidating_the_final_cohort() -> None:
+    import ast
+    from pathlib import Path
+
+    source = Path("src/easyicu/research_agent/pipeline.py").read_text()
+    tree = ast.parse(source)
+    pipeline = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ResearchAgentPipeline"
+    )
+    method = next(
+        node
+        for node in pipeline.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_validate_and_persist_plan"
+    )
+    scoped_calls = [
+        called.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.With)
+        and any(
+            isinstance(item.context_expr, ast.Call)
+            and isinstance(item.context_expr.func, ast.Name)
+            and item.context_expr.func.id == "cohort_concept_id_scope"
+            for item in node.items
+        )
+        for called in ast.walk(node)
+        if isinstance(called, ast.Call) and isinstance(called.func, ast.Name)
+    ]
+
+    assert "ensure_cohort_definition" in scoped_calls

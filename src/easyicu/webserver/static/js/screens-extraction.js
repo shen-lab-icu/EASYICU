@@ -104,7 +104,7 @@
                     ['ideas', 'target', t('I have a paper or topic', '我有文章或研究主题'), t('Mine a feasible question in Idea Mining', '在想法挖掘中形成可行问题'), 'ideas'],
                     ['extraction', 'extract', t('I have local ICU data', '我有本地 ICU 数据'), t('Validate and extract analysis-ready tables', '校验并抽取可分析数据表'), 'extraction'],
                     ['patient', 'viz', t('Patient Review', '患者审阅'), t('Review patients, tables, and trends from an export', '审阅导出中的患者、表格与趋势'), ''],
-                    ['agent', 'agent', t('Agent Projects', '研究项目'), t('Continue a confirmed plan with auditable runs', '用可审计运行继续已确认计划'), ''],
+                    ['agent', 'agent', t('Project Monitor', '项目监控'), t('Review runs, outputs, evidence, and sign-off', '查看运行、产出、证据与签署'), ''],
                   ].map(([nav, ic, ti, d, newStudy]) => `
                     <button type="button" class="col-entry" data-nav="${nav}" ${newStudy ? `data-home-new-study="${newStudy}"` : ''}>
                       <span class="ce-ico">${icon(ic, 15)}</span>
@@ -133,7 +133,7 @@
                 ['1', t('Frame', '框定'), t('the question', '研究问题'), 'guided'],
                 ['2', t('Extract', '抽取'), t('the data', '数据'), 'extraction'],
                 ['3', t('Review', '审阅'), t('& explore', '与探索'), 'patient'],
-                ['4', t('Analyze', '分析'), t('& draft', '与撰稿'), 'agent'],
+                ['4', t('Analyze', '分析'), t('& draft', '与撰稿'), 'guided'],
               ].map((n, i) => `
                 ${i > 0 ? '<div class="ej-conn"></div>' : ''}
                 <button type="button" class="ej-node" data-nav="${n[3]}" title="${t('Go to this step', '前往这一步')}"><div class="ej-num">${n[0]}</div><div><div class="ej-lab">${n[1]}</div><div class="ej-sub">${n[2]}</div></div></button>`).join('')}
@@ -216,7 +216,7 @@
             guided: t('Guided Copilot', '研究引导'), ideas: t('Idea Mining', '想法挖掘'),
             extraction: t('Data Extraction', '数据抽取'), patient: t('Patient Review', '患者审阅'),
             cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-database comparison', '跨库对比'),
-            agent: t('Agent Projects', '研究项目'),
+            agent: t('Project Monitor', '项目监控'),
           };
           const rawTime = usingContext ? Date.parse(activeContext.updated_at || '') : Number(legacyStudy.ts || 0);
           const when = (function (ts) { const d = Math.max(0, Math.round((Date.now() - (Number.isFinite(ts) && ts > 0 ? ts : Date.now())) / 60000)); return d < 1 ? t('just now', '刚刚') : d < 60 ? d + t('m ago', ' 分钟前') : Math.round(d / 60) + t('h ago', ' 小时前'); })(rawTime);
@@ -1801,7 +1801,7 @@
           : t('Seeded demo preview — no files were written to disk. The ledger below shows what a real run would produce; switch to Real to write an actual export.', '演示种子预览 —— 没有向磁盘写入任何文件。下方清单展示真实运行会产出什么；切换到真实模式才会写出实际导出。')}</div>
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
-          <button class="btn" data-study-handoff data-study-source="extraction" data-study-target="agent">${icon('agent', 14)} ${t('Hand off to Agent Projects', '交给研究项目')}</button>
+          <button class="btn" data-study-handoff data-study-source="extraction" data-study-target="guided">${icon('agent', 14)} ${t('Continue in Guided Copilot', '在研究引导中继续')}</button>
           <button class="btn ghost" data-ex-reset>${icon('refresh', 14)} ${t('Extract again', '重新抽取')}</button>
         </div>
       </div>

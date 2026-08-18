@@ -106,7 +106,7 @@
     },
     "webapp": {
       "install": "pip install easyicu[webapp]",
-      "packages": ["fastapi>=0.115", "uvicorn>=0.30", "psutil>=5.9", "openai>=1.0"]
+      "packages": ["fastapi>=0.115", "uvicorn>=0.30", "psutil>=5.9", "openai>=1.40.0"]
     },
     "all": {
       "install": "pip install pyricu[all]"

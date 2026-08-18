@@ -291,7 +291,7 @@ def test_development_write_accepts_audited_multi_image_lineage(tmp_path):
         lock_text=(
             "# runtime=docker\n"
             "# docker_image_id=sha256:old\n"
-            "# research_agent_source_sha256=old\n"
+            "# execution_kernel_source_sha256=old\n"
             "numpy==2.0.0\n"
         ),
         image_id="sha256:" + "a" * 64,
@@ -302,7 +302,7 @@ def test_development_write_accepts_audited_multi_image_lineage(tmp_path):
         lock_text=(
             "# runtime=docker\n"
             "# docker_image_id=sha256:new\n"
-            "# research_agent_source_sha256=new\n"
+            "# execution_kernel_source_sha256=new\n"
             "numpy==2.0.0\n"
         ),
         image_id="sha256:" + "b" * 64,

@@ -28,7 +28,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 from .catalog import (
     AvailableCatalog,
@@ -66,6 +66,10 @@ _SELECTION_SYSTEM = (
 )
 
 
+ConceptSelectionAuthority = Literal["agent_selectable", "host_exact"]
+_CONCEPT_SELECTION_AUTHORITIES = frozenset({"agent_selectable", "host_exact"})
+
+
 def _extract_json(raw: str) -> Optional[dict]:
     """Tolerant JSON extraction (fenced block or first {...} object)."""
     text = (raw or "").strip()
@@ -96,6 +100,7 @@ class ConceptSelection:
     coverage: Optional[CoverageReport] = None
     raw_response: str = ""
     selection_error: str = ""
+    selection_authority: ConceptSelectionAuthority = "agent_selectable"
 
     @property
     def selection_succeeded(self) -> bool:
@@ -110,6 +115,7 @@ class ConceptSelection:
             "coverage": self.coverage.to_dict() if self.coverage else None,
             "selection_succeeded": self.selection_succeeded,
             "selection_error": self.selection_error or None,
+            "selection_authority": self.selection_authority,
         }
 
 
@@ -309,6 +315,7 @@ def acquire_universe_for_question(
     required_feature_concepts: Sequence[str] = (),
     static_concepts: Sequence[str] = (),
     allowed_modules: Sequence[str] = (),
+    concept_selection_authority: ConceptSelectionAuthority = "agent_selectable",
     cohort_window: tuple = (0.0, 24.0),
     database: str = "miiv",
     require_outcome: bool = True,
@@ -343,10 +350,39 @@ def acquire_universe_for_question(
                 if Path(concept.file_name).stem.lower() in normalized_modules
             ],
         )
-    selection = DataFoundationAgent(llm).select_concepts(
-        question=question, catalog=catalog, target_outcome=target_outcome
-    )
-    sel_usage, sel_cost, sel_model = _selection_cost(llm)
+    if concept_selection_authority not in _CONCEPT_SELECTION_AUTHORITIES:
+        raise ValueError(
+            "concept_selection_authority must be agent_selectable or host_exact"
+        )
+    if concept_selection_authority == "host_exact":
+        # The caller has already compiled the exact exposure, outcome,
+        # adjustment, sensitivity, and structured cohort requirements.  Do not
+        # let a second model call silently widen that scientific universe.
+        selected = list(
+            dict.fromkeys(
+                [
+                    *static_concepts,
+                    *required_feature_concepts,
+                    *outcome_concepts,
+                ]
+            )
+        )
+        selection = ConceptSelection(
+            selected_concepts=selected,
+            rationale=(
+                "Host-compiled from the exact configured concept authority."
+            ),
+            coverage=assess_coverage(selected, catalog),
+            selection_authority="host_exact",
+        )
+        sel_usage = None
+        sel_cost = None
+        sel_model = None
+    else:
+        selection = DataFoundationAgent(llm).select_concepts(
+            question=question, catalog=catalog, target_outcome=target_outcome
+        )
+        sel_usage, sel_cost, sel_model = _selection_cost(llm)
     coverage = selection.coverage
     if not selection.selection_succeeded:
         return AcquisitionResult(
@@ -574,7 +610,7 @@ def acquire_universe_for_question(
     note = ""
     if not coverage.sufficient:
         note = (
-            "Some agent-requested concepts are not in the provided data; "
+            "Some selected concepts are not in the provided data; "
             "proceeding on the available subset. Advice: " + " ".join(coverage.advice)
         )
     return AcquisitionResult(

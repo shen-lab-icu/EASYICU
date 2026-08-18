@@ -3,12 +3,15 @@
    remain in their existing EasyICU owners. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
     source: null, childSource: null, childJobId: '', error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
+    researchProvider: 'codex', researchModel: '', codexAuth: null,
+    codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
     projectInitialization: null, workflow: null,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
@@ -21,11 +24,6 @@
   });
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
   function assistantTextHtml(value) {
     const renderer = window.EU_GUIDED_PI_MARKDOWN;
     return renderer && typeof renderer.render === 'function'
@@ -35,6 +33,27 @@
   function api() { return window.EU_API || {}; }
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
   function runtimeReady() { return !!(state.runtime && state.runtime.status === 'ready'); }
+  function shellReady() {
+    return !!(state.runtime && (state.runtime.shell_ready === true || state.runtime.status === 'ready'));
+  }
+  function apiResearchReady() {
+    const runtime = state.runtime || {};
+    const config = runtime.configuration || {};
+    return runtimeReady() && (config.api_transport || runtime.api_transport) === 'openai-completions';
+  }
+  function connectionConfigured() {
+    if (state.researchProvider !== 'codex') return apiResearchReady();
+    return !!(
+      state.runtime && state.runtime.status !== 'unavailable'
+      && state.codexAuth && state.codexAuth.authentication_verified
+      && state.researchModel
+    );
+  }
+  function connectionReady() {
+    return state.researchProvider === 'codex'
+      ? connectionConfigured() && shellReady()
+      : apiResearchReady();
+  }
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
   function agentMode() {
     return (state.session && state.session.agent_mode) || state.agentMode || 'research';
@@ -83,6 +102,12 @@
     if (error.code === 'pi_session_project_mismatch') {
       return tr('That Pi conversation belongs to another research project.', '该 Pi 对话属于另一个研究项目，不能在当前项目中打开。');
     }
+    if (error.code === 'codex_auth_login_required') {
+      return tr('Sign in with your ChatGPT account before starting this conversation.', '请先登录你的 ChatGPT 账户，再开始这段对话。');
+    }
+    if (error.code === 'codex_auth_model_unavailable') {
+      return tr('That model is no longer available for this Codex account. Refresh the account model list.', '该 Codex 账户已无法使用这个模型，请刷新账户模型列表。');
+    }
     if (isStaticPreview() && String(error.message || '').includes('Failed to fetch')) {
       return tr('This is a static preview without the EasyICU backend. Start EasyICU and open http://127.0.0.1:8765/#guided.', '这是不带 EasyICU 后端的静态预览。请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided。');
     }
@@ -95,6 +120,8 @@
     if (transport === 'anthropic-messages') return 'anthropic';
     if (transport === 'google-generative-ai') return 'google';
     if (base.includes('api.openai.com')) return 'openai';
+    if (base.includes('openrouter.ai')) return 'openrouter';
+    if (base.includes('api.deepseek.com')) return 'deepseek';
     if (base.includes('127.0.0.1:8317') || base.includes('localhost:8317')) return 'cliproxyapi';
     return 'custom-openai';
   }
@@ -106,64 +133,8 @@
     return !!(state.session && state.session.stale && state.session.stale.stale);
   }
 
-  function timeMs(value) {
-    const parsed = Date.parse(String(value || ''));
-    return Number.isFinite(parsed) ? parsed : Date.now();
-  }
-  function durationText(startedAt, endedAt) {
-    const elapsed = Math.max(0, Number(endedAt || Date.now()) - Number(startedAt || Date.now()));
-    if (elapsed < 1000) return `${elapsed} ms`;
-    const seconds = elapsed / 1000;
-    if (seconds < 60) {
-      const value = seconds < 10 ? seconds.toFixed(1) : Math.round(seconds);
-      return tr(`${value}s`, `${value} 秒`);
-    }
-    const minutes = Math.floor(seconds / 60);
-    const remainder = Math.round(seconds % 60);
-    return tr(
-      remainder ? `${minutes}m ${remainder}s` : `${minutes}m`,
-      remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分`,
-    );
-  }
   function iconHtml(name, size) {
     return typeof window.icon === 'function' ? window.icon(name, size || 16, 1.55) : '';
-  }
-  function toolIcon(name) {
-    const tool = String(name || '');
-    if (/preview/.test(tool)) return 'globe';
-    if (/read_project|write_project/.test(tool)) return 'file';
-    if (/edit_project/.test(tool)) return 'edit';
-    if (/check_project/.test(tool)) return 'check';
-    if (/list_project/.test(tool)) return 'folder';
-    if (/load_skill/.test(tool)) return 'wand';
-    if (/update|replan/.test(tool)) return 'edit';
-    if (/run$|extraction/.test(tool)) return 'play';
-    if (/resume/.test(tool)) return 'refresh';
-    if (/cancel/.test(tool)) return 'stop';
-    if (/literature|evidence|validation|blocker|interpretation/.test(tool)) return 'shield';
-    if (/workflow|manuscript|idea/.test(tool)) return 'list';
-    if (/artifact|plan|step/.test(tool)) return 'list';
-    if (/workspace|capability/.test(tool)) return 'db';
-    if (/context/.test(tool)) return 'file';
-    return 'spark';
-  }
-  function activityIcon(step) {
-    if (!step) return 'spark';
-    if (step.kind === 'submitted') return 'arrow';
-    if (step.kind === 'turn' || step.kind === 'retry') return 'refresh';
-    if (step.kind === 'assistant') return 'wand';
-    if (step.kind === 'tool') return toolIcon(step.toolName);
-    if (step.kind === 'pipeline') {
-      if (/artifact|report|manuscript/.test(step.step || '')) return 'file';
-      if (/gate|valid|audit|evidence/.test(step.step || '')) return 'shield';
-      if (/plan/.test(step.step || '')) return 'list';
-      return 'play';
-    }
-    if (step.kind === 'compaction') return 'layers';
-    if (step.kind === 'failed') return 'alert';
-    if (step.kind === 'cancelled') return 'stop';
-    if (step.kind === 'settled') return 'check';
-    return 'spark';
   }
   function resourceName(resource) {
     return resource && String(resource.label || resource.artifact || resource.file || '').trim();
@@ -209,89 +180,10 @@
       data-gpi-resource-revision="${esc(resource.study_revision == null ? '' : resource.study_revision)}"
       data-gpi-resource-digest="${esc(resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}">${esc(label || resourceLabel(resource))}</button>`;
   }
-  function toolLabel(name, resource) {
-    const labels = {
-      easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
-      easyicu_list_data_sources: tr('List registered data sources', '列出已登记数据源'),
-      easyicu_inspect_data_package: tr('Review data package', '审阅数据包'),
-      easyicu_inspect_workflow: tr('Inspect research workflow', '检查科研流程'),
-      easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
-      easyicu_inspect_plan: tr('Inspect scientific plan', '读取科学计划'),
-      easyicu_inspect_literature: tr('Inspect literature evidence', '读取文献证据'),
-      easyicu_inspect_capability: tr('Inspect capabilities', '检查可用能力'),
-      easyicu_inspect_run: tr('Inspect run status', '读取运行状态'),
-      easyicu_inspect_step: tr('Inspect plan step', '读取计划步骤'),
-      easyicu_inspect_validation: tr('Inspect validation', '读取验证状态'),
-      easyicu_list_artifacts: tr('List run artefacts', '列出运行产物'),
-      easyicu_inspect_evidence: tr('Inspect evidence', '读取证据状态'),
-      easyicu_explain_blocker: tr('Explain blocker', '解释阻断原因'),
-      easyicu_inspect_interpretation: tr('Interpret validated results', '解读已验证结果'),
-      easyicu_inspect_manuscript: tr('Inspect manuscript draft', '读取论文草稿'),
-      easyicu_update_study_context: tr('Save study setup', '保存研究配置'),
-      easyicu_mine_ideas: tr('Mine research ideas', '发掘研究想法'),
-      easyicu_search_literature: tr('Search PubMed literature', '检索 PubMed 文献'),
-      easyicu_prepare_idea_handoff: tr('Prepare idea plan', '准备想法计划'),
-      easyicu_accept_idea_handoff: tr('Accept selected idea', '接受所选想法'),
-      easyicu_start_extraction: tr('Start feature extraction', '启动特征提取'),
-      easyicu_run: tr('Start EasyICU run', '启动 EasyICU 运行'),
-      easyicu_resume: tr('Resume EasyICU work', '恢复 EasyICU 任务'),
-      easyicu_cancel: tr('Cancel EasyICU job', '取消 EasyICU 任务'),
-      easyicu_request_replan: tr('Request replan', '请求重新规划'),
-      easyicu_load_skill: tr('Load web-prototype skill', '加载网页原型技能'),
-      easyicu_list_extensions: tr('List frozen extensions', '列出固化扩展'),
-      easyicu_call_mcp_tool: tr('Call allowlisted MCP tool', '调用白名单 MCP 工具'),
-      easyicu_list_project_files: tr('List project files', '列出项目文件'),
-      easyicu_read_project_file: tr('Read project file', '读取项目文件'),
-      easyicu_write_project_file: tr('Write project file', '写入项目文件'),
-      easyicu_edit_project_file: tr('Edit project file', '编辑项目文件'),
-      easyicu_check_project_file: tr('Check project file', '检查项目文件'),
-      easyicu_preview_project_file: tr('Prepare web preview', '准备网页预览'),
-    };
-    const label = labels[String(name || '')] || String(name || tr('EasyICU tool', 'EasyICU 工具'));
-    const file = resourceName(resource);
-    return file ? `${label} · ${file}` : label;
-  }
-  function completedToolLabel(name, resource) {
-    const labels = {
-      easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
-      easyicu_list_data_sources: tr('Listed registered data sources', '已列出已登记数据源'),
-      easyicu_inspect_workflow: tr('Read research workflow', '已读取科研流程'),
-      easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
-      easyicu_inspect_plan: tr('Read scientific plan', '已读取科学计划'),
-      easyicu_inspect_literature: tr('Read literature evidence', '已读取文献证据'),
-      easyicu_inspect_capability: tr('Checked capabilities', '已检查可用能力'),
-      easyicu_inspect_run: tr('Read run status', '已读取运行状态'),
-      easyicu_inspect_step: tr('Read plan step', '已读取计划步骤'),
-      easyicu_inspect_validation: tr('Read validation', '已读取验证状态'),
-      easyicu_list_artifacts: tr('Listed run artefacts', '已列出运行产物'),
-      easyicu_inspect_evidence: tr('Read evidence', '已读取证据状态'),
-      easyicu_explain_blocker: tr('Read blocker details', '已读取阻断原因'),
-      easyicu_inspect_interpretation: tr('Organized evidence-bound interpretation', '已整理证据约束的结果解读'),
-      easyicu_inspect_manuscript: tr('Read manuscript draft', '已读取论文草稿'),
-      easyicu_update_study_context: tr('Saved study setup', '已保存研究配置'),
-      easyicu_mine_ideas: tr('Mined research ideas', '已发掘研究想法'),
-      easyicu_search_literature: tr('Searched PubMed literature', '已检索 PubMed 文献'),
-      easyicu_prepare_idea_handoff: tr('Prepared idea plan', '已准备想法计划'),
-      easyicu_accept_idea_handoff: tr('Accepted selected idea', '已接受所选想法'),
-      easyicu_start_extraction: tr('Started feature extraction', '已启动特征提取'),
-      easyicu_run: tr('Started EasyICU run', '已启动 EasyICU 运行'),
-      easyicu_resume: tr('Resumed EasyICU work', '已恢复 EasyICU 任务'),
-      easyicu_cancel: tr('Cancelled EasyICU job', '已取消 EasyICU 任务'),
-      easyicu_request_replan: tr('Requested replan', '已请求重新规划'),
-      easyicu_load_skill: tr('Loaded web-prototype skill', '已加载网页原型技能'),
-      easyicu_list_extensions: tr('Listed frozen extensions', '已列出固化扩展'),
-      easyicu_call_mcp_tool: tr('Called allowlisted MCP tool', '已调用白名单 MCP 工具'),
-      easyicu_list_project_files: tr('Listed project files', '已列出项目文件'),
-      easyicu_read_project_file: tr('Read project file', '已读取项目文件'),
-      easyicu_write_project_file: tr('Wrote project file', '已写入项目文件'),
-      easyicu_edit_project_file: tr('Edited project file', '已编辑项目文件'),
-      easyicu_check_project_file: tr('Checked project file', '已检查项目文件'),
-      easyicu_preview_project_file: tr('Prepared web preview', '已准备网页预览'),
-    };
-    const label = labels[String(name || '')] || tr(`Used ${toolLabel(name)}`, `已使用 ${toolLabel(name)}`);
-    const file = resourceName(resource);
-    return file ? `${label} · ${file}` : label;
-  }
+  const ACTIVITY = window.EU_GUIDED_PI_ACTIVITY.create({
+    tr, esc, iconHtml, resourceName, resourceKey, resourceButton,
+  });
+  const { timeMs } = ACTIVITY;
 
   function activeActivity() {
     return state.messages.slice().reverse().find(row => row.role === 'activity' && !row.childJobId && row.status === 'running');
@@ -300,7 +192,7 @@
     let row = activeActivity();
     if (!row) {
       const startedAt = timeMs(at);
-      row = { id: 'activity-' + startedAt, role: 'activity', status: 'running', startedAt, steps: [] };
+      row = { id: 'activity-' + startedAt, role: 'activity', status: 'running', startedAt, steps: [], expanded: true };
       state.messages.push(row);
     }
     return row;
@@ -316,7 +208,10 @@
     if (!activity) return;
     const endedAt = timeMs(at);
     activity.steps.forEach(step => {
-      if (step.status === 'running') step.status = status === 'complete' ? 'complete' : 'error';
+      if (step.status === 'running') {
+        step.status = status === 'complete' ? 'complete' : 'error';
+        step.endedAt = endedAt;
+      }
     });
     if (terminalKind) {
       upsertActivityStep(activity, {
@@ -326,31 +221,6 @@
     }
     activity.status = status;
     activity.endedAt = endedAt;
-  }
-
-  function activityStepLabel(step) {
-    const done = step.status === 'complete';
-    const failed = step.status === 'error';
-    if (step.kind === 'submitted') return tr('Message submitted to Pi AgentSession', '消息已提交给 Pi AgentSession');
-    if (step.kind === 'agent') return tr('Pi agent loop started', 'Pi Agent 循环已启动');
-    if (step.kind === 'turn') return done
-      ? tr(`Model turn ${step.turn + 1} finished`, `模型回合 ${step.turn + 1} 已结束`)
-      : tr(`Model turn ${step.turn + 1} is running`, `模型回合 ${step.turn + 1} 进行中`);
-    if (step.kind === 'assistant') return done
-      ? tr(`Response phase ${step.phase} finished`, `回复阶段 ${step.phase} 已结束`)
-      : tr(`Generating response phase ${step.phase}`, `正在生成回复阶段 ${step.phase}`);
-    if (step.kind === 'tool') return failed
-      ? tr(`${toolLabel(step.toolName, step.resource)} returned an error`, `${toolLabel(step.toolName, step.resource)} 返回错误`)
-      : done
-        ? completedToolLabel(step.toolName, step.resource)
-        : tr(`Calling ${toolLabel(step.toolName, step.resource)}`, `正在调用 ${toolLabel(step.toolName, step.resource)}`);
-    if (step.kind === 'pipeline') return String(step.label || tr('EasyICU research pipeline updated', 'EasyICU 科研流程已更新'));
-    if (step.kind === 'retry') return tr(`Retrying (${step.attempt}/${step.maxAttempts})`, `正在重试（${step.attempt}/${step.maxAttempts}）`);
-    if (step.kind === 'compaction') return done ? tr('Context compaction finished', '上下文整理已完成') : tr('Compacting context', '正在整理上下文');
-    if (step.kind === 'cancelled') return tr('This turn was stopped', '本轮已停止');
-    if (step.kind === 'failed') return tr('This turn failed', '本轮失败');
-    if (step.kind === 'settled') return tr('This turn completed', '本轮已完成');
-    return tr('Agent activity updated', 'Agent 状态已更新');
   }
 
   function transcriptMessages(session) {
@@ -457,34 +327,40 @@
       replay.forEach(event => {
         const at = timeMs(event && event.at);
         if (event.type === 'run_start') upsertActivityStep(replayActivity, { id: 'agent', kind: 'agent', status: 'complete', at });
-        else if (event.type === 'turn_start') upsertActivityStep(replayActivity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at });
+        else if (event.type === 'turn_start') upsertActivityStep(replayActivity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at, startedAt: at });
         else if (event.type === 'turn_end') {
           const turn = replayActivity.steps.find(item => item.id === 'turn-' + event.turn_index);
-          if (turn) turn.status = 'complete';
+          if (turn) { turn.status = 'complete'; turn.endedAt = at; }
         } else if (event.type === 'assistant_start') {
           const phase = replayActivity.steps.filter(item => item.kind === 'assistant').length + 1;
-          upsertActivityStep(replayActivity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at });
+          upsertActivityStep(replayActivity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at, startedAt: at });
         } else if (event.type === 'message_end') {
           const phase = replayActivity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
-          if (phase) phase.status = event.error_code ? 'error' : 'complete';
+          if (phase) { phase.status = event.error_code ? 'error' : 'complete'; phase.endedAt = at; }
         } else if (event.type === 'tool_start' || event.type === 'tool_progress') {
           upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at, resource: event.resource || null });
         } else if (event.type === 'tool_end') {
           upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', jobId: event.job_id || '', at, endedAt: at, resource: event.resource || null, resources: Array.isArray(event.resources) ? event.resources : [] });
-        } else if (event.type === 'retry') upsertActivityStep(replayActivity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'complete', attempt: event.attempt, maxAttempts: event.max_attempts, at });
-        else if (event.type === 'compaction_start' || event.type === 'compaction_end') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: event.type === 'compaction_end' && !event.aborted ? 'complete' : 'running', at });
+        } else if (event.type === 'retry') upsertActivityStep(replayActivity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'complete', attempt: event.attempt, maxAttempts: event.max_attempts, at, startedAt: at, endedAt: at });
+        else if (event.type === 'compaction_start') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: 'running', at, startedAt: at });
+        else if (event.type === 'compaction_end') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at, endedAt: at });
       });
-      replayActivity.steps.forEach(step => { if (step.status === 'running' && replayActivity.status !== 'running') step.status = replayActivity.status === 'complete' ? 'complete' : 'error'; });
+      replayActivity.steps.forEach(step => {
+        if (step.status === 'running' && replayActivity.status !== 'running') {
+          step.status = replayActivity.status === 'complete' ? 'complete' : 'error';
+          step.endedAt = replayActivity.endedAt;
+        }
+      });
       if (isNewReplayActivity && replayActivity.steps.length) messages.push(replayActivity);
     });
-    return messages.filter(row => row.text || row.role === 'activity');
+    return ACTIVITY.focusLatest(messages.filter(row => row.text || row.role === 'activity'));
   }
 
   function statusBanner() {
     if (state.loading) {
       return `<div class="gpi-inline"><span class="gpi-dot waiting"></span>${tr('Checking Pi Copilot…', '正在检查 Pi Copilot…')}</div>`;
     }
-    if (!runtimeReady()) {
+    if (!connectionReady()) {
       const blockers = (state.runtime && state.runtime.blockers) || [];
       const reason = blockers.includes('api_key_configured')
         ? tr('Connect and verify your model service before entering Pi Copilot.', '请先连接并验证模型服务，再进入 Pi Copilot。')
@@ -505,44 +381,27 @@
     const runtime = state.runtime || {};
     const config = runtime.configuration || {};
     const blockers = runtime.blockers || [];
-    const runtimeMissing = blockers.filter(code => [
-      'node_available', 'node_version_supported', 'entrypoint_available',
-      'dependency_installed', 'lockfile_present', 'base_url_configured',
-    ].includes(code));
-    const savedCredential = !!config.credential_present;
-    const canCancel = runtimeReady();
-    const staticPreview = isStaticPreview();
-    const preset = providerPreset(config, runtime);
-    const transport = config.api_transport || runtime.api_transport || 'openai-completions';
-    const discovered = state.availableModels.map(model => `<option value="${esc(model)}"></option>`).join('');
-    return `
-      <div class="gpi-setup-wrap">
-        <form class="gpi-setup" data-gpi-provider-form autocomplete="off">
-          <div class="gpi-kicker">PI COPILOT · FIRST-USE SETUP</div>
-          <h2>${tr('Connect your model service', '连接你的模型服务')}</h2>
-          <p>${tr('Like signing in to Codex or Claude Code, this one-time check must succeed before the conversation opens. The API credential is saved only in EasyICU’s private local credential file and is never returned to this page.', '就像登录 Codex 或 Claude Code 一样，只有这次连接验证成功后才会开放对话。API 凭据只保存在 EasyICU 本机私有凭据文件中，不会回传到页面。')}</p>
-          <div class="gpi-setup-grid">
-            <label><span>${tr('Service type', '服务类型')}</span><select data-gpi-provider-preset>${option('cliproxyapi', preset, 'CLIProxyAPI / Local proxy')}${option('custom-openai', preset, 'OpenAI-compatible gateway')}${option('openai', preset, 'OpenAI API')}${option('anthropic', preset, 'Anthropic API')}${option('google', preset, 'Google Gemini API')}</select></label>
-            <label><span>${tr('Provider ID', '提供方标识')}</span><input name="provider" maxlength="80" value="${esc(config.provider || runtime.provider || 'easyicu-local')}" required></label>
-            <label class="wide"><span>${tr('Service address', '服务地址')}</span><input name="base_url" maxlength="2048" value="${esc(config.base_url || 'http://127.0.0.1:8317/v1')}" inputmode="url" spellcheck="false" required></label>
-            <label><span>${tr('Compatibility protocol', '兼容协议')}</span><select name="api_transport">${option('openai-completions', transport, 'OpenAI Chat Completions')}${option('openai-responses', transport, 'OpenAI Responses')}${option('anthropic-messages', transport, 'Anthropic Messages')}${option('google-generative-ai', transport, 'Google Generative AI')}</select></label>
-            <label><span>${tr('Model', '模型')}</span><input name="model" list="gpi-model-options" maxlength="256" value="${esc(config.model || runtime.model || 'gpt-5.6-luna')}" spellcheck="false" required><datalist id="gpi-model-options">${discovered}</datalist></label>
-            <label><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Re-enter to verify or replace', '重新输入以验证或更换') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}" required></label>
-          </div>
-          <div class="gpi-config-note">${tr('Pi supports many provider brands. Service type selects the provider; compatibility protocol selects its wire API. For CLIProxyAPI on port 8317, use OpenAI Chat Completions.', 'Pi 支持很多模型提供方。“服务类型”表示接入对象，“兼容协议”表示实际通信格式；CLIProxyAPI 的 8317 端口请选择 OpenAI Chat Completions。')}</div>
-          ${state.availableModels.length ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Models reported by this service:', '该服务返回的可用模型：')} ${esc(state.availableModels.slice(0, 12).join(', '))}</div>` : ''}
-          ${savedCredential ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('A private credential is saved, but a newly entered credential is still required to verify or change this connection.', '本机已有私有凭据；为验证或更换连接，仍需重新输入一次凭据。')}</div>` : ''}
-          ${runtimeMissing.length ? `<div class="gpi-config-note warn">${tr('The Pi runtime also needs attention before chat can open:', '聊天开放前还需要处理 Pi 运行环境：')} ${esc(runtimeMissing.join(', '))}</div>` : ''}
-          ${staticPreview ? `<div class="gpi-config-note warn"><strong>${tr('Static preview only.', '当前只是静态预览。')}</strong>&nbsp;${tr('Start EasyICU, then open http://127.0.0.1:8765/#guided. This file:// page cannot verify any credential.', '请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided；当前 file:// 页面无法验证任何凭据。')}</div>` : ''}
-          <label class="gpi-optin"><input name="enable_ai" type="checkbox" required> <span>${tr('I authorize this verification request and external AI use for Pi Copilot. Chat text, PHI-safe summaries, and workspace file contents may be sent to this configured service. Do not place PHI, patient rows, credentials, or private clinical data in the workspace.', '我授权本次连接验证，并允许 Pi Copilot 使用外部 AI；对话文字、经 PHI 安全投影的摘要和工作区文件内容可能发送到所配置的服务。请勿在工作区放置 PHI、患者行级数据、凭据或私密临床数据。')}</span></label>
-          ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}
-          <div class="gpi-setup-actions">
-            ${canCancel ? `<button class="btn" type="button" data-gpi-cancel-setup>${tr('Back to conversation', '返回对话')}</button>` : `<button class="gpi-link" type="button" data-gpi-legacy>${tr('Use local Guided workflow', '使用本地研究引导流程')}</button>`}
-            <button class="btn primary" type="submit" ${state.setupSaving || staticPreview ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify and enter Copilot', '验证并进入 Copilot')}</button>
-          </div>
-          <div class="gpi-consent">${tr('Verification calls only the service model-list endpoint. The credential is never written to project files, browser storage, logs, or Pi session history.', '验证仅调用服务的模型列表接口。凭据不会写入项目文件、浏览器存储、日志或 Pi 会话历史。')}</div>
-        </form>
-      </div>`;
+    /* screens-guided-pi-blockers.js owns which codes are runtime problems,
+       what each one means in plain language, and what fixes it. This file
+       only lays the result out. */
+    const runtimeMissing = window.EU_PI_BLOCKERS
+      ? window.EU_PI_BLOCKERS.describe(blockers, runtime)
+      : [];
+    const owner = window.EU_GUIDED_PI_PROVIDER;
+    if (!owner || typeof owner.renderSetup !== 'function') return '';
+    return owner.renderSetup({
+      state, runtime, config, blockers, runtimeMissing, tr, esc, option,
+      providerPreset, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(),
+      connectionConfigured: connectionConfigured(), connectionReady: connectionReady(),
+      staticPreview: isStaticPreview(),
+    });
+  }
+
+  function providerBindingSummary() {
+    const owner = window.EU_GUIDED_PI_PROVIDER;
+    return owner && typeof owner.renderBindingSummary === 'function'
+      ? owner.renderBindingSummary({ state, tr, esc, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(), connectionReady: connectionReady() })
+      : '';
   }
 
   function activatePanel() {
@@ -556,6 +415,7 @@
         <div class="gpi-kicker">PI AGENTSESSION · EASYICU GATEWAY</div>
         <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
         <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
+        ${providerBindingSummary()}
         <button class="btn gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('View the complete research workflow demo', '查看完整科研流程演示')}</button>
         ${state.projectInitialization && state.projectInitialization.required ? `<div class="gpi-config-note warn"><strong>${tr('Study setup confirmation required.', '需要确认研究配置初始化。')}</strong> ${tr('No complete saved setup was found. Activating Pi will create an explicitly acknowledged empty StudyContext and collect the missing fields here in conversation.', '未找到完整的已保存配置。启用 Pi 后会在你明确确认下创建空的 StudyContext，并在当前对话中继续收集缺失字段。')}</div>` : ''}
         <p>${tr('Choose the tool boundary for this conversation. Research mode works with study configuration and evidence; Workspace mode also creates, edits, checks, and previews artifacts inside this project’s isolated folder.', '请选择这段对话的工具边界。研究模式处理研究配置与证据；项目工作区模式还可以在当前项目的隔离目录中创建、编辑、检查并预览产物。')}</p>
@@ -587,72 +447,8 @@
       </div>`;
   }
 
-  function activityStepPrimary(step) {
-    const label = activityStepLabel(step);
-    if (!step.resource) return `<strong>${esc(label)}</strong>`;
-    return resourceButton(step.resource, label);
-  }
-  function activityStepResources(step) {
-    const primary = resourceKey(step.resource);
-    const resources = (Array.isArray(step.resources) ? step.resources : [])
-      .filter(resource => resourceKey(resource) && resourceKey(resource) !== primary);
-    if (!resources.length) return '';
-    return `<div class="gpi-resource-list" aria-label="${tr('Run artifacts', '运行产物')}">${resources.map(resource => resourceButton(resource)).join('')}</div>`;
-  }
-  function activityStepRow(step) {
-    return `<li class="${esc(step.status || 'complete')}">
-      <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
-      <span class="gpi-activity-step-copy">${activityStepPrimary(step)}${step.text ? `<span>${esc(step.text)}</span>` : ''}${activityStepResources(step)}${step.code ? `<small>${esc([step.code, step.owner].filter(Boolean).join(' · '))}</small>` : ''}</span>
-      <span class="gpi-status-pip" aria-hidden="true"></span>
-    </li>`;
-  }
-
   function messageHtml(row) {
-    if (row.role === 'activity') {
-      const visibleSteps = row.steps.filter(step => ['submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction'].includes(step.kind));
-      const latest = visibleSteps[visibleSteps.length - 1] || row.steps[row.steps.length - 1];
-      const running = row.status === 'running';
-      const failed = row.status === 'error' || row.status === 'cancelled';
-      if (running) {
-        const title = latest && latest.kind !== 'submitted'
-          ? activityStepLabel(latest)
-          : tr('Pi is preparing the next action', 'Pi 正在准备下一步');
-        const liveSteps = visibleSteps.slice(-20);
-        return `<div class="gpi-activity-running" role="status">
-          <div class="gpi-activity-live">
-            <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
-            <span class="gpi-activity-title">${esc(title)}</span>
-            <span class="gpi-status-pip" aria-hidden="true"></span>
-          </div>
-          ${liveSteps.length ? `<ol>${liveSteps.map(activityStepRow).join('')}</ol>` : ''}
-        </div>`;
-      }
-      const toolSteps = visibleSteps.filter(step => step.kind === 'tool');
-      const pipelineSteps = visibleSteps.filter(step => step.kind === 'pipeline');
-      const completedTitle = row.displayTitle || (row.childJobId
-        ? tr('EasyICU research task finished', 'EasyICU 科研任务已结束')
-        : toolSteps.length === 1
-        ? activityStepLabel(toolSteps[0])
-        : toolSteps.length === 2
-          ? toolSteps.map(step => completedToolLabel(step.toolName, step.resource)).join(tr(' and ', '、'))
-          : toolSteps.length > 2
-            ? tr(`Used ${toolSteps.length} EasyICU tools`, `已使用 ${toolSteps.length} 个 EasyICU 工具`)
-            : tr('Answered without using tools', '仅回答，未执行操作'));
-      const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
-      const steps = visibleSteps.map(activityStepRow).join('');
-      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${failed || row.expanded ? 'open' : ''}>
-        <summary>
-          <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || pipelineSteps[0] || latest), 15)}</span>
-          <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
-          <span class="gpi-activity-title">${esc(title)}</span>
-          <span class="gpi-activity-meta">${esc(tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`))}${row.durationKnown === false ? '' : ` · ${esc(durationText(row.startedAt, row.endedAt))}`}</span>
-        </summary>
-        <div class="gpi-activity-body">
-          ${steps ? `<ol>${steps}</ol>` : ''}
-          <p>${tr('Lifecycle facts and EasyICU receipts only — private chain-of-thought is never displayed.', '这里只显示生命周期事实和 EasyICU 回执，不展示模型的私有思维链。')}</p>
-        </div>
-      </details>`;
-    }
+    if (row.role === 'activity') return ACTIVITY.render(row);
     const cls = row.role === 'user' ? 'user' : 'assistant';
     const preferredArtifacts = [
       'system_validation_report.html', 'system_validation_report.pdf',
@@ -834,6 +630,8 @@
   function sessionPanel() {
     const session = state.session || {};
     const model = session.model || {};
+    const research = session.research_provider || {};
+    const connection = session.model_connection || null;
     const messages = state.messages.map(messageHtml).join('');
     const stale = sessionIsStale();
     const workspace = agentMode() === 'workspace';
@@ -846,7 +644,9 @@
               <button type="button" data-gpi-mode-switch="research" aria-pressed="${!workspace}">${tr('Research', '研究')}</button>
               <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${workspace}">${tr('Workspace', '工作区')}</button>
             </div>
-            <span>${esc(model.id || (state.runtime && state.runtime.model) || 'model')}</span>
+            ${connection
+              ? `<span title="${tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')}">${esc([connection.provider, connection.model].filter(Boolean).join(' · ') || 'model')}</span>`
+              : `<span title="${tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定')}">${esc([model.id || (state.runtime && state.runtime.model), research.provider, research.model].filter(Boolean).join(' / ') || 'legacy model binding')}</span>`}
             <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Full demo', '完整演示')}</button>
             <button class="gpi-link" type="button" data-gpi-presentation-pin aria-pressed="${session.pinned_for_presentation ? 'true' : 'false'}">${session.pinned_for_presentation ? tr('Saved for presentation', '已保留演示') : tr('Save for presentation', '保留演示')}</button>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
@@ -1001,7 +801,7 @@
     state.host.hidden = false;
     state.host.innerHTML = state.shell === 'legacy'
       ? statusBanner()
-      : (state.demoMode ? demoPanel() : ((state.showSetup || !runtimeReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))));
+      : (state.demoMode ? demoPanel() : ((state.showSetup || !connectionReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))));
     syncProjectWorkflowAside();
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
@@ -1021,10 +821,11 @@
     try {
       const payload = await api().loadPiCopilotStatus();
       state.runtime = payload && payload.runtime;
+      await loadCodexResearchStatus(false);
       if (projectId()) {
         await prepareProject();
       }
-      if (!runtimeReady()) {
+      if (!connectionReady()) {
         state.showSetup = true;
       }
     } catch (error) {
@@ -1033,6 +834,110 @@
     } finally {
       state.loading = false; render();
     }
+  }
+
+  function stopCodexPoll() {
+    if (state.codexPoll) window.clearTimeout(state.codexPoll);
+    state.codexPoll = null;
+  }
+
+  async function loadCodexModels(renderAfter) {
+    if (!api().loadPiCopilotCodexModels) return;
+    try {
+      const payload = await api().loadPiCopilotCodexModels();
+      state.codexModels = Array.isArray(payload && payload.models) ? payload.models : [];
+      if (!state.researchModel || !state.codexModels.some(row => row.id === state.researchModel)) {
+        const preferred = state.codexModels.find(row => row.is_default) || state.codexModels[0];
+        state.researchModel = preferred ? String(preferred.id || '') : '';
+      }
+    } catch (error) {
+      // Keep the last catalog that was successfully verified for this
+      // browser-owned runtime. A transient account/catalog probe must not
+      // erase the user's model choice; logout clears it explicitly.
+      if (renderAfter) state.error = errorText(error);
+    }
+    if (renderAfter) render();
+  }
+
+  async function loadCodexResearchStatus(renderAfter) {
+    if (!api().loadPiCopilotCodexStatus) return;
+    try {
+      const payload = await api().loadPiCopilotCodexStatus();
+      state.codexAuth = payload && payload.auth ? payload.auth : null;
+      if (state.codexAuth && state.codexAuth.authentication_verified) {
+        stopCodexPoll();
+        state.codexLogin = null;
+        await loadCodexModels(false);
+      } else if (state.codexAuth && state.codexAuth.account_session_status === 'codex_auth_login_pending') {
+        stopCodexPoll();
+        state.codexPoll = window.setTimeout(() => loadCodexResearchStatus(true), 1500);
+      }
+    } catch (error) {
+      state.codexAuth = null;
+      if (renderAfter) state.error = errorText(error);
+    }
+    if (renderAfter) render();
+  }
+
+  async function startCodexLogin(flow, popup) {
+    if (state.codexBusy || !api().startPiCopilotCodexLogin) return;
+    state.codexBusy = true; state.error = ''; render();
+    try {
+      if (api().saveSetting) await api().saveSetting('ai_enabled', true);
+      const runtimePayload = await api().loadPiCopilotStatus();
+      state.runtime = runtimePayload && runtimePayload.runtime;
+      const payload = await api().startPiCopilotCodexLogin(flow || 'browser');
+      state.codexAuth = payload && payload.auth ? payload.auth : state.codexAuth;
+      state.codexLogin = payload && payload.login_started ? {
+        auth_url: payload.auth_url || payload.verification_url || '',
+        user_code: payload.user_code || '',
+      } : null;
+      const authUrl = String((payload && (payload.auth_url || payload.verification_url)) || '');
+      if (authUrl) {
+        if (popup && !popup.closed) popup.location.href = authUrl;
+        else window.open(authUrl, '_blank', 'noopener,noreferrer');
+      } else if (popup && !popup.closed) {
+        popup.close();
+      }
+      await loadCodexResearchStatus(false);
+    } catch (error) {
+      if (popup && !popup.closed) popup.close();
+      state.error = errorText(error);
+    } finally {
+      state.codexBusy = false; render();
+    }
+  }
+
+  function openAuthorizationPopup() {
+    const popup = window.open('about:blank', '_blank');
+    if (popup) {
+      try { popup.opener = null; } catch (error) {}
+    }
+    return popup;
+  }
+
+  async function cancelCodexLogin() {
+    if (state.codexBusy || !api().cancelPiCopilotCodexLogin) return;
+    state.codexBusy = true; state.error = ''; render();
+    try {
+      const payload = await api().cancelPiCopilotCodexLogin();
+      stopCodexPoll();
+      state.codexAuth = payload && payload.auth ? payload.auth : null;
+      state.codexLogin = null;
+    } catch (error) { state.error = errorText(error); }
+    finally { state.codexBusy = false; render(); }
+  }
+
+  async function logoutCodex() {
+    if (state.codexBusy || !api().logoutPiCopilotCodex) return;
+    state.codexBusy = true; state.error = ''; render();
+    try {
+      const payload = await api().logoutPiCopilotCodex();
+      stopCodexPoll();
+      state.codexAuth = payload && payload.auth ? payload.auth : null;
+      state.codexLogin = null; state.codexModels = []; state.researchModel = '';
+    } catch (error) { state.error = errorText(error); }
+    finally { state.codexBusy = false; render(); }
   }
 
   async function configureProvider(form) {
@@ -1058,11 +963,7 @@
         state.error = tr('The model connection was saved, but the Pi runtime is not ready yet.', '模型连接已保存，但 Pi 运行环境尚未就绪。');
         return;
       }
-      state.showSetup = false;
-      if (projectId()) {
-        await prepareProject();
-        await createSession();
-      }
+      state.error = '';
     } catch (error) {
       state.availableModels = Array.isArray(error && error.details && error.details.available_models)
         ? error.details.available_models.map(String) : [];
@@ -1072,8 +973,43 @@
     }
   }
 
+  async function finishProviderSetup() {
+    if (!connectionConfigured()) return;
+    state.setupSaving = true; state.error = ''; render();
+    try {
+      if (!shellReady() && api().saveSetting) {
+        await api().saveSetting('ai_enabled', true);
+        const payload = await api().loadPiCopilotStatus();
+        state.runtime = payload && payload.runtime;
+      }
+      if (!connectionReady()) {
+        throw new Error(tr('The selected model connection is not ready yet.', '所选模型连接尚未就绪。'));
+      }
+      state.showSetup = false;
+    } catch (error) {
+      state.error = errorText(error);
+    } finally {
+      state.setupSaving = false; render();
+    }
+  }
+
   async function createSession() {
     if (state.creating || !projectId()) return;
+    if (!connectionReady()) {
+      state.showSetup = true;
+      state.error = tr('Finish the one model connection before starting a conversation.', '请先完成这一套模型连接，再开始对话。');
+      render(); return;
+    }
+    if (state.researchProvider === 'codex' && (!state.codexAuth || !state.codexAuth.authentication_verified || !state.researchModel)) {
+      state.showSetup = true;
+      state.error = tr('Connect your ChatGPT account and select an account model first.', '请先连接 ChatGPT 账户并选择账户模型。');
+      render(); return;
+    }
+    if (state.researchProvider === 'api' && !apiResearchReady()) {
+      state.showSetup = true;
+      state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
+      render(); return;
+    }
     state.creating = true; state.error = ''; state.pendingAuthorityRebind = false; render();
     try {
       const payload = await api().createPiCopilotSession({
@@ -1082,6 +1018,8 @@
         agent_mode: state.agentMode,
         language: window.EU_LANG === 'zh' ? 'zh' : 'en',
         thinking_level: 'off', external_llm_opt_in: true,
+        research_provider: state.researchProvider,
+        research_model: state.researchProvider === 'codex' ? state.researchModel : null,
       });
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || state.agentMode;
@@ -1210,10 +1148,10 @@
       state.currentTurnResources = [];
       upsertActivityStep(activity, { id: 'agent', kind: 'agent', status: 'complete', at });
     } else if (event.type === 'turn_start') {
-      upsertActivityStep(activity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at });
+      upsertActivityStep(activity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at, startedAt: at });
     } else if (event.type === 'assistant_start') {
       const phase = activity.steps.filter(item => item.kind === 'assistant').length + 1;
-      upsertActivityStep(activity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at });
+      upsertActivityStep(activity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at, startedAt: at });
     } else if (event.type === 'text_delta') {
       assistantRow().text += String(event.delta || '');
     } else if (event.type === 'message_end') {
@@ -1225,7 +1163,7 @@
       }
       completeLatestAssistant(event.stop_reason);
       const step = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
-      if (step) step.status = event.error_code ? 'error' : 'complete';
+      if (step) { step.status = event.error_code ? 'error' : 'complete'; step.endedAt = at; }
     } else if (event.type === 'tool_start') {
       const assistant = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
       if (assistant) assistant.status = 'complete';
@@ -1257,16 +1195,16 @@
       }
     } else if (event.type === 'turn_end') {
       const turn = activity.steps.find(item => item.id === 'turn-' + event.turn_index);
-      if (turn) turn.status = 'complete';
+      if (turn) { turn.status = 'complete'; turn.endedAt = at; }
     } else if (event.type === 'retry') {
-      upsertActivityStep(activity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'running', attempt: event.attempt, maxAttempts: event.max_attempts, at });
+      upsertActivityStep(activity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'running', attempt: event.attempt, maxAttempts: event.max_attempts, at, startedAt: at });
     } else if (event.type === 'compaction_start') {
-      upsertActivityStep(activity, { id: 'compaction', kind: 'compaction', status: 'running', at });
+      upsertActivityStep(activity, { id: 'compaction', kind: 'compaction', status: 'running', at, startedAt: at });
     } else if (event.type === 'compaction_end') {
-      upsertActivityStep(activity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at });
+      upsertActivityStep(activity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at, endedAt: at });
     } else if (event.type === 'agent_cycle_end' && event.will_retry) {
       const retry = activity.steps.slice().reverse().find(item => item.kind === 'retry' && item.status === 'running');
-      if (retry) retry.status = 'complete';
+      if (retry) { retry.status = 'complete'; retry.endedAt = at; }
     } else if (event.type === 'run_end') {
       finishActivity('complete', event.at, 'settled');
     }
@@ -1291,7 +1229,7 @@
     const startedAt = Date.now();
     activity = {
       id: 'easyicu-job-' + jobId, role: 'activity', status: 'running',
-      startedAt, childJobId: jobId, steps: [],
+      startedAt, childJobId: jobId, steps: [], expanded: true,
     };
     const label = code === 'easyicu_extraction_submitted'
       ? tr('EasyICU data extraction submitted', 'EasyICU 数据提取任务已提交')
@@ -1397,7 +1335,7 @@
     const replayOwner = window.EU_GUIDED_PI_REPLAY;
     const presentation = replayOwner && typeof replayOwner.childJobPresentation === 'function'
       ? replayOwner.childJobPresentation(job, tr) : {};
-    activity.expanded = Boolean(presentation.expanded);
+    activity.expanded = activity.status === 'running' || Boolean(presentation.expanded);
     activity.durationKnown = Boolean(presentation.durationKnown);
     if (presentation.startedAt != null) activity.startedAt = presentation.startedAt;
     if (presentation.endedAt != null) activity.endedAt = presentation.endedAt;
@@ -1449,7 +1387,7 @@
 
   async function loadProjectSessions() {
     const expectedProjectId = projectId();
-    if (!runtimeReady() || !expectedProjectId) return;
+    if (!connectionReady() || !expectedProjectId) return;
     const listed = await api().loadPiCopilotSessions(100, expectedProjectId);
     if (expectedProjectId !== projectId()) return;
     state.sessions = (listed && listed.sessions) || [];
@@ -1502,7 +1440,7 @@
         state.project = { ...state.project, binding_receipt: null };
       }
       await loadWorkflow();
-      if (runtimeReady()) await loadProjectSessions();
+      if (connectionReady()) await loadProjectSessions();
     } catch (error) {
       if (expectedProjectId !== projectId()) return;
       if (error && error.code === 'pi_project_initialization_required') {
@@ -1751,6 +1689,36 @@
       if (modeSwitch) { switchMode(modeSwitch.dataset.gpiModeSwitch); return; }
       const accessMode = event.target.closest('[data-gpi-access-mode]');
       if (accessMode) { state.accessMode = accessMode.dataset.gpiAccessMode || 'assist'; render(); return; }
+      const researchProvider = event.target.closest('[data-gpi-research-provider]');
+      if (researchProvider) {
+        state.researchProvider = researchProvider.dataset.gpiResearchProvider === 'codex' ? 'codex' : 'api';
+        state.error = '';
+        if (state.researchProvider === 'codex') loadCodexResearchStatus(true);
+        else render();
+        return;
+      }
+      if (event.target.closest('[data-gpi-codex-login]')) {
+        const popup = openAuthorizationPopup();
+        startCodexLogin('browser', popup); return;
+      }
+      if (event.target.closest('[data-gpi-codex-device]')) {
+        const popup = openAuthorizationPopup();
+        startCodexLogin('device_code', popup); return;
+      }
+      if (event.target.closest('[data-gpi-codex-cancel]')) { cancelCodexLogin(); return; }
+      if (event.target.closest('[data-gpi-codex-logout]')) { logoutCodex(); return; }
+      if (event.target.closest('[data-gpi-codex-models]')) { loadCodexModels(true); return; }
+      if (event.target.closest('[data-gpi-provider-done]')) {
+        if (state.researchProvider === 'codex' && (!state.codexAuth || !state.codexAuth.authentication_verified || !state.researchModel)) {
+          state.error = tr('Connect your ChatGPT account and select an account model first.', '请先连接 ChatGPT 账户并选择账户模型。');
+          render(); return;
+        }
+        if (state.researchProvider === 'api' && !apiResearchReady()) {
+          state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
+          render(); return;
+        }
+        finishProviderSetup(); return;
+      }
       if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
       if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
       if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
@@ -1771,6 +1739,10 @@
       if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
     });
     state.host.addEventListener('change', event => {
+      if (event.target.matches('[data-gpi-codex-model]')) {
+        state.researchModel = String(event.target.value || '');
+        state.error = ''; render(); return;
+      }
       if (!event.target.matches('[data-gpi-provider-preset]')) return;
       const form = event.target.closest('[data-gpi-provider-form]');
       if (!form) return;
@@ -1778,6 +1750,8 @@
         cliproxyapi: { provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions', model: 'gpt-5.6-luna' },
         'custom-openai': { provider: 'custom-openai', base_url: 'https://example.com/v1', api_transport: 'openai-completions', model: '' },
         openai: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses', model: 'gpt-5.6-luna' },
+        openrouter: { provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions', model: '' },
+        deepseek: { provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions', model: 'deepseek-chat' },
         anthropic: { provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages', model: 'claude-sonnet-4-6' },
         google: { provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai', model: 'gemini-3.5-flash' },
       };
@@ -1809,7 +1783,7 @@
     wire(); loadStatus();
   }
   function unmount() {
-    closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
+    stopCodexPoll(); closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
   window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive };
 })();

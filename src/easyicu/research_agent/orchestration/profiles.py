@@ -9,7 +9,7 @@ part of the evaluation/submission scaffold defined in
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,10 @@ class SubmissionProfile:
     # every transition into Execute, regardless of which entrypoint applies the
     # profile. ``None`` preserves historical profile replay bytes.
     planner_only: Optional[bool] = None
+    # Planner strategy changes both the provider contract and the planning
+    # authority chain. Historical profiles omit it to preserve their replay
+    # bytes; additive profiles may pin the progressive strategy explicitly.
+    planner_strategy: Optional[Literal["monolithic_v1", "progressive_v2"]] = None
 
     @property
     def ref(self) -> str:
@@ -134,6 +138,8 @@ class SubmissionProfile:
             options["expected_runner_image_digest"] = self.expected_runner_image_digest
         if self.planner_only is not None:
             options["planner_only"] = self.planner_only
+        if self.planner_strategy is not None:
+            options["planner_strategy"] = self.planner_strategy
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -169,6 +175,7 @@ class SubmissionProfile:
             "expected_runner_image_digest",
             "allow_external_figure_upload",
             "planner_only",
+            "planner_strategy",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -336,6 +343,56 @@ E1_PLANNER_CANARY_2026_08_14 = SubmissionProfile(
     planner_only=True,
 )
 
+E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16 = SubmissionProfile(
+    name="npj_dm_e1_canary_dev",
+    version="20260816",
+    locked_at="2026-08-16T14:58:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Additive replacement for the archived 20260814 canary. It retains the
+    # same development-only data authority while making the progressive
+    # outline/materialization contract a frozen run coordinate.
+    expected_concept_dict_sha=(
+        E1_PLANNER_CANARY_2026_08_14.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PLANNER_CANARY_2026_08_14.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=True,
+    planner_strategy="progressive_v2",
+)
+
+E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17 = SubmissionProfile(
+    name="npj_dm_e1_canary_dev",
+    version="20260817",
+    locked_at="2026-08-17T05:31:06Z",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Additive re-lock after the ordinal SOFA-2 motor-response and sedated-GCS
+    # metadata corrections. Preserve the 20260816 profile for exact replay;
+    # this development-only profile binds the corrected dictionary bytes.
+    expected_concept_dict_sha="68b75da37d70c18ff35a11eb7efb9d39a6b6589e933bdf6a89a34469d4493107",
+    expected_sofa2_dict_sha="71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=True,
+    planner_strategy="progressive_v2",
+)
+
 E1_REVIEWED_DEMO_2026_08_15 = SubmissionProfile(
     name="npj_dm_e1_demo_dev",
     version="20260815",
@@ -356,6 +413,32 @@ E1_REVIEWED_DEMO_2026_08_15 = SubmissionProfile(
     enable_deterministic_planner_fallback=False,
     requires_real_provider=True,
     planner_only=False,
+)
+
+E1_REVIEWED_DEMO_2026_08_17 = SubmissionProfile(
+    name="npj_dm_e1_demo_dev",
+    version="20260817",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.locked_at,
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Execution companion to the 20260817 Planner canary. It remains
+    # development-only and cannot acquire publication authority.
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=False,
+    planner_strategy="progressive_v2",
 )
 
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
@@ -458,7 +541,14 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_18.ref: NPJ_DM_2026_07_18,
     NPJ_DM_2026_07_19.ref: NPJ_DM_2026_07_19,
     E1_PLANNER_CANARY_2026_08_14.ref: E1_PLANNER_CANARY_2026_08_14,
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16
+    ),
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17
+    ),
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
+    E1_REVIEWED_DEMO_2026_08_17.ref: E1_REVIEWED_DEMO_2026_08_17,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
@@ -590,6 +680,26 @@ def require_profile_capability_workflow_setting(
         )
 
 
+def require_profile_planner_strategy(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    planner_strategy: str,
+) -> None:
+    """Reject callers that override a profile-owned Planner contract."""
+
+    if name is None:
+        return
+    ref = f"{name}/{version}"
+    expected = get_submission_profile(ref).planner_strategy
+    if expected is not None and planner_strategy != expected:
+        raise ValueError(
+            "Planner strategy changes provider and plan authority and must "
+            f"match the submission profile; profile {ref!r} pins "
+            f"planner_strategy={expected!r}"
+        )
+
+
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
@@ -600,7 +710,10 @@ __all__ = [
     "NPJ_DM_2026_07_18",
     "NPJ_DM_2026_07_19",
     "E1_PLANNER_CANARY_2026_08_14",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17",
     "E1_REVIEWED_DEMO_2026_08_15",
+    "E1_REVIEWED_DEMO_2026_08_17",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
@@ -613,4 +726,5 @@ __all__ = [
     "require_profile_coder_resource_setting",
     "require_profile_reviewed_memory_setting",
     "require_profile_capability_workflow_setting",
+    "require_profile_planner_strategy",
 ]

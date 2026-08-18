@@ -37,6 +37,21 @@ def test_pyproject_requires_modern_pyarrow_for_export_compatibility() -> None:
     assert "pyarrow>=23.0.0" in dependencies
 
 
+def test_openai_json_schema_transport_has_a_consistent_sdk_floor() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    optional = pyproject["project"]["optional-dependencies"]
+
+    for extra in ("webapp", "agentic"):
+        assert "openai>=1.40.0" in optional[extra]
+
+    assert '"openai>=1.40.0"' in (
+        WORKFLOW_DIR / "ci.yml"
+    ).read_text(encoding="utf-8")
+    assert '"openai>=1.40.0"' in (
+        WORKFLOW_DIR / "research_agent_ci.yml"
+    ).read_text(encoding="utf-8")
+
+
 def test_pyproject_license_uses_spdx_string() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 

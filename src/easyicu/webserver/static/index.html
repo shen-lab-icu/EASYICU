@@ -20,7 +20,7 @@
 <link rel="stylesheet" href="css/tweaks.css?v=20260625-stage96" />
 <link rel="stylesheet" href="css/guided.css?v=20260815-compact-rail2" />
 <link rel="stylesheet" href="css/guided-projects.css?v=20260815-mobile-rail1" />
-<link rel="stylesheet" href="css/guided-pi.css?v=20260812-natural-chat-artifacts1" />
+<link rel="stylesheet" href="css/guided-pi.css?v=20260817-visible-activity1" />
 <link rel="stylesheet" href="css/guided-pi-demo.css?v=20260815-reviewer-demo2" />
 <link rel="stylesheet" href="css/guided-pi-preview.css?v=20260811-research-docs1" />
 <link rel="stylesheet" href="css/guided-pi-workbench-preview.css?v=20260813-workbench1" />
@@ -34,8 +34,8 @@
 <link rel="stylesheet" href="css/cohort-charts.css?v=20260728-shared-echarts1" />
 <link rel="stylesheet" href="css/dock.css?v=20260625-stage99" />
 <link rel="stylesheet" href="css/redesign.css?v=20260803-owner-migration" />
-<link rel="stylesheet" href="css/agent.css?v=20260812-natural-conversations1" />
-<link rel="stylesheet" href="css/agent-layout.css?v=20260702-agent-focus-layout" />
+<link rel="stylesheet" href="css/agent.css?v=20260817-project-monitor-states2" />
+<link rel="stylesheet" href="css/agent-layout.css?v=20260817-project-monitor-states2" />
 <link rel="stylesheet" href="css/agent-header.css?v=20260702-agent-compact-header" />
 <link rel="stylesheet" href="css/agent-review.css?v=20260702-agent-review-compact" />
 <link rel="stylesheet" href="css/agent-science.css?v=20260707-evidence-merge" />
@@ -60,15 +60,19 @@
 </svg>
 </template>
 <div id="app"></div>
+<!-- FIRST on purpose: every screen module destructures `esc` from this owner
+     at the top of its IIFE, so it must be defined before any of them run. -->
+<script src="js/html-escape.js?v=20260816-escape-owner"></script>
+<script src="js/chart-palette.js?v=20260816-palette-owner"></script>
 <script src="js/i18n.js?v=20260728-demo-mode1"></script>
 <script src="js/icons.js?v=20260625-stage84"></script>
 <script src="js/data-catalog.js?v=20260727-patient-demo2"></script>
-<script src="js/api.js?v=20260815-mode-history1"></script>
+<script src="js/api.js?v=20260816-copilot-provider-owner1"></script>
 <script src="js/study-context.js?v=20260812-natural-conversations1"></script>
 <script src="js/study-progress.js?v=20260802-stage-status"></script>
 <script src="js/gate-remedy.js?v=20260802-gate-remedy"></script>
 <script src="js/screens-extraction-sepsis.js?v=20260629-sepsis-anchor-readonly"></script>
-<script src="js/screens-extraction.js?v=20260803-picker-owner"></script>
+<script src="js/screens-extraction.js?v=20260817-copilot-boundary1"></script>
   <script src="js/screens-extraction-job-continuity.js?v=20260802-job-404"></script>
 <script src="js/screens-extraction-study-context.js?v=20260710-handoff"></script>
 <script src="js/screens-viz-demo.js?v=20260727-patient-demo2"></script>
@@ -87,41 +91,45 @@
 <script src="js/screens-viz-crossdb-progress.js?v=20260812-crossdb-jobs"></script>
 <script src="js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2"></script>
 <script src="js/screens-viz-crossdb-charts.js?v=20260728-shared-echarts1"></script>
-<script src="js/screens-viz-crossdb-results.js?v=20260812-tab-a11y1"></script>
+<script src="js/screens-viz-crossdb-results.js?v=20260817-copilot-boundary1"></script>
 <script src="js/screens-viz-patient-overview.js?v=20260710-review-scope"></script>
-<script src="js/screens-viz.js?v=20260812-crossdb-jobs"></script>
+<script src="js/screens-viz.js?v=20260817-copilot-boundary1"></script>
 <script src="js/screens-viz-crossdb-job-continuity.js?v=20260812-registered-jobs"></script>
 <script src="js/screens-viz-crossdb-source.js?v=20260812-crossdb-jobs"></script>
 <script src="js/screens-viz-study-context.js?v=20260710-handoff"></script>
 <script src="js/screens-ideas-zotero.js?v=20260702-zotero-origin"></script>
-<script src="js/screens-ideas.js?v=20260707-residuals"></script>
-<script src="js/screens-agent-render.js?v=20260815-system-validation1"></script>
+<script src="js/screens-ideas.js?v=20260817-copilot-boundary1"></script>
+<script src="js/screens-agent-render.js?v=20260817-project-monitor1"></script>
 <script src="js/screens-agent-science.js?v=20260707-design"></script>
 <script src="js/screens-agent-study-context.js?v=20260802-gate-remedy"></script>
-<script src="js/screens-agent.js?v=20260812-natural-conversations1"></script>
+<script src="js/screens-agent.js?v=20260817-project-monitor-states2"></script>
 <script src="js/screens-states.js"></script>
 <script src="js/screens-settings-extensions.js?v=20260812-extension-manager1"></script>
-<script src="js/screens-settings.js?v=20260812-extension-manager1"></script>
-<script src="js/screens-help.js?v=20260712-ux-fixes"></script>
+<script src="js/screens-settings.js?v=20260817-copilot-boundary1"></script>
+<script src="js/screens-help.js?v=20260817-copilot-boundary1"></script>
 <script src="js/screens-dict.js?v=20260712-ux-fixes"></script>
 <script src="js/screens-icd.js"></script>
 <script src="js/screens-guided-projects.js?v=20260815-compact-rail2"></script>
 <script src="js/screens-guided-project-continuity.js?v=20260813-project-continuity1"></script>
 <script src="js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"></script>
-<script src="js/screens-guided-idea-plan.js?v=20260627-ideas-feasibility-plan2"></script>
+<script src="js/screens-guided-idea-plan.js?v=20260817-copilot-boundary1"></script>
 <script src="js/screens-guided-extract.js?v=20260707-copilot"></script>
 <script src="js/screens-guided-intent.js?v=20260803-typed-study-intent"></script>
+<script src="js/screens-guided-pi-blockers.js?v=20260816-blocker-copy"></script>
 <script src="js/screens-guided-pi-literature.js?v=20260812-literature3"></script>
 <script src="js/screens-guided-pi-markdown.js?v=20260811-message-links1"></script>
 <script src="js/screens-guided-pi-demo.js?v=20260815-real-render2"></script>
 <script src="js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1"></script>
 <script src="js/screens-guided-pi-preview.js?v=20260815-real-render2"></script>
 <script src="js/screens-guided-pi-replay.js?v=20260815-mode-resume1"></script>
-<script src="js/screens-guided-pi.js?v=20260815-mode-history1"></script>
-<script src="js/screens-guided.js?v=20260815-compact-rail2"></script>
+<script src="js/screens-guided-pi-activity.js?v=20260817-visible-activity2"></script>
+<script src="js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"></script>
+<script src="js/screens-guided-pi.js?v=20260817-visible-activity2"></script>
+<script src="js/screens-guided-idea.js?v=20260817-copilot-boundary1"></script>
+<script src="js/screens-guided.js?v=20260817-copilot-boundary1"></script>
 <script src="js/screens-guided-study-context.js?v=20260710-handoff"></script>
-<script src="js/app.js?v=20260812-route-a11y1"></script>
-<script src="js/copilot-dock.js?v=20260712-ux-fixes"></script>
+<script src="js/app.js?v=20260817-project-monitor1"></script>
+<script src="js/copilot-dock.js?v=20260817-copilot-boundary1"></script>
 <script src="js/tweaks.js"></script>
 </body>
 </html>

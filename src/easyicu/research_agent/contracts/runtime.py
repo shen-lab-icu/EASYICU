@@ -75,6 +75,11 @@ class _PlanPhaseResult:
     # same bundle; a second post-analysis search must not introduce sources
     # that never governed the approved scientific plan.
     preplan_literature: Optional[LiteratureBundle] = None
+    # Run-bound materialized columns accepted by the approved cohort contract.
+    # These are not global dictionary concepts and must cross the Plan ->
+    # Execute boundary explicitly so later validation cannot lose authority or
+    # inherit another concurrent run's columns.
+    cohort_concept_ids: Tuple[str, ...] = ()
     aborted_result: Optional[PipelineResult] = None
 
 

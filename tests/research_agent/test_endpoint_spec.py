@@ -424,7 +424,7 @@ def _v2_with_endpoint(tmp_path: Path, endpoint: dict) -> ResearchContextV2:
     context = _build_v2_context(tmp_path)
     payload = context.model_dump(mode="python")
     payload["endpoint"] = endpoint
-    return ResearchContextV2.model_validate(payload)
+    return type(context).model_validate(payload)
 
 
 def test_a_declaration_binding_real_columns_is_accepted(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ from .llm import (
     current_provider_call_receipt,
 )
 from .protocol import LLMMessage
+from .protocol import StructuredOutputRequest
 
 
 def _model_identity(client: Any) -> str:
@@ -59,11 +60,13 @@ class HardStopClient:
         *,
         max_tokens: int = 2048,
         temperature: float = 0.2,
+        structured_output: Optional[StructuredOutputRequest] = None,
     ) -> str:
         response, _usage = self.complete_with_usage(
             messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            structured_output=structured_output,
         )
         return response
 
@@ -73,6 +76,7 @@ class HardStopClient:
         *,
         max_tokens: int = 2048,
         temperature: float = 0.2,
+        structured_output: Optional[StructuredOutputRequest] = None,
     ) -> tuple[str, Optional[Dict[str, Any]]]:
         with provider_hard_stop_call_scope(
             task=self._task,
@@ -80,6 +84,11 @@ class HardStopClient:
             model=_model_identity(self._inner),
             messages=messages,
             max_tokens=max_tokens,
+            additional_prompt_payload_bytes=(
+                structured_output.payload_bytes
+                if structured_output is not None
+                else 0
+            ),
         ) as hard_stop:
             try:
                 # Reviewed OpenAI/fallback/mock transports reserve immediately
@@ -94,11 +103,13 @@ class HardStopClient:
                     self._inner, "complete_with_usage", None
                 )
                 if callable(complete_with_usage):
-                    response, raw_usage = complete_with_usage(
-                        messages,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                    )
+                    kwargs: Dict[str, Any] = {
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                    }
+                    if structured_output is not None:
+                        kwargs["structured_output"] = structured_output
+                    response, raw_usage = complete_with_usage(messages, **kwargs)
                     # Usage doubles as the call-scoped model-provenance
                     # carrier. Keep non-numeric metadata intact; the hard-stop
                     # ledger reads only its numeric token fields.
@@ -109,6 +120,8 @@ class HardStopClient:
                         "max_tokens": max_tokens,
                         "temperature": temperature,
                     }
+                    if structured_output is not None:
+                        kwargs["structured_output"] = structured_output
                     response = complete(messages, **kwargs)
                     usage = None
             except BaseException as exc:

@@ -341,6 +341,14 @@ def test_the_adopted_cohort_seals_a_host_owned_checkpoint(typed_run):
     assert producer_flow.read_bytes() == (
         run_dir / "cohort_analysis_flow.csv"
     ).read_bytes()
+    producer_cohort = producer_flow.with_name("cohort_analysis.parquet")
+    assert producer_cohort.read_bytes() == (
+        run_dir / "cohort_analysis.parquet"
+    ).read_bytes()
+    producer_summary = json.loads(
+        producer_flow.with_name("step_summary.json").read_text(encoding="utf-8")
+    )
+    assert producer_summary == checkpoint["step_summary"]
 
 
 def test_writer_excludes_only_a_verified_host_cohort_checkpoint(typed_run):

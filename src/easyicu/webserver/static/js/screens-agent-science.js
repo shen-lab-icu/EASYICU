@@ -1,5 +1,5 @@
-/* Agent Projects "Evidence & provenance" submodule (tab id 'science').
-   Owner: the Agent Projects Evidence tab — the same run from Runs / Outputs,
+/* Project Monitor "Evidence & provenance" submodule (tab id 'science').
+   Owner: the Project Monitor Evidence tab — the same run from Runs / Outputs,
    opened at the artifact + evidence level. Renders artifact history, reviewer
    gate, evidence checklist, coverage, reusable protocol cards, and ICU-native
    views. Kept out of the already-large screens-agent.js owner file. This is a
@@ -7,6 +7,7 @@
    back to Outputs. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   const state = {
     projectDir: null,
@@ -20,9 +21,6 @@
     saved: {},
   };
 
-  function esc(v) {
-    return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  }
   function icon(name, size) {
     return window.icon ? window.icon(name, size || 13) : '';
   }

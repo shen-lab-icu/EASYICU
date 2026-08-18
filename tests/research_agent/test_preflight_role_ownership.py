@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.execution import phase as pipeline_execute
+from easyicu.research_agent.execution import phase_support as pipeline_execute_support
 from easyicu.research_agent.authority.figure_renderer import (
     _sealed_renderer_figure_step_matches_parent,
 )
@@ -626,8 +627,12 @@ def test_publication_renderer_cannot_preflight_or_replace_mixed_scientific_contr
 
     assert _step_has_figure_only_output_contract(figure_only)
     assert not _step_has_figure_only_output_contract(mixed)
-    production_source = inspect.getsource(pipeline_execute.run_execute_phase)
-    assert "if not _step_has_figure_only_output_contract(step):" in production_source
+    production_source = (
+        inspect.getsource(pipeline_execute._step_prepare_post_candidate_figures)
+        + "\n"
+        + inspect.getsource(pipeline_execute.run_execute_phase)
+    )
+    assert "repairable_publication_step = (" in production_source
     assert "and _step_has_figure_only_output_contract(step)" in production_source
 
 
@@ -750,7 +755,13 @@ def test_detached_repair_binding_comes_from_plan_and_current_outer_ledger():
         is None
     )
 
-    production_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    production_source = (
+        inspect.getsource(pipeline_execute._step_prepare_post_candidate_figures)
+        + "\n"
+        + inspect.getsource(
+            pipeline_execute_support._step_register_run_artifacts
+        )
+    )
     compact_source = "".join(production_source.split())
     assert 'step_record["repair_target_step_id"]' in production_source
     assert (

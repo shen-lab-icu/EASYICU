@@ -278,10 +278,10 @@
       </div>
       <div class="settings-cap-actions">
         <!-- Destination names must match the ones app.js puts in the rail
-             ('Agent Projects' / '研究项目', 'Idea Mining' / '想法挖掘'). A button
+             ('Project Monitor' / '项目监控', 'Idea Mining' / '想法挖掘'). A button
              that opens #agent while calling it something the sidebar never
              says reads as a fourth feature, not a link to an existing one. -->
-        <button class="btn sm" data-settings-open="agent">${icon('agent', 12)} ${dual('Open Agent Projects', '打开研究项目')}</button>
+        <button class="btn sm" data-settings-open="agent">${icon('agent', 12)} ${dual('Open Project Monitor', '打开项目监控')}</button>
         <button class="btn sm" data-settings-open="ideas">${icon('spark', 12)} ${dual('Open Idea Mining', '打开想法挖掘')}</button>
       </div>
     </div>`;
@@ -505,8 +505,8 @@
 
       <div class="sec-stack" id="set-research-agent"><div class="lbl">${T('Research Agent', '研究代理')}</div><h2>${T('Run behavior', '运行行为')}</h2></div>
       <div class="card pad">
-        ${row(T('Where run behavior is set', '运行行为在哪里设置'), T('Provider, output budget, repair policy, and evidence binding are decided per run inside Agent Projects and recorded in that run’s ledger — not as hidden global defaults that could make an unexpected external call.', '模型提供方、输出预算、修复策略与证据绑定都在研究项目里按次运行决定，并记录在该次运行的账本中 —— 不设隐藏的全局默认值，以免造成意外的外部调用。'),
-          `<button class="btn sm" data-settings-open="agent">${icon('agent', 12)} ${T('Open Agent Projects', '打开研究项目')}</button>`)}
+        ${row(T('Where run behavior is set', '运行行为在哪里设置'), T('Provider, model, output budget, and confirmations are chosen per run inside Guided Copilot and recorded in that run’s ledger — not as hidden global defaults that could make an unexpected external call.', '模型提供方、模型、输出预算与确认项都在「研究引导」中按次运行选择，并记录在该次运行的账本中 —— 不设隐藏的全局默认值，以免造成意外的外部调用。'),
+          `<button class="btn sm" data-settings-open="guided">${icon('spark', 12)} ${T('Open Guided Copilot', '打开研究引导')}</button>`)}
       </div>
 
       <div class="sec-stack" id="set-language"><div class="lbl">${T('Language', '语言')}</div><h2>${T('Language & display', '语言与显示')}</h2></div>
@@ -570,6 +570,7 @@
           e.preventDefault();
           const target = btn.getAttribute('data-settings-open');
           if (target === 'agent') location.hash = '#agent';
+          if (target === 'guided') location.hash = '#guided';
           if (target === 'ideas') location.hash = '#ideas';
         });
       });

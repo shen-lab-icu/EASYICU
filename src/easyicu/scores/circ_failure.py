@@ -23,7 +23,6 @@ Drug Levels:
 - Level 3: norepinephrine or epinephrine ≥ 0.1 μg/kg/min, or any vasopressin
 """
 
-import numpy as np
 import pandas as pd
 from typing import Optional, List, Dict, Any
 
@@ -94,8 +93,15 @@ def circ_failure_event(
     int
         Event level: 0 (stable), 1, 2, or 3 (most severe)
     """
+    if pd.isna(lactate) or pd.isna(map_value):
+        raise ValueError("circulatory failure requires measured lactate and MAP")
+    if any(pd.isna(value) for value in (norepi_rate, epi_rate, vaso_rate)):
+        raise ValueError("circulatory failure drug-rate evidence is incomplete")
+    if pd.isna(level1_drug_present):
+        raise ValueError("circulatory failure Level-1 drug evidence is incomplete")
+
     # Check lactate criterion
-    lactate_elevated = lactate >= LACTATE_THRESHOLD if pd.notna(lactate) else False
+    lactate_elevated = lactate >= LACTATE_THRESHOLD
     
     if not lactate_elevated:
         # Without elevated lactate, check if MAP/drugs indicate potential instability
@@ -116,7 +122,7 @@ def circ_failure_event(
         return 2
     
     # Level 1: MAP ≤ 65 OR Level 1 drugs present
-    map_low = map_value <= MAP_THRESHOLD if pd.notna(map_value) else False
+    map_low = map_value <= MAP_THRESHOLD
     if map_low or level1_drug_present:
         return 1
     
@@ -187,73 +193,97 @@ def calculate_circ_failure_status(
     """
     df = df.copy()
     
-    # Initialize output columns
-    df['lactate_elevated'] = False
-    df['map_low'] = False
-    df['level1_drugs'] = False
-    df['level2_drugs'] = False
-    df['level3_drugs'] = False
-    df['circ_event'] = 0
-    df['circ_failure'] = False
-    
     if df.empty:
+        for column in (
+            'lactate_elevated', 'map_low', 'level1_drugs', 'level2_drugs',
+            'level3_drugs', 'circ_failure',
+        ):
+            df[column] = pd.Series(dtype="boolean")
+        df['circ_event'] = pd.Series(dtype="Int64")
         return df
-    
-    # Calculate component conditions
-    if lactate_col in df.columns:
-        df['lactate_elevated'] = df[lactate_col] >= LACTATE_THRESHOLD
-        
-    if map_col in df.columns:
-        df['map_low'] = df[map_col] <= MAP_THRESHOLD
+
+    # Core criteria are required. Treating a missing lactate or MAP column as
+    # "not elevated / not low" silently under-detects circulatory failure.
+    if lactate_col is None or lactate_col not in df.columns:
+        raise ValueError("circulatory failure requires a lactate column")
+    if map_col is None or map_col not in df.columns:
+        raise ValueError("circulatory failure requires a MAP column")
+
+    def nullable_flag(source: pd.Series, comparison: pd.Series) -> pd.Series:
+        return comparison.astype("boolean").mask(source.isna(), pd.NA)
+
+    # Calculate component conditions while preserving row-level unknowns.
+    df['lactate_elevated'] = nullable_flag(
+        df[lactate_col], df[lactate_col] >= LACTATE_THRESHOLD
+    )
+    df['map_low'] = nullable_flag(
+        df[map_col], df[map_col] <= MAP_THRESHOLD
+    )
+    df['level1_drugs'] = pd.Series(False, index=df.index, dtype="boolean")
+    df['level2_drugs'] = pd.Series(False, index=df.index, dtype="boolean")
+    df['level3_drugs'] = pd.Series(False, index=df.index, dtype="boolean")
+
+    evidence_columns = [lactate_col, map_col]
         
     # Level 1 drugs
     if level1_cols:
         for col in level1_cols:
             if col in df.columns:
-                df['level1_drugs'] = df['level1_drugs'] | (df[col] > 0)
+                evidence_columns.append(col)
+                df['level1_drugs'] = df['level1_drugs'] | nullable_flag(
+                    df[col], df[col] > 0
+                )
     
     # Level 2 drugs (0 < norepi/epi < 0.1)
     if norepi_rate_col and norepi_rate_col in df.columns:
-        df['level2_drugs'] = df['level2_drugs'] | (
-            (df[norepi_rate_col] > 0) & 
-            (df[norepi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD)
+        evidence_columns.append(norepi_rate_col)
+        df['level2_drugs'] = df['level2_drugs'] | nullable_flag(
+            df[norepi_rate_col],
+            (df[norepi_rate_col] > 0)
+            & (df[norepi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD),
         )
     if epi_rate_col and epi_rate_col in df.columns:
-        df['level2_drugs'] = df['level2_drugs'] | (
-            (df[epi_rate_col] > 0) & 
-            (df[epi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD)
+        evidence_columns.append(epi_rate_col)
+        df['level2_drugs'] = df['level2_drugs'] | nullable_flag(
+            df[epi_rate_col],
+            (df[epi_rate_col] > 0)
+            & (df[epi_rate_col] < NOREPI_EPI_LEVEL2_THRESHOLD),
         )
     
     # Level 3 drugs (norepi/epi ≥ 0.1 OR vasopressin)
     if norepi_rate_col and norepi_rate_col in df.columns:
-        df['level3_drugs'] = df['level3_drugs'] | (
-            df[norepi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD
+        df['level3_drugs'] = df['level3_drugs'] | nullable_flag(
+            df[norepi_rate_col],
+            df[norepi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD,
         )
     if epi_rate_col and epi_rate_col in df.columns:
-        df['level3_drugs'] = df['level3_drugs'] | (
-            df[epi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD
+        df['level3_drugs'] = df['level3_drugs'] | nullable_flag(
+            df[epi_rate_col],
+            df[epi_rate_col] >= NOREPI_EPI_LEVEL2_THRESHOLD,
         )
     if vaso_rate_col and vaso_rate_col in df.columns:
-        df['level3_drugs'] = df['level3_drugs'] | (df[vaso_rate_col] > 0)
-    
-    # Normalise the boolean flags before scoring. The comparisons above (e.g.
-    # `df[map_col] <= MAP_THRESHOLD`, `df[col] > 0`) yield pd.NA on nullable
-    # dtypes when the source value is missing, which makes `if row.get(flag)`
-    # raise "boolean value of NA is ambiguous" in get_event_level. An unmeasured
-    # signal means the criterion is not met, matching the default-False init.
-    for _flag in ('lactate_elevated', 'map_low', 'level1_drugs',
-                  'level2_drugs', 'level3_drugs'):
-        df[_flag] = df[_flag].fillna(False).astype(bool)
+        evidence_columns.append(vaso_rate_col)
+        df['level3_drugs'] = df['level3_drugs'] | nullable_flag(
+            df[vaso_rate_col], df[vaso_rate_col] > 0
+        )
+
+    # A present-but-missing input is unknown, not evidence of absence.  Columns
+    # not supplied by the caller remain outside this row contract; callers that
+    # possess a drug stream must pass it explicitly.
+    evidence_columns = list(dict.fromkeys(evidence_columns))
+    df['_input_complete'] = df[evidence_columns].notna().all(axis=1)
 
     # Calculate event levels
     def get_event_level(row):
-        if not row.get('lactate_elevated', False):
+        if not bool(row['_input_complete']):
+            return pd.NA
+        if not bool(row['lactate_elevated']):
             return 0
-        if row.get('level3_drugs', False):
+        if bool(row['level3_drugs']):
             return 3
-        if row.get('level2_drugs', False):
+        if bool(row['level2_drugs']):
             return 2
-        if row.get('map_low', False) or row.get('level1_drugs', False):
+        if bool(row['map_low']) or bool(row['level1_drugs']):
             return 1
         return 0
     
@@ -269,23 +299,27 @@ def calculate_circ_failure_status(
         # decoupling sustained lactate (>= 2/3) from single-point drug presence
         # (the previous logic used `.any()` for drug level, which could promote a
         # window to Event 2/3 from a single drugged timepoint).
-        df['_point_event'] = df.apply(get_event_level, axis=1).astype(int)
+        df['_point_event'] = df.apply(get_event_level, axis=1).astype("Int64")
 
         def apply_rolling_window(group):
-            point = group['_point_event'].to_numpy()
+            point = group['_point_event'].astype("Int64")
             n = len(point)
             if n < window_steps:
                 # Not enough data for a full window: use point assessment.
-                group['circ_event'] = point
+                group['circ_event'] = point.array
                 return group
             half_window = window_steps // 2
-            events = np.zeros(n, dtype=int)
+            events = pd.array([pd.NA] * n, dtype="Int64")
             for i in range(n):
                 start_idx = max(0, i - half_window)
                 end_idx = min(n, i + half_window + 1)
-                win = point[start_idx:end_idx]
+                win = point.iloc[start_idx:end_idx]
+                if win.isna().any():
+                    continue
+                values = win.astype(int).to_numpy()
+                events[i] = 0
                 for k in (3, 2, 1):
-                    if (win >= k).mean() >= WINDOW_FRACTION_THRESHOLD:
+                    if (values >= k).mean() >= WINDOW_FRACTION_THRESHOLD:
                         events[i] = k
                         break
             group['circ_event'] = events
@@ -297,12 +331,14 @@ def calculate_circ_failure_status(
         if id_col not in df.columns:
             df[id_col] = _id_backup[id_col].values
         df = df.drop(columns=['_point_event'], errors='ignore')
+        df['circ_event'] = df['circ_event'].astype("Int64")
     else:
         # Simple point-in-time assessment
-        df['circ_event'] = df.apply(get_event_level, axis=1)
+        df['circ_event'] = df.apply(get_event_level, axis=1).astype("Int64")
     
     # Set circ_failure flag
-    df['circ_failure'] = df['circ_event'] > 0
+    df['circ_failure'] = df['circ_event'].gt(0).astype("boolean")
+    df = df.drop(columns=['_input_complete'], errors='ignore')
     
     return df
 
@@ -368,6 +404,8 @@ def load_circ_failure(
         'dopa_rate',
         'phn_rate',
         'milrinone',
+        'levo_rate',
+        'theo_rate',
     ]
     all_needed = core_concepts + optional_concepts
     
@@ -419,8 +457,17 @@ def load_circ_failure(
                     loaded_dfs[_cname] = _cdf.rename(columns={_alias: 'charttime'})
                     break
     
+    # Core concepts are non-optional; a silent partial load would score
+    # circulatory failure without its lactate or MAP evidence.
+    missing_core = [c for c in core_concepts if c not in loaded_dfs]
+    if missing_core:
+        raise ValueError(
+            "circulatory failure could not load required core concepts: "
+            + ", ".join(missing_core)
+        )
+
     # Build merged dataframe from core concepts
-    core_dfs = [loaded_dfs[c] for c in core_concepts if c in loaded_dfs]
+    core_dfs = [loaded_dfs[c] for c in core_concepts]
     if not core_dfs:
         if verbose:
             print("No core data loaded")
@@ -471,13 +518,19 @@ def load_circ_failure(
     # Map column names
     lactate_col = 'lact' if 'lact' in df.columns else ('lac' if 'lac' in df.columns else 'lactate')
     map_col = 'map' if 'map' in df.columns else None
+    if map_col is None:
+        raise ValueError("circulatory failure requires a MAP column")
     
     # Find drug columns (based on what was loaded)
     norepi_col = 'norepi_rate' if 'norepi_rate' in df.columns else None
     epi_col = 'epi_rate' if 'epi_rate' in df.columns else None
     vaso_col = 'adh_rate' if 'adh_rate' in df.columns else None
     level1_cols = [
-        c for c in ['dobu_rate', 'dopa_rate', 'phn_rate', 'milrinone']
+        c
+        for c in [
+            'dobu_rate', 'dopa_rate', 'phn_rate', 'milrinone', 'levo_rate',
+            'theo_rate',
+        ]
         if c in df.columns
     ]
     
@@ -603,8 +656,10 @@ def get_circ_failure_incidence(
     if events.empty:
         return pd.DataFrame()
     
-    # Get first event per patient
-    first_events = events.groupby(id_col).agg({
+    # Get first event per patient. Sort by time first so the level always
+    # describes the same row as the minimum time.
+    events = events.sort_values(time_col)
+    first_events = events.groupby(id_col, sort=False).agg({
         time_col: 'min',
         'circ_event': 'first',
     }).reset_index()

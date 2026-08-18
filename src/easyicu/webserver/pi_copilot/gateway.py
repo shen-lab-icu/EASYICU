@@ -5,6 +5,7 @@ from __future__ import annotations
 import collections
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -50,6 +51,8 @@ _CHILD_ENV_KEYS = frozenset(
         "EASYICU_PI_MODEL",
         "EASYICU_PI_BASE_URL",
         "EASYICU_PI_API",
+        "EASYICU_PI_CODEX_AUTH_FILE",
+        "EASYICU_PI_CODEX_SESSION_SHA256",
         "EASYICU_PI_CONTEXT_WINDOW",
         "EASYICU_PI_MAX_TOKENS",
         "EASYICU_PI_SESSION_TOKEN_BUDGET",
@@ -85,6 +88,7 @@ class PiGatewayClient:
         cwd: Optional[Path] = None,
         environ: Optional[Mapping[str, str]] = None,
         provider_store: Optional[PiProviderConfigStore] = None,
+        account_binding_sha256: Optional[str] = None,
         tool_executor: Callable[
             [str, Mapping[str, Any], ToolExecutionContext], Dict[str, Any]
         ] = execute_tool,
@@ -110,6 +114,7 @@ class PiGatewayClient:
         ).expanduser().absolute()
         self.cwd = self.declared_cwd.resolve()
         self.provider_store = provider_store or PiProviderConfigStore()
+        self.account_binding_sha256 = str(account_binding_sha256 or "").strip()
         self._provider_file_enabled = environ is None
         source_environment = os.environ if environ is None else environ
         provider_environment = self.provider_store.environment(
@@ -125,6 +130,31 @@ class PiGatewayClient:
             for key, value in source_environment.items()
             if key in _CHILD_ENV_KEYS or key.startswith("LC_")
         }
+        if self.account_binding_sha256:
+            # One immutable credential authority per child: account-backed Pi
+            # must never inherit a previously configured API secret.
+            self.environ.pop("EASYICU_PI_API_KEY", None)
+            auth_file = Path(
+                str(self.environ.get("EASYICU_PI_CODEX_AUTH_FILE") or "")
+            )
+            if (
+                re.fullmatch(r"[a-f0-9]{64}", self.account_binding_sha256)
+                is None
+                or self.environ.get("EASYICU_PI_CODEX_SESSION_SHA256")
+                != self.account_binding_sha256
+                or self.environ.get("EASYICU_PI_PROVIDER") != "openai-codex"
+                or self.environ.get("EASYICU_PI_API")
+                != "openai-codex-responses"
+                or not auth_file.is_absolute()
+                or auth_file.is_symlink()
+                or not auth_file.is_file()
+                or auth_file.resolve() != auth_file
+            ):
+                raise PiCopilotError(
+                    "pi_codex_account_authority_invalid",
+                    "The Codex account conversation boundary is invalid.",
+                    status_code=409,
+                )
         self._tool_executor = tool_executor
         self._tool_dispatch_max_workers = int(tool_dispatch_max_workers)
         self._tool_dispatch_max_pending = int(tool_dispatch_max_pending)
@@ -230,6 +260,25 @@ class PiGatewayClient:
         )
         packaged = self.app_dir == packaged_app_dir().resolve()
         runtime_integrity_verified = self._runtime_integrity_status(packaged=packaged)
+        account_configured = bool(self.account_binding_sha256)
+        if account_configured:
+            provider_configuration: Dict[str, Any] = {
+                "provider": "openai-codex",
+                "model": str(
+                    self.environ.get("EASYICU_PI_MODEL") or "gpt-5.6-luna"
+                ),
+                "api_transport": "openai-codex-responses",
+                "credential_present": True,
+                "connection_verified": True,
+                "model_available": True,
+                # Account/model validation is not itself a generation receipt.
+                # A real prompt may still fail at the provider boundary.
+                "inference_verified": False,
+                "credential_storage": "browser_isolated_codex_home",
+                "secrets_returned": False,
+            }
+        else:
+            provider_configuration = provider_status
         return {
             "node_available": bool(node),
             "node_version": (
@@ -244,12 +293,10 @@ class PiGatewayClient:
             "dependency_installed": dependency.is_file(),
             "lockfile_present": (self.app_dir / "package-lock.json").is_file(),
             "runtime_integrity_verified": runtime_integrity_verified,
-            "api_key_configured": bool(
-                str(self.environ.get("EASYICU_PI_API_KEY") or "").strip()
-            ),
-            "provider_connection_verified": bool(
-                provider_status.get("connection_verified")
-            ),
+            "api_key_configured": account_configured
+            or bool(str(self.environ.get("EASYICU_PI_API_KEY") or "").strip()),
+            "provider_connection_verified": account_configured
+            or bool(provider_status.get("connection_verified")),
             "provider": str(
                 self.environ.get("EASYICU_PI_PROVIDER") or "easyicu-local"
             ),
@@ -263,11 +310,18 @@ class PiGatewayClient:
             "api_transport": str(
                 self.environ.get("EASYICU_PI_API") or "openai-completions"
             ),
-            "provider_configuration": provider_status,
+            "provider_configuration": provider_configuration,
         }
 
     def apply_provider_config(self, config: PiProviderConfig) -> None:
         """Restart the sidecar boundary with a newly verified configuration."""
+
+        if self.account_binding_sha256:
+            raise PiCopilotError(
+                "pi_codex_account_reconfigure_forbidden",
+                "A browser-bound Codex conversation cannot be changed to an API key.",
+                status_code=409,
+            )
 
         self.close()
         with self._state_lock:

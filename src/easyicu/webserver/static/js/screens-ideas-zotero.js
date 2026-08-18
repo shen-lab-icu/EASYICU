@@ -1,10 +1,8 @@
 /* Owner: Idea Mining Zotero source widget. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
-  function esc(v) {
-    return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  }
 
   function create(deps) {
     const d = deps || {};

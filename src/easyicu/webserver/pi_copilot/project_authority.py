@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from .contracts import PiCopilotError, utc_now
 from .locking import exclusive_file_lock
 
+from easyicu.webserver import state_paths
+
 _SCHEMA_VERSION = "easyicu.pi-project-authority/1"
 _MAX_PROJECTS = 200
 
@@ -48,7 +50,7 @@ class ProjectAuthorityStore:
     """Persist and enforce the one-project/one-StudyContext relationship."""
 
     def __init__(self, path: Optional[Path] = None) -> None:
-        self.path = Path(path or Path.home() / ".easyicu" / "pi_project_authority.json")
+        self.path = Path(path or state_paths.state_root() / "pi_project_authority.json")
         self._lock = threading.RLock()
 
     @staticmethod

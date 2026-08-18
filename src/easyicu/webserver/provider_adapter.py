@@ -30,6 +30,14 @@ from easyicu.provider_auth import (
     credential_headers,
     normalize_openai_auth_header,
 )
+from easyicu.research_agent.providers.capabilities import (
+    ANTHROPIC_MESSAGES,
+    OPENAI_CHAT_COMPLETIONS,
+    SUPPORTED_USER_ACCOUNT_NAMES,
+    provider_profile,
+    user_account_profile,
+)
+from easyicu.webserver import state_paths
 from easyicu.webserver import agent_outputs
 from easyicu.webserver.provider_url_security import (
     ProviderUrlSecurityError,
@@ -40,8 +48,10 @@ _MAX_EXTERNAL_CALLS_PER_RUN = 1
 _DEFAULT_MAX_OUTPUT_TOKENS = 1200
 _MIN_MAX_OUTPUT_TOKENS = 128
 _ABSOLUTE_MAX_OUTPUT_TOKENS = 4000
-_DEFAULT_PROVIDER_ENV_FILE = Path.home() / ".easyicu" / "provider.env"
+_DEFAULT_PROVIDER_ENV_FILE = state_paths.state_root() / "provider.env"
 _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT = 240.0
+_DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT = 480.0
+_DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT = "low"
 _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES = (500, 502, 503, 504)
 _WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS = 192
@@ -50,13 +60,12 @@ _WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD = 100.0
 _WEB_RESEARCH_AGENT_MAX_WALL_CLOCK_SECONDS = 21_600.0
 _WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION = 10.0
 _WEB_RESEARCH_AGENT_OUTPUT_COST_PER_MILLION = 30.0
-# One acquisition request plus the Planner's five bounded structured attempts.
-# The local OpenAI-compatible Provider exposes a 128k output ceiling, so each
-# transport must reserve that ceiling before it can start even though actual
-# completions are much smaller. These aggregate ceilings fund exactly those six
-# worst-case reservations; the old 24/250k/$10 tuple advertised attempts that
-# its token and cost stops made impossible after two Planner responses.
-_WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS = 6
+# Progressive Planner can materialize as many as 24 outline steps. Fund one
+# acquisition, three outline attempts, two foundation attempts, one attempt per
+# step, and two local repairs. Token, cost, and wall-clock stops remain the
+# independent fail-closed ceilings; this attempt cap must not terminate a valid
+# progressive plan merely because it crossed the old monolithic six-call shape.
+_WEB_PLANNER_CANARY_MAX_PROVIDER_ATTEMPTS = 32
 _WEB_PLANNER_CANARY_MAX_TOTAL_TOKENS = 1_200_000
 _WEB_PLANNER_CANARY_MAX_ESTIMATED_COST_USD = 30.0
 _WEB_PLANNER_CANARY_MAX_WALL_CLOCK_SECONDS = 1_800.0
@@ -99,9 +108,7 @@ def web_research_agent_hard_stop_limits(
         max_total_tokens_per_batch=tokens,
         max_estimated_cost_usd_per_batch=cost,
         max_wall_clock_seconds_per_task=wall_clock,
-        input_cost_usd_per_million_tokens=(
-            _WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION
-        ),
+        input_cost_usd_per_million_tokens=(_WEB_RESEARCH_AGENT_INPUT_COST_PER_MILLION),
         output_cost_usd_per_million_tokens=(
             _WEB_RESEARCH_AGENT_OUTPUT_COST_PER_MILLION
         ),
@@ -116,6 +123,9 @@ def require_external_credentials(
     """Return sanitized provider metadata after checking env credentials."""
     if not provider_meta.get("external"):
         return provider_meta
+    provider = str(provider_meta.get("provider") or "").strip().lower()
+    if is_user_account_provider(provider):
+        return _require_user_account_session(provider_meta, environ=environ)
     try:
         credentials = _load_external_credentials(
             str(provider_meta.get("provider") or ""), environ=environ
@@ -129,10 +139,249 @@ def require_external_credentials(
     return updated
 
 
+def _user_account_environment(
+    provider: str,
+    environ: Optional[Mapping[str, str]],
+) -> Dict[str, str]:
+    if environ is None:
+        raise ProviderAdapterError(
+            {
+                "error": "codex_auth_session_required",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    source = environ
+    from easyicu.research_agent.providers.subprocess_env import (
+        build_provider_subprocess_env,
+    )
+
+    selected = build_provider_subprocess_env(
+        provider,
+        environment=source,
+        required_keys=(
+            "EASYICU_ALLOW_EXTERNAL_LLM",
+            "EASYICU_CODEX_SESSION_SHA256",
+            "EASYICU_CODEX_MODEL",
+            "CODEX_MODEL",
+        ),
+    )
+    binding = str(selected.get("EASYICU_CODEX_SESSION_SHA256") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", binding):
+        raise ProviderAdapterError(
+            {
+                "error": "codex_auth_session_required",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    if not selected.get("HOME") or not selected.get("CODEX_HOME"):
+        raise ProviderAdapterError(
+            {
+                "error": "codex_auth_isolated_home_required",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    selected["EASYICU_ALLOW_EXTERNAL_LLM"] = "1"
+    return selected
+
+
+def is_user_account_provider(provider: str) -> bool:
+    """Return whether *provider* is a reviewed per-user account transport."""
+
+    return str(provider or "").strip().lower() in SUPPORTED_USER_ACCOUNT_NAMES
+
+
+def is_cli_account_provider(provider: str) -> bool:
+    """Compatibility alias; public Web accounts are no longer host CLI logins."""
+
+    return is_user_account_provider(provider)
+
+
+def account_provider_environment(
+    provider: str,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    """Compile the bounded subprocess environment for a Web Pipeline run.
+
+    The returned mapping contains only the reviewed user-account variables and
+    the canonical external-LLM opt-in bit. API keys for unrelated providers are
+    deliberately excluded by :mod:`providers.subprocess_env`.
+    """
+
+    normalized = str(provider or "").strip().lower()
+    if not is_user_account_provider(normalized):
+        raise ProviderAdapterError(
+            {
+                "error": "research_pipeline_codex_user_auth_provider_required",
+                "provider": normalized,
+                "secrets_returned": False,
+            }
+        )
+    return _user_account_environment(normalized, environ)
+
+
+def _user_account_status(
+    provider: str,
+    *,
+    ai_enabled: bool,
+    environ: Optional[Mapping[str, str]],
+) -> Dict[str, Any]:
+    profile = user_account_profile(provider) if is_user_account_provider(provider) else None
+    if profile is None:
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_provider_unsupported",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    if environ is None:
+        return {
+            "provider": provider,
+            "provider_identity": profile.provider_identity,
+            "external": True,
+            "ai_enabled": bool(ai_enabled),
+            "authentication_mode": "chatgpt_account",
+            "authentication_verified": False,
+            "account_session_present": False,
+            "account_session_status": "codex_auth_session_required",
+            "credential_env_candidates": [],
+            "credential_present": False,
+            "credential_source": None,
+            "base_url_env_candidates": [],
+            "base_url_present": True,
+            "base_url_source": "codex_app_server",
+            "base_url_validation": "codex_app_server",
+            "base_url_rejection_reason": None,
+            "model_env_candidates": list(profile.model_env_names),
+            "model_present": True,
+            "model": "account-default",
+            "model_source": "account_default",
+            "ready": False,
+            "missing": ["codex_user_auth"],
+            "env_file": {
+                "enabled": False,
+                "status": "not_used_user_account",
+                "present": False,
+                "loaded_keys": [],
+                "secrets_returned": False,
+            },
+            "secrets_returned": False,
+            "client_constructed": False,
+            "network_calls": 0,
+            "subprocess_calls": 0,
+        }
+    source = _user_account_environment(provider, environ)
+    model_source, model = profile.model(source)
+    from easyicu.research_agent.providers.codex_app_server import (
+        CodexAppServerError,
+        CodexAppServerRuntime,
+    )
+
+    account = None
+    status_code = "codex_auth_login_required"
+    try:
+        runtime_cwd = Path(str(source["HOME"])) / "app-server-readiness"
+        with CodexAppServerRuntime(
+            environment=source,
+            cwd=runtime_cwd,
+            request_timeout=15.0,
+        ) as runtime:
+            account = runtime.request(
+                "account/read", {"refreshToken": False}, timeout=15.0
+            ).get("account")
+    except CodexAppServerError as exc:
+        status_code = exc.code
+    verified = bool(isinstance(account, Mapping) and account.get("type") == "chatgpt")
+    if verified:
+        status_code = "codex_auth_ready"
+    missing: List[str] = []
+    if not ai_enabled:
+        missing.append("ai_enabled")
+    if not verified:
+        missing.append("codex_user_auth")
+    binding = str(source.get("EASYICU_CODEX_SESSION_SHA256") or "")
+    return {
+        "provider": provider,
+        "provider_identity": profile.provider_identity,
+        "external": True,
+        "ai_enabled": bool(ai_enabled),
+        "authentication_mode": "chatgpt_account",
+        "authentication_verified": verified,
+        "account_session_present": verified,
+        "account_session_status": status_code,
+        "session_binding_sha256": binding,
+        "status_check_supported": True,
+        "credential_env_candidates": [],
+        "credential_present": verified,
+        "credential_source": "codex_user_auth" if verified else None,
+        "base_url_env_candidates": [],
+        "base_url_present": True,
+        "base_url_source": "codex_app_server",
+        "base_url_validation": "codex_app_server",
+        "base_url_rejection_reason": None,
+        "model_env_candidates": list(profile.model_env_names),
+        "model_present": True,
+        "model": model or "account-default",
+        "model_source": model_source or "account_default",
+        "ready": bool(ai_enabled and verified),
+        "missing": missing,
+        "env_file": {
+            "enabled": False,
+            "status": "not_used_user_account",
+            "present": False,
+            "loaded_keys": [],
+            "secrets_returned": False,
+        },
+        "secrets_returned": False,
+        "client_constructed": False,
+        "network_calls": 0,
+        "subprocess_calls": 1,
+    }
+
+
+def _require_user_account_session(
+    provider_meta: Dict[str, Any],
+    *,
+    environ: Optional[Mapping[str, str]],
+) -> Dict[str, Any]:
+    provider = str(provider_meta.get("provider") or "").strip().lower()
+    status = _user_account_status(
+        provider,
+        ai_enabled=bool(provider_meta.get("ai_enabled")),
+        environ=environ,
+    )
+    if not status["ready"]:
+        raise ProviderAdapterError(
+            {
+                **provider_meta,
+                **status,
+                "error": str(status["account_session_status"]),
+                "blocked_by": "codex_user_auth",
+            }
+        )
+    updated = dict(provider_meta)
+    updated.update(status)
+    updated["credentials_attempted"] = True
+    updated["credentials_loaded"] = True
+    profile = user_account_profile(provider)
+    assert profile is not None  # guarded by _user_account_status
+    endpoint = f"{profile.endpoint_identity}/session/{status['session_binding_sha256']}"
+    updated["endpoint_fingerprint"] = _fingerprint(endpoint)
+    updated["base_url_endpoint"] = "codex_app_server"
+    updated["provider_gate"] = "external_provider_account_ready"
+    updated.setdefault("provider_gate_order", []).append("user_account_checked")
+    return updated
+
+
 def build_research_agent_provider_client(
     provider_meta: Dict[str, Any],
     *,
     request_timeout: Optional[float] = None,
+    request_hard_timeout: Optional[float] = None,
     environ: Optional[Mapping[str, str]] = None,
 ) -> tuple[Any, Dict[str, Any]]:
     """Construct the governed Research Agent client without exposing a key.
@@ -151,11 +400,103 @@ def build_research_agent_provider_client(
                 "secrets_returned": False,
             }
         )
+    requested_provider = str(provider_meta.get("provider") or "").strip().lower()
+    account_profile = (
+        user_account_profile(requested_provider)
+        if is_user_account_provider(requested_provider)
+        else None
+    )
+    if account_profile is not None:
+        account = _require_user_account_session(provider_meta, environ=environ)
+        account_environment = _user_account_environment(requested_provider, environ)
+        selected_model = str(account.get("model") or "account-default")
+        effective_timeout = (
+            float(request_timeout)
+            if request_timeout is not None
+            else _DEFAULT_RESEARCH_AGENT_REQUEST_TIMEOUT
+        )
+        effective_hard_timeout = (
+            float(request_hard_timeout)
+            if request_hard_timeout is not None
+            else _DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT
+        )
+        try:
+            from easyicu.research_agent.providers.factory import (
+                authorize_provider_client,
+            )
+            from easyicu.research_agent.providers.llm import (
+                CodexAppServerLLMClient,
+            )
+
+            client = CodexAppServerLLMClient(
+                model=(
+                    None if selected_model == "account-default" else selected_model
+                ),
+                request_timeout=effective_timeout,
+                turn_hard_timeout=effective_hard_timeout,
+                reasoning_effort=_DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT,
+                environment=account_environment,
+            )
+            endpoint = (
+                f"{account_profile.endpoint_identity}/session/"
+                f"{account['session_binding_sha256']}"
+            )
+            client = authorize_provider_client(
+                client,
+                provider=account_profile.provider_identity,
+                model=selected_model,
+                base_url=endpoint,
+                destination="external",
+                environment=account_environment,
+            )
+        except Exception as exc:
+            raise ProviderAdapterError(
+                {
+                    "error": "research_agent_provider_client_failed",
+                    "provider": requested_provider,
+                    "reason": type(exc).__name__,
+                    "secrets_returned": False,
+                }
+            ) from exc
+        public = dict(account)
+        public.update(
+            {
+                "client": (
+                    "easyicu.research_agent.providers.llm."
+                    "CodexAppServerLLMClient"
+                ),
+                "client_constructed": True,
+                "provider_gate": "research_agent_provider_ready",
+                "request_timeout_seconds": effective_timeout,
+                "request_idle_timeout_seconds": effective_timeout,
+                "request_hard_timeout_seconds": (
+                    effective_hard_timeout
+                ),
+                "reasoning_effort": _DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT,
+                "reasoning_effort_source": "easyicu_account_research_default",
+                "progress_resets_idle_timeout": True,
+                "transport_max_attempts": 1,
+                "retryable_http_status_codes": [],
+                "strict_json_schema_enabled": bool(
+                    account_profile.supports_strict_json_schema
+                ),
+                "provider_hard_stop": {
+                    "required": True,
+                    "schema_version": "easyicu.web-provider-hard-stop-policy/1",
+                },
+                "secrets_returned": False,
+            }
+        )
+        return client, public
     credentials = _load_external_credentials(
         str(provider_meta.get("provider") or ""), environ=environ
     )
     provider = str(credentials.get("provider") or "").strip().lower()
-    if provider not in {"openai", "openrouter"}:
+    profile = provider_profile(provider)
+    if profile is None or profile.transport not in {
+        OPENAI_CHAT_COMPLETIONS,
+        ANTHROPIC_MESSAGES,
+    }:
         raise ProviderAdapterError(
             {
                 "error": "research_agent_provider_unsupported",
@@ -164,14 +505,9 @@ def build_research_agent_provider_client(
             }
         )
     endpoint = str(credentials["base_url"])
-    suffix = "/chat/completions"
-    base_url = endpoint[: -len(suffix)] if endpoint.endswith(suffix) else endpoint
-    if provider == "openai":
-        key_name = "OPENAI_API_KEY"
-        base_name = "OPENAI_BASE_URL"
-    else:
-        key_name = "OPENROUTER_API_KEY"
-        base_name = "OPENROUTER_BASE_URL"
+    base_url = _provider_sdk_base_url(endpoint, transport=profile.transport)
+    key_name = profile.api_key_env_names[0]
+    base_name = profile.base_url_env_names[0]
     provider_environment = {
         key_name: credentials["api_key"],
         base_name: base_url,
@@ -183,18 +519,22 @@ def build_research_agent_provider_client(
             TRUST_LOOPBACK_PROXY_KEY_ENV,
             is_loopback_openai_base_url,
         )
-        from easyicu.research_agent.providers.llm import OpenAIClient
 
-        loopback = provider == "openai" and is_loopback_openai_base_url(base_url)
+        loopback = bool(
+            profile.transport == OPENAI_CHAT_COMPLETIONS
+            and is_loopback_openai_base_url(base_url)
+        )
         if loopback:
             # The endpoint and credential were both loaded from the server-owned
             # provider configuration after explicit Web opt-in. Tell the shared
             # factory this one configured loopback proxy is allowed to receive
             # its own authentication token rather than the no-auth dummy key.
             provider_environment[TRUST_LOOPBACK_PROXY_KEY_ENV] = "1"
-        provider_environment[OPENAI_AUTH_HEADER_ENV] = str(
-            credentials.get("auth_header") or OpenAIAuthHeader.AUTHORIZATION.value
-        )
+        if profile.transport == OPENAI_CHAT_COMPLETIONS:
+            provider_environment[OPENAI_AUTH_HEADER_ENV] = str(
+                credentials.get("auth_header")
+                or OpenAIAuthHeader.AUTHORIZATION.value
+            )
         effective_timeout = (
             float(request_timeout)
             if request_timeout is not None
@@ -209,7 +549,6 @@ def build_research_agent_provider_client(
             model=credentials["model"],
             request_timeout=effective_timeout,
             title="EasyICU Web Research Agent",
-            client_cls=OpenAIClient,
             environment=provider_environment,
             # One extra transport attempt, hence two total requests.  Freeze
             # environment overrides so EASYICU_LLM_MAX_RETRIES cannot silently
@@ -235,11 +574,18 @@ def build_research_agent_provider_client(
     public.update(_credential_public_metadata(credentials))
     public.update(
         {
-            "client": "easyicu.research_agent.providers.OpenAIClient",
+            "client": (
+                "easyicu.research_agent.AnthropicMessagesClient"
+                if profile.transport == ANTHROPIC_MESSAGES
+                else "easyicu.research_agent.OpenAIClient"
+            ),
             "client_constructed": True,
             "provider_gate": "research_agent_provider_ready",
             "request_timeout_seconds": effective_timeout,
             "transport_max_attempts": 2,
+            "strict_json_schema_enabled": bool(
+                getattr(client, "supports_strict_json_schema", False)
+            ),
             "retryable_http_status_codes": list(
                 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES
             ),
@@ -268,9 +614,128 @@ def generate_bound_provider_payload(
     ] = None,
     environ: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Call an OpenAI-compatible provider and return bounded artifacts."""
+    """Call one governed API or account provider and return bounded artifacts."""
+    requested_provider = str(provider_meta.get("provider") or "").strip().lower()
+    profile = provider_profile(requested_provider)
+    governed_client_transport = bool(
+        is_user_account_provider(requested_provider)
+        or (profile is not None and profile.transport == ANTHROPIC_MESSAGES)
+    )
+    if governed_client_transport:
+        if transport is not None:
+            raise ProviderAdapterError(
+                {"error": "governed_provider_transport_override_unsupported"}
+            )
+        client, provider_public = build_research_agent_provider_client(
+            provider_meta,
+            environ=environ,
+        )
+        max_output_tokens = _max_output_tokens(environ=environ)
+        request = _build_chat_request(
+            provider=requested_provider,
+            run_id=run_id,
+            study_id=study_id,
+            question=question,
+            summary=summary,
+            cohort=cohort,
+            quality=quality,
+            output_artifacts=output_artifacts or {},
+            model=str(provider_public.get("model") or "account-default"),
+            max_output_tokens=max_output_tokens,
+            json_format_style="chat",
+        )
+        try:
+            from easyicu.research_agent.providers.protocol import (
+                LLMMessage,
+                StructuredOutputRequest,
+            )
+            from easyicu.research_agent.providers.factory import (
+                authorized_complete,
+                require_provider_client_authorization,
+            )
+
+            messages = [
+                LLMMessage(
+                    role=str(message.get("role") or "user"),
+                    content=str(message.get("content") or ""),
+                )
+                for message in request["messages"]
+            ]
+            structured_output = None
+            if bool(provider_public.get("strict_json_schema_enabled")):
+                structured_output = StructuredOutputRequest.from_schema(
+                    name="easyicu_agent_run",
+                    schema=_agent_payload_json_schema(
+                        request["easyicu_policy"]["allowed_evidence_ids"]
+                    ),
+                )
+            require_provider_client_authorization(client)
+            complete_with_usage = getattr(client, "complete_with_usage", None)
+            if callable(complete_with_usage):
+                text, call_usage = complete_with_usage(
+                    messages,
+                    max_tokens=max_output_tokens,
+                    temperature=0,
+                    structured_output=structured_output,
+                )
+            else:
+                text = authorized_complete(
+                    client,
+                    messages,
+                    max_tokens=max_output_tokens,
+                    temperature=0,
+                    structured_output=structured_output,
+                )
+                call_usage = {}
+        except Exception as exc:
+            raise ProviderAdapterError(
+                {
+                    "error": "external_provider_call_failed",
+                    "provider": requested_provider,
+                    "reason": type(exc).__name__,
+                    "secrets_returned": False,
+                }
+            ) from exc
+        payload = _coerce_provider_payload(
+            _parse_json_object(text),
+            run_id=run_id,
+            study_id=study_id,
+            question=question,
+        )
+        provider_update = dict(provider_public)
+        strict_enabled = bool(provider_public.get("strict_json_schema_enabled"))
+        if strict_enabled and is_user_account_provider(requested_provider):
+            json_transport = "codex_app_server_output_schema"
+        elif strict_enabled and profile is not None:
+            json_transport = "anthropic_output_config"
+        else:
+            json_transport = "prompted_json"
+        provider_update.update(
+            {
+                "external_calls": int(provider_meta.get("external_calls") or 0) + 1,
+                "max_external_calls_per_run": _MAX_EXTERNAL_CALLS_PER_RUN,
+                "max_output_tokens": max_output_tokens,
+                "json_format_style": json_transport,
+                "provider_gate": "external_provider_ready",
+                "provider_gate_order": [
+                    *list(provider_public.get("provider_gate_order") or []),
+                    "client_constructed",
+                    "external_call_completed",
+                ],
+                "usage": _public_llm_usage(call_usage),
+            }
+        )
+        request["easyicu_policy"]["json_format_style"] = provider_update[
+            "json_format_style"
+        ]
+        return {
+            "agent_plan": payload["agent_plan"],
+            "manuscript_draft": payload["manuscript_draft"],
+            "provider": provider_update,
+            "request_policy": request["easyicu_policy"],
+        }
     credentials = _load_external_credentials(
-        str(provider_meta.get("provider") or ""), environ=environ
+        requested_provider, environ=environ
     )
     max_output_tokens = _max_output_tokens(environ=environ)
     json_format_style = _json_format_style(environ=environ)
@@ -355,8 +820,39 @@ def provider_readiness(
     environ: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """Return sanitized provider readiness without constructing clients."""
-    env, env_file = _provider_env(environ=environ)
     provider_text = str(provider or "openai").strip() or "openai"
+    if is_user_account_provider(provider_text):
+        status = _user_account_status(
+            provider_text,
+            ai_enabled=ai_enabled,
+            environ=environ,
+        )
+        status["limits"] = {
+            "max_external_calls_per_run": _MAX_EXTERNAL_CALLS_PER_RUN,
+            "max_output_tokens": _max_output_tokens(environ=environ),
+            "json_format_style": (
+                "codex_app_server_output_schema"
+                if bool(
+                    user_account_profile(provider_text)
+                    and user_account_profile(provider_text).supports_strict_json_schema
+                )
+                else "prompted_json"
+            ),
+        }
+        return status
+    if not _is_offline_provider(provider_text) and provider_profile(provider_text) is None:
+        return {
+            "provider": provider_text,
+            "external": True,
+            "ai_enabled": bool(ai_enabled),
+            "ready": False,
+            "missing": ["supported_provider"],
+            "error": "research_agent_provider_unsupported",
+            "secrets_returned": False,
+            "client_constructed": False,
+            "network_calls": 0,
+        }
+    env, env_file = _provider_env(environ=environ)
     external = not _is_offline_provider(provider_text)
     key_names = _api_key_env_names(provider_text)
     base_names = _base_url_env_names(provider_text)
@@ -444,6 +940,14 @@ def write_provider_config(
 ) -> Dict[str, Any]:
     """Write the private provider env file and return sanitized metadata."""
     provider_text = str(provider or "openai").strip() or "openai"
+    if provider_profile(provider_text) is None:
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_provider_unsupported",
+                "provider": provider_text,
+                "secrets_returned": False,
+            }
+        )
     api_key = str(api_key or "").strip()
     base_url = str(base_url or "").strip()
     model = str(model or "").strip()
@@ -541,6 +1045,19 @@ def _load_external_credentials(
     *,
     environ: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, str]:
+    provider = _normalize_provider(provider)
+    profile = provider_profile(provider)
+    if profile is None:
+        raise ProviderAdapterError(
+            {
+                "error": "research_agent_provider_unsupported",
+                "provider": provider,
+                "secrets_returned": False,
+            }
+        )
+    provider_transport = (
+        profile.transport
+    )
     env, env_file = _provider_env(environ=environ)
     key_names = _api_key_env_names(provider)
     key_name, api_key = _first_env(env, key_names)
@@ -551,18 +1068,28 @@ def _load_external_credentials(
         # Re-checked here, not only where the UI writes it: the env file is an
         # ordinary file, and this is the last point before the key is sent.
         validate_provider_base_url(base_url)
-        base_url = _chat_completions_url(base_url)
+    base_url = _provider_request_url(base_url, transport=provider_transport)
     model_name, model = _first_env(env, _model_env_names(provider))
-    try:
-        auth_header = normalize_openai_auth_header(env.get(OPENAI_AUTH_HEADER_ENV))
-    except ProviderAuthContractError as exc:
-        raise ProviderAdapterError(
-            {
-                "error": exc.code,
-                "blocked_by": "external_provider_credentials",
-                "secrets_returned": False,
-            }
-        ) from exc
+    if provider_transport == ANTHROPIC_MESSAGES:
+        auth_header_value = "x-api-key"
+    elif profile is not None and not profile.supports_auth_header_override:
+        # Provider-specific profiles own their authentication contract. In
+        # particular, a stale local-Luna x-api-key setting must never alter an
+        # official DeepSeek request or its public provenance receipt.
+        auth_header_value = OpenAIAuthHeader.AUTHORIZATION.value
+    else:
+        try:
+            auth_header_value = normalize_openai_auth_header(
+                env.get(OPENAI_AUTH_HEADER_ENV)
+            ).value
+        except ProviderAuthContractError as exc:
+            raise ProviderAdapterError(
+                {
+                    "error": exc.code,
+                    "blocked_by": "external_provider_credentials",
+                    "secrets_returned": False,
+                }
+            ) from exc
     attempted = {
         "credentials_attempted": True,
         "credentials_loaded": False,
@@ -612,11 +1139,15 @@ def _load_external_credentials(
         "base_url_env": base_name or "provider_default",
         "model": model,
         "model_env": model_name,
-        "auth_header": auth_header.value,
+        "auth_header": auth_header_value,
+        "transport": provider_transport,
     }
 
 
 def _credential_public_metadata(credentials: Dict[str, str]) -> Dict[str, Any]:
+    transport = str(
+        credentials.get("transport") or OPENAI_CHAT_COMPLETIONS
+    ).strip()
     return {
         "credentials_attempted": True,
         "credentials_loaded": True,
@@ -624,7 +1155,11 @@ def _credential_public_metadata(credentials: Dict[str, str]) -> Dict[str, Any]:
         "credential_fingerprint": _fingerprint(credentials["api_key"]),
         "endpoint_fingerprint": _fingerprint(credentials["base_url"]),
         "base_url_configured": True,
-        "base_url_endpoint": "chat_completions",
+        "base_url_endpoint": (
+            "anthropic_messages"
+            if transport == ANTHROPIC_MESSAGES
+            else "chat_completions"
+        ),
         "base_url_source": credentials["base_url_env"],
         "model": credentials["model"],
         "model_source": credentials["model_env"],
@@ -637,6 +1172,9 @@ def _credential_public_metadata(credentials: Dict[str, str]) -> Dict[str, Any]:
 
 def _api_key_env_names(provider: str) -> List[str]:
     normalized = _normalize_provider(provider)
+    profile = provider_profile(normalized)
+    if profile is not None:
+        return list(profile.api_key_env_names)
     if normalized == "openai":
         return ["OPENAI_API_KEY", "EASYICU_LLM_API_KEY"]
     if normalized == "openrouter":
@@ -689,21 +1227,52 @@ def validate_provider_base_url(base_url: str) -> str:
 
 def _base_url_env_names(provider: str) -> List[str]:
     normalized = _normalize_provider(provider)
+    profile = provider_profile(normalized)
+    if profile is not None:
+        return list(profile.base_url_env_names)
     return [f"{_env_token(normalized)}_BASE_URL", "EASYICU_LLM_BASE_URL"]
 
 
 def _model_env_names(provider: str) -> List[str]:
     normalized = _normalize_provider(provider)
+    profile = provider_profile(normalized)
+    if profile is not None:
+        return list(profile.model_env_names)
     return [f"{_env_token(normalized)}_MODEL", "EASYICU_LLM_MODEL"]
 
 
 def _default_base_url(provider: str) -> str:
     normalized = _normalize_provider(provider)
-    if normalized == "openai":
-        return "https://api.openai.com/v1/chat/completions"
-    if normalized == "openrouter":
-        return "https://openrouter.ai/api/v1/chat/completions"
-    return ""
+    profile = provider_profile(normalized)
+    if profile is None or not profile.default_base_url:
+        return ""
+    return str(profile.default_base_url)
+
+
+def _provider_request_url(value: str, *, transport: str) -> str:
+    if transport == ANTHROPIC_MESSAGES:
+        return _anthropic_messages_url(value)
+    return _chat_completions_url(value)
+
+
+def _provider_sdk_base_url(value: str, *, transport: str) -> str:
+    text = str(value or "").strip().rstrip("/")
+    if transport == ANTHROPIC_MESSAGES:
+        suffix = "/v1/messages"
+    else:
+        suffix = "/chat/completions"
+    return text[: -len(suffix)] if text.endswith(suffix) else text
+
+
+def _anthropic_messages_url(value: str) -> str:
+    text = str(value or "").strip().rstrip("/")
+    if not text:
+        return ""
+    if text.endswith("/v1/messages"):
+        return text
+    if text.endswith("/v1"):
+        return text + "/messages"
+    return text + "/v1/messages"
 
 
 def _chat_completions_url(value: str) -> str:
@@ -987,6 +1556,24 @@ def _public_usage(response: Dict[str, Any]) -> Dict[str, Any]:
         "completion_tokens": usage.get("completion_tokens"),
         "total_tokens": usage.get("total_tokens"),
     }
+
+
+def _public_llm_usage(value: object) -> Dict[str, Any]:
+    source = value if isinstance(value, Mapping) else {}
+    public: Dict[str, Any] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        item = source.get(key)
+        if isinstance(item, int) and not isinstance(item, bool) and item >= 0:
+            public[key] = item
+    actual_model = source.get("actual_model")
+    if (
+        isinstance(actual_model, str)
+        and actual_model.strip()
+        and len(actual_model.strip()) <= 256
+        and actual_model.strip().isprintable()
+    ):
+        public["actual_model"] = actual_model.strip()
+    return public
 
 
 def _fingerprint(secret: str) -> str:

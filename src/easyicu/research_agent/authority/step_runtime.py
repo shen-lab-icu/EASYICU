@@ -995,6 +995,60 @@ def load_explicit_success_step_capsule(
     return verified
 
 
+def load_explicit_executed_success_step_capsule(
+    run_dir: str | Path,
+    *,
+    step_id: str,
+    record: Mapping[str, object],
+) -> Optional[VerifiedStepAuthorityCapsule]:
+    """Load the exact successful execution observation named by one record.
+
+    Unlike :func:`load_explicit_success_step_capsule`, which intentionally
+    recovers candidate code for revalidation, this contract is product-input
+    authority.  It therefore accepts only an executed capsule whose sealed
+    sandbox result is successful and safe to collect.  The caller decides
+    whether a record without a capsule is an older deterministic host path;
+    an explicitly named but invalid capsule never falls back to a scan.
+    """
+
+    if str(record.get("status") or "").strip().lower() != "ok":
+        return None
+    raw_ref = record.get("step_authority_capsule_ref")
+    if raw_ref is None:
+        return None
+    try:
+        ref = StepAuthorityCapsuleRef.model_validate(raw_ref)
+        verified = load_verified_step_authority_capsule(
+            run_dir,
+            ref=ref,
+            expected_step_id=str(step_id),
+        )
+    except (ValidationError, StepAuthorityCapsuleError, ValueError) as exc:
+        raise StepAuthorityRuntimeError(
+            "explicit executed-step capsule is missing, corrupt, or inconsistent"
+        ) from exc
+    capsule = verified.capsule
+    execution = capsule.execution
+    if capsule.stage not in {"executed", "executed_concept_audited"} or execution is None:
+        raise StepAuthorityRuntimeError(
+            "explicit successful-step capsule does not seal execution"
+        )
+    if (
+        execution.returncode != 0
+        or execution.timed_out
+        or not execution.outputs_safe_to_collect
+    ):
+        raise StepAuthorityRuntimeError(
+            "explicit successful-step capsule does not seal a successful result"
+        )
+    recorded_code_sha256 = str(record.get("executed_code_sha256") or "")
+    if recorded_code_sha256 and recorded_code_sha256 != execution.code_sha256:
+        raise StepAuthorityRuntimeError(
+            "explicit successful-step capsule code digest is inconsistent"
+        )
+    return verified
+
+
 def load_latest_explicit_failed_step_capsule_from_history(
     run_dir: str | Path,
     *,
@@ -1630,6 +1684,7 @@ __all__ = [
     "initial_generation_code_ref",
     "load_checkpoint_selected_step_capsule",
     "load_explicit_failed_step_capsule",
+    "load_explicit_executed_success_step_capsule",
     "load_latest_explicit_failed_step_capsule_from_history",
     "load_explicit_success_step_capsule",
     "select_explicit_step_capsule_for_targeted_resume",

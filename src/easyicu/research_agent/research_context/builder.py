@@ -57,9 +57,10 @@ from ..intake.legacy_materialization import (
     load_verified_legacy_materialization_provenance,
 )
 from .typed import (
+    RESEARCH_CONTEXT_V3_SCHEMA_VERSION,
     canonical_column_binding,
     ResearchContextAuthority,
-    ResearchContextV2,
+    ResearchContextV3,
     descriptor_physical_updates,
     materialized_research_inputs_from_authority,
     project_research_context_variables,
@@ -727,10 +728,10 @@ def build_research_context(
     )
     if verified_cohort is None:
         return base_context
-    return ResearchContextV2.model_validate(
+    return ResearchContextV3.model_validate(
         {
             **base_context.model_dump(mode="python"),
-            "schema_version": "easyicu.research_context/2",
+            "schema_version": RESEARCH_CONTEXT_V3_SCHEMA_VERSION,
             "materialized_inputs": materialized_research_inputs_from_authority(
                 cohort=verified_cohort,
                 trajectory=verified_trajectory,

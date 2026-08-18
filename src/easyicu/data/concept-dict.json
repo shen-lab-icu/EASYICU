@@ -13465,6 +13465,7 @@
   "class_name": "num_cncpt",
   "description": "GCS before sedation (for sedated patients)",
   "category": "neurology",
+  "aggregate": "min",
   "unit": "score",
   "min": 3,
   "max": 15,

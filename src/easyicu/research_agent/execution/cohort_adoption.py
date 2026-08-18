@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from ..authority.evidence_store import EvidenceStore
 from ..authority.plan_scope import _serializable_plan_scientific_scope_signature
@@ -108,10 +108,15 @@ def adopt_existing_host_cohort_materialization(
     per_step_records: List[Dict[str, Any]],
     preexecuted_step_ids: set[str],
     findings: List[ValidationFinding],
+    cohort_concept_ids: Sequence[str] = (),
 ) -> None:
     """Adopt a verified plan-phase cohort without scheduling the Coder."""
 
-    result = load_materialized_analysis_cohort_result(run_dir=run_dir, plan=plan)
+    result = load_materialized_analysis_cohort_result(
+        run_dir=run_dir,
+        plan=plan,
+        cohort_concept_ids=cohort_concept_ids,
+    )
     if result is None:
         return
     record_planned_host_cohort_checkpoint(

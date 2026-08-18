@@ -308,6 +308,7 @@ class RuntimeScientificProjection(_StrictFrozenModel):
 
     schema_version: Literal["easyicu.figure2_runtime_scientific_projection/1"]
     task_id: Literal[
+        "e1_sepsis3_prevalence_mortality",
         "e2_lactate_mortality",
         "h2_vasopressor_causal",
         "h3_trajectory_clustering",
@@ -337,6 +338,9 @@ class RuntimeScientificProjection(_StrictFrozenModel):
         if self.deterministic_execution_contract is None:
             raise ValueError("every governed case requires a deterministic contract")
         expected_schema = {
+            "e1_sepsis3_prevalence_mortality": (
+                "easyicu.association_model_grid_runtime_authority/1"
+            ),
             "e2_lactate_mortality": "easyicu.landmark_spline_runtime_authority/1",
             "h2_vasopressor_causal": "easyicu.source_feasibility_runtime_authority/1",
             "h3_trajectory_clustering": (

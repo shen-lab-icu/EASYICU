@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from easyicu.research_agent.acquisition.catalog import build_available_catalog
+from easyicu.webserver import state_paths
 from easyicu.webserver import cohort_review, sources
 from easyicu.webserver.data_package_execution_readiness import (
     build_data_package_execution_readiness,
@@ -47,7 +48,7 @@ class DataPackageReviewSnapshotStore:
         self.root = (
             Path(root)
             if root is not None
-            else Path.home() / ".easyicu" / "data-package-reviews"
+            else state_paths.state_root() / "data-package-reviews"
         )
         self._lock = threading.RLock()
 

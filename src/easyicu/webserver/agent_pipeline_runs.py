@@ -44,6 +44,10 @@ from easyicu.research_agent.planning.scientific_review import (
     PlanScientificReview,
     render_agent_plan_revision_contract,
 )
+from easyicu.research_agent.planning.progressive_artifacts import (
+    ProgressivePlanningArtifactError,
+    load_progressive_planner_checkpoint_chain,
+)
 from easyicu.research_agent.publication_skills import (
     publication_skill_flags_from_settings,
 )
@@ -88,6 +92,14 @@ from easyicu.webserver.agent_review_recovery import (
 )
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
+_RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
+_DEVELOPMENT_RESUME_JOB_ENV = (
+    "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
+)
+_DEVELOPMENT_RESUME_SEQUENCE_ENV = (
+    "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_CHECKPOINT_SEQUENCE"
+)
+_DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS = 120.0
 _MAX_MANUSCRIPT_PREVIEW = 24_000
 _MAX_FIGURE_EMBED_BYTES = 420_000
 _MAX_FIGURE_EMBED_TOTAL = 1_400_000
@@ -283,6 +295,111 @@ def _slug(value: Any) -> str:
     return text[:96] or "study"
 
 
+def _development_progressive_resume_binding(
+    *,
+    project_root: str,
+    study_id: str,
+    source_job_id: str,
+    budget_mode: str,
+    checkpoint_sequence: str | int | None = None,
+) -> tuple[Path, str]:
+    """Resolve one server-owned Dev checkpoint without accepting client paths."""
+
+    selected_job = str(source_job_id or "").strip()
+    if budget_mode not in {"planner_canary", "full_reviewed"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_budget_invalid",
+            "Development Planner resume requires a reviewed development budget.",
+        )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", selected_job):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_job_invalid",
+            "Choose one valid prior canary job from this study workspace.",
+        )
+    root = Path(project_root).expanduser().resolve()
+    study_root = root / _slug(study_id)
+    wrapper = study_root / f"run_{selected_job}"
+    pipeline_root = wrapper / "pipeline"
+    if wrapper.is_symlink() or pipeline_root.is_symlink():
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_source_invalid",
+            "The prior canary checkpoint source is not a regular owned workspace.",
+        )
+    try:
+        resolved_pipeline = pipeline_root.resolve(strict=True)
+        resolved_pipeline.relative_to(study_root.resolve())
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_source_missing",
+            "The prior canary checkpoint is unavailable in this study workspace.",
+        ) from exc
+    run_dirs = sorted(
+        path
+        for path in resolved_pipeline.iterdir()
+        if path.is_dir() and not path.is_symlink() and path.name.startswith("run_")
+    )
+    if len(run_dirs) != 1:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_source_ambiguous",
+            "The prior canary does not identify exactly one pipeline run.",
+        )
+    checkpoints: list[tuple[int, Path]] = []
+    for path in run_dirs[0].iterdir():
+        match = re.fullmatch(
+            r"progressive_planner_checkpoint_([0-9]{3})\.json",
+            path.name,
+        )
+        if match and path.is_file() and not path.is_symlink():
+            checkpoints.append((int(match.group(1)), path))
+    if not checkpoints:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_checkpoint_missing",
+            "The prior canary has no validated Progressive Planner checkpoint.",
+        )
+    selected_sequence_text = (
+        "" if checkpoint_sequence is None else str(checkpoint_sequence).strip()
+    )
+    if selected_sequence_text:
+        if not re.fullmatch(r"(?:0|[1-9][0-9]{0,2})", selected_sequence_text):
+            raise ResearchPipelineRunError(
+                "research_pipeline_development_resume_sequence_invalid",
+                "The server-selected development checkpoint sequence is invalid.",
+            )
+        selected_sequence = int(selected_sequence_text)
+        selected = [
+            path for sequence, path in checkpoints if sequence == selected_sequence
+        ]
+        if len(selected) != 1:
+            raise ResearchPipelineRunError(
+                "research_pipeline_development_resume_sequence_missing",
+                "The selected development checkpoint is unavailable in the "
+                "prior canary.",
+            )
+        terminal = selected[0]
+    else:
+        terminal = max(checkpoints, key=lambda item: item[0])[1]
+    try:
+        raw = terminal.read_bytes()
+    except OSError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_checkpoint_unreadable",
+            "The prior canary checkpoint cannot be read safely.",
+        ) from exc
+    artifact_sha256 = hashlib.sha256(raw).hexdigest()
+    try:
+        load_progressive_planner_checkpoint_chain(
+            last_checkpoint_path=terminal,
+            expected_artifact_sha256=artifact_sha256,
+        )
+    except ProgressivePlanningArtifactError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_checkpoint_invalid",
+            "The prior canary checkpoint chain did not pass integrity validation.",
+            details={"reason_code": exc.reason_code},
+        ) from exc
+    return terminal, artifact_sha256
+
+
 def _clean_text(value: Any, limit: int = 1_200) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
@@ -384,6 +501,23 @@ def _pipeline_failure_code(exc: BaseException) -> str:
         return "research_pipeline_provider_timeout"
     if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
         return "research_pipeline_plan_contract_exhausted"
+    typed_failure = _safe_pipeline_typed_failure(exc)
+    if typed_failure.get("owner") == (
+        "easyicu.providers.planner_efficiency_budget_v1"
+    ):
+        return "research_pipeline_planner_efficiency_budget_exhausted"
+    if (
+        typed_failure.get("owner") == "easyicu.providers.codex_app_server_v1"
+        and typed_failure.get("reason_code")
+        in {
+            "codex_auth_app_server_timeout",
+            "codex_auth_notification_hard_timeout",
+            "codex_auth_notification_timeout",
+        }
+    ):
+        return "research_pipeline_provider_timeout"
+    if typed_failure.get("owner") == "easyicu.planning.progressive_compiler_v1":
+        return "research_pipeline_progressive_compile_failed"
     return "research_pipeline_execution_failed"
 
 
@@ -413,9 +547,133 @@ def _safe_pipeline_attempt_metadata(exc: BaseException) -> List[Dict[str, Any]]:
     return []
 
 
+_SAFE_COMPILER_COORDINATE_RE = re.compile(r"^[A-Za-z0-9_.:\[\]-]{1,240}$")
+_SAFE_PLANNER_BUDGET_REASONS = frozenset(
+    {
+        "call_limit",
+        "provider_usage_unavailable",
+        "reported_token_limit",
+        "wall_clock_limit",
+    }
+)
+_SAFE_CODEX_APP_SERVER_REASONS = frozenset(
+    {
+        "codex_auth_app_server_exited",
+        "codex_auth_app_server_request_failed",
+        "codex_auth_app_server_timeout",
+        "codex_auth_notification_hard_timeout",
+        "codex_auth_notification_timeout",
+    }
+)
+
+
+def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
+    """Project one allowlisted owner diagnostic without exception text."""
+
+    for item in _pipeline_exception_chain(exc):
+        raw = getattr(item, "easyicu_safe_diagnostic", None)
+        if not isinstance(raw, Mapping):
+            continue
+        owner = raw.get("owner")
+        if owner == "easyicu.planning.progressive_compiler_v1":
+            reason_code = raw.get("reason_code")
+            if not isinstance(reason_code, str) or not re.fullmatch(
+                r"[a-z][a-z0-9_]{2,79}", reason_code
+            ):
+                continue
+            projected: Dict[str, Any] = {
+                "owner": owner,
+                "reason_code": reason_code,
+            }
+            step_id = raw.get("step_id")
+            if isinstance(step_id, str) and re.fullmatch(
+                r"[a-z0-9][a-z0-9_]{0,79}", step_id
+            ):
+                projected["step_id"] = step_id
+            step_index = raw.get("step_index")
+            if (
+                isinstance(step_index, int)
+                and not isinstance(step_index, bool)
+                and 0 <= step_index <= 10_000
+            ):
+                projected["step_index"] = step_index
+            path = raw.get("path")
+            if isinstance(path, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(
+                path
+            ):
+                projected["path"] = path
+            return projected
+        if owner == "easyicu.providers.planner_efficiency_budget_v1":
+            reason = raw.get("reason")
+            reason_code = raw.get("reason_code")
+            calls = raw.get("calls")
+            reported_tokens = raw.get("reported_tokens")
+            elapsed_seconds = raw.get("elapsed_seconds")
+            limits = raw.get("limits")
+            if (
+                reason_code != "planner_efficiency_budget_exhausted"
+                or reason not in _SAFE_PLANNER_BUDGET_REASONS
+                or not isinstance(calls, int)
+                or isinstance(calls, bool)
+                or calls < 0
+                or not isinstance(reported_tokens, int)
+                or isinstance(reported_tokens, bool)
+                or reported_tokens < 0
+                or not isinstance(elapsed_seconds, (int, float))
+                or isinstance(elapsed_seconds, bool)
+                or not math.isfinite(float(elapsed_seconds))
+                or float(elapsed_seconds) < 0
+                or not isinstance(limits, Mapping)
+            ):
+                continue
+            max_calls = limits.get("max_calls")
+            max_reported_tokens = limits.get("max_reported_tokens")
+            max_wall_seconds = limits.get("max_wall_seconds")
+            if (
+                not isinstance(max_calls, int)
+                or isinstance(max_calls, bool)
+                or max_calls <= 0
+                or not isinstance(max_reported_tokens, int)
+                or isinstance(max_reported_tokens, bool)
+                or max_reported_tokens <= 0
+                or not isinstance(max_wall_seconds, (int, float))
+                or isinstance(max_wall_seconds, bool)
+                or not math.isfinite(float(max_wall_seconds))
+                or float(max_wall_seconds) <= 0
+            ):
+                continue
+            return {
+                "owner": owner,
+                "reason_code": reason_code,
+                "reason": reason,
+                "calls": calls,
+                "reported_tokens": reported_tokens,
+                "elapsed_seconds": round(float(elapsed_seconds), 6),
+                "limits": {
+                    "max_calls": max_calls,
+                    "max_reported_tokens": max_reported_tokens,
+                    "max_wall_seconds": float(max_wall_seconds),
+                },
+            }
+        if owner == "easyicu.providers.codex_app_server_v1":
+            reason_code = raw.get("reason_code")
+            if reason_code in _SAFE_CODEX_APP_SERVER_REASONS:
+                return {
+                    "owner": owner,
+                    "reason_code": reason_code,
+                }
+    return {}
+
+
 def _pipeline_failure_category(exc: BaseException) -> str:
     """Return a closed diagnostic category for one bounded exception chain."""
 
+    typed_failure = _safe_pipeline_typed_failure(exc)
+    if (
+        typed_failure.get("owner") == "easyicu.providers.codex_app_server_v1"
+        and "timeout" in str(typed_failure.get("reason_code") or "")
+    ):
+        return "timeout"
     categories = [
         safe_provider_error_category(item) for item in _pipeline_exception_chain(exc)
     ]
@@ -454,10 +712,11 @@ def _write_pipeline_failure_diagnostic(
         f"{type(exc).__name__}: {exc}".encode("utf-8")
     ).hexdigest()
     payload = {
-        "schema_version": "easyicu.web-research-pipeline-failure/3",
+        "schema_version": "easyicu.web-research-pipeline-failure/4",
         "status": "failed",
         "code": code,
         "failure_type": _pipeline_failure_category(exc),
+        "typed_failure": _safe_pipeline_typed_failure(exc),
         "message": diagnostic_message,
         "message_sha256": message_sha256,
         "structured_retry_history": [],
@@ -540,6 +799,20 @@ def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
             if isinstance(value, str) and _clean_text(value, 160)
         )
     )
+
+
+def _configured_covariate_selection(study: Mapping[str, Any]) -> str:
+    """Return the one validated owner coordinate for adjustment authority."""
+
+    selection = str(
+        study.get("covariate_selection") or "planner_selectable"
+    ).strip()
+    if selection not in {"planner_selectable", "exact"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_covariate_selection_invalid",
+            "StudyContext covariate_selection must be planner_selectable or exact.",
+        )
+    return selection
 
 
 def _configured_sensitivity_specs(study: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -1136,14 +1409,7 @@ def _research_user_preferences(
         # keyword inference to reinterpret a descriptive risk contrast.
         preferences["inferred_analysis_family"] = analysis_family
     covariates = _configured_covariates(study)
-    selection = str(
-        study.get("covariate_selection") or "planner_selectable"
-    ).strip()
-    if selection not in {"planner_selectable", "exact"}:
-        raise ResearchPipelineRunError(
-            "research_pipeline_covariate_selection_invalid",
-            "StudyContext covariate_selection must be planner_selectable or exact.",
-        )
+    selection = _configured_covariate_selection(study)
     if selection == "exact":
         # An exact empty roster is a positive user decision to run unadjusted.
         # Merely serializing ``covariates=[]`` is not that authority.
@@ -2631,6 +2897,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             study = record.study
             credential_source = record.credential_source
             budget_mode = record.budget_mode
+            provider_name = _clean_text(record.provider_meta.get("provider"), 64)
         except WebReviewRecoveryError:
             return None
     else:
@@ -2638,6 +2905,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         study = entry.study
         credential_source = entry.credential_source
         budget_mode = entry.budget_mode
+        provider_name = _clean_text(entry.provider.get("provider"), 64)
     return {
             "run_id": pending.run_id,
             "study_id": _clean_text(study.get("id"), 160),
@@ -2646,6 +2914,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             ),
             "resume_scope": pending.resume_scope,
             "credential_source": credential_source,
+            "provider": provider_name,
             "budget_mode": budget_mode,
             "resumable_here": bool(pending.resumable_here),
             "requests": [
@@ -2762,6 +3031,7 @@ def _recover_pending_run(
             "endpoint_fingerprint",
             "credential_header",
             "base_url_endpoint",
+            "session_binding_sha256",
         ):
             if provider_public.get(key) != record.provider_public.get(key):
                 raise WebReviewRecoveryError(
@@ -2872,6 +3142,34 @@ def _compile_plan_revision_contract(
     return render_agent_plan_revision_contract(parsed_review)
 
 
+def _validated_pipeline_credential_source(
+    credential_source: str,
+    *,
+    provider: Mapping[str, Any],
+) -> str:
+    """Bind one Web credential source to the matching provider family."""
+
+    selected = str(credential_source or "").strip().lower()
+    if selected not in {"pi_verified", "codex_user_auth"}:
+        raise ResearchPipelineRunError(
+            "research_pipeline_credential_source_invalid",
+            "Choose one server-verified Research Agent credential source.",
+        )
+    provider_name = _clean_text(provider.get("provider"), 64).lower()
+    account_provider = provider_adapter.is_user_account_provider(provider_name)
+    if selected == "codex_user_auth" and not account_provider:
+        raise ResearchPipelineRunError(
+            "research_pipeline_codex_user_auth_provider_required",
+            "Codex user authentication requires the reviewed Codex account provider.",
+        )
+    if selected == "pi_verified" and account_provider:
+        raise ResearchPipelineRunError(
+            "research_pipeline_codex_user_auth_required",
+            "The Codex account provider requires this browser user's ChatGPT login.",
+        )
+    return selected
+
+
 def make_research_pipeline_run_runner(
     *,
     export_path: str,
@@ -2879,8 +3177,10 @@ def make_research_pipeline_run_runner(
     project_root: Optional[str],
     provider: Mapping[str, Any],
     provider_environment: Optional[Mapping[str, str]] = None,
+    credential_source: str = "pi_verified",
     literature_search_authorized: bool = False,
     plan_revision_source_run_id: str = "",
+    development_resume_source_job_id: str = "",
     budget_mode: str = "planner_canary",
     runner_image: Optional[str] = None,
 ) -> Any:
@@ -2916,6 +3216,7 @@ def make_research_pipeline_run_runner(
     target = _target_outcome(study)
     primary_exposure = _primary_exposure(study)
     covariates = _configured_covariates(study)
+    covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(study)
     _validate_primary_concept_selection(study, primary_exposure)
@@ -2958,15 +3259,39 @@ def make_research_pipeline_run_runner(
             "research_pipeline_budget_mode_invalid",
             "Choose an explicit reviewed Research Agent budget mode.",
         ) from exc
+    selected_credential_source = _validated_pipeline_credential_source(
+        credential_source,
+        provider=provider,
+    )
     if provider_environment is None:
         raise ResearchPipelineRunError(
-            "research_pipeline_pi_verified_credentials_required",
-            "A verified Pi provider credential is required for this pipeline.",
+            (
+                "research_pipeline_codex_user_auth_required"
+                if selected_credential_source == "codex_user_auth"
+                else "research_pipeline_pi_verified_credentials_required"
+            ),
+            "A verified provider credential is required for this pipeline.",
         )
     if not project_root:
         raise ResearchPipelineRunError(
             "research_pipeline_project_workspace_required",
             "A server-owned Pi project workspace is required for this pipeline.",
+        )
+    development_resume_binding: tuple[Path, str] | None = None
+    selected_resume_source = _clean_text(
+        development_resume_source_job_id
+        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV),
+        80,
+    )
+    if selected_resume_source:
+        development_resume_binding = _development_progressive_resume_binding(
+            project_root=project_root,
+            study_id=str(study.get("id") or ""),
+            source_job_id=selected_resume_source,
+            budget_mode=selected_budget_mode,
+            checkpoint_sequence=os.environ.get(
+                _DEVELOPMENT_RESUME_SEQUENCE_ENV
+            ),
         )
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(
@@ -2988,11 +3313,20 @@ def make_research_pipeline_run_runner(
         raise ResearchPipelineRunError(exc.code, exc.message, details=exc.details) from exc
     research_provider_environment = dict(provider_environment)
     source_run_id = _clean_text(plan_revision_source_run_id, 160)
-    selected_runner_image = str(runner_image or "").strip()
-    if runner_image is not None and not selected_runner_image:
+    environment_runner_image = os.environ.get(_RUNNER_IMAGE_ENV)
+    raw_runner_image = (
+        runner_image if runner_image is not None else environment_runner_image
+    )
+    selected_runner_image = str(raw_runner_image or "").strip()
+    if raw_runner_image is not None and (
+        not selected_runner_image
+        or "\n" in selected_runner_image
+        or "\r" in selected_runner_image
+        or "\0" in selected_runner_image
+    ):
         raise ResearchPipelineRunError(
             "research_pipeline_runner_image_invalid",
-            "The server-owned runner image cannot be empty.",
+            "The server-owned runner image must be one non-empty reference.",
         )
 
     def runner(job: Any) -> Dict[str, Any]:
@@ -3020,6 +3354,16 @@ def make_research_pipeline_run_runner(
         _progress(job, step="provider", label="Research Agent provider authorized")
         client, provider_public = provider_adapter.build_research_agent_provider_client(
             dict(provider),
+            request_timeout=(
+                _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS
+                if selected_budget_mode != "full_reviewed"
+                else None
+            ),
+            request_hard_timeout=(
+                _DEVELOPMENT_PROVIDER_REQUEST_TIMEOUT_SECONDS
+                if selected_budget_mode != "full_reviewed"
+                else None
+            ),
             environ=research_provider_environment,
         )
         provider_hard_stop = None
@@ -3080,6 +3424,11 @@ def make_research_pipeline_run_runner(
                 ],
                 static_concepts=foundation_profile["static_concepts"],
                 allowed_modules=foundation_profile["allowed_modules"],
+                concept_selection_authority=(
+                    "host_exact"
+                    if covariate_selection == "exact"
+                    else "agent_selectable"
+                ),
                 cohort_window=window,
                 database=database,
                 require_outcome=foundation_profile["require_outcome"],
@@ -3144,9 +3493,9 @@ def make_research_pipeline_run_runner(
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
             submission_profile_ref = (
-                "npj_dm_e1_demo_dev/20260815"
+                "npj_dm_e1_demo_dev/20260817"
                 if selected_budget_mode == "full_reviewed"
-                else "npj_dm_e1_canary_dev/20260814"
+                else "npj_dm_e1_canary_dev/20260817"
             )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()
@@ -3158,6 +3507,17 @@ def make_research_pipeline_run_runner(
                     "reviewed_memory_namespaces": (),
                 }
             )
+            if development_resume_binding is not None:
+                profile_options.update(
+                    {
+                        "development_progressive_resume_checkpoint_path": (
+                            development_resume_binding[0]
+                        ),
+                        "development_progressive_resume_checkpoint_sha256": (
+                            development_resume_binding[1]
+                        ),
+                    }
+                )
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 enable_publication_figure_skill=publication_skill_flags[
@@ -3217,6 +3577,19 @@ def make_research_pipeline_run_runner(
                 provider_output_cost_usd_per_million_tokens=(
                     hard_stop_limits.output_cost_usd_per_million_tokens
                 ),
+                development_planner_efficiency_max_calls=(
+                    6 if selected_budget_mode != "full_reviewed" else None
+                ),
+                development_planner_efficiency_max_reported_tokens=(
+                    100_000
+                    if selected_budget_mode != "full_reviewed"
+                    else None
+                ),
+                development_planner_efficiency_max_wall_seconds=(
+                    600.0
+                    if selected_budget_mode != "full_reviewed"
+                    else None
+                ),
                 **profile_options,
             )
             pipeline = ResearchAgentPipeline.from_config(
@@ -3246,7 +3619,7 @@ def make_research_pipeline_run_runner(
                 ),
                 provider_meta=dict(provider),
                 provider_public=dict(provider_public),
-                credential_source="pi_verified",
+                credential_source=selected_credential_source,
                 budget_mode=selected_budget_mode,
                 prepared_package_binding=prepared_package_binding,
                 pipeline_config=config_payload,
@@ -3331,7 +3704,7 @@ def make_research_pipeline_run_runner(
                     provider=provider_public,
                     acquisition=acquisition,
                     created_at=time.time(),
-                    credential_source="pi_verified",
+                    credential_source=selected_credential_source,
                     budget_mode=selected_budget_mode,
                     prepared_package_binding=prepared_package_binding,
                     provider_hard_stop=provider_hard_stop,
@@ -3389,6 +3762,16 @@ def make_research_pipeline_run_runner(
                 message = (
                     "The model used every bounded planning attempt without producing "
                     "a contract-valid plan. No analysis was run."
+                )
+            elif code == "research_pipeline_planner_efficiency_budget_exhausted":
+                message = (
+                    "The development Planner reached its call, token, or time budget. "
+                    "Its validated checkpoint prefix was preserved; no analysis was run."
+                )
+            elif code == "research_pipeline_progressive_compile_failed":
+                message = (
+                    "The deterministic host compiler rejected the bounded Planner "
+                    "repairs. A local replay artifact was preserved; no analysis was run."
                 )
             else:
                 message = (

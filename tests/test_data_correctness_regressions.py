@@ -1110,6 +1110,61 @@ def test_converter_distinguishes_mimic_generations_and_rejects_ambiguity(tmp_pat
         DataConverter(ambiguous, verbose=False)
 
 
+def test_mimic_same_calendar_day_death_is_not_lost_to_midnight_precision(
+    monkeypatch,
+):
+    import easyicu.scores.outcomes as outcomes
+
+    icu = pd.DataFrame(
+        {
+            "subject_id": [1],
+            "hadm_id": [10],
+            "stay_id": [1],
+            "intime": ["2020-01-01 12:00:00"],
+            "los": [2.0],
+        }
+    )
+    # MIMIC patients.dod is a DATE, represented at midnight after loading.
+    patients = pd.DataFrame({"subject_id": [1], "dod": ["2020-01-01"]})
+    monkeypatch.setattr(
+        outcomes,
+        "_raw_table",
+        lambda database, data_path, table: icu if table == "icustays" else patients,
+    )
+
+    result = outcomes.load_outcomes("miiv").set_index("stay_id")
+
+    # Subtracting exact intime from a midnight DATE produces -0.5 days and
+    # previously censored a genuine same-day death. Calendar-day semantics are
+    # the strongest resolution the source can support.
+    assert bool(result.loc[1, "mort_28d"]) is True
+
+
+def test_mimic_absent_death_date_is_censored_not_known_alive(monkeypatch):
+    import easyicu.scores.outcomes as outcomes
+
+    icu = pd.DataFrame(
+        {
+            "subject_id": [1],
+            "hadm_id": [10],
+            "stay_id": [1],
+            "intime": ["2020-01-01 12:00:00"],
+            "los": [2.0],
+        }
+    )
+    patients = pd.DataFrame({"subject_id": [1], "dod": [None]})
+    monkeypatch.setattr(
+        outcomes,
+        "_raw_table",
+        lambda database, data_path, table: icu if table == "icustays" else patients,
+    )
+
+    result = outcomes.load_outcomes("miiv").set_index("stay_id")
+
+    assert pd.isna(result.loc[1, "mort_28d"])
+    assert pd.isna(result.loc[1, "mort_365d"])
+
+
 def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
     monkeypatch,
 ):

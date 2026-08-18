@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from easyicu.extensions.contracts import (
     EMPTY_EXTENSION_ACTIVATION,
@@ -19,7 +19,8 @@ if TYPE_CHECKING:
     from .workspace import ProjectWorkspace
 
 PROTOCOL_VERSION = "easyicu.pi-copilot/1"
-SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/1"
+LEGACY_SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/1"
+SESSION_SCHEMA_VERSION = "easyicu.pi-copilot-session/2"
 MAX_MESSAGE_CHARS = 12_000
 AgentMode = Literal["research", "workspace"]
 TURN_CAPABILITIES = frozenset({"workspace_write"})
@@ -73,6 +74,57 @@ class AuthorityBinding(BaseModel):
     active_job_id: Optional[str] = None
 
 
+class ResearchProviderBinding(BaseModel):
+    """Immutable model connection selected before a Copilot session starts.
+
+    Session schema v2 uses this one binding for both the conversational shell
+    and governed Research Agent calls.  The historical class/field name remains
+    readable so v1 sessions keep their original two-provider semantics.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.research-provider-binding/1"] = (
+        "easyicu.research-provider-binding/1"
+    )
+    provider: Literal["openai", "codex"] = "openai"
+    credential_source: Literal["pi_verified", "codex_user_auth"] = "pi_verified"
+    authentication_mode: Literal["api_key", "chatgpt_account"] = "api_key"
+    model: str = Field(default="configured_provider_model", min_length=1, max_length=256)
+    account_session_sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def _authority_is_coherent(self) -> "ResearchProviderBinding":
+        if self.provider == "codex":
+            if (
+                self.credential_source != "codex_user_auth"
+                or self.authentication_mode != "chatgpt_account"
+                or not self.account_session_sha256
+            ):
+                raise ValueError("codex research provider binding is incomplete")
+        elif (
+            self.credential_source != "pi_verified"
+            or self.authentication_mode != "api_key"
+            or self.account_session_sha256 is not None
+        ):
+            raise ValueError("API research provider binding is inconsistent")
+        return self
+
+    def public_projection(self) -> Dict[str, Any]:
+        """Return browser-safe identity without the server-side account locator."""
+
+        return {
+            "schema_version": self.schema_version,
+            "provider": self.provider,
+            "credential_source": self.credential_source,
+            "authentication_mode": self.authentication_mode,
+            "model": self.model,
+        }
+
+
 class PiProjectBindingHandoffReceipt(BaseModel):
     """Path-free Agent/StudyContext handoff into one Pi research project."""
 
@@ -92,7 +144,10 @@ class PiSessionRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["easyicu.pi-copilot-session/1"] = SESSION_SCHEMA_VERSION
+    schema_version: Literal[
+        "easyicu.pi-copilot-session/1",
+        "easyicu.pi-copilot-session/2",
+    ] = SESSION_SCHEMA_VERSION
     session_id: str
     # Product/project ownership is fixed when the Pi AgentSession is created.
     # ``None`` is accepted only so metadata written before project scoping can
@@ -116,6 +171,10 @@ class PiSessionRecord(BaseModel):
     extension_activation: ExtensionActivationSnapshot = Field(
         default_factory=lambda: EMPTY_EXTENSION_ACTIVATION
     )
+    research_provider: ResearchProviderBinding = Field(
+        default_factory=ResearchProviderBinding,
+        frozen=True,
+    )
     binding: AuthorityBinding = Field(default_factory=AuthorityBinding)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
@@ -131,6 +190,12 @@ class PiSessionRecord(BaseModel):
     ] = None
     last_turn_allowed_actions: list[str] = Field(default_factory=list, max_length=16)
     pinned_for_presentation: bool = False
+
+    @property
+    def uses_unified_model_connection(self) -> bool:
+        """Whether the frozen provider powers both Copilot and analysis."""
+
+        return self.schema_version == SESSION_SCHEMA_VERSION
 
 
 class PiToolResult(BaseModel):
@@ -306,10 +371,12 @@ __all__ = [
     "AgentMode",
     "AuthorityBinding",
     "HostTurnGrant",
+    "LEGACY_SESSION_SCHEMA_VERSION",
     "MAX_MESSAGE_CHARS",
     "PROTOCOL_VERSION",
     "PiCopilotError",
     "PiProjectBindingHandoffReceipt",
+    "ResearchProviderBinding",
     "PiSessionRecord",
     "PiToolResult",
     "SESSION_SCHEMA_VERSION",

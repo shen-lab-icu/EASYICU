@@ -6,6 +6,9 @@ import os
 from typing import Mapping, Sequence
 
 
+CODEX_APP_SERVER_EXECUTABLE_ENV = "EASYICU_CODEX_EXECUTABLE"
+
+
 _SAFE_PROVIDER_ENV_KEYS = (
     "PATH",
     "HOME",
@@ -24,12 +27,10 @@ _SAFE_PROVIDER_ENV_KEYS = (
 
 _BACKEND_ENV_KEYS = {
     "codex": (
-        "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
         "CODEX_HOME",
+        CODEX_APP_SERVER_EXECUTABLE_ENV,
     ),
     "claude": (
-        "ANTHROPIC_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "CLAUDE_CONFIG_DIR",
     ),
@@ -56,9 +57,7 @@ def build_provider_subprocess_env(
     source = os.environ if environment is None else environment
     keys = (*_SAFE_PROVIDER_ENV_KEYS, *_BACKEND_ENV_KEYS[normalized_backend])
     selected = {
-        key: str(source[key])
-        for key in keys
-        if key in source and str(source[key])
+        key: str(source[key]) for key in keys if key in source and str(source[key])
     }
     for raw_key in required_keys:
         key = str(raw_key or "").strip()
@@ -69,4 +68,8 @@ def build_provider_subprocess_env(
     return selected
 
 
-__all__ = ["build_provider_subprocess_env", "external_llm_opted_in"]
+__all__ = [
+    "CODEX_APP_SERVER_EXECUTABLE_ENV",
+    "build_provider_subprocess_env",
+    "external_llm_opted_in",
+]

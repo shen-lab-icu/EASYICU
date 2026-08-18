@@ -37,6 +37,8 @@ from ..intake.materialized_trajectory import (
     VerifiedLegacyTrajectoryCapsuleReceipt,
 )
 from ..literature import LiteratureBundle
+from ..planning.cohort_contract import cohort_concept_id_scope
+from ..planning.progressive_compiler import progressive_cohort_concept_ids
 from ..research_context.typed import parse_research_context_json
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from ..contracts.runtime import _WritePhaseResult
@@ -501,13 +503,34 @@ def restore_durable_human_review_pause(
             ValidationFinding.model_validate(item)
             for item in list(handoff.get("findings") or ())
         ]
-        plan = AnalysisPlan.model_validate(handoff["plan"])
         preplan_literature = (
             LiteratureBundle.model_validate(handoff["preplan_literature"])
             if handoff.get("preplan_literature") is not None
             else None
         )
         started_at = datetime.fromisoformat(str(handoff["started_at"]))
+    except Exception as exc:
+        raise HumanReviewCheckpointError(
+            "durable human-review Plan handoff is invalid"
+        ) from exc
+    cohort_concept_ids = tuple(
+        sorted(
+            progressive_cohort_concept_ids(
+                agent_context,
+                tuple(variable.name for variable in agent_context.variables),
+            )
+        )
+    )
+    sealed_cohort_concept_ids = tuple(
+        str(item) for item in list(handoff.get("cohort_concept_ids") or ())
+    )
+    if sealed_cohort_concept_ids and sealed_cohort_concept_ids != cohort_concept_ids:
+        raise HumanReviewCheckpointError(
+            "durable human-review cohort concept authority changed after the pause"
+        )
+    try:
+        with cohort_concept_id_scope(cohort_concept_ids):
+            plan = AnalysisPlan.model_validate(handoff["plan"])
     except Exception as exc:
         raise HumanReviewCheckpointError(
             "durable human-review Plan handoff is invalid"
@@ -522,8 +545,14 @@ def restore_durable_human_review_pause(
     try:
         if parse_research_context_json(context_path.read_text(encoding="utf-8")) != context:
             raise ValueError("context differs")
-        if AnalysisPlan.model_validate_json(plan_path.read_text(encoding="utf-8")) != plan:
-            raise ValueError("plan differs")
+        with cohort_concept_id_scope(cohort_concept_ids):
+            if (
+                AnalysisPlan.model_validate_json(
+                    plan_path.read_text(encoding="utf-8")
+                )
+                != plan
+            ):
+                raise ValueError("plan differs")
     except Exception as exc:
         raise HumanReviewCheckpointError(
             "reviewed context or plan artifact changed after the pause"
@@ -579,6 +608,7 @@ def restore_durable_human_review_pause(
             for item in list(handoff.get("direct_comparator_literature_keys") or ())
         ),
         preplan_literature=preplan_literature,
+        cohort_concept_ids=cohort_concept_ids,
     )
 
     trajectory_binding = None

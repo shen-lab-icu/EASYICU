@@ -247,6 +247,95 @@ def repair_missing_methods_method_citation(
     }
 
 
+def _run_bound_context_source(
+    literature: Optional[LiteratureBundle],
+) -> Optional[str]:
+    """Return one exact contextual source without inventing a content claim."""
+
+    if literature is None:
+        return None
+    eligible_comparators = {
+        decision.citation_key
+        for decision in literature.screening_decisions
+        if decision.disposition == "include"
+        and decision.evidence_role == "direct_comparator"
+        and decision.publication_type_eligible
+    }
+    for record in literature.citations:
+        if record.key in eligible_comparators:
+            return record.key
+    method_keys = {card.source_key for card in METHOD_CARDS}
+    for record in literature.citations:
+        if record.key not in method_keys:
+            return record.key
+    return None
+
+
+def repair_missing_context_section_citations(
+    manuscript: str,
+    literature: Optional[LiteratureBundle],
+) -> tuple[str, list[dict[str, str]]]:
+    """Restore neutral Introduction/Discussion citations from run authority.
+
+    The repair makes no claim about a paper's findings.  It only records which
+    exact source the run retained for clinical context, preferring a screened
+    direct comparator and otherwise using the first non-method contextual
+    record in the immutable bundle.  Unknown or absent authority leaves the
+    manuscript unchanged and the existing literature audit stays fail-closed.
+    """
+
+    audit = audit_manuscript_literature(manuscript, literature)
+    missing = set(audit.missing_required_citation_sections) & {
+        "introduction",
+        "discussion",
+    }
+    if not missing:
+        return manuscript, []
+    citation_key = _run_bound_context_source(literature)
+    if citation_key is None:
+        return manuscript, []
+    templates = {
+        "introduction": (
+            "The declared clinical framework was contextualized using an exact "
+            f"source retained in the run literature bundle [@{citation_key}]."
+        ),
+        "discussion": (
+            "Interpretation was considered alongside the exact run-bound "
+            f"clinical-context source [@{citation_key}]."
+        ),
+    }
+    repaired = manuscript
+    repairs: list[dict[str, str]] = []
+    for section in ("introduction", "discussion"):
+        if section not in missing:
+            continue
+        heading = next(
+            (
+                match
+                for match in _HEADING.finditer(repaired or "")
+                if _canonical_section(match.group("title")) == section
+            ),
+            None,
+        )
+        if heading is None:
+            continue
+        sentence = templates[section]
+        repaired = (
+            repaired[: heading.end()]
+            + "\n\n"
+            + sentence
+            + repaired[heading.end() :]
+        )
+        repairs.append(
+            {
+                "section": section,
+                "citation_key": citation_key,
+                "sentence": sentence,
+            }
+        )
+    return repaired, repairs
+
+
 def audit_manuscript_literature(
     manuscript: str,
     literature: Optional[LiteratureBundle],
@@ -336,6 +425,7 @@ def audit_manuscript_literature(
 __all__ = [
     "ManuscriptLiteratureAudit",
     "audit_manuscript_literature",
+    "repair_missing_context_section_citations",
     "repair_missing_methods_method_citation",
     "render_writer_literature_digest",
 ]

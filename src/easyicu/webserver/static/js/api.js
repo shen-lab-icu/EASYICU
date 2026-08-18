@@ -11,7 +11,11 @@
 
   async function getJSON(path) {
     const res = await fetch(path, { headers: { Accept: 'application/json' } });
-    if (!res.ok) throw new Error(path + ' -> HTTP ' + res.status);
+    if (!res.ok) {
+      let d = null;
+      try { const payload = await res.json(); d = payload && payload.detail; } catch (e) {}
+      throw apiError(path, res, d);
+    }
     return res.json();
   }
 
@@ -285,6 +289,18 @@
     const q = provider ? '?provider=' + encodeURIComponent(provider) : '';
     return getJSON('/api/agent-runs/provider-status' + q);
   }
+  function loadCodexAuthStatus() {
+    return getJSON('/api/agent-runs/codex-auth/status');
+  }
+  function startCodexAuthLogin() {
+    return postJSON('/api/agent-runs/codex-auth/login', {});
+  }
+  function cancelCodexAuthLogin() {
+    return postJSON('/api/agent-runs/codex-auth/cancel', {});
+  }
+  function logoutCodexAuth() {
+    return postJSON('/api/agent-runs/codex-auth/logout', {});
+  }
   function saveAgentProviderConfig(body) {
     return postJSON('/api/agent-runs/provider-config', body || {});
   }
@@ -405,6 +421,21 @@
   }
   function savePiCopilotProviderConfig(body) {
     return postJSON('/api/copilot/pi/provider-config', body || {});
+  }
+  function loadPiCopilotCodexStatus() {
+    return getJSON('/api/copilot/pi/research-provider/codex/status');
+  }
+  function startPiCopilotCodexLogin(flow) {
+    return postJSON('/api/copilot/pi/research-provider/codex/login', { flow: flow || 'browser' });
+  }
+  function cancelPiCopilotCodexLogin() {
+    return postJSON('/api/copilot/pi/research-provider/codex/cancel', {});
+  }
+  function logoutPiCopilotCodex() {
+    return postJSON('/api/copilot/pi/research-provider/codex/logout', {});
+  }
+  function loadPiCopilotCodexModels() {
+    return getJSON('/api/copilot/pi/research-provider/codex/models');
   }
   function createPiCopilotSession(body) {
     return postJSON('/api/copilot/pi/sessions', body || {});
@@ -597,6 +628,10 @@
   window.EU_API.startCrossdbReviewSummaryJob = startCrossdbReviewSummaryJob;
   window.EU_API.loadCrossdbDemoDistribution = loadCrossdbDemoDistribution;
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
+  window.EU_API.loadCodexAuthStatus = loadCodexAuthStatus;
+  window.EU_API.startCodexAuthLogin = startCodexAuthLogin;
+  window.EU_API.cancelCodexAuthLogin = cancelCodexAuthLogin;
+  window.EU_API.logoutCodexAuth = logoutCodexAuth;
   window.EU_API.saveAgentProviderConfig = saveAgentProviderConfig;
   window.EU_API.startAgentRun = startAgentRun;
   window.EU_API.loadActiveStudyContext = loadActiveStudyContext;
@@ -634,6 +669,11 @@
   window.EU_API.loadGuidedSessions = loadGuidedSessions;
   window.EU_API.loadPiCopilotStatus = loadPiCopilotStatus;
   window.EU_API.savePiCopilotProviderConfig = savePiCopilotProviderConfig;
+  window.EU_API.loadPiCopilotCodexStatus = loadPiCopilotCodexStatus;
+  window.EU_API.startPiCopilotCodexLogin = startPiCopilotCodexLogin;
+  window.EU_API.cancelPiCopilotCodexLogin = cancelPiCopilotCodexLogin;
+  window.EU_API.logoutPiCopilotCodex = logoutPiCopilotCodex;
+  window.EU_API.loadPiCopilotCodexModels = loadPiCopilotCodexModels;
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
   window.EU_API.initializePiCopilotProject = initializePiCopilotProject;
   window.EU_API.loadPiCopilotProjectWorkflow = loadPiCopilotProjectWorkflow;

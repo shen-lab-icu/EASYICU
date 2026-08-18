@@ -1,0 +1,94 @@
+{
+  "schema_version": "easyicu.icu_action_space/1",
+  "action_space_ref": "easyicu.figure2_icu_agent_v2/action-space-20260815",
+  "stages": [
+    {
+      "stage_id": "question_context",
+      "order": 1,
+      "owner": "src/easyicu/research_agent/research_context/",
+      "public_contract": "ResearchContext plus typed temporal and observation semantics",
+      "success_artifact": "research_context.json with exact question and digest",
+      "failure_reason_codes": ["QUESTION_CONTEXT_INCOMPLETE", "TEMPORAL_SEMANTICS_UNRESOLVED"]
+    },
+    {
+      "stage_id": "literature_evidence",
+      "order": 2,
+      "owner": "src/easyicu/research_agent/planning/literature_contract.py",
+      "public_contract": "query and method literature bindings with source identity",
+      "success_artifact": "literature bindings and source excerpts",
+      "failure_reason_codes": ["LITERATURE_BINDING_INCOMPLETE", "LITERATURE_SOURCE_UNVERIFIED"]
+    },
+    {
+      "stage_id": "data_source_authority",
+      "order": 3,
+      "owner": "src/easyicu/research_agent/authority/source_fingerprints.py",
+      "public_contract": "typed source identity and immutable input authority",
+      "success_artifact": "source and input authority receipts",
+      "failure_reason_codes": ["DATA_SOURCE_AUTHORITY_MISSING", "DATA_SOURCE_IDENTITY_DRIFT"]
+    },
+    {
+      "stage_id": "concept_binding",
+      "order": 4,
+      "owner": "src/easyicu/research_agent/concept_catalog.py",
+      "public_contract": "typed concept identity, availability, units and observation scope",
+      "success_artifact": "concept binding and availability receipt",
+      "failure_reason_codes": ["CONCEPT_UNRESOLVED", "CONCEPT_AVAILABILITY_UNCERTIFIED"]
+    },
+    {
+      "stage_id": "cohort_definition",
+      "order": 5,
+      "owner": "src/easyicu/research_agent/cohort/materializer.py",
+      "public_contract": "immutable analysis cohort with attrition and semantic digest",
+      "success_artifact": "cohort artifact, flow table and cohort authority",
+      "failure_reason_codes": ["COHORT_CONTRACT_INCOMPLETE", "COHORT_AUTHORITY_DRIFT"]
+    },
+    {
+      "stage_id": "estimand_method",
+      "order": 6,
+      "owner": "src/easyicu/research_agent/planning/scientific_action_catalog.py",
+      "public_contract": "typed analysis family, estimand and scientific action selection",
+      "success_artifact": "analysis plan with exact action ids and endpoint contract",
+      "failure_reason_codes": ["SCIENTIFIC_ACTION_UNAVAILABLE", "ESTIMAND_CONTRACT_INCOMPLETE"]
+    },
+    {
+      "stage_id": "human_plan_review",
+      "order": 7,
+      "owner": "src/easyicu/research_agent/authority/plan_review.py",
+      "public_contract": "digest-bound clinical and methods decision on the executable plan",
+      "success_artifact": "approved executable plan and review receipt",
+      "failure_reason_codes": ["PLAN_REVIEW_REQUIRED", "PLAN_REVIEW_AUTHORITY_STALE"]
+    },
+    {
+      "stage_id": "bounded_execution",
+      "order": 8,
+      "owner": "src/easyicu/research_agent/execution/runner.py",
+      "public_contract": "resource-bounded isolated execution with typed result envelopes",
+      "success_artifact": "step result envelopes, code and execution receipts",
+      "failure_reason_codes": ["EXECUTION_CONTRACT_FAILED", "EXECUTION_RESOURCE_LIMIT"]
+    },
+    {
+      "stage_id": "diagnostics_sensitivity",
+      "order": 9,
+      "owner": "src/easyicu/research_agent/execution/standard_executor_diagnostics.py",
+      "public_contract": "family-specific assumptions, diagnostics and prespecified sensitivity results",
+      "success_artifact": "diagnostic and sensitivity panels with evidence ids",
+      "failure_reason_codes": ["DIAGNOSTIC_REQUIREMENT_INCOMPLETE", "SENSITIVITY_AUTHORITY_MISSING"]
+    },
+    {
+      "stage_id": "evidence_artifacts",
+      "order": 10,
+      "owner": "src/easyicu/research_agent/authority/evidence_store.py",
+      "public_contract": "content-addressed tables, figures, claims and source bindings",
+      "success_artifact": "EvidenceStore snapshot and registered artifact manifest",
+      "failure_reason_codes": ["EVIDENCE_BINDING_INCOMPLETE", "ARTIFACT_DIGEST_MISMATCH"]
+    },
+    {
+      "stage_id": "interpretation_reportability",
+      "order": 11,
+      "owner": "src/easyicu/research_agent/reporting/readiness.py",
+      "public_contract": "claim ceiling, limitations, reportability and publication authority",
+      "success_artifact": "bounded report, readiness receipt and reportability verdict",
+      "failure_reason_codes": ["CLAIM_CEILING_EXCEEDED", "REPORTABILITY_AUTHORITY_WITHHELD"]
+    }
+  ]
+}
