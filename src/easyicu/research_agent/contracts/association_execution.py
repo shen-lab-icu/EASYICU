@@ -41,7 +41,8 @@ reason the coder path handles correctly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+import math
+from typing import Any, Mapping, Optional, Sequence
 
 from .cohort_product_keys import sole_typed_cohort_input
 from .model_tokens import (
@@ -66,6 +67,93 @@ ASSOCIATION_HOST_ESTIMATORS: Mapping[str, str] = {
     "binary": ASSOCIATION_LOGIT_ESTIMATOR,
     "continuous": ASSOCIATION_OLS_ESTIMATOR,
 }
+
+
+#: The registered agent-coded association capability reused by a sensitivity
+#: child only after the host closes the narrower contract below.  The id alone
+#: never grants sensitivity authority; role, parent, output and variant roster
+#: must all match.
+ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID = "association_freeform_v1"
+ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT = "table:adjusted_association_estimates"
+
+
+@dataclass(frozen=True, slots=True)
+class AssociationBinarySensitivityContract:
+    """Closed effect boundary for one prespecified binary sensitivity grid."""
+
+    parent_product: str
+    output_product: str
+    sensitivity_ids: tuple[str, ...]
+    effect_measure: str = "odds_ratio"
+
+
+@dataclass(frozen=True, slots=True)
+class AssociationBinarySensitivityPlanVerdict:
+    """Attributable answer for a plan claiming the sensitivity capability."""
+
+    claimed: bool
+    reason_code: str
+    reason: str
+    contract: Optional[AssociationBinarySensitivityContract] = None
+
+
+@dataclass(frozen=True, slots=True)
+class AssociationBinarySensitivityResultIssue:
+    """One execution-result violation without importing schema types."""
+
+    reason_code: str
+    message: str
+    detail: Mapping[str, Any]
+
+
+def association_binary_sensitivity_contract(
+    step: Any,
+) -> Optional[AssociationBinarySensitivityContract]:
+    """Return the local closed contract, or ``None`` for any incomplete shape.
+
+    This deliberately reads only typed plan coordinates.  Method prose,
+    analysis-family inference, and effect-looking output names cannot grant
+    authority.  Plan-wide parent ownership is checked separately by
+    :func:`association_binary_sensitivity_plan_verdict`.
+    """
+
+    if (
+        str(getattr(step, "scientific_capability", "") or "").strip()
+        != ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+        or getattr(step, "planned_analysis_role", None) != "sensitivity"
+        or not str(getattr(step, "method", "") or "").strip()
+    ):
+        return None
+    outputs = tuple(
+        str(value or "").strip()
+        for value in (getattr(step, "expected_outputs", None) or ())
+    )
+    if (
+        len(outputs) != 1
+        or not outputs[0].startswith("table:")
+        or len(outputs[0].partition(":")[2]) == 0
+    ):
+        return None
+    inputs = tuple(
+        str(value or "").strip() for value in (getattr(step, "inputs", None) or ())
+    )
+    if inputs.count(ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT) != 1:
+        return None
+    sensitivity_ids = tuple(
+        str(value or "").strip()
+        for value in (getattr(step, "sensitivity_spec_ids", None) or ())
+    )
+    if (
+        not sensitivity_ids
+        or any(not value for value in sensitivity_ids)
+        or len(sensitivity_ids) != len(set(sensitivity_ids))
+    ):
+        return None
+    return AssociationBinarySensitivityContract(
+        parent_product=ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT,
+        output_product=outputs[0],
+        sensitivity_ids=sensitivity_ids,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,9 +357,225 @@ def sole_primary_model_requirement(step: Any) -> Optional[Any]:
     return requirements[0] if len(requirements) == 1 else None
 
 
+def association_binary_sensitivity_plan_verdict(
+    step: Any,
+    *,
+    plan_steps: Sequence[Any],
+) -> AssociationBinarySensitivityPlanVerdict:
+    """Verify the capability is inherited from one exact binary parent.
+
+    The sensitivity step remains agent-coded.  What the host certifies is the
+    narrower proposition needed by the effect gate: its input is the unique
+    host-owned binary adjusted-association product, its requested variants are
+    a closed id roster, and it owns exactly one typed result table.
+    """
+
+    declared = str(getattr(step, "scientific_capability", "") or "").strip()
+    if declared != ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID:
+        return AssociationBinarySensitivityPlanVerdict(
+            claimed=False,
+            reason_code="association_binary_sensitivity_not_declared",
+            reason="the step does not declare the binary sensitivity capability",
+        )
+    contract = association_binary_sensitivity_contract(step)
+    if contract is None:
+        return AssociationBinarySensitivityPlanVerdict(
+            claimed=False,
+            reason_code="association_binary_sensitivity_shape_invalid",
+            reason=(
+                "the capability requires role='sensitivity', one table output, "
+                "one adjusted-association product input, a non-empty unique "
+                "sensitivity id roster, and a declared method"
+            ),
+        )
+    steps = tuple(plan_steps)
+    producers = [
+        candidate
+        for candidate in steps
+        if contract.parent_product
+        in {
+            str(value or "").strip()
+            for value in (getattr(candidate, "expected_outputs", None) or ())
+        }
+    ]
+    if len(producers) != 1:
+        return AssociationBinarySensitivityPlanVerdict(
+            claimed=False,
+            reason_code="association_binary_sensitivity_parent_ambiguous",
+            reason=(
+                "the inherited adjusted-association product must have exactly "
+                f"one plan owner; found {len(producers)}"
+            ),
+        )
+    parent = producers[0]
+    try:
+        parent_index = next(
+            index for index, candidate in enumerate(steps) if candidate is parent
+        )
+        child_index = next(
+            index for index, candidate in enumerate(steps) if candidate is step
+        )
+    except StopIteration:
+        return AssociationBinarySensitivityPlanVerdict(
+            claimed=False,
+            reason_code="association_binary_sensitivity_step_unbound",
+            reason="the sensitivity step or its parent is absent from the plan",
+        )
+    if parent_index >= child_index:
+        return AssociationBinarySensitivityPlanVerdict(
+            claimed=False,
+            reason_code="association_binary_sensitivity_parent_not_preceding",
+            reason="the adjusted-association parent must precede its sensitivity child",
+        )
+    parent_verdict = association_execution_verdict(parent)
+    requirement = sole_primary_model_requirement(parent)
+    if (
+        getattr(parent, "planned_analysis_role", None) != "primary"
+        or not parent_verdict.claimed
+        or requirement is None
+        or str(getattr(requirement, "outcome_type", "") or "").strip() != "binary"
+    ):
+        return AssociationBinarySensitivityPlanVerdict(
+            claimed=False,
+            reason_code="association_binary_sensitivity_parent_invalid",
+            reason=(
+                "the parent must be the preceding host-owned primary adjusted "
+                "association with one binary-outcome model requirement; "
+                f"owner_reason={parent_verdict.reason}"
+            ),
+        )
+    return AssociationBinarySensitivityPlanVerdict(
+        claimed=True,
+        reason_code="association_binary_sensitivity_contract_closed",
+        reason=(
+            "one prespecified sensitivity grid inherits one host-owned binary "
+            "adjusted-association product"
+        ),
+        contract=contract,
+    )
+
+
+def _finite_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _nonnegative_integer(value: Any) -> Optional[int]:
+    number = _finite_number(value)
+    if number is None or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def association_binary_sensitivity_result_issues(
+    step: Any,
+    step_summary: Mapping[str, Any],
+) -> tuple[AssociationBinarySensitivityResultIssue, ...]:
+    """Validate the machine-readable result promised by the closed contract."""
+
+    contract = association_binary_sensitivity_contract(step)
+    if contract is None:
+        return ()
+    rows = step_summary.get("analysis_rows")
+    if not isinstance(rows, list):
+        return (
+            AssociationBinarySensitivityResultIssue(
+                reason_code="association_binary_sensitivity_rows_missing",
+                message=(
+                    "The binary sensitivity capability requires an analysis_rows "
+                    "list in step_summary."
+                ),
+                detail={"expected_analysis_ids": list(contract.sensitivity_ids)},
+            ),
+        )
+    row_ids = [
+        str(row.get("analysis_id") or "").strip() if isinstance(row, Mapping) else ""
+        for row in rows
+    ]
+    issues: list[AssociationBinarySensitivityResultIssue] = []
+    if (
+        len(row_ids) != len(contract.sensitivity_ids)
+        or len(row_ids) != len(set(row_ids))
+        or set(row_ids) != set(contract.sensitivity_ids)
+    ):
+        issues.append(
+            AssociationBinarySensitivityResultIssue(
+                reason_code="association_binary_sensitivity_ids_mismatch",
+                message=(
+                    "Sensitivity results must contain each planner-owned "
+                    "sensitivity id exactly once and no undeclared ids."
+                ),
+                detail={
+                    "expected_analysis_ids": list(contract.sensitivity_ids),
+                    "observed_analysis_ids": row_ids,
+                },
+            )
+        )
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            issues.append(
+                AssociationBinarySensitivityResultIssue(
+                    reason_code="association_binary_sensitivity_row_invalid",
+                    message="Every binary sensitivity result row must be an object.",
+                    detail={"row_index": index},
+                )
+            )
+            continue
+        analysis_id = str(row.get("analysis_id") or "").strip()
+        n_stays = _nonnegative_integer(row.get("n_stays"))
+        n_deaths = _nonnegative_integer(row.get("n_deaths"))
+        odds_ratio = _finite_number(row.get("odds_ratio"))
+        ci_low = _finite_number(row.get("ci_low"))
+        ci_high = _finite_number(row.get("ci_high"))
+        invalid_fields: list[str] = []
+        if n_stays is None or n_stays < 1:
+            invalid_fields.append("n_stays")
+        if n_deaths is None or (n_stays is not None and n_deaths > n_stays):
+            invalid_fields.append("n_deaths")
+        if odds_ratio is None or odds_ratio <= 0:
+            invalid_fields.append("odds_ratio")
+        if ci_low is None or ci_low <= 0:
+            invalid_fields.append("ci_low")
+        if ci_high is None or ci_high <= 0:
+            invalid_fields.append("ci_high")
+        if (
+            odds_ratio is not None
+            and ci_low is not None
+            and ci_high is not None
+            and not (0 < ci_low <= odds_ratio <= ci_high)
+        ):
+            invalid_fields.append("effect_interval_order")
+        if invalid_fields:
+            issues.append(
+                AssociationBinarySensitivityResultIssue(
+                    reason_code="association_binary_sensitivity_row_invalid",
+                    message=(
+                        "Each binary sensitivity row requires coherent finite "
+                        "counts and a positive odds ratio within its interval."
+                    ),
+                    detail={
+                        "row_index": index,
+                        "analysis_id": analysis_id or None,
+                        "invalid_fields": invalid_fields,
+                    },
+                )
+            )
+    return tuple(issues)
+
+
 __all__ = [
+    "ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID",
+    "ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT",
     "ASSOCIATION_HOST_ESTIMATORS",
+    "AssociationBinarySensitivityContract",
+    "AssociationBinarySensitivityPlanVerdict",
+    "AssociationBinarySensitivityResultIssue",
     "AssociationEstimatorSupport",
+    "association_binary_sensitivity_contract",
+    "association_binary_sensitivity_plan_verdict",
+    "association_binary_sensitivity_result_issues",
     "association_estimator_kind",
     "association_estimator_support",
     "association_execution_verdict",

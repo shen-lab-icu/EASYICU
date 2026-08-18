@@ -100,7 +100,12 @@ def sensitivity_output_instruction() -> str:
         "non_readmission_only, and use the readmission indicator only for that "
         "restriction rather than as a now-constant model covariate; the flexible "
         "row must use non-linear age and Charlson terms. Every model row must "
-        "report finite n_stays, n_deaths, odds_ratio, ci_low, and ci_high."
+        "report finite n_stays, n_deaths, odds_ratio, ci_low, and ci_high. For "
+        "each row, n_stays is the size of that row's prespecified eligibility "
+        "set before complete-case model filtering, and n_deaths is the number "
+        "of outcome events in that same eligibility set. Do not substitute the "
+        "fitted model's complete-case N for n_stays; a model N may be reported "
+        "separately if needed."
     )
 
 

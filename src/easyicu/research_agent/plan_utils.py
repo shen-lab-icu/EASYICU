@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 from pydantic import ValidationError
 
 from .authority.step_recovery import StepRecoverySignature
+from .contracts.association_execution import association_binary_sensitivity_contract
 from .contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
@@ -1000,8 +1001,10 @@ def effect_output_authorized(step: AnalysisStep) -> bool:
     never grant authority.
     """
 
-    return _effect_contract_applies(step) or bool(
-        getattr(step, "model_requirements", None)
+    return (
+        _effect_contract_applies(step)
+        or bool(getattr(step, "model_requirements", None))
+        or association_binary_sensitivity_contract(step) is not None
     )
 
 

@@ -16,6 +16,10 @@ from pydantic import ValidationError
 from ..authority.declared_levels import observed_levels_for
 from ..canonical_json import canonical_sha256
 from ..cohort.schema import materialized_input_column_authority
+from ..contracts.association_execution import (
+    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+    ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT,
+)
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
 from ..contracts.model_terms import ModelTermSpec, level_spelling
@@ -444,6 +448,88 @@ def _validate_outputs(
                 step_index=step_index,
                 path="outputs",
             )
+
+
+def _compile_binary_association_sensitivity_capability(
+    *,
+    skeleton: ProgressivePlanSkeleton,
+    step: ProgressiveSkeletonStep,
+    step_index: int,
+    outputs: Sequence[tuple[str, str]],
+) -> str | None:
+    """Compile effect authority only for the closed binary sensitivity shape."""
+
+    scientific_outputs = [
+        product_id
+        for product_id, semantic_role in outputs
+        if semantic_role == "scientific_sensitivity"
+    ]
+    parsed_output = (
+        typed_product(scientific_outputs[0])
+        if len(scientific_outputs) == 1
+        else None
+    )
+    if not scientific_outputs:
+        return None
+    if (
+        step.module_id != "custom_analysis"
+        or step.planned_analysis_role != "sensitivity"
+        or len(outputs) != 1
+        or parsed_output is None
+        or parsed_output[0] != "table"
+        or not step.sensitivity_spec_ids
+    ):
+        raise _fail(
+            "progressive_association_sensitivity_contract_invalid",
+            "scientific_sensitivity requires one custom sensitivity step, one "
+            "typed table output, and a non-empty unique sensitivity id roster",
+            step=step,
+            step_index=step_index,
+            path="outputs",
+        )
+    parent_refs = [
+        reference
+        for reference in step.product_inputs
+        if reference.product_id == ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT
+    ]
+    if len(parent_refs) != 1:
+        raise _fail(
+            "progressive_association_sensitivity_parent_invalid",
+            "scientific_sensitivity must consume exactly one "
+            f"{ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT!r} product",
+            step=step,
+            step_index=step_index,
+            path="product_inputs",
+        )
+    parent_ref = parent_refs[0]
+    parent_matches = [
+        candidate
+        for candidate in skeleton.steps[:step_index]
+        if candidate.step_id == parent_ref.producer_step_id
+    ]
+    if len(parent_matches) != 1:
+        raise _fail(
+            "progressive_association_sensitivity_parent_invalid",
+            "the declared adjusted-association producer must be one preceding step",
+            step=step,
+            step_index=step_index,
+            path="product_inputs",
+        )
+    parent = parent_matches[0]
+    if (
+        parent.module_id != "adjusted_association"
+        or parent.planned_analysis_role != "primary"
+        or parent.outcome_type != "binary"
+    ):
+        raise _fail(
+            "progressive_association_sensitivity_parent_invalid",
+            "the inherited parent must be the primary binary "
+            "adjusted_association module",
+            step=step,
+            step_index=step_index,
+            path="product_inputs",
+        )
+    return ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
 
 
 def _identity_column(
@@ -1283,6 +1369,14 @@ def _compile_one_step(
             path="outputs",
         ) from exc
     _validate_outputs(output_pairs, step=step, step_index=step_index)
+    association_sensitivity_capability = (
+        _compile_binary_association_sensitivity_capability(
+            skeleton=skeleton,
+            step=step,
+            step_index=step_index,
+            outputs=output_pairs,
+        )
+    )
     inputs, consumption = _compile_inputs(
         context=context,
         skeleton=skeleton,
@@ -1404,6 +1498,8 @@ def _compile_one_step(
             step=step,
             step_index=step_index,
         )
+    elif association_sensitivity_capability is not None:
+        kwargs["scientific_capability"] = association_sensitivity_capability
     try:
         compiled = AnalysisStep.model_validate(kwargs)
     except ValidationError as exc:
