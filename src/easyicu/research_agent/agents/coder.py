@@ -386,7 +386,10 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "never use an empty-object fallback that discards unwrapped authority. "
         "manifest['planner_declared_inputs'] is the exact Planner-owned consumer "
         "scope: kind:name entries are products and all others are the only eligible "
-        "raw-variable or column coordinates.\n"
+        "raw-variable or column coordinates. Project raw coordinates exactly as "
+        "`{item for item in manifest['planner_declared_inputs'] if ':' not in item}`; "
+        "raw coordinates are already bare names, so never split them to extract a "
+        "nonexistent suffix.\n"
         "- COHORT_PARQUET physical columns may be a strict superset of those raw "
         "coordinates. Require declared columns, but never require DataFrame.columns "
         "to equal planner_declared_inputs. Calculate only from declared coordinates; "
@@ -510,7 +513,10 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "empty-object fallback that discards unwrapped authority.",
         "- manifest['planner_declared_inputs'] is the exact Planner-owned "
         "consumer scope and the only eligible raw-variable or column coordinates. "
-        "manifest['inputs'] contains only host-bound typed products.",
+        "manifest['inputs'] contains only host-bound typed products. Project raw "
+        "coordinates exactly as `{item for item in "
+        "manifest['planner_declared_inputs'] if ':' not in item}`; raw coordinates "
+        "are bare names and must never be split to extract a suffix.",
         "- COHORT_PARQUET physical columns may be a strict superset of the raw "
         "Planner inputs. Require declared raw columns to be present, but never "
         "require DataFrame.columns to equal planner_declared_inputs or discard "

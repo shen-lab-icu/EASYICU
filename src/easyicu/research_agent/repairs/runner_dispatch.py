@@ -34,6 +34,7 @@ from .import_repair import (
     patch_known_host_helper_import,
 )
 from .input_scope import (
+    patch_planner_declared_raw_input_projection,
     patch_raw_contract_document_fallback,
     patch_raw_contract_list_type_assertion,
     patch_raw_contract_mapping_iteration,
@@ -140,6 +141,12 @@ def _runner_repair_input_contract_candidate(
         repaired = patch_raw_input_physical_superset_guard(code, run_log)
         if repaired != code:
             return input_scope_repair, repaired
+
+    raw_input_projection_repair = "planner_declared_raw_input_projection_v1"
+    if previous_repair != raw_input_projection_repair:
+        repaired = patch_planner_declared_raw_input_projection(code, run_log)
+        if repaired != code:
+            return raw_input_projection_repair, repaired
 
     raw_contract_mapping_repair = "raw_contract_mapping_iteration_v1"
     if previous_repair != raw_contract_mapping_repair:
