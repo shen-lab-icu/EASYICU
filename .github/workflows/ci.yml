@@ -1,8 +1,14 @@
 name: CI
 
 on:
+  # 2026-08-17: a bare `push:` ran the entire matrix on every feature-branch
+  # push AND again on the pull_request event -- the same 13,982 tests twice per
+  # iteration. Pushes now gate `main` only; PRs are the branch-level gate, and
+  # workflow_dispatch covers an on-demand full run before a freeze.
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,7 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+        # Full three-OS sweep on main / dispatch; PRs gate on ubuntu only.
+        # CLAUDE.md reserves the exhaustive matrix for the checkpoint run.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-14","windows-latest"]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,8 +39,8 @@ jobs:
 
       - name: Run conversion and extraction portability regressions
         run: |
-          pytest -q tests/test_arrow_converter.py tests/test_converter_optimizations.py tests/test_data_converter_hirid.py tests/test_derived_concept_callbacks.py tests/test_concept_outcome_fail_closed.py tests/test_extract_chunk_cap.py tests/test_extract_module_grouping.py
-          pytest -q tests/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
+          pytest -q -m "" tests/test_arrow_converter.py tests/test_converter_optimizations.py tests/test_data_converter_hirid.py tests/test_derived_concept_callbacks.py tests/test_concept_outcome_fail_closed.py tests/test_extract_chunk_cap.py tests/test_extract_module_grouping.py
+          pytest -q -m "" tests/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
 
   test:
     name: tests (py${{ matrix.python-version }})
@@ -40,7 +48,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # Same reasoning as portability: PRs prove the change on 3.11, and the
+        # 3.10/3.12 floors/ceilings are proven on main and before a freeze.
+        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.11"]') || fromJSON('["3.10","3.11","3.12"]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,11 +93,16 @@ jobs:
       - name: Run test suite
         run: |
           # Exercise fail-closed backend selection without development overrides.
-          pytest tests/research_agent/test_runner.py -q
+          # Kept serial and unfiltered: it asserts on runner selection itself.
+          pytest tests/research_agent/test_runner.py -q -m ""
           # Remaining offline integration tests may use the ephemeral Actions host.
+          # -m "" cancels the pytest.ini dev default (-m "not slow"): CI always
+          # runs the slow/integration tier. -n auto spreads it over the runner's
+          # cores -- pytest-xdist was a declared dev dep that no workflow used.
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
-            pytest -q --ignore=tests/research_agent/test_runner.py
+            pytest -q -m "" -n auto --dist loadfile \
+              --ignore=tests/research_agent/test_runner.py
 
   packaging:
     name: wheel + sdist install

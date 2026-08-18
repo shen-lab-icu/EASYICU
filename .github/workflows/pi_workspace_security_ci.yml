@@ -54,7 +54,7 @@ jobs:
 
       - name: Run scoped Pi contract tests
         run: |
-          pytest -q \
+          pytest -q -m "" \
             tests/test_pi_copilot_routes.py \
             tests/test_pi_copilot_workspace.py \
             tests/test_pi_copilot_contract.py \

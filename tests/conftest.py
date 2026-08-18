@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from functools import lru_cache
 import sys
 from pathlib import Path
 import types
@@ -228,6 +229,30 @@ _REAL_LLM_KEY_ENV_VARS = (
     "OPENROUTER_API_KEY",
     "ANTHROPIC_API_KEY",
 )
+
+
+# --- 慢测试自动打标 (2026-08-17) -------------------------------------------
+# tests/slow_tests.txt 里的节点在收集时自动获得 @pytest.mark.slow, 于是
+# pytest.ini 的开发默认 -m "not slow" 能跳过它们。用 pytest -m "" 跑全套。
+# 用 pytest_itemcollected 而不是 pytest_collection_modifyitems: marker 必须
+# 在 -m 表达式做去选之前就挂上去。
+_SLOW_LIST_PATH = Path(__file__).parent / "slow_tests.txt"
+
+
+@lru_cache(maxsize=1)
+def _slow_node_ids() -> frozenset[str]:
+    if not _SLOW_LIST_PATH.exists():
+        return frozenset()
+    return frozenset(
+        line.strip()
+        for line in _SLOW_LIST_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+def pytest_itemcollected(item):
+    if item.nodeid in _slow_node_ids():
+        item.add_marker(pytest.mark.slow)
 
 
 def pytest_collection_modifyitems(config, items):

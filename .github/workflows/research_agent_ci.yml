@@ -81,11 +81,19 @@ jobs:
       - name: Run research_agent test suite
         run: |
           python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
-          pytest tests/test_arch_measure.py -q
+          pytest tests/test_arch_measure.py -q -m ""
           # Keep fail-closed runner policy tests in their default environment.
-          pytest tests/research_agent/test_runner.py -q
-          # The remaining offline integration tests execute deterministic
-          # generated fixtures on the ephemeral Actions host.
+          pytest tests/research_agent/test_runner.py -q -m ""
+          # 2026-08-17: this job used to re-run the whole 10,577-test
+          # research_agent suite that ci.yml already runs, doubling the wall
+          # clock of every research_agent PR for zero extra coverage. This
+          # job's unique value is the MINIMUM dependency stack (core runtime
+          # installed explicitly, then `pip install --no-deps -e .`), so it now
+          # proves import health and the typed contract surface under that
+          # stack and leaves exhaustive behaviour coverage to ci.yml.
+          python -c "import easyicu.research_agent as m; print('import OK', m.__name__)"
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
-            pytest tests/research_agent -q --ignore=tests/research_agent/test_runner.py
+            pytest tests/research_agent -q -m "" -n auto --dist loadfile \
+              -k "contract or boundary or package or schema or import" \
+              --ignore=tests/research_agent/test_runner.py
