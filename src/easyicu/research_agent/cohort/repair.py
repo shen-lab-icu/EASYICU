@@ -36,7 +36,7 @@ from .schema import (
     CohortSchemaError,
     ConceptPredicate,
     TimeWindow,
-    register_cohort_concept_ids,
+    cohort_concept_id_scope,
     validate_cohort_definition,
 )
 from ..providers.protocol import LLMClient, LLMMessage
@@ -240,10 +240,25 @@ def extract_cohort_definition_from_prose(
         exclusion=tuple(exclusion),
     )
     # Allow these pre-materialised universe columns through predicate validation
-    # (they are not dictionary concepts).
-    register_cohort_concept_ids(columns)
-    try:
-        validate_cohort_definition(definition)
-    except CohortSchemaError:
-        return None
+    # (they are not dictionary concepts) for THIS validation only.
+    #
+    # This used to call ``register_cohort_concept_ids(columns)``, a permanent
+    # process-wide registration, purely to make the next two lines pass. Every
+    # caller -- including a unit test asking one question -- therefore leaked
+    # its universe columns into every later validation in the process. Measured
+    # 2026-08-18: running tests/research_agent/test_cohort_repair.py left
+    # ``{age, death, los_icu, sofa2, stay_id}`` registered forever, which made
+    # test_plan_lifecycle_authority's fail-closed assertion ("unsealed
+    # materialized concept must be refused") silently stop raising. A guard
+    # that only fires when nothing before it touched cohort repair is not a
+    # guard.
+    #
+    # The run-scoped registration this function used to imply is now made
+    # explicitly by the execution layer that owns the run (see
+    # ``execution/phase_support.py``); extraction itself is side-effect free.
+    with cohort_concept_id_scope(columns):
+        try:
+            validate_cohort_definition(definition)
+        except CohortSchemaError:
+            return None
     return definition
