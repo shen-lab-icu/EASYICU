@@ -48,7 +48,7 @@ def _authority_bind_worker(path: str, ready, start, queue, study_id: str) -> Non
         queue.put(("error", exc.code))
 
 
-#: How long to wait for both children to finish booting and patching.
+#: Total budget for BOTH children to finish booting and patching.
 #:
 #: A "spawn" child starts a fresh interpreter and imports easyicu before it can
 #: race for anything, and CI runs the suite under ``-n auto``. This budget is
@@ -56,7 +56,7 @@ def _authority_bind_worker(path: str, ready, start, queue, study_id: str) -> Non
 #: from the two below so widening it cannot mask a slow lock or a slow exit.
 _WORKER_READY_TIMEOUT_SECONDS = 120
 
-#: How long the contended operation itself may take once both children are
+#: Total budget for the contended operation once both children are
 #: parked on the start gate. Short on purpose: the work is one 0.2s delayed
 #: write plus lock contention, so overrunning this is a lock problem.
 _RESULT_TIMEOUT_SECONDS = 30
@@ -66,11 +66,32 @@ _RESULT_TIMEOUT_SECONDS = 30
 _EXIT_TIMEOUT_SECONDS = 10
 
 
-def _drain(queue, count: int, timeout: float, what: str, workers) -> list:
-    collected = []
+def _drain(
+    queue,
+    count: int,
+    budget: float,
+    what: str,
+    workers,
+    *,
+    stalled_hint: str,
+) -> list:
+    """Collect ``count`` reports within ONE shared budget for the whole phase.
+
+    Passing the budget to each ``queue.get`` separately meant a phase declared
+    at 120s could legitimately take 240s with two workers, so the constants
+    named a per-worker wait while reading like a phase budget. The deadline is
+    absolute and computed once: whatever the phase is declared to cost is what
+    it can cost in total, regardless of how many workers it collects from.
+    """
+
+    deadline = time.monotonic() + budget
+    collected: list = []
     for index in range(count):
+        remaining = deadline - time.monotonic()
         try:
-            collected.append(queue.get(timeout=timeout))
+            if remaining <= 0:
+                raise Empty
+            collected.append(queue.get(timeout=remaining))
         except Empty:
             states = [
                 f"pid={w.pid} alive={w.is_alive()} exitcode={w.exitcode}"
@@ -80,11 +101,10 @@ def _drain(queue, count: int, timeout: float, what: str, workers) -> list:
                 worker.kill()
                 worker.join(timeout=_EXIT_TIMEOUT_SECONDS)
             raise AssertionError(
-                f"only {index} of {count} workers reported {what} within "
-                f"{timeout}s; worker states at timeout: {'; '.join(states)}. "
-                "alive=True means the child was still booting or blocked "
-                "rather than the lock misbehaving; a non-zero exitcode means "
-                "it crashed before it could report."
+                f"only {index} of {count} workers reported {what} within the "
+                f"{budget}s phase budget; worker states at timeout: "
+                f"{'; '.join(states)}. {stalled_hint} A non-zero exitcode "
+                "means the child crashed before it could report."
             ) from None
     return collected
 
@@ -118,13 +138,34 @@ def _run_pair(target, args: tuple[str, ...]) -> list[tuple[str, str]]:
         worker.start()
 
     # 1-2. Both children are booted and patched before the gate opens.
-    _drain(ready, len(workers), _WORKER_READY_TIMEOUT_SECONDS, "ready", workers)
+    _drain(
+        ready,
+        len(workers),
+        _WORKER_READY_TIMEOUT_SECONDS,
+        "ready",
+        workers,
+        stalled_hint=(
+            "alive=True here means the child was still starting its "
+            "interpreter or importing easyicu, not that the lock misbehaved."
+        ),
+    )
 
     # 3. Release them together: this is the only moment either can proceed.
     start.set()
 
     # 4. Result wait, exit wait and the business assertions stay separate.
-    results = _drain(queue, len(workers), _RESULT_TIMEOUT_SECONDS, "a result", workers)
+    results = _drain(
+        queue,
+        len(workers),
+        _RESULT_TIMEOUT_SECONDS,
+        "a result",
+        workers,
+        stalled_hint=(
+            "Both children had already reported ready, so alive=True here is "
+            "NOT slow startup: the child is contending, blocked on the lock, "
+            "or blocked reporting its result."
+        ),
+    )
     for worker in workers:
         worker.join(timeout=_EXIT_TIMEOUT_SECONDS)
         assert worker.exitcode == 0, (
