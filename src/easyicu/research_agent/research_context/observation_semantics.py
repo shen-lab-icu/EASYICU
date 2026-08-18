@@ -92,9 +92,8 @@ def _positive_only_event_updates(
             )
             observed_levels = set(representative.dropna().unique().tolist())
             if (
-                representative.notna().all()
-                or not observed_levels
-                or not observed_levels.issubset({1, 1.0})
+                not observed_levels
+                or not observed_levels.issubset({0, 0.0, 1, 1.0})
             ):
                 continue
             try:
@@ -119,9 +118,9 @@ def _positive_only_event_updates(
             )
             raw_n_missing = int(frame[representative_column].isna().sum())
             note = (
-                "Raw nulls are reconciled event-absent rows, not unmeasured "
-                "values; count, measured flag, and positive-only representative "
-                "agree for every row."
+                "Raw nulls or explicit zeros on event-negative rows represent "
+                "event absence, not unmeasured values; count, measured flag, "
+                "and the positive-only representative agree for every row."
             )
             updated = _semantic_profile(
                 descriptor,

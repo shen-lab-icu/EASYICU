@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from typing import Any
 
 import pytest
 import pandas as pd
+from starlette.requests import Request
 
 from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
 from easyicu.research_agent.reporting.result_card import (
@@ -39,6 +41,7 @@ from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     PiCopilotError,
+    ResearchProviderBinding,
     PiSessionRecord,
     ToolExecutionContext,
 )
@@ -47,6 +50,22 @@ from easyicu.webserver.pi_copilot.workflow import (
     build_research_workflow_snapshot,
     registered_export_matches_study,
 )
+
+
+def _request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/jobs/agent-run",
+            "raw_path": b"/api/jobs/agent-run",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 123),
+        }
+    )
 
 
 def _complete_study() -> dict[str, Any]:
@@ -2136,7 +2155,12 @@ def test_extraction_uses_bound_study_source_and_returns_no_path(
     )
     from easyicu.webserver.routes import jobs as jobs_route
 
-    def submit(body: dict[str, Any]) -> dict[str, Any]:
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        assert account_environment is None
         submitted.append(dict(body))
         return {
             "job_id": "extract-job-1",
@@ -2286,7 +2310,12 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
     )
     from easyicu.webserver.routes import agent as agent_route
 
-    def submit(body: dict[str, Any]) -> dict[str, Any]:
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        assert account_environment is None
         submitted.append(dict(body))
         return {
             "job_id": "agent-job-full",
@@ -2296,7 +2325,7 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
             "study_context_revision": 5,
         }
 
-    monkeypatch.setattr(agent_route, "jobs_agent_run", submit)
+    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-full-owner",
@@ -2327,6 +2356,78 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
             "credential_source": "pi_verified",
         }
     ]
+
+
+def test_full_run_uses_the_codex_account_frozen_into_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import codex_account_sessions
+    from easyicu.webserver.routes import agent as agent_route
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda _binding: {
+            **_complete_study(),
+            "question": "Bound aggregate scientific question",
+        },
+    )
+
+    def account_environment(binding: str, *, model: str) -> dict[str, str]:
+        assert binding == "a" * 64
+        assert model == "gpt-5.6-luna"
+        return {
+            "EASYICU_CODEX_SESSION_SHA256": binding,
+            "EASYICU_CODEX_MODEL": model,
+        }
+
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        captured["body"] = dict(body)
+        captured["environment"] = dict(account_environment or {})
+        return {
+            "job_id": "agent-job-codex",
+            "kind": "agent-run",
+            "status": "running",
+            "study_context_id": "study-workflow",
+            "study_context_revision": 5,
+        }
+
+    monkeypatch.setattr(
+        codex_account_sessions,
+        "environment_for_binding",
+        account_environment,
+    )
+    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-codex-owner",
+            external_llm_opt_in=True,
+            research_provider=ResearchProviderBinding(
+                provider="codex",
+                credential_source="codex_user_auth",
+                authentication_mode="chatgpt_account",
+                model="gpt-5.6-luna",
+                account_session_sha256="a" * 64,
+            ),
+            binding=AuthorityBinding(
+                study_context_id="study-workflow",
+                study_revision=4,
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool("easyicu_run", {}, context)
+
+    assert result["code"] == "easyicu_full_run_submitted"
+    assert captured["body"]["llm_provider"] == "codex"
+    assert captured["body"]["credential_source"] == "codex_user_auth"
+    assert captured["environment"]["EASYICU_CODEX_MODEL"] == "gpt-5.6-luna"
 
 
 def _write_real_pipeline_fixture(run_dir: Path, *, manuscript: str) -> None:
@@ -3219,7 +3320,8 @@ def test_planner_failure_artifact_persists_only_safe_attempt_metadata(
 
     assert relative == "diagnostics/research_pipeline_failure.json"
     payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "easyicu.web-research-pipeline-failure/3"
+    assert payload["schema_version"] == "easyicu.web-research-pipeline-failure/4"
+    assert payload["typed_failure"] == {}
     assert payload["structured_attempts"] == [
         {
             "attempt": 1,
@@ -3253,22 +3355,140 @@ def test_pipeline_failure_type_is_a_closed_nonsecret_category(tmp_path: Path) ->
 
     payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
     assert payload["failure_type"] == "error"
+    assert payload["typed_failure"] == {}
     assert "sk_secret" not in json.dumps(payload)
+
+
+def test_pipeline_failure_projects_only_safe_progressive_compiler_coordinates(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.planning.progressive_contract import (
+        ProgressivePlanCompileError,
+    )
+
+    secret = "sk-provider-secret-in-compiler-message"
+    failure = ProgressivePlanCompileError(
+        "progressive_unknown_variable",
+        f"model candidate echoed {secret}",
+        step_id="05_primary",
+        step_index=4,
+        path="model_terms[1]",
+    )
+
+    code = agent_pipeline_runs._pipeline_failure_code(failure)
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path,
+        exc=failure,
+        code=code,
+    )
+
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert code == "research_pipeline_progressive_compile_failed"
+    assert payload["typed_failure"] == {
+        "owner": "easyicu.planning.progressive_compiler_v1",
+        "reason_code": "progressive_unknown_variable",
+        "step_id": "05_primary",
+        "step_index": 4,
+        "path": "model_terms[1]",
+    }
+    assert secret not in json.dumps(payload)
+
+
+def test_pipeline_failure_projects_closed_planner_efficiency_receipt(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.providers.efficiency_budget import (
+        PlannerEfficiencyBudgetExhausted,
+    )
+
+    failure = PlannerEfficiencyBudgetExhausted(
+        reason="reported_token_limit",
+        snapshot={
+            "calls": 5,
+            "reported_tokens": 101_000,
+            "elapsed_seconds": 123.4567891,
+            "limits": {
+                "max_calls": 6,
+                "max_reported_tokens": 100_000,
+                "max_wall_seconds": 600.0,
+            },
+        },
+    )
+
+    code = agent_pipeline_runs._pipeline_failure_code(failure)
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path,
+        exc=failure,
+        code=code,
+    )
+
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert code == "research_pipeline_planner_efficiency_budget_exhausted"
+    assert payload["failure_type"] == "provider_budget"
+    assert payload["typed_failure"] == {
+        "owner": "easyicu.providers.planner_efficiency_budget_v1",
+        "reason_code": "planner_efficiency_budget_exhausted",
+        "reason": "reported_token_limit",
+        "calls": 5,
+        "reported_tokens": 101_000,
+        "elapsed_seconds": 123.456789,
+        "limits": {
+            "max_calls": 6,
+            "max_reported_tokens": 100_000,
+            "max_wall_seconds": 600.0,
+        },
+    }
+
+
+def test_pipeline_failure_projects_codex_hard_timeout_as_provider_timeout(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.providers.codex_app_server import (
+        CodexAppServerError,
+    )
+
+    failure = CodexAppServerError(
+        "codex_auth_notification_hard_timeout",
+        "provider detail that must not be projected",
+    )
+
+    code = agent_pipeline_runs._pipeline_failure_code(failure)
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path,
+        exc=failure,
+        code=code,
+    )
+
+    payload = json.loads((tmp_path / relative).read_text(encoding="utf-8"))
+    assert code == "research_pipeline_provider_timeout"
+    assert payload["failure_type"] == "timeout"
+    assert payload["typed_failure"] == {
+        "owner": "easyicu.providers.codex_app_server_v1",
+        "reason_code": "codex_auth_notification_hard_timeout",
+    }
+    assert "provider detail" not in json.dumps(payload)
 
 
 def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     submitted: list[dict[str, Any]] = []
+    account_environments: list[dict[str, str] | None] = []
     monkeypatch.setattr(
         tool_module,
         "_bound_context",
         lambda binding: _complete_study(),
     )
     from easyicu.webserver.routes import agent as agent_route
+    from easyicu.webserver import codex_account_sessions
 
-    def submit(body: dict[str, Any]) -> dict[str, Any]:
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         submitted.append(dict(body))
+        account_environments.append(account_environment)
         return {
             "job_id": "resume-job-1",
             "kind": "agent-run",
@@ -3279,11 +3499,27 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             "study_context_revision": 5,
         }
 
-    monkeypatch.setattr(agent_route, "jobs_agent_run_review", submit)
+    monkeypatch.setattr(agent_route, "submit_agent_run_review", submit)
+    monkeypatch.setattr(
+        codex_account_sessions,
+        "environment_for_binding",
+        lambda binding, *, model: {
+            "CODEX_HOME": "/isolated/account",
+            "EASYICU_CODEX_MODEL": model,
+            "EASYICU_CODEX_ACCOUNT_SESSION_SHA256": binding,
+        },
+    )
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-review",
             external_llm_opt_in=True,
+            research_provider=ResearchProviderBinding(
+                provider="codex",
+                credential_source="codex_user_auth",
+                authentication_mode="chatgpt_account",
+                model="gpt-5.6-luna",
+                account_session_sha256="a" * 64,
+            ),
             binding=AuthorityBinding(
                 study_context_id="study-workflow",
                 study_revision=4,
@@ -3310,6 +3546,13 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             "external_llm_opt_in": True,
         }
     ]
+    assert account_environments == [
+        {
+            "CODEX_HOME": "/isolated/account",
+            "EASYICU_CODEX_MODEL": "gpt-5.6-luna",
+            "EASYICU_CODEX_ACCOUNT_SESSION_SHA256": "a" * 64,
+        }
+    ]
     with pytest.raises(PiCopilotError) as stale:
         context.assert_authority_fresh()
     assert stale.value.code == "pi_session_authority_stale"
@@ -3319,16 +3562,35 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     (
         "budget_mode",
         "runner_image",
+        "runner_image_environment",
+        "expected_runner_image",
         "expected_profile_name",
         "expected_profile_version",
     ),
     [
-        (None, None, "npj_dm_e1_canary_dev", "20260814"),
+        (
+            None,
+            None,
+            None,
+            "easyicu-research-agent:1.0.0",
+            "npj_dm_e1_canary_dev",
+            "20260817",
+        ),
+        (
+            None,
+            None,
+            "easyicu-research-agent:isolated-exact-head",
+            "easyicu-research-agent:isolated-exact-head",
+            "npj_dm_e1_canary_dev",
+            "20260817",
+        ),
         (
             "full_reviewed",
             "easyicu-research-agent:e1-demo-local",
+            " \n",
+            "easyicu-research-agent:e1-demo-local",
             "npj_dm_e1_demo_dev",
-            "20260815",
+            "20260817",
         ),
     ],
 )
@@ -3337,9 +3599,13 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     monkeypatch: pytest.MonkeyPatch,
     budget_mode: str | None,
     runner_image: str | None,
+    runner_image_environment: str | None,
+    expected_runner_image: str,
     expected_profile_name: str,
     expected_profile_version: str,
 ) -> None:
+    if runner_image_environment is not None:
+        monkeypatch.setenv("EASYICU_RUNNER_IMAGE", runner_image_environment)
     actual_run = tmp_path / "actual-pipeline-run"
     _write_real_pipeline_fixture(
         actual_run,
@@ -3357,13 +3623,17 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     acquisition.trajectory_authority_ref = None
     calls: dict[str, Any] = {}
 
+    def fake_build_provider(provider: dict[str, Any], **kwargs: Any):
+        calls["provider_build"] = kwargs
+        return (
+            object(),
+            {"provider": "openai", "model": "test-model"},
+        )
+
     monkeypatch.setattr(
         provider_adapter,
         "build_research_agent_provider_client",
-        lambda provider, **_kwargs: (
-            object(),
-            {"provider": "openai", "model": "test-model"},
-        ),
+        fake_build_provider,
     )
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.acquisition import foundation
@@ -3409,6 +3679,28 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         runner_kwargs["budget_mode"] = budget_mode
     if runner_image is not None:
         runner_kwargs["runner_image"] = runner_image
+    expected_resume_path = None
+    if budget_mode is None and runner_image_environment is None:
+        expected_resume_path = (
+            tmp_path
+            / "projects"
+            / "study-workflow"
+            / "run_prior-canary"
+            / "pipeline"
+            / "run_prior"
+            / "progressive_planner_checkpoint_000.json"
+        )
+        expected_resume_path.parent.mkdir(parents=True)
+        expected_resume_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(
+            agent_pipeline_runs,
+            "load_progressive_planner_checkpoint_chain",
+            lambda **_kwargs: [object()],
+        )
+        monkeypatch.setenv(
+            "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID",
+            "prior-canary",
+        )
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export_path),
         study_context=_complete_study(),
@@ -3429,6 +3721,12 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     result = runner(Job())
 
     assert calls["acquire"]["question"] == _complete_study()["question"]
+    expected_provider_timeout = 120.0 if budget_mode != "full_reviewed" else None
+    assert calls["provider_build"]["request_timeout"] == expected_provider_timeout
+    assert (
+        calls["provider_build"]["request_hard_timeout"]
+        == expected_provider_timeout
+    )
     from easyicu.research_agent.providers.hard_stop import HardStopClient
 
     assert isinstance(calls["acquire"]["llm"], HardStopClient)
@@ -3444,6 +3742,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     )
     assert calls["acquire"]["allowed_modules"] == ("demographics", "outcome")
     assert calls["acquire"]["static_concepts"] == ("age", "sex")
+    assert calls["acquire"]["concept_selection_authority"] == "host_exact"
     assert calls["run"]["cohort"] == universe
     assert calls["run"]["question"] == _complete_study()["question"]
     assert calls["acquire"]["primary_exposure_concept"] == "heart_rate"
@@ -3474,11 +3773,35 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     )
     assert calls["config"].runner_kind == "docker"
     assert calls["config"].runner_network == "none"
-    assert calls["config"].runner_image == (
-        runner_image or "easyicu-research-agent:1.0.0"
-    )
+    assert calls["config"].runner_image == expected_runner_image
     assert calls["config"].submission_profile_name == expected_profile_name
     assert calls["config"].submission_profile_version == expected_profile_version
+    assert calls["config"].planner_strategy == (
+        "progressive_v2"
+        if budget_mode in {None, "full_reviewed"}
+        else "monolithic_v1"
+    )
+    assert calls["config"].development_progressive_resume_checkpoint_path == (
+        expected_resume_path
+    )
+    assert calls[
+        "config"
+    ].development_progressive_resume_checkpoint_sha256 == (
+        hashlib.sha256(b"{}").hexdigest() if expected_resume_path else None
+    )
+    expected_efficiency_calls = 6 if budget_mode != "full_reviewed" else None
+    assert (
+        calls["config"].development_planner_efficiency_max_calls
+        == expected_efficiency_calls
+    )
+    assert (
+        calls["config"].development_planner_efficiency_max_reported_tokens
+        == (100_000 if expected_efficiency_calls else None)
+    )
+    assert (
+        calls["config"].development_planner_efficiency_max_wall_seconds
+        == (600.0 if expected_efficiency_calls else None)
+    )
     assert calls["config"].enable_memory is False
     assert calls["config"].enable_experience_bank is False
     assert calls["config"].enable_reviewed_memory is False
@@ -3506,6 +3829,139 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         and event["current"] == 1
         and event["total"] == 5
         for event in Job.events
+    )
+
+
+def test_web_runner_rejects_invalid_server_owned_image_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASYICU_RUNNER_IMAGE", " \n")
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+    export_path = _write_pipeline_export(tmp_path / "export")
+
+    with pytest.raises(
+        agent_pipeline_runs.ResearchPipelineRunError
+    ) as exc_info:
+        agent_pipeline_runs.make_research_pipeline_run_runner(
+            export_path=str(export_path),
+            study_context=_complete_study(),
+            project_root=str(tmp_path / "projects"),
+            provider={"provider": "openai", "external": True},
+            provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        )
+
+    assert exc_info.value.code == "research_pipeline_runner_image_invalid"
+
+
+def test_web_runner_allows_server_owned_resume_for_full_reviewed_development(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+    export_path = _write_pipeline_export(tmp_path / "export")
+    checkpoint = (
+        tmp_path
+        / "projects"
+        / "study-workflow"
+        / "run_prior-canary"
+        / "pipeline"
+        / "run_prior"
+        / "progressive_planner_checkpoint_000.json"
+    )
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "load_progressive_planner_checkpoint_chain",
+        lambda **_kwargs: [object()],
+    )
+
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(export_path),
+        study_context=_complete_study(),
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        development_resume_source_job_id="prior-canary",
+        budget_mode="full_reviewed",
+    )
+
+    assert callable(runner)
+
+
+def test_development_resume_selects_one_server_owned_checkpoint_sequence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = (
+        tmp_path
+        / "projects"
+        / "study-workflow"
+        / "run_prior-canary"
+        / "pipeline"
+        / "run_prior"
+    )
+    run_dir.mkdir(parents=True)
+    for sequence in range(3):
+        (run_dir / f"progressive_planner_checkpoint_{sequence:03d}.json").write_text(
+            f'{{"sequence":{sequence}}}',
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "load_progressive_planner_checkpoint_chain",
+        lambda **_kwargs: [object()],
+    )
+
+    path, digest = agent_pipeline_runs._development_progressive_resume_binding(
+        project_root=str(tmp_path / "projects"),
+        study_id="study-workflow",
+        source_job_id="prior-canary",
+        budget_mode="planner_canary",
+        checkpoint_sequence="1",
+    )
+
+    assert path.name == "progressive_planner_checkpoint_001.json"
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_development_resume_rejects_missing_server_checkpoint_sequence(
+    tmp_path: Path,
+) -> None:
+    run_dir = (
+        tmp_path
+        / "projects"
+        / "study-workflow"
+        / "run_prior-canary"
+        / "pipeline"
+        / "run_prior"
+    )
+    run_dir.mkdir(parents=True)
+    (run_dir / "progressive_planner_checkpoint_000.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc_info:
+        agent_pipeline_runs._development_progressive_resume_binding(
+            project_root=str(tmp_path / "projects"),
+            study_id="study-workflow",
+            source_job_id="prior-canary",
+            budget_mode="planner_canary",
+            checkpoint_sequence="2",
+        )
+
+    assert exc_info.value.code == (
+        "research_pipeline_development_resume_sequence_missing"
     )
 
 
@@ -3815,7 +4271,8 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
                 "run_type": "full",
                 "credential_source": "pi_verified",
                 "external_llm_opt_in": True,
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail")["error"] in {
@@ -3901,13 +4358,16 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
             "credential_source": "pi_verified",
             "external_llm_opt_in": True,
             "project_root": str(tmp_path / "client-controlled"),
-        }
+            "development_resume_source_job_id": "prior-canary",
+        },
+        request=_request(),
     )
 
     assert result["job_id"] == "job-workspace"
     assert Path(captured["project_root"]) == workspace.project_root(study["id"])
     assert Path(captured["project_root"]) != tmp_path / "client-controlled"
     assert captured["budget_mode"] == "planner_canary"
+    assert captured["development_resume_source_job_id"] == "prior-canary"
 
 
 def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
@@ -3931,11 +4391,31 @@ def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
                 "engine": "research_agent_pipeline",
                 "run_type": "full",
                 "budget_mode": "full_reviewed",
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail") == {
         "error": "research_pipeline_budget_mode_server_owned"
+    }
+
+
+def test_pipeline_development_execution_mode_is_server_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_route
+
+    monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
+    assert agent_route._server_research_pipeline_budget_mode() == "planner_canary"
+
+    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "1")
+    assert agent_route._server_research_pipeline_budget_mode() == "full_reviewed"
+
+    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "true")
+    with pytest.raises(Exception) as raised:
+        agent_route._server_research_pipeline_budget_mode()
+    assert getattr(raised.value, "detail") == {
+        "error": "research_pipeline_development_mode_invalid"
     }
 
 
@@ -3962,7 +4442,8 @@ def test_planner_canary_cannot_be_approved_into_execution(
                 "study_context_id": "study-workflow",
                 "decision": "approved",
                 "external_llm_opt_in": True,
-            }
+            },
+            request=_request(),
         )
 
     assert getattr(raised.value, "detail") == {
@@ -4073,10 +4554,14 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
     def build_client(
         provider: dict[str, Any],
         *,
+        request_timeout: float | None = None,
+        request_hard_timeout: float | None = None,
         environ: dict[str, str] | None = None,
     ) -> tuple[object, dict[str, Any]]:
         captured["provider"] = dict(provider)
         captured["environment"] = dict(environ or {})
+        captured["request_timeout"] = request_timeout
+        captured["request_hard_timeout"] = request_hard_timeout
         return object(), {"provider": "openai", "model": "test-local-model"}
 
     monkeypatch.setattr(
@@ -4128,6 +4613,8 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
     result = runner(Job())
 
     assert captured["environment"] == expected_environment
+    assert captured["request_timeout"] == 120.0
+    assert captured["request_hard_timeout"] == 120.0
     assert result["provider"]["model"] == "test-local-model"
     assert "test-private-provider-key" not in json.dumps(result)
 

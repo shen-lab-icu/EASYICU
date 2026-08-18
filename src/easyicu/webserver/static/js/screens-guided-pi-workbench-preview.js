@@ -3,15 +3,11 @@
    StudyContext state and never applies cohort/filter changes. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   const view = { query: '', status: 'all' };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
   function number(value) {
     return Number.isFinite(Number(value)) ? Number(value) : null;
   }

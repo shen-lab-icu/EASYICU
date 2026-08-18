@@ -1437,6 +1437,38 @@ _HOST_COHORT_FLOW_EVIDENCE_ID = "cohort_flow_execute_repair"
 _HOST_COHORT_FLOW_SOURCE_NAME = "cohort_analysis_flow.csv"
 
 
+def _publish_immutable_host_step_output(
+    *,
+    source: Path,
+    destination: Path,
+    label: str,
+) -> None:
+    """Publish one verified logical output for a script-free host step."""
+
+    if source.is_symlink() or not source.is_file():
+        raise RunInputIdentityError(
+            f"host cohort materializer source is not a regular {label} file"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source_digest = sha256_of_file(source)
+    if destination.exists():
+        if (
+            destination.is_symlink()
+            or not destination.is_file()
+            or sha256_of_file(destination) != source_digest
+        ):
+            raise RunInputIdentityError(
+                "host cohort materializer found a conflicting immutable "
+                f"{label} step output"
+            )
+        return
+    shutil.copyfile(source, destination)
+    if sha256_of_file(destination) != source_digest:
+        raise RunInputIdentityError(
+            f"host cohort materializer could not verify its {label} step output"
+        )
+
+
 def _declares_host_cohort_products(step: Any) -> bool:
     """Whether one step declares exactly the host-owned cohort product set."""
 
@@ -1529,6 +1561,18 @@ def _register_host_cohort_materialization(
         # copy. Publish that standard step output here from the same canonical
         # ledger; do not make the figure validator special-case a host producer
         # or accept a weaker evidence path.
+        cohort_step_output = (
+            run_dir
+            / "steps"
+            / cohort_product_step.step_id
+            / "outputs"
+            / _HOST_COHORT_MATERIALIZER_SOURCE_NAME
+        )
+        _publish_immutable_host_step_output(
+            source=cohort_path,
+            destination=cohort_step_output,
+            label="analysis-cohort",
+        )
         flow_step_output = (
             run_dir
             / "steps"
@@ -1536,25 +1580,11 @@ def _register_host_cohort_materialization(
             / "outputs"
             / _HOST_COHORT_FLOW_SOURCE_NAME
         )
-        flow_step_output.parent.mkdir(parents=True, exist_ok=True)
-        flow_digest = sha256_of_file(flow_path)
-        if flow_step_output.exists():
-            if (
-                flow_step_output.is_symlink()
-                or not flow_step_output.is_file()
-                or sha256_of_file(flow_step_output) != flow_digest
-            ):
-                raise RunInputIdentityError(
-                    "host cohort materializer found a conflicting immutable "
-                    "cohort-flow step output"
-                )
-        else:
-            shutil.copyfile(flow_path, flow_step_output)
-            if sha256_of_file(flow_step_output) != flow_digest:
-                raise RunInputIdentityError(
-                    "host cohort materializer could not verify its cohort-flow "
-                    "step output"
-                )
+        _publish_immutable_host_step_output(
+            source=flow_path,
+            destination=flow_step_output,
+            label="cohort-flow",
+        )
         try:
             flow_record = evidence.register_file(
                 kind="table",
@@ -1653,7 +1683,44 @@ def _seal_host_cohort_materialization(
             for record in evidence.records()
         },
     )
-    return (checkpoint, None) if error is None else (None, error)
+    if error is not None:
+        return None, error
+
+    summary_path = (
+        run_dir
+        / "steps"
+        / cohort_product_step.step_id
+        / "outputs"
+        / "step_summary.json"
+    )
+    summary_payload = checkpoint["step_summary"]
+    if summary_path.exists():
+        try:
+            existing_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return None, (
+                "host cohort materializer found an unreadable immutable "
+                f"step summary: {type(exc).__name__}: {exc}"
+            )
+        if summary_path.is_symlink() or existing_summary != summary_payload:
+            return None, (
+                "host cohort materializer found a conflicting immutable "
+                "step summary"
+            )
+    else:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(
+            json.dumps(
+                summary_payload,
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    return checkpoint, None
 
 
 def _planned_host_cohort_checkpoint(

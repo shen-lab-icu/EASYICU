@@ -128,6 +128,18 @@ def _counts_only_step_is_typed(step: object) -> bool:
     ]
     if getattr(step, "exposure_outcome_distribution_spec", None) is not None:
         return exposure_outcome_distribution_execution_verdict(step).claimed
+    table_one = getattr(step, "table_one_spec", None)
+    if table_one is not None:
+        return bool(
+            table_one.schema_version == "easyicu.table_one/2"
+            and not table_one.p_values_required
+            and table_one.p_value_adjustment
+            == "not_applicable_repeated_units"
+            and all(
+                variable.test == "none_descriptive_smd_only"
+                for variable in table_one.variables
+            )
+        )
     audit = getattr(step, "measurement_audit_spec", None)
     if audit is not None:
         reserved_result_tokens = (
@@ -165,6 +177,8 @@ def _counts_only_step_is_typed(step: object) -> bool:
         }
     if method == "visualization":
         return bool(outputs and all(output.startswith("figure:") for output in outputs))
+    if method == "feasibility_protocol":
+        return bool(outputs and all(output.startswith("report:") for output in outputs))
     return False
 
 
@@ -275,21 +289,36 @@ def bind_context_dependence_authority(
         if counts_only and (
             step.model_requirements
             or step.family_primary_result_requirement is not None
-            or step.scientific_capability is not None
+            or step.scientific_capability
+            not in {None, "descriptive_exposure_outcome_distribution_v1"}
         ):
             raise DependenceAuthorityError(
                 "counts-only analysis_design cannot authorize a model or inferential capability"
             )
-        if counts_only and step.table_one_spec is not None:
+        if (
+            counts_only
+            and step.scientific_capability
+            == "descriptive_exposure_outcome_distribution_v1"
+            and step.exposure_outcome_distribution_spec is None
+        ):
             raise DependenceAuthorityError(
-                "counts-only analysis_design forbids Table One summaries"
+                "counts-only descriptive capability lacks its typed distribution contract"
+            )
+        if (
+            counts_only
+            and step.table_one_spec is not None
+            and not _counts_only_step_is_typed(step)
+        ):
+            raise DependenceAuthorityError(
+                "counts-only analysis_design forbids inferential Table One tests"
             )
         if counts_only and not _counts_only_step_is_typed(step):
             raise DependenceAuthorityError(
                 "counts-only analysis_design permits only cohort accounting, the "
-                "typed exposure/outcome distribution, measurement audit, and "
-                "rendering steps; audit product names cannot claim reserved "
-                "baseline, distribution, outcome, risk, effect, or inference roles"
+                "typed exposure/outcome distribution, descriptive/SMD-only "
+                "Table One, measurement audit, rendering, and report steps; "
+                "audit product names cannot claim reserved baseline, distribution, "
+                "outcome, risk, effect, or inference roles"
             )
         requirements = []
         for requirement in step.model_requirements:

@@ -597,6 +597,7 @@ def run_adjusted_association_from_env(
     frame: Any = None,
     cohort_path: Any = None,
     emit_step_summary: bool = True,
+    output_dir: Any = None,
 ) -> Dict[str, Any]:
     """Fit the declared model and write the estimates table.
 
@@ -804,7 +805,11 @@ def run_adjusted_association_from_env(
             f"{expected_terms}"
         )
 
-    out_dir = Path(os.environ["STEP_OUT_DIR"])
+    out_dir = (
+        Path(output_dir)
+        if output_dir is not None
+        else Path(os.environ["STEP_OUT_DIR"])
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     table_path = out_dir / _TABLE_FILENAME
     pd.DataFrame(rows, columns=list(ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS)).to_csv(

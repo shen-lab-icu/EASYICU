@@ -368,8 +368,16 @@
         },
         detail_gate: {
           title: 'Clinically constrained synthetic demo; no source rows',
+          title_i18n: {
+            en: 'Clinically constrained synthetic demo; no source rows',
+            zh: '临床约束合成演示；无源始行数据',
+          },
           default_open: false,
           reason: 'Modeled values share one deterministic synthetic stay model; unmodeled catalog concepts remain unavailable instead of receiving invented values.',
+          reason_i18n: {
+            en: 'Modeled values share one deterministic synthetic stay model; unmodeled catalog concepts remain unavailable instead of receiving invented values.',
+            zh: '建模数值共享同一个确定性合成住院模型；未建模的目录概念保持不可用，而不是被赋予编造的值。',
+          },
           available_detail_modes: ['module_glance', 'single_feature_metadata'],
         },
         modules: tableModules,

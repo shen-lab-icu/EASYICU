@@ -1,11 +1,11 @@
 /* ============================================================
    screens-agent-render.js — fixture data + pure renderers for
-   the Research Agent screen (screens-agent.js).
+   the Project Monitor screen (legacy route id: #agent).
 
    First owner-file carve-out of the screens-agent.js monolith
    (see the file-size budget rule in CLAUDE.md / AGENTS.md).
-   Everything here is PURE: demo/fixture study + block catalogs,
-   artifact classifiers/label maps, and the artifact table/JSON
+   Everything here is PURE: demo/fixture studies, artifact
+   classifiers/label maps, and the artifact table/JSON
    renderers. The only external dependencies are the globals
    window.t (i18n) and window.icon (icon registry) — no closure
    state from screens-agent.js is referenced.
@@ -15,26 +15,15 @@
    This file MUST load before screens-agent.js in index.html.
    ============================================================ */
 (function () {
+  const { esc, escAttr } = window.EU_HTML;
   const t = window.t;
   const icon = window.icon;
 
-  function esc(value) {
-    return String(value == null ? '' : value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  }
-  function escAttr(value) {
-    return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[c]));
-  }
   function boundedPngDataUrl(value) {
     const source = String(value || '');
     return /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(source) ? source : '';
   }
-  function bi(value) {
-    return Array.isArray(value) ? t(value[0], value[1]) : esc(value);
-  }
-
-  /* ---------------- project + block fixture data ---------------- */
+  /* ---------------- project fixture data ---------------- */
   const DEMO_STUDIES = [
     {
       id: 'sepsis', name: ['Sepsis mortality prediction', '脓毒症死亡率预测'],
@@ -92,137 +81,6 @@
       signed: false,
     },
   ];
-
-  const BLOCK_FAMILIES = [
-    ['all', ['All blocks', '全部块']],
-    ['discovery', ['Discovery', '发现']],
-    ['analysis', ['Analysis', '分析']],
-    ['nature', ['Nature package', 'Nature 套件']],
-    ['submission', ['Submission', '投稿']],
-  ];
-  const BLOCK_LIBRARY = [
-    {
-      id: 'discovery_literature',
-      family: 'discovery',
-      title: ['Literature source intake', '文献来源录入'],
-      stage: ['Idea intake', '想法录入'],
-      icon: 'target',
-      desc: ['Capture a paper, PDF, review, or clinical question as the external source for an idea.', '把文章、PDF、综述或临床问题记录为研究想法的外部来源。'],
-      inputs: ['paper/PDF/topic', 'source metadata', 'uncertainty statement'],
-      outputs: ['source card', 'bounded excerpt', 'research idea'],
-      evidence: ['source id', 'metadata', 'excerpt hash'],
-      route: 'ideas',
-    },
-    {
-      id: 'discovery_feasibility',
-      family: 'discovery',
-      title: ['Outcome-blind feasibility', '结局盲可行性'],
-      stage: ['Feasibility', '可行性'],
-      icon: 'shield',
-      desc: ['Check denominator, concept availability, windows, and portability before looking at target outcome differences.', '在查看目标结局差异前，先核查分母、概念可得性、时间窗和跨库可迁移性。'],
-      inputs: ['research idea', 'candidate concepts', 'database scope'],
-      outputs: ['feasibility ledger', 'risk plan', 'go/hold call'],
-      evidence: ['coverage table', 'denominator summary', 'audit notes'],
-      route: 'ideas',
-    },
-    {
-      id: 'agent_handoff',
-      family: 'analysis',
-      title: ['Agent handoff object', 'Agent 交接对象'],
-      stage: ['Handoff', '交接'],
-      icon: 'agent',
-      desc: ['Freeze the confirmed study question, cohort recipe, concepts, and analysis boundaries for an Agent run.', '冻结已确认的问题、队列配方、概念和分析边界，供 Agent 运行使用。'],
-      inputs: ['confirmed idea', 'cohort recipe', 'allowed claims'],
-      outputs: ['Agent project', 'analysis plan', 'run contract'],
-      evidence: ['handoff package', 'handoff manifest'],
-      route: 'agent',
-    },
-    {
-      id: 'analysis_agent_run',
-      family: 'analysis',
-      title: ['Evidence-bound analysis run', '证据绑定分析运行'],
-      stage: ['Run', '运行'],
-      icon: 'play',
-      desc: ['Run the local Agent project against an active export and write bounded artifacts for review.', '基于 active export 运行本地 Agent 项目，并写入有界产物供审阅。'],
-      inputs: ['active export', 'study id', 'provider choice'],
-      outputs: ['tables', 'figures', 'run manifest'],
-      evidence: ['artifact hashes', 'run_context.json', 'quality_gate.json'],
-      route: 'agent',
-    },
-    {
-      id: 'evidence_review',
-      family: 'analysis',
-      title: ['Evidence review and sign-off', '证据审阅与签署'],
-      stage: ['Review', '审阅'],
-      icon: 'check',
-      desc: ['Review local artifacts before any manuscript claim is unlocked or exported.', '在任何稿件论断解锁或导出前，审阅本地产物。'],
-      inputs: ['run artifacts', 'claim ledger', 'reviewer confirmations'],
-      outputs: ['human_signoff.json', 'readiness status'],
-      evidence: ['sha256 registry', 'review checklist'],
-      route: 'agent',
-    },
-    {
-      id: 'nature_figure',
-      family: 'nature',
-      title: ['Nature figure block', 'Nature 图件块'],
-      stage: ['Figure', '图件'],
-      icon: 'viz',
-      desc: ['Separate storyboard/reference figures from code-backed numeric result figures and preserve source-data provenance.', '区分 storyboard/reference 图和代码驱动的数值结果图，并保留 source-data provenance。'],
-      inputs: ['caption', 'source data or storyboard prompt', 'figure type'],
-      outputs: ['svg/png', 'source data', 'figure audit'],
-      evidence: ['plotting code', 'axis/unit checks', 'storyboard prompt when applicable'],
-      route: 'agent',
-    },
-    {
-      id: 'nature_writing',
-      family: 'nature',
-      title: ['Nature writing block', 'Nature 写作块'],
-      stage: ['Writing', '写作'],
-      icon: 'file',
-      desc: ['Draft or revise manuscript sections from evidence-bound claims, without promoting unsupported results.', '基于证据绑定论断起草或修订稿件章节，不放大无证据支撑的结果。'],
-      inputs: ['claim ledger', 'section target', 'tone constraints'],
-      outputs: ['section draft', 'revision notes', 'claim map'],
-      evidence: ['evidence ids', 'blocked unsupported claims'],
-      route: 'agent',
-    },
-    {
-      id: 'nature_citation',
-      family: 'nature',
-      title: ['Nature citation block', 'Nature 引用块'],
-      stage: ['Citation', '引用'],
-      icon: 'list',
-      desc: ['Attach citations to claims and keep literature provenance separate from result provenance.', '为论断绑定引用，并把文献 provenance 与结果 provenance 分开。'],
-      inputs: ['claim text', 'candidate references', 'citation style'],
-      outputs: ['citation map', 'reference list', 'unresolved claims'],
-      evidence: ['DOI/PMID', 'source title', 'retrieval notes'],
-      route: 'agent',
-    },
-    {
-      id: 'nature_data',
-      family: 'submission',
-      title: ['Data availability block', '数据可用性块'],
-      stage: ['Submission', '投稿'],
-      icon: 'db',
-      desc: ['Prepare Data Availability, source-data inventory, and FAIR metadata checks for submission.', '准备 Data Availability、source-data 清单和 FAIR metadata 核查。'],
-      inputs: ['artifact list', 'repository plan', 'data restrictions'],
-      outputs: ['data availability text', 'source-data checklist'],
-      evidence: ['artifact manifest', 'repository/access notes'],
-      route: 'agent',
-    },
-    {
-      id: 'reviewer_response',
-      family: 'submission',
-      title: ['Reviewer response block', '审稿回复块'],
-      stage: ['Revision', '返修'],
-      icon: 'history',
-      desc: ['Turn reviewer comments into response items, manuscript edits, and evidence-backed rebuttal notes.', '把审稿意见拆成回复项、稿件修改和证据支持的 rebuttal notes。'],
-      inputs: ['reviewer comments', 'changed sections', 'new artifacts'],
-      outputs: ['response letter', 'change map', 'open blockers'],
-      evidence: ['diff references', 'artifact ids'],
-      route: 'agent',
-    },
-  ];
-  const NATURE_PACK = ['nature_figure', 'nature_writing', 'nature_citation', 'nature_data'];
 
   /* ---------------- pure status / text helpers ---------------- */
   function runStatusLabel(status) {
@@ -787,7 +645,7 @@
   }
 
   window.AGENT_RENDER = {
-    DEMO_STUDIES, BLOCK_FAMILIES, BLOCK_LIBRARY, NATURE_PACK,
+    DEMO_STUDIES,
     runStatusLabel, runStatusHint, gateCheckLabel, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
     thumb, scrubDataUrls, figureGallery, artifactScalar, artifactKeyLabel,

@@ -83,6 +83,14 @@ def _assert_partition_safety_guidance(text: str) -> None:
     assert "fail the cohort step closed" in text
 
 
+def _assert_raw_input_projection_guidance(text: str) -> None:
+    assert (
+        "{item for item in manifest['planner_declared_inputs'] if ':' not in item}"
+        in text
+    )
+    assert "never split" in text or "must never be split" in text
+
+
 def test_initial_coder_prompt_receives_primary_cohort_canonical_schema() -> None:
     llm = _CaptureLLM(["import os\nresult = 1\n"])
 
@@ -91,6 +99,7 @@ def test_initial_coder_prompt_receives_primary_cohort_canonical_schema() -> None
     assert len(llm.calls) == 1
     _assert_canonical_schema_guidance(llm.calls[0][0][-1].content)
     _assert_partition_safety_guidance(llm.calls[0][0][-1].content)
+    _assert_raw_input_projection_guidance(llm.calls[0][0][-1].content)
 
 
 def test_primary_cohort_role_binds_resolved_predicate_receipt() -> None:
@@ -223,6 +232,7 @@ def test_repair_prompt_and_contract_guidance_share_primary_cohort_schema() -> No
     _assert_canonical_schema_guidance(llm.calls[0][0][-1].content)
     _assert_partition_safety_guidance(repair_guidance)
     _assert_partition_safety_guidance(llm.calls[0][0][-1].content)
+    _assert_raw_input_projection_guidance(llm.calls[0][0][-1].content)
 
 
 def test_primary_cohort_schema_guidance_tracks_host_product_aliases() -> None:

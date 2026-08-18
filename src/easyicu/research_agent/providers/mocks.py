@@ -62,7 +62,7 @@ class MockLLMClient:
     name = "mock"
 
     def __init__(self, context: Optional[ResearchContext] = None) -> None:
-        from .factory import register_offline_test_client
+        from .client_trust import register_offline_test_client
 
         register_offline_test_client(self)
         self.context = context
@@ -132,7 +132,7 @@ class ScriptedMockLLMClient:
         *,
         repeat_last: bool = False,
     ) -> None:
-        from .factory import register_offline_test_client
+        from .client_trust import register_offline_test_client
 
         self.responses = list(responses)
         self._repeat_last = bool(repeat_last)
@@ -165,7 +165,7 @@ class ScriptedVisionMockLLMClient(ScriptedMockLLMClient):
     def __init__(self, responses: Sequence[str | BaseException]) -> None:
         # Register only after construction as this exact reviewed type; calling
         # the parent constructor would attempt to register the subclass there.
-        from .factory import register_offline_test_client
+        from .client_trust import register_offline_test_client
 
         self.responses = list(responses)
         self._repeat_last = False
@@ -191,7 +191,7 @@ class BudgetAwareScriptedMockLLMClient(ScriptedMockLLMClient):
     provider_attempt_budget_aware = True
 
     def __init__(self, responses: Sequence[str | Exception]) -> None:
-        from .factory import register_offline_test_client
+        from .client_trust import register_offline_test_client
 
         self.responses = list(responses)
         self._repeat_last = False
@@ -230,7 +230,7 @@ class PatternScriptedMockLLMClient:
         default: str | BaseException = "{}",
         contextual_default: bool = False,
     ) -> None:
-        from .factory import register_offline_test_client
+        from .client_trust import register_offline_test_client
 
         self._rules = [(str(marker), list(responses)) for marker, responses in rules]
         self._default = default
@@ -338,7 +338,7 @@ class ExternalCaptureMockLLMClient:
     name = "external-capture-mock"
 
     def __init__(self, responses: Sequence[str | Exception]) -> None:
-        from .factory import _register_external_capture_test_client
+        from .client_trust import _register_external_capture_test_client
 
         self.responses = list(responses)
         self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []

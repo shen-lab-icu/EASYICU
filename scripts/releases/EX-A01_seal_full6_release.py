@@ -105,6 +105,7 @@ CORRECTIONS = (
     "clinical_contract_registry_and_validator_are_content_addressed",
 )
 OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
+EVENT_TIME_COMPANIONS = {"death": "death_time"}
 
 
 def _physical_columns_from_manifest_concepts(
@@ -112,17 +113,20 @@ def _physical_columns_from_manifest_concepts(
 ) -> list[str]:
     """Expand owner-issued receipt companions exactly as native-v2 does.
 
-    SOFA-2 observed/available receipts are physical columns owned by their
-    public value concept, not independently selectable concepts.  The native
-    publisher therefore lists the public concepts in ``physical_concept_ids``
-    while placing the receipt companions immediately after each SOFA-2 value.
-    The release gate must validate that deterministic expansion rather than
-    reject a package merely because it preserved owner receipts.
+    SOFA-2 observed/available receipts and outcome event times are physical
+    columns owned by their public value concept, not independently selectable
+    concepts.  The native publisher therefore lists public concepts in
+    ``physical_concept_ids`` while placing each companion immediately after its
+    owner.  The release gate must validate that deterministic expansion rather
+    than reject a package merely because it preserved owner receipts.
     """
 
     columns = list(primary_key)
     for concept in physical_concepts:
         columns.append(concept)
+        event_time = EVENT_TIME_COMPANIONS.get(concept)
+        if event_time is not None:
+            columns.append(event_time)
         if concept.startswith("sofa2"):
             columns.extend(
                 f"{concept}{suffix}" for suffix in OWNER_RECEIPT_SUFFIXES

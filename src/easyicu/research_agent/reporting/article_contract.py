@@ -84,6 +84,9 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "quality",
         "missingness_profile",
         "data_quality_source_status",
+        "measurement_missingness",
+        "measurement_process",
+        "measurement_source",
     ),
     "primary_estimand": (
         "relationship",

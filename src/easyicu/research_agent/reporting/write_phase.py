@@ -42,6 +42,7 @@ from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_literature import (
     audit_manuscript_literature,
+    repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
 )
@@ -49,6 +50,7 @@ from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
+from ..providers.structured_retry import StructuredResponseFailure
 from .manuscript_post import (
     _apply_writer_evidence_repair_decisions,
     bind_numeric_values,
@@ -91,6 +93,133 @@ from .pdf_render import render_pdf_for_run
 
 class RuntimeProvenanceMismatchError(RuntimeError):
     """Docker steps disagree about the immutable execution environment."""
+
+
+def _repair_rejected_writer_sentences(
+    scaffold: str,
+    *,
+    llm: Any,
+    evidence_ids: Sequence[str],
+    evidence_digest: Optional[str],
+    rejected_sentences: Sequence[str],
+    scientific_claims: Dict[str, str],
+    claim_required_sentences: Sequence[str],
+    allowed_claim_refs: Sequence[str],
+    language: str,
+) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
+    """Apply bounded model decisions or deterministically drop rejected prose.
+
+    The optional model pass can only choose cite, exact host claim, or drop.
+    Invalid structured output or an internally inconsistent application must
+    never abort an otherwise valid analysis run. Dropping every sentence the
+    unchanged STRICT gate already rejected is the conservative host-owned
+    fallback: it cannot add a number, citation, or scientific interpretation.
+
+    Provider transport, refusal, and budget failures deliberately propagate;
+    they are not validation failures and must retain their owning boundary.
+    """
+
+    fallback_detail: Optional[Dict[str, Any]] = None
+    original_scaffold = scaffold
+    try:
+        repair_decisions = decide_writer_evidence_repairs(
+            llm,
+            evidence_ids=evidence_ids,
+            evidence_digest=evidence_digest,
+            missing_sentences=rejected_sentences,
+            scientific_claims=scientific_claims,
+            claim_required_sentences=claim_required_sentences,
+            language=language,
+        )
+        repaired, applied = _apply_writer_evidence_repair_decisions(
+            original_scaffold,
+            missing_sentences=rejected_sentences,
+            decisions=repair_decisions,
+            allowed_claim_refs=allowed_claim_refs,
+        )
+    except (StructuredResponseFailure, ValueError) as exc:
+        drop_decisions = [
+            {"index": index, "action": "drop", "evidence_ids": []}
+            for index in range(len(rejected_sentences))
+        ]
+        repaired, applied = _apply_writer_evidence_repair_decisions(
+            original_scaffold,
+            missing_sentences=rejected_sentences,
+            decisions=drop_decisions,
+            allowed_claim_refs=allowed_claim_refs,
+        )
+        raw_attempts = getattr(exc, "easyicu_structured_attempt_metadata", [])
+        safe_attempts = [dict(item) for item in raw_attempts if isinstance(item, dict)][
+            :4
+        ]
+        fallback_detail = {
+            "reason_code": "writer_evidence_repair_deterministic_drop",
+            "exception_type": type(exc).__name__,
+            "rejected_sentence_count": len(rejected_sentences),
+            "structured_attempts": safe_attempts,
+        }
+    return repaired, applied, fallback_detail
+
+
+def _drop_residual_strict_writer_sentences(
+    scaffold: str,
+    *,
+    enforce_scaffold: Callable[[str], object],
+) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
+    """Revalidate one bounded repair and drop any prose STRICT still rejects.
+
+    A model-selected evidence citation is not scientific-claim authority.  In
+    particular, appending ``{evidence:*}`` to numeric or interpretive prose
+    does not make that sentence legal under the manuscript grammar.  Run the
+    unchanged owner gate immediately after the bounded repair and remove only
+    the exact residual sentences it names.  A second failure propagates, so
+    this helper cannot turn an unknown enforcement defect into a manuscript.
+    """
+
+    try:
+        enforce_scaffold(scaffold)
+    except EvidenceEnforcementError as exc:
+        detail = exc.detail or {}
+        raw_results = detail.get("removed_sentences", [])
+        raw_claims = detail.get("unsupported_scientific_claim_sentences", [])
+        result_sentences = (
+            [str(value).strip() for value in raw_results if str(value).strip()]
+            if isinstance(raw_results, list)
+            else []
+        )
+        claim_sentences = (
+            [str(value).strip() for value in raw_claims if str(value).strip()]
+            if isinstance(raw_claims, list)
+            else []
+        )
+        rejected = [*result_sentences, *claim_sentences]
+        if not rejected:
+            raise
+        drop_decisions = [
+            {"index": index, "action": "drop", "evidence_ids": []}
+            for index in range(len(rejected))
+        ]
+        cleaned, applied = _apply_writer_evidence_repair_decisions(
+            scaffold,
+            missing_sentences=rejected,
+            decisions=drop_decisions,
+            allowed_claim_refs=(),
+        )
+        # Fail closed if anything outside the exact first-gate rejection set
+        # remains invalid.  The normal bind stage will enforce the same gate
+        # again, but this local check keeps the repair boundary attributable.
+        enforce_scaffold(cleaned)
+        return (
+            cleaned,
+            applied,
+            {
+                "reason_code": "writer_evidence_repair_residual_strict_drop",
+                "rejected_sentence_count": len(rejected),
+                "result_sentence_count": len(result_sentences),
+                "scientific_claim_sentence_count": len(claim_sentences),
+            },
+        )
+    return scaffold, [], None
 
 
 _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
@@ -966,6 +1095,22 @@ def _draft_manuscript(
                 detail={"repair": method_citation_repair},
             )
         )
+    scaffold, context_citation_repairs = repair_missing_context_section_citations(
+        scaffold,
+        literature,
+    )
+    if context_citation_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="warning",
+                message=(
+                    "Restored neutral section citation(s) from the exact "
+                    "run-bound contextual literature authority."
+                ),
+                detail={"repairs": context_citation_repairs},
+            )
+        )
     if (
         scaffold
         and pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT
@@ -1005,33 +1150,66 @@ def _draft_manuscript(
             claim_text_by_ref = {
                 claim.claim_ref: claim.render_text() for claim in authoritative_claims
             }
-            repair_decisions = decide_writer_evidence_repairs(
-                writer.llm,
+            (
+                scaffold,
+                applied_evidence_repairs,
+                repair_fallback_detail,
+            ) = _repair_rejected_writer_sentences(
+                scaffold,
+                llm=writer.llm,
                 evidence_ids=preferred_writer_evidence_names,
                 evidence_digest=writer_evidence_digest,
-                missing_sentences=rejected_sentences,
+                rejected_sentences=rejected_sentences,
                 scientific_claims=claim_text_by_ref,
                 claim_required_sentences=strict_scientific_claim_sentences,
+                allowed_claim_refs=tuple(claim_text_by_ref),
                 language=run_language,
             )
-            scaffold, applied_evidence_repairs = (
-                _apply_writer_evidence_repair_decisions(
-                    scaffold,
-                    missing_sentences=rejected_sentences,
-                    decisions=repair_decisions,
-                    allowed_claim_refs=tuple(claim_text_by_ref),
-                )
+            (
+                scaffold,
+                residual_strict_drops,
+                residual_strict_drop_detail,
+            ) = _drop_residual_strict_writer_sentences(
+                scaffold,
+                enforce_scaffold=evidence.enforce_evidence_bound_scaffold,
+            )
+            repair_message_prefix = (
+                "Applied deterministic drop fallback after an invalid bounded "
+                "writer evidence repair decision for "
+                if repair_fallback_detail is not None
+                else "Applied one bounded writer evidence repair pass to "
+            )
+            residual_message = (
+                " "
+                f"STRICT still rejected {len(residual_strict_drops)} cited or "
+                "unsupported sentence(s), which the host removed before "
+                "binding."
+                if residual_strict_drops
+                else ""
             )
             findings.append(
                 ValidationFinding(
                     validator="evidence_bound_writer",
                     severity="warning",
                     message=(
-                        "Applied one bounded writer evidence repair pass to "
-                        f"{len(applied_evidence_repairs)} sentence(s); the unchanged "
-                        "STRICT gate will revalidate the result."
+                        repair_message_prefix
+                        + f"{len(applied_evidence_repairs)} sentence(s); the unchanged "
+                        "STRICT gate revalidated the result." + residual_message
                     ),
-                    detail={"evidence_repairs": applied_evidence_repairs},
+                    detail={
+                        "evidence_repairs": applied_evidence_repairs,
+                        "residual_strict_drops": residual_strict_drops,
+                        **(
+                            {"fallback": repair_fallback_detail}
+                            if repair_fallback_detail is not None
+                            else {}
+                        ),
+                        **(
+                            {"residual_drop": residual_strict_drop_detail}
+                            if residual_strict_drop_detail is not None
+                            else {}
+                        ),
+                    },
                 )
             )
     scaffold_path = run_dir / "manuscript_scaffold.md"

@@ -19,6 +19,8 @@ import pytest
 
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
 
 def _step_record_by_id(records, step_id: str):
     for record in records:
@@ -11603,6 +11605,12 @@ def test_advanced_plan_contract_does_not_duplicate_dedicated_robustness_renderer
                 method="visualization",
                 inputs=["table:robustness_matrix"],
                 expected_outputs=["figure:robustness"],
+                input_consumption_contracts=[
+                    {
+                        "input_key": "table:robustness_matrix",
+                        "mode": "all_rows",
+                    }
+                ],
             ),
         ],
     )

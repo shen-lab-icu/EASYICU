@@ -55,11 +55,14 @@ def test_language_switch_flushes_guided_slots_before_global_rerender() -> None:
     )
 
 
-def test_agent_provider_affordance_names_the_scaffold_and_has_no_fake_exports() -> None:
+def test_agent_projects_has_no_provider_controls_or_fake_exports() -> None:
     agent = _js("screens-agent.js")
+    provider = _js("screens-guided-pi-provider.js")
 
-    assert "Generate provider scaffold" in agent
-    assert "it does not run a complete research analysis" in agent
+    assert "Research Projects only shows the resulting run and evidence" in provider
+    assert "data-gpi-research-provider" in provider
+    assert "data-ag-external-run" not in agent
+    assert "AGENT_PROVIDER_PANEL" not in agent
     # The dock-opening affordance moved to the shared topbar 'Page guide'
     # button; the agent screen must not ship its own duplicate opener.
     assert "data-cpopen" not in agent

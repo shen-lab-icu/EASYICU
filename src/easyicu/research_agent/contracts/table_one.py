@@ -407,7 +407,12 @@ def table_one_output_findings(
             )
         ]
     try:
-        table = pd.read_csv(path)
+        # ``category`` is a persisted level label, not a numeric measure.  Letting
+        # pandas infer its dtype turns integer labels into floats whenever the
+        # same column also contains blank numeric-variable rows (``0`` becomes
+        # ``0.0``).  That changes the declared closed-level identity at the CSV
+        # boundary and makes an executor-produced table fail its own contract.
+        table = pd.read_csv(path, dtype={"category": "string"})
     except Exception as exc:
         return [
             _error(

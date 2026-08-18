@@ -25,6 +25,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ..repair_registry import is_sealed_renderer_repair, repair_metadata_for
 from ..schema import AnalysisStep, ValidationFinding
+from .association_execution import association_binary_sensitivity_result_issues
 from ..trajectory.plan_contract import (
     trajectory_role_result_findings,
     trajectory_role_scope_summary_findings,
@@ -2103,6 +2104,22 @@ def declared_product_contract_findings(
             step=step,
             step_summary=step_summary,
             declared=declared,
+        )
+    )
+    findings.extend(
+        ValidationFinding(
+            validator="association_binary_sensitivity_contract",
+            severity="error",
+            message=issue.message,
+            detail={
+                "kind": issue.reason_code,
+                "step_id": step.step_id,
+                **dict(issue.detail),
+            },
+        )
+        for issue in association_binary_sensitivity_result_issues(
+            step,
+            step_summary,
         )
     )
 

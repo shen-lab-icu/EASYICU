@@ -134,6 +134,25 @@ def test_derived_concepts_absent_from_dicts_get_hint_metadata() -> None:
     assert cat.outcome_determinability["aki_stage_rrt"]["status"] == "known_0_1"
 
 
+def test_generic_derived_clinical_outcomes_have_typed_determinability() -> None:
+    binary = {
+        "icu_readmission",
+        "mort_28d",
+        "mort_90d",
+        "mort_365d",
+        "culture_positive",
+        "bld_culture_positive",
+    }
+    non_binary = {"icu_free_days_28", "vent_free_days_28"}
+    cat = load_concept_catalog(restrict_to=sorted(binary | non_binary))
+
+    assert set(cat.available_concepts) == binary | non_binary
+    for key in binary:
+        assert cat.outcome_determinability[key]["status"] == "known_0_1"
+    for key in non_binary:
+        assert cat.outcome_determinability[key]["status"] == "non_binary_determinable"
+
+
 def test_restrict_to_limits_available_concepts() -> None:
     cat = load_concept_catalog(restrict_to=["norepi_rate", "death", "not_a_real_concept"])
     assert set(cat.available_concepts) == {"norepi_rate", "death", "not_a_real_concept"}

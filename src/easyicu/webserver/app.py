@@ -24,6 +24,7 @@ from easyicu.webserver.deployment_lease import (
     acquire_single_process_lease,
     release_single_process_lease,
 )
+from easyicu.webserver.codex_account_sessions import shutdown_all as shutdown_codex_auth
 from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     reconcile_records as reconcile_review_recovery_records,
@@ -86,6 +87,7 @@ def _acquire_web_deployment_lease() -> None:
 
 @app.on_event("shutdown")
 def _release_web_deployment_lease() -> None:
+    shutdown_codex_auth()
     release_single_process_lease()
 
 

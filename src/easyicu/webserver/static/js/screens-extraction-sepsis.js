@@ -2,6 +2,10 @@
    Owner: Data Extraction route. The Web UI exposes only definition-safe
    choices; lower-level callback kwargs remain an implementation detail. */
 (function () {
+  /* The host may inject its own escaper; the fallback is the shared owner. */
+  const esc = (escHtml, value) => (
+    typeof escHtml === 'function' ? escHtml(value) : window.EU_HTML.esc(value)
+  );
   const RUNTIME_PROFILE = 'easyicu_sepsis3_locked_v1';
   const IMPLEMENTATION_PROFILE = 'selected_module_defaults';
   const SCORE_FAMILY = 'module-specific SOFA source';
@@ -27,11 +31,6 @@
     return (typeof t === 'function' ? t : (window.t || ((a) => a)))(en, zh);
   }
 
-  function esc(escHtml, value) {
-    return typeof escHtml === 'function'
-      ? escHtml(value)
-      : String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-  }
 
   function ic(icon, name, size) {
     return typeof icon === 'function' ? icon(name, size) : '';

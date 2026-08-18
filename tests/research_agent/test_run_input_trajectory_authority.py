@@ -51,7 +51,10 @@ from easyicu.research_agent.authority.run_input import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
-from easyicu.research_agent.research_context.typed import ResearchContextV2
+from easyicu.research_agent.research_context.typed import (
+    ResearchContextV2,
+    parse_research_context_json,
+)
 from tests.research_agent.test_materialized_trajectory_authority import (
     _bundle,
     _implementation_sha,
@@ -230,7 +233,7 @@ def test_typed_run_input_capsule_v3_binds_exact_staged_trajectory(tmp_path):
     )
     assert loaded.capsule == capsule
     context = json.loads(context_path.read_text(encoding="utf-8"))
-    assert context["schema_version"] == "easyicu.research_context/2"
+    assert context["schema_version"] == "easyicu.research_context/3"
     trajectory_context = context["materialized_inputs"]["trajectory"]
     assert trajectory_context["authority_ref"] == staged_trajectory.reference.to_dict()
     assert trajectory_context["requested_concepts"] == ["lact"]
@@ -251,7 +254,7 @@ def test_v2_trajectory_availability_lists_must_be_unique(tmp_path):
         context_path,
         _evidence,
     ) = _staged_typed_inputs(tmp_path)
-    context = ResearchContextV2.model_validate_json(
+    context = parse_research_context_json(
         context_path.read_text(encoding="utf-8")
     )
     payload = context.model_dump(mode="python")
@@ -261,7 +264,7 @@ def test_v2_trajectory_availability_lists_must_be_unique(tmp_path):
     ]
 
     with pytest.raises(ValidationError, match="availability states"):
-        ResearchContextV2.model_validate(payload)
+        type(context).model_validate(payload)
 
 
 def test_fresh_typed_capsule_rejects_legacy_v1_context(tmp_path):

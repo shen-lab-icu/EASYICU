@@ -1,4 +1,4 @@
-/* Agent Projects capability highlights. Owner: screens-agent.js / #agent. */
+/* Project Monitor capability highlights. Owner: screens-agent.js / legacy #agent. */
 .ag-wrap .ag-cap-grid{
   display:grid;
   grid-template-columns:repeat(2, minmax(0, 1fr));

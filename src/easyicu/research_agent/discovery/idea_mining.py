@@ -621,15 +621,22 @@ def extract_literature_ideas(
                 parse_status="parsed",
             )
         for item in payload:
-            coerced = _coerce_extracted_idea_item(
-                item,
-                source_snapshot_id=source_snapshot_id,
-                source_text_by_key=source_text_by_key,
-                adapter_level_by_key=adapter_level_by_key,
-                untraceable_quote_policy=untraceable_quote_policy,
-                dropped_untraceable=dropped_untraceable,
-                dropped_invalid=dropped_invalid,
-            )
+            try:
+                coerced = _coerce_extracted_idea_item(
+                    item,
+                    source_snapshot_id=source_snapshot_id,
+                    source_text_by_key=source_text_by_key,
+                    adapter_level_by_key=adapter_level_by_key,
+                    untraceable_quote_policy=untraceable_quote_policy,
+                    dropped_untraceable=dropped_untraceable,
+                    dropped_invalid=dropped_invalid,
+                )
+            except IdeaExtractionError as exc:
+                if malformed_batch_policy == "skip":
+                    if dropped_invalid is not None:
+                        dropped_invalid.append(str(exc))
+                    continue
+                raise
             if coerced is not None:
                 candidates.append(coerced)
 
@@ -2782,7 +2789,7 @@ def _lookup_probe_value(raw_result: Mapping[str, Any], concept: str) -> Optional
     for key, value in raw_result.items():
         if normalize_concept_name(str(key)) == normalised:
             return value
-    return next(iter(raw_result.values()), None)
+    return None
 
 
 def _coerce_probe_feasibility_signal(value: Any) -> HypothesisFeasibilitySignal:

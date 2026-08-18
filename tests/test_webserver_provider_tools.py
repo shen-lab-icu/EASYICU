@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import json
 import stat
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
-from tools.configure_webserver_provider_env import write_provider_env
+from tools.configure_webserver_provider_env import (
+    provider_env_names,
+    write_provider_env,
+)
 from tools.run_webserver_provider_point_fire import safe_summary, safety_failures
 
 
-def test_configure_provider_env_writes_0600_without_returning_secret(tmp_path: Path) -> None:
+def test_configure_provider_env_writes_0600_without_returning_secret(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "provider.env"
 
     meta = write_provider_env(
@@ -43,6 +49,38 @@ def test_configure_provider_env_refuses_existing_without_force(tmp_path: Path) -
     meta = write_provider_env(target, {"OPENAI_API_KEY": "second"}, force=True)
     assert meta["secrets_returned"] is False
     assert "second" in target.read_text(encoding="utf-8")
+
+
+def test_configure_provider_env_uses_catalogued_deepseek_names() -> None:
+    assert provider_env_names("deepseek") == {
+        "api_key": "DEEPSEEK_API_KEY",
+        "base_url": "DEEPSEEK_BASE_URL",
+        "model": "DEEPSEEK_MODEL",
+    }
+
+
+def test_configure_deepseek_uses_catalog_default_endpoint(monkeypatch) -> None:
+    from tools.configure_webserver_provider_env import collect_entries
+
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "test-private-key")
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _prompt: (_ for _ in ()).throw(
+            AssertionError("DeepSeek's reviewed default endpoint should avoid a prompt")
+        ),
+    )
+
+    entries = collect_entries(
+        Namespace(
+            provider="deepseek",
+            base_url="",
+            model="deepseek-v4-flash",
+            max_tokens="",
+            json_format_style="",
+        )
+    )
+
+    assert entries["DEEPSEEK_BASE_URL"] == "https://api.deepseek.com"
 
 
 def test_point_fire_safe_summary_strips_provider_values_and_checks_safety() -> None:
@@ -92,7 +130,9 @@ def test_point_fire_safe_summary_strips_provider_values_and_checks_safety() -> N
         },
     }
 
-    summary = safe_summary(snapshot, review={"readiness": {"status": "awaiting_human_signoff"}})
+    summary = safe_summary(
+        snapshot, review={"readiness": {"status": "awaiting_human_signoff"}}
+    )
 
     serialized = json.dumps(summary)
     assert "http://127.0.0.1:8787" not in serialized

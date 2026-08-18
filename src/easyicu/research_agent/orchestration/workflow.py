@@ -856,7 +856,16 @@ class PipelineWorkflow:
                 ),
             )
             assert approved_handoff is not None
-            approved_handoff.plan = AnalysisPlan.model_validate(approved.plan_payload)
+            if (
+                tuple(getattr(approved_handoff, "cohort_concept_ids", ()))
+                != approved.cohort_concept_ids
+            ):
+                raise HumanReviewAuthorityError(
+                    "approved cohort concept authority differs from the reviewed "
+                    "Plan handoff"
+                )
+            approved_handoff.plan = approved.analysis_plan()
+            approved_handoff.cohort_concept_ids = approved.cohort_concept_ids
             self._plan_result = approved_handoff
             self._approved_plan_sha256 = approved.plan_sha256
         try:

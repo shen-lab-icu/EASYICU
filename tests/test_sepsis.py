@@ -19,6 +19,7 @@ from easyicu.concept.callbacks import (
 )
 from easyicu.scores.sepsis import compute_sepsis3_onset, sep3, susp_inf
 from easyicu.table import ICUTable
+from easyicu.scores import sepsis_sofa2
 
 
 def _eicu_context() -> ConceptCallbackContext:
@@ -293,3 +294,54 @@ def test_sep3_accepts_nullable_boolean_suspicion_flags():
     assert result[["stay_id", "charttime", "sep3"]].to_dict("records") == [
         {"stay_id": 1, "charttime": 1.0, "sep3": True}
     ]
+
+
+# --- SI window ordering and boundary (2026-08-16 data review) ---
+
+def test_sepsis_sofa2_first_si_event_is_time_sorted() -> None:
+    sofa2 = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 35.0],
+            "sofa2": [0.0, 2.0],
+        }
+    )
+    susp = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [20.0, 5.0],  # deliberately unsorted
+            "susp_inf": [True, True],
+        }
+    )
+
+    result = sepsis_sofa2.sep3_sofa2(
+        sofa2,
+        susp,
+        id_cols=["stay_id"],
+        index_col="charttime",
+        si_window="first",
+    )
+
+    # The earliest SI event is t=5; its [t-48h, t+24h] window closes at t=29,
+    # so the t=35 SOFA rise is outside the window and no sepsis is detected.
+    assert "sep3_sofa2" in result.columns
+    assert not result["sep3_sofa2"].any()
+
+def test_si_and_includes_exact_window_boundary() -> None:
+    from easyicu.scores.sepsis import _si_and
+
+    abx = pd.DataFrame({"stay_id": [1], "charttime": [0.0], "abx": [1]})
+    samp = pd.DataFrame({"stay_id": [1], "charttime": [24.0], "samp": [1]})
+
+    result = _si_and(
+        abx,
+        samp,
+        id_cols=["stay_id"],
+        index_col="charttime",
+        abx_win=pd.Timedelta(hours=24),
+        samp_win=pd.Timedelta(hours=72),
+        keep_components=False,
+    )
+
+    # A sample exactly 24.0 h after the first antibiotic is a valid SI link.
+    assert result["susp_inf"].tolist() == [True]

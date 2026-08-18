@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import agent_outputs
 from easyicu.webserver import dataio
 from easyicu.webserver import numeric_evidence_audit
@@ -110,6 +111,7 @@ def make_agent_run_runner(
     external_llm_opt_in: bool = False,
     ai_enabled: bool = False,
     study_context: Optional[Dict[str, Any]] = None,
+    provider_environment: Optional[Mapping[str, str]] = None,
 ) -> Any:
     """Build a deterministic local runner for ``JobManager``."""
     resolved_run_type = normalize_run_type(run_type)
@@ -127,6 +129,7 @@ def make_agent_run_runner(
         llm_provider=llm_provider,
         external_llm_opt_in=external_llm_opt_in,
         ai_enabled=ai_enabled,
+        environ=provider_environment,
     )
 
     def runner(job: Any) -> Dict[str, Any]:
@@ -136,7 +139,7 @@ def make_agent_run_runner(
         root = (
             Path(project_root).expanduser()
             if project_root
-            else Path.home() / "easyicu" / "projects"
+            else state_paths.projects_root()
         )
         run_dir = root / safe_study / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -305,6 +308,7 @@ def make_agent_run_runner(
                         for name in agent_outputs.OUTPUT_ARTIFACT_NAMES
                         if name in artifacts
                     },
+                    environ=provider_environment,
                 )
                 provider.update(provider_result["provider"])
                 full_payload = {
@@ -723,7 +727,7 @@ def list_run_history(
     root = (
         Path(project_root).expanduser()
         if project_root
-        else Path.home() / "easyicu" / "projects"
+        else state_paths.projects_root()
     )
     root = root.resolve()
     if not root.exists() or not root.is_dir():

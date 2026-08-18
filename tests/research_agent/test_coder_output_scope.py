@@ -791,7 +791,7 @@ def test_coder_repair_requires_bidirectional_provenance_pairs(ra):
         context=_context(ra),
         step=step,
         code="measured = [c for c in frame if c.endswith('_measured')]\n",
-        run_log=('DETAIL: {"reason": ' '"provenance_pair_scan_not_bidirectional"}'),
+        run_log=('DETAIL: {"reason": "provenance_pair_scan_not_bidirectional"}'),
     )
 
     prompt = llm.messages[-1].content
@@ -1037,7 +1037,7 @@ def test_coder_repair_removes_constructed_exposure_fallback(ra):
         context=context,
         step=step,
         code="try:\n    resolved = bind(definition)\nexcept:\n    resolved = {}\n",
-        run_log=('DETAIL: {"reason": ' '"authoritative_primary_exposure_fallback"}'),
+        run_log=('DETAIL: {"reason": "authoritative_primary_exposure_fallback"}'),
     )
 
     prompt = llm.messages[-1].content
@@ -1275,6 +1275,30 @@ def test_typed_model_requirement_roster_also_authorizes_effect_output(ra):
             step=step,
         )[0]
     )
+
+
+def test_compiled_binary_sensitivity_prompt_preserves_ids_and_denominators(ra):
+    step = ra.AnalysisStep(
+        step_id="scientific_sensitivity",
+        planned_analysis_role="sensitivity",
+        intent="Fit the two prespecified binary association sensitivities.",
+        inputs=["table:adjusted_association_estimates"],
+        expected_outputs=["table:scientific_sensitivity"],
+        method="prespecified_binary_association_sensitivity",
+        scientific_capability="association_freeform_v1",
+        sensitivity_spec_ids=["full_cohort", "landmark"],
+    )
+
+    assert effect_output_authorized(step) is True
+    for prompt in _ordinary_run_repair_and_agentic_prompts(ra=ra, step=step):
+        assert "association_freeform_v1" in prompt
+        assert "full_cohort" in prompt and "landmark" in prompt
+        assert "eligibility" in prompt
+        assert "complete-case model filtering" in prompt
+        assert "fitted model N" in prompt
+        assert "center before squaring" in prompt
+        assert "optimizer pseudo-convergence" in prompt
+        assert "never publish a fallback null estimate" in prompt
 
 
 def test_prespecified_robustness_refit_prompt_has_effect_authority(ra):

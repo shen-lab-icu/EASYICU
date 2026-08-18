@@ -16,6 +16,9 @@ def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
     ra, tmp_path, monkeypatch
 ):
     import easyicu.research_agent.mcp_server as mcp
+    from easyicu.research_agent.providers.factory import (
+        build_provider_client as real_builder,
+    )
 
     # Every MCP filesystem argument is confined to a root configured at
     # startup; declare tmp_path so this test still exercises the credential
@@ -45,7 +48,11 @@ def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
     monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8787/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "paid-openai-secret")
     monkeypatch.setenv("OPENROUTER_API_KEY", "paid-openrouter-secret")
-    monkeypatch.setattr(mcp, "OpenAIClient", FakeClient)
+    monkeypatch.setattr(
+        mcp,
+        "build_provider_client",
+        lambda **kwargs: real_builder(client_cls=FakeClient, **kwargs),
+    )
     monkeypatch.setattr(mcp, "ResearchAgentPipeline", FakePipeline)
 
     result = mcp.dispatch(
@@ -67,6 +74,9 @@ def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
 
 def test_discovery_launcher_loopback_never_forwards_provider_secrets(monkeypatch):
     import tools.run_discovery_to_manuscript as launcher
+    from easyicu.research_agent.providers.factory import (
+        build_provider_client as real_builder,
+    )
 
     seen = {}
 
@@ -77,7 +87,11 @@ def test_discovery_launcher_loopback_never_forwards_provider_secrets(monkeypatch
     monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:8787/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "paid-openai-secret")
     monkeypatch.setenv("OPENROUTER_API_KEY", "paid-openrouter-secret")
-    monkeypatch.setattr(launcher, "OpenAIClient", FakeClient)
+    monkeypatch.setattr(
+        launcher,
+        "build_provider_client",
+        lambda **kwargs: real_builder(client_cls=FakeClient, **kwargs),
+    )
 
     launcher._build_data_foundation_llm(
         provider="openai",

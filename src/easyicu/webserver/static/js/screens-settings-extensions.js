@@ -1,6 +1,7 @@
 /* Owner: Settings route user Skill/MCP installation and lifecycle UI. */
 (function () {
   'use strict';
+  const { esc } = window.EU_HTML;
 
   const state = {
     loading: false,
@@ -12,11 +13,6 @@
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
-  function esc(value) {
-    return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[ch]));
-  }
   function api() { return window.EU_API || {}; }
   function registry() { return window.EU_EXTENSIONS || null; }
   function shortSha(value) { return String(value || '').slice(0, 12); }

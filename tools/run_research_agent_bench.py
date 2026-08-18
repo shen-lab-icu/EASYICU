@@ -105,6 +105,9 @@ _EXECUTION_INCOMPLETE_EXIT_CODE = 4
 # as a clean pass -- `scores=0, pending=1, exit=0`.
 _PENDING_ITEMS_EXIT_CODE = 5
 
+_CODEX_USER_SESSION_BINDING_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_CODEX_APP_SERVER_REASONING_EFFORT = "low"
+
 _SCIENTIFIC_RUNTIME_AUTHORITY_OPTIONS = (
     "trajectory_scientific_runtime_authority",
     "current_case_scientific_runtime_authority",
@@ -137,6 +140,9 @@ def _bind_runtime_scientific_projection_options(
         "easyicu.source_feasibility_runtime_authority/1": (
             "current_case_scientific_runtime_authority"
         ),
+        "easyicu.association_model_grid_runtime_authority/1": (
+            "current_case_scientific_runtime_authority"
+        ),
     }
     try:
         authority_option = authority_option_by_schema[schema_version]
@@ -153,8 +159,7 @@ def _bind_runtime_scientific_projection_options(
         supplied = options[option_name]
         if option_name != authority_option or supplied != expected_contract:
             raise ValueError(
-                "SCIENTIFIC_RUNTIME_AUTHORITY_OVERRIDE_FORBIDDEN: "
-                f"{option_name}"
+                f"SCIENTIFIC_RUNTIME_AUTHORITY_OVERRIDE_FORBIDDEN: {option_name}"
             )
     supplied_digest = options.get("scientific_runtime_projection_sha256")
     if supplied_digest is not None and str(supplied_digest) != projection_digest:
@@ -1321,9 +1326,7 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
             )
         )
         result["scientific_acceptance"] = scientific_receipt
-        result["scientific_acceptance_receipt"] = str(
-            scientific_receipt_path
-        )
+        result["scientific_acceptance_receipt"] = str(scientific_receipt_path)
     return result
 
 
@@ -1437,7 +1440,6 @@ def _run_one_arm(
     with cohort_concept_id_scope(
         list(getattr(item, "cohort_columns", None) or getattr(cohort, "columns", []))
     ):
-
         workdir.mkdir(parents=True, exist_ok=True)
         # Force the kind-matched reporting checklist(s) so the EMITTED file matches
         # what the scorecard READS by task kind (single source of truth:
@@ -1446,9 +1448,24 @@ def _run_one_arm(
         # mortality_prediction task while the scorecard expected TRIPOD+AI — so
         # reporting_completeness was silently NA on a run that did reach the write
         # phase (detector/emitter contract mismatch, G-2).
+        scientific_contract = getattr(item, "scientific_acceptance_contract", None)
+        runtime_projection = getattr(item, "runtime_scientific_projection", None)
+        if (
+            runtime_projection is None
+            and isinstance(scientific_contract, Mapping)
+            and scientific_contract.get("schema_version")
+            == "easyicu.e1_scientific_acceptance_contract/1"
+        ):
+            from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
+                build_e1_model_grid_runtime_projection,
+            )
+
+            runtime_projection = build_e1_model_grid_runtime_projection(
+                scientific_contract
+            )
         opts = _bind_runtime_scientific_projection_options(
             pipeline_options,
-            getattr(item, "runtime_scientific_projection", None),
+            runtime_projection,
         )
         opts.setdefault(
             "reporting_checklist_names",
@@ -1458,7 +1475,6 @@ def _run_one_arm(
         # trajectory-item applicability by kind (cross-sectional clustering vs
         # longitudinal) instead of fragile manuscript wording (M3 false-open).
         opts.setdefault("task_kind", getattr(item, "kind", None))
-        scientific_contract = getattr(item, "scientific_acceptance_contract", None)
         if isinstance(scientific_contract, Mapping):
             required_cohort_mode = str(
                 scientific_contract.get("primary_cohort_selection_mode") or ""
@@ -1844,6 +1860,7 @@ def _benchmark_execution_identity(
     request_timeout: float = 120.0,
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
 ):
     from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
@@ -1863,6 +1880,7 @@ def _benchmark_execution_identity(
             request_timeout=request_timeout,
             transport_max_attempts=transport_max_attempts,
             stream_enabled=stream_enabled,
+            supports_strict_json_schema=bool(planner_strict_json_schema),
             environment=provider_environment,
         )
     return ExecutionIdentity.create(
@@ -2399,6 +2417,7 @@ def _make_llm(
     reasoning_effort_profile: str = "provider_default",
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
 ):
     if not isinstance(transport_max_attempts, int) or isinstance(
@@ -2412,32 +2431,115 @@ def _make_llm(
     from easyicu.research_agent import (  # type: ignore
         LLMRouter,
         MockLLMClient,
-        OpenAIClient,
     )
     from easyicu.research_agent.providers import (  # type: ignore
+        ANTHROPIC_MESSAGES,
         ProviderConfigurationError,
+        SUPPORTED_CLI_ACCOUNT_NAMES,
         build_provider_client,
+        cli_account_profile,
+        provider_profile,
+        user_account_profile,
     )
-    from easyicu.research_agent.providers.llm import reasoning_effort_by_role
+    from easyicu.research_agent.providers.factory import authorize_provider_client
+    from easyicu.research_agent.providers.llm import (
+        CodexAppServerLLMClient,
+        build_llm_client,
+        reasoning_effort_by_role,
+    )
 
     if provider == "mock":
         return MockLLMClient()
+    if provider in SUPPORTED_CLI_ACCOUNT_NAMES:
+        cli_profile = cli_account_profile(provider)
+        assert cli_profile is not None
+        if reasoning_effort_profile != "provider_default":
+            raise SystemExit(
+                "Account-backed CLI providers currently require "
+                "--reasoning-effort-profile provider_default."
+            )
+        if total_transport_attempts != 1 or stream_enabled:
+            raise SystemExit(
+                "Account-backed CLI providers use one non-streaming transport "
+                "attempt per logical call."
+            )
+        if planner_strict_json_schema and not (cli_profile.supports_strict_json_schema):
+            raise SystemExit(
+                f"Provider {provider!r} cannot honor strict Planner JSON Schema."
+            )
+        account_environment = dict(provider_environment or {})
+        session_binding = str(
+            account_environment.get("EASYICU_CODEX_SESSION_SHA256") or ""
+        ).strip()
+        if session_binding:
+            account_profile = user_account_profile(provider)
+            if account_profile is None:
+                raise SystemExit(
+                    f"Provider {provider!r} has no reviewed App Server account path."
+                )
+            selected_model = str(model or "").strip()
+            if selected_model in {"", "cli-default", "account-default"}:
+                selected_model = "account-default"
+            try:
+                client = CodexAppServerLLMClient(
+                    model=(
+                        None if selected_model == "account-default" else selected_model
+                    ),
+                    request_timeout=request_timeout,
+                    turn_hard_timeout=request_timeout,
+                    reasoning_effort=_CODEX_APP_SERVER_REASONING_EFFORT,
+                    environment=account_environment,
+                )
+                endpoint = (
+                    f"{account_profile.endpoint_identity}/session/{session_binding}"
+                )
+                return authorize_provider_client(
+                    client,
+                    provider=account_profile.provider_identity,
+                    model=selected_model,
+                    base_url=endpoint,
+                    destination="external",
+                    environment=account_environment,
+                )
+            except (RuntimeError, ValueError, ProviderConfigurationError) as exc:
+                raise SystemExit(str(exc)) from exc
+        try:
+            return build_llm_client(
+                prefer=provider,
+                model=None if model == "cli-default" else model,
+                allow_mock=False,
+                ladder=[provider],
+                request_timeout=request_timeout,
+                environment=provider_environment,
+            ).client
+        except (RuntimeError, ValueError, ProviderConfigurationError) as exc:
+            raise SystemExit(str(exc)) from exc
     try:
         # The CLI option is deliberately expressed as total physical attempts,
         # while OpenAIClient's conventional ``max_retries`` contract counts
         # only attempts after the initial request.
         transport_max_retries = total_transport_attempts - 1
         effort_by_role = reasoning_effort_by_role(reasoning_effort_profile)
+        profile_definition = provider_profile(provider)
+        if (
+            effort_by_role
+            and profile_definition is not None
+            and profile_definition.transport == ANTHROPIC_MESSAGES
+        ):
+            raise SystemExit(
+                "Anthropic native API currently requires "
+                "--reasoning-effort-profile provider_default."
+            )
         if not effort_by_role:
             return build_provider_client(
                 provider=provider,
                 model=model,
                 request_timeout=request_timeout,
                 title="EasyICU research-agent benchmark",
-                client_cls=OpenAIClient,
                 environment=provider_environment,
                 max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
+                supports_strict_json_schema=bool(planner_strict_json_schema),
                 allow_environment_overrides=False,
             )
         clients_by_effort = {
@@ -2446,11 +2548,11 @@ def _make_llm(
                 model=model,
                 request_timeout=request_timeout,
                 title="EasyICU research-agent benchmark",
-                client_cls=OpenAIClient,
                 environment=provider_environment,
                 extra_body={"reasoning": {"effort": effort}},
                 max_retries=transport_max_retries,
                 stream_enabled=bool(stream_enabled),
+                supports_strict_json_schema=bool(planner_strict_json_schema),
                 allow_environment_overrides=False,
             )
             for effort in sorted(set(effort_by_role.values()))
@@ -2486,9 +2588,43 @@ def _resolve_backend_base_url(provider: str) -> str:
     if provider == "mock":
         return "mock://deterministic"
     _bootstrap_imports()
-    from easyicu.research_agent.providers import resolve_provider_base_url
+    from easyicu.research_agent.providers import (
+        cli_account_profile,
+        resolve_provider_base_url,
+    )
+
+    cli_profile = cli_account_profile(provider)
+    if cli_profile is not None:
+        return cli_profile.endpoint_identity
 
     return resolve_provider_base_url(provider)
+
+
+def _default_model_for_provider(provider: str) -> str:
+    """Return a provider-family-safe development default."""
+
+    _bootstrap_imports()
+    from easyicu.research_agent.providers import cli_account_profile, provider_profile
+
+    normalized = str(provider or "").strip().lower()
+    if normalized == "mock":
+        return "mock"
+    account = cli_account_profile(normalized)
+    if account is not None:
+        _source, configured_model = account.model(os.environ)
+        return configured_model or "cli-default"
+    profile = provider_profile(normalized)
+    _source, configured_model = (
+        profile.model(os.environ) if profile is not None else (None, "")
+    )
+    selected = configured_model or os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "")
+    if selected:
+        return selected
+    if normalized == "openrouter":
+        return "openai/gpt-oss-120b:free"
+    if normalized == "openai":
+        return "gpt-4o-mini"
+    raise SystemExit(f"--model is required for --provider {normalized}")
 
 
 def _provider_environment_snapshot(
@@ -2496,18 +2632,124 @@ def _provider_environment_snapshot(
 ) -> Dict[str, str]:
     """Freeze endpoint semantics while retaining only required credentials."""
 
-    keys = {
-        "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
-        "EASYICU_ALLOW_EXTERNAL_LLM",
-        "EASYICU_TRUST_LOOPBACK_PROXY_KEY",
-    }
+    _bootstrap_imports()
+    from easyicu.research_agent.providers import (
+        cli_account_profile,
+        is_loopback_openai_base_url,
+        provider_profile,
+    )
+    from easyicu.research_agent.providers.subprocess_env import (
+        build_provider_subprocess_env,
+    )
+
+    cli_profile = cli_account_profile(provider)
+    if cli_profile is not None:
+        snapshot = build_provider_subprocess_env(provider)
+        if "EASYICU_ALLOW_EXTERNAL_LLM" in os.environ:
+            snapshot["EASYICU_ALLOW_EXTERNAL_LLM"] = os.environ[
+                "EASYICU_ALLOW_EXTERNAL_LLM"
+            ]
+        return snapshot
+    profile = provider_profile(provider)
+    keys = {"EASYICU_ALLOW_EXTERNAL_LLM"}
+    if (
+        profile is not None
+        and profile.supports_auth_header_override
+        and is_loopback_openai_base_url(provider_base_url)
+    ):
+        keys.update(
+            {
+                "EASYICU_OPENAI_AUTH_HEADER",
+                "EASYICU_TRUST_LOOPBACK_PROXY_KEY",
+            }
+        )
+    if profile is not None:
+        keys.update(profile.api_key_env_names)
     snapshot = {key: os.environ[key] for key in keys if key in os.environ}
-    if provider == "openai":
-        snapshot["OPENAI_BASE_URL"] = str(provider_base_url)
-    elif provider == "openrouter":
-        snapshot["OPENROUTER_BASE_URL"] = str(provider_base_url)
+    if profile is not None:
+        snapshot[profile.base_url_env_names[0]] = str(provider_base_url)
     return snapshot
+
+
+def _validated_development_codex_session_binding(
+    binding: object,
+    *,
+    provider: str,
+    model: object,
+    development_diagnostic: bool,
+    formal_authority_requested: bool,
+    multiple_models_requested: bool,
+    explicit_provider_base_url: object,
+    reasoning_effort_profile: str,
+    transport_max_attempts: int,
+    stream_enabled: bool,
+) -> str | None:
+    """Validate the narrow benchmark bridge to one Web-managed Codex login."""
+
+    normalized = str(binding or "").strip().lower()
+    if not normalized:
+        return None
+    if not _CODEX_USER_SESSION_BINDING_PATTERN.fullmatch(normalized):
+        raise SystemExit(
+            "--codex-user-session-binding must be one 64-character lowercase "
+            "SHA-256 binding returned by the authenticated Web session."
+        )
+    if str(provider or "").strip().lower() != "codex":
+        raise SystemExit("--codex-user-session-binding requires --provider codex.")
+    if not development_diagnostic or formal_authority_requested:
+        raise SystemExit(
+            "--codex-user-session-binding is development-only and cannot enter "
+            "a formal, submission-profile, or paper-acceptance run."
+        )
+    if multiple_models_requested:
+        raise SystemExit(
+            "--codex-user-session-binding requires exactly one --model."
+        )
+    selected_model = str(model or "").strip()
+    if selected_model in {"", "cli-default", "account-default"}:
+        raise SystemExit(
+            "--codex-user-session-binding requires an explicit account model."
+        )
+    if str(explicit_provider_base_url or "").strip():
+        raise SystemExit(
+            "--codex-user-session-binding owns its App Server endpoint; "
+            "do not pass --provider-base-url."
+        )
+    if str(reasoning_effort_profile or "").strip() != "provider_default":
+        raise SystemExit(
+            "Codex App Server account runs require "
+            "--reasoning-effort-profile provider_default."
+        )
+    if transport_max_attempts != 1 or stream_enabled:
+        raise SystemExit(
+            "Codex App Server account runs use one non-streaming transport "
+            "attempt per logical call."
+        )
+    return normalized
+
+
+def _development_codex_session_environment(
+    binding_sha256: str,
+    *,
+    model: str,
+) -> tuple[Dict[str, str], str]:
+    """Resolve a verified private Web session without returning its credential."""
+
+    _bootstrap_imports()
+    from easyicu.research_agent.providers import user_account_profile
+    from easyicu.webserver.codex_account_sessions import (
+        CodexAccountSessionError,
+        environment_for_binding,
+    )
+
+    try:
+        environment = environment_for_binding(binding_sha256, model=model)
+    except CodexAccountSessionError as exc:
+        raise SystemExit(str(exc)) from exc
+    profile = user_account_profile("codex")
+    assert profile is not None
+    endpoint = f"{profile.endpoint_identity}/session/{binding_sha256}"
+    return dict(environment), endpoint
 
 
 def _provider_hard_stop_limits(
@@ -2540,12 +2782,8 @@ def _provider_hard_stop_limits(
         max_provider_attempts_per_batch=int(
             pipeline_options["max_provider_attempts_per_batch"]
         ),
-        max_total_tokens_per_run=int(
-            pipeline_options["max_total_tokens_per_run"]
-        ),
-        max_total_tokens_per_batch=int(
-            pipeline_options["max_total_tokens_per_batch"]
-        ),
+        max_total_tokens_per_run=int(pipeline_options["max_total_tokens_per_run"]),
+        max_total_tokens_per_batch=int(pipeline_options["max_total_tokens_per_batch"]),
         max_estimated_cost_usd_per_batch=float(
             pipeline_options["max_estimated_cost_usd_per_batch"]
         ),
@@ -2618,6 +2856,7 @@ def _benchmark_pipeline_options(
     max_total_steps: Optional[int],
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
+    planner_strategy: str = "monolithic_v1",
     max_step_llm_repair_attempts: Optional[int] = None,
     max_step_provider_calls: int = 9,
     max_provider_attempts_per_run: int = 192,
@@ -2643,6 +2882,8 @@ def _benchmark_pipeline_options(
     development_sample_size: Optional[int] = None,
     development_sample_seed: int = 20260719,
     development_diagnostic: bool = False,
+    development_progressive_resume_checkpoint_path: Optional[Path] = None,
+    development_progressive_resume_checkpoint_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -2673,8 +2914,25 @@ def _benchmark_pipeline_options(
                 "be combined with --submission-profile."
             )
         options["development_diagnostic"] = True
+    progressive_resume_values = (
+        development_progressive_resume_checkpoint_path,
+        development_progressive_resume_checkpoint_sha256,
+    )
+    if any(value is not None for value in progressive_resume_values):
+        if any(value is None for value in progressive_resume_values):
+            raise SystemExit(
+                "--development-progressive-resume-checkpoint and its SHA-256 "
+                "must be supplied together."
+            )
+        options["development_progressive_resume_checkpoint_path"] = Path(
+            development_progressive_resume_checkpoint_path
+        )
+        options["development_progressive_resume_checkpoint_sha256"] = str(
+            development_progressive_resume_checkpoint_sha256
+        )
     if enable_pubmed:
         options["enable_pubmed"] = True
+    options["planner_strategy"] = str(planner_strategy)
     # These are independent execution budgets.  The ordinary timeout bounds
     # model-generated scripts; registered standards use their own longer
     # planner-owned workload budget.
@@ -2691,20 +2949,14 @@ def _benchmark_pipeline_options(
     if max_step_llm_repair_attempts is not None:
         options["max_step_llm_repair_attempts"] = int(max_step_llm_repair_attempts)
     options["max_step_provider_calls"] = int(max_step_provider_calls)
-    options["max_provider_attempts_per_run"] = int(
-        max_provider_attempts_per_run
-    )
-    options["max_provider_attempts_per_batch"] = int(
-        max_provider_attempts_per_batch
-    )
+    options["max_provider_attempts_per_run"] = int(max_provider_attempts_per_run)
+    options["max_provider_attempts_per_batch"] = int(max_provider_attempts_per_batch)
     options["max_total_tokens_per_run"] = int(max_total_tokens_per_run)
     options["max_total_tokens_per_batch"] = int(max_total_tokens_per_batch)
     options["max_estimated_cost_usd_per_batch"] = float(
         max_estimated_cost_usd_per_batch
     )
-    options["max_wall_clock_seconds_per_task"] = float(
-        max_wall_clock_seconds_per_task
-    )
+    options["max_wall_clock_seconds_per_task"] = float(max_wall_clock_seconds_per_task)
     options["provider_input_cost_usd_per_million_tokens"] = float(
         provider_input_cost_usd_per_million_tokens
     )
@@ -2875,7 +3127,7 @@ def _enforce_mock_aware_provider(
         raise SystemExit(
             "The 'aware' arm on the mock provider returns pre-written, "
             "fixture responses, so its results are not real. Use "
-            "--provider openrouter/openai for paper-facing runs, restrict to "
+            "a configured real --provider for paper-facing runs, restrict to "
             "--arms naive, or pass --allow-mock-aware for an offline plumbing "
             "smoke test (results are non-substantive)."
         )
@@ -2903,6 +3155,7 @@ def _run_suite(
     reasoning_effort_profile: str = "provider_default",
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -2937,6 +3190,7 @@ def _run_suite(
         reasoning_effort_profile=reasoning_effort_profile,
         transport_max_attempts=transport_max_attempts,
         stream_enabled=stream_enabled,
+        planner_strict_json_schema=planner_strict_json_schema,
         provider_environment=provider_environment,
     )
     from easyicu.research_agent import (  # type: ignore
@@ -2969,9 +3223,7 @@ def _run_suite(
             )
         except BaseException as exc:
             if task_hard_stop is not None:
-                task_hard_stop.finish(
-                    error=f"{type(exc).__name__}: {str(exc)[:1800]}"
-                )
+                task_hard_stop.finish(error=f"{type(exc).__name__}: {str(exc)[:1800]}")
             raise
         scores.append(score)
         if task_hard_stop is not None:
@@ -2994,6 +3246,9 @@ def _run_suite(
         "arms": selected_arms,
         "case_registration": case_registration,
         "force_writer_probe": bool(force_writer_probe),
+        "provider_transport_options": {
+            "planner_strict_json_schema": bool(planner_strict_json_schema),
+        },
         "pipeline_options": dict(pipeline_options or {}),
         "items": [it.key for it in items],
         "scores": scores,
@@ -3104,9 +3359,7 @@ def _canonical_execution_config_from_args(args):
         max_step_llm_repair_attempts=getattr(
             args, "max_step_llm_repair_attempts", None
         ),
-        max_step_provider_calls=int(
-            getattr(args, "max_step_provider_calls", 9)
-        ),
+        max_step_provider_calls=int(getattr(args, "max_step_provider_calls", 9)),
         max_provider_attempts_per_run=int(
             getattr(args, "max_provider_attempts_per_run", 192)
         ),
@@ -3151,9 +3404,8 @@ def _canonical_execution_config_from_args(args):
         reasoning_effort_profile=str(
             getattr(args, "reasoning_effort_profile", "provider_default")
         ),
-        transport_max_attempts=int(
-            getattr(args, "transport_max_attempts", 1)
-        ),
+        planner_strategy=str(getattr(args, "planner_strategy", "monolithic_v1")),
+        transport_max_attempts=int(getattr(args, "transport_max_attempts", 1)),
         provider_base_url=(
             str(getattr(args, "provider_base_url", "") or "").strip()
             or _resolve_backend_base_url(str(getattr(args, "provider", "mock")))
@@ -3202,7 +3454,7 @@ def _verify_figure2_development_diagnostic(
     ).strip()
     if not receipt_raw:
         raise ValueError(
-            "--development-diagnostic requires " "--figure2-development-binding-receipt"
+            "--development-diagnostic requires --figure2-development-binding-receipt"
         )
     receipt_path = Path(receipt_raw).expanduser()
     if not receipt_path.is_absolute() or receipt_path.is_symlink():
@@ -3462,6 +3714,10 @@ def _figure2_realrun_authorization_gate(args):
 def main() -> int:
     _bootstrap_imports()
 
+    from easyicu.research_agent.providers import (
+        SUPPORTED_CLI_ACCOUNT_NAMES,
+        SUPPORTED_PROVIDER_NAMES,
+    )
     from tests.bench import ANALYSIS_BENCH_ITEMS, RULE_BENCH_ITEMS  # type: ignore
 
     default_submission_profile_ref = _default_submission_profile_ref()
@@ -3486,9 +3742,19 @@ def main() -> int:
     )
     parser.add_argument(
         "--provider",
-        choices=["mock", "openrouter", "openai"],
+        choices=["mock", *SUPPORTED_CLI_ACCOUNT_NAMES, *SUPPORTED_PROVIDER_NAMES],
         default="mock",
         help="LLM backend for the benchmark arms.",
+    )
+    parser.add_argument(
+        "--codex-user-session-binding",
+        default=None,
+        help=(
+            "Development-only SHA-256 binding for a verified Web-managed Codex "
+            "account session. Uses App Server rather than the legacy codex CLI; "
+            "requires --provider codex, one explicit --model, and "
+            "--development-diagnostic."
+        ),
     )
     parser.add_argument(
         "--allow-mock-aware",
@@ -3511,10 +3777,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get(
-            "EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"
+        default=None,
+        help=(
+            "Single model name for real-provider runs. Account CLIs default "
+            "to their logged-in model; API providers retain the hosted-model "
+            "development default. Formal runs should pin an exact model."
         ),
-        help="Single model name for real-provider runs.",
     )
     parser.add_argument(
         "--models",
@@ -3551,6 +3819,43 @@ def main() -> int:
         help=(
             "Use streaming transport. Off by default and frozen into Canonical9 "
             "execution authority; EASYICU_LLM_STREAM cannot override it."
+        ),
+    )
+    parser.add_argument(
+        "--planner-strict-json-schema",
+        action="store_true",
+        help=(
+            "Require the configured OpenAI-compatible Planner transport to "
+            "enforce the host-derived AnalysisPlan JSON Schema. The capability "
+            "is explicit and becomes part of the provider transport policy, "
+            "not PipelineConfig."
+        ),
+    )
+    parser.add_argument(
+        "--planner-strategy",
+        choices=["monolithic_v1", "progressive_v2"],
+        default="monolithic_v1",
+        help=(
+            "Planner contract materialization strategy. Progressive v2 asks "
+            "for a compact skeleton, compiles host-owned execution details, "
+            "and revises only an unlocked suffix."
+        ),
+    )
+    parser.add_argument(
+        "--development-progressive-resume-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Development-only terminal Progressive Planner checkpoint path. "
+            "Requires one selected JSONL item/arm and the exact file SHA-256."
+        ),
+    )
+    parser.add_argument(
+        "--development-progressive-resume-checkpoint-sha256",
+        default=None,
+        help=(
+            "Exact SHA-256 of --development-progressive-resume-checkpoint. "
+            "Formal paper-facing profiles reject this option."
         ),
     )
     parser.add_argument(
@@ -3942,18 +4247,52 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if not args.model and not args.models:
+        args.model = _default_model_for_provider(str(args.provider))
+    formal_authority_requested = bool(
+        args.submission_profile
+        or args.require_figure2_paper_acceptance
+        or args.figure2_realrun_authorization
+        or args.figure2_production_input_authority
+        or args.figure2_scientific_protocol_authority
+        or args.figure2_expected_execution_identity
+    )
+    codex_user_session_binding = _validated_development_codex_session_binding(
+        args.codex_user_session_binding,
+        provider=str(args.provider),
+        model=args.model,
+        development_diagnostic=bool(args.development_diagnostic),
+        formal_authority_requested=formal_authority_requested,
+        multiple_models_requested=bool(args.models),
+        explicit_provider_base_url=args.provider_base_url,
+        reasoning_effort_profile=str(args.reasoning_effort_profile),
+        transport_max_attempts=int(args.transport_max_attempts),
+        stream_enabled=bool(args.llm_stream),
+    )
+    codex_account_environment: Dict[str, str] | None = None
+    if codex_user_session_binding is not None:
+        codex_account_environment, codex_account_endpoint = (
+            _development_codex_session_environment(
+                codex_user_session_binding,
+                model=str(args.model),
+            )
+        )
+        args.provider_base_url = codex_account_endpoint
     # Resolve once. The authorization digest and every subsequently created
     # client receive this exact endpoint; later environment mutation is inert.
-    args.provider_base_url = (
-        str(args.provider_base_url or "").strip()
-        or _resolve_backend_base_url(str(args.provider))
-    )
+    args.provider_base_url = str(
+        args.provider_base_url or ""
+    ).strip() or _resolve_backend_base_url(str(args.provider))
     _realrun_gate_rc, _figure2_batch_binding = _figure2_realrun_authorization_gate(args)
     if _realrun_gate_rc is not None:
         return _realrun_gate_rc
-    provider_environment = _provider_environment_snapshot(
-        provider=str(args.provider),
-        provider_base_url=str(args.provider_base_url),
+    provider_environment = (
+        codex_account_environment
+        if codex_account_environment is not None
+        else _provider_environment_snapshot(
+            provider=str(args.provider),
+            provider_base_url=str(args.provider_base_url),
+        )
     )
     case_registration = _register_case_patterns(args.case)
     submission_profile = (
@@ -4013,18 +4352,15 @@ def main() -> int:
         max_total_steps=args.max_total_steps,
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
+        planner_strategy=str(args.planner_strategy),
         max_step_llm_repair_attempts=max_step_llm_repair_attempts,
         max_step_provider_calls=int(args.max_step_provider_calls),
         max_provider_attempts_per_run=int(args.max_provider_attempts_per_run),
         max_provider_attempts_per_batch=int(args.max_provider_attempts_per_batch),
         max_total_tokens_per_run=int(args.max_total_tokens_per_run),
         max_total_tokens_per_batch=int(args.max_total_tokens_per_batch),
-        max_estimated_cost_usd_per_batch=float(
-            args.max_estimated_cost_usd_per_batch
-        ),
-        max_wall_clock_seconds_per_task=float(
-            args.max_wall_clock_seconds_per_task
-        ),
+        max_estimated_cost_usd_per_batch=float(args.max_estimated_cost_usd_per_batch),
+        max_wall_clock_seconds_per_task=float(args.max_wall_clock_seconds_per_task),
         provider_input_cost_usd_per_million_tokens=float(
             args.provider_input_cost_usd_per_million_tokens
         ),
@@ -4046,6 +4382,19 @@ def main() -> int:
         development_sample_size=getattr(args, "development_sample_size", None),
         development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
         development_diagnostic=bool(getattr(args, "development_diagnostic", False)),
+        development_progressive_resume_checkpoint_path=getattr(
+            args,
+            "development_progressive_resume_checkpoint",
+            None,
+        ),
+        development_progressive_resume_checkpoint_sha256=getattr(
+            args,
+            "development_progressive_resume_checkpoint_sha256",
+            None,
+        ),
+    )
+    planner_strict_json_schema = bool(
+        getattr(args, "planner_strict_json_schema", False)
     )
 
     if (
@@ -4069,6 +4418,24 @@ def main() -> int:
             "--figure2-expected-execution-identity."
         )
 
+    progressive_resume_requested = (
+        getattr(args, "development_progressive_resume_checkpoint", None)
+        is not None
+    )
+    if progressive_resume_requested and not args.ehrflowbench_jsonl:
+        raise SystemExit(
+            "--development-progressive-resume-checkpoint requires "
+            "--ehrflowbench-jsonl so one source question can be selected."
+        )
+    if progressive_resume_requested and (
+        _figure2_batch_binding is not None
+        or bool(args.require_figure2_paper_acceptance)
+    ):
+        raise SystemExit(
+            "FORMAL_PROGRESSIVE_CHECKPOINT_RESUME_FORBIDDEN: cross-run Planner "
+            "checkpoint reuse is development-only and cannot enter a formal "
+            "Figure 2 batch."
+        )
     if args.ehrflowbench_jsonl:
         if bool(args.require_figure2_paper_acceptance) and _normalize_arms(
             args.arms
@@ -4085,6 +4452,11 @@ def main() -> int:
             raise SystemExit(
                 "--repeat cannot be combined with --resume-run-id: repeats "
                 "start fresh runs, resume continues one existing run."
+            )
+        if n_repeat > 1 and progressive_resume_requested:
+            raise SystemExit(
+                "--repeat cannot be combined with development Progressive "
+                "Planner checkpoint resume."
             )
 
         # Canonical9 batches run exactly the strict path verified by the gate.  An
@@ -4128,6 +4500,7 @@ def main() -> int:
                 reasoning_effort_profile=str(args.reasoning_effort_profile),
                 transport_max_attempts=int(args.transport_max_attempts),
                 stream_enabled=bool(args.llm_stream),
+                planner_strict_json_schema=planner_strict_json_schema,
                 provider_environment=provider_environment,
                 provider_base_url=str(args.provider_base_url),
                 items=args.items,
@@ -4207,6 +4580,7 @@ def main() -> int:
             reasoning_effort_profile=str(args.reasoning_effort_profile),
             transport_max_attempts=int(args.transport_max_attempts),
             stream_enabled=bool(args.llm_stream),
+            planner_strict_json_schema=planner_strict_json_schema,
             provider_environment=provider_environment,
             provider_base_url=str(args.provider_base_url),
         )
@@ -4238,6 +4612,9 @@ def main() -> int:
             "provider": args.provider,
             "arms": _normalize_arms(args.arms),
             "case_registration": case_registration,
+            "provider_transport_options": {
+                "planner_strict_json_schema": planner_strict_json_schema,
+            },
             "pipeline_options": pipeline_options,
             "items": [it.key for it in items],
             "runs": all_runs,
@@ -4785,8 +5162,7 @@ def _external_item_from_row(
             else None
         ),
         runtime_scientific_projection_sha256=(
-            str(row.get("runtime_scientific_projection_sha256") or "").strip()
-            or None
+            str(row.get("runtime_scientific_projection_sha256") or "").strip() or None
         ),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
@@ -4857,6 +5233,24 @@ def _cohort_shape_without_materialization(path: Path) -> tuple[int, List[str]]:
     raise _CohortMetadataError(f"Unsupported cohort format: {path.suffix or '<none>'}")
 
 
+def _safe_benchmark_structured_attempts(exc: BaseException) -> List[Dict[str, Any]]:
+    """Project retry diagnostics without response text or parser messages."""
+
+    try:
+        from easyicu.research_agent.providers.structured_retry import (
+            safe_structured_attempt_metadata,
+        )
+
+        projected = getattr(exc, "easyicu_structured_attempt_metadata", None)
+        if projected is None:
+            projected = getattr(exc, "attempts", None)
+        if projected is not None:
+            return safe_structured_attempt_metadata(projected)
+    except Exception:
+        pass
+    return []
+
+
 def _run_ehrflowbench_jsonl(
     *,
     jsonl_path: Path,
@@ -4880,6 +5274,7 @@ def _run_ehrflowbench_jsonl(
     reasoning_effort_profile: str = "provider_default",
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_base_url: Optional[str] = None,
     items: Optional[Sequence[str]] = None,
@@ -4996,6 +5391,16 @@ def _run_ehrflowbench_jsonl(
         str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
         for idx, row in enumerate(rows)
     ]
+    progressive_resume_path = (pipeline_options or {}).get(
+        "development_progressive_resume_checkpoint_path"
+    )
+    if progressive_resume_path is not None and (
+        len(input_task_ids) != 1 or len(_normalize_arms(arms)) != 1
+    ):
+        raise SystemExit(
+            "Development Progressive Planner checkpoint resume requires exactly "
+            "one selected JSONL item and one arm."
+        )
     hard_stop_limits = _provider_hard_stop_limits(pipeline_options or {})
     if batch_binding is not None and hard_stop_limits is None:
         raise ValueError(
@@ -5019,9 +5424,7 @@ def _run_ehrflowbench_jsonl(
             task_ids=input_task_ids,
             limits=hard_stop_limits,
             batch_id=(
-                str(batch_binding.batch_id)
-                if batch_binding is not None
-                else None
+                str(batch_binding.batch_id) if batch_binding is not None else None
             ),
             declaration_sha256=(
                 str(batch_binding.declaration_sha256)
@@ -5378,6 +5781,7 @@ def _run_ehrflowbench_jsonl(
                 reasoning_effort_profile=reasoning_effort_profile,
                 transport_max_attempts=transport_max_attempts,
                 stream_enabled=stream_enabled,
+                planner_strict_json_schema=planner_strict_json_schema,
                 provider_environment=provider_environment,
                 provider_hard_stop=task_hard_stop,
             )
@@ -5437,6 +5841,7 @@ def _run_ehrflowbench_jsonl(
             import traceback as _tb
 
             tb = _tb.format_exc()
+            structured_attempts = _safe_benchmark_structured_attempts(exc)
             print(
                 f"[ehrflowbench] item {key} FAILED: {type(exc).__name__}: "
                 f"{str(exc)[:200]}\n{tb}"
@@ -5446,19 +5851,38 @@ def _run_ehrflowbench_jsonl(
                 (out_root / key / "item_exception_traceback.txt").write_text(
                     tb, encoding="utf-8"
                 )
+                diagnostic = {
+                    "schema_version": "easyicu.benchmark_item_exception/1",
+                    "task_id": key,
+                    "error_type": type(exc).__name__,
+                    "message_sha256": hashlib.sha256(
+                        str(exc).encode("utf-8")
+                    ).hexdigest(),
+                    "structured_attempts": structured_attempts,
+                }
+                (out_root / key / "item_exception.json").write_text(
+                    json.dumps(
+                        diagnostic,
+                        indent=2,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
             except Exception:
                 pass
-            pending.append(
-                {
-                    "key": key,
-                    "status": "item_exception",
-                    "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-                }
-            )
+            pending_row: Dict[str, Any] = {
+                "key": key,
+                "status": "item_exception",
+                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            }
+            if structured_attempts:
+                pending_row["structured_attempts"] = structured_attempts
+            pending.append(pending_row)
             if task_hard_stop is not None:
-                task_hard_stop.finish(
-                    error=f"{type(exc).__name__}: {str(exc)[:1800]}"
-                )
+                task_hard_stop.finish(error=f"{type(exc).__name__}: {str(exc)[:1800]}")
             if formal_canary_task_id is not None and key == formal_canary_task_id:
                 _write_figure2_canary_gate(
                     out_root=out_root,
@@ -5492,6 +5916,9 @@ def _run_ehrflowbench_jsonl(
         "seed": seed,
         "arms": _normalize_arms(arms),
         "reasoning_effort_profile": reasoning_effort_profile,
+        "provider_transport_options": {
+            "planner_strict_json_schema": bool(planner_strict_json_schema),
+        },
         "backend_base_url": (
             str(provider_base_url)
             if provider_base_url is not None
@@ -5565,21 +5992,16 @@ def _run_ehrflowbench_jsonl(
                     "authorized batch declaration"
                 )
                 print(
-                    "[realrun-authority] POST-RUN batch ledger incomplete: "
-                    f"{detail}."
+                    f"[realrun-authority] POST-RUN batch ledger incomplete: {detail}."
                 )
-                batch_authority_issues.append(
-                    ("BATCH_LEDGER_INVALID", detail, None)
-                )
+                batch_authority_issues.append(("BATCH_LEDGER_INVALID", detail, None))
         except Exception as exc:  # fail closed into the terminal receipt
             detail = f"{type(exc).__name__}: {exc}"[:2048]
             print(
                 "[realrun-authority] POST-RUN batch ledger verification "
                 f"failed: {detail}"
             )
-            batch_authority_issues.append(
-                ("BATCH_LEDGER_INVALID", detail, None)
-            )
+            batch_authority_issues.append(("BATCH_LEDGER_INVALID", detail, None))
 
     acceptance_status: str | None = None
     if require_figure2_paper_acceptance or any(
@@ -5710,6 +6132,7 @@ def _run_one_item_from_cohort(
     reasoning_effort_profile: str = "provider_default",
     transport_max_attempts: int = 1,
     stream_enabled: bool = False,
+    planner_strict_json_schema: bool = False,
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_hard_stop: Optional[Any] = None,
 ) -> Dict[str, Any]:
@@ -5727,14 +6150,38 @@ def _run_one_item_from_cohort(
     )
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
+    account_session_client = None
+    if (
+        str(provider or "").strip().lower() == "codex"
+        and str(
+            (provider_environment or {}).get("EASYICU_CODEX_SESSION_SHA256") or ""
+        ).strip()
+        and set(_normalize_arms(arms)).intersection({"naive", "aware"})
+    ):
+        # Configuration-only identity cannot safely guess a browser-managed
+        # session's endpoint, hard timeout, or reasoning effort. Constructing
+        # this client performs no Provider call; it lets both reuse checks and
+        # the eventual Pipeline derive identity from the exact same live object.
+        account_session_client = _make_llm(
+            provider=provider,
+            model=model,
+            request_timeout=request_timeout,
+            reasoning_effort_profile=reasoning_effort_profile,
+            transport_max_attempts=transport_max_attempts,
+            stream_enabled=stream_enabled,
+            planner_strict_json_schema=planner_strict_json_schema,
+            provider_environment=provider_environment,
+        )
     expected_identity = _benchmark_execution_identity(
         bound_pipeline_options,
+        account_session_client,
         provider=provider,
         model=model,
         reasoning_effort_profile=reasoning_effort_profile,
         request_timeout=request_timeout,
         transport_max_attempts=transport_max_attempts,
         stream_enabled=stream_enabled,
+        planner_strict_json_schema=planner_strict_json_schema,
         provider_environment=provider_environment,
     )
     if reuse_existing and not resume_run_id:
@@ -5754,19 +6201,18 @@ def _run_one_item_from_cohort(
             ) or _skipped_arm("aware")
     run_naive = "naive" in selected and not _arm_was_run(naive)
     run_aware = "aware" in selected and not _arm_was_run(aware)
-    llm = (
-        _make_llm(
+    llm = account_session_client
+    if llm is None and (run_naive or run_aware):
+        llm = _make_llm(
             provider=provider,
             model=model,
             request_timeout=request_timeout,
             reasoning_effort_profile=reasoning_effort_profile,
             transport_max_attempts=transport_max_attempts,
             stream_enabled=stream_enabled,
+            planner_strict_json_schema=planner_strict_json_schema,
             provider_environment=provider_environment,
         )
-        if run_naive or run_aware
-        else None
-    )
     if run_naive:
         naive = _run_one_arm(
             item=item,
@@ -5810,6 +6256,9 @@ def _run_one_item_from_cohort(
         "operational_exposure": getattr(item, "operational_exposure", None),
         "database": getattr(item, "database", "bench"),
         "reasoning_effort_profile": reasoning_effort_profile,
+        "provider_transport_options": {
+            "planner_strict_json_schema": bool(planner_strict_json_schema),
+        },
         "expected_or_direction": item.expected_or_direction,
         "benchmark_family": getattr(item, "benchmark_family", "external"),
         "difficulty": getattr(item, "difficulty", "external"),

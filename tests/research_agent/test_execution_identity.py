@@ -178,9 +178,22 @@ def test_transport_policy_changes_execution_identity() -> None:
         retryable_http_status_codes=(500, 502, 503, 504),
         allow_environment_overrides=False,
     )
+    strict = build_provider_client(
+        provider="openai",
+        model="local-model",
+        request_timeout=60.0,
+        title="EasyICU test",
+        client_cls=OpenAIClient,
+        environment=environment,
+        max_retries=0,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        supports_strict_json_schema=True,
+        allow_environment_overrides=False,
+    )
 
     one_identity = _identity(provider_client=once)
     two_identity = _identity(provider_client=twice)
+    strict_identity = _identity(provider_client=strict)
 
     assert one_identity.identity_sha256 != two_identity.identity_sha256
     assert one_identity.provider_authorization["clients"][0]["transport_policy"][
@@ -189,6 +202,10 @@ def test_transport_policy_changes_execution_identity() -> None:
     assert two_identity.provider_authorization["clients"][0]["transport_policy"][
         "transport_max_attempts"
     ] == 2
+    assert strict_identity.identity_sha256 != one_identity.identity_sha256
+    assert strict_identity.provider_authorization["clients"][0]["transport_policy"][
+        "strict_json_schema_enabled"
+    ] is True
 
 
 def test_historical_v2_provider_manifest_execution_identity_still_validates() -> None:
@@ -242,12 +259,13 @@ def test_unmanaged_custom_provider_can_never_receive_paper_authority() -> None:
         "authorization_mode": "unmanaged",
         "authorization_sha256": "",
         "transport_policy": {
-            "schema_version": "easyicu.provider_transport_policy/1",
+            "schema_version": "easyicu.provider_transport_policy/2",
             "transport": "unmanaged",
             "request_timeout_seconds": None,
             "transport_max_attempts": None,
             "retryable_http_status_codes": None,
             "stream_enabled": None,
+            "strict_json_schema_enabled": None,
         },
     }
     assert identity.paper_eligible is False
@@ -292,7 +310,7 @@ def _pipeline_with_runtime_image(
         _runner_kind="docker",
         _expected_runner_image_digest=expected,
         _validated_runtime_bundle={
-            "schema": "easyicu.docker_runtime_preflight/2",
+            "schema": "easyicu.docker_runtime_preflight/3",
             "provenance": {"image_id": actual},
         },
         _runner_network="none",

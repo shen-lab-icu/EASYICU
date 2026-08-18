@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import study_contexts
 
 LITERATURE_AUTHORITY_SCHEMA_VERSION = "easyicu.web-literature-authority/3"
@@ -29,7 +30,7 @@ _SUPPORTED_SCHEMA_VERSIONS = frozenset(
         LITERATURE_AUTHORITY_SCHEMA_VERSION,
     }
 )
-_AUTHORITY_ROOT = Path.home() / ".easyicu" / "literature_authorities"
+_AUTHORITY_ROOT = state_paths.state_root() / "literature_authorities"
 _MAX_RECEIPT_BYTES = 512_000
 _MAX_CITATIONS = 20
 _MAX_QUERIES = 8

@@ -15,6 +15,7 @@ def _mock_transport_client(
     max_retries=0,
     retryable_http_status_codes=None,
     allow_environment_overrides=True,
+    supports_strict_json_schema=False,
 ):
     # These tests exercise the concrete adapter against an in-memory fake SDK,
     # but the adapter itself must go through its real constructor so provider
@@ -40,8 +41,165 @@ def _mock_transport_client(
         client_cls=client_type,
         max_retries=max_retries,
         retryable_http_status_codes=retryable_http_status_codes,
+        supports_strict_json_schema=supports_strict_json_schema,
         allow_environment_overrides=allow_environment_overrides,
     )
+
+
+def test_openai_client_sends_typed_schema_as_top_level_response_format(
+    monkeypatch, ra
+):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.protocol import StructuredOutputRequest
+
+    captured = {}
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            message = SimpleNamespace(content='{"ok":true}')
+            choice = SimpleNamespace(message=message, finish_reason="stop")
+            return SimpleNamespace(choices=[choice], usage=None)
+
+    request = StructuredOutputRequest.from_schema(
+        name="probe",
+        schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+    )
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-test",
+        completions=_Completions(),
+        supports_strict_json_schema=True,
+    )
+
+    assert client.complete(
+        [LLMMessage(role="user", content="return json")],
+        structured_output=request,
+    ) == '{"ok":true}'
+    assert captured["response_format"] == request.to_openai_response_format()
+    assert "response_format" not in captured.get("extra_body", {})
+
+
+def test_structured_retry_treats_provider_refusal_as_terminal(monkeypatch, ra):
+    import json
+
+    from easyicu.research_agent.providers.llm import (
+        LLMMessage,
+        OpenAIClient,
+        current_provider_call_receipt,
+    )
+    from easyicu.research_agent.providers.protocol import ProviderRefusal
+    from easyicu.research_agent.providers.structured_retry import (
+        call_llm_with_structured_retry,
+    )
+
+    class _Completions:
+        calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            message = SimpleNamespace(content=None, refusal="Policy refusal")
+            choice = SimpleNamespace(message=message, finish_reason="content_filter")
+            usage = SimpleNamespace(
+                prompt_tokens=20,
+                completion_tokens=0,
+                total_tokens=20,
+            )
+            return SimpleNamespace(choices=[choice], usage=usage)
+
+    completions = _Completions()
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-test",
+        completions=completions,
+        max_retries=4,
+        allow_environment_overrides=False,
+    )
+
+    with pytest.raises(ProviderRefusal) as ctx:
+        call_llm_with_structured_retry(
+            client,
+            [LLMMessage(role="user", content="return json")],
+            parser=json.loads,
+            role="planner",
+            max_retries=4,
+        )
+
+    refusal = ctx.value
+    assert completions.calls == 1
+    assert refusal.reason_code == "provider_refusal"
+    assert refusal.refusal_reason == "Policy refusal"
+    assert refusal.finish_reason == "content_filter"
+    assert refusal.usage_summary == {
+        "prompt_tokens": 20,
+        "completion_tokens": 0,
+        "total_tokens": 20,
+    }
+    assert refusal.transport_attempts == 1
+    assert refusal.easyicu_structured_attempt_metadata == [
+        {
+            "attempt": 1,
+            "raw_chars": 0,
+            "error_class": "provider_refusal",
+            "finish_reason": "content_filter",
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 0,
+                "total_tokens": 20,
+            },
+            "transport_attempts": 1,
+        }
+    ]
+    receipt = current_provider_call_receipt()
+    assert receipt is not None
+    assert receipt.finish_reason == "content_filter"
+    assert dict(receipt.usage_summary) == refusal.usage_summary
+
+
+def test_openai_client_rejects_unadvertised_schema_before_transport(monkeypatch, ra):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.protocol import (
+        StructuredOutputCapabilityError,
+        StructuredOutputRequest,
+    )
+
+    calls = 0
+
+    class _Completions:
+        def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise AssertionError("unadvertised schema must not reach transport")
+
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-test",
+        completions=_Completions(),
+    )
+    request = StructuredOutputRequest.from_schema(
+        name="probe",
+        schema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(StructuredOutputCapabilityError, match="not configured"):
+        client.complete(
+            [LLMMessage(role="user", content="return json")],
+            structured_output=request,
+        )
+    assert calls == 0
 
 
 def _retry_test_client(monkeypatch, failures):
@@ -247,6 +405,75 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
     assert stream.closed is True
 
 
+def test_openai_client_preserves_streamed_provider_refusal(monkeypatch, ra):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.protocol import ProviderRefusal
+
+    usage = SimpleNamespace(
+        prompt_tokens=8,
+        completion_tokens=0,
+        total_tokens=8,
+    )
+    chunks = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=None, refusal="Policy "),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=None, refusal="refusal"),
+                    finish_reason="content_filter",
+                )
+            ],
+            usage=None,
+        ),
+        SimpleNamespace(choices=[], usage=usage),
+    ]
+
+    class _Stream:
+        closed = False
+
+        def __iter__(self):
+            return iter(chunks)
+
+        def close(self):
+            self.closed = True
+
+    stream = _Stream()
+
+    class _Completions:
+        calls = 0
+
+        def create(self, **kwargs):
+            self.calls += 1
+            assert kwargs["stream"] is True
+            return stream
+
+    completions = _Completions()
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
+    client = _mock_transport_client(
+        monkeypatch,
+        OpenAIClient,
+        model="gpt-5.6-luna",
+        completions=completions,
+        max_retries=4,
+    )
+
+    with pytest.raises(ProviderRefusal) as ctx:
+        client.complete([LLMMessage(role="user", content="return json")])
+
+    assert completions.calls == 1
+    assert ctx.value.refusal_reason == "Policy refusal"
+    assert ctx.value.usage_summary["total_tokens"] == 8
+    assert stream.closed is True
+
+
 def test_fallback_client_preserves_call_scoped_usage(ra):
     from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
 
@@ -274,6 +501,42 @@ def test_fallback_client_preserves_call_scoped_usage(ra):
         "total_tokens": 21,
     }
     assert client.last_usage == usage
+
+
+def test_fallback_client_does_not_route_around_provider_refusal(ra):
+    from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
+    from easyicu.research_agent.providers.protocol import ProviderRefusal
+
+    class _RefusingClient:
+        name = "refusing-provider"
+        calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            self.calls += 1
+            raise ProviderRefusal(
+                "Policy refusal",
+                finish_reason="content_filter",
+                usage_summary={"total_tokens": 5},
+                transport_attempts=1,
+            )
+
+    class _AlternateClient:
+        name = "must-not-run"
+        calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            self.calls += 1
+            return "unsafe fallback"
+
+    refusing = _RefusingClient()
+    alternate = _AlternateClient()
+    client = FallbackLLMClient(refusing, alternate)
+
+    with pytest.raises(ProviderRefusal):
+        client.complete([LLMMessage(role="user", content="return json")])
+
+    assert refusing.calls == 1
+    assert alternate.calls == 0
 
 
 def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):

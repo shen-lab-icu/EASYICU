@@ -5,6 +5,7 @@ from easyicu.research_agent.literature import (
 )
 from easyicu.research_agent.reporting.manuscript_literature import (
     audit_manuscript_literature,
+    repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
 )
@@ -204,3 +205,27 @@ The result is compared with the retained ICU study [@paper_2024].
     assert repaired == manuscript
     assert repair is None
     assert audit_manuscript_literature(repaired, _bundle()).status == "blocked"
+
+
+def test_missing_context_sections_use_exact_run_bound_comparator() -> None:
+    manuscript = """## Introduction
+No literature citation here.
+
+## Methods
+The observational reporting route followed STROBE [@strobe_2007].
+
+## Discussion
+No literature citation here.
+"""
+
+    repaired, repairs = repair_missing_context_section_citations(
+        manuscript,
+        _bundle(),
+    )
+
+    assert [repair["section"] for repair in repairs] == [
+        "introduction",
+        "discussion",
+    ]
+    assert all(repair["citation_key"] == "paper_2024" for repair in repairs)
+    assert audit_manuscript_literature(repaired, _bundle()).status == "pass"

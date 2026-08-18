@@ -21,9 +21,11 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-_CONFIG_DIR = Path.home() / ".easyicu"
+from easyicu.webserver import state_paths
+
+_CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_guided_drafts.json"
-_PROJECTS_ROOT = Path.home() / "easyicu" / "projects"
+_PROJECTS_ROOT = state_paths.projects_root()
 
 _VALID_BRANCHES = {"predict", "crossdb", "quality"}
 _VALID_DEPTHS = {"extract", "review", "full"}

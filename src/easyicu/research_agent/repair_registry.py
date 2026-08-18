@@ -282,6 +282,7 @@ _SYNTACTIC_REPAIRS = {
     "restore_shadowed_json_module_v1",
     "replace_hallucinated_figure_utils_import_v1",
     "prediction_calibration_import_fix_v1",
+    "planner_declared_raw_input_projection_v1",
     "publication_export_audit_paths_v1",
     "raw_contract_document_fallback_v1",
     "raw_contract_list_type_assertion_v1",

@@ -127,7 +127,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260815-mode-history1" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -180,11 +180,11 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260812-route-a11y1" in index_html
-    assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
-    assert "js/screens-extraction.js?v=20260803-picker-owner" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
+    assert "js/app.js?v=20260817-project-monitor1" in index_html
+    assert "js/copilot-dock.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-extraction.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-agent.js?v=20260817-project-monitor-states2" in index_html
+    assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
 def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
@@ -323,8 +323,8 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260812-route-a11y1" in index_html
-    assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
+    assert "js/app.js?v=20260817-project-monitor1" in index_html
+    assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
 def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
@@ -349,8 +349,8 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260815-compact-rail2" in index_html
-    assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-guided.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/copilot-dock.js?v=20260817-copilot-boundary1" in index_html
 
 
 def test_native_page_guide_uses_backend_page_guide_contract() -> None:
@@ -391,14 +391,18 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260815-mode-history1" in index_html
-    assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
+    assert "js/copilot-dock.js?v=20260817-copilot-boundary1" in index_html
 
 
 def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> (
     None
 ):
     guided_js = _static_js("screens-guided.js")
+    # The Idea Mining sub-flow has its own owner; these assertions check
+    # ownership, not just presence — a copy left behind in the shell is the
+    # failure mode the split exists to prevent.
+    idea_js = _static_js("screens-guided-idea.js")
     projects_js = _static_js("screens-guided-projects.js")
     provider_js = _static_js("screens-guided-idea-provider.js")
     api_js = _static_js("api.js")
@@ -449,29 +453,11 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "external_llm_opt_in: false" in guided_js
     assert "goal === 'run_agent'" in guided_js
     assert "isGuidedAgentIntent(v)" in guided_js
-    assert "function startGuidedIdeaFlow" in guided_js
-    assert "thread.push({ guidedIdeaApiSetup: true })" in guided_js
-    assert "function renderGuidedIdeaApiSetupCard" in guided_js
-    assert "function showGuidedIdeaSourceForm" in guided_js
-    assert "function showGuidedIdeaApiSetup" in guided_js
-    assert "function renderGuidedIdeaCard" in guided_js
-    assert "function runGuidedIdeaMine" in guided_js
-    assert "function runGuidedIdeaPriorArt" in guided_js
-    assert "function runGuidedIdeaHandoff" in guided_js
-    assert "function runGuidedIdeaCreateProject" in guided_js
-    assert "window.EU_API.mineIdeas" in guided_js
-    assert "window.EU_API.resolveIdeaSource" in guided_js
-    assert "window.EU_API.ingestIdeaPdf" in guided_js
-    assert "window.EU_API.scanIdeaLiteratureFolder" in guided_js
-    assert "window.EU_GUIDED_IDEA_PROVIDER.requestStatus" in guided_js
+    assert "window.EU_GUIDED_IDEA_PROVIDER.requestStatus" in idea_js
     assert "loadAgentProviderStatus" in provider_js
     assert "window.EU_API.saveAgentProviderConfig" in _static_js("api.js")
     assert "saveAgentProviderConfig" in provider_js
-    assert "window.EU_API.checkIdeaPriorArt" in guided_js
-    assert "window.EU_API.handoffIdea" in guided_js
-    assert "window.EU_API.createIdeaAgentProject" in guided_js
     assert "goal === 'idea_mining'" in guided_js
-    assert "isGuidedIdeaIntent(v)" in guided_js
     assert "data-gi-mine" in guided_js
     assert "data-gi-pdf-file" in guided_js
     assert "data-gi-lit-browse" in guided_js
@@ -485,8 +471,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "data-gi-enable-ai" in provider_js
     assert "data-gi-api-continue" in provider_js
     assert "data-gi-api-back" in provider_js
-    assert "function saveGuidedIdeaProviderConfig" in guided_js
-    assert "function requestGuidedIdeaProviderStatus" in guided_js
+    assert "function requestGuidedIdeaProviderStatus" in idea_js
     assert "API readiness setup" in provider_js
     assert "API setup gate" not in guided_js
     assert "API setup gate" not in provider_js
@@ -543,7 +528,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260815-compact-rail2" in index_html
     assert "css/guided-projects.css?v=20260815-mobile-rail1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260815-mode-history1" in index_html
+    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     )
@@ -608,10 +593,10 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     assert "window.EU_GUIDED_PROJECTS = {" in projects_js
     assert "window.EU_GUIDED_IDEA_PLAN = {" in guided_plan_js
-    assert "window.EU_GUIDED_IDEA_PLAN.render" in guided_js
+    assert "window.EU_GUIDED_IDEA_PLAN.render" in idea_js
     assert "guidedProjectContext()" in guided_js
-    assert "function runGuidedIdeaPlan" in guided_js
-    assert "window.EU_API.planIdea" in guided_js
+    assert "function runGuidedIdeaPlan" in idea_js
+    assert "window.EU_API.planIdea" in idea_js
     assert "data-gi-plan" in guided_js
     assert "data-gi-replan" in guided_js
     assert "Create a study plan before Agent handoff" in guided_plan_js
@@ -621,26 +606,54 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "Applied replan note" in guided_plan_js
     assert (
         "Generate and review the study plan before freezing an Agent handoff"
-        in guided_js
+        in idea_js
     )
-    assert "restoreGuidedIdeaArtifacts" in guided_js
-    assert "dataContextConfirmed" in guided_js
-    assert "function confirmGuidedIdeaDataContext" in guided_js
+    # Renamed on the move: inside its own owner the guided/idea prefix is
+    # noise. A saved mid-run session still re-fetches that run on restore.
+    assert "function restoreArtifacts(runId)" in idea_js
+    assert "IDEA.restoreSlot(slots.idea);" in guided_js
+    assert "idea: IDEA.slotSnapshot()," in guided_js
+    assert "dataContextConfirmed" in idea_js
+    assert "function confirmGuidedIdeaDataContext" in idea_js
     assert (
-        "This only turns a source clue into a candidate research question" in guided_js
+        "This only turns a source clue into a candidate research question" in idea_js
     )
-    assert "requires explicit data-context confirmation" in guided_js
-    assert "Manual idea mode" in guided_js
-    assert "Article URL mode" in guided_js
-    assert "PDF file mode" in guided_js
-    assert "Literature folder mode" in guided_js
-    assert "Frontier topic mode" in guided_js
-    assert "source-${attr(tab)}" in guided_js
+    assert "requires explicit data-context confirmation" in idea_js
+    assert "Manual idea mode" in idea_js
+    assert "Article URL mode" in idea_js
+    assert "PDF file mode" in idea_js
+    assert "Literature folder mode" in idea_js
+    assert "Frontier topic mode" in idea_js
+    assert "source-${attr(tab)}" in idea_js
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260815-compact-rail2" in index_html
+    assert "js/screens-guided.js?v=20260817-copilot-boundary1" in index_html
 
+    assert "function startGuidedIdeaFlow" in idea_js
+    assert "function renderGuidedIdeaApiSetupCard" in idea_js
+    assert "function showGuidedIdeaSourceForm" in idea_js
+    assert "function showGuidedIdeaApiSetup" in idea_js
+    assert "function renderGuidedIdeaCard" in idea_js
+    assert "function runGuidedIdeaMine" in idea_js
+    assert "function runGuidedIdeaPriorArt" in idea_js
+    assert "function runGuidedIdeaHandoff" in idea_js
+    assert "function runGuidedIdeaCreateProject" in idea_js
+    assert "window.EU_API.mineIdeas" in idea_js
+    assert "window.EU_API.resolveIdeaSource" in idea_js
+    assert "window.EU_API.ingestIdeaPdf" in idea_js
+    assert "window.EU_API.scanIdeaLiteratureFolder" in idea_js
+    assert "window.EU_API.checkIdeaPriorArt" in idea_js
+    assert "window.EU_API.handoffIdea" in idea_js
+    assert "window.EU_API.createIdeaAgentProject" in idea_js
+    assert "function saveGuidedIdeaProviderConfig" in idea_js
+    assert "host.thread().push({ guidedIdeaApiSetup: true })" in idea_js
+    for moved in ("function runGuidedIdeaMine", "function renderGuidedIdeaCard"):
+        assert moved not in guided_js, f"{moved} is still in the shell too"
+    # The shell reaches the sub-flow only through the published owner.
+    assert "const IDEA = window.EU_GUIDED_IDEA;" in guided_js
+    assert "IDEA.runGuidedIdeaMine(" in guided_js
+    assert "IDEA.isGuidedIdeaIntent(v)" in guided_js
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     agent_js = _static_js("screens-agent.js")
@@ -654,9 +667,9 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
-    assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
+    assert "js/screens-agent.js?v=20260817-project-monitor-states2" in index_html
+    assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
+    assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
     assert "css/agent-capabilities.css?v=20260627-agent-capabilities" in index_html
@@ -674,10 +687,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert 'aria-controls="agStudyList"' in agent_js
     assert "ag-wrap ${listCollapsed ? 'list-collapsed' : 'list-open'}" in agent_js
     assert "data-ag-list-state=\"${listCollapsed ? 'collapsed' : 'open'}\"" in agent_js
-    assert (
-        "const compactHeader = agTab !== 'overview' && agTab !== 'workflow';"
-        in agent_js
-    )
+    assert "const compactHeader = agTab !== 'overview';" in agent_js
     assert "ag-dhead ${compactHeader ? 'compact' : ''}" in agent_js
     assert "function outputCountForStudy()" in agent_js
     assert "ag-review-layout" in agent_js
@@ -724,13 +734,13 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert "['outputs', t('Outputs', '产出'), 6]" not in agent_js
     assert "Seeded demo artifacts." not in agent_js
     assert "Illustrative outputs for layout" not in agent_js
-    assert "Agent Projects route-owned layout fixes" in agent_css
-    assert ".ag-pipe .pline" in agent_css
-    assert ".ag-pipe .pstep" in agent_css
-    assert ".ag-pipe .pt" in agent_css
-    assert ".ag-pipe .pd" in agent_css
+    assert "Project Monitor route-owned layout fixes" in agent_css
+    assert ".ag-pipe .pline" in agent_layout_css
+    assert ".ag-pipe .pstep" in agent_layout_css
+    assert ".ag-pipe .pt" in agent_layout_css
+    assert ".ag-pipe .pd" in agent_layout_css
     assert ".ag-wrap .chip" in agent_css
-    assert "Agent Projects focus layout" in agent_layout_css
+    assert "Project Monitor focus layout" in agent_layout_css
     assert ".ag-wrap.list-collapsed" in agent_layout_css
     assert ".ag-wrap.list-collapsed .ag-list" in agent_layout_css
     assert ".ag-wrap [data-ag-toggle-list]" in agent_layout_css
@@ -748,7 +758,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert ".ag-review-claims" not in agent_css
     assert ".ag-review-layout" not in redesign_css
     assert ".ag-review-claims" not in redesign_css
-    assert "Agent Projects output review cards" in agent_css
+    assert "Project Monitor output review cards" in agent_css
     assert ".ag-wrap .ag-output-brief" in agent_css
     assert ".ag-wrap .ag-featured-results" in agent_css
     assert ".ag-wrap .outcard.on" in agent_css
@@ -756,68 +766,97 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert ".ag-artifact-table" in agent_css
     assert ".ag-raw-json" in agent_css
     assert ".ag-raw-json:not([open]) pre" in agent_css
-    assert "Agent Projects capability highlights" in agent_cap_css
+    assert "Project Monitor capability highlights" in agent_cap_css
     assert ".ag-wrap .ag-cap-grid" in agent_cap_css
     assert ".ag-wrap .ag-link-chain" in agent_cap_css
 
 
-def test_native_agent_research_blocks_are_project_owned() -> None:
+def test_project_monitor_renders_one_load_state_and_fits_the_pipeline() -> None:
+    """Loading, index failure, successful-empty, and ready are exclusive.
+
+    Blank states omit the project header, pipeline, and tabs instead of
+    presenting an invented active Plan while the local index is unavailable.
+    """
+    agent_js = _static_js("screens-agent.js")
+    agent_css = _static_css("agent.css")
+    layout_css = _static_css("agent-layout.css")
+
+    assert "function monitorViewState(studies)" in agent_js
+    assert "if (studies.length) return 'ready';" in agent_js
+    assert "if (agIdeaProjects.error) return 'error';" in agent_js
+    assert "if (monitorState !== 'ready') return" in agent_js
+    assert 'data-ag-monitor-state="${monitorState}"' in agent_js
+    assert "const count = monitorState === 'loading' || monitorState === 'error' ? '—' : studies.length;" in agent_js
+    assert "Checking project index" in agent_js
+    for state in ("Loading projects", "Could not load local projects", "No projects to monitor yet"):
+        assert state in agent_js
+    assert "No project selected for monitoring" not in agent_js
+    assert "Local research projects unavailable" not in agent_js
+    assert "ideas-empty-list" not in agent_js
+    assert "ag-empty-steps" not in agent_js
+
+    for selector in (".ag-wrap-blank", ".ag-detail-blank", ".ag-monitor-state", ".ag-list-state"):
+        assert selector in layout_css
+        assert selector not in agent_css
+    assert "@media (min-width:721px)" in layout_css
+    assert ".ag-pipe{ overflow:hidden; }" in layout_css
+    assert ".ag-pipe .pstep{ flex:1 1 0; min-width:0; }" in layout_css
+    assert ".ag-pipe .pd{ display:none; }" in layout_css
+
+
+def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     agent_js = _static_js("screens-agent.js")
     render_js = _static_js("screens-agent-render.js")
     agent_css = _static_css("agent.css")
     app_js = _static_js("app.js")
+    guided_js = _static_js("screens-guided-pi.js")
+    provider_js = _static_js("screens-guided-pi-provider.js")
     screens_css = _static_css("screens.css")
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    # The block catalog data lives in the screens-agent-render.js owner file;
-    # the workflow-block UI + state stays in screens-agent.js.
-    assert "const BLOCK_LIBRARY = [" in render_js
-    assert "const BLOCK_FAMILIES = [" in render_js
-    assert "Nature writing block" in render_js
-    assert "Nature figure block" in render_js
-    assert "Outcome-blind feasibility" in render_js
-    assert "Evidence-bound analysis run" in render_js
-    assert "Data availability block" in render_js
-    assert "const BLOCK_LIBRARY = [" not in agent_js
-    assert "AG_BLOCKS_VERSION" in agent_js
-    assert "Planning Blocks" in agent_js
-    assert "Workflow Blocks" not in agent_js
-    assert "data-ag-block-add" in agent_js
-    assert "data-ag-block-pack" in agent_js
-    assert "workflowBlocks(s).length" in agent_js
-    assert "Turn the project into reviewable research steps" in agent_js
-    assert "Planning step table" in agent_js
-    assert "规划步骤表" in agent_js
-    assert "What you confirm" in agent_js
-    assert "你确认什么" in agent_js
-    assert "Planned outputs" in agent_js
-    assert "计划产出" in agent_js
-    assert "Evidence check" in agent_js
-    assert "证据检查" in agent_js
+    forbidden_js = (
+        "BLOCK_LIBRARY",
+        "BLOCK_FAMILIES",
+        "NATURE_PACK",
+        "AG_BLOCKS_VERSION",
+        "Planning Blocks",
+        "data-ag-block",
+        "data-ag-new",
+        "data-ag-runbtn",
+        "data-ag-promote",
+        "window.EU_API.startAgentRun",
+        "function startRun",
+        "function startRealRun",
+        "function startDemoRun",
+    )
+    for marker in forbidden_js:
+        assert marker not in agent_js
+        assert marker not in render_js
 
-    assert "Agent Projects Research Blocks module" in agent_css
-    assert ".ag-block-grid" in agent_css
-    assert ".ag-wf-guide" in agent_css
-    assert ".ag-wf-row" in agent_css
-    assert ".ag-wf-cell" in agent_css
-    assert ".ag-lib-card" in agent_css
-    assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    for marker in (".ag-block", ".ag-wf", ".ag-lib"):
+        assert marker not in agent_css
+        assert marker not in screens_css
+        assert marker not in redesign_css
 
-    assert "ag-block-grid" not in app_js
-    assert "Research Blocks" not in app_js
-    assert ".ag-block-grid" not in screens_css
-    assert ".ag-wf-row" not in screens_css
-    assert ".ag-lib-card" not in screens_css
-    assert ".ag-block-grid" not in redesign_css
-    assert ".ag-wf-row" not in redesign_css
-    assert ".ag-lib-card" not in redesign_css
+    assert "Requirements, model setup, and run initiation stay in Guided Copilot" in agent_js
+    assert "Requirements and execution live in Guided Copilot" in agent_js
+    assert "Continue in Guided Copilot" in agent_js
+    assert "data-ag-guided" in agent_js
+    assert "loadAgentRunHistory" in agent_js
+    assert "loadAgentRunReview" in agent_js
+    assert "signoffAgentRun" in agent_js
+    assert "Project Monitor" in app_js
+    assert "runs · outputs · evidence · review" in app_js
+    assert "sendPiCopilotMessage" in guided_js
+    assert "easyicu_run_submitted" in guided_js
+    assert "data-gpi-provider-form" in provider_js
+    assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
+    assert "js/screens-agent.js?v=20260817-project-monitor-states2" in index_html
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
-    """The fixture data (demo studies, block catalog) + pure artifact
+    """The fixture data and pure artifact
     renderers are owned by screens-agent-render.js, not inlined in the
     screens-agent.js monolith (owner-file carve-out, 2026-07-03). The main
     file rebinds them from window.AGENT_RENDER so call sites stay unchanged."""
@@ -825,9 +864,10 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     render_js = _static_js("screens-agent-render.js")
     index_html = _static_html("index.html")
 
-    # fixture data + pure renderers are DEFINED in the render file
+    # Fixture data + pure renderers are defined in the render file. Copilot
+    # configuration catalogs do not belong in this project-monitor owner.
     assert "const DEMO_STUDIES = [" in render_js
-    assert "const BLOCK_LIBRARY = [" in render_js
+    assert "const BLOCK_LIBRARY = [" not in render_js
     assert "function artifactStructuredView(name, payload)" in render_js
     assert "function runStatusLabel(status)" in render_js
     assert "function thumb(kind)" in render_js
@@ -851,7 +891,44 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260815-system-validation1" in index_html
+    assert "js/screens-agent-render.js?v=20260817-project-monitor1" in index_html
+
+
+def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
+    agent_js = _static_js("screens-agent.js")
+    guided_js = _static_js("screens-guided-pi.js")
+    provider_js = _static_js("screens-guided-pi-provider.js")
+    index_html = _static_html("index.html")
+
+    assert "window.EU_GUIDED_PI_PROVIDER =" in provider_js
+    assert "ChatGPT / Codex account" in provider_js
+    assert "DeepSeek API" in provider_js
+    assert "OpenRouter API" in provider_js
+    assert "data-gpi-codex-login" in provider_js
+    assert "data-gpi-codex-device" in provider_js
+    assert "data-gpi-codex-model" in provider_js
+    assert "ONE MODEL CONNECTION" in provider_js
+    assert "same selected provider and model powers" in provider_js
+    assert "Conversation model API" not in provider_js
+    assert "Analysis model" not in provider_js
+    assert "research_provider: state.researchProvider" in guided_js
+    assert "startPiCopilotCodexLogin" in guided_js
+    assert "AGENT_PROVIDER_PANEL" not in agent_js
+    assert "data-ag-codex-login" not in agent_js
+    assert "data-ag-external-run" not in agent_js
+    assert "screens-agent-provider.js" not in index_html
+
+    provider_pos = index_html.find("screens-guided-pi-provider.js?")
+    main_pos = index_html.find("screens-guided-pi.js?")
+    assert provider_pos != -1 and main_pos != -1
+    assert provider_pos < main_pos
+    assert (
+        "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"
+        in index_html
+    )
+
+    for foreign_marker in ("data-ag-", "data-cd-", "data-pt-", "data-idea-"):
+        assert foreign_marker not in provider_js
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -956,13 +1033,13 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert ".ag-wrap .ag-cap-grid" in agent_cap_css
     assert ".ag-wrap .ag-cap-card.evidence" in agent_cap_css
     assert ".ag-wrap .ag-cap-card.cross" in agent_cap_css
-    assert "Agent Projects structured question brief" in agent_question_css
+    assert "Project Monitor structured question brief" in agent_question_css
     assert ".ag-wrap .ag-question-brief" in agent_question_css
     assert ".ag-wrap .ag-q-section + .ag-q-section" in agent_question_css
     assert ".ag-wrap .ag-req-list" in agent_question_css
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
-    assert "css/agent.css?v=20260812-natural-conversations1" in index_html
-    assert "js/screens-agent.js?v=20260812-natural-conversations1" in index_html
+    assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
+    assert "js/screens-agent.js?v=20260817-project-monitor-states2" in index_html
 
     for name in (
         "benchmark_scorecard.json",
@@ -1119,7 +1196,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20260812-extension-manager1" in index_html
     assert "js/screens-settings-extensions.js?v=20260812-extension-manager1" in index_html
-    assert "js/screens-settings.js?v=20260812-extension-manager1" in index_html
+    assert "js/screens-settings.js?v=20260817-copilot-boundary1" in index_html
     assert ".settings-cap-panel" in settings_css
     assert ".settings-cap-tabs" in settings_css
     assert ".settings-cap-tile" in settings_css
@@ -1418,7 +1495,8 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "Discovery & Plan" in app_js
     assert "ideas-entry" in app_js
     assert "paper, PDF, or topic → feasible plan" in app_js
-    assert "Agent Projects" in app_js
+    assert "Project Monitor" in app_js
+    assert "runs · outputs · evidence · review" in app_js
     assert "Data & Review" in app_js
     assert "Data Workspace" in app_js
     # The misleading "N / 4" progress counter on the Data Workspace group was
@@ -1444,11 +1522,11 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20260812-route-a11y1" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260812-route-a11y1" in index_html
+    assert "js/app.js?v=20260817-project-monitor1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
-    assert "js/screens-ideas.js?v=20260707-residuals" in index_html
+    assert "js/screens-ideas.js?v=20260817-copilot-boundary1" in index_html
     assert "discoverIdeas" in api_js
     assert "/api/ideas/discover" in ideas_js
     assert "Discover papers" in ideas_js
@@ -1490,7 +1568,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "selectedRecordKey" in ideas_js
     assert "data-idea-record-key" in ideas_js
     assert "if (!rows.some(r => String(r.id) === String(current.id)))" in ideas_js
-    assert "Create Agent project" in ideas_js
+    assert "Create project seed" in ideas_js
     assert "Resolve source" in ideas_js
     assert "sourceResolvedNote" in ideas_js
     assert "display_status" in ideas_js
@@ -1513,7 +1591,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "ideas-work-grid" in ideas_js
     assert "Local idea runs" in ideas_js
     assert "stored on this machine · not Agent analysis runs" in ideas_js
-    assert "Separated from Research Projects" in ideas_js
+    assert "Idea Mining decides what is worth running" in ideas_js
     assert "ideas-source-card" in ideas_js
     assert "idea-ledger-card" in ideas_js
     assert "idea-ledger-grid" in ideas_js
@@ -1532,7 +1610,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "connector_pubmed_enabled" in ideas_js
     assert "PubMed connector is off" in ideas_js
     assert "data-idea-open-settings" in ideas_js
-    assert "Agent project ready" in ideas_js
+    assert "Project seed ready" in ideas_js
     assert "可作为结果报告" in ideas_js
     assert "querySelectorAll('#ideaNetworkOptIn')" in ideas_js
     assert "search: '<circle" in icons_js
@@ -1649,15 +1727,15 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     # DEMO_STUDIES data moved to screens-agent-render.js; the consumer stays.
     assert "const DEMO_STUDIES" in _static_js("screens-agent-render.js")
     assert "const base = realMode() ? [] : DEMO_STUDIES" in agent_js
-    assert "No local projects yet" in agent_js
-    # Real mode must not fabricate example studies; the empty-state teaches the
-    # Extract->Review->Run path (positive framing) while preserving that truthfulness.
-    assert "it never shows fabricated example studies" in agent_js
-    assert "Turn a question into a review-ready draft" in agent_js
-    assert "No active registered export is selected" in agent_js
+    assert "No projects to monitor yet" in agent_js
+    # Real mode must not fabricate studies or collect setup on the monitor.
+    assert "Start a study in Guided Copilot" in agent_js
+    assert "Open Guided Copilot" in agent_js
+    assert "data-ag-new" not in agent_js
+    assert "data-ag-runbtn" not in agent_js
     assert "data-ag-mode" not in agent_js
     assert "Idea exploration" not in agent_js
-    assert "Open Idea Mining" in agent_js
+    assert "Open Idea Mining" not in agent_js
 
 
 def test_native_extraction_cohort_controls_are_continuous_and_icd_is_empty() -> None:
@@ -2034,8 +2112,8 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
 
     assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260728-shared-echarts1" in index_html
-    assert "js/screens-viz-crossdb-results.js?v=20260812-tab-a11y1" in index_html
-    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
     assert "css/crossdb.css?v=20260728-one-click-raw1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -2083,7 +2161,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
+    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2260,7 +2338,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260815-mode-history1" in index_html
+    assert "api.js?v=20260816-copilot-provider-owner1" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2341,7 +2419,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "openGuidedProject" in guided_js
     assert "openGuidedProjectMemory(row, localDraftEl, 'draft')" in guided_js
     assert "Memory is scoped to" in guided_js
-    assert "Idea Mining and Agent Projects still own their own artifacts" in guided_js
+    assert "Idea Mining and the Research Agent backend still own their artifacts" in guided_js
     assert "Pick a goal to start" in guided_js
     assert "Project memory bound" in guided_js
     assert "pendingGuidedGoal" in guided_js
@@ -2530,13 +2608,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260815-mode-history1" in index_html
+    assert "api.js?v=20260816-copilot-provider-owner1" in index_html
     assert "screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260815-compact-rail2" in index_html
+    assert "screens-guided.js?v=20260817-copilot-boundary1" in index_html
     assert "guided.css?v=20260815-compact-rail2" in index_html
     assert "guided-projects.css?v=20260815-mobile-rail1" in index_html
     assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in projects_js
@@ -2547,11 +2625,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
 
 def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     agent_js = _static_js("screens-agent.js")
+    provider_js = _static_js("screens-guided-pi-provider.js")
     api_js = _static_js("api.js")
 
-    assert "DeepSeek-compatible" in agent_js
-    assert "Custom / local OpenAI-compatible" in agent_js
-    assert "Custom/local endpoints must be OpenAI-compatible" in agent_js
+    assert "DeepSeek API" in provider_js
+    assert "Anthropic / Claude API" in provider_js
+    assert "OpenAI-compatible gateway" in provider_js
+    assert "ChatGPT / Codex account" in provider_js
     assert "loadJobSnapshot" in api_js
     assert "cancelJob" in api_js
     assert "getJSON('/api/jobs/' + encodeURIComponent(jobId || ''))" in api_js
@@ -2565,11 +2645,14 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     assert "data-ag-cancel-job" in agent_js
     assert "data-ag-reconnect" in agent_js
     assert "Resume stream" in agent_js
-    assert "Restart from active export" in agent_js
-    assert "safe continuation is to restart from the active export" in agent_js
+    assert "Restart from active export" not in agent_js
+    assert "continue safely from Guided Copilot" in agent_js
+    assert "Continue in Guided Copilot" in agent_js
     assert "seedGateBlocksRun" in agent_js
+    assert "host.clientWidth < 1040" in agent_js
+    assert "data-ag-" not in provider_js
     assert "project_seed_dir" in agent_js
-    assert "Agent preflight checks are not ready" in agent_js
+    assert "Project readiness checks are not complete" in agent_js
     # The remedy sentences moved out of a regex-over-English table in
     # screens-agent.js into gate-remedy.js, keyed on the backend reason code.
     # Assert the property at its new owner rather than dropping it.
@@ -2577,7 +2660,7 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     assert "prior_art_not_reviewed" in remedy_js
     assert "prior-art review" in remedy_js
     assert "/prior-art/i" not in agent_js
-    assert "Refresh this project from Idea Mining" in agent_js
+    assert "Continue in Guided Copilot so it can refresh" in agent_js
 
 
 def test_native_patient_source_radios_are_real_controls() -> None:
@@ -2762,7 +2845,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
+    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
     assert "bounded browser review', '浏览器有界审阅" in viz_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -2951,7 +3034,7 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
         "manifest parsed · denominators previewed · aggregate payload returned"
         in viz_js
     )
-    assert "聚合载荷已就绪；打开 Agent 做证据绑定草稿核验。" in viz_js
+    assert "聚合载荷已就绪；打开项目监控做证据绑定草稿核验。" in viz_js
     assert "Draft gate" not in viz_js
     assert "Evidence checks" not in viz_js
     assert "locked · needs reviewer sign-off" not in viz_js
@@ -2966,7 +3049,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260812-crossdb-jobs" in index_html
+    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
@@ -3276,40 +3359,41 @@ def test_home_data_toggle_routes_through_setdatamode() -> None:
     assert "if (window.setDataMode) { window.setDataMode(m); return; }" in ext_js
 
 
-def test_guided_terminal_path_hands_off_design_to_agent() -> None:
-    """Regression: after the guided mock preflight, the forward action must carry
-    the study design into Agent Projects (not a bare nav) and honestly frame the
-    preflight as a local, non-reportable check."""
+def test_guided_terminal_path_opens_project_monitor_without_moving_setup_there() -> None:
+    """After the guided mock preflight, the review action may open Project
+    Monitor, but provider/model setup remains in Guided Copilot."""
     guided_js = _static_js("screens-guided.js")
     assert "function guidedAgentHandoffPrefill()" in guided_js
     assert "function openGuidedAgentHandoff()" in guided_js
     assert "data-ga-open-agent" in guided_js
-    assert "Continue in Agent Projects" in guided_js
+    assert "Open Project Monitor" in guided_js
+    assert "Provider and model selection stay in Guided Copilot" in guided_js
     assert "local, no-cost preflight" in guided_js
 
 
-def test_agent_destination_nav_buttons_use_one_name() -> None:
-    """Regression: navigation buttons to #agent must all use the destination name
-    'Agent Projects' / '研究项目', not the old drift (Research Projects / Analyze in
-    Agent / Hand off to Research Agent / Open Research Agent). The engine name
-    'Research Agent' / '研究代理' is reserved for settings/provider prose."""
+def test_analysis_handoffs_route_to_copilot_and_monitor_links_use_one_name() -> None:
+    """Starting/configuring analysis belongs to Guided Copilot; #agent is only
+    the consistently named Project Monitor destination for existing runs."""
     viz_js = _static_js("screens-viz.js")
+    crossdb_js = _static_js("screens-viz-crossdb-results.js")
     ideas_js = _static_js("screens-ideas.js")
     help_js = _static_js("screens-help.js")
     ext_js = _static_js("screens-extraction.js")
-    # unified destination label on the nav buttons
-    assert "Analyze in Agent Projects" in viz_js
-    assert "Open Agent Projects" in ideas_js
-    assert "Open Agent Projects" in help_js
-    assert "Hand off to Agent Projects" in ext_js
-    # the old drift names are gone from those nav buttons
-    assert "Analyze in Agent'" not in viz_js
-    assert "Open Research Projects" not in ideas_js
-    assert "Open Research Agent" not in help_js
-    assert "Hand off to Research Agent" not in ext_js
-    assert "交给研究代理" not in ext_js
-    # the engine-name distinction is deliberately preserved in settings (test-locked
-    # elsewhere: '研究代理' in settings_js), so do not assert its removal globally.
+    settings_js = _static_js("screens-settings.js")
+    app_js = _static_js("app.js")
+    guided_js = _static_js("screens-guided.js")
+
+    for owner in (viz_js, crossdb_js, ext_js):
+        assert 'data-study-target="agent"' not in owner
+        assert 'data-study-target="guided"' in owner
+    assert "Continue in Guided Copilot" in viz_js
+    assert "Continue in Guided Copilot" in ext_js
+    assert "Plan in Guided Copilot" in crossdb_js
+
+    for owner in (ideas_js, help_js, settings_js, guided_js):
+        assert "Open Project Monitor" in owner
+        assert "Open Agent Projects" not in owner
+    assert "t('Project Monitor', '项目监控')" in app_js
 
 
 def test_agent_run_status_labels_cover_success_statuses() -> None:
@@ -3441,7 +3525,7 @@ def test_science_workbench_framed_as_part_of_study() -> None:
 
 def test_science_tab_is_merged_into_agent_flow_as_evidence() -> None:
     """[12] full IA merge: the standalone 'Science Workbench' identity is dissolved
-    into the Agent Projects flow. The tab is named 'Evidence', the panel no longer
+    into the Project Monitor flow. The tab is named 'Evidence', the panel no longer
     announces a separate app, the Claude-Science reference card is removed, and the
     Evidence view is cross-linked bidirectionally with Outputs."""
     agent_js = _static_js("screens-agent.js")
@@ -3630,8 +3714,8 @@ def test_dead_end_screens_gained_onward_paths() -> None:
     dict_js = _static_js("screens-dict.js")
     # crossdb loaded nextbar links back to cohort as well as forward to agent
     assert "返回队列统计" in crossdb_results_js
-    # agent 'no runs yet' offers plan refinement in Idea Mining
-    assert "回想法挖掘细化" in agent_js
+    # Project Monitor sends configuration and execution back to Guided Copilot.
+    assert "请在研究引导中确认研究并发起受治理运行" in agent_js
     # example projects are chip-labelled per item in demo mode
     assert "${t('Example', '示例')} · " in agent_js
     # export picker folds older registrations instead of rendering a wall

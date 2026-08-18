@@ -11,7 +11,9 @@ both levels: the wrapper enforces, and no call site may quietly skip it.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
+from types import SimpleNamespace
 
 import pytest
 
@@ -110,6 +112,47 @@ def test_every_declared_consumer_is_enforced_on_complete(consumer: str) -> None:
     assert excinfo.value.actual_tokens == budget.limit_tokens + 1
     # Fail closed means the payload never reached the provider.
     assert inner.calls == []
+
+
+def test_schema_payload_is_counted_before_prompt_transport() -> None:
+    budget = PROMPT_TRANSPORT_BUDGETS["cohort_extraction"]
+    inner = _RecordingClient()
+    client = budgeted_role_client(_resolver(inner), budget.role, "cohort_extraction")
+
+    with pytest.raises(PromptTransportBudgetError):
+        client.complete(
+            _at_budget(budget),
+            structured_output=SimpleNamespace(
+                payload_bytes=int(CONSERVATIVE_BYTES_PER_TOKEN)
+            ),
+        )
+
+    assert inner.calls == []
+
+
+def test_planner_retry_is_rechecked_after_feedback_growth() -> None:
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.research_agent.providers.structured_retry import (
+        call_llm_with_structured_retry,
+    )
+
+    inner = ScriptedMockLLMClient(["not-json", '{"ok": true}'])
+    client = budgeted_role_client(
+        _resolver(inner),
+        "planner",
+        "planner_plan_generation",
+        limit_tokens=10,
+    )
+
+    with pytest.raises(PromptTransportBudgetError):
+        call_llm_with_structured_retry(
+            client,
+            _messages(25),
+            parser=json.loads,
+            max_retries=1,
+        )
+
+    assert len(inner.calls) == 1, "the over-budget retry must not reach transport"
 
 
 @pytest.mark.parametrize("consumer", sorted(PROMPT_TRANSPORT_BUDGETS))
@@ -490,12 +533,10 @@ _DECLARED_RAW_RESOLVER_SITES = {
     # review_step / review_manuscript paths are deterministic.
     ("execution/phase.py", "analyzer", "CriticAgent"),
     ("reporting/write_phase.py", "analyzer", "CriticAgent"),
-    # PlannerAgent and ReplannerAgent already enforce _PLANNER_PROMPT_BYTE_LIMIT
-    # on their own constructed prompt. That metric measures the projection they
-    # build, which is not byte-identical to the transport payload, so re-basing
-    # them onto the transport measure is a separate, evidence-backed change.
-    ("pipeline.py", "planner", "PlannerAgent"),
-    ("execution/phase.py", "planner", "ReplannerAgent"),
+    # ReplannerAgent still enforces its own constructed projection. Planner
+    # generation is transport-wrapped because its structured retries append
+    # response/feedback messages after the initial agent-local measurement.
+    ("execution/phase_support.py", "planner", "ReplannerAgent"),
 }
 
 
@@ -580,6 +621,14 @@ def test_the_live_analyzer_consumers_are_all_declared() -> None:
         "analyzer_interpretation",
         "concept_audit",
         "vlm_visual_qa",
+    }
+
+
+def test_the_live_planner_consumers_are_all_declared() -> None:
+    assert set(declared_consumers_for_role("planner")) == {
+        "cohort_extraction",
+        "legacy_model_roster_migration",
+        "planner_plan_generation",
     }
 
 

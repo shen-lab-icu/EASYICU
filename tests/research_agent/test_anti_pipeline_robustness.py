@@ -1574,7 +1574,7 @@ def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> Non
     assert early_gate_source.count("_step_deterministic_contract_findings(") == 1
     assert final_gate_source.count("_step_deterministic_contract_findings(") == 1
     assert "_evaluate_final_deterministic_gates(" in inspect.getsource(
-        phase.run_execute_phase
+        phase._step_finalize_step
     )
 
 
@@ -1583,12 +1583,14 @@ def test_later_repairs_receive_prior_concept_findings_as_regression_constraints(
     from easyicu.research_agent.execution.concept_repair import (
         run_concept_repair_loop,
     )
-    from easyicu.research_agent.execution.phase import run_execute_phase
+    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import phase_support
 
-    phase_source = inspect.getsource(run_execute_phase)
+    phase_source = inspect.getsource(pipeline_execute._execute_step)
+    support_source = inspect.getsource(phase_support)
     candidate_source = inspect.getsource(candidate_loop)
     concept_repair_source = inspect.getsource(run_concept_repair_loop)
-    assert "def _monotonic_concept_constraint_ticket" in phase_source
+    assert "def _step_monotonic_concept_constraint_ticket" in support_source
     assert "_monotonic_concept_constraint_ticket=(" in phase_source
     direct_tickets = candidate_source.count(
         "*attempt._monotonic_concept_constraint_ticket()"

@@ -5,6 +5,9 @@
    existing semantic SVG fallback.
    ============================================================ */
 (function () {
+  /* Chart labels keep their control-character + whitespace normalisation
+     (`text`) before escaping; only the escaping itself is shared. */
+  const esc = value => window.EU_HTML.esc(text(value));
   const VERSION = '6.1.0';
   const MAX_TEXT = 180;
   const STEP_FEATURES = new Set([
@@ -20,6 +23,13 @@
     return window.EU_ECHARTS || null;
   }
 
+  /* Straight to the palette owner rather than through the chart shell: this
+     file also renders when the shell is missing, and a local fallback here is
+     how the strokes silently diverged from the colours before. */
+  function traceLineStyle(index, width) {
+    return window.EU_PALETTE.lineStyle(index, { width });
+  }
+
   function text(value, fallback = '') {
     const normalized = String(value == null ? fallback : value)
       .replace(/[\u0000-\u001f\u007f]/g, ' ')
@@ -28,15 +38,6 @@
     return normalized.slice(0, MAX_TEXT);
   }
 
-  function esc(value) {
-    return text(value).replace(/[&<>"']/g, character => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    })[character]);
-  }
 
   function finite(value) {
     if (value == null || (typeof value === 'string' && !value.trim())) return null;
@@ -79,13 +80,7 @@
       muted: cssColor('--ink-4', '#64748b'),
       hair: cssColor('--hair', '#e2e8f0'),
       surface: cssColor('--surface', '#ffffff'),
-      series: [
-        cssColor('--accent', '#0f766e'),
-        '#2563eb',
-        '#7c3aed',
-        '#b45309',
-        '#be123c',
-      ],
+      series: window.EU_PALETTE.series(),
     };
   }
 
@@ -398,7 +393,7 @@
         },
         splitLine: { lineStyle: { color: colors.hair } },
       },
-      series: traces.map(row => ({
+      series: traces.map((row, index) => ({
         name: row.label,
         type: 'line',
         data: row.axis.pairs,
@@ -407,7 +402,7 @@
         smooth: false,
         connectNulls: false,
         sampling: 'lttb',
-        lineStyle: { width: 2 },
+        lineStyle: traceLineStyle(index, 2),
         emphasis: { lineStyle: { width: 3 } },
       })),
     };

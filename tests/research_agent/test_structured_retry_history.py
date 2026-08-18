@@ -360,6 +360,12 @@ def test_validation_projection_records_only_closed_stage_field_paths_and_types(
                     "type": secret,
                     "msg": secret,
                 },
+                {
+                    "loc": ("step", "primary_exposure"),
+                    "type": "value_error",
+                    "msg": secret,
+                    "input": secret,
+                },
             ]
 
     monkeypatch.setattr(
@@ -384,6 +390,10 @@ def test_validation_projection_records_only_closed_stage_field_paths_and_types(
             "issue_type": "literal_error",
         },
         {"location": ["<other>"], "issue_type": "other"},
+        {
+            "location": ["step", "primary_exposure"],
+            "issue_type": "value_error",
+        },
     ]
     assert len(projected[0]["violation_sha256"]) == 64
     assert secret not in str(projected)

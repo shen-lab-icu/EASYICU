@@ -227,15 +227,12 @@ class CountingClient:
 
 
 def _build_client(provider: str, model: str, request_timeout: float) -> Any:
-    from easyicu.research_agent.providers.llm import OpenAIClient
-
     try:
         return build_provider_client(
             provider=provider,
             model=model,
             request_timeout=request_timeout,
             title="EasyICU research know-how Planner A/B",
-            client_cls=OpenAIClient,
         )
     except ProviderConfigurationError as exc:
         raise SystemExit(str(exc)) from exc

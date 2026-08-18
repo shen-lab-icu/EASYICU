@@ -69,6 +69,33 @@ def test_native_metadata_authorizes_owner_observed_and_available_receipts() -> N
     )
 
 
+def test_native_metadata_binds_death_time_as_typed_event_time() -> None:
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "charttime": [0.0, 0.0],
+            "death": pd.Series([True, False], dtype="boolean"),
+            "death_time": [12.0, None],
+        }
+    )
+
+    binding = build_export_file_metadata_binding(
+        relative_path="outcome.parquet",
+        module="outcome",
+        frame=frame,
+        concept_ids=("death",),
+        database="miiv",
+        database_class_prefixes=(),
+        dictionary=load_dictionary(include_sofa2=True),
+    )
+
+    death_time = binding.columns["death_time"]
+    assert death_time.metadata.role is ConceptColumnRole.EVENT_TIME
+    assert death_time.metadata.time_origin == "icu_admission"
+    assert death_time.metadata.time_unit == "h"
+    assert death_time.representation_transform == "source_event_time"
+
+
 def _write_frame(path: Path, frame: pd.DataFrame, export_format: str) -> None:
     if export_format == "parquet":
         frame.to_parquet(path, index=False)

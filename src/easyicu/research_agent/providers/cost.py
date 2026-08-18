@@ -535,17 +535,28 @@ class MeteredClient:
     # The protocol methods the agents call.
 
     def complete(
-        self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
+        self,
+        messages,
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        structured_output: Any = None,
     ) -> str:
         result, _usage = self.complete_with_usage(
             messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            structured_output=structured_output,
         )
         return result
 
     def complete_with_usage(
-        self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
+        self,
+        messages,
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        structured_output: Any = None,
     ) -> tuple[str, Dict[str, Any]]:
         """Meter one call while preserving its call-scoped model provenance."""
         model = self._model_override or _identify_model(self._inner)
@@ -559,17 +570,21 @@ class MeteredClient:
         try:
             complete_with_usage = getattr(self._inner, "complete_with_usage", None)
             if callable(complete_with_usage):
-                result, usage = complete_with_usage(
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
+                kwargs: Dict[str, Any] = {
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                }
+                if structured_output is not None:
+                    kwargs["structured_output"] = structured_output
+                result, usage = complete_with_usage(messages, **kwargs)
             else:
-                result = self._inner.complete(
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
+                kwargs = {
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                }
+                if structured_output is not None:
+                    kwargs["structured_output"] = structured_output
+                result = self._inner.complete(messages, **kwargs)
                 # A shared ``last_usage`` attribute is not call-scoped and cannot be
                 # read safely under concurrent role calls. Legacy providers use the
                 # transparent heuristic until they implement ``complete_with_usage``.
@@ -591,6 +606,10 @@ class MeteredClient:
             is_heuristic = False
         else:
             prompt_chars = sum(len(m.content or "") for m in messages)
+            if structured_output is not None:
+                prompt_chars += max(
+                    0, int(getattr(structured_output, "payload_bytes", 0))
+                )
             completion_chars = len(result or "")
             prompt_tokens = max(1, prompt_chars // _CHARS_PER_TOKEN)
             completion_tokens = max(1, completion_chars // _CHARS_PER_TOKEN)

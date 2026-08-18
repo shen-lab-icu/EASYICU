@@ -166,14 +166,16 @@
     const t = ctx.t, ex = ctx.ex;
     const concepts = ctx.selectedConcepts;
     const expanded = !!ex.modulesExpanded;
-    const grid = (rows) => `<div class="gdx-modgrid">${rows.map(([key, en, zh, cnt, core]) => {
+    const grid = (rows) => `<div class="gdx-modgrid">${rows.map(([key, en, zh]) => {
       const on = ex.modules.includes(key);
       return `<button type="button" class="gdx-module ${on ? 'on' : ''}" data-gx-module="${ctx.attr(key)}">
-        <span class="mk">${on ? ctx.icon('check', 10, 3) : ''}</span><strong>${t(en, zh)}</strong><span>${ctx.moduleConceptCount(key, cnt)}</span>
+        <span class="mk">${on ? ctx.icon('check', 10, 3) : ''}</span><strong>${t(en, zh)}</strong><span>${ctx.moduleConceptCount(key)}</span>
       </button>`;
     }).join('')}</div>`;
-    const coreRows = ctx.modules.filter(m => m[4]);
-    const extraRows = ctx.modules.filter(m => !m[4]);
+    /* [id, en, zh, is-core] — the concept count column was removed; the
+       catalog is the only source for it. */
+    const coreRows = ctx.modules.filter(m => m[3]);
+    const extraRows = ctx.modules.filter(m => !m[3]);
     const extraOn = extraRows.filter(m => ex.modules.includes(m[0])).length;
     return `
       <div class="gdx-body">

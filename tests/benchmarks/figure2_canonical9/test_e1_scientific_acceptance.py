@@ -10,6 +10,7 @@ import pytest
 from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
     e1_scientific_acceptance_contract,
     evaluate_e1_scientific_acceptance,
+    sensitivity_output_instruction,
     write_e1_scientific_acceptance_receipt,
 )
 
@@ -227,7 +228,7 @@ def _accepted_run(tmp_path: Path) -> Path:
                 "landmark_hours": None,
                 "alive_at_landmark_required": False,
                 "negative_event_times_excluded": False,
-                "readmission_restriction": "non_readmission_only",
+                "readmission_restriction": True,
                 "age_form": "linear",
                 "charlson_form": "linear",
             },
@@ -296,6 +297,16 @@ def test_e1_scientific_acceptance_accepts_complete_structured_closure(
 
     assert receipt["status"] == "accepted"
     assert receipt["issues"] == []
+
+
+def test_e1_sensitivity_instruction_publishes_its_restriction_encoding() -> None:
+    instruction = sensitivity_output_instruction()
+
+    assert "readmission_restriction to non_readmission_only" in instruction
+    assert "now-constant model covariate" in instruction
+    assert "finite n_stays" in instruction
+    assert "eligibility set before complete-case model filtering" in instruction
+    assert "Do not substitute the fitted model's complete-case N" in instruction
 
 
 def test_e1_scientific_acceptance_rejects_obsolete_table_one_schema(

@@ -101,6 +101,68 @@ def test_raw_input_superset_repair_is_structural_and_automatic() -> None:
     assert automatic_repair_allowed(metadata.repair_id)
 
 
+def test_runner_repair_projects_bare_planner_raw_inputs_without_split() -> None:
+    code = '''
+manifest = DOCUMENT
+planner_inputs = manifest["planner_declared_inputs"]
+declared_raw = {
+    item.split(":", 1)[1]
+    for item in planner_inputs
+    if not item.startswith("artifact:") and not item.startswith("table:")
+}
+'''
+    run_log = "IndexError: list index out of range"
+
+    repair = _deterministic_runner_repair(code=code, run_log=run_log)
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "planner_declared_raw_input_projection_v1"
+    assert "split" not in repaired
+    namespace = {
+        "DOCUMENT": {
+            "planner_declared_inputs": [
+                "age",
+                "death",
+                "artifact:analysis_cohort",
+                "table:adjusted_estimates",
+            ]
+        }
+    }
+    exec(repaired, namespace)  # noqa: S102 - generated-code regression
+    assert namespace["declared_raw"] == {"age", "death"}
+    metadata = repair_metadata_for(repair_id)
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert _untrusted_runtime_repair_allowed(
+        repair_id=repair_id,
+        source="deterministic_runner_repair",
+    )
+
+
+def test_planner_raw_input_projection_repair_is_traceback_and_shape_bound() -> None:
+    code = '''
+planner_inputs = manifest["planner_declared_inputs"]
+declared_raw = {item.split(":", 1)[1] for item in planner_inputs}
+'''
+
+    assert _deterministic_runner_repair(code=code, run_log="") is None
+    assert (
+        _deterministic_runner_repair(
+            code=code.replace('"planner_declared_inputs"', '"other_inputs"'),
+            run_log="IndexError: list index out of range",
+        )
+        is None
+    )
+    ambiguous = code + code.replace("declared_raw", "other_raw")
+    assert (
+        _deterministic_runner_repair(
+            code=ambiguous,
+            run_log="IndexError: list index out of range",
+        )
+        is None
+    )
+
+
 def test_runner_repair_iterates_column_keyed_raw_contract_values() -> None:
     code = """
 def find_contract(manifest, column_name):

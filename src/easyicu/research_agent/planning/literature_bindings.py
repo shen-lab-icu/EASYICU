@@ -73,6 +73,43 @@ def _available_method_sources_by_element(
     return {element: sorted(keys) for element, keys in sources.items()}
 
 
+def missing_required_method_layers(
+    plan: AnalysisPlan,
+    allowed_keys: Sequence[str],
+    *,
+    context: ResearchContext | None,
+) -> tuple[str, ...]:
+    """Return run-enforceable method layers not covered by typed bindings.
+
+    This projection is shared by the final literature gate and Progressive
+    Planner's last-step compiler boundary.  Keeping it here prevents the agent
+    adapter from independently reinterpreting method-card applicability.
+    """
+
+    if context is None:
+        return ()
+    method_source_keys = set(allowed_method_source_keys(allowed_keys))
+    if not method_source_keys:
+        return ()
+    layer_by_key = _method_layers_by_source_key()
+    required_layers = set(required_method_layers_for_plan(plan, context))
+    available_layers = {
+        layer
+        for key in method_source_keys
+        for layer in layer_by_key.get(key, set())
+    }
+    cited_layers = {
+        layer
+        for step in plan.steps
+        for binding in step.literature_design_bindings
+        for layer in method_binding_support(
+            binding.citation_key,
+            binding.design_elements,
+        )["matched_layers"]
+    }
+    return tuple(sorted((required_layers & available_layers) - cited_layers))
+
+
 def validate_literature_citation_bindings(
     plan: AnalysisPlan,
     allowed_keys: Sequence[str],
@@ -146,14 +183,13 @@ def validate_literature_citation_bindings(
         method_source_keys,
         allowed,
     )
+    scientific_step_ids = {
+        step.step_id
+        for step in plan.steps
+        if step.planned_analysis_role in {"primary", "secondary", "sensitivity"}
+    }
     matched_layers_by_step: dict[str, set[str]] = {}
     for step in plan.steps:
-        if step.planned_analysis_role not in {
-            "primary",
-            "secondary",
-            "sensitivity",
-        }:
-            continue
         matched_layers: set[str] = set()
         for binding in step.literature_design_bindings:
             support = method_binding_support(
@@ -190,7 +226,7 @@ def validate_literature_citation_bindings(
     method_card_unbound = sorted(
         step_id
         for step_id, layers in matched_layers_by_step.items()
-        if not layers
+        if step_id in scientific_step_ids and not layers
     )
     if method_source_keys and method_card_unbound:
         raise ValueError(
@@ -199,27 +235,17 @@ def validate_literature_citation_bindings(
             "insufficient: "
             + ", ".join(method_card_unbound)
         )
-    if context is not None and method_source_keys:
-        layer_by_key = _method_layers_by_source_key()
-        required_layers = set(required_method_layers_for_plan(plan, context))
-        available_layers = {
-            layer
-            for key in method_source_keys
-            for layer in layer_by_key.get(key, set())
-        }
-        enforceable_layers = required_layers & available_layers
-        cited_layers = {
-            layer
-            for layers in matched_layers_by_step.values()
-            for layer in layers
-        }
-        missing_layers = sorted(enforceable_layers - cited_layers)
-        if missing_layers:
-            raise ValueError(
-                "The scientific plan does not bind method sources for all "
-                "case-applicable design decisions; missing method layers: "
-                + ", ".join(missing_layers)
-            )
+    missing_layers = missing_required_method_layers(
+        plan,
+        allowed_keys,
+        context=context,
+    )
+    if missing_layers:
+        raise ValueError(
+            "The scientific plan does not bind method sources for all "
+            "case-applicable design decisions; missing method layers: "
+            + ", ".join(missing_layers)
+        )
     direct_keys = {
         key
         for key in normalize_literature_citation_keys(direct_comparator_keys)
@@ -242,6 +268,7 @@ def validate_literature_citation_bindings(
 
 __all__ = [
     "allowed_method_source_keys",
+    "missing_required_method_layers",
     "normalize_literature_citation_keys",
     "validate_literature_citation_bindings",
 ]

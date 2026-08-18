@@ -28,7 +28,7 @@ import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from ..providers.protocol import LLMClient, LLMMessage
-from ..providers.factory import (
+from ..providers.client_trust import (
     authorized_complete,
     authorized_complete_with_images,
     provider_transport_destination,

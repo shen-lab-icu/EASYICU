@@ -125,7 +125,7 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
     viz = _read("js/screens-viz.js")
     viz_owner = _read("js/screens-viz-study-context.js")
     shell = _read("js/app.js")
-    assert 'data-study-source="extraction" data-study-target="agent"' in extraction
+    assert 'data-study-source="extraction" data-study-target="guided"' in extraction
     assert "window.EU_EXTRACTION_CONTEXT" in extraction
     assert "registerSource(" not in extraction
     assert "window.EU_EXTRACTION_CONTEXT" in extraction_owner
@@ -134,9 +134,9 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
     # marker moved with it. Assert per-owner rather than in the shell file, or
     # the test drifts into demanding a layering violation.
     for route in ("patient", "cohort"):
-        assert f'data-study-source="{route}" data-study-target="agent"' in viz
+        assert f'data-study-source="{route}" data-study-target="guided"' in viz
     assert (
-        'data-study-source="crossdb" data-study-target="agent"'
+        'data-study-source="crossdb" data-study-target="guided"'
         in _read("js/screens-viz-crossdb-results.js")
     )
     for route in ("patient", "cohort", "crossdb"):
@@ -148,7 +148,7 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
     assert "EU_STUDY_CONTEXT" not in shell
 
 
-def test_guided_and_agent_use_the_same_context_id_for_real_runs() -> None:
+def test_guided_owns_run_submission_and_monitor_reuses_the_same_context() -> None:
     guided = _read("js/screens-guided.js")
     guided_owner = _read("js/screens-guided-study-context.js")
     agent = _read("js/screens-agent.js")
@@ -165,12 +165,13 @@ def test_guided_and_agent_use_the_same_context_id_for_real_runs() -> None:
     assert "projectKind: 'study_context'" in agent_owner
     assert "function projects()" in agent_owner
     assert "function activate(id)" in agent_owner
-    assert "persistForRun(s)" in agent
-    assert "study_context_id: runToken.context_id || undefined" in agent
+    assert "persistForRun(s)" not in agent
+    assert "window.EU_API.startAgentRun" not in agent
     assert "markContextRunning(runToken.context_id, runToken.job_id" in guided
     assert "markContextFinished(" in guided
     assert "markActiveRunning" not in guided
     assert "markActiveFinished" not in guided
+    # The monitor may finish a reconnected stream, but cannot initiate a run.
     assert "window.EU_AGENT_STUDY_CONTEXT.markContextFinished(" in agent
     assert "result && result.study_context_revision" in agent
     assert "createRunChannel" in agent_owner
@@ -211,7 +212,7 @@ def test_crossdb_handoff_is_plan_only_and_non_crossdb_routes_clear_the_flag() ->
     # silently degraded to a bare data-nav during the owner split, so nothing
     # ever set crossdb_plan_only and the Agent-side gate below was unreachable.
     crossdb_results = _read("js/screens-viz-crossdb-results.js")
-    assert "Create cross-DB analysis plan" in crossdb_results
+    assert "Plan in Guided Copilot" in crossdb_results
     assert 'data-study-handoff data-study-source="crossdb"' in crossdb_results
     assert 'data-nav="agent"' not in crossdb_results
     assert "crossdb_plan_only" in viz_owner
@@ -238,7 +239,7 @@ def test_nonfatal_agent_submission_warnings_are_visible_in_both_surfaces() -> No
     # there is deliberately no "the pointer did not sync but it runs anyway"
     # warning left for this screen to render.
     assert "context_sync_warning" not in owner
-    assert "submissionWarning(r)" in agent
+    assert "submissionWarning(r)" not in agent
     assert "warningNote(agRun.warning)" in agent
     assert "submissionWarning(r)" in guided
     assert "warningNote(guidedAgent.warning)" in guided
@@ -255,9 +256,10 @@ def test_agent_blocked_gate_planning_copy_and_tabs_are_truthful() -> None:
     assert "Denominators resolved" not in agent
     assert "markContextStage(boundId, terminalStage(status, result), null, jobId, revision)" in owner
     assert "if (!updated) return null" in owner
-    assert "Planning Blocks" in agent
-    assert "规划块" in agent
-    assert "do not change the current /api/jobs/agent-run execution" in agent
+    assert "Planning Blocks" not in agent
+    assert "规划块" not in agent
+    assert "window.EU_API.startAgentRun" not in agent
+    assert "data-ag-guided" in agent
     assert "Workflow Blocks" not in agent
     assert 'role="tablist"' in agent
     assert 'role="tab"' in agent

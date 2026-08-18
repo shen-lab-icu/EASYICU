@@ -107,7 +107,9 @@ def _progress_payload(state: ProgressState) -> Dict[str, Any]:
     }
 
 
-def _run_command(*, cmd: Sequence[str], cwd: Path, env: Dict[str, str], log_path: Path) -> int:
+def _run_command(
+    *, cmd: Sequence[str], cwd: Path, env: Dict[str, str], log_path: Path
+) -> int:
     _append_log(log_path, "")
     _append_log(log_path, f"$ {' '.join(cmd)}")
     started = time.monotonic()
@@ -230,29 +232,81 @@ def _matrix_command(
 
 def main() -> int:
     repo_root = _bootstrap_imports()
+    from easyicu.research_agent.providers import (
+        SUPPORTED_CLI_ACCOUNT_NAMES,
+        SUPPORTED_PROVIDER_NAMES,
+        cli_account_profile,
+        provider_profile,
+    )
     from tests.bench import ANALYSIS_BENCH_ITEMS  # type: ignore
 
     all_items = [it.key for it in ANALYSIS_BENCH_ITEMS]
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--items", nargs="+", default=None,
-                        help="Subset of analysis bench items (default: all 10).")
-    parser.add_argument("--provider", choices=["openrouter", "openai", "mock"], default="openrouter")
-    parser.add_argument("--model",
-                        default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"),
-                        help="Single model to use when --models is not set.")
-    parser.add_argument("--models", nargs="+", default=None,
-                        help="Optional multiple models to run sequentially.")
+    parser.add_argument(
+        "--items",
+        nargs="+",
+        default=None,
+        help="Subset of analysis bench items (default: all 10).",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["mock", *SUPPORTED_CLI_ACCOUNT_NAMES, *SUPPORTED_PROVIDER_NAMES],
+        default="openrouter",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "Single model to use when --models is not set. Account CLIs use "
+            "their logged-in default when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        help="Optional multiple models to run sequentially.",
+    )
     parser.add_argument("--request-timeout", type=float, default=300.0)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--max-retries", type=int, default=4)
     parser.add_argument("--sleep-seconds", type=int, default=45)
-    parser.add_argument("--aggregate-after-each-model", action="store_true",
-                        help="Write per-model bench_results after each model finishes.")
+    parser.add_argument(
+        "--aggregate-after-each-model",
+        action="store_true",
+        help="Write per-model bench_results after each model finishes.",
+    )
     parser.add_argument("--python-bin", default=sys.executable)
-    parser.add_argument("--out-root", default=None,
-                        help="Default: research_output/bench/analysis_overnight_<UTC timestamp>")
+    parser.add_argument(
+        "--out-root",
+        default=None,
+        help="Default: research_output/bench/analysis_overnight_<UTC timestamp>",
+    )
     args = parser.parse_args()
+
+    if not args.model and not args.models:
+        if args.provider == "mock":
+            args.model = "mock"
+        elif args.provider in SUPPORTED_CLI_ACCOUNT_NAMES:
+            account = cli_account_profile(args.provider)
+            _source, configured_model = (
+                account.model(os.environ) if account is not None else (None, "")
+            )
+            args.model = configured_model or "cli-default"
+        else:
+            profile = provider_profile(args.provider)
+            _source, configured_model = (
+                profile.model(os.environ) if profile is not None else (None, "")
+            )
+            args.model = configured_model or os.environ.get(
+                "EASYICU_HOSTED_DEFAULT_MODEL",
+                "",
+            )
+            if not args.model and args.provider == "openrouter":
+                args.model = "openai/gpt-oss-120b:free"
+            if not args.model:
+                parser.error(f"--model is required for --provider {args.provider}")
 
     items = list(args.items or all_items)
     unknown = sorted(set(items) - set(all_items))
@@ -265,7 +319,10 @@ def main() -> int:
         models = list(args.models or [args.model])
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_root = Path(args.out_root or (repo_root / "research_output" / "bench" / f"analysis_overnight_{timestamp}")).resolve()
+    out_root = Path(
+        args.out_root
+        or (repo_root / "research_output" / "bench" / f"analysis_overnight_{timestamp}")
+    ).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     log_path = out_root / "overnight_runner.log"
     plan_path = out_root / "overnight_plan.json"
@@ -296,7 +353,9 @@ def main() -> int:
     _append_log(log_path, f"Out root={out_root}")
 
     for model_idx, model in enumerate(models, start=1):
-        model_root = out_root if len(models) == 1 else (out_root / _slugify_model(model))
+        model_root = (
+            out_root if len(models) == 1 else (out_root / _slugify_model(model))
+        )
         model_root.mkdir(parents=True, exist_ok=True)
         _append_log(log_path, "")
         _append_log(log_path, f"=== Model {model_idx}/{len(models)}: {model} ===")
@@ -311,7 +370,10 @@ def main() -> int:
                 )
                 state.attempts.append(record)
                 _write_json(progress_path, _progress_payload(state))
-                _append_log(log_path, f"--- Item {item_idx}/{len(items)}: {item} | attempt {attempt}/{args.max_retries} ---")
+                _append_log(
+                    log_path,
+                    f"--- Item {item_idx}/{len(items)}: {item} | attempt {attempt}/{args.max_retries} ---",
+                )
                 started = time.monotonic()
                 rc = _run_command(
                     cmd=_item_command(
@@ -337,10 +399,14 @@ def main() -> int:
                     success = True
                     break
                 if attempt < args.max_retries:
-                    _append_log(log_path, f"Retrying {item} after {args.sleep_seconds}s")
+                    _append_log(
+                        log_path, f"Retrying {item} after {args.sleep_seconds}s"
+                    )
                     time.sleep(args.sleep_seconds)
             if not success:
-                _append_log(log_path, f"Item failed after {args.max_retries} attempts: {item}")
+                _append_log(
+                    log_path, f"Item failed after {args.max_retries} attempts: {item}"
+                )
 
         if args.aggregate_after_each_model:
             _append_log(log_path, f"Aggregating completed items for model: {model}")

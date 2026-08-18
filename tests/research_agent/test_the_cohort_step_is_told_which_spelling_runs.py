@@ -50,7 +50,9 @@ from easyicu.research_agent.schema import (
     COHORT_DEFINITION_FLOW_OUTPUT,
     CohortDefinitionSpec,
     CohortDescriptor,
+    ExposureOutcomeDistributionSpec,
     ResearchContext,
+    TableOneSpec,
 )
 
 
@@ -262,6 +264,23 @@ def test_the_retry_reminder_closes_common_representation_seams():
     assert "exact exposure and outcome" in reminder
     assert "JSON numbers remain numbers" in reminder
     assert "required `robustness_specs`" in reminder
+    assert "`standardized_difference_mode`" in reminder
+    assert "do not add a second reporting switch" in reminder
+    assert "`report_standardized_mean_differences`" not in reminder
+    assert '["__easyicu_level_1__","__easyicu_level_2__"]' in reminder
+    assert "schema_version='easyicu.exposure_outcome_distribution/2'" in reminder
+    assert "interval_method='wilson'" in reminder
+    assert "repeated_unit_interval_method='patient_cluster_robust_wald'" in reminder
+    assert "even while dependence is null before host binding" in reminder
+
+
+def test_the_retry_reminder_derives_closed_scientific_keys_from_schema():
+    reminder = planner_science_retry_guide()
+
+    for field in TableOneSpec.model_fields:
+        assert f"`{field}`" in reminder
+    for field in ExposureOutcomeDistributionSpec.model_fields:
+        assert f"`{field}`" in reminder
 
 
 def test_the_retry_reminder_publishes_table_one_inputs_and_descriptive_ceiling():
@@ -279,15 +298,25 @@ def test_the_initial_directive_publishes_table_one_inputs_and_descriptive_ceilin
     assert "every `variables[*].name`" in directive
     assert '"unresolved_limitations"' in directive
     assert '"post_baseline_exposure_opportunity_unresolved"' in directive
-    assert '{"input_key":"table:exact_product","mode":"all_rows"}' in directive
-    assert "never rename them to `input` and `cardinality`" in directive
+    assert (
+        '{"schema_version":"easyicu.artifact_consumption/1",'
+        '"input_key":"table:exact_product","mode":"all_rows",'
+        '"role_column":null,"expected_roles":[]}' in directive
+    )
+    assert (
+        "Never rename `input_key` to `input` or `mode` to `cardinality`." in directive
+    )
 
 
 def test_the_retry_reminder_publishes_exact_nested_contract_shapes():
     reminder = planner_science_retry_guide()
 
-    assert '`{"input_key": "table:exact_product", "mode": "all_rows"}`' in reminder
-    assert "never rename `input_key` to `input`" in reminder
+    assert (
+        '`{"schema_version":"easyicu.artifact_consumption/1",'
+        '"input_key":"table:exact_product","mode":"all_rows",'
+        '"role_column":null,"expected_roles":[]}`' in reminder
+    )
+    assert "Never rename `input_key` to `input` or `mode` to `cardinality`." in reminder
     assert "`all_rows`, `single_row`, and `one_per_role`" in reminder
     assert "must be JSON strings" in reminder
     assert '`["0", "1"]`' in reminder
@@ -298,8 +327,8 @@ def test_the_retry_reminder_publishes_exact_nested_contract_shapes():
 def test_the_retry_reminder_keeps_citations_and_model_rosters_on_their_owner():
     reminder = planner_science_retry_guide()
 
-    assert "must also appear in that same step's `literature_citation_keys`" in reminder
-    assert "update both fields together" in reminder
+    assert "host compiles its `citation_key`" in reminder
+    assert "citation with no matching design binding remains invalid" in reminder
     assert "method is exactly `adjusted_association_models`" in reminder
     assert "`table:adjusted_association_estimates`" in reminder
     assert "every other step emits `model_requirements: []`" in reminder

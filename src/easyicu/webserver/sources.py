@@ -16,10 +16,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
 from easyicu.webserver import settings as settings_store
 
-_CONFIG_DIR = Path.home() / ".easyicu"
+_CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_sources.json"
 _LOCK = threading.RLock()
 _PATH_LEASE_COUNTS: Dict[str, int] = {}
@@ -219,9 +220,9 @@ def _autodiscovery_bases() -> List[Path]:
     settings = settings_store.load_settings()
     raw_bases = [
         settings.get("export_dir"),
-        Path.home() / "easyicu_export",
-        Path.home() / "easyicu" / "exports",
-        Path.home() / ".easyicu" / "exports",
+        state_paths.user_home() / "easyicu_export",
+        state_paths.exports_root(),
+        state_paths.state_root() / "exports",
     ]
     bases: List[Path] = []
     seen = set()

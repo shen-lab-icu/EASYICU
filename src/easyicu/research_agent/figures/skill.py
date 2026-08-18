@@ -60,6 +60,12 @@ class _PrimaryLineageEvidenceView:
         self._evidence = evidence
         self._allowed_step_ids = set(allowed_step_ids)
 
+    @property
+    def root(self) -> Path:
+        """Expose the backing store root for verified contract reads."""
+
+        return self._evidence.root
+
     def records(self) -> List[EvidenceRecord]:
         records = self._evidence.records()
         allowed_records = [
@@ -2067,6 +2073,7 @@ _PRIMARY_PUBLICATION_ROLE_POOLS: Dict[str, set[str]] = {
     },
     "descriptive": {
         "distribution",
+        "descriptive_result",
         "cohort_accounting",
         "data_quality",
     },
@@ -2548,6 +2555,16 @@ def _contract_promoted_from_source(
             payload = {}
     except Exception:
         payload = {}
+    source_statistics_note = str(payload.get("statistics_note") or "").strip()
+    promotion_note = (
+        "This run-level bundle promotes a registered step-level publication "
+        "figure and preserves its source evidence."
+    )
+    statistics_note = (
+        f"{source_statistics_note} {promotion_note}"
+        if source_statistics_note
+        else promotion_note
+    )
     source_panels = payload.get("panels")
     panels: List[Dict[str, Any]] = []
     if isinstance(source_panels, list):
@@ -2600,10 +2617,7 @@ def _contract_promoted_from_source(
             ),
             panels=panels,
             source_data=list(source_ids),
-            statistics_note=(
-                "This run-level bundle promotes a registered step-level "
-                "publication figure and preserves its source evidence."
-            ),
+            statistics_note=statistics_note,
         )
     except Exception:
         return make_figure_contract(

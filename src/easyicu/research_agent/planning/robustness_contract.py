@@ -65,6 +65,23 @@ COMPLETE_CASE_STRATEGY = "complete_case"
 #: So it is required here, where the Planner can still supply it.
 COMPLETE_CASE_VARIABLES_KEY = "variables"
 
+# Public, dependency-neutral wire keys consumed by the locked robustness
+# executors. The Planner transport schema imports these constants instead of
+# re-declaring a second, drifting map of accepted override fields.
+PLANNER_MISSING_OVERRIDE_FIELDS = (
+    "strategy",
+    "variables",
+    "audit_flags",
+)
+PLANNER_OUTCOME_OVERRIDE_FIELDS = (
+    "column",
+    "concept_id",
+    "target",
+    "event_time_column",
+    "time_column",
+    "aggregation",
+)
+
 #: Keys a real plan has used for the same list without being told the name.
 #: They are reported back, not accepted: a second spelling of a scientific
 #: declaration is how two consumers end up disagreeing about which variables
@@ -224,6 +241,8 @@ __all__ = [
     "COMPLETE_CASE_VARIABLES_KEY",
     "MIN_AXIS_COUNTS",
     "MIN_TOTAL_SPEC_COUNT",
+    "PLANNER_MISSING_OVERRIDE_FIELDS",
+    "PLANNER_OUTCOME_OVERRIDE_FIELDS",
     "ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS",
     "RobustnessAxis",
     "RobustnessPlanError",

@@ -92,6 +92,10 @@ Code contract:
   exponentiation, cap an overflowed ratio at the largest finite float, or
   otherwise manufacture a huge finite effect; report it as not estimable and
   preserve the numerical failure in diagnostics.
+  When a prespecified sensitivity analysis restricts the cohort by fixing one
+  variable, use that variable for membership only and omit its now-constant
+  column from the fitted design matrix. Do not silently drop any other
+  unexpectedly constant predictor; fail closed and report that defect instead.
   Every coefficient, confidence interval, and derived estimate must use the
   scale and unit implied by its own model family. In particular, a quantile-
   regression coefficient is a conditional-quantile difference in the outcome

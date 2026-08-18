@@ -26,6 +26,7 @@ from easyicu.provider_auth import (
     credential_headers,
     pi_openai_auth_header,
 )
+from easyicu.webserver import state_paths
 from easyicu.webserver.provider_url_security import (
     ProviderUrlSecurityError,
     validate_credential_endpoint,
@@ -45,8 +46,8 @@ SUPPORTED_API_TRANSPORTS = frozenset(
         "openai-responses",
     }
 )
-_DEFAULT_CONFIG_PATH = Path.home() / ".easyicu" / "pi-provider.env"
-_DEFAULT_RECEIPT_PATH = Path.home() / ".easyicu" / "pi-provider-verification.json"
+_DEFAULT_CONFIG_PATH = state_paths.state_root() / "pi-provider.env"
+_DEFAULT_RECEIPT_PATH = state_paths.state_root() / "pi-provider-verification.json"
 _CONFIG_KEYS = frozenset(
     {
         "EASYICU_PI_API_KEY",

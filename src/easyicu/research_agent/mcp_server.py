@@ -67,9 +67,14 @@ from .gates.figure_egress import (
     RESERVED_PRIVACY_METADATA_KEYS,
     TRUSTED_FIGURE_PRODUCERS,
 )
-from .providers.llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
-from .providers import ProviderConfigurationError, build_provider_client
+from .providers import (
+    SUPPORTED_PROVIDER_NAMES,
+    ProviderConfigurationError,
+    build_provider_client,
+)
+from .providers.capabilities import SUPPORTED_CLI_ACCOUNT_NAMES, cli_account_profile
+from .providers.llm import build_llm_client
 from .orchestration.config import PipelineConfig
 from .orchestration.services import PipelineServices
 from .skills import list_skills
@@ -128,8 +133,12 @@ def _provider_configuration_error_payload(
             "is a local OpenAI-compatible server"
         )
         error_code = "llm_configuration_required"
+    elif error.issue in {"missing_provider_key", "missing_provider_base_url"}:
+        message = str(error)
+        error_code = "llm_configuration_required"
     elif error.issue in {
         "invalid_openai_base_url_override",
+        "invalid_provider_base_url_override",
         "openrouter_base_url_override",
     }:
         message = str(error)
@@ -153,7 +162,7 @@ def _build_run_llm(args: Dict[str, Any]):
     model = str(args.pop("model", "") or "").strip()
     base_url_arg = args.pop("base_url", None)
     request_timeout = float(args.pop("request_timeout", 120.0))
-    if not model:
+    if not model and provider not in SUPPORTED_CLI_ACCOUNT_NAMES:
         return None, {
             "error": (
                 "configuration_error: research_agent.run requires an explicit "
@@ -161,12 +170,37 @@ def _build_run_llm(args: Dict[str, Any]):
             ),
             "error_code": "llm_configuration_required",
         }
+    if provider in SUPPORTED_CLI_ACCOUNT_NAMES:
+        if base_url_arg is not None:
+            return None, {
+                "error": (
+                    "configuration_error: account-backed CLI providers do not "
+                    "accept a base_url"
+                ),
+                "error_code": "llm_configuration_invalid",
+            }
+        try:
+            selection = build_llm_client(
+                prefer=provider,
+                model=None if model in {"", "cli-default"} else model,
+                allow_mock=False,
+                ladder=[provider],
+                request_timeout=request_timeout,
+            )
+            return selection.client, None
+        except (RuntimeError, ValueError, ProviderConfigurationError) as exc:
+            return None, {
+                "error": (
+                    "configuration_error: could not construct the requested "
+                    f"account-backed CLI: {type(exc).__name__}"
+                ),
+                "error_code": "llm_configuration_required",
+            }
     build_kwargs: Dict[str, Any] = {
         "provider": provider,
         "model": model,
         "request_timeout": request_timeout,
         "title": "EasyICU research-agent MCP",
-        "client_cls": OpenAIClient,
     }
     if base_url_arg is not None:
         build_kwargs["base_url_override"] = base_url_arg
@@ -275,6 +309,14 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
     provider_identity = {
         key: args.get(key) for key in ("provider", "model", "base_url")
     }
+    account_profile = cli_account_profile(str(provider_identity.get("provider") or ""))
+    if account_profile is not None:
+        provider_identity = {
+            "provider": account_profile.provider_identity,
+            "model": str(provider_identity.get("model") or "").strip()
+            or "cli-default",
+            "base_url": account_profile.endpoint_identity,
+        }
     workdir = resolve_within_roots(
         args.pop("workdir", None) or "./research_output", field="workdir"
     )
@@ -307,9 +349,7 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
             max_provider_attempts_per_batch=limits.max_provider_attempts_per_batch,
             max_total_tokens_per_run=limits.max_total_tokens_per_run,
             max_total_tokens_per_batch=limits.max_total_tokens_per_batch,
-            max_estimated_cost_usd_per_batch=(
-                limits.max_estimated_cost_usd_per_batch
-            ),
+            max_estimated_cost_usd_per_batch=(limits.max_estimated_cost_usd_per_batch),
             max_wall_clock_seconds_per_task=limits.max_wall_clock_seconds_per_task,
             provider_input_cost_usd_per_million_tokens=(
                 limits.input_cost_usd_per_million_tokens
@@ -1397,7 +1437,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "description": "Run an ICU-aware research-agent pipeline against a cohort parquet.",
         "inputSchema": {
             "type": "object",
-            "required": ["question", "cohort_path", "model"],
+            "required": ["question", "cohort_path"],
             "additionalProperties": False,
             "properties": {
                 "question": {"type": "string"},
@@ -1405,7 +1445,10 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "workdir": {"type": "string"},
                 "provider": {
                     "type": "string",
-                    "enum": ["openai", "openrouter"],
+                    "enum": [
+                        *SUPPORTED_CLI_ACCOUNT_NAMES,
+                        *SUPPORTED_PROVIDER_NAMES,
+                    ],
                 },
                 "model": {"type": "string"},
                 "base_url": {"type": "string"},
@@ -1786,9 +1829,7 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
 for _tool_schema in TOOL_SCHEMAS:
     _tool_schema["inputSchema"]["additionalProperties"] = False
 
-_TOOL_INPUT_SCHEMAS = {
-    str(tool["name"]): tool["inputSchema"] for tool in TOOL_SCHEMAS
-}
+_TOOL_INPUT_SCHEMAS = {str(tool["name"]): tool["inputSchema"] for tool in TOOL_SCHEMAS}
 
 
 def _validate_dispatch_arguments(tool_name: str, arguments: Mapping[str, Any]) -> None:
@@ -1797,8 +1838,7 @@ def _validate_dispatch_arguments(tool_name: str, arguments: Mapping[str, Any]) -
     unknown = sorted(set(arguments) - set(properties))
     if unknown:
         raise ValueError(
-            f"{tool_name} does not accept additional properties: "
-            + ", ".join(unknown)
+            f"{tool_name} does not accept additional properties: " + ", ".join(unknown)
         )
     for name, value in arguments.items():
         declaration = properties.get(name)

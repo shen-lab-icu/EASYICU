@@ -26,6 +26,7 @@ from easyicu.research_agent.execution.envelope_sealing import (
 )
 from easyicu.research_agent.execution.phase import (
     _evaluate_final_deterministic_gates,
+    _step_prepare_execution_authority,
     run_execute_phase,
 )
 
@@ -230,7 +231,7 @@ def test_multiple_distinct_analysis_cohorts_fail_closed(tmp_path: Path) -> None:
 
 
 def test_execute_phase_routes_runner_and_gates_to_the_bound_step_cohort() -> None:
-    tree = ast.parse(inspect.getsource(run_execute_phase))
+    tree = ast.parse(inspect.getsource(_step_prepare_execution_authority))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
     assert any(
         isinstance(call.func, ast.Name)

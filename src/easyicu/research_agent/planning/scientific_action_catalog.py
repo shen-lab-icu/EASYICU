@@ -638,8 +638,17 @@ def planner_scientific_action_guide(
         "SCIENTIFIC ACTIONS (inferred family; exact ids):",
         f"type={catalog.analysis_type}; family={catalog.analysis_family}; "
         f"primary_contract={contract}.",
-        "Set scientific_action_id on result steps only. unavailable=fail-closed; "
-        "alternatives need user confirmation; never substitute methods or invent ids.",
+        "scientific_action_id is either null or exactly one of this current "
+        "family's ids: "
+        + ", ".join(action.action_id for action in catalog.actions)
+        + ".",
+        "Set scientific_action_id only when a result step actually selects one "
+        "of those actions. Cohort-definition, Table 1, raw distribution, and "
+        "figure-only support steps do not gain a cross-family action id merely "
+        "because they emit an artifact; leave it null unless the exact current-"
+        "family action above represents that analysis. unavailable=fail-closed; "
+        "alternatives need user confirmation; never substitute methods, import "
+        "another family prefix, or invent ids.",
     ]
     if not catalog.primary_contract_registered:
         lines.append(

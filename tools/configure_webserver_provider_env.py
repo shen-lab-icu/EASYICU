@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Create EasyICU's private provider env file without echoing secrets."""
+
 from __future__ import annotations
 
 import argparse
@@ -17,22 +18,19 @@ DEFAULT_ENV_PATH = Path.home() / ".easyicu" / "provider.env"
 
 def provider_env_names(provider: str) -> Dict[str, str]:
     text = str(provider or "openai").strip().lower()
-    if text == "openai":
-        return {
-            "api_key": "OPENAI_API_KEY",
-            "base_url": "OPENAI_BASE_URL",
-            "model": "OPENAI_MODEL",
-        }
-    if text == "openrouter":
-        return {
-            "api_key": "OPENROUTER_API_KEY",
-            "base_url": "OPENROUTER_BASE_URL",
-            "model": "OPENROUTER_MODEL",
-        }
+    repo_root = Path(__file__).resolve().parents[1]
+    src_root = repo_root / "src"
+    if str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
+    from easyicu.research_agent.providers.capabilities import provider_profile
+
+    profile = provider_profile(text)
+    if profile is None:
+        raise ValueError(f"unsupported provider: {provider!r}")
     return {
-        "api_key": "EASYICU_LLM_API_KEY",
-        "base_url": "EASYICU_LLM_BASE_URL",
-        "model": "EASYICU_LLM_MODEL",
+        "api_key": profile.api_key_env_names[0],
+        "base_url": profile.base_url_env_names[0],
+        "model": profile.model_env_names[0],
     }
 
 
@@ -77,17 +75,30 @@ def write_provider_env(
     return {
         "path": str(target),
         "mode": "0600",
-        "keys": sorted(key for key, value in entries.items() if str(value or "").strip()),
+        "keys": sorted(
+            key for key, value in entries.items() if str(value or "").strip()
+        ),
         "secrets_returned": False,
     }
 
 
 def collect_entries(args: argparse.Namespace) -> Dict[str, str]:
     names = provider_env_names(args.provider)
+    from easyicu.research_agent.providers.capabilities import provider_profile
+
+    profile = provider_profile(args.provider)
+    assert profile is not None  # argparse/provider_env_names already validated it
     api_key = getpass.getpass(f"{names['api_key']}: ").strip()
     base_url = str(args.base_url or "").strip()
     if not base_url:
-        base_url = input(f"{names['base_url']} (OpenAI-compatible base, e.g. http://127.0.0.1:8787/v1): ").strip()
+        base_url = str(profile.default_base_url or "")
+    if not base_url:
+        transport_hint = (
+            "Anthropic API base, e.g. https://api.anthropic.com"
+            if profile.transport == "anthropic_messages"
+            else "OpenAI-compatible base, e.g. http://127.0.0.1:8787/v1"
+        )
+        base_url = input(f"{names['base_url']} ({transport_hint}): ").strip()
     model = str(args.model or "").strip()
     if not model:
         model = input(f"{names['model']}: ").strip()
@@ -102,7 +113,11 @@ def collect_entries(args: argparse.Namespace) -> Dict[str, str]:
         entries["EASYICU_LLM_MAX_TOKENS"] = max_tokens
     if json_format_style:
         entries["EASYICU_LLM_JSON_FORMAT_STYLE"] = json_format_style
-    missing = [key for key, value in entries.items() if key != "EASYICU_LLM_MAX_TOKENS" and not value]
+    missing = [
+        key
+        for key, value in entries.items()
+        if key != "EASYICU_LLM_MAX_TOKENS" and not value
+    ]
     if missing:
         raise ValueError(f"missing required values for: {', '.join(missing)}")
     return entries
@@ -115,13 +130,25 @@ def _quote_env_value(value: str) -> str:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    repo_root = Path(__file__).resolve().parents[1]
+    src_root = repo_root / "src"
+    if str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
+    from easyicu.research_agent.providers.capabilities import SUPPORTED_PROVIDER_NAMES
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--provider", default="openai", choices=["openai", "openrouter", "custom"])
+    parser.add_argument(
+        "--provider",
+        default="openai",
+        choices=list(SUPPORTED_PROVIDER_NAMES),
+    )
     parser.add_argument("--path", type=Path, default=DEFAULT_ENV_PATH)
     parser.add_argument("--base-url", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--max-tokens", default="")
-    parser.add_argument("--json-format-style", choices=["chat", "responses", "both"], default="")
+    parser.add_argument(
+        "--json-format-style", choices=["chat", "responses", "both"], default=""
+    )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args(argv)
 
@@ -131,7 +158,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         meta = write_provider_env(args.path, collect_entries(args), force=args.force)
     except Exception as exc:  # noqa: BLE001
-        print(json.dumps({"ok": False, "error": str(exc), "secrets_returned": False}, indent=2), file=sys.stderr)
+        print(
+            json.dumps(
+                {"ok": False, "error": str(exc), "secrets_returned": False}, indent=2
+            ),
+            file=sys.stderr,
+        )
         return 1
     print(json.dumps({"ok": True, **meta}, indent=2))
     return 0

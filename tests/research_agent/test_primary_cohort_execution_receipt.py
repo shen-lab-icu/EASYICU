@@ -138,7 +138,11 @@ def test_execute_phase_asks_for_the_receipt_through_the_selection_owner() -> Non
     # ``inclusion or exclusion`` re-implementation here silently withheld the
     # receipt from every all-row cohort while the cohort layer still
     # materialised one.
-    source = inspect.getsource(execution_phase.run_execute_phase)
+    source = (
+        inspect.getsource(execution_phase._step_prepare_execution_authority)
+        + "\n"
+        + inspect.getsource(execution_phase.run_execute_phase)
+    )
 
     assert "primary_cohort_execution_receipt = (" in source
     assert "cohort_definition_has_explicit_selection(" in source
