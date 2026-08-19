@@ -459,6 +459,53 @@ def test_sparse_hourly_creatinine_is_not_misread_as_minutes():
     assert row["aki_stage_creat"].item() == 3
 
 
+def test_kdigo_seven_day_boundary_and_baseline_provenance():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [-169.0, -168.0, 0.0],
+            "crea": [0.4, 1.0, 1.6],
+        }
+    )
+
+    result = kdigo_aki.kdigo_creatinine(
+        creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="hours",
+    )
+    admission = result.loc[result["charttime"] == 0].iloc[0]
+
+    assert admission["creat_low_past_7day"] == pytest.approx(1.0)
+    assert admission["creat_baseline_n_7d"] == 1
+    assert admission["creat_baseline_source"] == "observed_pre_icu"
+    assert bool(admission["creat_pre_icu_history_observed"])
+    assert admission["aki_stage_creat"] == 1
+
+
+def test_hirid_like_series_keeps_first_creatinine_unknown_then_uses_icu_history():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 24.0],
+            "crea": [1.0, 1.6],
+        }
+    )
+
+    result = kdigo_aki.kdigo_creatinine(
+        creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="hours",
+    )
+
+    assert pd.isna(result.iloc[0]["aki_stage_creat"])
+    assert result.iloc[0]["creat_baseline_source"] == "unavailable"
+    assert result.iloc[1]["aki_stage_creat"] == 1
+    assert result.iloc[1]["creat_baseline_source"] == "observed_prior_icu"
+    assert not bool(result.iloc[1]["creat_pre_icu_history_observed"])
+
+
 def test_numeric_kdigo_charttime_requires_explicit_unit() -> None:
     creatinine = pd.DataFrame(
         {

@@ -148,6 +148,45 @@ def test_raw_alias_is_charged_once(monkeypatch):
     assert sum(1 for c in charged if c > 0) == 1
 
 
+def test_raw_cache_isolates_default_and_kdigo_history_windows(monkeypatch):
+    resolver = _resolver(monkeypatch, "64")
+    generic = ICUTable(
+        data=pd.DataFrame({"stay_id": [1], "charttime": [0.0], "crea": [1.6]}),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="crea",
+    )
+    kdigo = ICUTable(
+        data=pd.DataFrame(
+            {"stay_id": [1, 1], "charttime": [-120.0, 0.0], "crea": [1.0, 1.6]}
+        ),
+        id_columns=["stay_id"],
+        index_column="charttime",
+        value_column="crea",
+    )
+    scope = ("pre_admission_hours", 168.0)
+
+    resolver._store_raw_concept_cache(
+        "crea", "hash1", generic, aggregator="auto"
+    )
+    resolver._store_raw_concept_cache(
+        "crea", "hash1", kdigo, aggregator="auto", cache_scope=scope
+    )
+
+    default_hit = resolver._get_raw_concept_from_cache(
+        "crea", "hash1", "auto", allow_aggregated=True
+    )
+    kdigo_hit = resolver._get_raw_concept_from_cache(
+        "crea",
+        "hash1",
+        "auto",
+        allow_aggregated=True,
+        cache_scope=scope,
+    )
+    assert default_hit is generic
+    assert kdigo_hit is kdigo
+
+
 def test_clear_resets_accounting(monkeypatch):
     resolver = _resolver(monkeypatch, "8")
     for i in range(5):

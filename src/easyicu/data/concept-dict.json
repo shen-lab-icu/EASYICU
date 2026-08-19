@@ -7189,10 +7189,12 @@
  "kdigo_creatinine_input": {
   "class_name": "rec_cncpt",
   "description": "Phenotype-specific serum-creatinine input for KDIGO AKI",
+  "_comment": "The 168-hour lookback is an internal phenotype input contract. Generic crea and published chemistry exports retain the standard 24-hour pre-ICU window. Staging is prior-only and excludes the current/future value; cross-checked against MIT-LCP mimic-code and eth-mds/icu-features.",
+  "pre_admission_lookback_hours": 168,
   "clinical_status": "validated_definition",
   "canonical_definition": true,
-  "definition_source": "KDIGO 2012; MIT-LCP mimic-code organfailure/kdigo_creatinine.sql",
-  "definition_version": "2026-08-19",
+  "definition_source": "KDIGO 2012; MIT-LCP mimic-code concepts/organfailure/kdigo_creatinine.sql; eth-mds/icu-features AKI",
+  "definition_version": "2026-08-20",
   "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [

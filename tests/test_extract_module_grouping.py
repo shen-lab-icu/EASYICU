@@ -268,6 +268,11 @@ def test_renal_module_exports_kdigo_ascertainment_receipt():
         "aki_ascertainment",
         "observation_window_coverage",
         "creatinine_ascertainment",
+        "creatinine_ascertainment_reason",
         "urine_ascertainment",
         "rrt_ascertainment",
+        "creat_baseline_n_48h",
+        "creat_baseline_n_7d",
+        "creat_baseline_source",
+        "creat_pre_icu_history_observed",
     }.issubset(renal)

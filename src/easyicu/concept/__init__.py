@@ -42,6 +42,13 @@ _MISSING_SOURCE_WARNED: set[tuple[str, ...]] = set()
 # Concepts that require hourly maxima (vasoactive infusion rates)
 VASO_RATE_CONCEPTS = {"dopa_rate", "dobu_rate", "epi_rate", "norepi_rate", "adh_rate"}
 
+# These phenotype callbacks consume already interval-aligned inputs and return
+# one row per entity/time key. Re-aggregating their multi-column receipts drops
+# categorical provenance columns (for example the creatinine baseline source).
+_PREAGGREGATED_CALLBACK_OUTPUTS = frozenset(
+    {"kdigo_aki", "kdigo_creatinine", "kdigo_uo"}
+)
+
 # 窗口/递归聚合方法的概念级覆盖 —— 单一声明式来源（REFACTOR 2026-06）。
 # 这些是 change_interval 在同一时间桶内聚合"最终概念值"时使用的标量方法，
 # 区别于概念字典里的 per-source `aggregate` 列表（后者是每个数据源各自的聚合）。
@@ -847,12 +854,35 @@ class ConceptResolver:
         concept_name: str,
         patient_ids_hash: object,
         aggregator: object,
+        cache_scope: object = None,
     ) -> tuple:
-        return (
+        key = (
             concept_name,
             patient_ids_hash,
             self._normalize_raw_cache_aggregator(aggregator),
         )
+        return key if cache_scope is None else (*key, cache_scope)
+
+    @staticmethod
+    def _pre_admission_hours_from_kwargs(
+        kwargs: Optional[Mapping[str, object]],
+    ) -> Optional[float]:
+        """Return a validated phenotype-specific pre-ICU history window."""
+
+        if not kwargs or kwargs.get("_pre_admission_hours") is None:
+            return None
+        try:
+            hours = float(kwargs["_pre_admission_hours"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("_pre_admission_hours must be a finite non-negative number") from exc
+        if not np.isfinite(hours) or hours < 0:
+            raise ValueError("_pre_admission_hours must be a finite non-negative number")
+        return hours
+
+    @classmethod
+    def _raw_cache_scope(cls, kwargs: Optional[Mapping[str, object]]) -> object:
+        hours = cls._pre_admission_hours_from_kwargs(kwargs)
+        return None if hours is None else ("pre_admission_hours", hours)
 
     def _get_raw_concept_from_cache(
         self,
@@ -861,17 +891,27 @@ class ConceptResolver:
         aggregator: object,
         *,
         allow_aggregated: bool,
+        cache_scope: object = None,
     ):
         """Lookup raw cache entries with backward-compatible fallback order."""
-        keys = [self._raw_cache_key(concept_name, patient_ids_hash, aggregator)]
+        keys = [
+            self._raw_cache_key(
+                concept_name, patient_ids_hash, aggregator, cache_scope
+            )
+        ]
         if allow_aggregated:
             keys.extend(
                 [
-                    self._raw_cache_key(concept_name, patient_ids_hash, "auto"),
-                    self._raw_cache_key(concept_name, patient_ids_hash, None),
+                    self._raw_cache_key(
+                        concept_name, patient_ids_hash, "auto", cache_scope
+                    ),
+                    self._raw_cache_key(
+                        concept_name, patient_ids_hash, None, cache_scope
+                    ),
                 ]
             )
-            keys.append((concept_name, patient_ids_hash))
+            if cache_scope is None:
+                keys.append((concept_name, patient_ids_hash))
         # 🔧 FIX: allow_aggregated=False 时不退回到 None key 和 legacy 2-tuple
         # 否则特定聚合器请求会命中默认聚合的缓存
 
@@ -894,14 +934,17 @@ class ConceptResolver:
         *,
         aggregator: object,
         store_legacy: bool = False,
+        cache_scope: object = None,
     ) -> None:
         """Store raw cache entries without duplicating table objects."""
         stored = self._bounded_cache_store(
             'raw',
-            self._raw_cache_key(concept_name, patient_ids_hash, aggregator),
+            self._raw_cache_key(
+                concept_name, patient_ids_hash, aggregator, cache_scope
+            ),
             table,
         )
-        if store_legacy and stored:
+        if store_legacy and cache_scope is None and stored:
             # Alias key to the same object — charge 0 bytes so the table is
             # not double-counted against the cache budget.
             self._bounded_cache_store(
@@ -1114,6 +1157,7 @@ class ConceptResolver:
         defer_empty_columns_to_arrow = bool(
             kwargs.pop("_defer_empty_columns_to_arrow", False)
         )
+        raw_cache_scope = self._raw_cache_scope(kwargs)
         required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
@@ -1276,6 +1320,7 @@ class ConceptResolver:
                         name, _pid_hash,
                         aggregator=aggregators.get(name, "auto"),
                         allow_aggregated=True,
+                        cache_scope=raw_cache_scope,
                     ) is None
                 ]
             if shared_table in WIDE_TABLES and len(concepts_info_filtered) >= 1:
@@ -1414,6 +1459,7 @@ class ConceptResolver:
                                 name, _pid_hash,
                                 aggregator=aggregators.get(name, "auto"),
                                 allow_aggregated=True,
+                                cache_scope=raw_cache_scope,
                             ) is None
                         ]
 
@@ -1508,6 +1554,9 @@ class ConceptResolver:
                                 data_source,
                                 [id_col],
                                 _time_col_out,
+                                pre_admission_hours=(
+                                    self._pre_admission_hours_from_kwargs(kwargs)
+                                ),
                             )
                             # The all-covered fast path returns this frame
                             # directly, bypassing the regular R-format merger
@@ -5160,7 +5209,10 @@ class ConceptResolver:
                     combined,
                     data_source,
                     id_columns,
-                    index_column
+                    index_column,
+                    pre_admission_hours=(
+                        self._pre_admission_hours_from_kwargs(kwargs)
+                    ),
                 )
                 
                 # 🔧 FIX: _align_time_to_admission 可能会删除 intime/outtime 列
@@ -5552,7 +5604,10 @@ class ConceptResolver:
                 combined,
                 data_source,
                 id_columns,
-                index_column
+                index_column,
+                pre_admission_hours=(
+                    self._pre_admission_hours_from_kwargs(kwargs)
+                ),
             )
         
         # NOTE: filter_bounds已移至change_interval之前（见上方FIX 2026-03-10注释）
@@ -5667,6 +5722,7 @@ class ConceptResolver:
         id_columns: List[str],
         index_column: str,
         time_columns: Optional[List[str]] = None,
+        pre_admission_hours: Optional[float] = None,
     ) -> pd.DataFrame:
         """Align time column to ICU admission time as anchor (R ricu as_dt_min).
         
@@ -5877,16 +5933,26 @@ class ConceptResolver:
                     upper_hours = discharge_hours.add(
                         ICU_TIME_POST_DISCHARGE_HOURS
                     ).fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
                 invalid_time = event_hours.notna() & (
-                    (event_hours < -ICU_TIME_PRE_ADMISSION_HOURS)
+                    (event_hours < -allowed_pre_hours)
                     | (event_hours > upper_hours)
                 )
                 excluded = int(invalid_time.sum())
                 if excluded:
                     logger.warning(
                         "dropping %d AUMC row(s) outside the ICU episode "
-                        "(24h pre/post allowance)",
+                        "(%gh pre-ICU history; 24h post-discharge allowance)",
                         excluded,
+                        allowed_pre_hours,
                     )
                     frame = frame.loc[~invalid_time].copy()
             origin_columns = ["admittedat"]
@@ -6383,6 +6449,13 @@ class ConceptResolver:
 
         # Prepare kwargs for sub-concepts, allowing them to be optional
         sub_kwargs = {**kwargs, '_allow_missing_concept': True}
+        contract_lookback = definition.pre_admission_lookback_hours
+        if contract_lookback is not None:
+            inherited_lookback = self._pre_admission_hours_from_kwargs(sub_kwargs)
+            sub_kwargs['_pre_admission_hours'] = max(
+                float(contract_lookback),
+                inherited_lookback if inherited_lookback is not None else 0.0,
+            )
         
         # 🔧 FIX: Use concept's own interval (like R ricu's coalesce(x[["interval"]], interval))
         # This is critical for vaso60-type concepts where interval="00:01:00" (1 minute)
@@ -6478,7 +6551,10 @@ class ConceptResolver:
                             table.data,
                             data_source,
                             id_cols,
-                            idx_col
+                            idx_col,
+                            pre_admission_hours=(
+                                self._pre_admission_hours_from_kwargs(sub_kwargs)
+                            ),
                         )
                     
                     # Convert dur_var (duration) from timedelta to hours
@@ -6520,6 +6596,7 @@ class ConceptResolver:
                         sub_table,
                         aggregator=sub_agg,
                         store_legacy=False,
+                        cache_scope=self._raw_cache_scope(sub_kwargs),
                     )
         
         ctx = ConceptCallbackContext(
@@ -6575,6 +6652,8 @@ class ConceptResolver:
             logger.debug(f"🎯 Executing callback '{callback_name}' for concept '{concept_name}' with {len(sub_tables)} sub-tables")
 
         result = execute_concept_callback(callback_name, sub_tables, ctx)
+        if callback_name in _PREAGGREGATED_CALLBACK_OUTPUTS:
+            result._pre_aggregated = True
 
         # 🔧 回调执行后释放子概念的中间内存
         # sub_tables 在回调内已经被消费，可以释放
@@ -6602,7 +6681,10 @@ class ConceptResolver:
                     result.data,
                     data_source,
                     id_cols,
-                    idx_col
+                    idx_col,
+                    pre_admission_hours=(
+                        self._pre_admission_hours_from_kwargs(kwargs)
+                    ),
                 )
             
             # Convert dur_var from timedelta to hours
@@ -6650,7 +6732,10 @@ class ConceptResolver:
                         result.data,
                         data_source,
                         id_cols,
-                        idx_col
+                        idx_col,
+                        pre_admission_hours=(
+                            self._pre_admission_hours_from_kwargs(kwargs)
+                        ),
                     )
                     
                     # WinTbl 特殊处理：dur_var（持续时间）也需要转换
@@ -6678,7 +6763,10 @@ class ConceptResolver:
                         result.data,
                         data_source,
                         id_cols,
-                        idx_col
+                        idx_col,
+                        pre_admission_hours=(
+                            self._pre_admission_hours_from_kwargs(kwargs)
+                        ),
                     )
                     
                     # WinTbl: 同时转换 dur_var
@@ -8002,6 +8090,7 @@ class ConceptResolver:
                     yield (k, str(v))
         kwargs_hash = hash(frozenset(_hashable_kwargs_items(kwargs))) if kwargs else 0
         concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value), kwargs_hash)
+        raw_cache_scope = self._raw_cache_scope(kwargs)
         
         # 🔧 如果 _skip_concept_cache=True，跳过所有缓存检查和缓存写入
         # 这用于回调内部加载概念，避免污染主缓存
@@ -8031,6 +8120,7 @@ class ConceptResolver:
                         patient_ids_hash,
                         aggregator=agg_value,
                         allow_aggregated=not _is_specific_agg,
+                        cache_scope=raw_cache_scope,
                     )
                 if raw_cached is not None:
                     if hasattr(raw_cached, 'copy'):
@@ -8042,7 +8132,12 @@ class ConceptResolver:
                     if agg_value not in (None, False, "auto"):
                         # 🚀 PERF: 如果缓存命中是精确的聚合方式匹配，数据已经聚合完毕，
                         # 跳过冗余的 groupby().agg()（94K 患者下节省 ~30s）
-                        exact_key = self._raw_cache_key(concept_name, patient_ids_hash, agg_value)
+                        exact_key = self._raw_cache_key(
+                            concept_name,
+                            patient_ids_hash,
+                            agg_value,
+                            raw_cache_scope,
+                        )
                         if exact_key in self._raw_concept_cache:
                             result = raw_cached
                         else:
@@ -8283,7 +8378,12 @@ class ConceptResolver:
                     patient_ids_hash,
                     result,
                     aggregator=agg_value,
-                    store_legacy=interval is None and agg_value in (None, False, "auto"),
+                    store_legacy=(
+                        raw_cache_scope is None
+                        and interval is None
+                        and agg_value in (None, False, "auto")
+                    ),
+                    cache_scope=raw_cache_scope,
                 )
                 
                 self._get_inflight().discard(concept_name)

@@ -188,6 +188,50 @@ def test_aumc_source_times_outside_the_icu_episode_are_quarantined():
     assert "dischargedat" not in out.columns
 
 
+def test_aumc_kdigo_history_can_use_168h_without_widening_default_window():
+    """The phenotype window keeps seven-day history; generic concepts do not."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._aumc_admissions_cache = None
+    admittedat = 20_000.0
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "admissionid": [1],
+                "admittedat": [admittedat],
+                "dischargedat": [admittedat + 48 * 60],
+            }
+        ),
+    )
+    frame = pd.DataFrame(
+        {
+            "admissionid": [1, 1, 1, 1],
+            "measuredat_minutes": [
+                admittedat - 169 * 60,
+                admittedat - 168 * 60,
+                admittedat - 120 * 60,
+                admittedat,
+            ],
+            "crea": [0.8, 0.9, 1.0, 1.6],
+        }
+    )
+
+    generic = resolver._align_time_to_admission(
+        frame.copy(), source, ["admissionid"], "measuredat_minutes"
+    )
+    kdigo = resolver._align_time_to_admission(
+        frame.copy(),
+        source,
+        ["admissionid"],
+        "measuredat_minutes",
+        pre_admission_hours=168,
+    )
+
+    assert generic["measuredat_minutes"].tolist() == [0.0]
+    assert kdigo["measuredat_minutes"].tolist() == [-168.0, -120.0, 0.0]
+
+
 def test_sic_interval_duration_seconds_are_declared_as_hours():
     """SIC data_range durations must not expand seconds as hours."""
 

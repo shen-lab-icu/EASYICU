@@ -1198,6 +1198,10 @@ def load_concepts(
         "uo_rt_24hr",
         "creat_low_past_48hr",
         "creat_low_past_7day",
+        "creat_baseline_n_48h",
+        "creat_baseline_n_7d",
+        "creat_baseline_source",
+        "creat_pre_icu_history_observed",
         # A zero stage is a definitive negative only when this receipt says
         # ``negative_complete``.  Keep these special KDIGO outputs routable
         # through ``load_concepts`` and the module exporter.
@@ -1206,6 +1210,7 @@ def load_concepts(
         "aki_assessment_reason",
         "observation_window_coverage",
         "creatinine_ascertainment",
+        "creatinine_ascertainment_reason",
         "urine_ascertainment",
         "rrt_ascertainment",
     }

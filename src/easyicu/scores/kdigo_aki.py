@@ -25,6 +25,7 @@ References:
 1. KDIGO Clinical Practice Guideline for Acute Kidney Injury (2012)
 2. MIT-LCP MIMIC-IV concepts: https://github.com/MIT-LCP/mimic-iv/tree/master/concepts/organfailure
 3. AmsterdamUMCdb: https://github.com/AmsterdamUMC/AmsterdamUMCdb
+4. ETH ICU features (prior-only rolling AKI baseline): https://github.com/eth-mds/icu-features
 
 Author: EasyICU Team
 Date: 2026-01-26
@@ -290,6 +291,11 @@ def kdigo_creatinine(
     
     creat_low_48hr = np.full(len(df), np.nan)
     creat_low_7day = np.full(len(df), np.nan)
+    baseline_n_48hr = np.zeros(len(df), dtype=np.int64)
+    baseline_n_7day = np.zeros(len(df), dtype=np.int64)
+    baseline_source = np.full(len(df), "unavailable", dtype=object)
+    pre_icu_history_observed = np.zeros(len(df), dtype=bool)
+    relative_icu_time = time_unit != 'datetime'
     
     # Process each patient with vectorized operations
     for _pid, _idx in df.groupby(id_col, sort=False).indices.items():
@@ -308,13 +314,47 @@ def kdigo_creatinine(
         for i in range(1, n):
             left_48 = bounds_48[i]
             if left_48 < i:  # at least one previous measurement in window
-                creat_low_48hr[_idx_sorted[i]] = np.min(creas[left_48:i])
+                window_48 = creas[left_48:i]
+                baseline_n_48hr[_idx_sorted[i]] = len(window_48)
+                creat_low_48hr[_idx_sorted[i]] = np.min(window_48)
             left_7d = bounds_7d[i]
             if left_7d < i:
-                creat_low_7day[_idx_sorted[i]] = np.min(creas[left_7d:i])
+                window_7d = creas[left_7d:i]
+                baseline_n_7day[_idx_sorted[i]] = len(window_7d)
+                baseline_offset = int(np.argmin(window_7d))
+                baseline_position = left_7d + baseline_offset
+                creat_low_7day[_idx_sorted[i]] = window_7d[baseline_offset]
+                if relative_icu_time:
+                    baseline_source[_idx_sorted[i]] = (
+                        "observed_pre_icu"
+                        if hours[baseline_position] < 0
+                        else "observed_prior_icu"
+                    )
+                    pre_icu_history_observed[_idx_sorted[i]] = bool(
+                        np.any(hours[left_7d:i] < 0)
+                    )
+                else:
+                    baseline_source[_idx_sorted[i]] = "observed_prior_time_unknown"
     
     df['creat_low_past_48hr'] = creat_low_48hr
     df['creat_low_past_7day'] = creat_low_7day
+    df['creat_baseline_n_48h'] = pd.Series(
+        baseline_n_48hr, index=df.index, dtype="Int64"
+    )
+    df['creat_baseline_n_7d'] = pd.Series(
+        baseline_n_7day, index=df.index, dtype="Int64"
+    )
+    df['creat_baseline_source'] = pd.Series(
+        baseline_source, index=df.index, dtype="string"
+    )
+    if relative_icu_time:
+        df['creat_pre_icu_history_observed'] = pd.Series(
+            pre_icu_history_observed, index=df.index, dtype="boolean"
+        )
+    else:
+        df['creat_pre_icu_history_observed'] = pd.Series(
+            pd.NA, index=df.index, dtype="boolean"
+        )
     df.drop(columns=['_hours'], inplace=True)
     
     result = df
@@ -329,8 +369,18 @@ def kdigo_creatinine(
     # Rename columns for clarity
     result = result.rename(columns={value_col: 'crea'})
     
-    return result[[id_col, time_col, 'crea', 'creat_low_past_48hr', 
-                   'creat_low_past_7day', 'aki_stage_creat']]
+    return result[[
+        id_col,
+        time_col,
+        'crea',
+        'creat_low_past_48hr',
+        'creat_low_past_7day',
+        'creat_baseline_n_48h',
+        'creat_baseline_n_7d',
+        'creat_baseline_source',
+        'creat_pre_icu_history_observed',
+        'aki_stage_creat',
+    ]]
 
 
 def _calc_aki_stage_creat(
