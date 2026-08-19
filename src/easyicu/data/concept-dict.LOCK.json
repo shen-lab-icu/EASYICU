@@ -1,7 +1,7 @@
 {
   "finalized": true,
-  "finalized_note": "定稿 2026-08-19 — 基于干净提交 42650ed8 完成六库 renal 及 KDIGO 依赖闭包原始数据重提取。AKI 使用显式肌酐、尿量和急性 RRT 输入合同；MIMIC GU 灌洗净额、eICU 官方尿量 cellpath、AUMC 官方尿量异常值规则及 SIC ICUOffset 时间锚均已进入生产产物。六库 manifest、原始事件回查、针对性临床测试和发布 QC 通过后方可 seal。",
-  "locked_for_extraction_run": "full6_native_v2_aki_source_contract_42650ed8_20260819",
+  "finalized_note": "定稿 2026-08-19 — 基于干净提交 82abec4b 完成六库 19 模块全量原始数据重提取。AKI 使用显式肌酐、尿量和急性 RRT 输入合同；MIMIC GU 灌洗净额、eICU 官方尿量 cellpath、AUMC 官方尿量异常值规则及 SIC 全模块 ICUOffset 时间锚均已进入生产产物。六库全行 KDIGO 阈值复算、12 名患者级阳性/阴性轨迹抽查、manifest 及发布 QC 通过后方可 seal。",
+  "locked_for_extraction_run": "full6_native_v2_aki_sic_timeaxis_82abec4b_20260819",
   "concept_dict_sha256": "c3cb9b4fbb5f70ce6ce0a3723efcf46711e643c2d582d77fdd509cde486a2b78",
   "sofa2_dict_sha256": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
   "total_concepts": 254,
@@ -37,7 +37,7 @@
     "concept_catalog_tests": "Targeted 2026-08-19 AKI/source-contract suite: 203 passed; broader related suite: 360 passed, 3 skipped, with one pre-existing unrelated cache-fingerprint failure.",
     "extract_chunk_cap_tests": "39 passed (tests/test_extract_chunk_cap.py — never > 3 chunks any db/module)",
     "module_extraction_tests": "test_concept_bounds_enforcement updated to the one-wide-file-per-module contract",
-    "full_pipeline_smoke": "Six databases completed raw renal re-extraction with zero module errors; all 19 modules were republished into one candidate with one clean runtime commit. Every database now contains explicit negative_complete AKI ascertainment where all source components are observed."
+    "full_pipeline_smoke": "Six databases completed raw re-extraction of all 19 modules with zero database failures under one clean runtime commit. Every database contains explicit negative_complete AKI ascertainment where all source components are observed; whole-export recomputation found zero creatinine-stage, urine-stage, final-stage or negative-complete contradictions."
   },
   "audit_coverage": {
     "own103_vs_official_code": "38 fixes (aggregate arity, plr dimension, 3 units, eICU blood-product wrong-table, HiRID route errors)",
