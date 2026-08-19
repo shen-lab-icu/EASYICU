@@ -13,6 +13,22 @@ phenotype and broader descriptive concepts.
 - HiRID: [official variable reference](https://github.com/ratschlab/HIRID-ICU-Benchmark/blob/master/preprocessing/resources/varref.tsv). Variable `10020000` is `OUTurine/h` (mL/h); `30005110` is cumulative total fluid output and is excluded.
 - SICdb: [official repository](https://github.com/CITI-USZ/SICdb). Event `Offset` is anchored to ICU admission by subtracting `cases.ICUOffset`; urine and CRRT use DataIDs 725 and 723 respectively.
 
+## Creatinine history window
+
+`kdigo_creatinine_input` has a phenotype-specific 168-hour pre-ICU lookback.
+This requirement propagates to its `crea` dependency before AUMC admission-time
+cropping and is included in memory and disk cache keys. Generic `crea` and the
+published chemistry module retain the standard 24-hour pre-ICU boundary.
+
+At each measurement, the canonical baseline is the lowest *prior* creatinine
+in `[t-168 h, t)`; the current and future values are excluded. EasyICU does not
+use a whole-stay minimum or eGFR=75 back-calculation in the canonical phenotype.
+AUMC can therefore use genuine hospital measurements from the preceding seven
+days. HiRID usually has no pre-ICU history, so its first ICU creatinine remains
+indeterminate and later measurements use only observed prior ICU values. The
+prior-only implementation was also cross-checked against
+[eth-mds/icu-features](https://github.com/eth-mds/icu-features).
+
 ## Ascertainment rule
 
 A positive component establishes AKI immediately. A negative AKI result is
