@@ -85,6 +85,50 @@ def _aumc_admissions_relation_sql(data_source: Any) -> str:
     )
 
 
+def _sic_cases_relation_sql(data_source: Any) -> str:
+    """Return the SICdb cases relation containing the ICU clock origin.
+
+    SICdb event ``Offset`` values are seconds from the primary PDMS/hospital
+    admission, while ``cases.ICUOffset`` is the actual ICU-admission offset.
+    Official SICdb documentation therefore requires ``Offset - ICUOffset``
+    before conversion to ICU-relative hours.
+    """
+
+    base_path = Path(data_source.base_path)
+    candidates: List[Path] = []
+    try:
+        resolved = data_source._resolve_loader_from_disk("cases")
+    except (AttributeError, KeyError, TypeError, ValueError):
+        resolved = None
+    if isinstance(resolved, (str, Path)):
+        candidates.append(Path(resolved))
+    candidates.extend(
+        [
+            base_path / "cases.parquet",
+            base_path / "cases.csv",
+            base_path / "cases.csv.gz",
+        ]
+    )
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if not candidate.is_file():
+            continue
+        sql_path = _duckdb_path(candidate).replace("'", "''")
+        if candidate.suffix.lower() in {".parquet", ".pq"}:
+            return f"read_parquet('{sql_path}')"
+        if candidate.name.lower().endswith((".csv", ".csv.gz")):
+            return f"read_csv_auto('{sql_path}', header=true)"
+
+    raise FileNotFoundError(
+        "SICdb ICU-relative aggregation requires cases.parquet, cases.csv, "
+        "or cases.csv.gz under the data source path"
+    )
+
+
 def _is_valid_parquet_name(name: str) -> bool:
     """Whether a filename should be treated as a real parquet file.
 
@@ -3657,14 +3701,14 @@ def load_bucketed_table_aggregated(
             ORDER BY a.{output_id_col}, 2
             """
     elif db_name in ("sic", "sic_demo"):
-        # SIC: Offset is in seconds relative to hospital admission
-        # 🔧 FIX: R ricu 和旧 Python 路径不减去 ICUOffset，直接 Offset/3600 → 小时
-        # _align_time_to_admission 中 SIC 用 magnitude check > 5000 来决定是否除以 3600
-        # DuckDB 输出秒级时间（FLOOR 到整小时的秒数），保持与旧路径一致
+        # SICdb Offset is relative to the primary PDMS admission, not ICU
+        # admission. Anchor every bucket to cases.ICUOffset. See the official
+        # CITI-USZ/SICdb schema documentation for cases.ICUOffset.
         _interval_seconds = interval_minutes * 60.0
-        # Quote "Offset" as it's a reserved word in DuckDB
-        # 🔧 输出小时而非秒，避免 _align_time_to_admission magnitude check 误判
-        time_round_expr = f'FLOOR(o."Offset" / {_interval_seconds})'
+        cases_relation = _sic_cases_relation_sql(data_source)
+        time_round_expr = (
+            f'FLOOR((o."Offset" - c.ICUOffset) / {_interval_seconds})'
+        )
         output_time_expr = f"{time_round_expr} as charttime"
 
         if _has_inline_convert:
@@ -3694,16 +3738,26 @@ def load_bucketed_table_aggregated(
                 _sic_value_expr
             )
 
-        # 🔧 FIX: SIC 不再需要 JOIN cases 表（不减 ICUOffset），直接查询
+        sic_where_clause = where_clause.replace(
+            f"{itemid_col}", f"o.{itemid_col}"
+        )
+        sic_where_clause = sic_where_clause.replace(
+            f"{id_col} IN", f"o.{id_col} IN"
+        )
+        sic_where_clause = sic_where_clause.replace(
+            f"{value_column} IS NOT NULL", f"o.{value_column} IS NOT NULL"
+        )
         query = f"""
         SELECT
-            {id_col},
+            o.{id_col} AS {id_col},
             {output_time_expr},
             {_sic_agg_expr}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
-        {where_clause}
-        GROUP BY {id_col}, {time_round_expr}
-        ORDER BY {id_col}, 2
+        JOIN {cases_relation} c ON o.{id_col} = c.CaseID
+        {sic_where_clause}
+          AND c.ICUOffset IS NOT NULL
+        GROUP BY o.{id_col}, {time_round_expr}
+        ORDER BY o.{id_col}, 2
         """
     elif db_name in ("eicu", "eicu_demo"):
         # eICU: time columns are already relative offsets in minutes
@@ -4151,12 +4205,17 @@ def load_bucketed_table_multi_aggregated(
     elif _base_db == 'sic':
         p_clause = _patient_clause(id_col, patient_ids)
         _time_ref = f'o."{time_col}"' if time_col == 'Offset' else f'o.{time_col}'
-        time_round_expr = f"FLOOR({_time_ref} / {_interval_seconds})"
+        cases_relation = _sic_cases_relation_sql(data_source)
+        time_round_expr = (
+            f"FLOOR(({_time_ref} - c.ICUOffset) / {_interval_seconds})"
+        )
         query = f"""
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
             {select_sql}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN {cases_relation} c ON o.{id_col} = c.CaseID
         WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
+            AND c.ICUOffset IS NOT NULL
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
         """

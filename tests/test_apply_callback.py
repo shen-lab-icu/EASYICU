@@ -51,6 +51,43 @@ from easyicu.concept.callbacks import (
 from easyicu.table import ICUTable
 
 
+def test_mimic_urine_output_nets_gu_irrigant_before_aggregation():
+    frame = pd.DataFrame(
+        {
+            "itemid": [226559, 227488, 227489],
+            "value": [100.0, 500.0, 550.0],
+        }
+    )
+
+    result = _apply_callback(
+        frame,
+        _src(
+            "mimic_urine_output",
+            sub_var="itemid",
+            value_var="value",
+        ),
+        concept_name="kdigo_urine_input",
+    )
+
+    assert result["value"].tolist() == [100.0, -500.0, 550.0]
+    assert result["value"].sum() == 150.0
+
+
+def test_aumc_urine_output_repairs_decimal_errors_before_outlier_filter():
+    frame = pd.DataFrame(
+        {"value": [2500.0, 2600.0, 45_000.0, 50_000.0]}
+    )
+
+    result = _apply_callback(
+        frame,
+        _src("aumc_urine_output", value_var="value"),
+        concept_name="kdigo_urine_input",
+    )
+
+    assert result["value"].iloc[:3].tolist() == [2500.0, 260.0, 4500.0]
+    assert pd.isna(result["value"].iloc[3])
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
