@@ -7434,7 +7434,7 @@ def _callback_kdigo_aki(
     - Stage 3: Creatinine >=3x baseline OR >=4.0 mg/dL OR RRT, or UO <0.3 mL/kg/h for >=24h or anuria
     
     Args:
-        tables: Dictionary containing 'crea', 'urine', 'weight', and optionally 'rrt' tables
+        tables: Dictionary containing phenotype-specific KDIGO inputs and weight
         ctx: Callback context
         
     Returns:
@@ -7443,10 +7443,10 @@ def _callback_kdigo_aki(
     from easyicu.scores.kdigo_aki import kdigo_stages, _detect_id_col, _detect_time_col
     
     # Extract DataFrames from tables
-    crea_tbl = tables.get('crea')
-    urine_tbl = tables.get('urine')
+    crea_tbl = tables.get('kdigo_creatinine_input')
+    urine_tbl = tables.get('kdigo_urine_input')
     weight_tbl = tables.get('weight')
-    rrt_tbl = tables.get('rrt')
+    rrt_tbl = tables.get('acute_rrt_input')
     
     # Convert to DataFrames
     def to_df(tbl):
@@ -7462,6 +7462,17 @@ def _callback_kdigo_aki(
     urine_df = to_df(urine_tbl)
     weight_df = to_df(weight_tbl)
     rrt_df = to_df(rrt_tbl)
+
+    def rename_value(frame, source_name, target_name):
+        if frame is None or target_name in frame.columns:
+            return frame
+        if source_name in frame.columns:
+            return frame.rename(columns={source_name: target_name})
+        return frame
+
+    crea_df = rename_value(crea_df, 'kdigo_creatinine_input', 'crea')
+    urine_df = rename_value(urine_df, 'kdigo_urine_input', 'urine')
+    rrt_df = rename_value(rrt_df, 'acute_rrt_input', 'rrt')
     
     if crea_df is None or crea_df.empty:
         return ICUTable(
@@ -7493,6 +7504,7 @@ def _callback_kdigo_aki(
         ),
         interval=ctx.interval or pd.Timedelta(hours=1),
         time_unit="hours",
+        rrt_source_complete='acute_rrt_input' in tables,
     )
     
     if result.empty:
@@ -7511,6 +7523,35 @@ def _callback_kdigo_aki(
     )
 
 
+def _callback_kdigo_input_alias(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+    source_name: str,
+) -> ICUTable:
+    """Expose a general concept through a phenotype-specific contract name."""
+
+    source = tables.get(source_name)
+    if source is None:
+        return ICUTable(
+            data=pd.DataFrame(columns=[ctx.concept_name]),
+            id_columns=[],
+            index_column=None,
+            value_column=ctx.concept_name,
+        )
+    frame = source.data.copy()
+    value_col = source.value_column or source_name
+    if value_col in frame.columns:
+        frame = frame.rename(columns={value_col: ctx.concept_name})
+    elif source_name in frame.columns:
+        frame = frame.rename(columns={source_name: ctx.concept_name})
+    return ICUTable(
+        data=frame,
+        id_columns=list(source.id_columns),
+        index_column=source.index_column,
+        value_column=ctx.concept_name,
+    )
+
+
 def _callback_kdigo_creatinine(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -7526,7 +7567,7 @@ def _callback_kdigo_creatinine(
     """
     from easyicu.scores.kdigo_aki import kdigo_creatinine
     
-    crea_tbl = tables.get('crea')
+    crea_tbl = tables.get('kdigo_creatinine_input')
     if crea_tbl is None:
         return ICUTable(
             data=pd.DataFrame(columns=['stay_id', 'charttime', 'aki_stage_creat']),
@@ -7541,6 +7582,9 @@ def _callback_kdigo_creatinine(
         crea_df = crea_tbl.data
     else:
         crea_df = crea_tbl
+
+    if 'crea' not in crea_df.columns and 'kdigo_creatinine_input' in crea_df.columns:
+        crea_df = crea_df.rename(columns={'kdigo_creatinine_input': 'crea'})
     
     if crea_df.empty:
         return ICUTable(
@@ -7582,7 +7626,7 @@ def _callback_kdigo_uo(
     """Calculate KDIGO AKI urine output-based staging.
     
     Args:
-        tables: Dictionary containing 'urine' and 'weight' tables
+        tables: Dictionary containing 'kdigo_urine_input' and 'weight' tables
         ctx: Callback context
         
     Returns:
@@ -7590,7 +7634,7 @@ def _callback_kdigo_uo(
     """
     from easyicu.scores.kdigo_aki import kdigo_uo
     
-    urine_tbl = tables.get('urine')
+    urine_tbl = tables.get('kdigo_urine_input')
     weight_tbl = tables.get('weight')
     
     if urine_tbl is None:
@@ -7612,6 +7656,13 @@ def _callback_kdigo_uo(
     
     urine_df = to_df(urine_tbl)
     weight_df = to_df(weight_tbl)
+
+    if (
+        urine_df is not None
+        and 'urine' not in urine_df.columns
+        and 'kdigo_urine_input' in urine_df.columns
+    ):
+        urine_df = urine_df.rename(columns={'kdigo_urine_input': 'urine'})
     
     if urine_df is None or urine_df.empty:
         return ICUTable(
@@ -8415,6 +8466,15 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "kdigo_aki": _callback_kdigo_aki,
     "kdigo_creatinine": _callback_kdigo_creatinine,
     "kdigo_uo": _callback_kdigo_uo,
+    "kdigo_creatinine_input": lambda tables, ctx: _callback_kdigo_input_alias(
+        tables, ctx, "crea"
+    ),
+    "kdigo_urine_input": lambda tables, ctx: _callback_kdigo_input_alias(
+        tables, ctx, "urine"
+    ),
+    "acute_rrt_input": lambda tables, ctx: _callback_kdigo_input_alias(
+        tables, ctx, "rrt"
+    ),
 }
 
 def register_callback(name: str, func: CallbackFn) -> None:

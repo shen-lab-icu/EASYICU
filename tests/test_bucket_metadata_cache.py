@@ -71,6 +71,60 @@ def _write_aumc_time_fixture(
     return source, admittedat
 
 
+def _write_sic_time_fixture(tmp_path: Path) -> ICUDataSource:
+    pd.DataFrame(
+        {"CaseID": [7], "ICUOffset": [3_600.0]}
+    ).to_parquet(tmp_path / "cases.parquet", index=False)
+    table = tmp_path / "data_float_h"
+    table.mkdir()
+    pd.DataFrame(
+        {
+            "CaseID": [7, 7],
+            "Offset": [3_600.0, 7_200.0],
+            "DataID": [725, 725],
+            "DataValue": [50.0, 60.0],
+        }
+    ).to_parquet(table / "part.parquet", index=False)
+    return ICUDataSource(DataSourceConfig(name="sic"), base_path=tmp_path)
+
+
+def test_sic_single_loader_anchors_offset_to_icu_admission(tmp_path: Path) -> None:
+    source = _write_sic_time_fixture(tmp_path)
+
+    result = load_bucketed_table_aggregated(
+        source,
+        "data_float_h",
+        "DataValue",
+        [725],
+        patient_ids=[7],
+        agg_func="sum",
+        id_col="CaseID",
+        time_col="Offset",
+    )
+
+    assert result["charttime"].tolist() == [0.0, 1.0]
+    assert result["DataValue"].tolist() == [50.0, 60.0]
+
+
+def test_sic_multi_loader_anchors_offset_to_icu_admission(tmp_path: Path) -> None:
+    source = _write_sic_time_fixture(tmp_path)
+
+    result = load_bucketed_table_multi_aggregated(
+        source,
+        "data_float_h",
+        {"urine": [725]},
+        value_column="DataValue",
+        patient_ids=[7],
+        agg_func="sum",
+        id_col="CaseID",
+        time_col="Offset",
+        itemid_col="DataID",
+    )
+
+    assert result["charttime"].tolist() == [0.0, 1.0]
+    assert result["urine"].tolist() == [50.0, 60.0]
+
+
 def test_bucket_file_resolution_uses_duckdb_hash_and_skips_unrelated_buckets(tmp_path: Path) -> None:
     data_source = _make_data_source(tmp_path)
     bucket_dir = tmp_path / "chartevents_bucket"

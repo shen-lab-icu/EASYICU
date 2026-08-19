@@ -2442,6 +2442,8 @@ class ConceptResolver:
                     _is_transform_binary_op = False  # 🚀 transform_fun(binary_op(...))
                     _transform_binary_op_operator = None  # '*', '/', '+', '-'
                     _transform_binary_op_value = None     # numeric factor
+                    _is_mimic_urine_output = False
+                    _is_aumc_urine_output = False
                     _duckdb_value_transform = None  # SQL transform expression
                     
                     if _has_bucket_dir:
@@ -2455,6 +2457,16 @@ class ConceptResolver:
                         _is_percent_as_numeric = (
                             has_callback and isinstance(source.callback, str) and
                             source.callback.strip() == 'transform_fun(percent_as_numeric)'
+                        )
+                        _is_mimic_urine_output = (
+                            has_callback
+                            and isinstance(source.callback, str)
+                            and source.callback.strip() == "mimic_urine_output"
+                        )
+                        _is_aumc_urine_output = (
+                            has_callback
+                            and isinstance(source.callback, str)
+                            and source.callback.strip() == "aumc_urine_output"
                         )
                         # 🚀 检测 transform_fun(binary_op(`*`, N)) — 简单乘除可内联到 DuckDB
                         # 例: o2sat AUMC item 12311 callback='transform_fun(binary_op(`*`, 100))'
@@ -2486,8 +2498,21 @@ class ConceptResolver:
                             _effective_ids = _rgx_pre_matched_ids
                         # 🚀 扩展 DuckDB 判定逻辑：接受 percent_as_numeric/set_val_na/fahr_to_cels/binary_op 回调
                         # 但多源概念的 value_transform 会被禁止（防止 median-of-medians）
-                        _can_inline_callback = not has_callback or is_convert_unit or _is_percent_as_numeric or _is_transform_binary_op
-                        if _block_duckdb_value_transform and (_is_percent_as_numeric or is_convert_unit or _is_transform_binary_op):
+                        _can_inline_callback = (
+                            not has_callback
+                            or is_convert_unit
+                            or _is_percent_as_numeric
+                            or _is_transform_binary_op
+                            or _is_mimic_urine_output
+                            or _is_aumc_urine_output
+                        )
+                        if _block_duckdb_value_transform and (
+                            _is_percent_as_numeric
+                            or is_convert_unit
+                            or _is_transform_binary_op
+                            or _is_mimic_urine_output
+                            or _is_aumc_urine_output
+                        ):
                             # 多源 value_transform：禁止内联，回退到 Python 回调路径
                             _can_inline_callback = not has_callback
                         # 🔧 FIX 2026-05: 同表多源时禁用 DuckDB 预聚合
@@ -2706,6 +2731,11 @@ class ConceptResolver:
                             if _is_transform_binary_op and use_duckdb_aggregation:
                                 _convert_unit_callback_for_duckdb = True
                                 # value_transform will be built below after value_col is known
+                            if (
+                                _is_mimic_urine_output
+                                or _is_aumc_urine_output
+                            ) and use_duckdb_aggregation:
+                                _convert_unit_callback_for_duckdb = True
                     
                     if _idtbl_done:
                         # id_tbl DuckDB 快速路径已完成 — table 已设置，只需提取 frame
@@ -2752,6 +2782,24 @@ class ConceptResolver:
                         elif _is_transform_binary_op:
                             # transform_fun(binary_op(`*`, N)): 简单算术内联到 DuckDB
                             _duckdb_value_transform = f'(TRY_CAST("{value_col}" AS DOUBLE) {_transform_binary_op_operator} {_transform_binary_op_value})'
+                        elif _is_mimic_urine_output:
+                            item_col = source.sub_var or "itemid"
+                            numeric_value = f'TRY_CAST("{value_col}" AS DOUBLE)'
+                            _duckdb_value_transform = (
+                                f'CASE WHEN TRY_CAST("{item_col}" AS BIGINT) = 227488 '
+                                f'AND {numeric_value} > 0 THEN -1 * {numeric_value} '
+                                f'ELSE {numeric_value} END'
+                            )
+                        elif _is_aumc_urine_output:
+                            numeric_value = f'TRY_CAST("{value_col}" AS DOUBLE)'
+                            repaired = (
+                                f'CASE WHEN {numeric_value} > 2500 '
+                                f'THEN {numeric_value} / 10.0 ELSE {numeric_value} END'
+                            )
+                            _duckdb_value_transform = (
+                                f'CASE WHEN ({repaired}) <= 4500 '
+                                f'THEN ({repaired}) END'
+                            )
                         elif (_is_set_val_na or _is_fahr_to_cels) and _convert_unit_filter:
                             # 需要 unit 列匹配过滤模式 — 从表配置获取实际列名
                             _unit_var_for_duckdb = None
@@ -5848,11 +5896,12 @@ class ConceptResolver:
             _normalize_duration_to_hours(data)
             return data
         
-        if db_name == 'sic':
-            # SIC tables (data_float_h, laboratory, medication) use Offset in SECONDS.
-            # R ricu converts via change_interval(hours(1)) → divide by 3600.
-            # Some callbacks (sic_dur, sic_rate_kg) already convert medication Offset
-            # to hours internally — detect via magnitude check to avoid double-conversion.
+        if db_name in {'sic', 'sic_demo'}:
+            # SICdb raw Offset is in seconds from the primary PDMS admission;
+            # cases.ICUOffset is the ICU-admission origin. DuckDB bucket loaders
+            # already publish ICU-relative ``charttime`` hours. This fallback
+            # handles raw second-valued callback paths and subtracts the same
+            # official origin before scaling.
             
             cols_to_convert = set()
             if index_column and index_column in data.columns:
@@ -5869,12 +5918,56 @@ class ConceptResolver:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
 
+            second_valued_cols = []
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     max_abs = data[col].abs().max()
                     if pd.notna(max_abs) and max_abs > 5000:
-                        # Values > 5000 cannot be hours (= 208 days), must be seconds
-                        data[col] = data[col] / 3600.0
+                        second_valued_cols.append(col)
+
+            if second_valued_cols:
+                primary_id = next(
+                    (column for column in id_columns if column in data.columns),
+                    None,
+                )
+                if primary_id is None:
+                    raise ValueError(
+                        "SICdb raw time alignment requires a CaseID column"
+                    )
+                if "ICUOffset" in data.columns:
+                    frame = data.copy()
+                else:
+                    try:
+                        cases = data_source.load_table(
+                            "cases",
+                            columns=[primary_id, "ICUOffset"],
+                            verbose=False,
+                        )
+                        cases_df = cases.data if hasattr(cases, "data") else cases
+                        origins = (
+                            cases_df[[primary_id, "ICUOffset"]]
+                            .drop_duplicates(subset=[primary_id], keep="last")
+                        )
+                        frame = data.merge(
+                            origins,
+                            on=primary_id,
+                            how="left",
+                            validate="many_to_one",
+                        )
+                    except Exception as exc:
+                        raise ValueError(
+                            "SICdb raw time alignment requires cases.ICUOffset"
+                        ) from exc
+                origin = pd.to_numeric(frame["ICUOffset"], errors="coerce")
+                if origin.notna().sum() == 0:
+                    raise ValueError(
+                        "SICdb raw time alignment found no usable cases.ICUOffset"
+                    )
+                for col in second_valued_cols:
+                    frame[col] = (
+                        pd.to_numeric(frame[col], errors="coerce") - origin
+                    ) / 3600.0
+                data = frame.drop(columns=["ICUOffset"], errors="ignore")
 
             # SIC interval tables (notably data_range for mech_vent) produce
             # dur_var in seconds.  It is an interval, not an absolute offset,
