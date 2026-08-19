@@ -1,8 +1,8 @@
 {
   "finalized": true,
-  "finalized_note": "定稿 2026-08-19 — 基于干净提交 82abec4b 完成六库 19 模块全量原始数据重提取。AKI 使用显式肌酐、尿量和急性 RRT 输入合同；MIMIC GU 灌洗净额、eICU 官方尿量 cellpath、AUMC 官方尿量异常值规则及 SIC 全模块 ICUOffset 时间锚均已进入生产产物。六库全行 KDIGO 阈值复算、12 名患者级阳性/阴性轨迹抽查、manifest 及发布 QC 通过后方可 seal。",
-  "locked_for_extraction_run": "full6_native_v2_aki_sic_timeaxis_82abec4b_20260819",
-  "concept_dict_sha256": "c3cb9b4fbb5f70ce6ce0a3723efcf46711e643c2d582d77fdd509cde486a2b78",
+  "finalized_note": "定稿 2026-08-19 — 基于干净提交 9913f31c 对六库 renal 及其 KDIGO 依赖闭包重新读取原始数据，保留经验证的其余 18 个模块。AKI 肌酐使用真实观测的 prior-only 168 小时历史，不采用未来值或 eGFR 回推；尿量、急性 RRT、跨库时间轴与缺失可判定合同保持显式。六库全行规则复算和 M1 三库 1,759,552 条记录复算均为零不一致，90 例去标识轨迹审计完成。",
+  "locked_for_extraction_run": "full6_native_v2_kdigo_7d_baseline_9913f31c_20260819",
+  "concept_dict_sha256": "e3fd2fcb9d4a65fdaa58c5bc1edece0b1d8e7c685c13310bedef86fdd7138b00",
   "sofa2_dict_sha256": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
   "total_concepts": 254,
   "own_concepts_not_in_ricu": 130,
@@ -34,10 +34,10 @@
   "gates_passed": {
     "aggregate_arity_violations": 0,
     "json_roundtrip": true,
-    "concept_catalog_tests": "Targeted 2026-08-19 AKI/source-contract suite: 203 passed; broader related suite: 360 passed, 3 skipped, with one pre-existing unrelated cache-fingerprint failure.",
+    "concept_catalog_tests": "Targeted 2026-08-19 KDIGO/source-contract/release-sealer gate: 67 passed after the 168-hour prior-only baseline refresh; prior broader related suite: 360 passed, 3 skipped.",
     "extract_chunk_cap_tests": "39 passed (tests/test_extract_chunk_cap.py — never > 3 chunks any db/module)",
     "module_extraction_tests": "test_concept_bounds_enforcement updated to the one-wide-file-per-module contract",
-    "full_pipeline_smoke": "Six databases completed raw re-extraction of all 19 modules with zero database failures under one clean runtime commit. Every database contains explicit negative_complete AKI ascertainment where all source components are observed; whole-export recomputation found zero creatinine-stage, urine-stage, final-stage or negative-complete contradictions."
+    "full_pipeline_smoke": "Six databases completed raw renal re-extraction at clean commit 9913f31c; the remaining 18 validated modules were byte-reused from the clean 82abec4b parent. Whole-export creatinine-stage recomputation and M1 three-database urine/final-stage recomputation found zero contradictions."
   },
   "audit_coverage": {
     "own103_vs_official_code": "38 fixes (aggregate arity, plr dimension, 3 units, eICU blood-product wrong-table, HiRID route errors)",
