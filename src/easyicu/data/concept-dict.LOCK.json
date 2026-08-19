@@ -1,15 +1,18 @@
 {
   "finalized": true,
-  "finalized_note": "定稿 2026-08-17 — 基于干净提交 d78c5b3a 完成六库 outcome、renal、respiratory 及 SOFA/Sepsis 依赖闭包原始数据重提取。AUMC RRT 使用 processitems 12465=CVVH、16363=Hemodialyse 的 start/stop 治疗区间；KDIGO 异常肌酐过滤、显式 ICU 小时时间轴、SOFA-2 运动反应序数聚合和 owner-issued death_time 均已进入生产产物。六库 manifest、死亡事件时间和针对性临床/发布 QC 通过后方可 seal；eICU death_time 按源限制保持结构性不可用。",
-  "locked_for_extraction_run": "full6_native_v2_m1_renal_resp_outcome_d78c5b3a_20260817",
-  "concept_dict_sha256": "22039e19c9b499d635dce956298550cecb1fdf55059304736cca73ee42bf129a",
+  "finalized_note": "定稿 2026-08-19 — 基于干净提交 42650ed8 完成六库 renal 及 KDIGO 依赖闭包原始数据重提取。AKI 使用显式肌酐、尿量和急性 RRT 输入合同；MIMIC GU 灌洗净额、eICU 官方尿量 cellpath、AUMC 官方尿量异常值规则及 SIC ICUOffset 时间锚均已进入生产产物。六库 manifest、原始事件回查、针对性临床测试和发布 QC 通过后方可 seal。",
+  "locked_for_extraction_run": "full6_native_v2_aki_source_contract_42650ed8_20260819",
+  "concept_dict_sha256": "c3cb9b4fbb5f70ce6ce0a3723efcf46711e643c2d582d77fdd509cde486a2b78",
   "sofa2_dict_sha256": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
-  "total_concepts": 251,
+  "total_concepts": 254,
   "own_concepts_not_in_ricu": 130,
   "new_this_round": [
     "vent_mode",
     "vent_breath_seq",
-    "driving_pres_controlled"
+    "driving_pres_controlled",
+    "kdigo_creatinine_input",
+    "kdigo_urine_input",
+    "acute_rrt_input"
   ],
   "extraction_contract": {
     "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
@@ -31,10 +34,10 @@
   "gates_passed": {
     "aggregate_arity_violations": 0,
     "json_roundtrip": true,
-    "concept_catalog_tests": "Targeted 2026-08-17 foundation suite: 265 passed, 10 source-dependent skipped after updating the stale 5-of-6 SOFA-2 aggregate expectation to the completeness contract.",
+    "concept_catalog_tests": "Targeted 2026-08-19 AKI/source-contract suite: 203 passed; broader related suite: 360 passed, 3 skipped, with one pre-existing unrelated cache-fingerprint failure.",
     "extract_chunk_cap_tests": "39 passed (tests/test_extract_chunk_cap.py — never > 3 chunks any db/module)",
     "module_extraction_tests": "test_concept_bounds_enforcement updated to the one-wide-file-per-module contract",
-    "full_pipeline_smoke": "Six databases completed raw re-extraction of outcome, renal, respiratory, sepsis_shared, sofa1_score, sofa2_score, sepsis3_sofa1 and sepsis3_sofa2 with zero module errors; all 19 modules were republished into one candidate with one clean runtime commit."
+    "full_pipeline_smoke": "Six databases completed raw renal re-extraction with zero module errors; all 19 modules were republished into one candidate with one clean runtime commit. Every database now contains explicit negative_complete AKI ascertainment where all source components are observed."
   },
   "audit_coverage": {
     "own103_vs_official_code": "38 fixes (aggregate arity, plr dimension, 3 units, eICU blood-product wrong-table, HiRID route errors)",
