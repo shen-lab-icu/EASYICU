@@ -1,7 +1,10 @@
 # AKI Patient-Level Audit — 2026-08-19
 
 This audit uses deidentified ICU stay identifiers from the full six-database,
-19-module candidate `full6_native_v2_aki_sic_timeaxis_82abec4b_20260819`.
+19-module candidate
+`full6_native_v2_kdigo_7d_baseline_9913f31c_20260819`. Its renal module was
+re-read from all six raw databases at clean commit `9913f31c`; the other
+modules were byte-reused from the validated parent candidate.
 Thresholds and official implementation references are documented in
 [`aki-source-contract.md`](aki-source-contract.md).
 
@@ -28,7 +31,24 @@ are negative, all component stages are 0, `aki` is false, and
 
 ## Whole-export rule recomputation
 
-Across the six renal exports, 2,121,721 creatinine-stage rows, 12,772,292
-urine-stage rows, 14,667,524 final-stage rows, and 504,706 complete-negative
-rows were independently recomputed from the exported inputs. Mismatches were
-zero in every database and every check.
+Across the six refreshed renal exports, 2,477,387 creatinine-stage rows with a
+published current creatinine were independently recomputed from the exported
+48-hour and 7-day minima. Mismatches were zero in every database. Every renal
+file contained the five new baseline-provenance columns, had zero duplicate
+`(stay_id, charttime)` keys, and retained the public pre-ICU boundary (AUMC,
+eICU, MIMIC-III, MIMIC-IV and SICdb: -24 h; HiRID: -1 h).
+
+## Seven-day baseline correction
+
+| Database | First non-negative creatinine rows | Assessable before | Assessable after | Baseline source after |
+|---|---:|---:|---:|---|
+| AUMC | 22,496 | 11,005 (48.92%) | 19,222 (85.45%) | 19,222 observed pre-ICU; 3,272 unavailable |
+| HiRID | 29,182 | 74 (0.25%) | 74 (0.25%) | 74 observed at -1 h; 29,108 unavailable |
+
+The AUMC gain is therefore attributable to observed `-168` to `-24 h`
+measurements, not imputation. HiRID did not gain fabricated admission
+baselines. For example, AUMC stay 166 changed from indeterminate to creatinine
+stage 1 at 0 h (current 1.199, prior 7-day low 0.826 mg/dL). HiRID stay 107
+remained unknown at its first creatinine, then used observed ICU history: at
+48 h, current 1.753 versus prior low 0.950 mg/dL produced creatinine stage 1;
+its urine-output component independently reached stage 3 at 59 h.
