@@ -1023,6 +1023,41 @@ def _apply_callback(
         frame.loc[:, concept_name] = result
         return frame
 
+    if expr == "mimic_urine_output":
+        # MIT-LCP/mimic-code, mimic-iv/concepts/measurement/urine_output.sql:
+        # GU irrigant in (227488) is a negative volume and is summed with
+        # urine/irrigant out (227489) at the same chart time.
+        frame = frame.copy()
+        value_col = (
+            concept_name
+            if concept_name in frame.columns
+            else (source.value_var or "value")
+        )
+        item_col = source.sub_var or "itemid"
+        if value_col not in frame.columns or item_col not in frame.columns:
+            return frame
+        values = pd.to_numeric(frame[value_col], errors="coerce")
+        itemids = pd.to_numeric(frame[item_col], errors="coerce")
+        irrigant_in = itemids.eq(227488) & values.gt(0)
+        frame[value_col] = values.where(~irrigant_in, -values)
+        return frame
+
+    if expr == "aumc_urine_output":
+        # AmsterdamUMCdb/amsterdamumcdb/scores.py repairs likely decimal-entry
+        # errors (>2500 mL -> /10) before excluding values still >4500 mL.
+        frame = frame.copy()
+        value_col = (
+            concept_name
+            if concept_name in frame.columns
+            else (source.value_var or "value")
+        )
+        if value_col not in frame.columns:
+            return frame
+        values = pd.to_numeric(frame[value_col], errors="coerce")
+        values = values.where(values <= 2500, values / 10.0)
+        frame[value_col] = values.where(values <= 4500)
+        return frame
+
     # Handle transform_fun(floor) - apply floor function to values
     if re.fullmatch(r"transform_fun\(floor\)", expr):
         frame = frame.copy()

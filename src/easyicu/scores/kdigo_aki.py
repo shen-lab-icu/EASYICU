@@ -940,11 +940,15 @@ def _rrt_ascertainment_from_observations(
     rrt_view: pd.DataFrame,
     id_col: str,
     time_col: str,
+    *,
+    source_complete: bool = False,
 ) -> pd.Series:
-    """Classify only explicit RRT observations; absence is indeterminate."""
+    """Classify RRT evidence, including a completed positive-event search."""
 
     ascertainment = pd.Series(
-        "indeterminate", index=result.index, dtype="string"
+        "negative" if source_complete else "indeterminate",
+        index=result.index,
+        dtype="string",
     )
     if result.empty or rrt_view.empty:
         return ascertainment
@@ -983,6 +987,7 @@ def kdigo_stages(
     time_unit: Optional[str] = None,
     interval: Optional[pd.Timedelta] = None,
     observation_window_coverage: Optional[Mapping[Any, str]] = None,
+    rrt_source_complete: bool = False,
 ) -> pd.DataFrame:
     """Calculate component-neutral KDIGO AKI staging.
     
@@ -1011,6 +1016,10 @@ def kdigo_stages(
             Values are ``complete``, ``partial``, or ``indeterminate``.  In the
             absence of this receipt the function will never infer that a
             component-negative row completely excludes AKI.
+        rrt_source_complete: Whether the dedicated active-RRT source was
+            successfully searched for the requested cohort. Because the
+            source is positive-event encoded, no event then constitutes a
+            criterion-negative RRT component rather than missing data.
         
     Returns:
         DataFrame with combined AKI staging including:
@@ -1284,7 +1293,11 @@ def kdigo_stages(
                 result, rrt_view, id_col, time_col
             )
             rrt_ascertainment = _rrt_ascertainment_from_observations(
-                result, rrt_view, id_col, time_col
+                result,
+                rrt_view,
+                id_col,
+                time_col,
+                source_complete=rrt_source_complete,
             )
             result["rrt"] = rrt_mask
             # RRT is its own component; do not rewrite the creatinine stage.
@@ -1342,14 +1355,22 @@ def kdigo_stages(
     ].astype("string")
     result['rrt_ascertainment'] = rrt_ascertainment
     result['rrt_ascertainment_reason'] = pd.Series(
-        "source_absent", index=result.index, dtype="string"
+        (
+            "source_searched_no_active_rrt"
+            if rrt_source_complete
+            else "source_absent"
+        ),
+        index=result.index,
+        dtype="string",
     )
     if rrt_df is not None and not rrt_df.empty:
         assert rrt_id_col is not None
         rrt_patients = set(rrt_df[rrt_id_col].dropna().tolist())
         rrt_present = result[id_col].isin(rrt_patients)
         result.loc[rrt_present, 'rrt_ascertainment_reason'] = (
-            "no_observation_at_or_before_time"
+            "source_searched_no_active_rrt"
+            if rrt_source_complete
+            else "no_observation_at_or_before_time"
         )
         result.loc[
             result['rrt_ascertainment'] == "negative",
@@ -1360,8 +1381,15 @@ def kdigo_stages(
             'rrt_ascertainment_reason',
         ] = "criterion_positive"
         result.loc[~rrt_present, 'rrt_ascertainment_reason'] = (
-            "patient_data_absent"
+            "source_searched_no_active_rrt"
+            if rrt_source_complete
+            else "patient_data_absent"
         )
+    elif rrt_source_complete:
+        # A successfully queried positive-event source can legitimately be
+        # empty for a cohort. Preserve that completed search as negative RRT
+        # evidence instead of silently reverting to unknown.
+        result['rrt_ascertainment'] = "negative"
     rrt_positive = result['aki_stage_rrt'].where(
         result['aki_stage_rrt'] > 0, pd.NA
     )
@@ -1396,6 +1424,18 @@ def kdigo_stages(
     result['observation_window_coverage'] = result[id_col].map(
         supplied_coverage
     ).astype("string")
+    all_components_known = pd.concat(
+        [
+            result['creatinine_ascertainment'],
+            result['urine_ascertainment'],
+            result['rrt_ascertainment'],
+        ],
+        axis=1,
+    ).ne("indeterminate").all(axis=1)
+    result.loc[
+        result['observation_window_coverage'].isna() & all_components_known,
+        'observation_window_coverage',
+    ] = "complete"
     result.loc[
         result['observation_window_coverage'].isna() & any_component_observed,
         'observation_window_coverage',
@@ -1518,7 +1558,7 @@ def load_kdigo_aki(
     """Load KDIGO AKI staging for a given database using EasyICU concepts.
     
     This is the high-level API function that:
-    1. Loads required concepts (crea, urine, weight, rrt) from the database
+    1. Loads phenotype-specific creatinine, urine-output, and active-RRT inputs
     2. Calculates KDIGO AKI staging using the loaded data
     3. Returns a unified DataFrame with AKI staging results
     
@@ -1548,6 +1588,11 @@ def load_kdigo_aki(
     from easyicu.api import load_concepts  # was `from .api` -> resolved to non-existent easyicu.scores.api
 
     _pre = preloaded_data or {}
+    legacy_input_names = {
+        "kdigo_creatinine_input": "crea",
+        "kdigo_urine_input": "urine",
+        "acute_rrt_input": "rrt",
+    }
     
     def _load_or_reuse(concept):
         if concept in _pre:
@@ -1558,6 +1603,15 @@ def load_kdigo_aki(
                     message=f"Preloaded {concept} source is not a pandas DataFrame",
                 )
             return _pre[concept]
+        legacy_name = legacy_input_names.get(concept)
+        if legacy_name in _pre:
+            if not isinstance(_pre[legacy_name], pd.DataFrame):
+                raise KDIGOComponentSchemaError(
+                    component=concept,
+                    reason_code="kdigo_preloaded_component_not_dataframe",
+                    message=f"Preloaded {legacy_name} source is not a pandas DataFrame",
+                )
+            return _pre[legacy_name]
         try:
             return load_concepts(
                 concepts=[concept], database=database, data_path=data_path,
@@ -1575,10 +1629,25 @@ def load_kdigo_aki(
     
     # Load all KDIGO components before deciding whether the patient has an
     # assessable timeline.  Creatinine is not a membership prerequisite.
-    crea_df = _load_or_reuse('crea')
-    urine_df = _load_or_reuse('urine')
+    crea_df = _load_or_reuse('kdigo_creatinine_input')
+    urine_df = _load_or_reuse('kdigo_urine_input')
     weight_df = _load_or_reuse('weight')
-    rrt_df = _load_or_reuse('rrt')
+    rrt_df = _load_or_reuse('acute_rrt_input')
+
+    def _normalise_input_column(
+        frame: pd.DataFrame, source_name: str, target_name: str
+    ) -> pd.DataFrame:
+        if target_name in frame.columns or source_name not in frame.columns:
+            return frame
+        return frame.rename(columns={source_name: target_name})
+
+    crea_df = _normalise_input_column(
+        crea_df, "kdigo_creatinine_input", "crea"
+    )
+    urine_df = _normalise_input_column(
+        urine_df, "kdigo_urine_input", "urine"
+    )
+    rrt_df = _normalise_input_column(rrt_df, "acute_rrt_input", "rrt")
 
     if not any(
         isinstance(frame, pd.DataFrame) and not frame.empty
@@ -1600,6 +1669,7 @@ def load_kdigo_aki(
         time_unit="hours",
         interval=pd.Timedelta(hours=1),
         observation_window_coverage=observation_window_coverage,
+        rrt_source_complete=True,
     )
     
     if verbose and not result.empty:

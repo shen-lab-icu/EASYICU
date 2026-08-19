@@ -746,6 +746,42 @@ def test_complete_window_and_three_negative_components_prove_negative_aki():
     assert last["aki_severe_ascertainment"] == "negative_complete"
 
 
+def test_completed_positive_only_rrt_search_derives_complete_negative_aki():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0, 300],
+            "crea": [1.0, 1.0],
+        }
+    )
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1] * 6,
+            "charttime": [0, 60, 120, 180, 240, 300],
+            "urine": [100.0] * 6,
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
+
+    result = kdigo_stages(
+        creatinine,
+        urine_df=urine,
+        weight_df=weight,
+        rrt_df=pd.DataFrame(columns=["stay_id", "charttime", "rrt"]),
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+        rrt_source_complete=True,
+    )
+
+    last = result.iloc[-1]
+    assert last["rrt_ascertainment"] == "negative"
+    assert last["rrt_ascertainment_reason"] == "source_searched_no_active_rrt"
+    assert last["observation_window_coverage"] == "complete"
+    assert last["aki_ascertainment"] == "negative_complete"
+    assert bool(last["aki"]) is False
+
+
 def test_positive_component_overrides_partial_coverage():
     rrt = pd.DataFrame({"stay_id": [1], "charttime": [30], "rrt": [1]})
 
@@ -841,7 +877,7 @@ def test_load_kdigo_source_exception_is_not_downgraded_to_missing(monkeypatch):
         load_kdigo_aki("synthetic", verbose=False)
 
     assert error.value.reason_code == "kdigo_component_load_failed"
-    assert error.value.component == "crea"
+    assert error.value.component == "kdigo_creatinine_input"
 
 
 def test_public_aki_helpers_reject_missing_identity_before_indexing():

@@ -548,9 +548,12 @@ CONCEPT_GROUPS_INTERNAL = {
 # the user-facing catalog.  They are loader entry points or legacy/source aliases
 # whose outputs are surfaced through canonical web concepts above.
 HIDDEN_DICTIONARY_CONCEPTS = {
+    'acute_rrt_input',
     'bicarb',
     'kdigo_aki',
+    'kdigo_creatinine_input',
     'kdigo_creat',
+    'kdigo_urine_input',
     'kdigo_uo',
     'potassium',
     'sep3',
