@@ -633,10 +633,11 @@ def test_urine_output_excludes_enteral_residuals_and_keeps_perioperative_urine()
         if source.get("table") == "intakeoutput"
         and source.get("regex")
     ]
-    assert any(re.search(pattern, "Urine Output-Foley", re.I) for pattern in eicu_regexes)
-    assert any(re.search(pattern, "Suprapubic Urine Output", re.I) for pattern in eicu_regexes)
-    assert any(re.search(pattern, "Urine, void:", re.I) for pattern in eicu_regexes)
-    assert not any(re.search(pattern, "Mixed Urine/Stool Volume", re.I) for pattern in eicu_regexes)
+    official_prefix = "flowsheet|Flowsheet Cell Labels|I&O|Output (ml)|"
+    assert any(re.search(pattern, official_prefix + "Urine Output-Foley", re.I) for pattern in eicu_regexes)
+    assert any(re.search(pattern, official_prefix + "Suprapubic Urine Output", re.I) for pattern in eicu_regexes)
+    assert any(re.search(pattern, official_prefix + "Urine, void:", re.I) for pattern in eicu_regexes)
+    assert not any(re.search(pattern, official_prefix + "Mixed Urine/Stool Volume", re.I) for pattern in eicu_regexes)
 
     for dataset in ("miiv", "mimic", "mimic_demo"):
         output_sources = [
@@ -664,7 +665,8 @@ def test_urine_output_excludes_enteral_residuals_and_keeps_perioperative_urine()
         #      still leaves the surrounding OR hours empty -- it does not fix the false
         #      anuria it was added for, it adds a second artefact on top of it.
         assert {226627, 226631}.isdisjoint(urine_ids)
-        assert {43348, 43365, 43372, 43638, 227489}.isdisjoint(urine_ids)
+        assert {43348, 43365, 43372, 43638}.isdisjoint(urine_ids)
+        assert {227488, 227489}.issubset(urine_ids)
 
     for dataset in ("mimic", "mimic_demo"):
         output_sources = [

@@ -7171,6 +7171,51 @@
    ]
   }
  },
+ "acute_rrt_input": {
+  "class_name": "rec_cncpt",
+  "description": "Phenotype-specific active renal-replacement-therapy input for KDIGO AKI",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "definition_source": "MIT-LCP mimic-code treatment/rrt; active-treatment mappings audited per database",
+  "definition_version": "2026-08-19",
+  "clinical_contract_id": "kdigo_aki_2012",
+  "category": "renal",
+  "concepts": [
+   "rrt"
+  ],
+  "callback": "acute_rrt_input",
+  "target": "ts_tbl"
+ },
+ "kdigo_creatinine_input": {
+  "class_name": "rec_cncpt",
+  "description": "Phenotype-specific serum-creatinine input for KDIGO AKI",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "definition_source": "KDIGO 2012; MIT-LCP mimic-code organfailure/kdigo_creatinine.sql",
+  "definition_version": "2026-08-19",
+  "clinical_contract_id": "kdigo_aki_2012",
+  "category": "renal",
+  "concepts": [
+   "crea"
+  ],
+  "callback": "kdigo_creatinine_input",
+  "target": "ts_tbl"
+ },
+ "kdigo_urine_input": {
+  "class_name": "rec_cncpt",
+  "description": "Phenotype-specific urine-output input for KDIGO AKI",
+  "clinical_status": "validated_definition",
+  "canonical_definition": true,
+  "definition_source": "MIT-LCP mimic-code urine_output; MIT-LCP eicu-code pivoted-uo; AmsterdamUMCdb scores.py; HiRID varref; SICdb KDIGO",
+  "definition_version": "2026-08-19",
+  "clinical_contract_id": "kdigo_aki_2012",
+  "category": "renal",
+  "concepts": [
+   "urine"
+  ],
+  "callback": "kdigo_urine_input",
+  "target": "ts_tbl"
+ },
  "kdigo_aki": {
   "class_name": "rec_cncpt",
   "description": "KDIGO Acute Kidney Injury staging (0-3) based on creatinine and urine output",
@@ -7182,10 +7227,10 @@
   "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [
-   "crea",
-   "urine",
+   "kdigo_creatinine_input",
+   "kdigo_urine_input",
    "weight",
-   "rrt"
+   "acute_rrt_input"
   ],
   "callback": "kdigo_aki",
   "target": "ts_tbl"
@@ -7201,7 +7246,7 @@
   "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [
-   "crea"
+   "kdigo_creatinine_input"
   ],
   "callback": "kdigo_creatinine",
   "target": "ts_tbl"
@@ -7217,7 +7262,7 @@
   "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [
-   "urine",
+   "kdigo_urine_input",
    "weight"
   ],
   "callback": "kdigo_uo",
@@ -15582,7 +15627,7 @@
  "urine": {
   "unit": "mL",
   "min": 0,
-  "max": 2000,
+  "max": 5000,
   "aggregate": "sum",
   "description": "urine output",
   "omopid": 4264378,
@@ -15603,53 +15648,26 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid",
-     "_comment": "2026-07-02 AUMC raw dictionary audit: added explicit urine-output side channels; urine chemistry and dialysis fluid channels remain excluded. | 2026-07-17 official-code audit (amsterdamumcdb/sql/common/legacy/urine_output.sql lists 8794,8796,8798,8800,8803,10743,10745,19921,19922): ADDED 10743 'Nefrodrain li Uit' and 10745 'Nefrodrain re Uit' (left/right nephrostomy drain output) — 2 of the 9 official ids were missing while their ureteric-splint analogues (19921/19922) were present. Omission pushed AUMC urine DOWN -> false oliguria -> false-positive KDIGO-UO. STILL PENDING: official also repairs decimal-entry errors (value>2500 -> /10) and only discards >4500, whereas this concept uses a flat max=2000 that both rejects real 2000-2500 mL voids and drops repairable >2500 values."
+     "callback": "aumc_urine_output",
+     "_comment": "Official AmsterdamUMCdb references: amsterdamumcdb/sql/common/legacy/urine_output.sql (nine item IDs) and amsterdamumcdb/scores.py::get_sofa_renal_daily_urine_output (value>2500 -> /10, then discard values still >4500). Urine chemistry and dialysis-fluid channels remain excluded."
     }
    ],
    "eicu": [
     {
-     "ids": [
-      "Urine",
-      "URINE CATHETER"
-     ],
+     "regex": "^flowsheet\\|Flowsheet\\ Cell\\ Labels\\|I\\&O\\|Output\\ \\(ml\\)\\|(?:(?-i:Urine|3\\ way\\ foley|3\\ Way\\ Foley|Actual\\ Urine|Adjusted\\ total\\ UO\\ NOC\\ end\\ shift|BRP\\ \\(urine\\)|BRP\\ \\(Urine\\)|condome\\ cath\\ urine|diaper\\ urine|inc\\ of\\ urine|incontient\\ urine|Incontient\\ urine|Incontient\\ Urine|incontinence\\ of\\ urine|Incontinence\\-urine|incontinence/\\ voids\\ urine|incontinent\\ of\\ urine|INCONTINENT\\ OF\\ URINE|Incontinent\\ UOP|incontinent\\ urine|Incontinent\\ \\(urine\\)|Incontinent\\ Urine|incontinent\\ urine\\ counts|incont\\ of\\ urine|incont\\.\\ of\\ urine|incont\\.\\ of\\ urine\\ count|incont\\ urine|incont\\.\\ urine|Incont\\.\\ urine|Incont\\.\\ Urine|inc\\ urine|inc\\.\\ urine|Inc\\.\\ urine|Inc\\ Urine|indwelling\\ foley|Indwelling\\ Foley|Straight\\ Catheter\\-Foley|Straight\\ Catheterization\\ Urine|Straight\\ Cath\\ UOP|straight\\ cath\\ urine|Straight\\ Cath\\ Urine|strait\\ cath\\ Urine|Suprapubic\\ Urine\\ Output|true\\ urine|True\\ Urine|True\\ Urine\\ out|unmeasured\\ urine|Unmeasured\\ Urine|unmeasured\\ urine\\ output|Urethal\\ Catheter|Urethral\\ Catheter|urinary\\ output\\ 7AM\\ \\-\\ 7\\ PM|urinary\\ output\\ 7AM\\-7PM|urine|URINE|URINE\\ CATHETER|Intermittent/Straight\\ Cath\\ \\(mL\\)|straightcath|straight\\ cath|Straight\\ cath|Straight\\ \\ cath|Straight\\ Cath|Straight\\ \\ Cath|Straight\\ Cath'd|straight\\ cath\\ daily|straight\\ cathed|Straight\\ Cathed|Straight\\ catheterization|Straight\\ Catheter\\ Output|Straight\\ Catheter\\-Straight\\ Catheter|straight\\ cath\\ ml's|Straight\\ cath\\ ml's|Straight\\ Cath\\ Q6hrs|Straight\\ caths|Urine\\ Output\\-straight\\ cath|Urine\\-straight\\ cath|Urine\\ Straight\\ Cath|Condom\\ Catheter|condom\\ catheter|condom\\ cath|Condom\\ Cath|CONDOM\\ CATHETER\\ OUTPUT|Urine\\ via\\ condom\\ catheter|Urine\\-foley|Urine\\-\\ foley|Urine\\-\\ Foley|Urine\\ foley\\ catheter|Urine,\\ L\\ neph:|Urine\\ \\(measured\\)|urine\\ output|Urine\\ Output\\-external\\ catheter|Urine\\ Output\\-foley|Urine\\ Output\\-Foley|Urine\\ Output\\-FOLEY|Urine\\ Output\\-Foley\\ cath|Urine\\ Output\\-FOLEY\\ CATH|Urine\\ Output\\-foley\\ catheter|Urine\\ Output\\-Foley\\ Catheter|Urine\\ Output\\-FOLEY\\ CATHETER|Urine\\ Output\\-Foley\\ Output|Urine\\ Output\\-Fpley|Urine\\ Output\\-Ileoconduit|Urine\\ Output\\-left\\ nephrostomy|Urine\\ Output\\-Left\\ Nephrostomy|Urine\\ Output\\-Left\\ Nephrostomy\\ Tube|Urine\\ Output\\-LEFT\\ PCN\\ TUBE|Urine\\ Output\\-L\\ Nephrostomy|Urine\\ Output\\-L\\ Nephrostomy\\ Tube|Urine\\ Output\\-Nephrostomy|Urine\\ Output\\-right\\ nephrostomy|Urine\\ Output\\-RIGHT\\ Nephrouretero\\ Stent\\ Urine\\ Output|Urine\\ Output\\-R\\ nephrostomy|Urine\\ Output\\-R\\ Nephrostomy|Urine\\ Output\\-R\\.\\ Nephrostomy|Urine\\ Output\\-R\\ Nephrostomy\\ Tube|Urine\\ Output\\-Rt\\ Nephrectomy|Urine\\ Output\\-stent|Urine\\ Output\\-suprapubic|Urine\\ Output\\-Texas\\ Cath|Urine\\ Output\\-Urine|Urine\\ Output\\-Urine\\ Output|Urine,\\ R\\ neph:|urine\\ \\(void\\)|Urine\\-\\ void|Urine,\\ void:)|(?i:foley(?!.*(?:pacu|or|ir)).*|Output.*Urinary\\ Catheter.*|Output.*Urethral\\ Catheter.*|Urine\\ Output\\ \\(mL\\).*|Output.*External\\ Urethral.*|Urinary\\ Catheter\\ Output.*))$",
      "table": "intakeoutput",
-     "sub_var": "celllabel"
-    },
-    {
-     "regex": "(?i)catheter.+output|output.+catheter",
-     "table": "intakeoutput",
-     "sub_var": "celllabel",
-     "class_name": "rgx_itm"
-    },
-    {
-     "regex": "(?i)^(?!.*stool).*(urine\\s*output|output.*urine|urine,\\s*void|suprapubic\\s+urine)",
-     "table": "intakeoutput",
-     "sub_var": "celllabel",
+     "sub_var": "cellpath",
      "class_name": "rgx_itm",
-     "_comment": "2026-07-03 semantic coverage review: capture eICU Foley/suprapubic/void urine output labels while excluding mixed urine/stool volume."
+     "_comment": "Port of MIT-LCP/eicu-code concepts/pivoted/pivoted-uo.sql: require the official Output (ml) cellpath namespace, include its urine/catheter/nephrostomy families, exclude mixed stool and PACU/OR/IR Foley paths, and use current cellvaluenumeric rather than cumulative outputtotal."
     }
    ],
    "eicu_demo": [
     {
-     "ids": [
-      "Urine",
-      "URINE CATHETER"
-     ],
+     "regex": "^flowsheet\\|Flowsheet\\ Cell\\ Labels\\|I\\&O\\|Output\\ \\(ml\\)\\|(?:(?-i:Urine|3\\ way\\ foley|3\\ Way\\ Foley|Actual\\ Urine|Adjusted\\ total\\ UO\\ NOC\\ end\\ shift|BRP\\ \\(urine\\)|BRP\\ \\(Urine\\)|condome\\ cath\\ urine|diaper\\ urine|inc\\ of\\ urine|incontient\\ urine|Incontient\\ urine|Incontient\\ Urine|incontinence\\ of\\ urine|Incontinence\\-urine|incontinence/\\ voids\\ urine|incontinent\\ of\\ urine|INCONTINENT\\ OF\\ URINE|Incontinent\\ UOP|incontinent\\ urine|Incontinent\\ \\(urine\\)|Incontinent\\ Urine|incontinent\\ urine\\ counts|incont\\ of\\ urine|incont\\.\\ of\\ urine|incont\\.\\ of\\ urine\\ count|incont\\ urine|incont\\.\\ urine|Incont\\.\\ urine|Incont\\.\\ Urine|inc\\ urine|inc\\.\\ urine|Inc\\.\\ urine|Inc\\ Urine|indwelling\\ foley|Indwelling\\ Foley|Straight\\ Catheter\\-Foley|Straight\\ Catheterization\\ Urine|Straight\\ Cath\\ UOP|straight\\ cath\\ urine|Straight\\ Cath\\ Urine|strait\\ cath\\ Urine|Suprapubic\\ Urine\\ Output|true\\ urine|True\\ Urine|True\\ Urine\\ out|unmeasured\\ urine|Unmeasured\\ Urine|unmeasured\\ urine\\ output|Urethal\\ Catheter|Urethral\\ Catheter|urinary\\ output\\ 7AM\\ \\-\\ 7\\ PM|urinary\\ output\\ 7AM\\-7PM|urine|URINE|URINE\\ CATHETER|Intermittent/Straight\\ Cath\\ \\(mL\\)|straightcath|straight\\ cath|Straight\\ cath|Straight\\ \\ cath|Straight\\ Cath|Straight\\ \\ Cath|Straight\\ Cath'd|straight\\ cath\\ daily|straight\\ cathed|Straight\\ Cathed|Straight\\ catheterization|Straight\\ Catheter\\ Output|Straight\\ Catheter\\-Straight\\ Catheter|straight\\ cath\\ ml's|Straight\\ cath\\ ml's|Straight\\ Cath\\ Q6hrs|Straight\\ caths|Urine\\ Output\\-straight\\ cath|Urine\\-straight\\ cath|Urine\\ Straight\\ Cath|Condom\\ Catheter|condom\\ catheter|condom\\ cath|Condom\\ Cath|CONDOM\\ CATHETER\\ OUTPUT|Urine\\ via\\ condom\\ catheter|Urine\\-foley|Urine\\-\\ foley|Urine\\-\\ Foley|Urine\\ foley\\ catheter|Urine,\\ L\\ neph:|Urine\\ \\(measured\\)|urine\\ output|Urine\\ Output\\-external\\ catheter|Urine\\ Output\\-foley|Urine\\ Output\\-Foley|Urine\\ Output\\-FOLEY|Urine\\ Output\\-Foley\\ cath|Urine\\ Output\\-FOLEY\\ CATH|Urine\\ Output\\-foley\\ catheter|Urine\\ Output\\-Foley\\ Catheter|Urine\\ Output\\-FOLEY\\ CATHETER|Urine\\ Output\\-Foley\\ Output|Urine\\ Output\\-Fpley|Urine\\ Output\\-Ileoconduit|Urine\\ Output\\-left\\ nephrostomy|Urine\\ Output\\-Left\\ Nephrostomy|Urine\\ Output\\-Left\\ Nephrostomy\\ Tube|Urine\\ Output\\-LEFT\\ PCN\\ TUBE|Urine\\ Output\\-L\\ Nephrostomy|Urine\\ Output\\-L\\ Nephrostomy\\ Tube|Urine\\ Output\\-Nephrostomy|Urine\\ Output\\-right\\ nephrostomy|Urine\\ Output\\-RIGHT\\ Nephrouretero\\ Stent\\ Urine\\ Output|Urine\\ Output\\-R\\ nephrostomy|Urine\\ Output\\-R\\ Nephrostomy|Urine\\ Output\\-R\\.\\ Nephrostomy|Urine\\ Output\\-R\\ Nephrostomy\\ Tube|Urine\\ Output\\-Rt\\ Nephrectomy|Urine\\ Output\\-stent|Urine\\ Output\\-suprapubic|Urine\\ Output\\-Texas\\ Cath|Urine\\ Output\\-Urine|Urine\\ Output\\-Urine\\ Output|Urine,\\ R\\ neph:|urine\\ \\(void\\)|Urine\\-\\ void|Urine,\\ void:)|(?i:foley(?!.*(?:pacu|or|ir)).*|Output.*Urinary\\ Catheter.*|Output.*Urethral\\ Catheter.*|Urine\\ Output\\ \\(mL\\).*|Output.*External\\ Urethral.*|Urinary\\ Catheter\\ Output.*))$",
      "table": "intakeoutput",
-     "sub_var": "celllabel"
-    },
-    {
-     "regex": "(?i)catheter.+output|output.+catheter",
-     "table": "intakeoutput",
-     "sub_var": "celllabel",
-     "class_name": "rgx_itm"
-    },
-    {
-     "regex": "(?i)^(?!.*stool).*(urine\\s*output|output.*urine|urine,\\s*void|suprapubic\\s+urine)",
-     "table": "intakeoutput",
-     "sub_var": "celllabel",
+     "sub_var": "cellpath",
      "class_name": "rgx_itm",
-     "_comment": "2026-07-03 semantic coverage review: capture eICU Foley/suprapubic/void urine output labels while excluding mixed urine/stool volume."
+     "_comment": "Port of MIT-LCP/eicu-code concepts/pivoted/pivoted-uo.sql; demo uses the same official cellpath contract."
     }
    ],
    "hirid": [
@@ -15674,11 +15692,14 @@
       226564,
       226565,
       226567,
-      226584
+      226584,
+      227488,
+      227489
      ],
      "table": "outputevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: removed 227510 TF Residual; added 226627 OR Urine and 226631 PACU Urine. GU irrigant-only/mixed candidates remain excluded unless explicitly modeled. | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/measurement/urine_output.sql): REMOVED 226627 'OR Urine' (22,948 rows/19,798 stays/14.4M mL, median 400) and 226631 'PACU Urine' (2,941/2,805/3.2M mL, median 625) — official's id list contains neither; including them inflates uo_rt and MASKS early oliguria. REMOVED 226566 'Urine and GU Irrigant Out' (verified 0 rows in this build; a mixed urine+irrigant channel that also contradicted this entry's own stated exclusion). STILL PENDING: official also nets GU irrigation via 227489 (Urine/Irrigant Out) minus 227488 (Irrigant In, negated). We currently capture NEITHER, so the ~767 irrigation stays read as ANURIC -> false KDIGO stage 3. That netting needs a callback (the concept's min=0 bound filters the negative irrigant-in leg), tracked separately."
+     "callback": "mimic_urine_output",
+     "_comment": "Exact MIT-LCP/mimic-code mimic-iv/concepts/measurement/urine_output.sql item IDs. The pre-aggregation callback negates positive 227488 GU irrigant-in and sums it with 227489 urine/irrigant-out."
     }
    ],
    "mimic": [
@@ -15722,11 +15743,14 @@
       226564,
       226565,
       226567,
-      226584
+      226584,
+      227488,
+      227489
      ],
      "table": "outputevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: removed 227510 TF Residual; added 226627 OR Urine and 226631 PACU Urine; semantic coverage review added MIMIC-III ED/EW/angio/Foley urine output volume channels. Per-kg/hr rates, 24h summaries, specimens, and GU irrigant mixed output remain excluded. | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/measurement/urine_output.sql): REMOVED 226627 'OR Urine' (22,948 rows/19,798 stays/14.4M mL, median 400) and 226631 'PACU Urine' (2,941/2,805/3.2M mL, median 625) — official's id list contains neither; including them inflates uo_rt and MASKS early oliguria. REMOVED 226566 'Urine and GU Irrigant Out' (verified 0 rows in this build; a mixed urine+irrigant channel that also contradicted this entry's own stated exclusion). STILL PENDING: official also nets GU irrigation via 227489 (Urine/Irrigant Out) minus 227488 (Irrigant In, negated). We currently capture NEITHER, so the ~767 irrigation stays read as ANURIC -> false KDIGO stage 3. That netting needs a callback (the concept's min=0 bound filters the negative irrigant-in leg), tracked separately."
+     "callback": "mimic_urine_output",
+     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation."
     }
    ],
    "mimic_demo": [
@@ -15770,11 +15794,14 @@
       226564,
       226565,
       226567,
-      226584
+      226584,
+      227488,
+      227489
      ],
      "table": "outputevents",
      "sub_var": "itemid",
-     "_comment": "2026-07-03 audit: removed 227510 TF Residual; added 226627 OR Urine and 226631 PACU Urine; semantic coverage review added MIMIC-III ED/EW/angio/Foley urine output volume channels. Per-kg/hr rates, 24h summaries, specimens, and GU irrigant mixed output remain excluded. | 2026-07-17 official-code audit (mimic-code mimic-iv/concepts/measurement/urine_output.sql): REMOVED 226627 'OR Urine' (22,948 rows/19,798 stays/14.4M mL, median 400) and 226631 'PACU Urine' (2,941/2,805/3.2M mL, median 625) — official's id list contains neither; including them inflates uo_rt and MASKS early oliguria. REMOVED 226566 'Urine and GU Irrigant Out' (verified 0 rows in this build; a mixed urine+irrigant channel that also contradicted this entry's own stated exclusion). STILL PENDING: official also nets GU irrigation via 227489 (Urine/Irrigant Out) minus 227488 (Irrigant In, negated). We currently capture NEITHER, so the ~767 irrigation stays read as ANURIC -> false KDIGO stage 3. That netting needs a callback (the concept's min=0 bound filters the negative irrigant-in leg), tracked separately."
+     "callback": "mimic_urine_output",
+     "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation."
     }
    ],
    "sic": [
