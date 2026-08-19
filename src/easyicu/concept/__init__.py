@@ -2854,6 +2854,7 @@ class ConceptResolver:
                             convert_unit_filter=_convert_unit_filter if _convert_unit_callback_for_duckdb else None,
                             # 🚀 通用值转换表达式（percent_as_numeric, set_val_na, fahr_to_cels）
                             value_transform=_duckdb_value_transform,
+                            itemid_col=source.sub_var,
                         )
                         
                         if _convert_unit_callback_for_duckdb and verbose and len(frame) > 0:

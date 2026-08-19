@@ -3011,6 +3011,7 @@ def load_bucketed_table_aggregated(
     convert_unit_factor: Optional[float] = None,  # 🚀 DuckDB内联convert_unit因子
     convert_unit_filter: Optional[str] = None,  # 🚀 DuckDB内联convert_unit单位过滤模式
     value_transform: Optional[str] = None,  # 🚀 通用SQL值转换表达式（如 percent_as_numeric, set_val_na）
+    itemid_col: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
@@ -3099,8 +3100,12 @@ def load_bucketed_table_aggregated(
             else:
                 time_col = 'charttime'
     
-    # 确定itemid列名
-    if db_name == 'aumc':
+    # 确定itemid列名。概念源显式传入的 sub_var 优先于表默认值：
+    # eICU intakeoutput 的常规液体概念使用 celllabel，官方尿量表型使用
+    # 更严格的 cellpath。
+    if itemid_col is not None:
+        itemid_col = str(itemid_col)
+    elif db_name == 'aumc':
         itemid_col = 'itemid'
     elif db_name == 'hirid':
         itemid_col = 'variableid'

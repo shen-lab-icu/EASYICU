@@ -480,6 +480,52 @@ def test_transformed_bounds_are_applied_before_hourly_aggregation(tmp_path):
     }
 
 
+def test_bucket_loader_honours_source_sub_var_over_table_default(tmp_path):
+    official_path = (
+        "flowsheet|Flowsheet Cell Labels|I&O|Output (ml)|Urine"
+    )
+    pd.DataFrame(
+        {
+            "patientunitstayid": [1, 1],
+            "intakeoutputoffset": [0, 60],
+            "celllabel": ["Urine", "Urine"],
+            "cellpath": [official_path, "unrelated|Urine"],
+            "cellvaluenumeric": [50.0, 999.0],
+        }
+    ).to_parquet(tmp_path / "intakeoutput.parquet", index=False)
+
+    defaults = SimpleNamespace(
+        index_var="intakeoutputoffset",
+        sub_var="celllabel",
+        unit_var=None,
+    )
+    config = SimpleNamespace(
+        name="eicu", get_table=lambda name: SimpleNamespace(defaults=defaults)
+    )
+    source = SimpleNamespace(
+        config=config,
+        base_path=tmp_path,
+        _resolve_bucket_directory=lambda name: None,
+        _resolve_flat_parquet_directory=lambda name: tmp_path,
+        _get_parquet_columns_for_files=lambda files: set(
+            pd.read_parquet(files[0]).columns
+        ),
+    )
+
+    result = load_bucketed_table_aggregated(
+        source,
+        "intakeoutput",
+        "cellvaluenumeric",
+        [official_path],
+        patient_ids=[1],
+        agg_func="sum",
+        itemid_col="cellpath",
+    )
+
+    assert result["charttime"].tolist() == [0.0]
+    assert result["cellvaluenumeric"].tolist() == [50.0]
+
+
 def test_inline_unit_conversion_resolves_configured_column_case_insensitively(
     tmp_path,
 ):
