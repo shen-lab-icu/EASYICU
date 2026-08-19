@@ -34,6 +34,12 @@ def test_kdigo_uses_explicit_phenotype_input_contracts() -> None:
         "kdigo_urine_input",
         "weight",
     ]
+    assert (
+        dictionary["kdigo_creatinine_input"][
+            "pre_admission_lookback_hours"
+        ]
+        == 168
+    )
 
 
 def test_official_mimic_gu_irrigation_ids_and_transform_are_declared() -> None:

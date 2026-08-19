@@ -148,6 +148,7 @@ class ConceptDefinition:
     definition_source: Optional[str] = None
     definition_version: Optional[str] = None
     clinical_contract_id: Optional[str] = None
+    pre_admission_lookback_hours: Optional[float] = None
 
     @classmethod
     def from_name_and_payload(
@@ -209,6 +210,9 @@ class ConceptDefinition:
             definition_source=payload.get("definition_source"),
             definition_version=payload.get("definition_version"),
             clinical_contract_id=payload.get("clinical_contract_id"),
+            pre_admission_lookback_hours=_maybe_float(
+                payload.get("pre_admission_lookback_hours")
+            ),
             family=payload.get("family"),
             depends_on=depends_list,
         )

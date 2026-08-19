@@ -273,11 +273,16 @@ CONCEPT_DICTIONARY = {
     'aki_assessment_reason': ('KDIGO AKI Assessment Reason', 'KDIGO AKI 判定原因', 'category'),
     'observation_window_coverage': ('KDIGO Observation-window Coverage', 'KDIGO 观察窗覆盖度', 'category'),
     'creatinine_ascertainment': ('KDIGO Creatinine-component Ascertainment', 'KDIGO 肌酐组件判定状态', 'category'),
+    'creatinine_ascertainment_reason': ('KDIGO Creatinine-component Ascertainment Reason', 'KDIGO 肌酐组件判定原因', 'category'),
     'urine_ascertainment': ('KDIGO Urine-output-component Ascertainment', 'KDIGO 尿量组件判定状态', 'category'),
     'rrt_ascertainment': ('KDIGO RRT-component Ascertainment', 'KDIGO RRT 组件判定状态', 'category'),
     # 🔧 2026-02-12: 添加规范化后的 KDIGO 扩展列
     'creat_low_past_48hr': ('Lowest Creatinine in Past 48h', '过去48小时内最低肌酐', 'mg/dL'),
     'creat_low_past_7day': ('Baseline Creatinine (7-day lowest)', '基线肌酐（7天内最低值）', 'mg/dL'),
+    'creat_baseline_n_48h': ('Eligible Creatinine Baselines in Past 48h', '过去48小时可用肌酐基线数', 'count'),
+    'creat_baseline_n_7d': ('Eligible Creatinine Baselines in Past 7d', '过去7天可用肌酐基线数', 'count'),
+    'creat_baseline_source': ('KDIGO Creatinine Baseline Source', 'KDIGO 肌酐基线来源', 'category'),
+    'creat_pre_icu_history_observed': ('Pre-ICU Creatinine History Observed', '已观察到入ICU前肌酐史', 'boolean'),
     'uo_rt_6hr': ('Urine Output Rate (6h rolling window)', '尿量率（6小时滚动窗口）', 'mL/kg/h'),
     'uo_rt_12hr': ('Urine Output Rate (12h rolling window)', '尿量率（12小时滚动窗口）', 'mL/kg/h'),
     'uo_rt_24hr': ('Urine Output Rate (24h rolling window)', '尿量率（24小时滚动窗口）', 'mL/kg/h'),
@@ -530,9 +535,13 @@ CONCEPT_GROUPS_INTERNAL = {
               # unavailable, so export the state alongside the stage.
               'aki_assessable', 'aki_ascertainment', 'aki_assessment_reason',
               'observation_window_coverage', 'creatinine_ascertainment',
+              'creatinine_ascertainment_reason',
               'urine_ascertainment', 'rrt_ascertainment',
               # 规范化后的列名（从 kdigo_* 展开列规范化而来）
-              'creat_low_past_48hr', 'creat_low_past_7day', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+              'creat_low_past_48hr', 'creat_low_past_7day',
+              'creat_baseline_n_48h', 'creat_baseline_n_7d',
+              'creat_baseline_source', 'creat_pre_icu_history_observed',
+              'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
               # 液体平衡（入量/出量衍生）
               'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml',
               # 衍生肾功能指数 (Tier 1, 2026-06-22)

@@ -212,11 +212,13 @@
     "runtime_golden_vectors": ["tests/clinical_specs/kdigo_aki_2012.json"],
     "test_vector_version": "v1",
     "validation_status": "automated_golden; independent_clinical_review_pending",
-    "validated_against": ["KDIGO 2012 Chapter 2.1", "MIT-LCP KDIGO staging SQL"],
+    "validated_against": ["KDIGO 2012 Chapter 2.1", "MIT-LCP KDIGO staging SQL", "eth-mds/icu-features prior-only 168-hour rolling minimum"],
     "reviewer": "EasyICU software conformance review; independent clinician pending",
     "last_reviewed_at": "2026-08-09",
     "reference_implementation": "MIT-LCP/mimic-code kdigo_stages.sql",
     "reference_commit": "86df38ae2073dc59647bc8e9758fadf92ea89aee",
+    "reference_implementations": ["https://github.com/MIT-LCP/mimic-code/tree/main/mimic-iv/concepts/organfailure", "https://github.com/eth-mds/icu-features"],
+    "temporal_contract": {"kdigo_creatinine_input_pre_admission_lookback_hours": 168, "generic_crea_pre_admission_lookback_hours": 24, "baseline_window": "[t-168h, t)", "current_and_future_values_excluded": true},
     "database_conformance": {"mimic": "mapping_only", "miiv": "algorithm_golden", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   }
 }
