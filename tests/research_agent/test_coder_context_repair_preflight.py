@@ -722,6 +722,47 @@ def validate_interval(point, low, high):
     )
 
 
+def test_mechanical_preflight_allows_loc_temporary_for_fail_closed_validation(ra):
+    code = """
+import numpy as np
+
+def validate_integer(values):
+    observed = values.notna()
+    numeric = values.loc[observed].to_numpy(dtype=float)
+    if not np.isclose(numeric, np.rint(numeric)).all():
+        raise ValueError('fractional count')
+    return values
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_loc_temporary_used_for_rendering(ra):
+    code = """
+import numpy as np
+
+def render(values, ax):
+    observed = values.notna()
+    numeric = values.loc[observed].to_numpy(dtype=float)
+    if not np.isclose(numeric, np.rint(numeric)).all():
+        raise ValueError('fractional count')
+    ax.bar(range(len(numeric)), numeric)
+    return ax
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_silent_accounting_count_rounding(ra):
     code = """
 def render(frame):
