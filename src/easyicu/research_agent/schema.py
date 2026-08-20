@@ -1283,6 +1283,12 @@ class ArtifactConsumptionContract(BaseModel):
             raise ValueError(
                 "all_rows/single_row must not declare role_column or expected_roles"
             )
+        kind, _, _product = self.input_key.partition(":")
+        if kind == "artifact" and self.mode != "all_rows":
+            raise ValueError(
+                "artifact inputs are row-level datasets and require all_rows; "
+                "role-specific or singleton consumption belongs to a typed table"
+            )
         self.expected_roles[:] = roles
         return self
 
