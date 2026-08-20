@@ -158,6 +158,7 @@ def test_reference_docker_image_matches_advertised_capabilities(ra):
     )
     assert "requirements.lock" in dockerfile
     assert "pip install --no-cache-dir --no-deps /opt/easyicu" in dockerfile
+    assert "--no-build-isolation" in dockerfile
 
     dockerignore = (repo_root / ".dockerignore").read_text(encoding="utf-8")
     for excluded in (".git", ".venv", ".env.*", "research_output", "output"):

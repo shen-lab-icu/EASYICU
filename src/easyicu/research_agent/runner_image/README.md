@@ -39,6 +39,11 @@ docker build \
     .
 ```
 
+The repository package installation reuses the build tools already present in
+the digest-pinned base/runtime layer (`--no-build-isolation`). It therefore does
+not perform a second, unpinned setuptools/wheel download after the locked
+scientific stack has been installed.
+
 If you tag it differently, point the pipeline at your tag:
 
 ```python
