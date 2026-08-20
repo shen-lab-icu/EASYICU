@@ -107,3 +107,17 @@ def test_execute_phase_gates_before_registering_or_applying_candidate_plan() -> 
     assert '"runtime_replan_human_review_required"' in inspect.getsource(
         run_execute_phase
     )
+
+
+def test_runtime_replan_rebinds_signed_science_before_contract_review() -> None:
+    """A replan cannot widen a host-owned model step back into generated code."""
+
+    source = inspect.getsource(phase_support._step_maybe_replan)
+    normalized = source.index("normalize_replan_candidate(")
+    rebound = source.index("_scientific_runtime_authorities.bind_plan(revised)")
+    validated = source.index("_scientific_runtime_authorities.validate_plan(revised)")
+    contract_review = source.index("replan_candidate_contract_findings(")
+    registered = source.index("register_plan_revision(revised, reason=reason)")
+
+    assert normalized < rebound < validated < contract_review < registered
+    assert "replanner_scientific_runtime_rebind_failed" in source

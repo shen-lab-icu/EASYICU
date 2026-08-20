@@ -56,6 +56,7 @@ from ..authority.plan_authority import (
     NormalizedPlanCandidate as NormalizedPlanCandidate,
 )
 from ..authority.plan_scope import (
+    _plan_signature,
     _serializable_plan_scientific_scope_signature,
     _step_scientific_signature,
 )
@@ -1751,6 +1752,35 @@ def _step_maybe_replan(
     )
     revised = normalized_candidate.plan
 
+    # Runtime replanning happens after the initial plan compiler.  Re-apply the
+    # same immutable scientific authority here so generic input-closure shaping
+    # cannot widen or otherwise drift a signed host-owned step.  Without this,
+    # a replanner could append plausible companion columns to an association
+    # model grid, make the exact owner decline it, and silently send the effect
+    # calculation back to generated code.
+    try:
+        revised, scientific_runtime_findings = (
+            pipeline._scientific_runtime_authorities.bind_plan(revised)
+        )
+        pipeline._scientific_runtime_authorities.validate_plan(revised)
+    except (TypeError, ValueError) as exc:
+        findings.extend(normalized_candidate.findings)
+        findings.append(
+            ValidationFinding(
+                validator="replanner",
+                severity="warning",
+                message=(
+                    "Rejected a replanner candidate because it could not be "
+                    "rebound to the immutable scientific runtime authority."
+                ),
+                detail={
+                    "reason": "replanner_scientific_runtime_rebind_failed",
+                    "error_type": type(exc).__name__,
+                },
+            )
+        )
+        return current_plan, plan_path
+
     candidate_contract_findings = replan_candidate_contract_findings(
         plan=revised,
         context=context,
@@ -1764,7 +1794,10 @@ def _step_maybe_replan(
     )
     active_candidate_findings, candidate_contract_errors = (
         partition_replan_candidate_findings(
-            normalization_findings=list(normalized_candidate.findings),
+            normalization_findings=[
+                *normalized_candidate.findings,
+                *scientific_runtime_findings,
+            ],
             contract_findings=candidate_contract_findings,
         )
     )
@@ -1779,7 +1812,7 @@ def _step_maybe_replan(
         )
         return current_plan, plan_path
 
-    if not normalized_candidate.substantive:
+    if _plan_signature(revised) == _plan_signature(current_plan):
         _replan_state["noop_streak"] += 1
         cap_noop = pipeline._max_consecutive_noop_replans
         if cap_noop and _replan_state["noop_streak"] >= cap_noop:
