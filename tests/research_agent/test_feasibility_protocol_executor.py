@@ -77,6 +77,21 @@ def test_the_terminal_protocol_is_owned_and_selected() -> None:
     assert selection.consumed_input_keys == tuple(step.inputs)
 
 
+def test_legacy_raw_names_are_ignored_not_mounted_or_executed() -> None:
+    step = _step(inputs=["age", *_step().inputs])
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step]),
+    )
+
+    assert feasibility_protocol_executor_owns_step(step)
+    assert selection is not None
+    assert selection.consumed_input_keys == tuple(_step().inputs)
+    assert not feasibility_protocol_executor_owns_step(
+        _step(inputs=["../cohort.parquet", *_step().inputs])
+    )
+
+
 def test_primary_or_numeric_protocols_are_never_claimed() -> None:
     assert not feasibility_protocol_executor_owns_step(
         _step(planned_analysis_role="primary")

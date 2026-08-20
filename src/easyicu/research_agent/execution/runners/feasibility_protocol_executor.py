@@ -51,21 +51,38 @@ def feasibility_protocol_consumed_input_keys(step: AnalysisStep) -> tuple[str, .
     for value in step.inputs or ():
         token = str(value or "").strip()
         match = _TYPED_KEY.fullmatch(token)
-        if match is None or match.group(1) not in RUNTIME_BINDABLE_TYPED_INPUT_KINDS:
-            return ()
-        keys.append(token)
+        if match is not None:
+            if match.group(1) not in RUNTIME_BINDABLE_TYPED_INPUT_KINDS:
+                return ()
+            keys.append(token)
     return tuple(keys)
+
+
+def _declared_raw_inputs(step: AnalysisStep) -> tuple[str, ...] | None:
+    """Return legacy raw names that the protocol must explicitly ignore."""
+
+    values: list[str] = []
+    for value in step.inputs or ():
+        token = str(value or "").strip()
+        if _TYPED_KEY.fullmatch(token) is not None:
+            continue
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
+            return None
+        values.append(token)
+    return tuple(values)
 
 
 def feasibility_protocol_executor_owns_step(step: AnalysisStep) -> bool:
     """Whether the step is exactly a terminal non-executable protocol."""
 
     inputs = feasibility_protocol_consumed_input_keys(step)
+    raw_inputs = _declared_raw_inputs(step)
     return bool(
         step.planned_analysis_role in {"auxiliary", "secondary", "sensitivity"}
         and _method_head(step.method) == "feasibility_protocol"
         and _report_product(step) is not None
-        and len(inputs) == len(step.inputs or ())
+        and raw_inputs is not None
+        and len(inputs) + len(raw_inputs) == len(step.inputs or ())
         and step.table_one_spec is None
         and step.trajectory_stability_spec is None
         and step.exposure_outcome_distribution_spec is None
@@ -83,6 +100,8 @@ def feasibility_protocol_executor_code(step: AnalysisStep) -> str:
     product = _report_product(step)
     if product is None or not feasibility_protocol_executor_owns_step(step):
         raise ValueError("step is not an owned feasibility protocol")
+    raw_inputs = _declared_raw_inputs(step)
+    assert raw_inputs is not None
     return textwrap.dedent(
         f"""
         import json
@@ -101,7 +120,8 @@ def feasibility_protocol_executor_code(step: AnalysisStep) -> str:
             planned_analysis_role={step.planned_analysis_role!r},
             intent={step.intent!r},
             report_product={product!r},
-            declared_inputs={list(step.inputs or ())!r},
+            declared_inputs={list(feasibility_protocol_consumed_input_keys(step))!r},
+            ignored_raw_inputs={list(raw_inputs)!r},
         )
         print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
         """
@@ -126,6 +146,7 @@ def run_feasibility_protocol(
     intent: str,
     report_product: str,
     declared_inputs: list[str],
+    ignored_raw_inputs: list[str] | None = None,
 ) -> dict[str, Any]:
     """Write the declared limitation without computing or inventing a result."""
 
@@ -214,6 +235,16 @@ def run_feasibility_protocol(
         )
     else:
         lines.append("- None declared by this protocol step.")
+    ignored = list(ignored_raw_inputs or [])
+    if ignored:
+        lines.extend(
+            [
+                "",
+                "## Raw inputs intentionally not consumed",
+                "",
+                *[f"- `{name}`" for name in ignored],
+            ]
+        )
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     receipt = {
@@ -224,6 +255,7 @@ def run_feasibility_protocol(
         "effect_estimate": None,
         "declared_intent": str(intent).strip(),
         "bound_input_authorities": authorities,
+        "ignored_raw_inputs": ignored,
         "report_sha256": _sha256(report_path),
     }
     receipt_path = out_dir / f"{report_product}.receipt.json"
