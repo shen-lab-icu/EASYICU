@@ -66,7 +66,7 @@ from ..repairs.reasons import (
     repair_reason_for_finding,
     typed_repair_ticket,
 )
-from ..plan_utils import _step_contract_repair_guidance
+from ..plan_utils import _step_contract_repair_guidance, effect_output_authorized
 from ..orchestration.resume import store_quarantined_concept_draft
 from ..repair_registry import is_sealed_renderer_repair
 from ..authority.provider_budget import ProviderCallBudgetReceiptError
@@ -1643,7 +1643,10 @@ def _candidate_contract_setup_transition(
         step_summary=state.visual_step_summary,
         completed_step_records=completed_records_snapshot,
         resolved_input_bindings=attempt.resolved_input_bindings,
-        step_record=attempt.step_record,
+        effect_output_is_authorized=effect_output_authorized(
+            attempt.step,
+            step_record=attempt.step_record,
+        ),
         out_dir=state.run_result.out_dir,
         run_dir=host.run_dir,
         universe_path=host.universe_path,

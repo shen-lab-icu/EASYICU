@@ -47,6 +47,7 @@ from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..gates.contract import _step_deterministic_contract_findings
 from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
+from ..plan_utils import effect_output_authorized
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .cohort_routing import (
     bound_step_execution_cohort_path as _bound_step_execution_cohort_path,
@@ -301,7 +302,10 @@ def _evaluate_final_deterministic_gates(
         step_summary=step_summary,
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
-        step_record=step_record,
+        effect_output_is_authorized=effect_output_authorized(
+            step,
+            step_record=step_record,
+        ),
         out_dir=out_dir,
         run_dir=run_dir,
         universe_path=universe_path,

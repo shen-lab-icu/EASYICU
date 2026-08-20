@@ -4068,6 +4068,7 @@ def _step_contract_findings(
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     step_record: Optional[Mapping[str, Any]] = None,
+    effect_output_is_authorized: Optional[bool] = None,
     out_dir: Optional[Path] = None,
     trajectory_role_contract_applies: bool = True,
 ) -> List[ValidationFinding]:
@@ -4117,7 +4118,6 @@ def _step_contract_findings(
         )
     )
     findings.extend(table_one_output_findings(step=step, out_dir=out_dir))
-
     # Figure-only follow-up steps (created by ``_split_table_and_figure_outputs_in_plan``)
     # inherit the parent's step_id with a ``_figure`` suffix, e.g.
     # ``04_primary_association_figure`` / ``01_model_training_figure``. Their
@@ -4140,7 +4140,7 @@ def _step_contract_findings(
             step_summary=step_summary,
             effect_method_authorized=effect_output_authorized(
                 step, step_record=step_record
-            ),
+            ) if effect_output_is_authorized is None else effect_output_is_authorized,
             effect_figure_source_authorized=_effect_figure_source_authorized(
                 step=step,
                 completed_step_records=completed_step_records,
