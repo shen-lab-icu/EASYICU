@@ -312,6 +312,7 @@ def _structural_filter_findings(
         prior_guards: dict[str, list[ast.stmt]] = {}
         mask_names: set[str] = set()
         mask_sources: dict[str, set[str]] = {}
+        mask_column_sources: dict[str, set[str]] = {}
         frame_aliases: dict[str, set[str]] = {}
         for statement in body:
             if isinstance(statement, (ast.Assign, ast.AnnAssign)):
@@ -346,6 +347,12 @@ def _structural_filter_findings(
                             continue
                         mask_names.add(target.id)
                         mask_sources[target.id] = _referenced_names(value)
+                        mask_column_sources[target.id] = {
+                            source
+                            for candidate in ast.walk(value)
+                            if isinstance(candidate, ast.Subscript)
+                            and (source := _subscript_frame_name(candidate.value))
+                        }
             for node in ast.walk(statement):
                 if not isinstance(node, ast.Subscript):
                     continue
@@ -369,7 +376,12 @@ def _structural_filter_findings(
                     mask_name
                     and (
                         value_name.endswith(".loc")
-                        or (direct_name and source_names & direct_sources)
+                        or (
+                            direct_name
+                            and source_names & direct_sources
+                            and mask_column_sources.get(mask_name, set())
+                            & direct_sources
+                        )
                     )
                 )
                 if not is_row_filter:
