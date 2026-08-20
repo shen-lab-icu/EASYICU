@@ -2105,6 +2105,8 @@ class ResearchAgentPipeline:
             raise ValueError("development_sample_size must be positive")
         self._development_sample_seed = int(config.development_sample_seed)
         self._development_diagnostic = bool(config.development_diagnostic)
+        from .orchestration.profiles import is_paper_facing_profile
+
         if (
             self._development_sample_size is not None
             and config.submission_profile_name is not None
@@ -2113,12 +2115,13 @@ class ResearchAgentPipeline:
                 "development cohort sampling is non-paper authority and cannot "
                 "be combined with a submission profile"
             )
-        if self._development_diagnostic and config.submission_profile_name is not None:
+        if self._development_diagnostic and is_paper_facing_profile(
+            config.submission_profile_name
+        ):
             raise ValueError(
                 "development diagnostics are non-paper authority and cannot "
-                "be combined with a submission profile"
+                "be combined with a paper-facing submission profile"
             )
-        from .orchestration.profiles import is_paper_facing_profile
 
         if config.allow_underfunded_step_provider_calls and is_paper_facing_profile(
             config.submission_profile_name
