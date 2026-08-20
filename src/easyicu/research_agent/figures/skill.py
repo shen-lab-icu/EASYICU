@@ -41,7 +41,10 @@ from .base import (
     first_normalisable_record as _first_normalisable_record,
     verified_record_path as _verified_record_path,
 )
-from .display_labels import display_label as _display_label
+from .display_labels import (
+    binary_contrast_label as _binary_contrast_label,
+    display_label as _display_label,
+)
 from .exposure_outcome_distribution import (
     normalise_distribution_risk_difference,
 )
@@ -2910,11 +2913,20 @@ def _normalise_association_frame(
     if estimate_col is None or label_col is None:
         return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
 
+    def association_label(value: Any) -> str:
+        if primary_token and primary_token in _match_token(value):
+            declared_contrast = _binary_contrast_label(
+                primary_exposure, display_labels
+            )
+            if declared_contrast is not None:
+                return declared_contrast
+        return _display_label(value, display_labels)
+
     out = pd.DataFrame(
         {
             "label": frame[label_col]
             .astype(str)
-            .map(lambda value: _display_label(value, display_labels)),
+            .map(association_label),
             "estimate": pd.to_numeric(frame[estimate_col], errors="coerce"),
         }
     )

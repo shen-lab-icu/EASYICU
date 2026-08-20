@@ -14,7 +14,12 @@ from typing import Any, Mapping, Optional
 
 import pandas as pd
 
-from .display_labels import display_label
+from .display_labels import (
+    binary_contrast_label,
+    binary_scope_label,
+    display_label,
+    scoped_label_lookup,
+)
 
 
 _DISTRIBUTION_IDENTITY_COLUMNS = frozenset(
@@ -130,14 +135,20 @@ def normalise_distribution_risk_difference(
     exposure_column = columns.get("exposure_column")
     if not exposure_name and exposure_column is not None:
         exposure_name = _single_text(frame[exposure_column]) or ""
+    declared_contrast = binary_contrast_label(exposure_name, display_labels)
     exposure_label = display_label(exposure_name or "Exposure", display_labels)
-    comparison_label = _exposure_level_label(comparison_level, display_labels)
-    reference_label = _exposure_level_label(reference_level, display_labels)
+    comparison_label = _exposure_level_label(
+        comparison_level, display_labels, scope=exposure_name
+    )
+    reference_label = _exposure_level_label(
+        reference_level, display_labels, scope=exposure_name
+    )
 
     result = pd.DataFrame(
         {
             "label": [
-                f"{exposure_label}: {comparison_label} vs {reference_label}"
+                declared_contrast
+                or f"{exposure_label}: {comparison_label} vs {reference_label}"
             ],
             "estimate": [estimate],
             "lower": [lower],
@@ -185,10 +196,16 @@ def normalise_distribution_outcome_rates(
     if levels.empty:
         return pd.DataFrame(columns=["score", "rate", "lower", "upper", "n"])
 
+    exposure_name = ""
+    exposure_column = columns.get("exposure_column")
+    if exposure_column is not None:
+        exposure_name = _single_text(frame[exposure_column]) or ""
     result = pd.DataFrame(
         {
             "score": levels[columns["exposure_level"]].map(
-                lambda value: _exposure_level_label(value, display_labels)
+                lambda value: _exposure_level_label(
+                    value, display_labels, scope=exposure_name
+                )
             ),
             "rate": pd.to_numeric(
                 levels[columns["outcome_rate_pct"]], errors="coerce"
@@ -216,9 +233,12 @@ def normalise_distribution_outcome_rates(
         result[["rate", "lower", "upper"]] / 100.0
     )
     result = result.sort_values("_order").drop(columns=["_order"]).reset_index(drop=True)
+    scope_label = binary_scope_label(exposure_name, display_labels)
     result.attrs.update(
         {
-            "score_label": "Exposure group",
+            "score_label": (
+                f"{scope_label} status" if scope_label else "Exposure group"
+            ),
             "score_is_numeric": False,
             "source_contract": "exposure_outcome_distribution",
         }
@@ -227,8 +247,14 @@ def normalise_distribution_outcome_rates(
 
 
 def _exposure_level_label(
-    value: Any, display_labels: Optional[Mapping[str, str]]
+    value: Any,
+    display_labels: Optional[Mapping[str, str]],
+    *,
+    scope: Any = None,
 ) -> str:
+    declared = scoped_label_lookup(scope, value, display_labels)
+    if declared is not None:
+        return declared
     token = str(value).strip().casefold()
     if token in {"0", "0.0", "false", "no", "absent", "negative"}:
         return "Unexposed"

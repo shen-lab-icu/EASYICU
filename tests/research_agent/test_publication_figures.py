@@ -1359,6 +1359,41 @@ def test_e1_typed_distribution_uses_authorized_risk_difference_not_level_codes(r
     assert axis["xlabel"] == "Risk difference (percentage points)"
 
 
+def test_binary_level_display_labels_reach_adjusted_and_distribution_panels(ra):
+    from easyicu.research_agent.figures.skill import (
+        _normalise_association_frame,
+        _normalise_strata_frame,
+        _strata_score_label,
+    )
+
+    labels = {
+        "marker_a=0": "Marker A absent",
+        "marker_a=1": "Marker A present",
+    }
+    adjusted = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "exposure": ["marker_a"],
+                "estimate": [1.4],
+                "ci_low": [1.2],
+                "ci_high": [1.6],
+            }
+        ),
+        primary_exposure="marker_a",
+        display_labels=labels,
+    )
+    distribution = _e1_typed_distribution_frame(
+        include_risk_difference=True
+    ).assign(exposure_column="marker_a")
+    strata = _normalise_strata_frame(distribution, display_labels=labels)
+
+    assert adjusted["label"].tolist() == [
+        "Marker A present vs Marker A absent"
+    ]
+    assert strata["score"].tolist() == ["Marker A absent", "Marker A present"]
+    assert _strata_score_label(strata) == "Marker A status"
+
+
 def test_e1_typed_distribution_without_authorized_contrast_fails_closed(ra):
     from easyicu.research_agent.figures.skill import _normalise_association_frame
 
@@ -1648,7 +1683,8 @@ def test_publication_figure_skill_e1_typed_distribution_projects_both_panels(
     plan = ra.AnalysisPlan(
         research_question=context.research_question,
         display_labels={
-            "sep3_sofa1_max": "标准 Sepsis-3 状态（0–24小时）",
+            "sep3_sofa1_max=0": "Sepsis-3 absent",
+            "sep3_sofa1_max=1": "Sepsis-3 present",
             "age": "ICU入科时年龄（岁）",
             "death": "院内死亡",
         },
@@ -1690,9 +1726,16 @@ def test_publication_figure_skill_e1_typed_distribution_projects_both_panels(
         / "publication_figure_source_stratified_outcome.csv"
     )
     assert primary_source["estimate"].tolist() == pytest.approx([5.415095])
+    assert primary_source["label"].tolist() == [
+        "Sepsis-3 present vs Sepsis-3 absent"
+    ]
     assert not set(primary_source["estimate"]) & {0.0, 1.0}
     assert strata_source["rate"].tolist() == pytest.approx([0.08210047, 0.13625142])
     assert strata_source["n"].tolist() == [62_862, 31_596]
+    assert strata_source["score"].tolist() == [
+        "Sepsis-3 absent",
+        "Sepsis-3 present",
+    ]
     contract = json.loads(
         (
             run_dir
