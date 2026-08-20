@@ -4,14 +4,14 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5673,
-      "sha256": "4f6b6e8a3125d2795796d60da1e7d81fbbdd575b751a745d0dabaec11c385acf",
+      "loc": 5679,
+      "sha256": "7d1d15f733f8f33291e5f6dfdeb71866da1f61e25b8cd42cd83c4d325e99ed79",
       "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 3682,
-      "sha256": "1f61dd6422e75f74d94cdf1c4a323a76d554408c81930be82afd373f98852cf4",
+      "loc": 3708,
+      "sha256": "13dd5ac53f553bbd4e3f6110e4e1e829f462f5a3f7a5f6a73016a096ad7b601a",
       "intra_package_import_edges": 55,
       "shim_bypass_violations": []
     },
@@ -22,8 +22,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8745,
-      "sha256": "dd01d95d41a6b8bdd58fb16ba903d50cc039f75145a3309215dc1ea91dadc258",
+      "loc": 8752,
+      "sha256": "a5ddf74c0b9fa7e27f1c52fb846c6bdd591c158dc259a509b2eb81a2ff14c5b9",
       "intra_package_import_edges": 122,
       "shim_bypass_violations": []
     },
@@ -40,8 +40,8 @@
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
-      "loc": 2213,
-      "sha256": "5a68f21fa487196586d64ef6acada6ceb4c5440dad9c1100592c968b98235280",
+      "loc": 2274,
+      "sha256": "b3bdb3b0f5876fdd241e4cb15456d83f6ab5502a92ebe828ca26f0d3ead91bd0",
       "intra_package_import_edges": 15,
       "shim_bypass_violations": []
     },
@@ -76,8 +76,8 @@
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 5784,
-      "sha256": "7f07e6370b46136301480a0be31f4045154ea3415625e3755536a79b2375f2a8",
+      "loc": 6228,
+      "sha256": "99af5a0eb5ef4f77778316378016d2428b5df52fb2ba49ae4c04e0f2b97204f1",
       "intra_package_import_edges": 15,
       "shim_bypass_violations": []
     },
@@ -100,9 +100,9 @@
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 5496,
-      "sha256": "59f4d482cc6c011424faf030e8a4dd0935ce1a47e450c17abf7481480d1a3675",
-      "intra_package_import_edges": 32,
+      "loc": 5601,
+      "sha256": "2f37a6bfd73dfb44d8349e597371f3e3cf52cdbc96bc481c90f57ac8e1b0a39d",
+      "intra_package_import_edges": 36,
       "shim_bypass_violations": []
     },
     "repairs/typed_input.py": {
@@ -160,8 +160,8 @@
       "shim_bypass_violations": []
     },
     "plan_utils.py": {
-      "loc": 4892,
-      "sha256": "ec5b776f1ad02eb1cfbfef7c6ff25828a76ab134b5de8e4aac6fb805a102d932",
+      "loc": 4928,
+      "sha256": "af86076ecd228a934dbe7dd9565b5fa71692bdfc60a8457210f46111cc452d54",
       "intra_package_import_edges": 17,
       "shim_bypass_violations": []
     },
@@ -197,7 +197,7 @@
     },
     "agents/planner.py": {
       "loc": 2024,
-      "sha256": "59842a896e83c6b5bb60753d600ff9ff046ed31aff3ee4dfb8fcf68350d6d76c",
+      "sha256": "eaf03b422afabec41388e0400aae7566e9b407d883a3d0551c3c54736aa7bbb7",
       "intra_package_import_edges": 27,
       "shim_bypass_violations": []
     },
@@ -226,8 +226,8 @@
       "shim_bypass_violations": []
     },
     "agents/coder.py": {
-      "loc": 1564,
-      "sha256": "0b4106b14bae41e5411fffe0dc50f6a5ec9d8d8ed13126ffaedd517b786203d2",
+      "loc": 1628,
+      "sha256": "c9abf916942f927b1d604eb65d39b42f05d830c40b457fa9dd04aae4e06387fc",
       "intra_package_import_edges": 26,
       "shim_bypass_violations": []
     },
@@ -244,8 +244,8 @@
       "shim_bypass_violations": []
     },
     "schema.py": {
-      "loc": 3257,
-      "sha256": "150083d0b02b80d9763a6bd554648652f50e9066404e1a2249ab881a3b31b96e",
+      "loc": 3263,
+      "sha256": "7c54a40c1aa5420b774d023103ad089989ea012813f72a123b3853a040a2b3d2",
       "intra_package_import_edges": 18,
       "shim_bypass_violations": []
     },
@@ -274,8 +274,8 @@
       "shim_bypass_violations": []
     },
     "figures/skill.py": {
-      "loc": 3358,
-      "sha256": "bd3f855685c0eee0be952987e6a7681c578a444ded0fe16bfb3d748a0c777fea",
+      "loc": 3370,
+      "sha256": "4ef551dd6db8410bf8eff6d5327c572d640403c9a1b03255986684467ebcb0a5",
       "intra_package_import_edges": 14,
       "shim_bypass_violations": []
     },
@@ -295,7 +295,7 @@
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 66,
-      "line_start": 1772,
+      "line_start": 1777,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 2,
@@ -307,7 +307,7 @@
     },
     "execution/phase.py::run_execute_phase": {
       "lines": 921,
-      "line_start": 1165,
+      "line_start": 1170,
       "direct_nested_funcs": 3,
       "total_nested_funcs": 4,
       "own_bound_names": 133,
@@ -317,7 +317,7 @@
     },
     "execution/phase.py::_execute_step": {
       "lines": 660,
-      "line_start": 3777,
+      "line_start": 3783,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 135,
@@ -326,11 +326,11 @@
       "callable_closure_captured_names": 0
     },
     "execution/phase.py::_prepare_execute_phase_authority": {
-      "lines": 138,
+      "lines": 143,
       "line_start": 1025,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
-      "own_bound_names": 31,
+      "own_bound_names": 32,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 0
@@ -347,7 +347,7 @@
     },
     "pipeline.py::run": {
       "lines": 672,
-      "line_start": 4622,
+      "line_start": 4629,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 107,
@@ -357,7 +357,7 @@
     },
     "pipeline.py::_generate_or_resume_plan": {
       "lines": 446,
-      "line_start": 2549,
+      "line_start": 2552,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 48,
@@ -367,7 +367,7 @@
     },
     "pipeline.py::_run_plan_phase": {
       "lines": 620,
-      "line_start": 3420,
+      "line_start": 3427,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 83,
@@ -376,11 +376,47 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Accept a seven-line growth in execution/phase_support.py (3675 -> 3682) so the run-lifetime cohort-column registration is stated by the layer that owns the run. Its previous home, cohort/repair.py, performed the same registration as a permanent process-wide side effect of merely extracting a definition, which silently disabled two 091384c fail-closed authority assertions whenever anything touched cohort repair first. The seven lines are one import, one None-guard, one call and four lines of rationale; the KNOWN DEBT narrative was moved to the registry that owns it in planning/cohort_contract.py to keep this as small as it can be while still saying why. This entry also corrects a pre-existing drift: the committed baseline recorded pipeline.py at 8747 and _run_plan_phase at 623 while the 4868315 tree had 8745 and 620, leaving that ratchet two lines looser than intended. No other gated metric changes.",
+  "baseline_reason": "Accept the reviewed 2026-08-18..2026-08-20 E1 convergence batch through e689e91: generic fail-closed provenance, typed-input loading, planner-panel/display authority, runtime-replan binding, figure-lineage/export registration, and validation-only pandas preflight contracts. The measured growth is contract hardening exercised by focused owner tests and the fresh 11/11 E1 run; it adds no E1/Sepsis-specific branch. This ratchet move records rather than hides the growth. pipeline.py, execution/phase.py, gates/preflight.py, repairs/source.py, and the other listed large owners remain explicit decomposition debt; no further rules should be added to them without an owner-level split.",
   "baseline_accepted_growth": {
+    "execution/phase.py": {
+      "loc_was": 5673,
+      "loc_now": 5679
+    },
     "execution/phase_support.py": {
-      "loc_was": 3675,
-      "loc_now": 3682
+      "loc_was": 3682,
+      "loc_now": 3708
+    },
+    "pipeline.py": {
+      "loc_was": 8745,
+      "loc_now": 8752
+    },
+    "authority/typed_binding.py": {
+      "loc_was": 2213,
+      "loc_now": 2274
+    },
+    "gates/preflight.py": {
+      "loc_was": 5784,
+      "loc_now": 6228
+    },
+    "repairs/source.py": {
+      "loc_was": 5496,
+      "loc_now": 5601
+    },
+    "plan_utils.py": {
+      "loc_was": 4892,
+      "loc_now": 4928
+    },
+    "agents/coder.py": {
+      "loc_was": 1564,
+      "loc_now": 1628
+    },
+    "schema.py": {
+      "loc_was": 3257,
+      "loc_now": 3263
+    },
+    "figures/skill.py": {
+      "loc_was": 3358,
+      "loc_now": 3370
     }
   },
   "baseline_history": [
@@ -663,6 +699,51 @@
         "execution/phase_support.py": {
           "loc_was": 3675,
           "loc_now": 3682
+        }
+      }
+    },
+    {
+      "reason": "Accept the reviewed 2026-08-18..2026-08-20 E1 convergence batch through e689e91: generic fail-closed provenance, typed-input loading, planner-panel/display authority, runtime-replan binding, figure-lineage/export registration, and validation-only pandas preflight contracts. The measured growth is contract hardening exercised by focused owner tests and the fresh 11/11 E1 run; it adds no E1/Sepsis-specific branch. This ratchet move records rather than hides the growth. pipeline.py, execution/phase.py, gates/preflight.py, repairs/source.py, and the other listed large owners remain explicit decomposition debt; no further rules should be added to them without an owner-level split.",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 5673,
+          "loc_now": 5679
+        },
+        "execution/phase_support.py": {
+          "loc_was": 3682,
+          "loc_now": 3708
+        },
+        "pipeline.py": {
+          "loc_was": 8745,
+          "loc_now": 8752
+        },
+        "authority/typed_binding.py": {
+          "loc_was": 2213,
+          "loc_now": 2274
+        },
+        "gates/preflight.py": {
+          "loc_was": 5784,
+          "loc_now": 6228
+        },
+        "repairs/source.py": {
+          "loc_was": 5496,
+          "loc_now": 5601
+        },
+        "plan_utils.py": {
+          "loc_was": 4892,
+          "loc_now": 4928
+        },
+        "agents/coder.py": {
+          "loc_was": 1564,
+          "loc_now": 1628
+        },
+        "schema.py": {
+          "loc_was": 3257,
+          "loc_now": 3263
+        },
+        "figures/skill.py": {
+          "loc_was": 3358,
+          "loc_now": 3370
         }
       }
     }
