@@ -20,6 +20,7 @@ from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,
+    cohort_concept_id_scope,
     materialize_locked_analysis_cohort,
 )
 from easyicu.research_agent.execution import phase as execution_phase
@@ -128,6 +129,46 @@ def test_all_input_rows_cohort_yields_a_row_conservation_receipt(
     assert [row["predicate_kind"] for row in receipt["ordered_predicate_flow"]] == [
         "universe"
     ]
+
+
+def test_receipt_scopes_materialized_columns_without_process_leak(tmp_path: Path) -> None:
+    concept_id = "materialized_signal"
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {"stay_id": [11, 12], concept_id: [1.0, None]}
+    ).to_parquet(universe_path, index=False)
+    with cohort_concept_id_scope([concept_id]):
+        definition = CohortDefinition(
+            name="measured_signal",
+            inclusion=(
+                ConceptPredicate(
+                    concept_id=concept_id,
+                    time_window=TimeWindow("icu_admit", 0, 24),
+                    aggregation="first",
+                    op="not_missing",
+                ),
+            ),
+        )
+        plan = AnalysisPlan(
+            research_question="Use the materialized signal.",
+            cohort=definition,
+            robustness_specs=[],
+            steps=[],
+        )
+        result = materialize_locked_analysis_cohort(
+            run_dir=tmp_path,
+            plan=plan,
+            universe_path=universe_path,
+            cohort_concept_ids=[concept_id],
+        )
+
+    receipt = _planner_materialized_cohort_execution_receipt(
+        plan=plan,
+        universe_path=universe_path,
+        analysis_cohort_path=Path(result["path"]),
+    )
+
+    assert receipt["authoritative_analysis_cohort"]["rows"] == 1
 
 
 def test_execute_phase_asks_for_the_receipt_through_the_selection_owner() -> None:

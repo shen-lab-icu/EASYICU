@@ -441,6 +441,52 @@ E1_REVIEWED_DEMO_2026_08_17 = SubmissionProfile(
     planner_strategy="progressive_v2",
 )
 
+E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19 = SubmissionProfile(
+    name="npj_dm_e1_canary_dev",
+    version="20260819",
+    locked_at="2026-08-19T15:58:41Z",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Additive re-lock for the finalized seven-day AKI dictionary. Earlier E1
+    # profiles remain immutable replay coordinates.
+    expected_concept_dict_sha="e3fd2fcb9d4a65fdaa58c5bc1edece0b1d8e7c685c13310bedef86fdd7138b00",
+    expected_sofa2_dict_sha="71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=True,
+    planner_strategy="progressive_v2",
+)
+
+E1_REVIEWED_DEMO_2026_08_19 = SubmissionProfile(
+    name="npj_dm_e1_demo_dev",
+    version="20260819",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.locked_at,
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=False,
+    planner_strategy="progressive_v2",
+)
+
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
     name="npj_dm_know_how_dev",
     version="20260721",
@@ -547,8 +593,12 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17.ref: (
         E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17
     ),
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19
+    ),
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     E1_REVIEWED_DEMO_2026_08_17.ref: E1_REVIEWED_DEMO_2026_08_17,
+    E1_REVIEWED_DEMO_2026_08_19.ref: E1_REVIEWED_DEMO_2026_08_19,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
@@ -712,8 +762,10 @@ __all__ = [
     "E1_PLANNER_CANARY_2026_08_14",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_16",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19",
     "E1_REVIEWED_DEMO_2026_08_15",
     "E1_REVIEWED_DEMO_2026_08_17",
+    "E1_REVIEWED_DEMO_2026_08_19",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",

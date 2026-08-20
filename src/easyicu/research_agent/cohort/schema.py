@@ -62,6 +62,20 @@ COHORT_LOCK_FILENAME = "cohort_locked.json"
 _IMPLEMENTED_AGGREGATIONS = set(ALLOWED_CTAS_AGGREGATIONS)
 
 
+def materialized_cohort_concept_id_scope(
+    path: Path, verified: Any = None
+) -> Any:
+    """Scope validation to columns proven by one materialized cohort."""
+
+    if verified is not None:
+        columns = verified.authority.cohort_columns
+    else:
+        import pyarrow.parquet as pq  # type: ignore
+
+        columns = tuple(str(name) for name in pq.read_schema(path).names)
+    return cohort_concept_id_scope(columns)
+
+
 class CohortDataError(KeyError):
     """Raised when materialised data cannot satisfy a CTAS definition."""
 
@@ -1690,6 +1704,7 @@ __all__ = [
     "coerce_cohort_definition",
     "clear_cohort_concept_ids",
     "cohort_concept_id_scope",
+    "materialized_cohort_concept_id_scope",
     "cohort_definition_sha",
     "concept_id_exists",
     "default_pattern_registry",

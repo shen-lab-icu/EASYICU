@@ -343,7 +343,7 @@ def _base_planner_user_prompt(
     "but mark it as a feasibility / protocol step unless the "
     "ResearchContext explicitly provides external cohort files. "
     "Use score-specific QC steps only when a relevant score is "
-    "actually central to the question. Do not put invented "
+    "central to the question. Do not put invented "
     "prefixed variables such as eicu:age in `inputs`. Honor "
     "explicit user preferences and requested outputs when they "
     "are compatible with the cohort and analysis family. Similar-study "

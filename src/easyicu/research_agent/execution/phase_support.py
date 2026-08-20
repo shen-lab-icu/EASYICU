@@ -42,7 +42,6 @@ from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
     assert_cohort_definition_locked,
-    register_cohort_concept_ids,
 )
 from ..contracts.runtime import ValidationFinding
 
@@ -451,12 +450,6 @@ def _extract_cohort_definition_with_provider_budget(
             name=name,
         ),
     )
-    if definition is not None:
-        # Owned here, not in the extractor: the execution receipt re-validates
-        # this definition outside any scope (``coerce_cohort_definition``), and
-        # its predicates name pre-materialised columns. Still process-permanent
-        # -- see the KNOWN DEBT on ``_EXTRA_COHORT_CONCEPT_IDS``.
-        register_cohort_concept_ids(universe_columns)
     snapshot = budget.snapshot()
     return definition, {
         "budget_owner_step_id": budget_owner_step_id,
