@@ -2449,6 +2449,7 @@ def _step_prepare_execution_authority(
         planner_declared_inputs=step.inputs,
         bindings=resolved_input_bindings,
         context_path=plan_result.context_path,
+        plan_path=plan_result.plan_path,
         raw_input_contracts=plausibility_authority.raw_input_contracts(),
         host_verified_cohort_execution_receipt=(
             primary_cohort_execution_receipt

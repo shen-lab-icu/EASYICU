@@ -391,7 +391,11 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "- manifest['context'] binds the immutable Agent-produced ResearchContext by "
         "relative_path and sha256. Load it under EASYICU_RUN_DIR and verify the digest; "
         "it is semantic context only; do not copy prompt literals, invent scientific "
-        "coordinates, or treat it as a second executable input contract. Look up each "
+        "coordinates, or treat it as a second executable input contract. "
+        "manifest['plan'] binds the current immutable Planner-owned AnalysisPlan the "
+        "same way; load it under EASYICU_RUN_DIR and verify its digest. Read "
+        "presentation fields such as display_labels from that plan, never from the "
+        "ResearchContext, notes, or copied prompt literals. Look up each "
         "typed kind:name exactly in manifest['inputs'] and verify its evidence_id, "
         "relative_path, and sha256.\n"
         "- product_contract from the successful producer's step summary owns that "
@@ -520,6 +524,9 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "- manifest['context'] binds the immutable Agent-produced ResearchContext; "
         "verify its digest, do not copy prompt literals, and do not treat it as "
         "another executable input contract.",
+        "- manifest['plan'] binds the current immutable Planner-owned AnalysisPlan; "
+        "verify its digest and read presentation fields such as display_labels from "
+        "that plan, never from ResearchContext, notes, or copied prompt literals.",
         "- Record one input_bindings row per typed input attempted; it must be "
         "truthful and include exact input_key/evidence_id/sha256, loaded, and, for each "
         "loaded tabular input, its row_count. This list may contain only exact keys "

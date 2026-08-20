@@ -866,6 +866,11 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
 
     context_path = tmp_path / "research_context.json"
     context_path.write_text('{"primary_exposure":"x"}\n', encoding="utf-8")
+    plan_path = tmp_path / "analysis_plan.json"
+    plan_path.write_text(
+        '{"display_labels":{"x=0":"Unexposed","x=1":"Exposed"}}\n',
+        encoding="utf-8",
+    )
     manifest_path = _write_resolved_inputs_manifest(
         run_dir=tmp_path,
         step_id="consumer",
@@ -876,6 +881,7 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
         ],
         bindings={"table:scaling_summary": binding},
         context_path=context_path,
+        plan_path=plan_path,
     )
     payload = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "2.1"
@@ -887,6 +893,8 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     assert list(payload["inputs"]) == ["table:scaling_summary"]
     assert payload["context"]["relative_path"] == "research_context.json"
     assert payload["context"]["sha256"] == sha256_of_file(context_path)
+    assert payload["plan"]["relative_path"] == "analysis_plan.json"
+    assert payload["plan"]["sha256"] == sha256_of_file(plan_path)
     manifest_binding = payload["inputs"]["table:scaling_summary"]
     assert manifest_binding["evidence_id"] == current.evidence_id
     assert manifest_binding["product_contract"]["value_column"] == "x"
@@ -968,6 +976,22 @@ def test_resolved_inputs_manifest_rejects_context_outside_run(tmp_path: Path) ->
             planner_declared_inputs=[],
             bindings={},
             context_path=outside,
+        )
+
+
+def test_resolved_inputs_manifest_rejects_plan_outside_run(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    outside = tmp_path / "outside_plan.json"
+    outside.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="contained by run_dir"):
+        _write_resolved_inputs_manifest(
+            run_dir=run_dir,
+            step_id="consumer",
+            planner_declared_inputs=[],
+            bindings={},
+            plan_path=outside,
         )
 
 
