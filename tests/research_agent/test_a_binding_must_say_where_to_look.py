@@ -44,6 +44,7 @@ whether the bytes can be read.  Whether a consumer needs coordinates does.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 
@@ -296,6 +297,76 @@ def test_the_production_binder_still_publishes_a_readable_sibling() -> None:
     assert refusals == []
     assert binding is not None
     assert binding["product_contract"]["columns"]
+
+
+def test_only_terminal_report_can_bind_opaque_figure_as_digest_reference(
+    tmp_path: pathlib.Path,
+) -> None:
+    from easyicu.research_agent.authority.typed_binding import (
+        _consumer_allows_opaque_reference,
+        _resolved_typed_input_binding,
+    )
+    from easyicu.research_agent.schema import AnalysisStep, EvidenceRef
+
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    figure_path = evidence_dir / "figure_evidence__primary_result.png"
+    figure_path.write_bytes(b"not decoded by the report binder")
+    digest = hashlib.sha256(figure_path.read_bytes()).hexdigest()
+    record = {
+        "evidence_id": "figure_evidence",
+        "kind": "figure",
+        "relative_path": str(figure_path.relative_to(tmp_path)),
+        "sha256": digest,
+        "produced_by_step": "03_figure",
+    }
+    ref = EvidenceRef(
+        evidence_id="figure_evidence",
+        kind="figure",
+        relative_path=str(figure_path.relative_to(tmp_path)),
+    )
+    report = AnalysisStep(
+        step_id="04_report",
+        planned_analysis_role="auxiliary",
+        intent="Assemble the scientific report.",
+        method="scientific_reporting",
+        inputs=["figure:primary_result"],
+        expected_outputs=["report:analysis_results"],
+    )
+
+    assert _consumer_allows_opaque_reference(report, "figure:primary_result")
+    binding = _resolved_typed_input_binding(
+        input_name="figure:primary_result",
+        evidence_ref=ref,
+        evidence_records=[record],
+        run_dir=tmp_path,
+        allow_opaque_reference=True,
+    )
+    assert binding is not None
+    assert binding["product_contract"]["opaque_reference"] is True
+    assert binding["product_contract"]["read_policy"] == "digest_reference_only"
+
+    analysis = report.model_copy(
+        update={
+            "method": "visualization",
+            "expected_outputs": ["figure:secondary_result"],
+        }
+    )
+    assert not _consumer_allows_opaque_reference(
+        analysis, "figure:primary_result"
+    )
+    refusals: list[dict] = []
+    assert (
+        _resolved_typed_input_binding(
+            input_name="figure:primary_result",
+            evidence_ref=ref,
+            evidence_records=[record],
+            run_dir=tmp_path,
+            refusals=refusals,
+        )
+        is None
+    )
+    assert refusals[0]["reason"] == "typed_input_serialization_is_unreadable"
 
 
 def test_no_recorded_table_binding_is_touched_by_this_rule() -> None:

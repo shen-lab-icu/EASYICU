@@ -1142,6 +1142,43 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_report_orders_after_figure_without_reading_raster_as_data() -> None:
+    payload = json.loads(json.dumps(_payload()))
+    report = json.loads(json.dumps(payload["steps"][-1]))
+    report.update(
+        {
+            "step_id": "08_report",
+            "module_id": "report",
+            "objective": "Assemble the source-bound scientific report.",
+            "depends_on": ["07_figure"],
+            "raw_inputs": [],
+            "product_inputs": [
+                {
+                    "producer_step_id": "07_figure",
+                    "product_id": "figure:primary_results",
+                }
+            ],
+            "outputs": [
+                {
+                    "product_id": "report:analysis_results",
+                    "semantic_role": "report",
+                }
+            ],
+        }
+    )
+    payload["steps"].append(report)
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=_context(),
+    )
+    compiled_report = plan.steps[-1]
+
+    assert compiled_report.expected_outputs == ["report:analysis_results"]
+    assert "figure:primary_results" not in compiled_report.inputs
+    assert "artifact:analysis_cohort" in compiled_report.inputs
+
+
 def test_progressive_visualization_rejects_raw_cohort_inputs() -> None:
     payload = _payload()
     payload["steps"][-1]["raw_inputs"] = ["exposure_flag"]
