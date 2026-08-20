@@ -240,6 +240,19 @@ def test_host_compiles_the_exact_grid_and_the_real_router_claims_it() -> None:
         authority.parent_product,
     )
 
+    rebuilt_step = plan.steps[1].model_copy(deep=True)
+    assert rebuilt_step is not plan.steps[1]
+    rebuilt_selection = select_standard_executor(
+        rebuilt_step,
+        plan=plan,
+        current_case_scientific_runtime_authority=authority,
+        scientific_runtime_projection_sha256=projection[
+            "runtime_projection_sha256"
+        ],
+    )
+    assert rebuilt_selection is not None
+    assert rebuilt_selection.analysis_kind == "association_model_grid"
+
     drifted = plan.model_copy(
         update={
             "steps": [

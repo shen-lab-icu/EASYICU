@@ -79,7 +79,10 @@ def association_model_grid_executor_owns_step(
     if sealed is None:
         return False
     try:
-        return sealed.governed_step(plan) is step
+        # Runtime replanning rebuilds Pydantic objects even when the signed
+        # step is structurally unchanged.  Ownership is the fully validated
+        # typed step, not one particular in-memory instance of it.
+        return sealed.governed_step(plan) == step
     except ValueError:
         return False
 
