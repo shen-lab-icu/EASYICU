@@ -1,19 +1,9 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json",
-      "src/easyicu/research_agent/agents/planner.py"
+      "src/easyicu/research_agent/schema.py"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 60821,
-        "was": 60830
-      },
-      "max_planner_without_resources_bytes": {
-        "now": 56181,
-        "was": 56190
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -277,9 +267,16 @@
           "was": 56190
         }
       }
+    },
+    {
+      "reason": "Reviewed generic E1 contract extensions changed the schema source digest; the offline Canonical9 resource selection and context-size envelope is unchanged.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Accept the finalized seven-day AKI dictionary digest and 9-byte case-neutral Planner prompt compaction; no provider calls or paper-input authority.",
+  "baseline_reason": "Reviewed generic E1 contract extensions changed the schema source digest; the offline Canonical9 resource selection and context-size envelope is unchanged.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -313,7 +310,7 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "150083d0b02b80d9763a6bd554648652f50e9066404e1a2249ab881a3b31b96e",
+    "src/easyicu/research_agent/schema.py": "7c54a40c1aa5420b774d023103ad089989ea012813f72a123b3853a040a2b3d2",
     "tools/research_agent_resource_baseline.py": "4f3fe0d9c859ff713fe1cbdaa9dc47ebe5041b60b2be08fd8b8087d115bd3712"
   },
   "summary": {

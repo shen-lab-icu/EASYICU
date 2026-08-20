@@ -1911,6 +1911,17 @@ def _write_resolved_inputs_manifest(
         run_root = Path(run_dir).resolve()
         if not resolved_plan.is_file():
             raise ValueError("plan_path must name an existing plan file")
+        canonical_plan = run_root / "analysis_plan.json"
+        if (
+            resolved_plan != canonical_plan
+            and canonical_plan.is_file()
+            and sha256_of_file(canonical_plan) == sha256_of_file(resolved_plan)
+        ):
+            # Resume resolves the immutable plan through its EvidenceStore alias,
+            # while the initial execution receives the run-root working copy.
+            # Identical signed bytes must produce one resolved-input manifest so
+            # an execution seal remains replayable without another Coder call.
+            resolved_plan = canonical_plan
         try:
             relative_plan = resolved_plan.relative_to(run_root).as_posix()
         except ValueError as exc:
