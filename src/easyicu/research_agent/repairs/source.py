@@ -70,6 +70,7 @@ from .nonfinite_audit import (
 )
 from .nullable_validation import patch_unused_nullable_numeric_validation
 from .figure_output_registration import patch_figure_output_registration
+from .input_binding_receipt import patch_missing_loaded_input_binding_receipt
 from .literal_mapping_access import patch_literal_mapping_access
 from .pandas_numeric_container import patch_pandas_numeric_container
 from .rendering_role import patch_structured_analysis_role_selection
@@ -5111,6 +5112,15 @@ def _deterministic_contract_repair_candidate(
         repaired = _patch_unresolved_input_binding_receipts(code, findings=findings)
         if repaired != code:
             return unresolved_receipt_repair_name, repaired
+
+    loaded_receipt_repair_name = "missing_loaded_input_binding_receipt_v1"
+    if previous_repair != loaded_receipt_repair_name:
+        repaired = patch_missing_loaded_input_binding_receipt(
+            code,
+            findings=findings,
+        )
+        if repaired != code:
+            return loaded_receipt_repair_name, repaired
 
     render_echo_repair_name = "render_only_effect_echo_suppression_v1"
     if previous_repair != render_echo_repair_name:
