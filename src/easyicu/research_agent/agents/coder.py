@@ -184,6 +184,22 @@ def _declared_statistic_products(step: AnalysisStep) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _figure_panel_scope_contract(step: AnalysisStep) -> tuple[str, ...]:
+    """Describe the one authoritative location and semantics of panel planning."""
+
+    if step.figure_panels:
+        return (
+            "- PLANNED PANEL CONTRACT (binding): AnalysisStep.figure_panels is "
+            "non-empty; AnalysisPlan.figure_panels is invalid. Match its cardinality "
+            "and copy panel_id, article_role, chart_type, and source_products verbatim.",
+        )
+    return (
+        "- UNPLANNED PANEL COMPOSITION (binding): AnalysisStep.figure_panels empty; "
+        "AnalysisPlan.figure_panels invalid. Runtime panels describe declared-input "
+        "plots, never invented plans.",
+    )
+
+
 def _declared_output_scope_contract(step: AnalysisStep) -> str:
     """Keep code generation inside the plan's typed product boundary.
 
@@ -233,21 +249,14 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
         )
         lines.extend(
             [
-                "- FIGURE SOURCE-DATA LINEAGE (binding): each panel-bound table "
-                "gets a companion CSV preserving original "
-                "column names and exact row-aligned values (full copy or keyed "
-                "subset). List every file in FigureContract.source_data and "
-                "step_summary.",
-                "- Never collapse parents or value vectors into generic "
-                "`value`, `count`, or `denominator` columns. Keep derived plot "
-                "values internal and authenticate their raw inputs.",
-                "- PLANNED PANEL CONTRACT (binding): when figure_panels is non-empty, "
-                "emit exactly one runtime contract entry per planned panel and copy "
-                "its panel_id, article_role, chart_type, and source_products verbatim. "
-                "Do not split, merge, rename, infer, or invent panel coordinates; keep "
-                "article_role separate from the compatibility PanelSpec role.",
+                "- FIGURE SOURCE-DATA LINEAGE (binding): export row-aligned CSVs "
+                "preserving original column names/values; list in "
+                "FigureContract.source_data and step_summary.",
+                "- Never rename source columns value/count/denominator; derive plots "
+                "in memory.",
             ]
         )
+        lines.extend(_figure_panel_scope_contract(step))
     else:
         lines.append(
             "- This step declares no figure product. Do not render, save, or register "
@@ -613,17 +622,13 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
             "or replace semantic missingness with zero to make validation pass."
         )
     if has_figure:
-        lines.extend(
-            [
-                "- FIGURE REWRITE INVARIANT: keep one original-column, row-aligned "
-                "companion CSV per panel-bound table; list all companions in "
-                "FigureContract.source_data and step_summary. Never replace them "
-                "with generic value/count/denominator rows.",
-                "- Preserve the exact planned figure_panels cardinality and copy each "
-                "panel_id, article_role, chart_type, and source_products verbatim into "
-                "the runtime FigureContract; never split or merge planned panels.",
-            ]
+        lines.append(
+            "- FIGURE REWRITE INVARIANT: keep one original-column, row-aligned "
+            "companion CSV per panel-bound table; list all companions in "
+            "FigureContract.source_data and step_summary. Never replace them "
+            "with generic value/count/denominator rows."
         )
+        lines.extend(_figure_panel_scope_contract(step))
     lines.extend(
         [
             f"- Exact Planner-declared inputs for this step: {declared_inputs}",

@@ -29,17 +29,44 @@ def _planned_figure_step() -> AnalysisStep:
     )
 
 
+def _unplanned_figure_step() -> AnalysisStep:
+    return AnalysisStep.model_validate(
+        {
+            "step_id": "render",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Render the declared figure from typed inputs.",
+            "method": "visualization",
+            "inputs": ["table:result"],
+            "expected_outputs": ["figure:result"],
+            "figure_panels": [],
+        }
+    )
+
+
 def test_initial_coder_contract_preserves_exact_planned_panel_coordinates() -> None:
     contract = _declared_output_scope_contract(_planned_figure_step())
 
     assert "PLANNED PANEL CONTRACT (binding)" in contract
     for field in ("panel_id", "article_role", "chart_type", "source_products"):
         assert field in contract
-    assert "Do not split, merge, rename, infer, or invent" in contract
+    assert "Match its cardinality" in contract
+    assert "AnalysisPlan.figure_panels is invalid" in contract
 
 
 def test_repair_scope_keeps_planned_panel_cardinality_and_coordinates() -> None:
     contract = _compact_repair_scope_contract(_planned_figure_step())
 
-    assert "exact planned figure_panels cardinality" in contract
-    assert "never split or merge planned panels" in contract
+    assert "Match its cardinality" in contract
+    assert "copy panel_id, article_role, chart_type" in contract
+
+
+def test_empty_planned_panels_authorize_truthful_runtime_composition() -> None:
+    initial = _declared_output_scope_contract(_unplanned_figure_step())
+    repair = _compact_repair_scope_contract(_unplanned_figure_step())
+
+    for contract in (initial, repair):
+        assert "UNPLANNED PANEL COMPOSITION (binding)" in contract
+        assert "AnalysisStep.figure_panels empty" in contract
+        assert "AnalysisPlan.figure_panels invalid" in contract
+        assert "Runtime panels describe declared-input plots" in contract
+        assert "Match its cardinality" not in contract
