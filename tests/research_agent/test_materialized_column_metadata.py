@@ -367,6 +367,27 @@ def test_resolved_raw_input_contracts_bind_domain_and_range_policy(
     assert payload["raw_input_contracts"] == contracts
 
 
+def test_resolved_raw_input_contracts_bind_materialized_identity_column(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+
+    contracts = resolved_raw_input_contracts(context, ["stay_id"])
+
+    identity = contracts["contracts"]["stay_id"]
+    assert identity == {
+        "column": "stay_id",
+        "dtype": "int64",
+        "physical_role": "identity",
+        "representation_transform": "row_identity",
+        "source_database_actual": "miiv",
+        "authority_kind": "materialized_cohort_identity",
+        "row_identity_sha256": (
+            context.materialized_inputs.cohort.row_identity_sha256
+        ),
+    }
+
+
 def test_resolved_raw_input_contracts_bind_sealed_observed_levels(
     tmp_path: Path,
 ) -> None:
