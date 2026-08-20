@@ -24,8 +24,11 @@ from ..contracts.figure_plan import (
     GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+    ROBUSTNESS_FIGURE_INPUT,
+    ROBUSTNESS_FIGURE_KNOWN_INPUTS,
     data_quality_audit_source_candidates,
     measurement_availability_figure_panels,
+    robustness_figure_panels,
 )
 from ..schema import (
     AnalysisPlan,
@@ -451,6 +454,11 @@ def bind_deterministic_figure_panels(
         input_set = frozenset(str(value) for value in step.inputs)
         templates = templates_by_inputs.get(input_set)
         if (
+            ROBUSTNESS_FIGURE_INPUT in input_set
+            and input_set <= ROBUSTNESS_FIGURE_KNOWN_INPUTS
+        ):
+            templates = robustness_figure_panels(step.inputs)
+        if (
             data_quality_sources is not None
             and input_set == frozenset(data_quality_sources)
         ):
@@ -499,7 +507,13 @@ def bind_deterministic_figure_panels(
             for contract in step.input_consumption_contracts
             if contract.mode == "all_rows"
         }
-        if all_row_inputs != {str(value) for value in step.inputs}:
+        tabular_inputs = {
+            str(value)
+            for value in step.inputs
+            if (product := typed_product(value)) is not None
+            and product[0] in {"artifact", "table"}
+        }
+        if all_row_inputs != tabular_inputs:
             steps.append(step)
             continue
         figure_output = figure_outputs[0]

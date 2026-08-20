@@ -216,6 +216,36 @@ def test_deterministic_renderer_is_not_bound_without_all_rows_authority() -> Non
     assert findings == []
 
 
+def test_deterministic_robustness_renderer_binds_statistics_and_tables() -> None:
+    step = AnalysisStep(
+        step_id="robustness_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render the locked robustness grid.",
+        method="visualization",
+        inputs=[
+            "statistic:primary_or",
+            "statistic:complete_case_n",
+            "table:robustness_summary",
+            "table:robustness_matrix",
+        ],
+        expected_outputs=["figure:robustness_plot"],
+        input_consumption_contracts=[
+            {"input_key": "table:robustness_summary", "mode": "all_rows"},
+            {"input_key": "table:robustness_matrix", "mode": "all_rows"},
+        ],
+    )
+    plan = AnalysisPlan(research_question="Assess robustness.", steps=[step])
+
+    shaped, findings = bind_deterministic_figure_panels(plan=plan)
+
+    panel = shaped.steps[0].figure_panels[0]
+    assert panel.panel_id == "robustness_grid"
+    assert panel.article_role == "robustness"
+    assert panel.chart_type == "sensitivity_forest"
+    assert panel.source_products == step.inputs
+    assert findings[0].detail["reason"] == "deterministic_figure_panels_bound"
+
+
 def test_grouped_distribution_draft_is_normalized_to_point_range() -> None:
     step = AnalysisStep(
         step_id="08_age_distribution_figure",
