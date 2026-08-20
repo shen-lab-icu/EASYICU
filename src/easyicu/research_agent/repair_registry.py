@@ -329,6 +329,7 @@ _STRUCTURAL_REPAIRS = {
     "host_validation_helper_reraise_v1",
     "local_wilson_proportion_confint_v1",
     "lossy_numeric_coercion_guard_v1",
+    "literal_mapping_access_v1",
     "llm_proven_numeric_domain_guards_v1",
     "matplotlib_errorbar_xerr_shape_v1",
     "measurement_provenance_summary_mapping_v1",
