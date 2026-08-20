@@ -1052,13 +1052,18 @@ def _prepare_execute_phase_authority(
     )
     if companion_input_findings:
         findings.extend(companion_input_findings)
-        plan_path = register_measurement_companion_input_closure(
-            run_dir=run_dir,
-            evidence=evidence,
-            plan=plan,
-            prompt_pack_version=plan_result.prompt_version,
-        ).evidence_path
-        plan_result.plan_path = plan_path
+        plan, runtime_compile_findings = (
+            pipeline._scientific_runtime_authorities.bind_plan(plan)
+        )
+        findings.extend(runtime_compile_findings)
+        if plan != plan_result.plan:
+            plan_path = register_measurement_companion_input_closure(
+                run_dir=run_dir,
+                evidence=evidence,
+                plan=plan,
+                prompt_pack_version=plan_result.prompt_version,
+            ).evidence_path
+            plan_result.plan_path = plan_path
     stop_after_step_id = _resolve_stop_after_step_selector(plan, stop_after_step_id)
     resume_controller = ResumeController(
         plan=plan,

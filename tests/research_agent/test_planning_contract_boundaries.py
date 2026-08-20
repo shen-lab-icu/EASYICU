@@ -445,3 +445,14 @@ def test_pipeline_binds_signed_runtime_after_generic_input_closure() -> None:
     assert source.index("close_measurement_companion_inputs") < source.index(
         "self._scientific_runtime_authorities.bind_plan"
     )
+
+
+def test_execute_rebinds_signed_runtime_before_registering_input_closure() -> None:
+    from easyicu.research_agent.execution import phase
+
+    source = inspect.getsource(phase._prepare_execute_phase_authority)
+
+    close_at = source.index("close_measurement_companion_inputs")
+    bind_at = source.index("_scientific_runtime_authorities.bind_plan")
+    register_at = source.index("register_measurement_companion_input_closure")
+    assert close_at < bind_at < register_at
