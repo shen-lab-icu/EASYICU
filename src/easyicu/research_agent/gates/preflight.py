@@ -5478,6 +5478,149 @@ def _strict_numeric_nonfinite_findings(
     return sorted(findings, key=lambda finding: int(finding.detail["coercion_line"]))
 
 
+def _pandas_numeric_container_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Reject Series-only null checks on an unverified ``to_numeric`` result.
+
+    ``pandas.to_numeric`` preserves array-like inputs: passing a NumPy array
+    returns an array, which has no ``.isna()``/``.notna()`` methods. Generated
+    helpers commonly accept either Series or arrays, so a direct function
+    parameter is not sufficient proof of the result container. This check is
+    deliberately container-only; it does not alter numeric or missing-data
+    semantics.
+    """
+
+    def _assignment(node: ast.AST) -> tuple[str, ast.AST] | None:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            return node.targets[0].id, node.value
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            return node.target.id, node.value
+        return None
+
+    def _series_constructor(value: ast.AST, name: str) -> bool:
+        return bool(
+            isinstance(value, ast.Call)
+            and _call_name(value.func) in {"pd.Series", "pandas.Series"}
+            and value.args
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id == name
+        )
+
+    findings: list[ValidationFinding] = []
+    function_types = (ast.FunctionDef, ast.AsyncFunctionDef)
+    for function in [
+        node for node in ast.walk(tree) if isinstance(node, function_types)
+    ]:
+        parameter_names = {
+            argument.arg
+            for argument in (
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            )
+        }
+        if function.args.vararg is not None:
+            parameter_names.add(function.args.vararg.arg)
+        if function.args.kwarg is not None:
+            parameter_names.add(function.args.kwarg.arg)
+        if not parameter_names:
+            continue
+
+        scoped_nodes = sorted(
+            _scope_nodes(function.body),
+            key=lambda node: (
+                int(getattr(node, "lineno", -1)),
+                int(getattr(node, "col_offset", -1)),
+            ),
+        )
+        assignments = [
+            (node, assignment)
+            for node in scoped_nodes
+            if (assignment := _assignment(node)) is not None
+        ]
+        for assignment_node, (result_name, value) in assignments:
+            if not (
+                isinstance(value, ast.Call)
+                and _call_name(value.func) in {"pd.to_numeric", "pandas.to_numeric"}
+                and value.args
+                and isinstance(value.args[0], ast.Name)
+                and value.args[0].id in parameter_names
+            ):
+                continue
+            source_name = value.args[0].id
+            conversion_line = int(assignment_node.lineno)
+            source_normalized = any(
+                int(node.lineno) < conversion_line
+                and assigned_name == source_name
+                and _series_constructor(assigned_value, source_name)
+                for node, (assigned_name, assigned_value) in assignments
+            )
+            if source_normalized:
+                continue
+
+            series_only_uses = sorted(
+                [
+                    node
+                    for node in scoped_nodes
+                    if isinstance(node, ast.Attribute)
+                    and node.attr in {"isna", "notna"}
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == result_name
+                    and int(node.lineno) > conversion_line
+                ],
+                key=lambda node: (int(node.lineno), int(node.col_offset)),
+            )
+            if not series_only_uses:
+                continue
+            first_use_line = int(series_only_uses[0].lineno)
+            intervening = [
+                (node, assigned_value)
+                for node, (assigned_name, assigned_value) in assignments
+                if assigned_name == result_name
+                and conversion_line < int(node.lineno) < first_use_line
+            ]
+            if intervening:
+                if any(
+                    _series_constructor(assigned_value, result_name)
+                    for _, assigned_value in intervening
+                ):
+                    continue
+                # Another assignment means the method no longer consumes the
+                # diagnosed conversion result, so this narrow proof does not apply.
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "pd.to_numeric preserves an array-like input container; "
+                        "this helper accepts an unverified parameter and then "
+                        "calls Series-only .isna()/.notna() on the result. "
+                        "Normalize the input or result to pd.Series before the "
+                        "conversion result is used."
+                    ),
+                    detail={
+                        "reason": "pandas_numeric_container_unverified",
+                        "line": conversion_line,
+                        "first_use_line": first_use_line,
+                        "name": str(function.name),
+                    },
+                )
+            )
+    return sorted(
+        findings,
+        key=lambda finding: (
+            int((finding.detail or {}).get("line", -1)),
+            str((finding.detail or {}).get("name", "")),
+        ),
+    )
+
+
 def _positive_boolean_mask_test(
     test: ast.AST,
     *,
@@ -5806,6 +5949,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_local_helper_unpack_arity_findings(tree))
     findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))
+    findings.extend(_pandas_numeric_container_findings(tree))
     findings.extend(_conditional_nonfinite_guard_findings(tree))
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))

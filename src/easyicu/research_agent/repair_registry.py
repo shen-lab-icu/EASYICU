@@ -340,6 +340,7 @@ _STRUCTURAL_REPAIRS = {
     "nonfinite_missing_mask_conflation_v1",
     "non_tabular_companion_row_gate_v1",
     "normalize_first_time_companion_v1",
+    "pandas_numeric_container_v1",
     "observed_binary_primary_exposure_guard_v1",
     "penalized_convergence_contract_v1",
     "penalized_convergence_contract_v2",
