@@ -686,6 +686,7 @@ def _step_deterministic_contract_findings(
     step_summary: Dict[str, Any],
     completed_step_records: Sequence[Mapping[str, Any]],
     resolved_input_bindings: Mapping[str, Mapping[str, Any]],
+    step_record: Mapping[str, Any] | None = None,
     out_dir: Path,
     run_dir: Path,
     universe_path: Path,
@@ -735,6 +736,7 @@ def _step_deterministic_contract_findings(
         context=context,
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
+        step_record=step_record,
         out_dir=out_dir,
         trajectory_role_contract_applies=trajectory_plan_contract_applies(
             plan=plan,

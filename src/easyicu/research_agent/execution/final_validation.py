@@ -301,6 +301,7 @@ def _evaluate_final_deterministic_gates(
         step_summary=step_summary,
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
+        step_record=step_record,
         out_dir=out_dir,
         run_dir=run_dir,
         universe_path=universe_path,

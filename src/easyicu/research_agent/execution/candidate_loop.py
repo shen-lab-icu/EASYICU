@@ -1643,6 +1643,7 @@ def _candidate_contract_setup_transition(
         step_summary=state.visual_step_summary,
         completed_step_records=completed_records_snapshot,
         resolved_input_bindings=attempt.resolved_input_bindings,
+        step_record=attempt.step_record,
         out_dir=state.run_result.out_dir,
         run_dir=host.run_dir,
         universe_path=host.universe_path,
