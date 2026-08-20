@@ -191,8 +191,8 @@ def extract_cohort_definition_from_prose(
 
     The result is grounded: every predicate's ``concept_id`` is one of
     ``universe_columns`` and its operator is one ``build_cohort`` implements.
-    ``register_cohort_concept_ids`` is called so these pre-materialised columns
-    pass predicate validation.
+    Pre-materialised columns are visible only inside a local validation scope;
+    extraction never widens the process registry.
     """
     if not (cohort_prose or "").strip() or not universe_columns:
         return None
@@ -220,43 +220,30 @@ def extract_cohort_definition_from_prose(
     if data is None:
         return None
 
-    inclusion = []
-    for item in data.get("inclusion") or []:
-        pred = _predicate_from_minimal(item, columns=columns)
-        if pred is not None:
-            inclusion.append(pred)
-    exclusion = []
-    for item in data.get("exclusion") or []:
-        pred = _predicate_from_minimal(item, columns=columns)
-        if pred is not None:
-            exclusion.append(pred)
-
-    if not (inclusion or exclusion):
-        return None
-
-    definition = CohortDefinition(
-        name=name,
-        inclusion=tuple(inclusion),
-        exclusion=tuple(exclusion),
-    )
-    # Allow these pre-materialised universe columns through predicate validation
-    # (they are not dictionary concepts) for THIS validation only.
-    #
-    # This used to call ``register_cohort_concept_ids(columns)``, a permanent
-    # process-wide registration, purely to make the next two lines pass. Every
-    # caller -- including a unit test asking one question -- therefore leaked
-    # its universe columns into every later validation in the process. Measured
-    # 2026-08-18: running tests/research_agent/test_cohort_repair.py left
-    # ``{age, death, los_icu, sofa2, stay_id}`` registered forever, which made
-    # test_plan_lifecycle_authority's fail-closed assertion ("unsealed
-    # materialized concept must be refused") silently stop raising. A guard
-    # that only fires when nothing before it touched cohort repair is not a
-    # guard.
-    #
-    # The run-scoped registration this function used to imply is now made
-    # explicitly by the execution layer that owns the run (see
-    # ``execution/phase_support.py``); extraction itself is side-effect free.
+    # Predicate construction itself validates concept ids, so the scope must
+    # cover construction as well as the final definition check. These are
+    # actual columns in this run's materialized universe, not dictionary claims
+    # and never process-global registrations.
     with cohort_concept_id_scope(columns):
+        inclusion = []
+        for item in data.get("inclusion") or []:
+            pred = _predicate_from_minimal(item, columns=columns)
+            if pred is not None:
+                inclusion.append(pred)
+        exclusion = []
+        for item in data.get("exclusion") or []:
+            pred = _predicate_from_minimal(item, columns=columns)
+            if pred is not None:
+                exclusion.append(pred)
+
+        if not (inclusion or exclusion):
+            return None
+
+        definition = CohortDefinition(
+            name=name,
+            inclusion=tuple(inclusion),
+            exclusion=tuple(exclusion),
+        )
         try:
             validate_cohort_definition(definition)
         except CohortSchemaError:

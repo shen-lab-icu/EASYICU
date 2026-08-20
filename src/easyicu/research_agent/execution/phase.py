@@ -180,6 +180,7 @@ from ..authority.plausibility import (
 from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
+    materialized_cohort_concept_id_scope,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
@@ -800,7 +801,6 @@ def _planner_materialized_cohort_execution_receipt(
     manifest the same physical column bindings and row-accounting checks
     without exposing row identities or choosing any new scientific rule.
     """
-
     analysis_cohort_path = Path(analysis_cohort_path)
     verified = load_verified_materialized_cohort_authority(analysis_cohort_path)
     if verified is not None:
@@ -846,28 +846,28 @@ def _planner_materialized_cohort_execution_receipt(
     # default ``selection_mode`` to keep legacy authority digests stable while
     # pydantic's ``model_dump`` always emits it, so comparing those two
     # spellings reported every predicate-filtered cohort as a mismatch.
-    # Re-hashing the recorded definition through the canonical digest owner
-    # additionally proves the stored ``cohort_sha256`` indexes the stored
-    # definition rather than merely asserting it.
-    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
-    if definition is None:
-        raise MaterializedMetadataError(
-            "active plan carries no cohort definition for the execution receipt"
-        )
-    planner_cohort_sha256 = cohort_definition_sha(definition)
-    recorded_cohort = provenance.get("cohort_definition")
-    if not isinstance(recorded_cohort, Mapping):
-        raise MaterializedMetadataError(
-            "analysis cohort execution receipt has no recorded cohort definition"
-        )
-    try:
-        recorded_cohort_sha256 = cohort_definition_sha(
-            CohortDefinition.from_dict(dict(recorded_cohort))
-        )
-    except (CohortSchemaError, KeyError, TypeError, ValueError) as exc:
-        raise MaterializedMetadataError(
-            "analysis cohort execution receipt cohort definition is unreadable"
-        ) from exc
+    # Re-hashing through the canonical owner proves ``cohort_sha256`` indexes
+    # the stored definition rather than merely asserting it.
+    with materialized_cohort_concept_id_scope(analysis_cohort_path, verified):
+        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+        if definition is None:
+            raise MaterializedMetadataError(
+                "active plan carries no cohort definition for the execution receipt"
+            )
+        planner_cohort_sha256 = cohort_definition_sha(definition)
+        recorded_cohort = provenance.get("cohort_definition")
+        if not isinstance(recorded_cohort, Mapping):
+            raise MaterializedMetadataError(
+                "analysis cohort execution receipt has no recorded cohort definition"
+            )
+        try:
+            recorded_cohort_sha256 = cohort_definition_sha(
+                CohortDefinition.from_dict(dict(recorded_cohort))
+            )
+        except (CohortSchemaError, KeyError, TypeError, ValueError) as exc:
+            raise MaterializedMetadataError(
+                "analysis cohort execution receipt cohort definition is unreadable"
+            ) from exc
     flow = provenance.get("cohort_flow")
     if (
         recorded_cohort_sha256 != planner_cohort_sha256

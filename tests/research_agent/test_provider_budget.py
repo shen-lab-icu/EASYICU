@@ -27,6 +27,7 @@ from easyicu.research_agent.execution.phase import (
     _cohort_translation_budget_owner_step_id,
     _extract_cohort_definition_with_provider_budget,
 )
+from easyicu.research_agent.planning import cohort_contract
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.schema import (
     AnalysisStep,
@@ -187,6 +188,41 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
             name="adult_icu",
         )
     assert len(llm.calls) == 2
+
+
+def test_pre_step_cohort_translation_does_not_leak_materialized_columns(tmp_path):
+    cohort_contract.clear_cohort_concept_ids()
+    try:
+        concept_id = "materialized_signal"
+        assert not cohort_contract.concept_id_exists(concept_id)
+        definition, _snapshot = _extract_cohort_definition_with_provider_budget(
+            run_dir=tmp_path,
+            budget_owner_step_id="01_cohort_definition",
+            configured_limit=1,
+            cohort_prose="Include rows with a materialized signal.",
+            universe_columns=["stay_id", concept_id],
+            llm=ScriptedMockLLMClient(
+                [
+                    json.dumps(
+                        {
+                            "inclusion": [
+                                {
+                                    "concept_id": concept_id,
+                                    "op": "not_missing",
+                                }
+                            ],
+                            "exclusion": [],
+                        }
+                    )
+                ]
+            ),
+            name="materialized_signal_cohort",
+        )
+
+        assert definition is not None
+        assert not cohort_contract.concept_id_exists(concept_id)
+    finally:
+        cohort_contract.clear_cohort_concept_ids()
 
 
 def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):

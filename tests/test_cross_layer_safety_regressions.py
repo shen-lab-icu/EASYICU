@@ -269,6 +269,10 @@ def test_sic_extreme_source_interval_is_quarantined_before_expansion():
             # +2 h respectively.
             "charttime": [-31_138.0 * 3_600.0, 2.0 * 3_600.0],
             "dur_var": [7_200.0, 7_200.0],
+            # The raw SIC contract anchors offsets to cases.ICUOffset. Keep
+            # this regression focused on extreme-interval quarantine while
+            # supplying that required origin explicitly.
+            "ICUOffset": [0.0, 0.0],
         }
     )
 

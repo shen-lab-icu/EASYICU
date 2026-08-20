@@ -563,10 +563,12 @@ def test_e1_progressive_profile_is_public_and_rejects_strategy_override(
     assert config.planner_strategy == "progressive_v2"
 
 
-def test_e1_20260817_profiles_additively_bind_corrected_sofa2_dictionaries() -> None:
+def test_e1_20260819_profiles_additively_bind_finalized_aki_dictionaries() -> None:
     from easyicu.research_agent import (
-        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17 as public_profile,
-        E1_REVIEWED_DEMO_2026_08_17 as reviewed_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_17 as prior_public_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19 as public_profile,
+        E1_REVIEWED_DEMO_2026_08_17 as prior_reviewed_profile,
+        E1_REVIEWED_DEMO_2026_08_19 as reviewed_profile,
     )
     from easyicu.research_agent.concept_dict_audit import (
         compute_concept_dict_fingerprint,
@@ -574,10 +576,15 @@ def test_e1_20260817_profiles_additively_bind_corrected_sofa2_dictionaries() -> 
 
     fingerprint = compute_concept_dict_fingerprint()
 
-    assert public_profile.ref == "npj_dm_e1_canary_dev/20260817"
+    assert prior_public_profile.ref == "npj_dm_e1_canary_dev/20260817"
+    assert prior_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260817"
+    assert prior_public_profile.expected_concept_dict_sha == (
+        "68b75da37d70c18ff35a11eb7efb9d39a6b6589e933bdf6a89a34469d4493107"
+    )
+    assert public_profile.ref == "npj_dm_e1_canary_dev/20260819"
     assert public_profile.planner_only is True
     assert public_profile.planner_strategy == "progressive_v2"
-    assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260817"
+    assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260819"
     assert reviewed_profile.planner_only is False
     assert reviewed_profile.planner_strategy == "progressive_v2"
     assert reviewed_profile.pipeline_options()["planner_strategy"] == (
