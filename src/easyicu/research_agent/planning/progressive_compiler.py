@@ -1137,7 +1137,10 @@ def _compile_inputs(
                 "repair": "set raw_inputs=[] and select exact typed result sources",
             },
         )
-    if step.module_id == "visualization":
+    if step.module_id in {"visualization", "report"}:
+        # A terminal report cites sealed products; raw cohort columns would
+        # make the report a second analysis owner and prevent the deterministic
+        # feasibility/report executor from claiming the step.
         raw_names = []
     if step.module_id == "measurement_audit":
         # Observation semantics are host-verified context authority.  An audit
