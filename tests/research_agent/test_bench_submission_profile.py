@@ -213,6 +213,39 @@ def test_submission_profile_rejects_development_diagnostic() -> None:
         )
 
 
+def test_development_profile_allows_bounded_development_diagnostic() -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19,
+    )
+
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        submission_profile=E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19,
+        development_diagnostic=True,
+    )
+
+    assert options["development_diagnostic"] is True
+    assert options["planner_only"] is True
+    assert options["planner_strategy"] == "progressive_v2"
+
+
+def test_profile_rejects_explicit_planner_strategy_override() -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19,
+    )
+
+    with pytest.raises(SystemExit, match="pins --planner-strategy progressive_v2"):
+        _benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+            planner_strategy="monolithic_v1",
+            submission_profile=E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19,
+        )
+
+
 def test_benchmark_options_keep_execution_timeouts_independent() -> None:
     options = _benchmark_pipeline_options(
         max_total_steps=None,
@@ -573,6 +606,10 @@ def test_e1_20260819_profiles_additively_bind_finalized_aki_dictionaries() -> No
     from easyicu.research_agent.concept_dict_audit import (
         compute_concept_dict_fingerprint,
     )
+    from easyicu.research_agent.orchestration.profiles import (
+        CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
+        CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
+    )
 
     fingerprint = compute_concept_dict_fingerprint()
 
@@ -590,6 +627,8 @@ def test_e1_20260819_profiles_additively_bind_finalized_aki_dictionaries() -> No
     assert reviewed_profile.pipeline_options()["planner_strategy"] == (
         "progressive_v2"
     )
+    assert CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF == public_profile.ref
+    assert CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF == reviewed_profile.ref
     for profile in (public_profile, reviewed_profile):
         assert profile.expected_concept_dict_sha == fingerprint.concept_dict_sha
         assert profile.expected_sofa2_dict_sha == fingerprint.sofa2_dict_sha

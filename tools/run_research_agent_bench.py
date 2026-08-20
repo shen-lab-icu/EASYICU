@@ -245,6 +245,17 @@ def _resolve_submission_profile(profile_ref: Optional[str]):
         raise SystemExit(str(exc)) from exc
 
 
+def _is_paper_facing_submission_profile(
+    profile: Optional["SubmissionProfile"],
+) -> bool:
+    if profile is None:
+        return False
+    _bootstrap_imports()
+    from easyicu.research_agent.orchestration.profiles import is_paper_facing_profile
+
+    return is_paper_facing_profile(profile.name)
+
+
 def _default_submission_profile_ref() -> str:
     """Resolve the benchmark CLI default from the canonical registry."""
 
@@ -2699,7 +2710,7 @@ def _validated_development_codex_session_binding(
     if not development_diagnostic or formal_authority_requested:
         raise SystemExit(
             "--codex-user-session-binding is development-only and cannot enter "
-            "a formal, submission-profile, or paper-acceptance run."
+            "a formal, paper-facing-profile, or paper-acceptance run."
         )
     if multiple_models_requested:
         raise SystemExit(
@@ -2856,7 +2867,7 @@ def _benchmark_pipeline_options(
     max_total_steps: Optional[int],
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
-    planner_strategy: str = "monolithic_v1",
+    planner_strategy: Optional[str] = None,
     max_step_llm_repair_attempts: Optional[int] = None,
     max_step_provider_calls: int = 9,
     max_provider_attempts_per_run: int = 192,
@@ -2908,10 +2919,10 @@ def _benchmark_pipeline_options(
         options["development_sample_size"] = int(development_sample_size)
         options["development_sample_seed"] = int(development_sample_seed)
     if development_diagnostic:
-        if submission_profile is not None:
+        if _is_paper_facing_submission_profile(submission_profile):
             raise SystemExit(
                 "--development-diagnostic is non-paper authority and cannot "
-                "be combined with --submission-profile."
+                "be combined with a paper-facing submission profile."
             )
         options["development_diagnostic"] = True
     progressive_resume_values = (
@@ -2932,7 +2943,10 @@ def _benchmark_pipeline_options(
         )
     if enable_pubmed:
         options["enable_pubmed"] = True
-    options["planner_strategy"] = str(planner_strategy)
+    options["planner_strategy"] = _enforce_submission_profile_planner_strategy(
+        planner_strategy,
+        profile=submission_profile,
+    )
     # These are independent execution budgets.  The ordinary timeout bounds
     # model-generated scripts; registered standards use their own longer
     # planner-owned workload budget.
@@ -3026,6 +3040,22 @@ def _enforce_submission_profile_arms(
             "reviewer-response run."
         )
     return selected
+
+
+def _enforce_submission_profile_planner_strategy(
+    planner_strategy: Optional[str],
+    *,
+    profile: Optional["SubmissionProfile"],
+) -> str:
+    expected = profile.planner_strategy if profile is not None else None
+    if expected is not None:
+        if planner_strategy is not None and planner_strategy != expected:
+            raise SystemExit(
+                f"Submission profile '{profile.ref}' pins "
+                f"--planner-strategy {expected}."
+            )
+        return expected
+    return str(planner_strategy or "monolithic_v1")
 
 
 def _enforce_development_resume_repair_budget(
@@ -3419,15 +3449,18 @@ def _verify_figure2_development_diagnostic(
     *,
     jsonl_path: Path,
     task_ids: tuple,
+    submission_profile: Optional["SubmissionProfile"] = None,
 ) -> None:
     """Verify an explicit non-paper Canonical9 development input binding."""
 
-    if bool(getattr(args, "submission_profile", False)) or bool(
+    if bool(getattr(args, "submission_profile", False)) and submission_profile is None:
+        raise ValueError("development submission profile must be resolved before gating")
+    if _is_paper_facing_submission_profile(submission_profile) or bool(
         getattr(args, "require_figure2_paper_acceptance", False)
     ):
         raise ValueError(
-            "development diagnostics cannot enable a submission profile or "
-            "paper acceptance"
+            "development diagnostics cannot enable a paper-facing submission "
+            "profile or paper acceptance"
         )
     if any(
         getattr(args, name, None)
@@ -3484,7 +3517,11 @@ def _verify_figure2_development_diagnostic(
         raise ValueError("development binding receipt does not bind these JSONL bytes")
 
 
-def _figure2_realrun_authorization_gate(args):
+def _figure2_realrun_authorization_gate(
+    args,
+    *,
+    submission_profile: Optional["SubmissionProfile"] = None,
+):
     """Fail-closed real-run authorization, enforced before anything is launched.
 
     Returns ``(exit_code_or_None, batch_binding_or_None)``.  A non-None exit
@@ -3568,6 +3605,7 @@ def _figure2_realrun_authorization_gate(args):
                 args,
                 jsonl_path=strict_jsonl,
                 task_ids=task_ids,
+                submission_profile=submission_profile,
             )
         except Exception as exc:  # noqa: BLE001
             print(
@@ -3834,11 +3872,12 @@ def main() -> int:
     parser.add_argument(
         "--planner-strategy",
         choices=["monolithic_v1", "progressive_v2"],
-        default="monolithic_v1",
+        default=None,
         help=(
             "Planner contract materialization strategy. Progressive v2 asks "
             "for a compact skeleton, compiles host-owned execution details, "
-            "and revises only an unlocked suffix."
+            "and revises only an unlocked suffix. A selected profile owns this "
+            "setting when the flag is omitted."
         ),
     )
     parser.add_argument(
@@ -4249,8 +4288,17 @@ def main() -> int:
     args = parser.parse_args()
     if not args.model and not args.models:
         args.model = _default_model_for_provider(str(args.provider))
+    submission_profile = (
+        _resolve_submission_profile(args.profile)
+        if bool(args.submission_profile)
+        else None
+    )
+    args.planner_strategy = _enforce_submission_profile_planner_strategy(
+        args.planner_strategy,
+        profile=submission_profile,
+    )
     formal_authority_requested = bool(
-        args.submission_profile
+        _is_paper_facing_submission_profile(submission_profile)
         or args.require_figure2_paper_acceptance
         or args.figure2_realrun_authorization
         or args.figure2_production_input_authority
@@ -4283,7 +4331,10 @@ def main() -> int:
     args.provider_base_url = str(
         args.provider_base_url or ""
     ).strip() or _resolve_backend_base_url(str(args.provider))
-    _realrun_gate_rc, _figure2_batch_binding = _figure2_realrun_authorization_gate(args)
+    _realrun_gate_rc, _figure2_batch_binding = _figure2_realrun_authorization_gate(
+        args,
+        submission_profile=submission_profile,
+    )
     if _realrun_gate_rc is not None:
         return _realrun_gate_rc
     provider_environment = (
@@ -4295,11 +4346,6 @@ def main() -> int:
         )
     )
     case_registration = _register_case_patterns(args.case)
-    submission_profile = (
-        _resolve_submission_profile(args.profile)
-        if bool(args.submission_profile)
-        else None
-    )
     args.arms = _enforce_submission_profile_arms(
         args.arms,
         profile=submission_profile,

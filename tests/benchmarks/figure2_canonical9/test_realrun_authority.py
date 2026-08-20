@@ -1202,6 +1202,44 @@ def test_canonical_development_diagnostic_requires_exact_nonpaper_binding(
     assert binding is None
 
 
+def test_canonical_development_diagnostic_accepts_current_dev_profile(
+    tmp_path,
+) -> None:
+    import argparse
+
+    import tools.run_research_agent_bench as bench
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19,
+    )
+
+    files = _launcher_files(tmp_path)
+    receipt = _development_binding_receipt(
+        tmp_path / "development-receipt.json",
+        files["jsonl_path"],
+    )
+    args = argparse.Namespace(
+        figure2_realrun_authorization=None,
+        figure2_expected_execution_identity=None,
+        figure2_production_input_authority=None,
+        figure2_development_binding_receipt=str(receipt),
+        development_diagnostic=True,
+        ehrflowbench_jsonl=str(files["jsonl_path"]),
+        require_figure2_paper_acceptance=False,
+        submission_profile=True,
+        runner="docker",
+        arms=["aware"],
+        provider="openai",
+    )
+
+    rc, binding = bench._figure2_realrun_authorization_gate(
+        args,
+        submission_profile=E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19,
+    )
+
+    assert rc is None
+    assert binding is None
+
+
 def test_canonical_development_diagnostic_rejects_tampered_binding(
     tmp_path,
 ) -> None:
