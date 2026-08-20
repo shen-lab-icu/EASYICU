@@ -121,6 +121,24 @@ def test_one_per_role_requires_exact_complete_role_roster(tmp_path: Path) -> Non
         )
 
 
+def test_row_level_artifact_cannot_invent_a_role_column() -> None:
+    """The analysis cohort is a dataset, not a role-indexed result table."""
+
+    with pytest.raises(ValidationError, match="artifact inputs.*require all_rows"):
+        ArtifactConsumptionContract(
+            input_key="artifact:analysis_cohort",
+            mode="one_per_role",
+            role_column="artifact_role",
+            expected_roles=["analysis_cohort"],
+        )
+
+    accepted = ArtifactConsumptionContract(
+        input_key="artifact:analysis_cohort",
+        mode="all_rows",
+    )
+    assert accepted.mode == "all_rows"
+
+
 def test_contract_must_target_an_exact_same_step_input() -> None:
     with pytest.raises(ValidationError, match="must target exact inputs"):
         AnalysisStep(
