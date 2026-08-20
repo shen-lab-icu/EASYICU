@@ -1295,6 +1295,31 @@ def test_registered_output_consumer_fails_closed_on_stale_attempt(
     assert findings[0].detail["sidecar_unavailable_reason"] == "attempt_mismatch"
 
 
+def test_writer_recovers_producing_sidecar_after_no_execution_revalidation(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    artifact = _register_upstream_table(
+        store, tmp_path / "exposure_outcome_summary.csv"
+    )
+    sidecar_id = _commit_upstream_sidecar(store, envelope, attempt_id="attempt-1")
+    record = _modern_upstream_record(
+        sidecar_evidence_id=sidecar_id,
+        attempt_id="resume-revalidation-2",
+        checkpoint_id="resume-revalidation-2:deterministic-review",
+    )
+    record["evidence_ids"] = [artifact.evidence_id, sidecar_id]
+    record["revalidated_without_execution"] = True
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [record], evidence_store=store
+    )
+
+    assert projected[0]["writer_result_envelope_evidence_id"] == sidecar_id
+    assert projected[0]["attempt_id"] == "resume-revalidation-2"
+
+
 def test_registered_output_consumer_fails_closed_on_incomplete_coordinates(
     tmp_path: Path,
 ) -> None:
