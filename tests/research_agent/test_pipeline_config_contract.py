@@ -165,6 +165,25 @@ def test_progressive_resume_is_explicitly_development_only(
         )
 
 
+def test_pipeline_accepts_development_diagnostic_with_dev_profile(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19,
+    )
+
+    config = ra.PipelineConfig(
+        workdir=tmp_path,
+        development_diagnostic=True,
+        **E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.pipeline_options(),
+    )
+
+    pipeline = ra.ResearchAgentPipeline.from_config(config)
+
+    assert pipeline._development_diagnostic is True
+    assert pipeline._submission_profile_name == "npj_dm_e1_canary_dev"
+
+
 def test_planner_efficiency_budget_is_complete_and_development_only(
     ra, tmp_path: Path
 ) -> None:
