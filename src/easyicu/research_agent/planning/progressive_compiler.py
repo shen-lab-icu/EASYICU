@@ -1215,7 +1215,15 @@ def _compile_inputs(
         # declared raw columns/specification. An outline dependency can order
         # those steps, but its table/report product must not become a second
         # data-frame input that the executor neither reads nor receipts.
-        if step.module_id not in _COHORT_FRAME_ONLY_MODULES:
+        parsed_reference = typed_product(reference.product_id)
+        if (
+            step.module_id not in _COHORT_FRAME_ONLY_MODULES
+            and not (
+                step.module_id == "report"
+                and parsed_reference is not None
+                and parsed_reference[0] == "figure"
+            )
+        ):
             inputs.append(reference.product_id)
     inputs = list(dict.fromkeys(inputs))
     if step.module_id == "visualization":

@@ -986,6 +986,7 @@ def _resolved_typed_input_binding(
     authoritative_cohort_path: Optional[Path] = None,
     development_sample: Optional[Any] = None,
     locked_cohort_name: object = None,
+    allow_opaque_reference: bool = False,
     refusals: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Build the exact, digest-verified runtime binding for one typed input.
@@ -1151,6 +1152,21 @@ def _resolved_typed_input_binding(
                 producer_contract,
                 structure_receipt,
             )
+    elif allow_opaque_reference:
+        # A terminal report may cite a completed figure by path and digest
+        # without reading values back out of its raster export. This is a
+        # reference contract, not a readable-data contract; statistical and
+        # visualization consumers never set this flag and retain the strict
+        # refusal below.
+        host_contract = dict(producer_contract or {})
+        host_contract.update(
+            {
+                "schema_version": "easyicu.host_opaque_reference.v1",
+                "opaque_reference": True,
+                "serialization": verified_path.suffix.lower() or "(none)",
+                "read_policy": "digest_reference_only",
+            }
+        )
     elif not _binding_is_readable_without_a_schema_receipt(
         verified_path, producer_contract
     ):
@@ -1231,6 +1247,28 @@ def _resolved_typed_input_binding(
     binding["identity_row"] = identity_row
     binding["product_contract"] = host_contract
     return binding
+
+
+def _consumer_allows_opaque_reference(
+    step: AnalysisStep | None,
+    input_name: str,
+) -> bool:
+    """Whether one report may cite, but never parse, an opaque figure."""
+
+    parsed_input = _typed_input_product(input_name)
+    if step is None or parsed_input is None or parsed_input[0] != "figure":
+        return False
+    outputs = [
+        _canonical_typed_product(value) for value in step.expected_outputs or ()
+    ]
+    return bool(
+        step.planned_analysis_role == "auxiliary"
+        and len(outputs) == 1
+        and outputs[0] is not None
+        and outputs[0][0] == "report"
+        and str(step.method or "").strip().lower().split(" with ", 1)[0]
+        in {"feasibility_protocol", "scientific_reporting"}
+    )
 
 
 def _assignment_model_authority_context_block(
@@ -2010,6 +2048,10 @@ def _resume_typed_input_bindings(
             authoritative_cohort_path=cohort_path,
             development_sample=development_sample,
             locked_cohort_name=getattr(getattr(plan, "cohort", None), "name", None),
+            allow_opaque_reference=_consumer_allows_opaque_reference(
+                step,
+                input_name,
+            ),
             refusals=binding_refusals,
         )
         if binding is None:
@@ -2142,6 +2184,10 @@ class TypedBindingResolver:
                         development_sample=self.development_sample,
                         locked_cohort_name=getattr(
                             getattr(plan, "cohort", None), "name", None
+                        ),
+                        allow_opaque_reference=_consumer_allows_opaque_reference(
+                            consumer_step,
+                            value,
                         ),
                         refusals=binding_refusals,
                     )
