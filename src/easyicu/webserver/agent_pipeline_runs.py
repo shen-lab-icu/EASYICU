@@ -3375,6 +3375,8 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.execution.runner import DockerRunner
             from easyicu.research_agent.orchestration.config import PipelineConfig
             from easyicu.research_agent.orchestration.profiles import (
+                CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
+                CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
                 get_submission_profile,
             )
             from easyicu.research_agent.orchestration.services import PipelineServices
@@ -3493,9 +3495,9 @@ def make_research_pipeline_run_runner(
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
             submission_profile_ref = (
-                "npj_dm_e1_demo_dev/20260817"
+                CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF
                 if selected_budget_mode == "full_reviewed"
-                else "npj_dm_e1_canary_dev/20260817"
+                else CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF
             )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()

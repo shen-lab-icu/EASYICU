@@ -3574,7 +3574,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             None,
             "easyicu-research-agent:1.0.0",
             "npj_dm_e1_canary_dev",
-            "20260817",
+            "20260819",
         ),
         (
             None,
@@ -3582,7 +3582,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             "easyicu-research-agent:isolated-exact-head",
             "easyicu-research-agent:isolated-exact-head",
             "npj_dm_e1_canary_dev",
-            "20260817",
+            "20260819",
         ),
         (
             "full_reviewed",
@@ -3590,7 +3590,7 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
             " \n",
             "easyicu-research-agent:e1-demo-local",
             "npj_dm_e1_demo_dev",
-            "20260817",
+            "20260819",
         ),
     ],
 )
