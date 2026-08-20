@@ -487,11 +487,23 @@ def _runtime_suffix_structured_output_request_cached(
         }
     else:
         step_properties["inputs"]["maxItems"] = 0
+    output_items: dict[str, Any]
+    if len(expected_outputs) == 1:
+        output_items = {"type": "string", "const": expected_outputs[0]}
+    elif expected_outputs:
+        output_items = {
+            "type": "string",
+            "enum": list(dict.fromkeys(expected_outputs)),
+        }
+    else:
+        output_items = {"type": "string"}
     step_properties["expected_outputs"] = {
         "type": "array",
-        "prefixItems": [
-            {"type": "string", "const": value} for value in expected_outputs
-        ],
+        # OpenAI Structured Outputs rejects ``prefixItems`` and requires every
+        # array schema to declare ``items``.  Lock the vocabulary and exact
+        # cardinality here; the existing host-side coordinate validator remains
+        # authoritative for order and duplicate rejection.
+        "items": output_items,
         "minItems": len(expected_outputs),
         "maxItems": len(expected_outputs),
     }
