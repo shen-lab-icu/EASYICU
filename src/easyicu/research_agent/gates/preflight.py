@@ -5621,6 +5621,82 @@ def _pandas_numeric_container_findings(
     )
 
 
+def _literal_mapping_double_subscript_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Reject integer indexing before a known key on a literal mapping."""
+
+    findings: list[ValidationFinding] = []
+    scopes: list[ast.AST] = [tree]
+    scopes.extend(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    for scope in scopes:
+        body = tree.body if isinstance(scope, ast.Module) else scope.body
+        nodes = _scope_nodes(body)
+        literal_keys: dict[str, tuple[set[str], int]] = {}
+        for node in nodes:
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Dict)
+                and node.value.keys
+                and all(
+                    isinstance(key, ast.Constant) and isinstance(key.value, str)
+                    for key in node.value.keys
+                )
+            ):
+                continue
+            literal_keys[node.targets[0].id] = (
+                {str(key.value) for key in node.value.keys},
+                int(node.lineno),
+            )
+        for node in nodes:
+            if not (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)
+                and isinstance(node.value, ast.Subscript)
+                and isinstance(node.value.value, ast.Name)
+                and isinstance(node.value.slice, ast.Constant)
+                and isinstance(node.value.slice.value, int)
+                and not isinstance(node.value.slice.value, bool)
+            ):
+                continue
+            mapping_name = node.value.value.id
+            binding = literal_keys.get(mapping_name)
+            if binding is None:
+                continue
+            keys, binding_line = binding
+            field = str(node.slice.value)
+            if field not in keys or binding_line >= int(node.lineno):
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A literal string-keyed mapping is indexed by an integer "
+                        "before accessing one of its known fields. Access the "
+                        "known field directly on the mapping."
+                    ),
+                    detail={
+                        "reason": "literal_mapping_index_then_key",
+                        "line": int(node.lineno),
+                        "name": mapping_name,
+                        "field": field,
+                    },
+                )
+            )
+    return sorted(
+        findings,
+        key=lambda finding: int((finding.detail or {}).get("line", -1)),
+    )
+
+
 def _positive_boolean_mask_test(
     test: ast.AST,
     *,
@@ -5950,6 +6026,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))
     findings.extend(_pandas_numeric_container_findings(tree))
+    findings.extend(_literal_mapping_double_subscript_findings(tree))
     findings.extend(_conditional_nonfinite_guard_findings(tree))
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))
