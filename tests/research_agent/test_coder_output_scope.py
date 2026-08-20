@@ -1076,6 +1076,8 @@ def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
     assert "DIAGNOSED FIGURE SOURCE-DATA TRACE REPAIR" in prompt
     assert "Remove unplotted derived numeric/boolean audit fields" in prompt
     assert "Keep such checks internal" in prompt
+    assert "FIGURE REWRITE INVARIANT" in prompt
+    assert "one original-column, row-aligned companion CSV" in prompt
 
 
 def test_coder_repair_fail_closes_partial_structural_accounting_figure(ra):

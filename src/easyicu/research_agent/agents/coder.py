@@ -493,6 +493,7 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         )
     outputs = [str(item) for item in step.expected_outputs or []]
     effect_authorized = effect_output_authorized(step)
+    has_figure = _step_expects_figure(step)
     lines = [
         "DECLARED OUTPUT SCOPE (binding): minimal patch",
         "- Preserve the exact Planner Method, inputs, Expected outputs, model "
@@ -605,6 +606,13 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
             "Require finite values for numbers actually used by this step, but do not "
             "reject the whole product for an unused nullable field. Never drop rows "
             "or replace semantic missingness with zero to make validation pass."
+        )
+    if has_figure:
+        lines.append(
+            "- FIGURE REWRITE INVARIANT: keep one original-column, row-aligned "
+            "companion CSV per panel-bound table; list all companions in "
+            "FigureContract.source_data and step_summary. Never replace them "
+            "with generic value/count/denominator rows."
         )
     lines.extend(
         [
