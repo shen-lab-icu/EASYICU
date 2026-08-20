@@ -63,6 +63,24 @@ def test_typed_repair_ticket_folds_only_identical_occurrences():
     assert ticket[0]["occurrence_count"] == 1
 
 
+def test_runtime_panel_contract_failure_gets_planned_panel_route():
+    finding = ValidationFinding(
+        validator="planned_figure_contract_binding",
+        severity="error",
+        message="runtime panel coordinates are incomplete",
+        detail={"reason": "runtime_panel_scientific_coordinates_missing"},
+    )
+
+    authority = RepairPromptAuthority.create(findings=[finding])
+
+    assert authority.payload()["route_codes"] == [
+        RepairRoute.FIGURE_PANEL_BINDING.value
+    ]
+    assert typed_repair_ticket([finding])[0]["reason"] == (
+        RepairReason.OUTPUT_CONTRACT_INVALID.value
+    )
+
+
 def test_structured_repair_metadata_reads_nested_exact_coordinates_only():
     authority = RepairPromptAuthority.create(
         typed_ticket=[
