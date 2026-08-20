@@ -70,10 +70,13 @@ RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
 
 # Generated analysis imports EasyICU's publication-figure and audit helpers.
 # Install the repository package itself without resolving dependencies again;
-# the complete runtime set is pinned above and is captured by DockerRunner.
+# the complete runtime set is pinned above and is captured by DockerRunner. The
+# digest-pinned base already supplies the pyproject build tools, so reuse those
+# exact bytes instead of creating a second temporary environment that downloads
+# setuptools/wheel again outside requirements.lock.
 COPY pyproject.toml README.md /opt/easyicu/
 COPY src/easyicu /opt/easyicu/src/easyicu
-RUN pip install --no-cache-dir --no-deps /opt/easyicu
+RUN pip install --no-cache-dir --no-deps /opt/easyicu --no-build-isolation
 
 # Non-root user so `--user=$(id -u):$(id -g)` works out of the box and
 # the script cannot accidentally `chown` host-mounted files to root.
