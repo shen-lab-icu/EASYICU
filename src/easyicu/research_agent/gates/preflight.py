@@ -295,6 +295,99 @@ def _is_raise_only_guard(
     return _mask_incomplete_test(statement.test, mask_name, frame_names)
 
 
+def _validation_only_filtered_assignment(
+    *,
+    owner: ast.FunctionDef,
+    filtered_node: ast.Subscript,
+) -> bool:
+    """Recognise a filtered temporary that cannot affect rendered rows.
+
+    Structural-accounting renderers must not silently drop rows.  A local
+    ``Series.loc[mask]`` can also be used solely to validate observed values,
+    however.  Accept that narrow case only when the filtered result is assigned
+    to one local name and every subsequent load of that name is confined to a
+    fail-closed validation predicate.  Returning, plotting, or otherwise using
+    the filtered temporary remains a row-filter finding.
+    """
+
+    parents = {
+        child: parent
+        for parent in ast.walk(owner)
+        for child in ast.iter_child_nodes(parent)
+    }
+    assignment: ast.Assign | ast.AnnAssign | None = None
+    ancestor: ast.AST | None = filtered_node
+    while ancestor is not None and ancestor is not owner:
+        if isinstance(ancestor, (ast.Assign, ast.AnnAssign)):
+            assignment = ancestor
+            break
+        ancestor = parents.get(ancestor)
+    if isinstance(assignment, ast.Assign):
+        if len(assignment.targets) != 1 or not isinstance(
+            assignment.targets[0], ast.Name
+        ):
+            return False
+        value = assignment.value
+        target_name = assignment.targets[0].id
+    elif isinstance(assignment, ast.AnnAssign):
+        if not isinstance(assignment.target, ast.Name) or assignment.value is None:
+            return False
+        value = assignment.value
+        target_name = assignment.target.id
+    else:
+        return False
+    if not any(candidate is filtered_node for candidate in ast.walk(value)):
+        return False
+
+    assignment_line = int(getattr(assignment, "lineno", 0))
+    later_loads = [
+        candidate
+        for candidate in ast.walk(owner)
+        if isinstance(candidate, ast.Name)
+        and isinstance(candidate.ctx, ast.Load)
+        and candidate.id == target_name
+        and int(getattr(candidate, "lineno", 0)) > assignment_line
+    ]
+    later_stores = [
+        candidate
+        for candidate in ast.walk(owner)
+        if isinstance(candidate, ast.Name)
+        and isinstance(candidate.ctx, ast.Store)
+        and candidate.id == target_name
+        and candidate is not getattr(assignment, "target", None)
+        and candidate not in getattr(assignment, "targets", [])
+        and int(getattr(candidate, "lineno", 0)) > assignment_line
+    ]
+    if later_stores:
+        return False
+
+    validation_uses = 0
+    for load in later_loads:
+        container: ast.AST | None = load
+        accepted = False
+        while container is not None and container is not owner:
+            if isinstance(container, ast.Assert):
+                accepted = any(item is load for item in ast.walk(container.test))
+                break
+            if isinstance(container, ast.If):
+                accepted = bool(
+                    any(item is load for item in ast.walk(container.test))
+                    and container.body
+                    and all(
+                        isinstance(item, (ast.Raise, ast.Return))
+                        for item in container.body
+                    )
+                )
+                break
+            container = parents.get(container)
+        if not accepted:
+            return False
+        validation_uses += 1
+    if not later_loads:
+        return False
+    return validation_uses > 0
+
+
 
 
 def _structural_filter_findings(
@@ -385,6 +478,11 @@ def _structural_filter_findings(
                     )
                 )
                 if not is_row_filter:
+                    continue
+                if _validation_only_filtered_assignment(
+                    owner=owner,
+                    filtered_node=node,
+                ):
                     continue
                 if (
                     not mask_name
