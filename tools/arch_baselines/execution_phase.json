@@ -40,8 +40,8 @@
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
-      "loc": 2274,
-      "sha256": "b3bdb3b0f5876fdd241e4cb15456d83f6ab5502a92ebe828ca26f0d3ead91bd0",
+      "loc": 2285,
+      "sha256": "c737409a7a17137907244f53c4bd7fbdcf0b122f3079d843e65f84eb16ce8bb9",
       "intra_package_import_edges": 15,
       "shim_bypass_violations": []
     },
@@ -161,7 +161,7 @@
     },
     "plan_utils.py": {
       "loc": 4928,
-      "sha256": "af86076ecd228a934dbe7dd9565b5fa71692bdfc60a8457210f46111cc452d54",
+      "sha256": "ebd9798507373d470989a19756687b03961eff380c96bafb39dd2437c4af1486",
       "intra_package_import_edges": 17,
       "shim_bypass_violations": []
     },
@@ -376,47 +376,11 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Accept the reviewed 2026-08-18..2026-08-20 E1 convergence batch through e689e91: generic fail-closed provenance, typed-input loading, planner-panel/display authority, runtime-replan binding, figure-lineage/export registration, and validation-only pandas preflight contracts. The measured growth is contract hardening exercised by focused owner tests and the fresh 11/11 E1 run; it adds no E1/Sepsis-specific branch. This ratchet move records rather than hides the growth. pipeline.py, execution/phase.py, gates/preflight.py, repairs/source.py, and the other listed large owners remain explicit decomposition debt; no further rules should be added to them without an owner-level split.",
+  "baseline_reason": "Accept 11 owner-local lines that canonicalize identical plan authority paths for exact capsule replay; imports, closure metrics, and all other tracked modules are unchanged.",
   "baseline_accepted_growth": {
-    "execution/phase.py": {
-      "loc_was": 5673,
-      "loc_now": 5679
-    },
-    "execution/phase_support.py": {
-      "loc_was": 3682,
-      "loc_now": 3708
-    },
-    "pipeline.py": {
-      "loc_was": 8745,
-      "loc_now": 8752
-    },
     "authority/typed_binding.py": {
-      "loc_was": 2213,
-      "loc_now": 2274
-    },
-    "gates/preflight.py": {
-      "loc_was": 5784,
-      "loc_now": 6228
-    },
-    "repairs/source.py": {
-      "loc_was": 5496,
-      "loc_now": 5601
-    },
-    "plan_utils.py": {
-      "loc_was": 4892,
-      "loc_now": 4928
-    },
-    "agents/coder.py": {
-      "loc_was": 1564,
-      "loc_now": 1628
-    },
-    "schema.py": {
-      "loc_was": 3257,
-      "loc_now": 3263
-    },
-    "figures/skill.py": {
-      "loc_was": 3358,
-      "loc_now": 3370
+      "loc_was": 2274,
+      "loc_now": 2285
     }
   },
   "baseline_history": [
@@ -744,6 +708,15 @@
         "figures/skill.py": {
           "loc_was": 3358,
           "loc_now": 3370
+        }
+      }
+    },
+    {
+      "reason": "Accept 11 owner-local lines that canonicalize identical plan authority paths for exact capsule replay; imports, closure metrics, and all other tracked modules are unchanged.",
+      "accepted_growth": {
+        "authority/typed_binding.py": {
+          "loc_was": 2274,
+          "loc_now": 2285
         }
       }
     }
