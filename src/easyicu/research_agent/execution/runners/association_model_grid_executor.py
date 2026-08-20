@@ -130,7 +130,7 @@ def association_model_grid_executor_code(
         if plausibility_scope is not None and plausibility_scope.expected_columns
         else ""
     )
-    return textwrap.dedent(
+    prologue = textwrap.dedent(
         f"""
         import json
         import os
@@ -146,7 +146,10 @@ def association_model_grid_executor_code(
         frame, cohort_path = load_step_cohort_frame(
             typed_cohort_input={typed_cohort_input!r},
         )
-        {receipt_code}
+        """
+    ).strip()
+    body = textwrap.dedent(
+        f"""
         summary = run_association_model_grid(
             frame=frame,
             cohort_path=cohort_path,
@@ -166,6 +169,7 @@ def association_model_grid_executor_code(
         print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
         """
     ).strip()
+    return "\n\n".join(part for part in (prologue, receipt_code, body) if part)
 
 
 def _binary_outcome(frame: Any, column: str):
