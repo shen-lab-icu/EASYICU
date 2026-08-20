@@ -683,6 +683,23 @@ def render(frame, labels):
     )
 
 
+def test_mechanical_preflight_allows_series_indexing_for_fail_closed_validation(ra):
+    code = """
+def validate_interval(point, low, high):
+    available = point.notna() & low.notna() & high.notna()
+    if (low[available] > high[available]).any():
+        raise ValueError('lower bound exceeds upper bound')
+    return point, low, high
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_silent_accounting_count_rounding(ra):
     code = """
 def render(frame):
