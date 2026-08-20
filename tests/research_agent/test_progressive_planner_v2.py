@@ -25,6 +25,9 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_exec
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_replay_spec_is_emittable,
 )
+from easyicu.research_agent.execution.runners.feasibility_protocol_executor import (
+    feasibility_protocol_executor_owns_step,
+)
 from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
     compile_progressive_plan,
@@ -1151,8 +1154,12 @@ def test_report_orders_after_figure_without_reading_raster_as_data() -> None:
             "module_id": "report",
             "objective": "Assemble the source-bound scientific report.",
             "depends_on": ["07_figure"],
-            "raw_inputs": [],
+            "raw_inputs": ["age_years"],
             "product_inputs": [
+                {
+                    "producer_step_id": "05_primary",
+                    "product_id": "table:adjusted_association_estimates",
+                },
                 {
                     "producer_step_id": "07_figure",
                     "product_id": "figure:primary_results",
@@ -1176,7 +1183,10 @@ def test_report_orders_after_figure_without_reading_raster_as_data() -> None:
 
     assert compiled_report.expected_outputs == ["report:analysis_results"]
     assert "figure:primary_results" not in compiled_report.inputs
+    assert "age_years" not in compiled_report.inputs
+    assert "table:adjusted_association_estimates" in compiled_report.inputs
     assert "artifact:analysis_cohort" in compiled_report.inputs
+    assert feasibility_protocol_executor_owns_step(compiled_report)
 
 
 def test_progressive_visualization_rejects_raw_cohort_inputs() -> None:
