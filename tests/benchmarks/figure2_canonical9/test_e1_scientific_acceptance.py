@@ -299,6 +299,38 @@ def test_e1_scientific_acceptance_accepts_complete_structured_closure(
     assert receipt["issues"] == []
 
 
+def test_e1_scientific_acceptance_accepts_explicit_zero_variance_smd(
+    tmp_path: Path,
+) -> None:
+    """Perfect separation is explicit evidence, not a missing SMD calculation."""
+
+    run_dir = _accepted_run(tmp_path)
+    path = run_dir / "steps" / "02_table_one" / "outputs" / "table_one.csv"
+    table = pd.read_csv(path)
+    table.loc[len(table)] = {
+        "schema_version": "easyicu.table_one_result/3",
+        "variable": "perfectly_separated_indicator",
+        "absolute_standardized_mean_difference": None,
+        "standardized_difference_status": "undefined_zero_pooled_variance",
+    }
+    table.to_csv(path, index=False)
+
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for row in manifest["evidence"]:
+        if row["produced_by_step"] == "02_table_one":
+            row["sha256"] = _sha256(path)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    receipt = evaluate_e1_scientific_acceptance(
+        run_dir=run_dir,
+        contract=e1_scientific_acceptance_contract(),
+    )
+
+    assert receipt["status"] == "accepted"
+    assert receipt["issues"] == []
+
+
 def test_e1_sensitivity_instruction_publishes_its_restriction_encoding() -> None:
     instruction = sensitivity_output_instruction()
 

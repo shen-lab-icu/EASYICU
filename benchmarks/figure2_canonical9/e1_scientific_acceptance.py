@@ -596,11 +596,24 @@ def _validate_table_one(
         computed = mask & status.eq("computed") & numeric.map(
             lambda value: bool(pd.notna(value) and math.isfinite(float(value)))
         )
-        if not bool(computed.any()):
+        # Perfectly separated or constant strata have zero pooled variance.
+        # The verified Table 1 method represents that mathematically undefined
+        # SMD explicitly instead of fabricating a finite number or infinity.
+        # Treat that typed, all-NA state as scientifically complete; every
+        # other missing/non-finite state remains rejected.
+        variable_statuses = set(status[mask])
+        explicit_zero_variance = (
+            variable_statuses == {"undefined_zero_pooled_variance"}
+            and bool(numeric[mask].isna().all())
+        )
+        if not bool(computed.any()) and not explicit_zero_variance:
             issues.append(
                 _issue(
                     "e1_table_one_smd_incomplete",
-                    "A Table 1 variable has no computed finite SMD.",
+                    (
+                        "A Table 1 variable has neither a computed finite SMD "
+                        "nor an explicit zero-pooled-variance status."
+                    ),
                     variable=variable,
                 )
             )
