@@ -214,6 +214,25 @@ def test_a_step_naming_neither_table_is_not_asked():
     assert _verdict(plan).missing_declarations == ()
 
 
+def test_a_composite_publication_figure_is_not_claimed_as_an_audit_figure():
+    """One audit panel does not turn a multi-source figure into this owner."""
+
+    composite = _figure_step(
+        "table:cohort_flow",
+        MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+        "table:adjusted_association_estimates",
+        "table:robustness_summary",
+    )
+    composite["step_id"] = "primary_figure_suite"
+    composite["expected_outputs"] = ["figure:primary_figure_suite"]
+    plan = _plan(_audit_step(*MISSINGNESS_MEASUREMENT_FIGURE_INPUTS), composite)
+
+    verdict = _verdict(plan, step_id="primary_figure_suite")
+
+    assert verdict.missing_declarations == ()
+    assert "sole input" in verdict.reason
+
+
 # ---------------------------------------------------------------------------
 # The renderer is not loosened, and the gate carries the verdict
 # ---------------------------------------------------------------------------

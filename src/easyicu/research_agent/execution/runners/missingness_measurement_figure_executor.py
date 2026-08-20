@@ -383,12 +383,20 @@ def missingness_measurement_figure_declaration_verdict(
 
     declared = {str(value or "").strip() for value in step.inputs or []}
     named = [key for key in MISSINGNESS_MEASUREMENT_FIGURE_INPUTS if key in declared]
-    if len(named) != 1:
+    # This owner can only claim the exact two-table audit figure after the
+    # missing sibling is added.  A composite publication figure may consume
+    # one audit table alongside cohort, effect, or robustness products; adding
+    # the sibling would still leave extra inputs and therefore could never
+    # make ``missingness_measurement_figure_executor_owns_step`` true.  Such a
+    # step belongs to the Coder and must not be blocked as under-declared for
+    # this deterministic owner.
+    if len(named) != 1 or declared != {named[0]}:
         return OwnershipVerdict.wrong_shape(
             MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND,
             reason=(
                 "the step does not name exactly one of this owner's two audit "
-                "tables, so the gap is not a single missing input declaration"
+                "tables as its sole input, so adding the sibling would not make "
+                "it claimable by this deterministic owner"
             ),
         )
     have = named[0]
