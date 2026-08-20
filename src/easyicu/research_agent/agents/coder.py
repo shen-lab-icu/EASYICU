@@ -231,6 +231,18 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
         lines.append(
             "- Figure rendering is allowed only for the explicitly declared figure products."
         )
+        lines.extend(
+            [
+                "- FIGURE SOURCE-DATA LINEAGE (binding): each panel-bound table "
+                "gets a companion CSV preserving original "
+                "column names and exact row-aligned values (full copy or keyed "
+                "subset). List every file in FigureContract.source_data and "
+                "step_summary.",
+                "- Never collapse parents or value vectors into generic "
+                "`value`, `count`, or `denominator` columns. Keep derived plot "
+                "values internal and authenticate their raw inputs.",
+            ]
+        )
     else:
         lines.append(
             "- This step declares no figure product. Do not render, save, or register "
@@ -1492,7 +1504,12 @@ def _repair_specialization(
             "checks internal to the script or summarize them in step_summary.json; "
             "do not rename, stringify, or fabricate an upstream source merely to "
             "evade trace validation. Preserve plotted values, denominators, source "
-            "row indices, source table names, and the FigureContract unchanged.\n"
+            "row indices, source table names, and scientific FigureContract "
+            "fields unchanged.\n"
+            "Preserve the FigureContract's panels, claims, chart types, and "
+            "scientific coordinates; update its `source_data` references and "
+            "the step-summary source-data list only as needed to enumerate the "
+            "independently verifiable companion files.\n"
             "  ONE PANEL PER FILE when panels read different upstream columns. "
             "A single parent feeding several panels that each draw a DIFFERENT "
             "upstream column cannot be stacked into one long `value` column: "
