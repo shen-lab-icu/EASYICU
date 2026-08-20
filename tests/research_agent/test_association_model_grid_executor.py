@@ -18,6 +18,9 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     load_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.authority.plan_input_closure import (
+    close_measurement_companion_inputs,
+)
 from easyicu.research_agent.execution.runners.adjusted_association_executor import (
     run_adjusted_association_from_env,
 )
@@ -31,7 +34,12 @@ from easyicu.research_agent.execution.runners.selection import (
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
 )
-from easyicu.research_agent.schema import AnalysisPlan
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    CohortDescriptor,
+    ConceptDescriptor,
+    ResearchContext,
+)
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
 _COVARIATES = ["age", "sex", "charlson_max"]
@@ -242,6 +250,46 @@ def test_host_compiles_the_exact_grid_and_the_real_router_claims_it() -> None:
     )
     with pytest.raises(CurrentCaseScientificAuthorityError, match="method"):
         authority.validate_plan(drifted)
+
+
+def test_runtime_grid_rebinds_after_generic_measurement_input_closure() -> None:
+    _, authority, bound, _ = _authority_and_plan()
+    context = ResearchContext(
+        research_question=bound.research_question,
+        cohort=CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[
+            ConceptDescriptor(name=name, dtype="float64")
+            for name in (
+                "sep3_sofa2_max",
+                "sep3_sofa2_measured",
+                "sep3_sofa2_n",
+            )
+        ],
+    )
+    closed, findings = close_measurement_companion_inputs(
+        plan=bound,
+        context=context,
+    )
+    assert findings
+    with pytest.raises(CurrentCaseScientificAuthorityError, match="inputs"):
+        authority.validate_plan(closed)
+
+    rebound, _ = ScientificRuntimeAuthorities(
+        current_case=authority,
+        trajectory=None,
+    ).bind_plan(closed)
+
+    authority.validate_plan(rebound)
+    assert set(rebound.steps[1].inputs) == {
+        *authority.required_columns(rebound),
+        authority.cohort_product,
+        authority.parent_product,
+    }
 
 
 def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(

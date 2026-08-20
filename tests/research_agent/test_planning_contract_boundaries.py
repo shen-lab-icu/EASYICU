@@ -433,3 +433,15 @@ def test_pipeline_scopes_run_concepts_while_revalidating_the_final_cohort() -> N
     ]
 
     assert "ensure_cohort_definition" in scoped_calls
+
+
+def test_pipeline_binds_signed_runtime_after_generic_input_closure() -> None:
+    from easyicu.research_agent import pipeline as pipeline_module
+
+    source = inspect.getsource(
+        pipeline_module.ResearchAgentPipeline._validate_and_persist_plan
+    )
+
+    assert source.index("close_measurement_companion_inputs") < source.index(
+        "self._scientific_runtime_authorities.bind_plan"
+    )

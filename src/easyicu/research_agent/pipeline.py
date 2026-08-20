@@ -3041,10 +3041,6 @@ class ResearchAgentPipeline:
         # ensure_* could rename or reorder step_ids and break the resume skip
         # set. A freshly generated plan still gets the full treatment.
         if not reused_prior_plan:
-            plan, scientific_runtime_compile_findings = (
-                self._scientific_runtime_authorities.bind_plan(plan)
-            )
-            findings.extend(scientific_runtime_compile_findings)
             plan, plan_contract_findings = _enforce_advanced_plan_contract(
                 plan=plan,
                 context=context,
@@ -3153,6 +3149,14 @@ class ResearchAgentPipeline:
                 "a previously executed plan in memory"
             )
         plan = bound_dependence_plan
+        if not reused_prior_plan:
+            # The signed runtime owner is the final public-input compiler. Run
+            # it after generic input closure so measurement companions or other
+            # host shaping cannot drift its exact executor contract.
+            plan, scientific_runtime_compile_findings = (
+                self._scientific_runtime_authorities.bind_plan(plan)
+            )
+            findings.extend(scientific_runtime_compile_findings)
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
