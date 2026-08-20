@@ -1185,15 +1185,37 @@ def resolved_raw_input_contracts(
     variables = {variable.name: variable for variable in context.variables}
     for name in raw_names:
         binding = cohort.column_bindings.get(name)
-        if binding is None:
+        variable = variables.get(name)
+        if binding is None and (
+            name != cohort.identity_column
+            or name not in cohort.cohort_columns
+            or variable is None
+            or str(variable.role.value) != "id"
+        ):
             raise ValueError(
                 f"Planner-declared raw input {name!r} lacks a typed cohort binding"
             )
+        if binding is None:
+            # Identity is deliberately excluded from concept-column bindings:
+            # it has row-identity authority, not clinical concept metadata.
+            # Still expose its exact materialized-cohort contract so a Planner
+            # may use it for row identity or deduplication without pretending
+            # it is a physiological variable or inventing a plausibility range.
+            fact = {
+                "column": name,
+                "dtype": variable.dtype,
+                "physical_role": "identity",
+                "representation_transform": "row_identity",
+                "source_database_actual": cohort.source_database,
+                "authority_kind": "materialized_cohort_identity",
+                "row_identity_sha256": cohort.row_identity_sha256,
+            }
+            contracts[name] = fact
+            continue
         fact = {
             **_column_prompt_fact(name, binding),
             "binding_sha256": binding.binding_sha256,
         }
-        variable = variables.get(name)
         domain = (
             variable.observed_domain
             if variable is not None and isinstance(variable.observed_domain, Mapping)
