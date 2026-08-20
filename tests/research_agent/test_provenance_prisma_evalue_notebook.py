@@ -307,6 +307,20 @@ def test_development_write_accepts_audited_multi_image_lineage(tmp_path):
         ),
         image_id="sha256:" + "b" * 64,
     )
+    for step_id, suffix, file_count in (("one", "old", 10), ("two", "new", 11)):
+        provenance_path = (
+            run_dir / "steps" / step_id / "outputs" / "runner_provenance.json"
+        )
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        provenance.update(
+            {
+                "execution_kernel_identity_sha256": f"identity-{suffix}",
+                "execution_kernel_source_sha256": f"source-{suffix}",
+                "execution_kernel_files_sha256": f"files-{suffix}",
+                "execution_kernel_file_count": file_count,
+            }
+        )
+        provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
 
     selected = _validated_runtime_lock(
         run_dir,
