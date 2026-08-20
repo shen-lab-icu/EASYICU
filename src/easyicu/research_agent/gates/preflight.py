@@ -10,6 +10,7 @@ import ast
 import builtins
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from ..icu_rules import companion_count_column_for_measured
@@ -5697,6 +5698,76 @@ def _literal_mapping_double_subscript_findings(
     )
 
 
+def _figure_output_registration_findings(
+    tree: ast.Module,
+    step: AnalysisStep,
+) -> list[ValidationFinding]:
+    """Reject a figure stem where ``output_files`` requires a real filename."""
+
+    figure_products = {
+        str(item)
+        for item in step.expected_outputs or []
+        if str(item).strip().lower().startswith(("figure:", "fig:"))
+    }
+    if not figure_products:
+        return []
+    constant_bindings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            constant_bindings[node.targets[0].id] = node.value.value
+
+    findings: list[ValidationFinding] = []
+    for summary in [node for node in ast.walk(tree) if isinstance(node, ast.Dict)]:
+        fields = {
+            str(key.value): value
+            for key, value in zip(summary.keys, summary.values)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        output_map = fields.get("output_files")
+        figure_files = fields.get("figure_files")
+        if not isinstance(output_map, ast.Dict) or not isinstance(figure_files, ast.Name):
+            continue
+        for key, value in zip(output_map.keys, output_map.values):
+            if not (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and key.value in figure_products
+                and isinstance(value, ast.Name)
+            ):
+                continue
+            registered = constant_bindings.get(value.id)
+            if registered is None or Path(registered).suffix:
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A declared figure product is registered to a stem rather "
+                        "than an exported file, even though the same summary "
+                        "provides the figure_files sequence. Register its first "
+                        "primary export filename."
+                    ),
+                    detail={
+                        "reason": "figure_output_path_missing_extension",
+                        "line": int(value.lineno),
+                        "name": figure_files.id,
+                        "field": str(key.value),
+                    },
+                )
+            )
+    return sorted(
+        findings,
+        key=lambda finding: int((finding.detail or {}).get("line", -1)),
+    )
+
+
 def _positive_boolean_mask_test(
     test: ast.AST,
     *,
@@ -6027,6 +6098,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_lossy_numeric_coercion_findings(tree))
     findings.extend(_pandas_numeric_container_findings(tree))
     findings.extend(_literal_mapping_double_subscript_findings(tree))
+    findings.extend(_figure_output_registration_findings(tree, step))
     findings.extend(_conditional_nonfinite_guard_findings(tree))
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))

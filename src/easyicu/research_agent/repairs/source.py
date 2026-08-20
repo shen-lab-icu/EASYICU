@@ -69,6 +69,7 @@ from .nonfinite_audit import (
     patch_strict_numeric_helper_nonfinite_guard,
 )
 from .nullable_validation import patch_unused_nullable_numeric_validation
+from .figure_output_registration import patch_figure_output_registration
 from .literal_mapping_access import patch_literal_mapping_access
 from .pandas_numeric_container import patch_pandas_numeric_container
 from .rendering_role import patch_structured_analysis_role_selection
@@ -1871,6 +1872,28 @@ def _literal_mapping_access_coordinates(
     )
 
 
+def _figure_output_registration_coordinates(
+    findings: Sequence[ValidationFinding],
+) -> tuple[dict[str, object], ...]:
+    """Return exact host-diagnosed figure output registration coordinates."""
+
+    return tuple(
+        {
+            "line": detail["line"],
+            "name": detail["name"],
+            "field": detail["field"],
+        }
+        for finding in findings
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and (detail := (finding.detail or {})).get("reason")
+        == "figure_output_path_missing_extension"
+        and isinstance(detail.get("line"), int)
+        and isinstance(detail.get("name"), str)
+        and isinstance(detail.get("field"), str)
+    )
+
+
 def _conditional_nonfinite_guard_lines(
     findings: Sequence[ValidationFinding],
 ) -> frozenset[int]:
@@ -2969,6 +2992,16 @@ def _deterministic_concept_audit_repair_candidate(
         if mapping_access_fixed != repaired:
             repair_name = "literal_mapping_access_v1"
             repaired = mapping_access_fixed
+            repair_names.append(repair_name)
+
+    if RepairReason.FIGURE_OUTPUT_REGISTRATION_INVALID in set(repair_reasons):
+        figure_output_fixed = patch_figure_output_registration(
+            repaired,
+            coordinates=_figure_output_registration_coordinates(repair_findings),
+        )
+        if figure_output_fixed != repaired:
+            repair_name = "figure_output_registration_v1"
+            repaired = figure_output_fixed
             repair_names.append(repair_name)
 
     if RepairReason.BOOLEAN_REDUCTION_IDENTITY in set(repair_reasons):

@@ -268,6 +268,7 @@ _SYNTACTIC_REPAIRS = {
     "closed_counts_stable_keywords_v1",
     "cluster_count_summary_alias_v1",
     "figure_contract_source_data_schema_v1",
+    "figure_output_registration_v1",
     "fstring_runtime_quote_compat_v1",
     "host_helper_keyword_only_call_v1",
     "local_helper_unpack_receipt_v1",
