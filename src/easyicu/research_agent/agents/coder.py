@@ -241,6 +241,11 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
                 "- Never collapse parents or value vectors into generic "
                 "`value`, `count`, or `denominator` columns. Keep derived plot "
                 "values internal and authenticate their raw inputs.",
+                "- PLANNED PANEL CONTRACT (binding): when figure_panels is non-empty, "
+                "emit exactly one runtime contract entry per planned panel and copy "
+                "its panel_id, article_role, chart_type, and source_products verbatim. "
+                "Do not split, merge, rename, infer, or invent panel coordinates; keep "
+                "article_role separate from the compatibility PanelSpec role.",
             ]
         )
     else:
@@ -608,11 +613,16 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
             "or replace semantic missingness with zero to make validation pass."
         )
     if has_figure:
-        lines.append(
-            "- FIGURE REWRITE INVARIANT: keep one original-column, row-aligned "
-            "companion CSV per panel-bound table; list all companions in "
-            "FigureContract.source_data and step_summary. Never replace them "
-            "with generic value/count/denominator rows."
+        lines.extend(
+            [
+                "- FIGURE REWRITE INVARIANT: keep one original-column, row-aligned "
+                "companion CSV per panel-bound table; list all companions in "
+                "FigureContract.source_data and step_summary. Never replace them "
+                "with generic value/count/denominator rows.",
+                "- Preserve the exact planned figure_panels cardinality and copy each "
+                "panel_id, article_role, chart_type, and source_products verbatim into "
+                "the runtime FigureContract; never split or merge planned panels.",
+            ]
         )
     lines.extend(
         [
@@ -1537,6 +1547,19 @@ def _repair_specialization(
             "then the upstream schema, not an invented replacement column. Do "
             "not rename it to `estimate`, `score`, or another guessed alias; do "
             "not mix that scalar row with table-derived value vectors.\n"
+        )
+
+    if RepairRoute.FIGURE_PANEL_BINDING in repair_routes:
+        guidance.append(
+            "- DIAGNOSED PLANNED-PANEL BINDING REPAIR (binding): rebuild the runtime "
+            "FigureContract panels from the current step.figure_panels, with exactly "
+            "one entry per planned panel. Copy panel_id, article_role, chart_type, and "
+            "source_products verbatim; do not infer them from prose or evidence ids, "
+            "and do not split, merge, rename, or invent panels. Keep article_role as "
+            "an explicit scientific coordinate separate from the compatibility "
+            "PanelSpec role. The visible layout and labels must implement the same "
+            "planned panel grouping, while preserving all bound values and source-data "
+            "lineage.\n"
         )
 
     if RepairRoute.STRUCTURAL_ACCOUNTING in repair_routes:

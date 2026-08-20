@@ -53,6 +53,7 @@ class RepairRoute(str, Enum):
     ASSIGNMENT_BINDING = "registered_propensity_score_column_unavailable"
     UNDEFINED_HELPER = "undefined_helper_call"
     FIGURE_SOURCE_TRACE = "no_verifiable_values"
+    FIGURE_PANEL_BINDING = "planned_figure_panel_binding"
     STRUCTURAL_ACCOUNTING = "partial_cohort_flow"
     ARBITRARY_COLUMN = "arbitrary_frame_order"
     INTEGER_ACCOUNTING = "fractional_count_values"
@@ -297,6 +298,12 @@ def _derived_repair_routes(ticket: Sequence[Mapping[str, Any]]) -> set[str]:
         routes.add(RepairRoute.BINDING_METADATA.value)
     if tokens & {"figure_source_data", "figure_source_trace"}:
         routes.add(RepairRoute.FIGURE_SOURCE_TRACE.value)
+    if tokens & {
+        "planned_figure_contract_binding",
+        "runtime_panel_scientific_coordinates_missing",
+        "runtime_panel_contract_mismatch",
+    }:
+        routes.add(RepairRoute.FIGURE_PANEL_BINDING.value)
     return routes
 
 
@@ -596,6 +603,8 @@ _DETAIL_REASON_CODES = {
     "figure_output_path_missing_extension": (
         RepairReason.FIGURE_OUTPUT_REGISTRATION_INVALID
     ),
+    "runtime_panel_scientific_coordinates_missing": RepairReason.OUTPUT_CONTRACT_INVALID,
+    "runtime_panel_contract_mismatch": RepairReason.OUTPUT_CONTRACT_INVALID,
     "arbitrary_column_fallback": RepairReason.ARBITRARY_COLUMN_FALLBACK,
     "typed binding unavailable": RepairReason.TYPED_PRODUCT_BINDING_INVALID,
     "unpersisted_binding_metadata": RepairReason.TYPED_PRODUCT_BINDING_INVALID,

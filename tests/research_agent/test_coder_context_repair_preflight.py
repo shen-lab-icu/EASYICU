@@ -7,11 +7,13 @@ import json
 import pytest
 
 from easyicu.research_agent.agents.core import CoderAgent, _looks_like_python_script
+from easyicu.research_agent.agents.coder import _repair_specialization
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
 from easyicu.research_agent.repairs.binary_domain import (
     patch_observed_binary_primary_exposure_guard,
 )
 from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
+from easyicu.research_agent.repairs.reasons import RepairPromptAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
     coder_guide_for_step,
     scoped_coder_context,
@@ -83,6 +85,26 @@ def _figure_step(ra):
         expected_outputs=["figure:cohort_flow"],
         method="visualization",
     )
+
+
+def test_planned_panel_binding_failure_gets_exact_repair_guidance(ra):
+    finding = ValidationFinding(
+        validator="planned_figure_contract_binding",
+        severity="error",
+        message="runtime panel coordinates are incomplete",
+        detail={"reason": "runtime_panel_scientific_coordinates_missing"},
+    )
+    authority = RepairPromptAuthority.create(findings=[finding])
+
+    guidance = _repair_specialization(
+        context=_context(ra),
+        repair_authority=authority,
+        code="figure_contract = {}",
+    )
+
+    assert "DIAGNOSED PLANNED-PANEL BINDING REPAIR" in guidance
+    assert "exactly one entry per planned panel" in guidance
+    assert "panel_id, article_role, chart_type, and source_products" in guidance
 
 
 def test_step_scoped_coder_context_keeps_declared_family_and_drops_unrelated(ra):
