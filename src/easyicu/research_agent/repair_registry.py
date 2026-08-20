@@ -275,6 +275,7 @@ _SYNTACTIC_REPAIRS = {
     "local_read_before_assignment_hoist_v1",
     "measurement_provenance_envelope_alias_v1",
     "measurement_receipt_stable_binding_v1",
+    "missing_loaded_input_binding_receipt_v1",
     "missing_os_import_v1",
     "pandas_boolean_index_alignment_v1",
     "pandas_merge_dynamic_column_collision_guard_v1",
