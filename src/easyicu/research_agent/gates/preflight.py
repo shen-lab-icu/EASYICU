@@ -167,8 +167,39 @@ def _mask_incomplete_test(
     mask_name: str,
     frame_names: set[str],
 ) -> bool:
+    def _unwrap_bool(node: ast.AST) -> ast.AST:
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "bool"
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            return node.args[0]
+        return node
+
+    def _mask_all_true(node: ast.AST) -> bool:
+        node = _unwrap_bool(node)
+        if _is_mask_method_call(node, mask_name, "all"):
+            return True
+        return bool(
+            isinstance(node, ast.Call)
+            and not node.args
+            and not node.keywords
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "all"
+            and isinstance(node.func.value, ast.Call)
+            and isinstance(node.func.value.func, ast.Attribute)
+            and node.func.value.func.attr == "eq"
+            and isinstance(node.func.value.func.value, ast.Name)
+            and node.func.value.func.value.id == mask_name
+            and len(node.func.value.args) == 1
+            and isinstance(node.func.value.args[0], ast.Constant)
+            and node.func.value.args[0].value is True
+        )
+
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
-        return _is_mask_method_call(test.operand, mask_name, "all")
+        return _mask_all_true(test.operand)
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Invert):
         return _is_mask_method_call(test.operand, mask_name, "all")
 
@@ -352,6 +383,16 @@ def _structural_filter_findings(
                             equivalent_frame_names,
                         )
                         for guard in prior_guards.get(mask_name, [])
+                    )
+                    or any(
+                        int(getattr(guard, "lineno", 0)) < int(node.lineno)
+                        and _is_raise_only_guard(
+                            guard,
+                            mask_name,
+                            equivalent_frame_names,
+                        )
+                        for guard in ast.walk(statement)
+                        if isinstance(guard, (ast.Assert, ast.If))
                     )
                 ):
                     continue

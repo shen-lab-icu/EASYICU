@@ -648,6 +648,25 @@ def render(frame):
     )
 
 
+def test_mechanical_preflight_accepts_nested_all_true_guard_before_filter(ra):
+    code = """
+def render(frame):
+    valid_rows = frame['n'].notna()
+    if bool(valid_rows.any()):
+        if not bool(valid_rows.eq(True).all()):
+            raise ValueError('invalid accounting row')
+        plotted = frame.loc[valid_rows].copy()
+    return plotted
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_ignores_unrelated_mapping_subscript(ra):
     code = """
 def render(frame, labels):
