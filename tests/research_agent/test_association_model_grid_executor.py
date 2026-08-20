@@ -21,6 +21,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
 from easyicu.research_agent.authority.plan_input_closure import (
     close_measurement_companion_inputs,
 )
+from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
 from easyicu.research_agent.execution.runners.adjusted_association_executor import (
     run_adjusted_association_from_env,
 )
@@ -252,6 +253,24 @@ def test_host_compiles_the_exact_grid_and_the_real_router_claims_it() -> None:
     )
     assert rebuilt_selection is not None
     assert rebuilt_selection.analysis_kind == "association_model_grid"
+
+    receipt_selection = select_standard_executor(
+        rebuilt_step,
+        plan=plan,
+        current_case_scientific_runtime_authority=authority,
+        scientific_runtime_projection_sha256=projection[
+            "runtime_projection_sha256"
+        ],
+        plausibility_scope=FlagOnlyPlausibilityScope(
+            step_id=rebuilt_step.step_id,
+            expected_columns=("age",),
+            source_contracts_sha256="0" * 64,
+            authority_kind="test_raw_input_contract",
+        ),
+    )
+    assert receipt_selection is not None
+    compile(receipt_selection.code, "<association_model_grid>", "exec")
+    assert "plausibility_audit" in receipt_selection.code
 
     drifted = plan.model_copy(
         update={
