@@ -282,6 +282,10 @@ def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     source = (tmp_path / "out" / "robustness_plot_source_data.csv").read_text()
     assert "alt_missing_complete_case" in source
     assert (tmp_path / "out" / "robustness_plot.png").is_file()
+    contract = json.loads(
+        (tmp_path / "out" / "robustness_plot.figure_contract.json").read_text()
+    )
+    assert contract["panels"][0]["metadata"]["chart_type"] == "sensitivity_forest"
 
 
 def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):

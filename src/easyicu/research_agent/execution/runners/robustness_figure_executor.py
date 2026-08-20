@@ -852,7 +852,7 @@ def run_robustness_figure(
                 ),
                 "evidence_ids": list(source_data_names),
                 "metadata": {
-                    "chart_type": "forest_interval_robustness",
+                    "chart_type": "sensitivity_forest",
                     "source_data": list(source_data_names),
                 },
             }
