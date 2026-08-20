@@ -79,7 +79,7 @@ from .cohort_flow_figure_executor import (
     cohort_flow_figure_executor_owns_step,
 )
 from .composite_descriptive_figure_executor import (
-    COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
+    composite_descriptive_figure_consumed_input_keys,
     composite_descriptive_figure_executor_code,
     composite_descriptive_figure_executor_owns_step,
 )
@@ -571,8 +571,13 @@ def select_standard_executor(
                 progress_message=(
                     "Using digest-bound composite descriptive renderer"
                 ),
-                code=composite_descriptive_figure_executor_code(step),
-                consumed_input_keys=COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
+                code=composite_descriptive_figure_executor_code(
+                    step,
+                    display_labels=plan.display_labels,
+                ),
+                consumed_input_keys=(
+                    composite_descriptive_figure_consumed_input_keys(step)
+                ),
                 host_sealed_renderer=True,
             )
         )
