@@ -160,6 +160,9 @@ def test_coder_prompt_allows_only_declared_figure_products(ra):
     prompt = llm.messages[-1].content
     assert "Figure rendering is allowed only for the explicitly declared" in prompt
     assert "declares no figure product" not in prompt
+    assert "FIGURE SOURCE-DATA LINEAGE (binding)" in prompt
+    assert "preserving original column names" in prompt
+    assert "FigureContract.source_data" in prompt
 
 
 def test_coder_prompt_recognises_fig_typed_alias_as_figure_product(ra):
