@@ -83,6 +83,20 @@ GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT = "table:distribution_prevalence"
 MISSINGNESS_MEASUREMENT_AUDIT_INPUT = "table:missingness_measurement_audit"
 MEASUREMENT_PROCESS_AUDIT_INPUT = "table:measurement_process_audit"
 COHORT_FLOW_INPUT = "table:cohort_flow"
+ROBUSTNESS_FIGURE_INPUT = "table:robustness_matrix"
+ROBUSTNESS_PRIMARY_ESTIMATE_INPUT = "statistic:primary_or"
+ROBUSTNESS_PRIMARY_EFFECT_INPUT = "statistic:primary_effect"
+ROBUSTNESS_COMPLETE_CASE_INPUT = "statistic:complete_case_n"
+ROBUSTNESS_FIGURE_KNOWN_INPUTS = frozenset(
+    {
+        ROBUSTNESS_FIGURE_INPUT,
+        "table:robustness_summary",
+        "statistic:robustness_summary",
+        ROBUSTNESS_PRIMARY_EFFECT_INPUT,
+        ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
+        ROBUSTNESS_COMPLETE_CASE_INPUT,
+    }
+)
 DATA_QUALITY_AUDIT_ROLES = (
     "measurement_missingness",
     "measurement_process",
@@ -233,6 +247,31 @@ def measurement_availability_figure_panels(
     )
 
 
+def robustness_figure_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind the deterministic sensitivity forest to its exact typed parents."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    if (
+        ROBUSTNESS_FIGURE_INPUT not in cleaned
+        or len(cleaned) != len(set(cleaned))
+        or any(not is_canonical_typed_product_token(value) for value in cleaned)
+    ):
+        raise ValueError(
+            "robustness figure sources must be unique typed inputs and "
+            "include the robustness matrix"
+        )
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_grid",
+            article_role="robustness",
+            chart_type="sensitivity_forest",
+            source_products=cleaned,
+        ),
+    )
+
+
 __all__ = [
     "COHORT_FLOW_FIGURE_PANELS",
     "COHORT_FLOW_INPUT",
@@ -246,8 +285,14 @@ __all__ = [
     "GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT",
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
     "MISSINGNESS_MEASUREMENT_AUDIT_INPUT",
+    "ROBUSTNESS_COMPLETE_CASE_INPUT",
+    "ROBUSTNESS_FIGURE_INPUT",
+    "ROBUSTNESS_FIGURE_KNOWN_INPUTS",
+    "ROBUSTNESS_PRIMARY_EFFECT_INPUT",
+    "ROBUSTNESS_PRIMARY_ESTIMATE_INPUT",
     "PlannedFigurePanelSpec",
     "data_quality_audit_source_candidates",
     "measurement_availability_figure_panels",
+    "robustness_figure_panels",
     "resolve_data_quality_figure_inputs",
 ]

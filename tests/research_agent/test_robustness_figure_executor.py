@@ -285,7 +285,12 @@ def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     contract = json.loads(
         (tmp_path / "out" / "robustness_plot.figure_contract.json").read_text()
     )
+    assert contract["panels"][0]["panel_id"] == "robustness_grid"
+    assert contract["panels"][0]["metadata"]["article_role"] == "robustness"
     assert contract["panels"][0]["metadata"]["chart_type"] == "sensitivity_forest"
+    assert contract["panels"][0]["metadata"]["source_products"] == [
+        "table:robustness_matrix"
+    ]
 
 
 def test_it_renders_the_normalized_primary_effect_anchor(tmp_path):

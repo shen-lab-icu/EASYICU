@@ -79,6 +79,14 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...contracts.figure_plan import (
+    ROBUSTNESS_COMPLETE_CASE_INPUT,
+    ROBUSTNESS_FIGURE_INPUT,
+    ROBUSTNESS_FIGURE_KNOWN_INPUTS,
+    ROBUSTNESS_PRIMARY_EFFECT_INPUT,
+    ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
+    robustness_figure_panels,
+)
 from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .deterministic_robustness import (
@@ -97,8 +105,6 @@ __all__ = [
     "run_robustness_figure",
 ]
 
-
-ROBUSTNESS_FIGURE_INPUT = "table:robustness_matrix"
 
 #: The columns this renderer reads. The replay owner's contract is wider; a
 #: figure that required every one of its columns would break the next time the
@@ -134,21 +140,9 @@ def _figure_product(value: Any) -> str | None:
 #: matrix. Optional because the figure is correct without each of them, and
 #: read whenever present -- see the module docstring on why "optional" may
 #: never mean "ignored".
-ROBUSTNESS_PRIMARY_ESTIMATE_INPUT = "statistic:primary_or"
-ROBUSTNESS_PRIMARY_EFFECT_INPUT = "statistic:primary_effect"
-ROBUSTNESS_COMPLETE_CASE_INPUT = "statistic:complete_case_n"
-
 ROBUSTNESS_FIGURE_CAPABILITY = TypedInputCapability(
     required=frozenset({ROBUSTNESS_FIGURE_INPUT}),
-    optional=frozenset(
-        {
-            "table:robustness_summary",
-            "statistic:robustness_summary",
-            ROBUSTNESS_PRIMARY_EFFECT_INPUT,
-            ROBUSTNESS_PRIMARY_ESTIMATE_INPUT,
-            ROBUSTNESS_COMPLETE_CASE_INPUT,
-        }
-    ),
+    optional=ROBUSTNESS_FIGURE_KNOWN_INPUTS - {ROBUSTNESS_FIGURE_INPUT},
 )
 
 
@@ -748,6 +742,7 @@ def run_robustness_figure(
         specification_grid=specification_grid,
     )
     source_data_names = [source_path.name, *companion_sources]
+    panel_template = robustness_figure_panels(tuple(bound_inputs))[0]
 
     import matplotlib
 
@@ -841,7 +836,7 @@ def run_robustness_figure(
         ),
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": panel_template.panel_id,
                 "title": "Locked specification grid",
                 "role": "robustness",
                 "claim": (
@@ -852,7 +847,9 @@ def run_robustness_figure(
                 ),
                 "evidence_ids": list(source_data_names),
                 "metadata": {
-                    "chart_type": "sensitivity_forest",
+                    "article_role": panel_template.article_role,
+                    "chart_type": panel_template.chart_type,
+                    "source_products": list(panel_template.source_products),
                     "source_data": list(source_data_names),
                 },
             }
