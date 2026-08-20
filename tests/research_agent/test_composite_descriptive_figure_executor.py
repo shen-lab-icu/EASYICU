@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.execution.runners.composite_descriptive_figure_executor import (
     COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
+    COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
     composite_descriptive_figure_executor_owns_step,
     run_composite_descriptive_figure,
 )
@@ -40,6 +42,7 @@ def _frames() -> dict[str, pd.DataFrame]:
                 "row_role": ["exposure_level", "exposure_level", "overall"],
                 "exposure_level": [0, 1, -1],
                 "n_rows": [60, 40, 100],
+                "exposure_denominator": [100, 100, 100],
                 "exposure_pct": [60.0, 40.0, 100.0],
                 "outcome_events": [6, 8, 14],
                 "outcome_denominator": [60, 40, 100],
@@ -63,6 +66,22 @@ def _frames() -> dict[str, pd.DataFrame]:
             }
         ),
     }
+
+
+def _robustness_frames() -> dict[str, pd.DataFrame]:
+    frames = _frames()
+    frames.pop("table:measurement_process_audit")
+    frames["table:robustness_summary"] = pd.DataFrame(
+        {
+            "axis": ["primary", "missing"],
+            "total_specs": [1, 2],
+            "converged_specs": [1, 2],
+            "non_independent_specs": [0, 0],
+            "range_low": [1.2, 1.1],
+            "range_high": [1.5, 1.6],
+        }
+    )
+    return frames
 
 
 def _binding(key: str, frame: pd.DataFrame, path: Path) -> dict[str, object]:
@@ -135,6 +154,53 @@ def test_owner_refuses_widened_or_incomplete_contract(tmp_path: Path) -> None:
     )
 
 
+def test_robustness_four_table_contract_selects_and_renders(tmp_path: Path) -> None:
+    frames = _robustness_frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep.model_validate(
+        {
+            **_step().model_dump(mode="json"),
+            "inputs": list(COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS),
+            "input_consumption_contracts": [
+                {"input_key": key, "mode": "all_rows"}
+                for key in COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS
+            ],
+        }
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(
+            research_question="Describe the cohort.",
+            steps=[step],
+            display_labels={"exposure=0": "Absent", "exposure=1": "Present"},
+        ),
+        resolved_bindings=bindings,
+    )
+    assert selection is not None
+    assert selection.consumed_input_keys == (
+        COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS
+    )
+
+    summary = run_composite_descriptive_figure(
+        out_dir=tmp_path / "outputs",
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="primary_publication_figure",
+        input_keys=COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
+        display_labels={"exposure=0": "Absent", "exposure=1": "Present"},
+    )
+    assert summary["status"] == "ok"
+    assert summary["source_inputs"] == list(
+        COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS
+    )
+
+
 def test_renderer_preserves_exact_source_rows_and_exports_figure(tmp_path: Path) -> None:
     frames = _frames()
     bindings = {}
@@ -168,3 +234,37 @@ def test_renderer_preserves_exact_source_rows_and_exports_figure(tmp_path: Path)
     assert set(item["input_key"] for item in stored["input_bindings"]) == set(
         COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS
     )
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "message"),
+    [
+        ("n_rows", 60.5, "integer-like"),
+        ("exposure_pct", 61.0, "does not reconcile"),
+    ],
+)
+def test_renderer_fails_closed_on_inconsistent_display_values(
+    tmp_path: Path,
+    column: str,
+    value: float,
+    message: str,
+) -> None:
+    frames = _frames()
+    frames["table:exposure_outcome_distribution"][column] = frames[
+        "table:exposure_outcome_distribution"
+    ][column].astype(float)
+    frames["table:exposure_outcome_distribution"].loc[0, column] = value
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    with pytest.raises(ValueError, match=message):
+        run_composite_descriptive_figure(
+            out_dir=tmp_path / "outputs",
+            run_dir=tmp_path,
+            resolved_inputs={"step_id": _step().step_id, "inputs": bindings},
+            step_id=_step().step_id,
+            figure_product="primary_publication_figure",
+        )

@@ -34,6 +34,12 @@ COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS = (
     "table:missingness_measurement_audit",
     "table:measurement_process_audit",
 )
+COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS = (
+    "table:cohort_flow",
+    "table:exposure_outcome_distribution",
+    "table:missingness_measurement_audit",
+    "table:robustness_summary",
+)
 
 _REQUIRED_COLUMNS = {
     "table:cohort_flow": frozenset({"n_remaining"}),
@@ -42,6 +48,7 @@ _REQUIRED_COLUMNS = {
             "row_role",
             "exposure_level",
             "n_rows",
+            "exposure_denominator",
             "exposure_pct",
             "outcome_events",
             "outcome_denominator",
@@ -49,15 +56,30 @@ _REQUIRED_COLUMNS = {
         }
     ),
     "table:missingness_measurement_audit": frozenset(
-        {"variable", "label", "n_total", "missing_n", "missing_pct"}
+        {"variable", "n_total", "missing_n", "missing_pct"}
     ),
     "table:measurement_process_audit": frozenset(
         {"concept", "n_total", "measured_one_n"}
     ),
+    "table:robustness_summary": frozenset(
+        {
+            "axis",
+            "total_specs",
+            "converged_specs",
+            "non_independent_specs",
+            "range_low",
+            "range_high",
+        }
+    ),
 }
 
-COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITY = TypedInputCapability(
-    required=frozenset(COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS),
+_COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES = (
+    COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
+    COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
+)
+_COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES = tuple(
+    TypedInputCapability(required=frozenset(profile))
+    for profile in _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES
 )
 
 
@@ -96,24 +118,51 @@ def composite_descriptive_figure_executor_owns_step(
     """Own only the exact typed four-table, one-figure contract."""
 
     products = [_figure_product(value) for value in step.expected_outputs]
+    profile = next(
+        (
+            candidate
+            for candidate, capability in zip(
+                _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES,
+                _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES,
+            )
+            if capability.admits_step(step)
+        ),
+        None,
+    )
     if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITY.admits_step(step)
+        and profile is not None
         and len(products) == 1
         and products[0] is not None
         and step.trajectory_stability_spec is None
         and isinstance(resolved_bindings, Mapping)
-        and set(resolved_bindings) == set(COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS)
+        and set(resolved_bindings) == set(profile)
     ):
         return False
     return all(
         _binding_carries_required_columns(resolved_bindings.get(key), key)
-        for key in COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS
+        for key in profile
     )
 
 
-def composite_descriptive_figure_executor_code(step: AnalysisStep) -> str:
+def composite_descriptive_figure_consumed_input_keys(
+    step: AnalysisStep,
+) -> tuple[str, ...]:
+    for profile, capability in zip(
+        _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES,
+        _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES,
+    ):
+        if capability.admits_step(step):
+            return profile
+    return ()
+
+
+def composite_descriptive_figure_executor_code(
+    step: AnalysisStep,
+    *,
+    display_labels: Mapping[str, str] | None = None,
+) -> str:
     product = _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
     if product is None:
         raise ValueError("composite descriptive figure has no safe figure product")
@@ -132,6 +181,8 @@ def composite_descriptive_figure_executor_code(step: AnalysisStep) -> str:
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
+            input_keys={composite_descriptive_figure_consumed_input_keys(step)!r},
+            display_labels={dict(display_labels or {})!r},
         )
         """
     ).strip()
@@ -142,6 +193,7 @@ def _load_inputs(
     run_dir: Path,
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
+    input_keys: tuple[str, ...],
 ) -> dict[str, BoundTypedInput]:
     return {
         key: load_typed_input(
@@ -154,7 +206,7 @@ def _load_inputs(
             require_consumption_contract=True,
             minimum_row_count=1,
         )
-        for key in COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS
+        for key in input_keys
     }
 
 
@@ -163,6 +215,30 @@ def _finite_series(frame: pd.DataFrame, column: str) -> pd.Series:
     if values.isna().any() or not np.isfinite(values.to_numpy(dtype=float)).all():
         raise ValueError(f"{column!r} must contain only finite numeric values")
     return values.astype(float)
+
+
+def _integer_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    values = _finite_series(frame, column)
+    if not np.isclose(values, np.rint(values), rtol=0.0, atol=1e-9).all():
+        raise ValueError(f"{column!r} must contain only integer-like values")
+    return values.astype("int64")
+
+
+def _assert_percentage(
+    *,
+    reported: pd.Series,
+    numerator: pd.Series,
+    denominator: pd.Series,
+    label: str,
+) -> None:
+    if (denominator <= 0).any() or (numerator < 0).any() or (
+        numerator > denominator
+    ).any():
+        raise ValueError(f"{label} counts do not nest within positive denominators")
+    expected = 100.0 * numerator.astype(float) / denominator.astype(float)
+    # Source tables may persist percentages rounded to six decimal places.
+    if not np.isclose(reported, expected, rtol=0.0, atol=5e-6).all():
+        raise ValueError(f"{label} does not reconcile to its counts and denominators")
 
 
 def _reader_label(value: Any) -> str:
@@ -187,6 +263,8 @@ def run_composite_descriptive_figure(
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
     figure_product: str,
+    input_keys: tuple[str, ...] = COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
+    display_labels: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Render four source-bound descriptive panels without model-authored code."""
 
@@ -203,6 +281,7 @@ def run_composite_descriptive_figure(
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
         step_id=step_id,
+        input_keys=input_keys,
     )
     for key, item in bound.items():
         missing = _REQUIRED_COLUMNS[key] - set(item.frame.columns)
@@ -212,27 +291,82 @@ def run_composite_descriptive_figure(
     flow = bound["table:cohort_flow"].frame.copy()
     distribution = bound["table:exposure_outcome_distribution"].frame.copy()
     missingness = bound["table:missingness_measurement_audit"].frame.copy()
-    process = bound["table:measurement_process_audit"].frame.copy()
+    process = (
+        bound["table:measurement_process_audit"].frame.copy()
+        if "table:measurement_process_audit" in bound
+        else None
+    )
+    robustness = (
+        bound["table:robustness_summary"].frame.copy()
+        if "table:robustness_summary" in bound
+        else None
+    )
 
     levels = distribution.loc[
         distribution["row_role"].astype(str).eq("exposure_level")
     ].copy()
     if levels.empty:
         raise ValueError("exposure/outcome distribution has no exposure-level rows")
-    for column in ("exposure_pct", "outcome_rate_pct", "n_rows"):
-        levels[column] = _finite_series(levels, column)
+    levels["n_rows"] = _integer_series(levels, "n_rows")
+    levels["exposure_denominator"] = _integer_series(
+        levels, "exposure_denominator"
+    )
+    levels["outcome_events"] = _integer_series(levels, "outcome_events")
+    levels["outcome_denominator"] = _integer_series(
+        levels, "outcome_denominator"
+    )
+    levels["exposure_pct"] = _finite_series(levels, "exposure_pct")
+    levels["outcome_rate_pct"] = _finite_series(levels, "outcome_rate_pct")
+    _assert_percentage(
+        reported=levels["exposure_pct"],
+        numerator=levels["n_rows"],
+        denominator=levels["exposure_denominator"],
+        label="exposure percentage",
+    )
+    _assert_percentage(
+        reported=levels["outcome_rate_pct"],
+        numerator=levels["outcome_events"],
+        denominator=levels["outcome_denominator"],
+        label="outcome percentage",
+    )
+    missingness["n_total"] = _integer_series(missingness, "n_total")
+    missingness["missing_n"] = _integer_series(missingness, "missing_n")
     missingness["missing_pct"] = _finite_series(missingness, "missing_pct")
-    process["n_total"] = _finite_series(process, "n_total")
-    process["measured_one_n"] = _finite_series(process, "measured_one_n")
-    if (process["n_total"] <= 0).any() or (
-        process["measured_one_n"] > process["n_total"]
-    ).any():
-        raise ValueError("measurement-process counts do not nest within denominators")
-    process_display_pct = 100.0 * process["measured_one_n"] / process["n_total"]
+    _assert_percentage(
+        reported=missingness["missing_pct"],
+        numerator=missingness["missing_n"],
+        denominator=missingness["n_total"],
+        label="missingness percentage",
+    )
+    process_display_pct = None
+    if process is not None:
+        process["n_total"] = _integer_series(process, "n_total")
+        process["measured_one_n"] = _integer_series(process, "measured_one_n")
+        if (process["n_total"] <= 0).any() or (
+            process["measured_one_n"] > process["n_total"]
+        ).any():
+            raise ValueError(
+                "measurement-process counts do not nest within denominators"
+            )
+        process_display_pct = 100.0 * process["measured_one_n"] / process["n_total"]
+    if robustness is not None:
+        for column in ("total_specs", "converged_specs", "non_independent_specs"):
+            robustness[column] = _integer_series(robustness, column)
+        robustness["range_low"] = _finite_series(robustness, "range_low")
+        robustness["range_high"] = _finite_series(robustness, "range_high")
+        if (
+            (robustness["total_specs"] <= 0).any()
+            or (robustness["converged_specs"] < 0).any()
+            or (robustness["converged_specs"] > robustness["total_specs"]).any()
+            or (robustness["non_independent_specs"] < 0).any()
+            or (robustness["non_independent_specs"] > robustness["total_specs"]).any()
+            or (robustness["range_low"] > robustness["range_high"]).any()
+        ):
+            raise ValueError("robustness summary counts or ranges are inconsistent")
 
     source_files = [
         _write_exact_source(bound[key], out_dir=out_dir)
-        for key in COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS
+        for key in input_keys
     ]
     evidence = {
         key: str(item.evidence_id or "") for key, item in bound.items()
@@ -242,7 +376,9 @@ def run_composite_descriptive_figure(
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
 
     ax = axes[0, 0]
-    remaining = _finite_series(flow, "n_remaining")
+    remaining = _integer_series(flow, "n_remaining")
+    if (remaining < 0).any():
+        raise ValueError("cohort-flow counts must be non-negative")
     positions = np.arange(len(flow))
     ax.barh(positions, remaining, color=palette["blue"])
     flow_labels = []
@@ -262,7 +398,15 @@ def run_composite_descriptive_figure(
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
     ax = axes[0, 1]
-    labels = [_reader_label(value) for value in levels["exposure_level"]]
+    display_labels = dict(display_labels or {})
+    exposure_column = str(levels.iloc[0].get("exposure_column") or "exposure")
+    labels = []
+    for value in levels["exposure_level"]:
+        numeric = float(value)
+        level = str(int(numeric)) if numeric.is_integer() else str(numeric)
+        labels.append(
+            display_labels.get(f"{exposure_column}={level}", _reader_label(value))
+        )
     positions = np.arange(len(levels))
     width = 0.36
     ax.bar(
@@ -286,12 +430,15 @@ def run_composite_descriptive_figure(
     add_panel_label(ax, "B", x=-0.12, y=1.04)
 
     missing_order = missingness.sort_values("missing_pct", ascending=True)
+    missing_label_column = (
+        "label" if "label" in missing_order.columns else "variable"
+    )
     ax = axes[1, 0]
     positions = np.arange(len(missing_order))
     ax.barh(positions, missing_order["missing_pct"], color=palette["orange"])
     ax.set_yticks(
         positions,
-        [_reader_label(value) for value in missing_order["label"]],
+        [_reader_label(value) for value in missing_order[missing_label_column]],
         fontsize=5.8,
     )
     ax.set_xlim(0, 100)
@@ -299,27 +446,61 @@ def run_composite_descriptive_figure(
     ax.set_title("Measurement missingness", loc="left", pad=12)
     add_panel_label(ax, "C", x=-0.12, y=1.04)
 
-    process_order = process.assign(_display_pct=process_display_pct).sort_values(
-        "_display_pct", ascending=True
-    )
     ax = axes[1, 1]
-    positions = np.arange(len(process_order))
-    ax.barh(positions, process_order["_display_pct"], color=palette["blue_soft"])
-    ax.set_yticks(
-        positions,
-        [_reader_label(value) for value in process_order["concept"]],
-        fontsize=5.8,
-    )
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Measured at least once (%)")
-    ax.set_title("Measurement process", loc="left", pad=12)
+    if process is not None and process_display_pct is not None:
+        process_order = process.assign(_display_pct=process_display_pct).sort_values(
+            "_display_pct", ascending=True
+        )
+        positions = np.arange(len(process_order))
+        ax.barh(
+            positions, process_order["_display_pct"], color=palette["blue_soft"]
+        )
+        ax.set_yticks(
+            positions,
+            [_reader_label(value) for value in process_order["concept"]],
+            fontsize=5.8,
+        )
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("Measured at least once (%)")
+        panel_d_title = "Measurement process"
+        panel_d_role = "data_quality"
+        panel_d_input = "table:measurement_process_audit"
+    elif robustness is not None:
+        positions = np.arange(len(robustness))
+        centres = (robustness["range_low"] + robustness["range_high"]) / 2.0
+        errors = np.vstack(
+            [centres - robustness["range_low"], robustness["range_high"] - centres]
+        )
+        ax.errorbar(
+            centres,
+            positions,
+            xerr=errors,
+            fmt="o",
+            color=palette["blue"],
+            capsize=2.5,
+        )
+        ax.set_yticks(
+            positions,
+            [
+                f"{_reader_label(row.axis)} ({int(row.converged_specs)}/{int(row.total_specs)})"
+                for row in robustness.itertuples(index=False)
+            ],
+            fontsize=5.8,
+        )
+        ax.set_xlabel("Estimate range")
+        panel_d_title = "Robustness range"
+        panel_d_role = "robustness"
+        panel_d_input = "table:robustness_summary"
+    else:  # pragma: no cover - guarded by the typed profile
+        raise ValueError("unsupported composite descriptive input profile")
+    ax.set_title(panel_d_title, loc="left", pad=12)
     add_panel_label(ax, "D", x=-0.12, y=1.04)
 
     panel_specs = [
         ("A", "Cohort accounting", "cohort_accounting", [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[0]]),
         ("B", "Exposure and observed outcome", "descriptive_result", [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[1]]),
         ("C", "Measurement missingness", "data_quality", [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[2]]),
-        ("D", "Measurement process", "data_quality", [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[3]]),
+        ("D", panel_d_title, panel_d_role, [panel_d_input]),
     ]
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
@@ -375,7 +556,7 @@ def run_composite_descriptive_figure(
         "analysis_family": "descriptive",
         "deterministic_standard_analysis": "composite_descriptive_figure",
         "rendering_only": True,
-        "source_inputs": list(COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS),
+        "source_inputs": list(input_keys),
         "input_bindings": [
             {
                 "input_key": key,
@@ -402,6 +583,8 @@ def run_composite_descriptive_figure(
 
 __all__ = [
     "COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS",
+    "COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS",
+    "composite_descriptive_figure_consumed_input_keys",
     "composite_descriptive_figure_executor_code",
     "composite_descriptive_figure_executor_owns_step",
     "run_composite_descriptive_figure",
