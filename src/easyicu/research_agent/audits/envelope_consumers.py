@@ -225,13 +225,77 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
         return None
 
     @staticmethod
+    def _revalidated_execution_coordinates(
+        upstream_step: str,
+        record: Mapping[str, Any],
+        evidence_store: Any,
+    ) -> tuple[str, str] | None:
+        """Recover the producing attempt for a no-execution revalidation.
+
+        Resume revalidation has its own monotonic attempt/checkpoint identity,
+        but it does not produce a new result envelope.  The live alias must
+        therefore still name the immutable sidecar from the producing attempt.
+        Recover coordinates only from that current, record-declared sidecar;
+        ordinary stale-attempt records remain invalid.
+        """
+
+        if record.get("revalidated_without_execution") is not True:
+            return None
+        alias_id = str(
+            evidence_store.aliases().get(
+                f"result_envelope_sidecar__{upstream_step}", ""
+            )
+            or ""
+        ).strip()
+        declared_ids = {
+            str(evidence_id).strip()
+            for evidence_id in (record.get("evidence_ids") or [])
+            if str(evidence_id).strip()
+        }
+        if not alias_id or alias_id not in declared_ids:
+            return None
+        matches = [
+            candidate
+            for candidate in evidence_store.records()
+            if str(getattr(candidate, "evidence_id", "") or "") == alias_id
+            and str(getattr(candidate, "produced_by_step", "") or "")
+            == upstream_step
+        ]
+        if len(matches) != 1:
+            return None
+        metadata = getattr(matches[0], "metadata", None)
+        if not isinstance(metadata, Mapping):
+            return None
+        if (
+            str(metadata.get("step_id") or "") != upstream_step
+            or str(metadata.get("terminal_status") or "").strip().lower()
+            != SUCCESSFUL_TERMINAL_STATUS
+            or str(metadata.get("script_evidence_id") or "")
+            != str(record.get("script_evidence_id") or "")
+        ):
+            return None
+        attempt_id = str(metadata.get("attempt_id") or "").strip()
+        checkpoint_id = str(metadata.get("checkpoint_id") or "").strip()
+        if not attempt_id or not checkpoint_id:
+            return None
+        return attempt_id, checkpoint_id
+
+    @classmethod
     def _sidecar_query(
-        upstream_step: str, record: Dict[str, Any]
+        cls,
+        upstream_step: str,
+        record: Dict[str, Any],
+        evidence_store: Any,
     ) -> StepResultEnvelopeSidecarQuery | None:
         attempt_id = str(record.get("attempt_id") or "").strip()
         checkpoint_id = str(
             record.get("review_checkpoint_id") or record.get("checkpoint_id") or ""
         ).strip()
+        revalidated_coordinates = cls._revalidated_execution_coordinates(
+            upstream_step, record, evidence_store
+        )
+        if revalidated_coordinates is not None:
+            attempt_id, checkpoint_id = revalidated_coordinates
         script_evidence_id = str(record.get("script_evidence_id") or "").strip()
         if not (attempt_id and checkpoint_id and script_evidence_id):
             return None
@@ -252,7 +316,7 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
         record: Dict[str, Any],
         evidence_store: Any,
     ) -> StepResultEnvelopeSidecarLoad:
-        query = self._sidecar_query(upstream_step, record)
+        query = self._sidecar_query(upstream_step, record, evidence_store)
         if query is None:
             return StepResultEnvelopeSidecarUnavailable(reason="incomplete_query")
         return load_current_step_result_envelope_sidecar(
