@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from easyicu.research_agent.execution.runners.composite_descriptive_figure_executor import (
+    COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
+    composite_descriptive_figure_executor_owns_step,
+    run_composite_descriptive_figure,
+)
+from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+
+def _step() -> AnalysisStep:
+    return AnalysisStep(
+        step_id="08_primary_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render the four declared descriptive sources.",
+        method="visualization",
+        inputs=list(COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS),
+        expected_outputs=["figure:primary_publication_figure"],
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"}
+            for key in COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS
+        ],
+    )
+
+
+def _frames() -> dict[str, pd.DataFrame]:
+    return {
+        "table:cohort_flow": pd.DataFrame(
+            {"concept_id": ["analysis cohort"], "n_remaining": [100]}
+        ),
+        "table:exposure_outcome_distribution": pd.DataFrame(
+            {
+                "row_role": ["exposure_level", "exposure_level", "overall"],
+                "exposure_level": [0, 1, -1],
+                "n_rows": [60, 40, 100],
+                "exposure_pct": [60.0, 40.0, 100.0],
+                "outcome_events": [6, 8, 14],
+                "outcome_denominator": [60, 40, 100],
+                "outcome_rate_pct": [10.0, 20.0, 14.0],
+            }
+        ),
+        "table:missingness_measurement_audit": pd.DataFrame(
+            {
+                "variable": ["age", "lactate"],
+                "label": ["Age", "Lactate"],
+                "n_total": [100, 100],
+                "missing_n": [0, 20],
+                "missing_pct": [0.0, 20.0],
+            }
+        ),
+        "table:measurement_process_audit": pd.DataFrame(
+            {
+                "concept": ["age", "lactate"],
+                "n_total": [100, 100],
+                "measured_one_n": [100, 80],
+            }
+        ),
+    }
+
+
+def _binding(key: str, frame: pd.DataFrame, path: Path) -> dict[str, object]:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    product = key.partition(":")[2]
+    return {
+        "declared_kind": "table",
+        "evidence_kind": "table",
+        "product": product,
+        "relative_path": path.name,
+        "sha256": digest,
+        "evidence_id": f"evidence_{product}",
+        "product_contract": {"columns": list(frame.columns), "row_count": len(frame)},
+        "consumption_contract": {
+            "input_key": key,
+            "mode": "all_rows",
+            "artifact_sha256": digest,
+        },
+        "identity_row": {
+            "input_key": key,
+            "declared_kind": "table",
+            "product": product,
+            "evidence_id": f"evidence_{product}",
+            "sha256": digest,
+        },
+    }
+
+
+def test_exact_four_table_contract_selects_composite_owner(tmp_path: Path) -> None:
+    bindings = {}
+    for key, frame in _frames().items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = _step()
+
+    assert composite_descriptive_figure_executor_owns_step(
+        step, resolved_bindings=bindings
+    )
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Describe the cohort.", steps=[step]),
+        resolved_bindings=bindings,
+    )
+    assert selection is not None
+    assert selection.analysis_kind == "composite_descriptive_figure"
+    assert selection.host_sealed_renderer is True
+    assert selection.consumed_input_keys == COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS
+
+
+def test_owner_refuses_widened_or_incomplete_contract(tmp_path: Path) -> None:
+    frames = _frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    widened = _step().model_copy(update={"inputs": [*_step().inputs, "table:extra"]})
+    assert not composite_descriptive_figure_executor_owns_step(
+        widened, resolved_bindings={**bindings, "table:extra": {}}
+    )
+    incomplete = dict(bindings)
+    incomplete["table:measurement_process_audit"] = {
+        **incomplete["table:measurement_process_audit"],
+        "product_contract": {"columns": ["concept"], "row_count": 2},
+    }
+    assert not composite_descriptive_figure_executor_owns_step(
+        _step(), resolved_bindings=incomplete
+    )
+
+
+def test_renderer_preserves_exact_source_rows_and_exports_figure(tmp_path: Path) -> None:
+    frames = _frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    manifest = {"step_id": _step().step_id, "inputs": bindings}
+    out_dir = tmp_path / "outputs"
+
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs=manifest,
+        step_id=_step().step_id,
+        figure_product="primary_publication_figure",
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["deterministic_standard_analysis"] == (
+        "composite_descriptive_figure"
+    )
+    for key, frame in frames.items():
+        product = key.partition(":")[2]
+        source = pd.read_csv(out_dir / f"{product}_source_data.csv")
+        assert source["source_row_index"].tolist() == list(range(len(frame)))
+        assert source.drop(columns=["source_row_index", "source_table"]).equals(frame)
+    for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
+        assert (out_dir / f"primary_publication_figure.{suffix}").is_file()
+    stored = json.loads((out_dir / "step_summary.json").read_text())
+    assert set(item["input_key"] for item in stored["input_bindings"]) == set(
+        COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS
+    )

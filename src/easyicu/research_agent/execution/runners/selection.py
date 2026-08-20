@@ -78,6 +78,11 @@ from .cohort_flow_figure_executor import (
     cohort_flow_figure_executor_code,
     cohort_flow_figure_executor_owns_step,
 )
+from .composite_descriptive_figure_executor import (
+    COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
+    composite_descriptive_figure_executor_code,
+    composite_descriptive_figure_executor_owns_step,
+)
 from .descriptive_result_figure_executor import (
     descriptive_result_figure_executor_code,
     descriptive_result_figure_executor_owns_step,
@@ -553,6 +558,25 @@ def select_standard_executor(
             )
         )
     _missed("cohort_flow_figure")
+    if composite_descriptive_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("composite_descriptive_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="composite_descriptive_figure",
+                selection_reason="composite_descriptive_figure_contract_preflight",
+                progress_message=(
+                    "Using digest-bound composite descriptive renderer"
+                ),
+                code=composite_descriptive_figure_executor_code(step),
+                consumed_input_keys=COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
+                host_sealed_renderer=True,
+            )
+        )
+    _missed("composite_descriptive_figure")
     if descriptive_result_figure_executor_owns_step(
         step, resolved_bindings=resolved_bindings
     ):
