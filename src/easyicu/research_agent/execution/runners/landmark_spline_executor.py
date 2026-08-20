@@ -32,7 +32,7 @@ def landmark_spline_executor_owns_step(
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         return False
-    return sealed.governed_step(plan) is step
+    return sealed.governed_step(plan) == step
 
 
 def landmark_spline_executor_scaffold(

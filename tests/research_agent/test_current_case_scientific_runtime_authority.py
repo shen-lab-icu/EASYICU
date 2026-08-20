@@ -199,6 +199,19 @@ def test_signed_current_case_contracts_are_selected_by_the_real_execution_router
         assert authority.execution_contract_sha256 in selected.code
         assert projection.runtime_projection_sha256 in selected.code
 
+        rebuilt_step = plan.steps[0].model_copy(deep=True)
+        assert rebuilt_step is not plan.steps[0]
+        rebuilt = select_standard_executor(
+            rebuilt_step,
+            plan=plan,
+            current_case_scientific_runtime_authority=authority,
+            scientific_runtime_projection_sha256=(
+                projection.runtime_projection_sha256
+            ),
+        )
+        assert rebuilt is not None
+        assert rebuilt.analysis_kind == expected_kind
+
 
 def test_pipeline_config_requires_the_signed_contract_and_projection_as_a_pair(
     tmp_path: Path,

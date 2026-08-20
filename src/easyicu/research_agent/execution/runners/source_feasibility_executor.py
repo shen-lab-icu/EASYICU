@@ -26,7 +26,7 @@ def source_feasibility_executor_owns_step(
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, SourceFeasibilityRuntimeAuthority):
         return False
-    return sealed.governed_step(plan) is step
+    return sealed.governed_step(plan) == step
 
 
 def source_feasibility_executor_code(
