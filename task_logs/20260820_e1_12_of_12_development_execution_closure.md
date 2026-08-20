@@ -110,6 +110,11 @@ repeated-stay dependence, exact adjustment-set confirmation, genuinely distinct
 robustness axes, exact manuscript citation binding, complete manuscript sections,
 and PDF render QA.
 
+After the exact image became ready, one two-token health probe against the bound
+OpenAI-compatible Provider used `max_retries=0` and a 35-second timeout. It ended
+in `APITimeoutError` with no HTTP status. The fresh E1 canary was therefore not
+launched; this is an external transport blocker, not a failed analysis step.
+
 ## Fastest next acceptance path
 
 1. Run one fresh, single-image E1 canary with the verified `a8fda65` image. Accept
