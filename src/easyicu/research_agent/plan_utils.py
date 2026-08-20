@@ -928,7 +928,39 @@ def _has_closed_contract_product(
     )
 
 
-def effect_output_authorized(step: AnalysisStep) -> bool:
+def _signed_standard_effect_output_authorized(
+    step: AnalysisStep,
+    step_record: Optional[Mapping[str, Any]],
+) -> bool:
+    """Recognize a host-selected effect owner without widening Coder scope."""
+
+    if not isinstance(step_record, Mapping):
+        return False
+    candidates = step_record.get("standard_executor_candidates")
+    return bool(
+        step.method == "verified_association_model_grid"
+        and step.planned_analysis_role == "sensitivity"
+        and len(step.expected_outputs or []) == 1
+        and typed_product(step.expected_outputs[0]) is not None
+        and typed_product(step.expected_outputs[0])[0] == "table"
+        and any(
+            re.fullmatch(r"scientific_runtime_contract:[0-9a-f]{64}", str(ref))
+            for ref in (step.icu_rule_refs or [])
+        )
+        and step_record.get("deterministic_standard_analysis")
+        == "association_model_grid"
+        and step_record.get("deterministic_standard_selection_reason")
+        == "signed_association_model_grid_contract_preflight"
+        and isinstance(candidates, Mapping)
+        and candidates.get("claimed_by") == "association_model_grid"
+    )
+
+
+def effect_output_authorized(
+    step: AnalysisStep,
+    *,
+    step_record: Optional[Mapping[str, Any]] = None,
+) -> bool:
     """Return whether the plan authorizes this step to own effect outputs.
 
     This is the single authorization predicate shared by pre-execution coder
@@ -943,6 +975,7 @@ def effect_output_authorized(step: AnalysisStep) -> bool:
         _effect_contract_applies(step)
         or bool(getattr(step, "model_requirements", None))
         or association_binary_sensitivity_contract(step) is not None
+        or _signed_standard_effect_output_authorized(step, step_record)
     )
 
 
@@ -4034,6 +4067,7 @@ def _step_contract_findings(
     context: Optional[ResearchContext] = None,
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    step_record: Optional[Mapping[str, Any]] = None,
     out_dir: Optional[Path] = None,
     trajectory_role_contract_applies: bool = True,
 ) -> List[ValidationFinding]:
@@ -4104,7 +4138,9 @@ def _step_contract_findings(
         declared_product_contract_findings(
             step=step,
             step_summary=step_summary,
-            effect_method_authorized=effect_output_authorized(step),
+            effect_method_authorized=effect_output_authorized(
+                step, step_record=step_record
+            ),
             effect_figure_source_authorized=_effect_figure_source_authorized(
                 step=step,
                 completed_step_records=completed_step_records,

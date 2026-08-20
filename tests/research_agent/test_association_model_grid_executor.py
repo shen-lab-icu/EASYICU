@@ -32,9 +32,13 @@ from easyicu.research_agent.execution.runners.association_model_grid_executor im
 from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
 )
+from easyicu.research_agent.contracts.declared_product import (
+    declared_product_contract_findings,
+)
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
 )
+from easyicu.research_agent.plan_utils import effect_output_authorized
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     CohortDescriptor,
@@ -154,6 +158,24 @@ def _cohort(n: int = 800) -> pd.DataFrame:
             "icu_readmission": readmission,
         }
     )
+
+
+def test_signed_standard_selection_authorizes_grid_effect_outputs_only_at_runtime():
+    _projection, _authority, plan, _findings = _authority_and_plan()
+    step = plan.steps[1]
+    record = {
+        "deterministic_standard_analysis": "association_model_grid",
+        "deterministic_standard_selection_reason": (
+            "signed_association_model_grid_contract_preflight"
+        ),
+        "standard_executor_candidates": {"claimed_by": "association_model_grid"},
+    }
+
+    assert effect_output_authorized(step) is False
+    assert effect_output_authorized(step, step_record=record) is True
+    assert effect_output_authorized(
+        step, step_record={**record, "deterministic_standard_analysis": "other"}
+    ) is False
 
 
 def _parent_binding(
@@ -357,6 +379,25 @@ def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(
     assert summary["basis_receipts"]["flexible_age_charlson"]
     assert summary["scientific_runtime_receipt"]["adapter"] == (
         "adjusted_association_executor/statsmodels"
+    )
+    selection_record = {
+        "deterministic_standard_analysis": "association_model_grid",
+        "deterministic_standard_selection_reason": (
+            "signed_association_model_grid_contract_preflight"
+        ),
+        "standard_executor_candidates": {"claimed_by": "association_model_grid"},
+    }
+    product_findings = declared_product_contract_findings(
+        step=plan.steps[1],
+        step_summary=summary,
+        effect_method_authorized=effect_output_authorized(
+            plan.steps[1], step_record=selection_record
+        ),
+        out_dir=out_dir,
+    )
+    assert not any(
+        finding.detail.get("kind") == "unauthorized_effect_product"
+        for finding in product_findings
     )
 
     parent_path = run_dir / manifest["inputs"][authority.parent_product][
