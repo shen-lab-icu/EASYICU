@@ -227,9 +227,21 @@ def test_runtime_suffix_strict_schema_binds_only_the_next_coordinate() -> None:
     step = schema["$defs"]["AnalysisStep"]["properties"]
     assert step["step_id"]["const"] == "02_summary"
     assert step["planned_analysis_role"]["const"] == "auxiliary"
-    assert [item["const"] for item in step["expected_outputs"]["prefixItems"]] == [
-        "table:descriptive_summary"
-    ]
+    assert step["expected_outputs"]["items"] == {
+        "type": "string",
+        "const": "table:descriptive_summary",
+    }
+    assert "prefixItems" not in step["expected_outputs"]
+    pending = [schema]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            if node.get("type") == "array":
+                assert "items" in node
+                assert "prefixItems" not in node
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
     assert "artifact:analysis_cohort" in step["inputs"]["items"]["enum"]
     assert request.payload_bytes < 32_000
     assert agent.last_prompt_metrics["structured_output_authority_sha256"] == (
