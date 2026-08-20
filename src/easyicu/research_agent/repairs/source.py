@@ -69,6 +69,7 @@ from .nonfinite_audit import (
     patch_strict_numeric_helper_nonfinite_guard,
 )
 from .nullable_validation import patch_unused_nullable_numeric_validation
+from .pandas_numeric_container import patch_pandas_numeric_container
 from .rendering_role import patch_structured_analysis_role_selection
 from .runner_dispatch import (
     RunnerRepairServices,
@@ -1829,6 +1830,24 @@ def _lossy_numeric_coercion_repair_lines(
     return frozenset(lines)
 
 
+def _pandas_numeric_container_repair_lines(
+    findings: Sequence[ValidationFinding],
+) -> frozenset[int]:
+    """Return exact host-diagnosed conversion assignment lines."""
+
+    return frozenset(
+        int(line)
+        for finding in findings
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and (finding.detail or {}).get("reason")
+        == "pandas_numeric_container_unverified"
+        and isinstance((line := (finding.detail or {}).get("line")), int)
+        and not isinstance(line, bool)
+        and line > 0
+    )
+
+
 def _conditional_nonfinite_guard_lines(
     findings: Sequence[ValidationFinding],
 ) -> frozenset[int]:
@@ -2907,6 +2926,16 @@ def _deterministic_concept_audit_repair_candidate(
         if returned_loss_guarded != repaired:
             repair_name = "returned_coercion_loss_guard_v1"
             repaired = returned_loss_guarded
+            repair_names.append(repair_name)
+
+    if RepairReason.PANDAS_NUMERIC_CONTAINER_UNVERIFIED in set(repair_reasons):
+        container_normalized = patch_pandas_numeric_container(
+            repaired,
+            finding_lines=_pandas_numeric_container_repair_lines(repair_findings),
+        )
+        if container_normalized != repaired:
+            repair_name = "pandas_numeric_container_v1"
+            repaired = container_normalized
             repair_names.append(repair_name)
 
     if RepairReason.BOOLEAN_REDUCTION_IDENTITY in set(repair_reasons):

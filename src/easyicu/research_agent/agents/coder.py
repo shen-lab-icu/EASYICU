@@ -953,6 +953,10 @@ class CoderAgent:
             "frame-order fallback.\n"
             "- A rendering step must fail closed on any invalid structural "
             "accounting row; never filter invalid rows and continue plotting.\n"
+            "- `pd.to_numeric` preserves array-like containers. If its input "
+            "may be a NumPy array or generic function parameter, normalize the "
+            "input or result to `pd.Series` before calling Series-only "
+            "`.isna()` or `.notna()` methods.\n"
         )
         shared_contract = (
             step_contract_header

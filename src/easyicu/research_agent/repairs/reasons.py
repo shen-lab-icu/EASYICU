@@ -29,6 +29,7 @@ class RepairReason(str, Enum):
     NONFINITE_NUMERIC_INPUT = "NONFINITE_NUMERIC_INPUT"
     LOSSY_ORDINAL_ROUNDING = "LOSSY_ORDINAL_ROUNDING"
     INVALID_NUMERIC_REDUCTION = "INVALID_NUMERIC_REDUCTION"
+    PANDAS_NUMERIC_CONTAINER_UNVERIFIED = "PANDAS_NUMERIC_CONTAINER_UNVERIFIED"
     ARBITRARY_COLUMN_FALLBACK = "ARBITRARY_COLUMN_FALLBACK"
     TYPED_PRODUCT_BINDING_INVALID = "TYPED_PRODUCT_BINDING_INVALID"
     ROW_ALIGNMENT_UNVERIFIED = "ROW_ALIGNMENT_UNVERIFIED"
@@ -586,6 +587,9 @@ _DETAIL_REASON_CODES = {
     "conditional_nonfinite_guard": RepairReason.NONFINITE_NUMERIC_INPUT,
     "strict_numeric_nonfinite_unchecked": RepairReason.NONFINITE_NUMERIC_INPUT,
     "scalar_cast_before_reduction": RepairReason.INVALID_NUMERIC_REDUCTION,
+    "pandas_numeric_container_unverified": (
+        RepairReason.PANDAS_NUMERIC_CONTAINER_UNVERIFIED
+    ),
     "arbitrary_column_fallback": RepairReason.ARBITRARY_COLUMN_FALLBACK,
     "typed binding unavailable": RepairReason.TYPED_PRODUCT_BINDING_INVALID,
     "unpersisted_binding_metadata": RepairReason.TYPED_PRODUCT_BINDING_INVALID,
