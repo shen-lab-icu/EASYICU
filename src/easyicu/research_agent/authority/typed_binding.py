@@ -1732,6 +1732,7 @@ def _write_resolved_inputs_manifest(
     planner_declared_inputs: Sequence[str],
     bindings: Mapping[str, Mapping[str, Any]],
     context_path: Optional[Path] = None,
+    plan_path: Optional[Path] = None,
     raw_input_contracts: Optional[Mapping[str, Any]] = None,
     host_verified_cohort_execution_receipt: Optional[Mapping[str, Any]] = None,
     host_authorized_ambient_trajectory: Optional[Mapping[str, Any]] = None,
@@ -1904,6 +1905,20 @@ def _write_resolved_inputs_manifest(
             "relative_path": relative_context,
             "absolute_path": str(resolved_context),
             "sha256": sha256_of_file(resolved_context),
+        }
+    if plan_path is not None:
+        resolved_plan = Path(plan_path).resolve()
+        run_root = Path(run_dir).resolve()
+        if not resolved_plan.is_file():
+            raise ValueError("plan_path must name an existing plan file")
+        try:
+            relative_plan = resolved_plan.relative_to(run_root).as_posix()
+        except ValueError as exc:
+            raise ValueError("plan_path must be contained by run_dir") from exc
+        payload["plan"] = {
+            "relative_path": relative_plan,
+            "absolute_path": str(resolved_plan),
+            "sha256": sha256_of_file(resolved_plan),
         }
     temporary_path = manifest_path.with_suffix(".json.tmp")
     temporary_path.write_text(
