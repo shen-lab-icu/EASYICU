@@ -34,6 +34,12 @@ correctly forced to `diagnostic_only`; paper authority remains false.
   `easyicu-research-agent:e4d4842-devpatch`, digest
   `sha256:9b596a2861f1e4b7954e787c9e60c40f318ea60b523c6c8fff4cc72feb5ba4f0`.
   This is a development hotpatch image, not a reproducible formal image.
+- Exact code-head image after the build-path repair:
+  `easyicu-research-agent:a8fda65`, digest
+  `sha256:0ecfce04652de83118fbd0956188bca811d3cf1e6a6dd962089a98fd0b5db789`.
+  `tools/check_agent_runtime.py` reports `status=ready`, `network=none`, 291
+  kernel files, and all required method capabilities. This image has not yet
+  been used for the one fresh E1 canary.
 
 ## Architecture defects closed
 
@@ -46,6 +52,7 @@ correctly forced to `diagnostic_only`; paper authority remains false.
 | `1cf3ee0` | Progressive article reports consume sealed typed products, not raw cohort inputs. |
 | `e4d4842` | Terminal feasibility reports remain non-analytic and ignore legacy raw-column inputs rather than mounting them. |
 | `65da00f` | Planner-scoped binary labels reach adjusted and distribution publication panels without hard-coding a benchmark case. |
+| `a8fda65` | Runner package installation reuses build tools from the digest-pinned layer (`--no-build-isolation`) instead of making a second unpinned PyPI request. |
 
 The repeated E1 failures were therefore not failures of logistic regression or
 plotting mathematics. They were failures of cross-layer authority, typed input
@@ -83,6 +90,9 @@ and figure narratives remain study-specific Planner authority.
 - Progressive sealed-report compiler test: `1 passed`.
 - Visual verification used a zero-Provider synthetic E1 publication bundle; PNG,
   SVG and overlap audit passed.
+- Runner-image contract test: `6 passed`; exact image build succeeded, offline
+  import smoke returned `easyicu 1.0.0 imports_ok`, and runtime capability check
+  returned `status=ready`.
 
 Focused suites are development evidence. A full exact-head CI has not been run at
 `65da00f` and is deliberately deferred until the E1 clean canary freezes the head.
@@ -102,15 +112,14 @@ and PDF render QA.
 
 ## Fastest next acceptance path
 
-1. Rebuild one reproducible exact-`65da00f` image when package retrieval is healthy
-   (or from a verified offline wheelhouse); do not promote the devpatch image.
-2. Run one fresh, single-image E1 canary. Accept only 12/12 step completion, zero
+1. Run one fresh, single-image E1 canary with the verified `a8fda65` image. Accept
+   only 12/12 step completion, zero
    unowned outputs, correct Planner labels, and explicit `diagnostic_only` paper
    ceiling while scientific gates remain open.
-3. Freeze the head and run one full exact-head CI. Do not run full CI between small
+2. Freeze the head and run one full exact-head CI. Do not run full CI between small
    fixes.
-4. Then close the article-grade study decisions and Writer/literature gates. Add a
+3. Then close the article-grade study decisions and Writer/literature gates. Add a
    cross-case diversity benchmark that records candidate designs, selected and
    rejected analyses, and what every figure supports/cannot prove.
-5. Only after the development freeze proceed to E2, Qualification12, and eventually
+4. Only after the development freeze proceed to E2, Qualification12, and eventually
    the atomic Held-out27 formal batch.
