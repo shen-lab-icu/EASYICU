@@ -228,6 +228,10 @@ _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
         "image_id",
         "repo_digests",
         "requirements_sha256",
+        "execution_kernel_identity_sha256",
+        "execution_kernel_source_sha256",
+        "execution_kernel_files_sha256",
+        "execution_kernel_file_count",
     }
 )
 
@@ -338,9 +342,11 @@ def _validated_runtime_lock(
     Paper-facing/default runs require byte-identical locks and provenance for
     every step. An explicitly non-paper development diagnostic may span images
     while framework fixes are tested, but only when package pins and all
-    non-image runtime controls remain identical. The newest step lock is then
-    selected for the diagnostic notebook and the full lineage is recorded
-    separately by :func:`_write_development_runtime_lineage`.
+    non-source runtime controls remain identical. Image and execution-kernel
+    source fingerprints may change because they identify the framework build,
+    not the installed dependency set or sandbox policy. The newest step lock
+    is then selected for the diagnostic notebook and the full lineage is
+    recorded separately by :func:`_write_development_runtime_lineage`.
     """
 
     entries = _runtime_snapshot_entries(run_dir)
