@@ -140,6 +140,7 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "event rate",
         "outcome by exposure",
         "outcome-by-exposure",
+        "exposure_outcome_distribution",
     ),
     "transportability": (
         "cross database",
