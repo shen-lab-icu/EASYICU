@@ -83,6 +83,10 @@ from .composite_descriptive_figure_executor import (
     composite_descriptive_figure_executor_code,
     composite_descriptive_figure_executor_owns_step,
 )
+from .landmark_association_figure_executor import (
+    landmark_association_figure_executor_code,
+    landmark_association_figure_executor_owns_step,
+)
 from .descriptive_result_figure_executor import (
     descriptive_result_figure_executor_code,
     descriptive_result_figure_executor_owns_step,
@@ -353,12 +357,8 @@ def select_standard_executor(
                 return _selected(
                     StandardExecutorSelection(
                         analysis_kind=LANDMARK_SPLINE_ANALYSIS_KIND,
-                        selection_reason=(
-                            "signed_landmark_spline_contract_preflight"
-                        ),
-                        progress_message=(
-                            "Using signed landmark spline executor"
-                        ),
+                        selection_reason=("signed_landmark_spline_contract_preflight"),
+                        progress_message=("Using signed landmark spline executor"),
                         code=landmark_spline_executor_code(
                             step,
                             authority=sealed_current,
@@ -389,11 +389,7 @@ def select_standard_executor(
                             runtime_projection_sha256=projection_digest,
                         ),
                         consumed_input_keys=(
-                            *(
-                                value
-                                for value in step.inputs
-                                if ":" in value
-                            ),
+                            *(value for value in step.inputs if ":" in value),
                         ),
                     )
                 )
@@ -410,9 +406,7 @@ def select_standard_executor(
                         selection_reason=(
                             "signed_source_feasibility_contract_preflight"
                         ),
-                        progress_message=(
-                            "Using signed source-feasibility executor"
-                        ),
+                        progress_message=("Using signed source-feasibility executor"),
                         code=source_feasibility_executor_code(
                             authority=sealed_current,
                             runtime_projection_sha256=projection_digest,
@@ -575,9 +569,7 @@ def select_standard_executor(
             )
         )
     _missed("adjusted_association_figure")
-    if cohort_flow_figure_executor_owns_step(
-        step, resolved_bindings=resolved_bindings
-    ):
+    if cohort_flow_figure_executor_owns_step(step, resolved_bindings=resolved_bindings):
         if receipt_required:
             _receipt_declined("cohort_flow_figure")
             return None
@@ -592,6 +584,27 @@ def select_standard_executor(
             )
         )
     _missed("cohort_flow_figure")
+    if landmark_association_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("landmark_association_composite_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="landmark_association_composite_figure",
+                selection_reason=(
+                    "landmark_association_composite_figure_contract_preflight"
+                ),
+                progress_message=(
+                    "Using digest-bound landmark association composite renderer"
+                ),
+                code=landmark_association_figure_executor_code(step),
+                consumed_input_keys=tuple(str(value) for value in step.inputs),
+                host_sealed_renderer=True,
+            )
+        )
+    _missed("landmark_association_composite_figure")
     if composite_descriptive_figure_executor_owns_step(
         step, resolved_bindings=resolved_bindings
     ):
@@ -602,9 +615,7 @@ def select_standard_executor(
             StandardExecutorSelection(
                 analysis_kind="composite_descriptive_figure",
                 selection_reason="composite_descriptive_figure_contract_preflight",
-                progress_message=(
-                    "Using digest-bound composite descriptive renderer"
-                ),
+                progress_message=("Using digest-bound composite descriptive renderer"),
                 code=composite_descriptive_figure_executor_code(
                     step,
                     display_labels=plan.display_labels,
@@ -626,9 +637,7 @@ def select_standard_executor(
             StandardExecutorSelection(
                 analysis_kind="descriptive_result_figure",
                 selection_reason="descriptive_result_figure_contract_preflight",
-                progress_message=(
-                    "Using digest-bound descriptive result renderer"
-                ),
+                progress_message=("Using digest-bound descriptive result renderer"),
                 code=descriptive_result_figure_executor_code(step),
                 consumed_input_keys=(step.inputs[0],),
                 host_sealed_renderer=True,
@@ -877,9 +886,7 @@ def select_standard_executor(
                     scientific_runtime_authority=(
                         trajectory_scientific_runtime_authority
                     ),
-                    runtime_projection_sha256=(
-                        scientific_runtime_projection_sha256
-                    ),
+                    runtime_projection_sha256=(scientific_runtime_projection_sha256),
                 ),
                 consumed_input_keys=tuple(sorted(STABILITY_EXECUTOR_INPUTS)),
             )

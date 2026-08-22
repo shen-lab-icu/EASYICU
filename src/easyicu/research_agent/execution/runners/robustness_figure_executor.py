@@ -149,6 +149,16 @@ ROBUSTNESS_FIGURE_CAPABILITY = TypedInputCapability(
 #: The replay owner's own header, imported rather than restated, so a producer
 #: that changes its contract changes this gate with it.
 _PRODUCER_CONTRACT_COLUMNS = frozenset(_MATRIX_COLUMNS)
+_SIGNED_LANDMARK_PROJECTION_COLUMNS = frozenset(
+    {
+        *_READ_COLUMNS,
+        "model_contract_n",
+        "event_n",
+        "source_model_id",
+        "independent_variant",
+        "notes",
+    }
+)
 
 #: The same, for the specification grid: its guaranteed columns and the stem
 #: the producer writes it to.
@@ -173,10 +183,13 @@ def _contract_columns(binding: Any) -> set[str] | None:
 
 
 def _binding_is_producer_contract(binding: Any) -> bool:
-    """Whether this binding is the deterministic replay owner's own matrix."""
+    """Whether this binding is a host-owned deterministic robustness matrix."""
 
     columns = _contract_columns(binding)
-    return columns is not None and _PRODUCER_CONTRACT_COLUMNS <= columns
+    return columns is not None and (
+        _PRODUCER_CONTRACT_COLUMNS <= columns
+        or _SIGNED_LANDMARK_PROJECTION_COLUMNS <= columns
+    )
 
 
 def _binding_is_specification_grid(binding: Any) -> bool:
