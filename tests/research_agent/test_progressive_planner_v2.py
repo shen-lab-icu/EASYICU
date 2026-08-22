@@ -892,6 +892,48 @@ def test_current_step_schema_locks_outline_coordinate_and_product_registry() -> 
     ]
 
 
+def test_custom_step_schema_separates_generic_and_scientific_sensitivity_shapes() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="06_sensitivity",
+        planned_analysis_role="sensitivity",
+        module_id="custom_analysis",
+        objective="Run a prespecified scientific sensitivity analysis.",
+        depends_on=["05_primary"],
+        variable_names=["exposure_flag", "outcome_flag"],
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(
+            outline_step.model_dump(mode="json")
+        ),
+        variable_names=outline_step.variable_names,
+        scientific_action_ids=(),
+        available_product_refs=[
+            ("05_primary", "table:adjusted_association_estimates")
+        ],
+    )
+    schema = json.loads(request.schema_json)
+    branches = schema["$defs"]["ProgressiveSkeletonStep"]["anyOf"]
+    generic, scientific = branches
+
+    generic_properties = generic["properties"]
+    assert generic_properties["outputs"]["items"]["properties"][
+        "semantic_role"
+    ]["const"] == "custom"
+    assert generic_properties["sensitivity_spec_ids"]["maxItems"] == 0
+
+    scientific_properties = scientific["properties"]
+    assert scientific_properties["outputs"]["minItems"] == 1
+    assert scientific_properties["outputs"]["maxItems"] == 1
+    assert scientific_properties["outputs"]["items"]["properties"][
+        "product_id"
+    ]["pattern"].startswith("^table:")
+    assert scientific_properties["outputs"]["items"]["properties"][
+        "semantic_role"
+    ]["const"] == "scientific_sensitivity"
+    assert scientific_properties["sensitivity_spec_ids"]["minItems"] == 1
+
+
 def test_current_step_schema_excludes_navigation_from_statistical_fields() -> None:
     outline_step = ProgressiveOutlineStep(
         step_id="05_primary",

@@ -223,7 +223,32 @@ def _bind_step_module_shape(
     custom_properties["outputs"]["minItems"] = 1
     custom = _closed_object(custom_properties)
     if locked_module_id == "custom_analysis":
-        definitions["ProgressiveSkeletonStep"] = custom
+        generic_custom = copy.deepcopy(custom)
+        generic_properties = generic_custom["properties"]
+        generic_properties["outputs"]["items"]["properties"][
+            "semantic_role"
+        ] = {"type": "string", "const": "custom"}
+        generic_properties["sensitivity_spec_ids"]["maxItems"] = 0
+
+        scientific_sensitivity = copy.deepcopy(custom)
+        sensitivity_properties = scientific_sensitivity["properties"]
+        sensitivity_properties["outputs"]["minItems"] = 1
+        sensitivity_properties["outputs"]["maxItems"] = 1
+        sensitivity_output = sensitivity_properties["outputs"]["items"][
+            "properties"
+        ]
+        sensitivity_output["product_id"] = {
+            "type": "string",
+            "pattern": r"^table:[a-z][a-z0-9_]*$",
+        }
+        sensitivity_output["semantic_role"] = {
+            "type": "string",
+            "const": "scientific_sensitivity",
+        }
+        sensitivity_properties["sensitivity_spec_ids"]["minItems"] = 1
+        definitions["ProgressiveSkeletonStep"] = {
+            "anyOf": [generic_custom, scientific_sensitivity]
+        }
     elif locked_module_id is not None:
         definitions["ProgressiveSkeletonStep"] = standard
     else:
