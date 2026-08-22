@@ -150,6 +150,48 @@ def _requires_visualization_step(context: ResearchContext) -> bool:
     return bool(_EXPLICIT_FIGURE_OUTPUT.search(text))
 
 
+def _bind_runtime_action_dependencies(
+    outline: ProgressivePlanOutline,
+) -> ProgressivePlanOutline:
+    """Seal uniquely implied host-owned product edges in an outline.
+
+    A runtime action contract already fixes which typed products an action
+    consumes and emits. Requiring the Planner to repeat that same mechanical
+    edge in ``depends_on`` adds no scientific choice and makes a valid design
+    depend on redundant model bookkeeping. Add only edges with one preceding
+    runtime-contract owner; ambiguous or unavailable owners remain untouched
+    so the ordinary fail-closed validators can report them.
+    """
+
+    actions = {
+        action.action_id: action
+        for action in scientific_actions_for_analysis_type(outline.analysis_type).actions
+    }
+    prior_owners: dict[str, list[str]] = {}
+    bound_steps: list[ProgressiveOutlineStep] = []
+    for step in outline.steps:
+        action = actions.get(str(step.scientific_action_id or ""))
+        contract = action.runtime_contract if action is not None else None
+        dependencies = list(step.depends_on)
+        if contract is not None:
+            for product_id in contract.required_product_inputs:
+                owners = prior_owners.get(product_id, [])
+                if len(owners) == 1 and owners[0] not in dependencies:
+                    dependencies.append(owners[0])
+        bound_step = (
+            step
+            if dependencies == step.depends_on
+            else step.model_copy(update={"depends_on": dependencies})
+        )
+        bound_steps.append(bound_step)
+        if contract is not None:
+            for product_id, _semantic_role in contract.outputs:
+                prior_owners.setdefault(product_id, []).append(step.step_id)
+    if bound_steps == outline.steps:
+        return outline
+    return outline.model_copy(update={"steps": bound_steps})
+
+
 def _complete_case_variable_roster(
     context: ResearchContext,
     variable_names: Sequence[str],
@@ -839,7 +881,11 @@ class ProgressivePlannerAgent:
             "later typed input can consume the primary product. Put descriptive "
             "absolute-risk or other headline context after the primary model; "
             "an isolated raw-cohort custom result cannot satisfy a Planner-owned "
-            "article result role."
+            "article result role. When an action runtime_contract lists "
+            "required_product_inputs, depends_on must include the preceding "
+            "action step that emits each required product. The host seals only "
+            "a uniquely implied missing runtime-contract edge; ambiguous owners "
+            "remain an error."
         )
         if know_how_context:
             blocks.append(
@@ -1899,6 +1945,7 @@ class ProgressivePlannerAgent:
 
             def parse_outline(raw: str) -> ProgressivePlanOutline:
                 parsed = _parse_model(raw, ProgressivePlanOutline)
+                parsed = _bind_runtime_action_dependencies(parsed)
                 self._validate_outline_authority(
                     parsed,
                     analysis_types=analysis_types,

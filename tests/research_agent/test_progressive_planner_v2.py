@@ -16,6 +16,7 @@ from easyicu.research_agent.agents.progressive_payload import (
 )
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
+    _bind_runtime_action_dependencies,
     _complete_case_variable_roster,
     _parse_foundation_materialization,
     _parse_step_materialization,
@@ -2272,6 +2273,46 @@ def test_outline_prompt_exposes_host_compiled_singleton_ownership() -> None:
     assert '"table:robustness_matrix"' in prompt
     assert "Each listed module may appear at most once" in prompt
     assert "all replayable robustness intents in one robustness_replay step" in prompt
+
+
+def test_outline_binds_unique_runtime_product_owner_without_model_bookkeeping() -> None:
+    outline = ProgressivePlanOutline(
+        analysis_type="prediction_model",
+        cohort_objective="Use the host-authorized analysis cohort.",
+        steps=[
+            ProgressiveOutlineStep(
+                step_id="primary_model",
+                planned_analysis_role="primary",
+                module_id="custom_analysis",
+                objective="Fit the prespecified static prediction model.",
+                variable_names=["outcome_flag", "age_years"],
+                scientific_action_id="prediction.discrimination_calibration",
+            ),
+            ProgressiveOutlineStep(
+                step_id="calibration",
+                planned_analysis_role="secondary",
+                module_id="custom_analysis",
+                objective="Assess validation-partition calibration.",
+                variable_names=["outcome_flag"],
+                scientific_action_id="prediction.calibration_metrics",
+            ),
+            ProgressiveOutlineStep(
+                step_id="clinical_utility",
+                planned_analysis_role="secondary",
+                module_id="custom_analysis",
+                objective="Assess validation-partition net benefit.",
+                variable_names=["outcome_flag"],
+                scientific_action_id="prediction.decision_curve",
+            ),
+        ],
+        rationale="Separate scientific choices from host-owned product edges.",
+    )
+
+    bound = _bind_runtime_action_dependencies(outline)
+
+    assert outline.steps[1].depends_on == []
+    assert bound.steps[1].depends_on == ["primary_model"]
+    assert bound.steps[2].depends_on == ["primary_model"]
 
 
 def test_outline_prompt_projects_explicit_figure_obligation() -> None:
