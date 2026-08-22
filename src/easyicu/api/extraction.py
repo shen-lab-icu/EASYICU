@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, List, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 
@@ -3701,6 +3701,7 @@ def _publish_native_export_v2(
     modules: List[str],
     max_patients: Optional[int],
     result: Dict,
+    concept_projection: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> Dict[str, object]:
     """Seal completed grouped-module files as one native-v2 package.
 
@@ -3770,6 +3771,27 @@ def _publish_native_export_v2(
     requested_concept_plan = {
         module: list(EXTRACT_MODULES[module]) for module in published_modules
     }
+    if concept_projection is not None:
+        unknown_modules = set(concept_projection) - set(published_modules)
+        if unknown_modules:
+            raise ValueError(
+                "native_export_v2 concept projection references unpublished "
+                f"modules: {sorted(unknown_modules)}"
+            )
+        for module, raw_concepts in concept_projection.items():
+            projected = list(dict.fromkeys(str(value) for value in raw_concepts))
+            if not projected:
+                raise ValueError(
+                    "native_export_v2 concept projection cannot be empty for "
+                    f"module {module!r}"
+                )
+            unknown_concepts = set(projected) - set(EXTRACT_MODULES[module])
+            if unknown_concepts:
+                raise ValueError(
+                    "native_export_v2 concept projection contains concepts outside "
+                    f"module {module!r}: {sorted(unknown_concepts)}"
+                )
+            requested_concept_plan[module] = projected
     concept_plan: Dict[str, List[str]] = {}
     unavailable_concepts: List[Dict[str, str]] = []
     files: List[Dict[str, object]] = []

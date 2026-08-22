@@ -75,6 +75,79 @@ def test_native_sofa2_receipts_survive_producer_to_trajectory(
     assert provenance["unavailable_value_rows_excluded"] == {"sofa2_resp": 1}
 
 
+def test_native_projection_excludes_unrequested_conflicting_concept(
+    tmp_path: Path,
+) -> None:
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 0.0],
+            "sofa2_resp": [2.0, 2.0],
+            "sofa2_resp_observed": [1, 1],
+            "sofa2_resp_available": [1, 1],
+            "sofa2_cns_delirium_tx_ascertainment": [
+                "not_score_relevant",
+                "proxy_only",
+            ],
+        }
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["sofa2_score"],
+        max_patients=None,
+        result=_completed_result("sofa2_score"),
+        concept_projection={"sofa2_score": ["sofa2_resp"]},
+    )
+
+    published = pd.read_parquet(tmp_path / "sofa2_score.parquet")
+    assert list(published.columns) == [
+        "stay_id",
+        "charttime",
+        "sofa2_resp",
+        "sofa2_resp_observed",
+        "sofa2_resp_available",
+    ]
+    assert published["sofa2_resp"].tolist() == [2.0]
+
+
+@pytest.mark.parametrize(
+    ("projection", "message"),
+    [
+        ({"not_published": ["sofa2_resp"]}, "unpublished modules"),
+        ({"sofa2_score": []}, "cannot be empty"),
+        ({"sofa2_score": ["map"]}, "outside module"),
+    ],
+)
+def test_native_projection_rejects_invalid_scope(
+    tmp_path: Path,
+    projection: dict[str, list[str]],
+    message: str,
+) -> None:
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2_resp": [2.0],
+            "sofa2_resp_observed": [1],
+            "sofa2_resp_available": [1],
+        }
+    ).to_parquet(tmp_path / "sofa2_score.parquet", index=False)
+
+    with pytest.raises(ValueError, match=message):
+        api._publish_native_export_v2(
+            database="miiv",
+            data_path="/raw/source-must-not-be-read",
+            output_dir=str(tmp_path),
+            modules=["sofa2_score"],
+            max_patients=None,
+            result=_completed_result("sofa2_score"),
+            concept_projection=projection,
+        )
+
+
 def test_native_sofa2_missing_receipt_fails_closed_after_real_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
