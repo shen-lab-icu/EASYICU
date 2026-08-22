@@ -38,6 +38,7 @@ from ..schema import (
     ExposureOutcomeRiskDifferenceContrast,
     MeasurementAuditProduct,
     MeasurementAuditSpec,
+    OrderedStratifiedSpec,
     KnowHowDecision,
     PlannedModelRequirement,
     ResearchContext,
@@ -400,6 +401,125 @@ def _canonical_outputs(step: ProgressiveSkeletonStep) -> list[tuple[str, str]]:
             )
         by_product[product] = role
     return list(by_product.items())
+
+
+def _compile_ordered_stratified_spec(
+    *,
+    context: ResearchContext,
+    skeleton: ProgressivePlanSkeleton,
+    step: ProgressiveSkeletonStep,
+    step_index: int,
+    variables: Mapping[str, Any],
+    output_pairs: list[tuple[str, str]],
+) -> OrderedStratifiedSpec | None:
+    """Bind the ordinal-trend action to prior typed Planner coordinates."""
+
+    if step.scientific_action_id != "association.ordinal_trend":
+        return None
+    if step.module_id != "custom_analysis" or step.planned_analysis_role != "secondary":
+        raise _fail(
+            "progressive_ordered_trend_shape_invalid",
+            "association.ordinal_trend requires one secondary custom-analysis step",
+            step=step,
+            step_index=step_index,
+            path="scientific_action_id",
+        )
+    parents = [
+        candidate
+        for candidate in skeleton.steps[:step_index]
+        if candidate.step_id in step.depends_on
+        and candidate.module_id == "adjusted_association"
+        and candidate.planned_analysis_role == "primary"
+        and candidate.outcome_type == "binary"
+        and candidate.primary_exposure
+        and candidate.outcome
+        and candidate.event_level_index is not None
+    ]
+    if len(parents) != 1:
+        raise _fail(
+            "progressive_ordered_trend_primary_binding_invalid",
+            "association.ordinal_trend requires exactly one depended-on typed "
+            "primary adjusted-association step",
+            step=step,
+            step_index=step_index,
+            path="depends_on",
+        )
+    parent = parents[0]
+    exposure = str(parent.primary_exposure)
+    binary_outcome = str(parent.outcome)
+    if exposure not in step.raw_inputs or binary_outcome not in step.raw_inputs:
+        raise _fail(
+            "progressive_ordered_trend_primary_columns_missing",
+            "the inherited primary exposure and binary outcome must be current-step raw inputs",
+            step=step,
+            step_index=step_index,
+            path="raw_inputs",
+        )
+    remaining = [
+        name for name in step.raw_inputs if name not in {exposure, binary_outcome}
+    ]
+    if len(remaining) != 1:
+        raise _fail(
+            "progressive_ordered_trend_continuous_outcome_ambiguous",
+            "association.ordinal_trend requires exactly one additional continuous outcome",
+            step=step,
+            step_index=step_index,
+            path="raw_inputs",
+        )
+    continuous_outcome = remaining[0]
+    descriptor = variables[continuous_outcome]
+    domain = descriptor.observed_domain or {}
+    if descriptor.role.value != "outcome" or domain.get("is_binary") is not False:
+        raise _fail(
+            "progressive_ordered_trend_continuous_outcome_invalid",
+            "the additional ordered-trend input must be a typed non-binary outcome",
+            step=step,
+            step_index=step_index,
+            path="raw_inputs",
+        )
+    levels = list(observed_levels_for(name=exposure, variables=dict(variables)))
+    binary_levels = list(
+        observed_levels_for(name=binary_outcome, variables=dict(variables))
+    )
+    event_index = int(parent.event_level_index)
+    if (
+        len(levels) < 3
+        or binary_levels != [0, 1]
+        or event_index != 1
+    ):
+        raise _fail(
+            "progressive_ordered_trend_domain_unsupported",
+            "the v1 deterministic owner requires >=3 ordered exposure levels "
+            "and a typed 0/1 binary outcome with event index 1",
+            step=step,
+            step_index=step_index,
+            path="raw_inputs",
+        )
+    declared_trends = [
+        product for product, _role in output_pairs if product.startswith("table:")
+    ]
+    if len(declared_trends) != 1:
+        raise _fail(
+            "progressive_ordered_trend_product_invalid",
+            "association.ordinal_trend requires exactly one Planner-declared trend table",
+            step=step,
+            step_index=step_index,
+            path="outputs",
+        )
+    for product in (
+        "table:ordered_stratified_outcomes",
+        "test:ordinal_trend",
+    ):
+        if product not in {item[0] for item in output_pairs}:
+            output_pairs.append((product, "custom"))
+    return OrderedStratifiedSpec(
+        ordered_exposure=exposure,
+        ordered_levels=levels,
+        cochran_armitage_scores=list(range(len(levels))),
+        binary_outcome=binary_outcome,
+        continuous_outcome=continuous_outcome,
+        trend_product=declared_trends[0],
+    )
 
 
 def _validate_outputs(
@@ -1446,6 +1566,14 @@ def _compile_one_step(
             step_index=step_index,
             path="outputs",
         ) from exc
+    ordered_stratified_spec = _compile_ordered_stratified_spec(
+        context=context,
+        skeleton=skeleton,
+        step=step,
+        step_index=step_index,
+        variables=variables,
+        output_pairs=output_pairs,
+    )
     _validate_outputs(output_pairs, step=step, step_index=step_index)
     association_sensitivity_capability = (
         _compile_binary_association_sensitivity_capability(
@@ -1486,7 +1614,11 @@ def _compile_one_step(
         host_interpretation_source_key=host_interpretation_source_key,
         host_missing_data_binding=host_missing_data_binding,
     )
-    method = step.custom_method or _METHOD_BY_MODULE[step.module_id]
+    method = (
+        "ordinal_stratified_descriptive_analysis"
+        if ordered_stratified_spec is not None
+        else step.custom_method or _METHOD_BY_MODULE[step.module_id]
+    )
     kwargs: dict[str, Any] = {
         "step_id": step.step_id,
         "planned_analysis_role": step.planned_analysis_role,
@@ -1501,6 +1633,8 @@ def _compile_one_step(
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,
     }
+    if ordered_stratified_spec is not None:
+        kwargs["ordered_stratified_spec"] = ordered_stratified_spec
     if step.module_id == "cohort_definition":
         kwargs["cohort_definition_spec"] = CohortDefinitionSpec(
             identity_column=_identity_column(

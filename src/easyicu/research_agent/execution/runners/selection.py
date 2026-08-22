@@ -43,6 +43,11 @@ from .cohort_summary_executor import (
     cohort_summary_executor_code,
     cohort_summary_executor_owns_step,
 )
+from .ordered_stratified_executor import (
+    ORDERED_STRATIFIED_ANALYSIS_KIND,
+    ordered_stratified_executor_code,
+    ordered_stratified_executor_owns_step,
+)
 from .deterministic_missingness import (
     is_compact_missingness_measurement_contract,
     is_measurement_bias_audit_contract,
@@ -451,6 +456,17 @@ def select_standard_executor(
             )
         )
     _missed("descriptive_cohort_summary")
+    if ordered_stratified_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=ORDERED_STRATIFIED_ANALYSIS_KIND,
+                selection_reason="typed_ordered_stratified_contract_preflight",
+                progress_message="Using deterministic ordered-trend adapter",
+                code=ordered_stratified_executor_code(step),
+                consumed_input_keys=_consumed_typed_cohort_inputs(step),
+            )
+        )
+    _missed(ORDERED_STRATIFIED_ANALYSIS_KIND)
     if exposure_outcome_distribution_executor_owns_step(step):
         typed_cohort_inputs = _consumed_typed_cohort_inputs(step)
         return _selected(
