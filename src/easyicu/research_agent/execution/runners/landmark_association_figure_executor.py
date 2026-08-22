@@ -238,7 +238,10 @@ def run_landmark_association_figure(
     source_files: list[str] = []
     for key, item in bound.items():
         name = f"{key.partition(':')[2]}_source_data.csv"
-        item.frame.to_csv(out_dir / name, index=False)
+        source = item.frame.copy()
+        source.insert(0, "source_row_index", source.index.astype(int))
+        source.insert(1, "source_table", item.path.name)
+        source.to_csv(out_dir / name, index=False)
         source_files.append(name)
 
     import matplotlib
