@@ -2628,6 +2628,7 @@ class ResearchAgentPipeline:
         reused_plan_path: Optional[Path] = None
         migrated_plan_path: Optional[Path] = None
         proposed_plan: Optional[AnalysisPlan] = None
+        development_authority_plan = None
         if resume_state is not None:
             (
                 plan,
@@ -2644,6 +2645,12 @@ class ResearchAgentPipeline:
                 know_how_binding=know_how_binding,
                 enable_know_how=self._enable_know_how,
                 findings=findings,
+            )
+        elif self._development_diagnostic:
+            development_authority_plan = (
+                self._scientific_runtime_authorities.development_execution_only_plan(
+                    research_question=agent_context.research_question,
+                )
             )
 
         if reused_prior_plan:
@@ -2779,6 +2786,10 @@ class ResearchAgentPipeline:
                         },
                     )
                 )
+        elif development_authority_plan is not None:
+            plan, development_authority_finding = development_authority_plan
+            findings.append(development_authority_finding)
+            plan_generation_mode = "development_execution_only_runtime_authority"
         elif skill_obj is not None:
             plan_generation_mode = "deterministic_skill"
             issues = skill_obj.validate_against(pd.read_parquet(cohort_path))

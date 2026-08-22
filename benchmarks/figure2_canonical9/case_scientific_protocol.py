@@ -683,6 +683,7 @@ def _h1_deterministic_execution_contract(
             "authority_kind": "landmark_survival_suite",
             "protocol_content_sha256": case_protocol_content_sha256(protocol),
             "plan_method": "signed_landmark_survival_suite",
+            "development_execution_only_allowed": True,
             "plan_intent": (
                 "Execute the signed 24-hour landmark ventilation-survival suite "
                 "with explicit prevalent-exposure exclusion and PH auditing."

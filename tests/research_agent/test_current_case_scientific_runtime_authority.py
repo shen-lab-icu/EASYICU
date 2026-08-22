@@ -232,6 +232,20 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         "landmark_survival_suite_host_compiled"
     )
 
+    execution_only = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=authority,
+    ).development_execution_only_plan(
+        research_question="Run the sealed landmark survival development suite."
+    )
+    assert execution_only is not None
+    execution_only_plan, execution_only_finding = execution_only
+    authority.validate_plan(execution_only_plan)
+    assert len(execution_only_plan.steps) == 1
+    assert execution_only_finding.detail["reason_code"] == (
+        "development_execution_only_authority_compiled"
+    )
+
     selected = select_standard_executor(
         bound.steps[0],
         plan=bound,
