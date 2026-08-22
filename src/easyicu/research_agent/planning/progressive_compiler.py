@@ -791,6 +791,12 @@ def _compile_table_one(
             )
         )
     descriptive = step.table_one_mode == "descriptive_smd_only"
+    group_missingness = variables[group_by].missingness
+    missing_group_policy = (
+        "exclude_and_report"
+        if group_missingness is not None and group_missingness.n_missing > 0
+        else "fail_closed"
+    )
     try:
         return TableOneSpec(
             schema_version=(
@@ -800,7 +806,7 @@ def _compile_table_one(
             group_levels=list(group_levels),
             variables=rows,
             include_overall=True,
-            missing_group_policy="fail_closed",
+            missing_group_policy=missing_group_policy,
             missingness_display="n_percent_by_group",
             p_values_required=not descriptive,
             p_value_adjustment=(
