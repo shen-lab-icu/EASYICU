@@ -52,6 +52,10 @@ class SubmissionProfile:
     # submission-defining coordinate. Historical profiles leave this None and
     # remain byte-identical; only an additive profile may opt in.
     enable_know_how: Optional[bool] = None
+    # Curated-MVP cards are suitable for explicitly non-paper development
+    # diagnostics, but never for formal or paper-facing runs. Keep this as an
+    # additive profile coordinate so callers cannot enable it ad hoc.
+    allow_curated_mvp_know_how: Optional[bool] = None
     # Step-scoped Action/Software/Data resources alter Coder prompts and resume
     # authority. Historical profiles therefore omit the coordinate entirely;
     # only an additive development profile may enable Phase-2 wiring.
@@ -126,6 +130,10 @@ class SubmissionProfile:
             options["allow_external_figure_upload"] = self.allow_external_figure_upload
         if self.enable_know_how is not None:
             options["enable_know_how"] = self.enable_know_how
+        if self.allow_curated_mvp_know_how is not None:
+            options["allow_curated_mvp_know_how"] = (
+                self.allow_curated_mvp_know_how
+            )
         if self.enable_coder_resources is not None:
             options["enable_coder_resources"] = self.enable_coder_resources
         if self.enable_reviewed_memory is not None:
@@ -168,6 +176,7 @@ class SubmissionProfile:
             "enable_deterministic_planner_fallback",
             "requires_real_provider",
             "enable_know_how",
+            "allow_curated_mvp_know_how",
             "enable_coder_resources",
             "enable_reviewed_memory",
             "reviewed_memory_namespaces",
@@ -492,6 +501,37 @@ CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF = (
 )
 CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_2026_08_19.ref
 
+DEV9_AI_REVIEWED_DEMO_2026_08_22 = SubmissionProfile(
+    name="npj_dm_dev9_demo_dev",
+    version="20260822",
+    locked_at="2026-08-22T00:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Development-only E1-H3 execution coordinate. It permits exact
+    # curated-MVP Know-How cards for AI-assisted engineering review while the
+    # *_dev profile name and --development-diagnostic path deny paper authority.
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    enable_know_how=True,
+    allow_curated_mvp_know_how=True,
+    planner_only=False,
+    planner_strategy="progressive_v2",
+)
+
+CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF = DEV9_AI_REVIEWED_DEMO_2026_08_22.ref
+
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
     name="npj_dm_know_how_dev",
     version="20260721",
@@ -604,6 +644,7 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     E1_REVIEWED_DEMO_2026_08_17.ref: E1_REVIEWED_DEMO_2026_08_17,
     E1_REVIEWED_DEMO_2026_08_19.ref: E1_REVIEWED_DEMO_2026_08_19,
+    DEV9_AI_REVIEWED_DEMO_2026_08_22.ref: DEV9_AI_REVIEWED_DEMO_2026_08_22,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
@@ -659,6 +700,35 @@ def require_profile_know_how_setting(
             "Research Know-How changes study design and must match an additive "
             f"submission profile coordinate; profile {ref!r} pins "
             f"enable_know_how={expected}"
+        )
+
+
+def require_profile_curated_know_how_setting(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    enabled: bool,
+) -> None:
+    """Keep development-only curated-card access profile-owned."""
+
+    if name is None:
+        if enabled:
+            raise ValueError(
+                "curated-MVP Know-How requires an additive development profile"
+            )
+        return
+    ref = f"{name}/{version}"
+    profile = get_submission_profile(ref)
+    expected = bool(profile.allow_curated_mvp_know_how)
+    if bool(enabled) != expected:
+        raise ValueError(
+            "curated-MVP Know-How access must match the submission profile; "
+            f"profile {ref!r} pins allow_curated_mvp_know_how={expected}"
+        )
+    if expected and (is_paper_facing_profile(name) or not profile.enable_know_how):
+        raise ValueError(
+            "curated-MVP Know-How is restricted to development-only profiles "
+            "that enable Research Know-How"
         )
 
 

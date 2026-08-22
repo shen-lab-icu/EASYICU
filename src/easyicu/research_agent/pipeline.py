@@ -2194,6 +2194,12 @@ class ResearchAgentPipeline:
             config.experience_bank_min_similarity
         )
         self._enable_know_how = bool(config.enable_know_how)
+        self._allow_curated_mvp_know_how = bool(
+            config.allow_curated_mvp_know_how
+            # Preserve the archived 20260721 profile's historical behaviour
+            # without changing its serialized replay contract.
+            or config.submission_profile_name == "npj_dm_know_how_dev"
+        )
         self._enable_coder_resources = bool(config.enable_coder_resources)
         self._enable_reviewed_memory = bool(config.enable_reviewed_memory)
         self._reviewed_memory_namespaces = tuple(config.reviewed_memory_namespaces)
@@ -2232,6 +2238,13 @@ class ResearchAgentPipeline:
             name=config.submission_profile_name,
             version=config.submission_profile_version,
             enabled=self._enable_know_how,
+        )
+        from .orchestration.profiles import require_profile_curated_know_how_setting
+
+        require_profile_curated_know_how_setting(
+            name=config.submission_profile_name,
+            version=config.submission_profile_version,
+            enabled=bool(config.allow_curated_mvp_know_how),
         )
         from .orchestration.profiles import require_profile_coder_resource_setting
 
@@ -3728,9 +3741,7 @@ class ResearchAgentPipeline:
                 paths=self._know_how_paths,
                 top_k=self._know_how_top_k,
                 min_score=self._know_how_min_score,
-                allow_curated_mvp=(
-                    self._submission_profile_name == "npj_dm_know_how_dev"
-                ),
+                allow_curated_mvp=self._allow_curated_mvp_know_how,
             )
             know_how_binding = PlannerKnowHowBinding.from_prepared(prepared_know_how)
 

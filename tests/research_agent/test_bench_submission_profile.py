@@ -522,6 +522,39 @@ def test_every_profile_either_omits_or_pins_memory_off_never_on() -> None:
         assert opts.get("enable_deterministic_planner_fallback", False) is False, ref
 
 
+def test_dev9_ai_review_profile_allows_curated_cards_without_paper_authority() -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF,
+        DEV9_AI_REVIEWED_DEMO_2026_08_22,
+        is_paper_facing_profile,
+    )
+
+    profile = DEV9_AI_REVIEWED_DEMO_2026_08_22
+
+    assert profile.ref == "npj_dm_dev9_demo_dev/20260822"
+    assert CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF == profile.ref
+    assert profile.enable_know_how is True
+    assert profile.allow_curated_mvp_know_how is True
+    assert profile.planner_only is False
+    assert profile.planner_strategy == "progressive_v2"
+    assert profile.as_pipeline_options()["allow_curated_mvp_know_how"] is True
+    assert is_paper_facing_profile(profile.name) is False
+
+
+def test_curated_card_access_is_profile_owned_and_formal_profiles_pin_it_off() -> None:
+    from easyicu.research_agent.orchestration.profiles import (
+        NPJ_DM_2026_07_19,
+        require_profile_curated_know_how_setting,
+    )
+
+    with pytest.raises(ValueError, match="curated-MVP Know-How access"):
+        require_profile_curated_know_how_setting(
+            name=NPJ_DM_2026_07_19.name,
+            version=NPJ_DM_2026_07_19.version,
+            enabled=True,
+        )
+
+
 def test_e1_planner_canary_profile_binds_current_dictionaries_without_publication_authority() -> None:
     from easyicu.research_agent.orchestration.profiles import (
         E1_PLANNER_CANARY_2026_08_14,
