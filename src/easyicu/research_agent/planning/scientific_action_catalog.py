@@ -78,6 +78,26 @@ class ScientificActionRuntimeContract:
 
 
 _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
+    "phenotyping.cluster_solution": ScientificActionRuntimeContract(
+        outputs=(
+            ("table:phenotype_profiles", "custom"),
+            ("table:phenotype_assignments", "custom"),
+        ),
+        article_roles=("phenotype_structure", "phenotype_profile"),
+        standard_executor="cross_sectional_phenotyping",
+    ),
+    "phenotyping.k_selection": ScientificActionRuntimeContract(
+        outputs=(("table:cluster_selection", "custom"),),
+        required_product_inputs=("table:phenotype_assignments",),
+        article_roles=("cluster_selection",),
+        standard_executor="cross_sectional_phenotyping",
+    ),
+    "phenotyping.cluster_stability": ScientificActionRuntimeContract(
+        outputs=(("table:cluster_stability", "custom"),),
+        required_product_inputs=("table:phenotype_assignments",),
+        article_roles=("stability",),
+        standard_executor="cross_sectional_phenotyping",
+    ),
     "prediction.discrimination_calibration": ScientificActionRuntimeContract(
         outputs=(
             ("table:prediction_scores", "custom"),

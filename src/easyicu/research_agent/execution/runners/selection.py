@@ -165,11 +165,23 @@ from .prediction_model_executor import (
     prediction_model_executor_code,
     prediction_model_executor_owns_step,
 )
+from .cross_sectional_phenotyping_executor import (
+    PHENOTYPING_ANALYSIS_KIND,
+    cross_sectional_phenotyping_consumed_input_keys,
+    cross_sectional_phenotyping_executor_code,
+    cross_sectional_phenotyping_executor_owns_step,
+)
 from .prediction_figure_executor import (
     PREDICTION_COMPOSITE_FIGURE_INPUTS,
     PREDICTION_FIGURE_ANALYSIS_KIND,
     prediction_figure_executor_code,
     prediction_figure_executor_owns_step,
+)
+from .cross_sectional_phenotyping_figure_executor import (
+    PHENOTYPING_FIGURE_ANALYSIS_KIND,
+    PHENOTYPING_FIGURE_INPUTS,
+    cross_sectional_phenotyping_figure_executor_code,
+    cross_sectional_phenotyping_figure_executor_owns_step,
 )
 
 
@@ -463,6 +475,18 @@ def select_standard_executor(
         )
     _missed(PREDICTION_MODEL_ANALYSIS_KIND)
 
+    if cross_sectional_phenotyping_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=PHENOTYPING_ANALYSIS_KIND,
+                selection_reason="typed_cross_sectional_phenotyping_contract_preflight",
+                progress_message="Using deterministic cross-sectional phenotyping adapter",
+                code=cross_sectional_phenotyping_executor_code(step),
+                consumed_input_keys=cross_sectional_phenotyping_consumed_input_keys(step),
+            )
+        )
+    _missed(PHENOTYPING_ANALYSIS_KIND)
+
     if cohort_summary_executor_owns_step(step):
         # This executor emits the flag-only receipt itself, so a receipt
         # obligation no longer sends a step the host can compute exactly to
@@ -663,6 +687,23 @@ def select_standard_executor(
             )
         )
     _missed(PREDICTION_FIGURE_ANALYSIS_KIND)
+    if cross_sectional_phenotyping_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined(PHENOTYPING_FIGURE_ANALYSIS_KIND)
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=PHENOTYPING_FIGURE_ANALYSIS_KIND,
+                selection_reason="cross_sectional_phenotyping_figure_contract_preflight",
+                progress_message="Using source-bound cross-sectional phenotyping renderer",
+                code=cross_sectional_phenotyping_figure_executor_code(step),
+                consumed_input_keys=PHENOTYPING_FIGURE_INPUTS,
+                host_sealed_renderer=True,
+            )
+        )
+    _missed(PHENOTYPING_FIGURE_ANALYSIS_KIND)
     if composite_descriptive_figure_executor_owns_step(
         step, resolved_bindings=resolved_bindings
     ):

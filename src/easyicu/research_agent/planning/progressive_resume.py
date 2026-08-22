@@ -26,10 +26,13 @@ from .progressive_contract import (
     ProgressivePlanFoundation,
     ProgressivePlannerCheckpoint,
     ProgressivePlanOutline,
+    ProgressiveOutputIntent,
+    ProgressiveProductRef,
     ProgressivePlanSkeleton,
     ProgressiveSkeletonStep,
     ProgressiveStepMaterialization,
 )
+from .scientific_action_catalog import scientific_action_for_id
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -473,6 +476,8 @@ def restore_progressive_resume_prefix(
             ),
         )
     state = ProgressivePrefixState()
+    stored_available_product_refs: tuple[tuple[str, str], ...] = ()
+    runtime_contract_migration_started = False
     for step_index, materialization in enumerate(materializations):
         outline_step = outline.steps[step_index]
         outline_step_sha256 = canonical_sha256(
@@ -487,7 +492,7 @@ def restore_progressive_resume_prefix(
         current_schema_authority = step_schema_authority(
             outline_step,
             outline_step_sha256,
-            state.available_product_refs,
+            stored_available_product_refs,
         )
         if (
             step_index >= len(stored_schema_authorities)
@@ -501,6 +506,12 @@ def restore_progressive_resume_prefix(
                 step_index=step_index,
                 path="resume_checkpoint.step_schema_authority",
             )
+        stored_materialization = materialization
+        materialization = _migrate_installed_runtime_contract(
+            materialization,
+            analysis_type=outline.analysis_type,
+            available_product_refs=state.available_product_refs,
+        )
         try:
             state = compile_progressive_prefix(
                 state,
@@ -527,7 +538,73 @@ def restore_progressive_resume_prefix(
                 path=exc.path or "resume_checkpoint.materializations",
                 findings=[exc.details],
             ) from exc
+        migrated = materialization != stored_materialization
+        runtime_contract_migration_started = (
+            runtime_contract_migration_started or migrated
+        )
+        if runtime_contract_migration_started:
+            stored_available_product_refs = (
+                *stored_available_product_refs,
+                *(
+                    (stored_materialization.step.step_id, output.product_id)
+                    for output in stored_materialization.step.outputs
+                ),
+            )
+        else:
+            stored_available_product_refs = state.available_product_refs
     return state
+
+
+def _migrate_installed_runtime_contract(
+    materialization: ProgressiveStepMaterialization,
+    *,
+    analysis_type: str,
+    available_product_refs: Sequence[tuple[str, str]],
+) -> ProgressiveStepMaterialization:
+    """Project a reused model step onto a newly installed owner contract.
+
+    A development checkpoint can predate a deterministic adapter.  The signed
+    model choices remain authoritative, but output product names and uniquely
+    implied producer edges are implementation coordinates already fixed by the
+    new owner.  Migrate only those coordinates; ambiguous or non-direct inputs
+    remain untouched and fail through the ordinary compiler.
+    """
+
+    step = materialization.step
+    if step.scientific_action_id is None:
+        return materialization
+    action = scientific_action_for_id(
+        analysis_type=analysis_type,
+        action_id=step.scientific_action_id,
+    )
+    contract = action.runtime_contract
+    if contract is None:
+        return materialization
+    references: list[ProgressiveProductRef] = []
+    for product_id in contract.required_product_inputs:
+        owners = [
+            producer
+            for producer, available_product in available_product_refs
+            if available_product == product_id
+        ]
+        if len(owners) != 1 or owners[0] not in step.depends_on:
+            return materialization
+        references.append(
+            ProgressiveProductRef(
+                producer_step_id=owners[0],
+                product_id=product_id,
+            )
+        )
+    outputs = [
+        ProgressiveOutputIntent(product_id=product_id, semantic_role=semantic_role)
+        for product_id, semantic_role in contract.outputs
+    ]
+    migrated_step = step.model_copy(
+        update={"product_inputs": references, "outputs": outputs}
+    )
+    if migrated_step == step:
+        return materialization
+    return materialization.model_copy(update={"step": migrated_step})
 
 
 __all__ = [
