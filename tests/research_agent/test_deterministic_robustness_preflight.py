@@ -1325,6 +1325,99 @@ def test_complete_case_equivalence_requires_identical_locked_membership(
     assert "complete_case_n=3, model_n=4" in str(error)
 
 
+def test_complete_case_difference_replays_registered_primary_code(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _replay_primary_model_for_complete_case,
+    )
+
+    script_path = tmp_path / "primary" / "analysis.py"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text(
+        """
+import json
+import os
+from pathlib import Path
+import pandas as pd
+
+frame = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = Path(os.environ["STEP_OUT_DIR"])
+out.mkdir(parents=True, exist_ok=True)
+pd.DataFrame([{
+    "model_id": "primary",
+    "term": "exposure",
+    "term_role": "exposure",
+    "source_variable": "exposure",
+    "odds_ratio": 1.5,
+    "ci_low": 1.1,
+    "ci_high": 2.0,
+    "std_error": 0.1,
+}]).to_csv(out / "coefficients.csv", index=False)
+summary = {
+    "primary_model_id": "primary",
+    "coefficient_table": "coefficients.csv",
+    "model_contracts": [{
+        "model_id": "primary",
+        "analysis_role": "primary",
+        "analysis_set": "source_aware",
+        "exposure_role": "primary",
+        "exposure_source": "exposure",
+        "exposure_expression": "exposure",
+        "n": len(frame),
+        "event_n": int(frame["outcome"].sum()),
+        "fit_status": "fitted",
+        "converged": True,
+        "fit_method": "registered_test_model",
+    }],
+}
+(out / "step_summary.json").write_text(json.dumps(summary))
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    source = {
+        "step_id": "primary",
+        "script_path": script_path,
+        "script_sha256": hashlib.sha256(script_path.read_bytes()).hexdigest(),
+        "primary_contract": {
+            "exposure_source": "exposure",
+            "exposure_expression": "exposure",
+        },
+    }
+    spec = RobustnessSpec(
+        spec_id="complete_case",
+        axis="missing",
+        description="Replay the locked complete-case membership.",
+        missing_override={
+            "strategy": "complete_case",
+            "variables": ["exposure", "outcome", "age"],
+        },
+    )
+    primary_data = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "exposure": [0.0, 1.0, 0.0, 1.0],
+            "outcome": [0, 1, 0, 1],
+            "age": [50.0, None, 70.0, 80.0],
+        }
+    )
+
+    replay = _replay_primary_model_for_complete_case(
+        spec=spec,
+        source=source,
+        primary_data=primary_data,
+        out_dir=tmp_path / "robustness",
+    )
+
+    assert replay["error"] is None
+    assert replay["row"].converged is True
+    assert replay["row"].n == 3
+    assert replay["index"]["input_n"] == 3
+    assert replay["index"]["modeled_n"] == 3
+    assert replay["contracts"][0]["missing_override"]["strategy"] == "complete_case"
+
+
 @pytest.mark.parametrize(
     "diagnostic_reference",
     [
