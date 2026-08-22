@@ -3819,6 +3819,19 @@ class FigureSourceDataValidator:
         source_path: Path,
         upstream_path: Path,
     ) -> Dict[str, Any]:
+        if (
+            source_path.is_file()
+            and upstream_path.is_file()
+            and _sha256_file(source_path) == _sha256_file(upstream_path)
+        ):
+            return {
+                "ok": True,
+                "reason": "exact_file_digest_match",
+                "source_table": source_path.name,
+                "upstream_table": upstream_path.name,
+                "n_source_rows": int(len(source_df)),
+                "join_mode": "exact_file_digest",
+            }
         try:
             upstream_df = cls._read_tabular(upstream_path)
         except Exception as exc:
@@ -5534,5 +5547,4 @@ def _figure_audit__credit_statistic_source(source_path: Path, statistic_ids: Set
                 matched_figure_obligations[figure].update(
                     required_figure_obligations[figure]
                 )
-
 
