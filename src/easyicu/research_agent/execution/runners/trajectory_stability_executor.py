@@ -394,8 +394,32 @@ def _empty_outputs(out_dir: Path, id_column: str = "id") -> None:
     pd.DataFrame(
         columns=["resample_id", id_column, "reference_cluster", "resampled_cluster"]
     ).to_csv(out_dir / "cluster_stability_assignments.csv", index=False)
-    pd.DataFrame(columns=[id_column, "cluster"]).to_csv(
+    pd.DataFrame(
+        columns=[
+            id_column,
+            "cluster",
+            "stability_inclusion_n",
+            "assignment_agreement_n",
+            "stability_inclusion_fraction",
+            "assignment_agreement_fraction",
+            "assignment_uncertainty_fraction",
+        ]
+    ).to_csv(
         out_dir / "cluster_assignment_provenance.csv", index=False
+    )
+    pd.DataFrame(
+        columns=[
+            "cluster",
+            "source_column",
+            "window_start_hours",
+            "window_end_hours",
+            "summary_statistic",
+            "value",
+            "n_observed",
+        ]
+    ).to_csv(out_dir / "trajectory_profiles.csv", index=False)
+    pd.DataFrame(columns=["cluster", "n"]).to_csv(
+        out_dir / "cluster_sizes.csv", index=False
     )
 
 
@@ -1074,7 +1098,12 @@ def run_trajectory_stability(
         )
         if sealed_authority is not None:
             sealed_authority.validate_representation_schema(representation_schema)
-            sealed_authority.validate_selection(selection_manifest)
+            sealed_authority.validate_selection(
+                selection_manifest,
+                allow_prespecified_boundary_rejection=(
+                    solution_schema.get("stability_authorized") is False
+                ),
+            )
             expected_authority_binding = {
                 "schema_version": sealed_authority.schema_version,
                 "protocol_content_sha256": sealed_authority.protocol_content_sha256,
@@ -1107,6 +1136,148 @@ def run_trajectory_stability(
             selection_payload=selection_manifest,
             solution_schema=solution_schema,
         )
+        if solution_schema.get("stability_authorized") is False:
+            if sealed_authority is None:
+                raise ValueError(
+                    "a failed-closed candidate decision requires signed authority"
+                )
+            reason_code = str(
+                solution_schema.get("scientific_selection_reason_code") or ""
+            )
+            allowed_reasons = {
+                sealed_authority.upper_boundary_reason_code,
+                sealed_authority.minimum_cluster_fraction_reason_code,
+            }
+            if reason_code not in allowed_reasons:
+                raise ValueError(
+                    "candidate rejection reason is not owned by signed authority"
+                )
+            if (
+                reason_code == sealed_authority.upper_boundary_reason_code
+                and selected_n_clusters
+                != max(sealed_authority.candidate_cluster_counts)
+            ):
+                raise ValueError("candidate boundary rejection does not replay")
+            minimum_fraction = float(reference.value_counts().min() / len(reference))
+            if (
+                reason_code
+                == sealed_authority.minimum_cluster_fraction_reason_code
+                and minimum_fraction >= sealed_authority.minimum_cluster_fraction
+            ):
+                raise ValueError("candidate minimum-size rejection does not replay")
+
+            _empty_outputs(out_dir, id_column=id_column)
+            spec_payload = spec.model_dump(mode="json")
+            spec_digest = hashlib.sha256(
+                json.dumps(
+                    spec_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            _write_json(
+                out_dir / "cluster_stability_spec.json",
+                {
+                    "schema_version": "easyicu.cluster_stability_spec/1",
+                    "trajectory_stability_spec": spec_payload,
+                    "trajectory_stability_spec_sha256": spec_digest,
+                    "execution_status": "not_executed_candidate_selection_failed_closed",
+                    "reason_code": reason_code,
+                    "scientific_runtime_authority": summary.get(
+                        "scientific_runtime_authority"
+                    ),
+                },
+            )
+            policy = {
+                "schema_version": "easyicu.trajectory_missingness_policy/1",
+                "id_column": id_column,
+                "observation_family": representation_schema.get(
+                    "observation_family"
+                ),
+                "observation_columns": representation_schema.get(
+                    "observation_columns"
+                ),
+                "representation_columns": representation_columns,
+                "min_observed_windows": representation_schema.get(
+                    "min_observed_windows"
+                ),
+                "profile_columns": representation_schema.get("profile_columns"),
+                "profile_summary_statistic": representation_schema.get(
+                    "profile_summary_statistic"
+                ),
+                "clustering_method": solution_schema.get("model_family"),
+                "n_clusters": None,
+                "time_axis": representation_schema.get("time_axis"),
+                "anchor": representation_schema.get("anchor"),
+                "anchor_provenance": representation_schema.get(
+                    "anchor_provenance"
+                ),
+                "anchor_source": representation_schema.get("anchor_source"),
+                "trailing_na_policy": representation_schema.get(
+                    "trailing_na_policy"
+                ),
+                "evidence_state_policy": representation_schema.get(
+                    "evidence_state_policy"
+                ),
+                "scientific_status": "failed_closed",
+                "reason_code": reason_code,
+            }
+            _write_json(out_dir / "trajectory_missingness_policy.json", policy)
+            _write_json(
+                out_dir / "stability_freeze.json",
+                {
+                    "schema_version": "easyicu.trajectory_stability_freeze/1",
+                    "freeze_status": "not_frozen_candidate_selection_failed_closed",
+                    "selected_n_clusters": None,
+                    "candidate_selected_n_clusters": selected_n_clusters,
+                    "scientific_status": "failed_closed",
+                    "reason_code": reason_code,
+                    "outcome_binding_received_by_executor": False,
+                    "outcome_bindings_received": [],
+                    "eligibility_reapplied": False,
+                },
+            )
+            output_files = {
+                "artifact:stability_freeze": "stability_freeze.json",
+                "artifact:cluster_assignments": "cluster_assignments.csv",
+                "manifest:cluster_stability_spec": "cluster_stability_spec.json",
+                "manifest:trajectory_missingness_policy": (
+                    "trajectory_missingness_policy.json"
+                ),
+                "table:cluster_assignments": "cluster_assignments.csv",
+                "table:cluster_stability": "cluster_stability.csv",
+                "table:cluster_stability_assignments": (
+                    "cluster_stability_assignments.csv"
+                ),
+                "table:cluster_assignment_provenance": (
+                    "cluster_assignment_provenance.csv"
+                ),
+            }
+            if include_characterization:
+                output_files.update(
+                    {
+                        "table:trajectory_profiles": "trajectory_profiles.csv",
+                        "table:cluster_sizes": "cluster_sizes.csv",
+                    }
+                )
+            summary.update(
+                {
+                    "status": "ok",
+                    "scientific_status": "failed_closed",
+                    "freeze_status": (
+                        "not_frozen_candidate_selection_failed_closed"
+                    ),
+                    "reason_code": reason_code,
+                    "reportable_result": "no_stable_phenotype_solution",
+                    "candidate_selected_n_clusters": selected_n_clusters,
+                    "minimum_observed_cluster_fraction": minimum_fraction,
+                    "stability_refits_executed": 0,
+                    "output_files": output_files,
+                    "outputs": sorted(set(output_files.values())),
+                }
+            )
+            _write_json(out_dir / "step_summary.json", summary)
+            return summary
         x, scaling_manifest = _scale_coordinates(
             x,
             columns=representation_columns,

@@ -142,11 +142,15 @@ def run_trajectory_scientific_representation(
         f"{sealed.window_start_hours + (int(index) + 1) * sealed.grid_width_hours}"
         for concept, index in zip(frame["concept"], frame["window_index"], strict=True)
     ]
+    universe_ids = pd.Index(pd.unique(trajectory["stay_id"]), name="stay_id")
     matrix = (
         frame.groupby(["stay_id", "representation_column"], sort=False)["value_num"]
         .max()
         .unstack("representation_column")
-        .reindex(columns=list(sealed.representation_columns))
+        .reindex(
+            index=universe_ids,
+            columns=list(sealed.representation_columns),
+        )
     )
     sofa_concepts = tuple(
         concept for concept in sealed.coordinate_concepts if concept.startswith("sofa2")
@@ -186,6 +190,22 @@ def run_trajectory_scientific_representation(
         }
     )
     membership.to_csv(out_dir / "trajectory_membership.csv", index=False)
+    pd.DataFrame(
+        {
+            "metric": [
+                "input_cohort",
+                "meets_min_observed_windows",
+                "excluded_insufficient_windows",
+                "included_in_clustering",
+            ],
+            "n": [
+                len(matrix),
+                int(eligible.sum()),
+                int((~eligible).sum()),
+                int(eligible.sum()),
+            ],
+        }
+    ).to_csv(out_dir / "cohort_flow.csv", index=False)
     model_matrix = matrix.loc[eligible].reset_index()
     if len(model_matrix) <= max(sealed.candidate_cluster_counts):
         raise ValueError(
@@ -309,6 +329,7 @@ def run_trajectory_scientific_representation(
             ),
             "table:trajectory_membership": "trajectory_membership.csv",
             "table:feature_availability": "feature_availability.csv",
+            "table:cohort_flow": "cohort_flow.csv",
             "manifest:trajectory_representation_schema": (
                 "trajectory_representation_schema.json"
             ),

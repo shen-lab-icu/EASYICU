@@ -218,37 +218,26 @@ def run_trajectory_scientific_candidate_selection(
             )
         ],
     }
-    if selected_k == max(sealed.candidate_cluster_counts):
-        summary = {
-            **base_summary,
-            "status": "failed_closed",
-            "failure_class": "scientific_selection_failure",
-            "reason_code": sealed.upper_boundary_reason_code,
-            "reportable_result": "no_interior_solution_in_prespecified_candidate_range",
-        }
-        _write_json(
-            out_dir / "candidate_cluster_models.json", {"candidates": candidate_rows}
-        )
-        _write_json(out_dir / "step_summary.json", summary)
-        return summary
-    sealed.validate_selection(selection)
+    sealed.validate_selection(
+        selection,
+        allow_prespecified_boundary_rejection=True,
+    )
     labels = labels_by_k[selected_k]
     counts = pd.Series(labels).value_counts().sort_index()
     minimum_fraction = float(counts.min() / len(labels))
-    if minimum_fraction < sealed.minimum_cluster_fraction:
-        summary = {
-            **base_summary,
-            "status": "failed_closed",
-            "failure_class": "scientific_selection_failure",
+    scientific_rejection: dict[str, str] | None = None
+    if selected_k == max(sealed.candidate_cluster_counts):
+        scientific_rejection = {
+            "reason_code": sealed.upper_boundary_reason_code,
+            "reportable_result": (
+                "no_interior_solution_in_prespecified_candidate_range"
+            ),
+        }
+    elif minimum_fraction < sealed.minimum_cluster_fraction:
+        scientific_rejection = {
             "reason_code": sealed.minimum_cluster_fraction_reason_code,
-            "minimum_observed_cluster_fraction": minimum_fraction,
             "reportable_result": "no_stable_phenotype_solution",
         }
-        _write_json(
-            out_dir / "candidate_cluster_models.json", {"candidates": candidate_rows}
-        )
-        _write_json(out_dir / "step_summary.json", summary)
-        return summary
     assignments = pd.DataFrame(
         {id_column: representation[id_column].to_numpy(), "candidate_cluster": labels}
     )
@@ -287,6 +276,13 @@ def run_trajectory_scientific_candidate_selection(
         "coordinate_scaling_manifest_sha256": scaling_manifest[
             "scaling_manifest_sha256"
         ],
+        "scientific_selection_status": (
+            "failed_closed" if scientific_rejection else "interior_solution"
+        ),
+        "stability_authorized": scientific_rejection is None,
+        "scientific_selection_reason_code": (
+            scientific_rejection["reason_code"] if scientific_rejection else None
+        ),
         "scientific_runtime_authority": authority_binding,
     }
     _write_json(out_dir / "candidate_cluster_solution_schema.json", solution)
@@ -313,7 +309,18 @@ def run_trajectory_scientific_candidate_selection(
             out_dir / "candidate_cluster_solution_schema.json"
         ),
         "embedding_role": "descriptive_only_not_model_input",
+        "scientific_status": (
+            "failed_closed" if scientific_rejection else "selected"
+        ),
+        "stability_authorized": scientific_rejection is None,
     }
+    if scientific_rejection:
+        summary.update(
+            {
+                "failure_class": "scientific_selection_failure",
+                **scientific_rejection,
+            }
+        )
     _write_json(out_dir / "step_summary.json", summary)
     return summary
 
