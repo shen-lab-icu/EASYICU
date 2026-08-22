@@ -130,4 +130,7 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     )
     assert summary["status"] == "ok"
     assert len(summary["source_data_files"]) == 4
+    source = pd.read_csv(tmp_path / "outputs" / summary["source_data_files"][0])
+    assert source["source_row_index"].tolist() == [0, 1]
+    assert source["source_table"].nunique() == 1
     assert (tmp_path / "outputs" / "display_suite.figure_contract.json").is_file()
