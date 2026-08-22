@@ -67,6 +67,9 @@ from easyicu.research_agent.orchestration.progressive_planning import (
     run_progressive_planner,
 )
 from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
+from easyicu.research_agent.planning.preplan_know_how import (
+    verify_know_how_decisions,
+)
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.authority.plan_lifecycle import (
     build_normalized_plan_lineage,
@@ -600,6 +603,71 @@ def test_foundation_parser_rejects_conflicting_duplicate_know_how_decisions() ->
             json.dumps(payload),
             host_cohort=None,
         )
+
+
+def test_foundation_parser_canonicalizes_only_exact_citation_permutations() -> None:
+    payload = _foundation_payload()
+    decision = {
+        "card_id": "card_a",
+        "card_version": "1.0.0",
+        "card_sha256": "a" * 64,
+        "claim_id": "claim_a",
+        "disposition": "adopted",
+        "reason_code": "fits_estimand",
+        "rationale": "The retrieved claim matches the prespecified estimand.",
+        "citation_ids": ["citation_b", "citation_a"],
+    }
+    payload["foundation"]["know_how_decisions"] = [decision]
+    authority = {
+        "card_a": {
+            "version": "1.0.0",
+            "file_sha256": "a" * 64,
+            "claims": {"claim_a": ("citation_a", "citation_b")},
+        }
+    }
+
+    parsed = _parse_foundation_materialization(
+        json.dumps(payload),
+        host_cohort=None,
+        allowed_know_how_decisions=authority,
+    )
+
+    assert parsed.foundation.know_how_decisions[0].citation_ids == [
+        "citation_a",
+        "citation_b",
+    ]
+    verify_know_how_decisions(parsed.foundation.know_how_decisions, authority)
+
+
+def test_foundation_parser_does_not_repair_changed_citation_membership() -> None:
+    payload = _foundation_payload()
+    payload["foundation"]["know_how_decisions"] = [
+        {
+            "card_id": "card_a",
+            "card_version": "1.0.0",
+            "card_sha256": "a" * 64,
+            "claim_id": "claim_a",
+            "disposition": "adopted",
+            "reason_code": "fits_estimand",
+            "rationale": "The retrieved claim matches the prespecified estimand.",
+            "citation_ids": ["citation_a", "citation_c"],
+        }
+    ]
+    authority = {
+        "card_a": {
+            "version": "1.0.0",
+            "file_sha256": "a" * 64,
+            "claims": {"claim_a": ("citation_a", "citation_b")},
+        }
+    }
+    parsed = _parse_foundation_materialization(
+        json.dumps(payload),
+        host_cohort=None,
+        allowed_know_how_decisions=authority,
+    )
+
+    with pytest.raises(ValueError, match="changed citation binding"):
+        verify_know_how_decisions(parsed.foundation.know_how_decisions, authority)
 
 
 def _walk_objects(node):
