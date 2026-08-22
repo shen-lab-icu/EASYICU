@@ -245,6 +245,11 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert execution_only_finding.detail["reason_code"] == (
         "development_execution_only_authority_compiled"
     )
+    endpoint = authority.research_context_endpoint()
+    assert endpoint.kind == "time_to_event"
+    assert endpoint.event_column == "mort_28d"
+    assert endpoint.time_column == "followup_days_28d"
+    assert execution_only_plan.endpoint == endpoint
 
     selected = select_standard_executor(
         bound.steps[0],
