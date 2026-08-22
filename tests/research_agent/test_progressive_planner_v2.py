@@ -1739,6 +1739,34 @@ def test_outline_cannot_substitute_unrelated_closed_domains_for_primary_pair() -
     assert caught.value.details["step_id"] == distribution["step_id"]
 
 
+def test_outline_rejects_secondary_custom_result_off_primary_lineage() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom["planned_analysis_role"] = "secondary"
+    custom["depends_on"] = ["01_cohort"]
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_outline_secondary_custom_off_primary_lineage"
+    )
+    assert caught.value.details["findings"][0]["step_ids"] == [custom["step_id"]]
+
+
 def test_outline_rejects_missing_method_layer_before_checkpoint() -> None:
     payload = _outline_payload()
     for step in payload["steps"]:
