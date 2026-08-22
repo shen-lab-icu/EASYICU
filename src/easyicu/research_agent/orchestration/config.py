@@ -576,6 +576,7 @@ class PipelineConfig:
     experience_bank_top_k: int = 5
     experience_bank_min_similarity: float = 0.2
     enable_know_how: bool = False
+    allow_curated_mvp_know_how: bool = False
     enable_coder_resources: bool = False
     enable_reviewed_memory: bool = False
     reviewed_memory_namespaces: Sequence[str] = ()
