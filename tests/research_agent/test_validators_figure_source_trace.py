@@ -1732,6 +1732,29 @@ def test_numeric_only_shared_column_not_used_as_key(tmp_path: Path):
     assert res.get("reason") == "no_shared_key", res
 
 
+def test_byte_identical_numeric_only_source_is_digest_traceable(tmp_path: Path):
+    upstream = tmp_path / "upstream_numeric.csv"
+    pd.DataFrame(
+        {
+            "exposure_group": [0, 0, 1, 1],
+            "time_days": [0.0, 1.0, 0.0, 1.0],
+            "survival_probability": [1.0, 0.95, 1.0, 0.90],
+        }
+    ).to_csv(upstream, index=False)
+    source = tmp_path / "figure_numeric.csv"
+    source.write_bytes(upstream.read_bytes())
+
+    result = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=pd.read_csv(source),
+        source_path=source,
+        upstream_path=upstream,
+    )
+
+    assert result.get("ok") is True, result
+    assert result.get("reason") == "exact_file_digest_match"
+    assert result.get("join_mode") == "exact_file_digest"
+
+
 def _write_authoritative_figure_trace_run(
     tmp_path: Path,
 ) -> tuple[Path, Path, list[dict]]:
