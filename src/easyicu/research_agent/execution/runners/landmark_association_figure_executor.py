@@ -174,7 +174,7 @@ def _load(
     }
 
 
-def _finite(frame: pd.DataFrame, columns: tuple[str, ...]) -> None:
+def _require_finite_columns(frame: pd.DataFrame, columns: tuple[str, ...]) -> None:
     for column in columns:
         values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
         if not np.isfinite(values).all():
@@ -225,15 +225,17 @@ def run_landmark_association_figure(
         missing = required - set(frame.columns)
         if missing:
             raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
-    _finite(contrast, ("lactate_mmol_l", "adjusted_odds_ratio", "ci_low", "ci_high"))
+    _require_finite_columns(
+        contrast, ("lactate_mmol_l", "adjusted_odds_ratio", "ci_low", "ci_high")
+    )
     shown_risk = risk.loc[
         risk["estimate_type"].astype(str).isin(["outcome_risk", "prevalence"])
     ].copy()
     if shown_risk.empty:
         raise ValueError("absolute-risk context has no displayable estimate rows")
-    _finite(shown_risk, ("estimate", "ci_low", "ci_high"))
-    _finite(robustness, ("range_low", "range_high"))
-    _finite(process, ("n_total", "measured_one_n"))
+    _require_finite_columns(shown_risk, ("estimate", "ci_low", "ci_high"))
+    _require_finite_columns(robustness, ("range_low", "range_high"))
+    _require_finite_columns(process, ("n_total", "measured_one_n"))
 
     source_files: list[str] = []
     for key, item in bound.items():

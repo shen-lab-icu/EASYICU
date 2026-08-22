@@ -8,7 +8,6 @@ into the generic robustness products required by downstream renderers.
 from __future__ import annotations
 
 import json
-import math
 import textwrap
 from pathlib import Path
 from typing import Any, Mapping
@@ -18,6 +17,7 @@ from ...authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from ...schema import AnalysisPlan, AnalysisStep
+from ...numeric_scalars import coerce_finite_float
 from .deterministic_robustness import (
     declared_robustness_product_registrations,
     robustness_replay_spec_is_emittable,
@@ -96,13 +96,6 @@ def landmark_spline_robustness_executor_code(
         )
         """
     ).strip()
-
-
-def _finite(value: Any, *, label: str) -> float:
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(f"{label} is not finite")
-    return number
 
 
 def _contrast_coordinate_column(frame: Any) -> str:
@@ -187,12 +180,16 @@ def run_landmark_spline_robustness(
     ordered = contrasts.sort_values(coordinate)
     upper = ordered.iloc[-1]
     linear = linear_sensitivity.iloc[0]
-    primary_or = _finite(upper["adjusted_odds_ratio"], label="upper contrast OR")
-    primary_low = _finite(upper["ci_low"], label="upper contrast CI low")
-    primary_high = _finite(upper["ci_high"], label="upper contrast CI high")
-    complete_case_n = int(_finite(linear["n"], label="complete-case n"))
-    events = int(_finite(linear["events"], label="event count"))
-    coordinate_value = _finite(upper[coordinate], label="upper contrast coordinate")
+    primary_or = coerce_finite_float(
+        upper["adjusted_odds_ratio"], label="upper contrast OR"
+    )
+    primary_low = coerce_finite_float(upper["ci_low"], label="upper contrast CI low")
+    primary_high = coerce_finite_float(upper["ci_high"], label="upper contrast CI high")
+    complete_case_n = int(coerce_finite_float(linear["n"], label="complete-case n"))
+    events = int(coerce_finite_float(linear["events"], label="event count"))
+    coordinate_value = coerce_finite_float(
+        upper[coordinate], label="upper contrast coordinate"
+    )
 
     matrix_columns = [
         "spec_id",
@@ -247,11 +244,15 @@ def run_landmark_spline_robustness(
         {
             **base,
             "spec_id": "signed_linear_functional_form_sensitivity",
-            "point_estimate": _finite(
+            "point_estimate": coerce_finite_float(
                 linear["adjusted_odds_ratio"], label="linear sensitivity OR"
             ),
-            "ci_low": _finite(linear["ci_low"], label="linear sensitivity CI low"),
-            "ci_high": _finite(linear["ci_high"], label="linear sensitivity CI high"),
+            "ci_low": coerce_finite_float(
+                linear["ci_low"], label="linear sensitivity CI low"
+            ),
+            "ci_high": coerce_finite_float(
+                linear["ci_high"], label="linear sensitivity CI high"
+            ),
             "axis": "functional_form",
             "model_id": "signed_landmark_linear_sensitivity",
             "independent_variant": True,
@@ -411,9 +412,7 @@ def run_bound_landmark_spline_robustness(
             ),
             expected_evidence_kind="table",
             minimum_row_count=(
-                2
-                if input_key == sealed.downstream_parent_product
-                else 1
+                2 if input_key == sealed.downstream_parent_product else 1
             ),
             require_consumption_contract=(
                 input_key
