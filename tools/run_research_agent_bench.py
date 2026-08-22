@@ -1544,12 +1544,14 @@ def _run_one_arm(
         )
         runtime_endpoint = None
         runtime_primary_exposure = None
+        runtime_contrast_authorized = True
         current_case_authority = opts.get(
             "current_case_scientific_runtime_authority"
         )
         if current_case_authority is not None:
             from easyicu.research_agent.authority.current_case_scientific_runtime import (
                 LandmarkSurvivalRuntimeAuthority,
+                SourceFeasibilityRuntimeAuthority,
                 load_current_case_scientific_runtime_authority,
             )
 
@@ -1559,6 +1561,8 @@ def _run_one_arm(
             if isinstance(sealed_current_case, LandmarkSurvivalRuntimeAuthority):
                 runtime_endpoint = sealed_current_case.research_context_endpoint()
                 runtime_primary_exposure = sealed_current_case.exposure_status_column
+            elif isinstance(sealed_current_case, SourceFeasibilityRuntimeAuthority):
+                runtime_contrast_authorized = False
         opts.setdefault(
             "reporting_checklist_names",
             list(checklist_names_for_kind(getattr(item, "kind", None))),
@@ -1596,8 +1600,16 @@ def _run_one_arm(
             )
         started = time.monotonic()
         database = str(getattr(item, "database", "") or "bench").strip() or "bench"
-        operational_exposure = _operational_exposure_for_item(item)
-        exposure_display_name = getattr(item, "primary_predictor", None) or None
+        operational_exposure = (
+            _operational_exposure_for_item(item)
+            if runtime_contrast_authorized
+            else None
+        )
+        exposure_display_name = (
+            getattr(item, "primary_predictor", None) or None
+            if runtime_contrast_authorized
+            else None
+        )
         normalized_question = re.sub(
             r"[^a-z0-9]+", "_", str(item.research_question or "").lower()
         ).strip("_")
@@ -1629,12 +1641,20 @@ def _run_one_arm(
             cohort_name=f"bench_{item.key}",
             database=database,
             target_outcome=(
-                runtime_endpoint.name
-                if runtime_endpoint is not None
-                else item.target_outcome
+                (
+                    runtime_endpoint.name
+                    if runtime_endpoint is not None
+                    else item.target_outcome
+                )
+                if runtime_contrast_authorized
+                else None
             ),
             endpoint=runtime_endpoint,
-            primary_exposure=(runtime_primary_exposure or operational_exposure),
+            primary_exposure=(
+                runtime_primary_exposure or operational_exposure
+                if runtime_contrast_authorized
+                else None
+            ),
             concept_descriptions=concept_descriptions,
             inclusion_criteria=item.inclusion_criteria,
             id_columns=(getattr(item, "id_columns", None) or None),
