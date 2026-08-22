@@ -79,6 +79,7 @@ def host_bound_cohort_executor_code(
             "deterministic_standard_analysis": {HOST_BOUND_COHORT_ANALYSIS_KIND!r},
             "n_source": int(len(frame)),
             "n_analysis_cohort": int(len(frame)),
+            "analysis_cohort_n": int(len(frame)),
             "source_sha256": source_sha256,
             "output_sha256": output_sha256,
             "cohort_binding": {{
