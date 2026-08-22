@@ -22,8 +22,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8752,
-      "sha256": "a5ddf74c0b9fa7e27f1c52fb846c6bdd591c158dc259a509b2eb81a2ff14c5b9",
+      "loc": 9006,
+      "sha256": "3c9bfc20561233011f3b66c0bd8673732faaf1c355dcfc882654b42d7a3976a7",
       "intra_package_import_edges": 122,
       "shim_bypass_violations": []
     },
@@ -346,8 +346,8 @@
       "callable_closure_captured_names": 15
     },
     "pipeline.py::run": {
-      "lines": 672,
-      "line_start": 4629,
+      "lines": 777,
+      "line_start": 4669,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 107,
@@ -356,8 +356,8 @@
       "callable_closure_captured_names": 43
     },
     "pipeline.py::_generate_or_resume_plan": {
-      "lines": 446,
-      "line_start": 2552,
+      "lines": 442,
+      "line_start": 2596,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 48,
@@ -366,8 +366,8 @@
       "callable_closure_captured_names": 0
     },
     "pipeline.py::_run_plan_phase": {
-      "lines": 620,
-      "line_start": 3427,
+      "lines": 618,
+      "line_start": 3474,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 83,
@@ -376,11 +376,11 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Accept 11 owner-local lines that canonicalize identical plan authority paths for exact capsule replay; imports, closure metrics, and all other tracked modules are unchanged.",
+  "baseline_reason": "E2 deterministic landmark figure closure: accept the reviewed host-orchestration calls and ruff-only physical line expansion introduced by 2290f27. Scientific execution and rendering remain in their typed owner modules; pipeline.py gained no new private method implementation. This moves the exact-byte ratchet without claiming decomposition, and pipeline.py remains tracked architecture debt.",
   "baseline_accepted_growth": {
-    "authority/typed_binding.py": {
-      "loc_was": 2274,
-      "loc_now": 2285
+    "pipeline.py": {
+      "loc_was": 8752,
+      "loc_now": 9006
     }
   },
   "baseline_history": [
@@ -717,6 +717,15 @@
         "authority/typed_binding.py": {
           "loc_was": 2274,
           "loc_now": 2285
+        }
+      }
+    },
+    {
+      "reason": "E2 deterministic landmark figure closure: accept the reviewed host-orchestration calls and ruff-only physical line expansion introduced by 2290f27. Scientific execution and rendering remain in their typed owner modules; pipeline.py gained no new private method implementation. This moves the exact-byte ratchet without claiming decomposition, and pipeline.py remains tracked architecture debt.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 8752,
+          "loc_now": 9006
         }
       }
     }
