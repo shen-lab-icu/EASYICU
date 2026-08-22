@@ -353,16 +353,23 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert final_count == summary["n_landmark_population"]
     assert risk["excluded_since_prior_stage"].sum() >= 30
 
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    figure_sources = {}
+    for product, source_name in (
+        (authority.km_product, "landmark_km_curve.csv"),
+        (authority.cox_product, "landmark_cox_summary.csv"),
+        (authority.risk_set_product, "landmark_risk_set_flow.csv"),
+    ):
+        evidence_path = evidence_dir / f"table_step_artifact_deadbeef__{source_name}"
+        evidence_path.write_bytes((tmp_path / source_name).read_bytes())
+        figure_sources[product] = evidence_path
     figure_dir = tmp_path / "figure"
     figure_summary = run_landmark_survival_figure(
         km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
         cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
         risk_flow=risk,
-        source_paths={
-            authority.km_product: tmp_path / "landmark_km_curve.csv",
-            authority.cox_product: tmp_path / "landmark_cox_summary.csv",
-            authority.risk_set_product: tmp_path / "landmark_risk_set_flow.csv",
-        },
+        source_paths=figure_sources,
         authority=authority,
         out_dir=figure_dir,
     )
