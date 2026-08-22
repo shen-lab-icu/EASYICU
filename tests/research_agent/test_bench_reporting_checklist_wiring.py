@@ -177,6 +177,63 @@ def test_external_execution_uses_database_and_operational_exposure_not_scoring_k
     assert captured["run"]["question"] == "Build a model."
 
 
+def test_source_feasibility_authority_does_not_declare_a_runtime_contrast(
+    monkeypatch,
+    tmp_path,
+):
+    from benchmarks.figure2_canonical9.case_scientific_protocol import (
+        build_runtime_scientific_projection,
+        load_default_case_protocol,
+    )
+
+    item = _item("causal_inference")
+    item.key = "h2_vasopressor_causal"
+    item.research_question = "Estimate an early vasopressor effect."
+    item.primary_predictor = "vasopressor"
+    item.operational_exposure = "vaso_ind_max"
+    projection = build_runtime_scientific_projection(
+        load_default_case_protocol("h2_vasopressor_causal")
+    )
+    item.runtime_scientific_projection = projection.model_dump(mode="json")
+    item.runtime_scientific_projection_sha256 = (
+        projection.runtime_projection_sha256
+    )
+    item.case_scientific_protocol_sha256 = projection.protocol_content_sha256
+
+    import easyicu.research_agent as rapkg
+    import tools.run_research_agent_bench as bench
+
+    captured: dict = {}
+
+    class CapturePipeline:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        def run(self, **kwargs):
+            captured["run"] = kwargs
+            return SimpleNamespace(workdir=str(tmp_path))
+
+    monkeypatch.setattr(rapkg, "ResearchAgentPipeline", CapturePipeline)
+    monkeypatch.setattr(bench, "_score_arm", lambda **kwargs: {})
+
+    bench._run_one_arm(
+        item=item,
+        cohort=SimpleNamespace(columns=["vaso_ind_max", "death"]),
+        workdir=tmp_path,
+        disable_icu_context=False,
+        label="aware",
+        llm=object(),
+        pipeline_options={"development_diagnostic": True},
+    )
+
+    assert captured["run"]["primary_exposure"] is None
+    assert captured["run"]["target_outcome"] is None
+    assert captured["run"]["concept_descriptions"] is None
+    authority = captured["init"]["current_case_scientific_runtime_authority"]
+    assert authority["binary_control_arm_authorized"] is False
+    assert authority["causal_contrast_authorized"] is False
+
+
 def test_question_exposed_exposure_label_is_typed_context_metadata(
     monkeypatch, tmp_path
 ):
