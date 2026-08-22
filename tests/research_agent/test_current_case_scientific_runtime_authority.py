@@ -37,6 +37,7 @@ from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
 )
+from easyicu.research_agent.plan_utils import _typed_plan_dag_findings
 from easyicu.research_agent.schema import AnalysisPlan
 
 
@@ -225,9 +226,12 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         current_case=authority,
     ).bind_plan(_h1_draft_plan())
     authority.validate_plan(bound)
-    assert len(bound.steps) == 1
-    assert bound.steps[0].method == authority.plan_method
-    assert set(bound.steps[0].expected_outputs) == set(authority.plan_outputs)
+    assert len(bound.steps) == 2
+    assert bound.steps[0].method == "host_materialized_locked_cohort"
+    assert bound.steps[0].expected_outputs == ["table:analysis_cohort"]
+    assert bound.steps[1].method == authority.plan_method
+    assert set(bound.steps[1].expected_outputs) == set(authority.plan_outputs)
+    assert _typed_plan_dag_findings(bound) == []
     assert findings[0].detail["reason_code"] == (
         "landmark_survival_suite_host_compiled"
     )
@@ -241,7 +245,8 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert execution_only is not None
     execution_only_plan, execution_only_finding = execution_only
     authority.validate_plan(execution_only_plan)
-    assert len(execution_only_plan.steps) == 1
+    assert len(execution_only_plan.steps) == 2
+    assert _typed_plan_dag_findings(execution_only_plan) == []
     assert execution_only_finding.detail["reason_code"] == (
         "development_execution_only_authority_compiled"
     )
@@ -252,7 +257,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert execution_only_plan.endpoint == endpoint
 
     selected = select_standard_executor(
-        bound.steps[0],
+        bound.steps[1],
         plan=bound,
         current_case_scientific_runtime_authority=authority,
         scientific_runtime_projection_sha256=projection.runtime_projection_sha256,
