@@ -800,7 +800,7 @@ def _inspect_context(
             context,
             status="not_found",
             code="study_context_not_found",
-            summary="No typed StudyContext is currently bound to this Pi session.",
+            summary="No typed StudyContext is currently bound to this Copilot session.",
             owner="easyicu.webserver.study_contexts",
         )
     return _result(
@@ -1877,7 +1877,7 @@ def _update_study_context(
         code="study_context_updated",
         summary=(
             f"Saved typed StudyContext revision {int(updated.get('revision') or 0)}. "
-            "The conversation host will rebind this Pi session after the turn settles."
+            "The conversation host will rebind this Copilot session after the turn settles."
         ),
         owner="easyicu.webserver.study_contexts",
         details={
@@ -3155,7 +3155,7 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
             status="blocked",
             code="scientific_resume_not_supported",
             summary=(
-                "The Pi conversation can resume, but the current EasyICU Web "
+                "The Copilot conversation can resume, but the current EasyICU Web "
                 "scientific pipeline has no public crash-resume owner contract. "
                 "No replacement resume path was invented."
             ),
@@ -3165,7 +3165,7 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
         context,
         status="not_found",
         code="easyicu_resume_target_not_found",
-        summary="No active EasyICU job or persisted run was bound to this Pi session.",
+        summary="No active EasyICU job or persisted run was bound to this Copilot session.",
         owner="easyicu.webserver.jobs",
     )
 

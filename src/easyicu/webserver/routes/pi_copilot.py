@@ -92,7 +92,7 @@ class PiSessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: ShortText
-    title: str = "Pi Copilot"
+    title: str = "EasyICU Copilot"
     agent_mode: Literal["research", "workspace"] = "research"
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
@@ -154,7 +154,7 @@ class PiProjectInitializeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: ShortText
-    title: str = "Pi Copilot"
+    title: str = "EasyICU Copilot"
     confirm_initialization: StrictBool = False
     binding_receipt: PiProjectBindingHandoffReceipt | None = None
 

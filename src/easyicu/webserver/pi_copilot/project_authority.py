@@ -148,6 +148,11 @@ class ProjectAuthorityStore:
                 None,
             )
 
+    def bindings(self) -> tuple[ProjectAuthorityBinding, ...]:
+        """Return one immutable snapshot for read-only host composition."""
+        with self._lock:
+            return tuple(self._read())
+
     def bind(
         self,
         project_id: str,
@@ -220,7 +225,7 @@ class ProjectAuthorityStore:
         if mapped != str(study_context_id or "").strip():
             raise PiCopilotError(
                 "pi_session_project_authority_mismatch",
-                "The Pi session StudyContext does not belong to this research project.",
+                "The Copilot session StudyContext does not belong to this research project.",
                 status_code=409,
                 details={"project_id": clean_project},
             )

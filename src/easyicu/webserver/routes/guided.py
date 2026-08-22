@@ -6,7 +6,8 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from easyicu.webserver import guided_sessions
+from easyicu.webserver import guided_sessions, study_contexts
+from easyicu.webserver.pi_copilot.project_authority import ProjectAuthorityStore
 from easyicu.webserver.routes.request_parsing import body_int
 
 router = APIRouter()
@@ -26,10 +27,38 @@ def post_guided_draft(body: Dict[str, Any]) -> dict:
 
 @router.post("/api/guided/drafts/list")
 def post_guided_drafts_list(body: Dict[str, Any] | None = None) -> dict:
-    """List metadata-only guided Copilot drafts from local settings storage."""
-    return guided_sessions.list_guided_drafts(
+    """List drafts together with their authoritative configuration health."""
+    result = guided_sessions.list_guided_drafts(
         limit=body_int(body or {}, "limit", 20, min_value=1, max_value=100)
     )
+    drafts = result.get("drafts")
+    if not isinstance(drafts, list) or not drafts:
+        return result
+    bindings = {
+        binding.project_id: binding.study_context_id
+        for binding in ProjectAuthorityStore().bindings()
+    }
+    relevant_context_ids = [
+        bindings[str(row.get("id") or "")]
+        for row in drafts
+        if isinstance(row, dict) and str(row.get("id") or "") in bindings
+    ]
+    existing_ids = study_contexts.existing_context_ids(relevant_context_ids)
+    for row in drafts:
+        if not isinstance(row, dict):
+            continue
+        context_id = bindings.get(str(row.get("id") or ""))
+        if context_id is None:
+            status = "unbound"
+        elif context_id in existing_ids:
+            status = "ready"
+        else:
+            status = "configuration_missing"
+        row["configuration_health"] = {
+            "status": status,
+            "can_continue": status != "configuration_missing",
+        }
+    return result
 
 
 def _guided_draft_remove_response(body: Dict[str, Any] | None) -> dict:

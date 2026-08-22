@@ -12,7 +12,7 @@
     showSetup: false, availableModels: [], project: null,
     researchProvider: 'codex', researchModel: '', codexAuth: null,
     codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
-    projectInitialization: null, workflow: null,
+    projectInitialization: null, projectIssue: '', workflow: null,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
   };
@@ -55,6 +55,10 @@
       : apiResearchReady();
   }
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
+  function displaySessionTitle(value) {
+    const title = String(value || '').trim();
+    return !title || title === 'Pi Copilot' ? 'EasyICU Copilot' : title;
+  }
   function agentMode() {
     return (state.session && state.session.agent_mode) || state.agentMode || 'research';
   }
@@ -100,7 +104,13 @@
       return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
     }
     if (error.code === 'pi_session_project_mismatch') {
-      return tr('That Pi conversation belongs to another research project.', '该 Pi 对话属于另一个研究项目，不能在当前项目中打开。');
+      return tr('That Copilot conversation belongs to another research project.', '该研究助手对话属于另一个研究项目，不能在当前项目中打开。');
+    }
+    if (error.code === 'pi_project_study_context_missing') {
+      return tr('This project’s saved study setup no longer exists. Recreate or rebind the project before starting Copilot.', '当前项目保存的研究配置已不存在。请重新创建或绑定项目后再启动研究助手。');
+    }
+    if (error.code === 'pi_project_initialization_required') {
+      return tr('Confirm this project’s study setup before starting Copilot.', '请先确认当前项目的研究配置，再启动研究助手。');
     }
     if (error.code === 'codex_auth_login_required') {
       return tr('Sign in with your ChatGPT account before starting this conversation.', '请先登录你的 ChatGPT 账户，再开始这段对话。');
@@ -358,21 +368,21 @@
 
   function statusBanner() {
     if (state.loading) {
-      return `<div class="gpi-inline"><span class="gpi-dot waiting"></span>${tr('Checking Pi Copilot…', '正在检查 Pi Copilot…')}</div>`;
+      return `<div class="gpi-inline"><span class="gpi-dot waiting"></span>${tr('Checking EasyICU Copilot…', '正在检查 EasyICU 研究助手…')}</div>`;
     }
     if (!connectionReady()) {
       const blockers = (state.runtime && state.runtime.blockers) || [];
       const reason = blockers.includes('api_key_configured')
-        ? tr('Connect and verify your model service before entering Pi Copilot.', '请先连接并验证模型服务，再进入 Pi Copilot。')
+        ? tr('Connect and verify your model service before entering EasyICU Copilot.', '请先连接并验证模型服务，再进入 EasyICU 研究助手。')
         : blockers.includes('provider_connection_unverified')
-          ? tr('Verify the saved model service before entering Pi Copilot.', '请先验证已保存的模型服务，再进入 Pi Copilot。')
+          ? tr('Verify the saved model service before entering EasyICU Copilot.', '请先验证已保存的模型服务，再进入 EasyICU 研究助手。')
         : blockers.includes('easyicu_ai_opt_in_disabled')
-          ? tr('Confirm external AI use before entering Pi Copilot.', '请先确认允许使用外部 AI，再进入 Pi Copilot。')
-          : tr('Pi is not ready on this machine. The local Guided workflow remains available.', '这台电脑上的 Pi 尚未就绪，仍可使用本地研究引导流程。');
+          ? tr('Confirm external AI use before entering EasyICU Copilot.', '请先确认允许使用外部 AI，再进入 EasyICU 研究助手。')
+          : tr('EasyICU Copilot is not ready on this machine. The local Guided workflow remains available.', '这台电脑上的 EasyICU 研究助手尚未就绪，仍可使用本地研究引导流程。');
       return `<div class="gpi-inline unavailable"><span class="gpi-dot"></span><span>${esc(reason)}</span><button class="gpi-link" type="button" data-gpi-setup>${tr('Set up', '开始配置')}</button></div>`;
     }
     if (state.shell === 'legacy') {
-      return `<div class="gpi-inline ready"><span class="gpi-dot"></span><span>${tr('Pi AgentSession is ready with EasyICU-only tools.', 'Pi AgentSession 已就绪，仅开放 EasyICU 工具。')}</span><button class="gpi-link" type="button" data-gpi-open>${tr('Open Pi shell', '打开 Pi 交互壳')}</button></div>`;
+      return `<div class="gpi-inline ready"><span class="gpi-dot"></span><span>${tr('EasyICU Copilot is ready with EasyICU-only tools.', 'EasyICU 研究助手已就绪，仅开放 EasyICU 工具。')}</span><button class="gpi-link" type="button" data-gpi-open>${tr('Open Copilot', '打开研究助手')}</button></div>`;
     }
     return '';
   }
@@ -407,41 +417,56 @@
   function activatePanel() {
     const saved = state.sessions.map(row => `
       <button class="gpi-session-row" type="button" data-gpi-session="${esc(row.session_id)}">
-        <span><strong>${esc(row.title || 'Pi Copilot')}</strong><small>${esc(row.updated_at || '')}</small></span>
+        <span><strong>${esc(displaySessionTitle(row.title))}</strong><small>${esc(row.updated_at || '')}</small></span>
         <span>${row.agent_mode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}</span>
       </button>`).join('');
+    if (state.projectIssue === 'pi_project_study_context_missing') {
+      return `
+        <div class="gpi-activate gpi-project-recovery">
+          <div class="gpi-kicker">EASYICU COPILOT · PROJECT RECOVERY</div>
+          <h2>${tr('This old project can no longer be opened', '这个旧项目已无法继续打开')}</h2>
+          <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
+          ${providerBindingSummary()}
+          <div class="gpi-recovery-card" role="alert">
+            <span class="gpi-recovery-icon">${iconHtml('folder', 20)}</span>
+            <div>
+              <strong>${tr('The saved research setup is no longer available', '关联的研究配置已经失效')}</strong>
+              <p>${tr('The project shortcut still exists, but its authoritative study setup was removed. EasyICU will not silently create or attach a different setup.', '项目快捷记录仍然存在，但它原来绑定的权威研究配置已经被移除。EasyICU 不会静默创建或绑定另一份配置。')}</p>
+            </div>
+          </div>
+          <div class="gpi-recovery-actions">
+            <button class="btn primary" type="button" data-newstudy>${tr('Create or open a project', '新建或打开项目')}</button>
+            <button class="btn" type="button" data-refreshdrafts>${tr('Refresh project list', '刷新项目列表')}</button>
+          </div>
+          <div class="gpi-consent">${tr('You can also choose another existing project from the list on the left. Rebinding this old project remains an explicit recovery operation.', '也可以直接从左侧列表选择其他已有项目。若要恢复当前旧项目，仍需执行明确的重新绑定操作。')}</div>
+          <button class="gpi-link" type="button" data-gpi-legacy>${tr('Use the local Guided workflow', '使用本地研究引导流程')}</button>
+        </div>`;
+    }
     return `
       <div class="gpi-activate">
-        <div class="gpi-kicker">PI AGENTSESSION · EASYICU GATEWAY</div>
+        <div class="gpi-kicker">EASYICU COPILOT · RESEARCH WORKSPACE</div>
         <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
         <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
         ${providerBindingSummary()}
-        <button class="btn gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('View the complete research workflow demo', '查看完整科研流程演示')}</button>
-        ${state.projectInitialization && state.projectInitialization.required ? `<div class="gpi-config-note warn"><strong>${tr('Study setup confirmation required.', '需要确认研究配置初始化。')}</strong> ${tr('No complete saved setup was found. Activating Pi will create an explicitly acknowledged empty StudyContext and collect the missing fields here in conversation.', '未找到完整的已保存配置。启用 Pi 后会在你明确确认下创建空的 StudyContext，并在当前对话中继续收集缺失字段。')}</div>` : ''}
-        <p>${tr('Choose the tool boundary for this conversation. Research mode works with study configuration and evidence; Workspace mode also creates, edits, checks, and previews artifacts inside this project’s isolated folder.', '请选择这段对话的工具边界。研究模式处理研究配置与证据；项目工作区模式还可以在当前项目的隔离目录中创建、编辑、检查并预览产物。')}</p>
-        <div class="gpi-mode-picker" role="radiogroup" aria-label="${tr('Agent mode', 'Agent 模式')}">
-          <button type="button" role="radio" data-gpi-mode-choice="research" aria-checked="${state.agentMode === 'research'}">
-            ${iconHtml('shield', 17)}<span><strong>${tr('Research workflow', '科研流程')}</strong><small>${tr('Question, setup, run, evidence, and results', '问题、配置、运行、证据与结果')}</small></span>
-          </button>
-          <button type="button" role="radio" data-gpi-mode-choice="workspace" aria-checked="${state.agentMode === 'workspace'}">
-            ${iconHtml('folder', 17)}<span><strong>${tr('Artifact workspace', '产物工作区')}</strong><small>${tr('Real file tools and web preview', '真实文件工具与网页预览')}</small></span>
-          </button>
-        </div>
+        ${state.error ? `<div class="gpi-error" role="alert">${esc(state.error)}</div>` : ''}
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
-          ${state.creating ? tr('Starting…', '正在启动…') : tr('I agree — activate Pi Copilot', '我同意——启用 Pi Copilot')}
+          ${state.creating ? tr('Starting…', '正在启动…') : tr('Start research conversation', '开始研究对话')}
         </button>
-        <div class="gpi-consent">${tr('Workspace tools can see only this project’s isolated artifact folder. They cannot browse the EasyICU repository, patient rows, credentials, or arbitrary host files.', '工作区工具只能看到当前项目的隔离产物目录，不能浏览 EasyICU 仓库、患者行级数据、凭据或任意本机文件。')}</div>
-        ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Pi conversations in this project', '当前项目中的 Pi 对话')}</div>${saved}</div>` : ''}
-        <button class="gpi-link" type="button" data-gpi-legacy>${tr('Use the local Guided workflow', '使用本地研究引导流程')}</button>
+        <div class="gpi-consent">${iconHtml('shield', 13)}<span>${tr('Study progress is saved automatically. File access can be enabled later and remains limited to this project folder — never patient rows, credentials, or arbitrary host files.', '研究进度会自动保存；文件操作可稍后开启，且只能访问当前项目目录，不包括患者行级数据、凭据或其他本机文件。')}</span></div>
+        ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Copilot conversations in this project', '当前项目中的研究助手对话')}</div>${saved}</div>` : ''}
+        <div class="gpi-secondary-actions">
+          <button class="gpi-link" type="button" data-gpi-demo>${tr('View workflow demo', '查看流程演示')}</button>
+          <button class="gpi-link" type="button" data-gpi-legacy>${tr('Use the local Guided workflow', '使用本地研究引导流程')}</button>
+        </div>
       </div>`;
   }
 
   function projectRequiredPanel() {
     return `
       <div class="gpi-activate">
-        <div class="gpi-kicker">EASYICU PROJECT · PI CONVERSATIONS</div>
+        <div class="gpi-kicker">EASYICU PROJECT · COPILOT CONVERSATIONS</div>
         <h2>${tr('Select a research project first', '请先选择研究项目')}</h2>
-        <p>${tr('Use the Research projects list on the left, or create a new project. EasyICU keeps study setup, runs, and evidence in that project; Pi keeps its conversation history.', '请从左侧“研究项目”中选择一个项目，或新建项目。EasyICU 在项目中保存研究配置、运行和证据；Pi 保存自己的对话历史。')}</p>
+        <p>${tr('Use the Research projects list on the left, or create a new project. EasyICU keeps study setup, runs, evidence, and conversation history in that project.', '请从左侧“研究项目”中选择一个项目，或新建项目。EasyICU 会在项目中保存研究配置、运行、证据和对话历史。')}</p>
         <button class="btn primary gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 16)} ${tr('View the complete research workflow demo', '查看完整科研流程演示')}</button>
         <button class="gpi-link" type="button" data-gpi-legacy>${tr('Use the local Guided workflow', '使用本地研究引导流程')}</button>
       </div>`;
@@ -638,7 +663,7 @@
     return `
       <div class="gpi-panel">
         <header class="gpi-head">
-          <div><div class="gpi-kicker">PI AGENTSESSION · ${esc((state.project && state.project.title) || projectId())}</div><div class="gpi-title">${esc(session.title || 'Pi Copilot')} <span class="gpi-live" role="status" aria-live="polite">${state.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
+          <div><div class="gpi-kicker">EASYICU COPILOT · ${esc((state.project && state.project.title) || projectId())}</div><div class="gpi-title">${esc(displaySessionTitle(session.title))} <span class="gpi-live" role="status" aria-live="polite">${state.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
           <div class="gpi-head-meta">
             <div class="gpi-mode-switch" role="group" aria-label="${tr('Agent mode', 'Agent 模式')}">
               <button type="button" data-gpi-mode-switch="research" aria-pressed="${!workspace}">${tr('Research', '研究')}</button>
@@ -658,13 +683,13 @@
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
         <div class="gpi-log" data-gpi-log>
           ${messages || (workspace
-            ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('Pi can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'Pi 可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
-            : `<div class="gpi-empty"><strong>${tr('Ask about the current study', '询问当前研究')}</strong><span>${tr('Pi can inspect context, plans, runs, validation, artefacts, evidence, and blockers through bounded EasyICU tools.', 'Pi 可通过受限的 EasyICU 工具检查上下文、计划、运行、验证、产物、证据和阻断原因。')}</span></div>`)}
+            ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
+            : `<div class="gpi-empty"><strong>${tr('Ask about the current study', '询问当前研究')}</strong><span>${tr('EasyICU Copilot can inspect context, plans, runs, validation, artefacts, evidence, and blockers through bounded EasyICU tools.', 'EasyICU 研究助手可通过受限的 EasyICU 工具检查上下文、计划、运行、验证、产物、证据和阻断原因。')}</span></div>`)}
           ${workflowConfirmationHtml()}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
         <div class="gpi-compose">
-          <textarea data-gpi-input rows="3" maxlength="12000" placeholder="${workspace ? tr('Ask Pi to create or edit a project artifact — do not paste patient rows or identifiers.', '让 Pi 创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Ask Pi about this EasyICU study — do not paste patient rows or identifiers.', '向 Pi 询问这个 EasyICU 研究——请勿粘贴患者行级数据或标识符。')}" ${state.busy || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
+          <textarea data-gpi-input rows="3" maxlength="12000" placeholder="${workspace ? tr('Ask EasyICU Copilot to create or edit a project artifact — do not paste patient rows or identifiers.', '让 EasyICU 研究助手创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Ask EasyICU Copilot about this study — do not paste patient rows or identifiers.', '向 EasyICU 研究助手询问当前研究——请勿粘贴患者行级数据或标识符。')}" ${state.busy || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
           <div class="gpi-actions">
             ${accessModeHtml()}
             ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send ${stale ? 'disabled' : ''}>${tr('Send', '发送')}</button>`}
@@ -683,7 +708,7 @@
     const reviewResources = typeof demo.reviewResources === 'function' ? demo.reviewResources() : [];
     return `<div class="gpi-panel gpi-demo-panel">
       <header class="gpi-head">
-        <div><div class="gpi-kicker">PI COPILOT · REVIEWER DEMONSTRATION</div><div class="gpi-title">${tr('Complete governed workflow', '完整受治理科研流程')} <span class="gpi-live">${tr('complete', '已完成')}</span></div></div>
+        <div><div class="gpi-kicker">EASYICU COPILOT · REVIEWER DEMONSTRATION</div><div class="gpi-title">${tr('Complete governed workflow', '完整受治理科研流程')} <span class="gpi-live">${tr('complete', '已完成')}</span></div></div>
         <div class="gpi-head-meta"><span>${tr('Registered source run · 94,458 ICU stays', '登记 source run · 94,458 ICU stays')}</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
       </header>
       ${workflowHtml(workflow)}
@@ -798,10 +823,17 @@
 
   function render() {
     if (!state.host) return;
+    const setupFocused = state.shell !== 'legacy'
+      && !state.demoMode
+      && (state.showSetup || !connectionReady() || state.projectIssue === 'pi_project_study_context_missing');
+    const main = state.host.closest('.gd-main');
+    if (main) main.classList.toggle('gpi-setup-focus', setupFocused);
     state.host.hidden = false;
     state.host.innerHTML = state.shell === 'legacy'
       ? statusBanner()
-      : (state.demoMode ? demoPanel() : ((state.showSetup || !connectionReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))));
+      : (state.demoMode ? demoPanel() : (state.projectIssue === 'pi_project_study_context_missing'
+        ? activatePanel()
+        : ((state.showSetup || !connectionReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel())))));
     syncProjectWorkflowAside();
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
@@ -823,7 +855,8 @@
       state.runtime = payload && payload.runtime;
       await loadCodexResearchStatus(false);
       if (projectId()) {
-        await prepareProject();
+        try { await prepareProject(); }
+        catch (error) { state.error = errorText(error); }
       }
       if (!connectionReady()) {
         state.showSetup = true;
@@ -960,7 +993,7 @@
       });
       state.runtime = payload && payload.runtime;
       if (!runtimeReady()) {
-        state.error = tr('The model connection was saved, but the Pi runtime is not ready yet.', '模型连接已保存，但 Pi 运行环境尚未就绪。');
+        state.error = tr('The model connection was saved, but the Copilot runtime is not ready yet.', '模型连接已保存，但研究助手运行环境尚未就绪。');
         return;
       }
       state.error = '';
@@ -995,6 +1028,7 @@
 
   async function createSession() {
     if (state.creating || !projectId()) return;
+    const expectedProjectId = projectId();
     if (!connectionReady()) {
       state.showSetup = true;
       state.error = tr('Finish the one model connection before starting a conversation.', '请先完成这一套模型连接，再开始对话。');
@@ -1012,8 +1046,23 @@
     }
     state.creating = true; state.error = ''; state.pendingAuthorityRebind = false; render();
     try {
+      if (state.projectInitialization && state.projectInitialization.required) {
+        const bindingReceipt = state.project && state.project.binding_receipt;
+        const initialized = await api().initializePiCopilotProject({
+          project_id: expectedProjectId,
+          title: (state.project && state.project.title) || expectedProjectId,
+          confirm_initialization: true,
+          binding_receipt: bindingReceipt || undefined,
+        });
+        if (expectedProjectId !== projectId()) return;
+        state.projectInitialization = initialized || { status: 'ready' };
+        if (bindingReceipt && initialized && initialized.binding_receipt) {
+          state.project = { ...state.project, binding_receipt: null };
+        }
+        await loadWorkflow();
+      }
       const payload = await api().createPiCopilotSession({
-        project_id: projectId(),
+        project_id: expectedProjectId,
         title: `${(state.project && state.project.title) || tr('Research project', '研究项目')} · ${state.agentMode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}`,
         agent_mode: state.agentMode,
         language: window.EU_LANG === 'zh' ? 'zh' : 'en',
@@ -1021,6 +1070,7 @@
         research_provider: state.researchProvider,
         research_model: state.researchProvider === 'codex' ? state.researchModel : null,
       });
+      if (expectedProjectId !== projectId()) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || state.agentMode;
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
@@ -1435,6 +1485,7 @@
         binding_receipt: state.project.binding_receipt || undefined,
       });
       if (expectedProjectId !== projectId()) return;
+      state.projectIssue = '';
       state.projectInitialization = initialized || { status: 'ready' };
       if (bindingReceipt && initialized && initialized.binding_receipt) {
         state.project = { ...state.project, binding_receipt: null };
@@ -1444,10 +1495,17 @@
     } catch (error) {
       if (expectedProjectId !== projectId()) return;
       if (error && error.code === 'pi_project_initialization_required') {
+        state.projectIssue = '';
         state.projectInitialization = {
           required: true,
           missingRequired: (error.details && error.details.missing_required) || [],
         };
+        state.error = '';
+        render();
+        return;
+      }
+      if (error && error.code === 'pi_project_study_context_missing') {
+        state.projectIssue = error.code;
         state.error = '';
         render();
         return;
@@ -1478,15 +1536,17 @@
     state.busy = false;
     state.jobId = '';
     state.error = '';
+    state.projectIssue = '';
     state.projectInitialization = null;
     state.workflow = null;
+    state.agentMode = 'research';
     state.pendingAuthorityRebind = false;
     if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.clearProject) {
       window.EU_GUIDED_PI_PREVIEW.clearProject();
     }
     render();
     if (next) {
-      // Project selection happens after the initial Pi status request in the
+      // Project selection happens after the initial Copilot status request in the
       // common path. prepareProject() updates the authoritative workflow and
       // saved-session lists asynchronously, so render again when it settles;
       // otherwise the legacy 0/8 aside and empty-session panel remain visible
@@ -1510,10 +1570,10 @@
           finishActivity('error', null, 'failed');
           state.error = /^pi_model_/.test(String(row.error || ''))
             ? modelErrorText(row.error)
-            : String(row.error || tr('Pi message failed.', 'Pi 消息失败。'));
+            : String(row.error || tr('Copilot message failed.', '研究助手消息失败。'));
         } else if (row.status === 'cancelled') {
           finishActivity('cancelled', null, 'cancelled');
-          state.error = tr('Pi message stopped.', 'Pi 消息已停止。');
+          state.error = tr('Copilot message stopped.', '研究助手消息已停止。');
         } else {
           finishActivity('complete', null, 'settled');
         }
@@ -1554,6 +1614,12 @@
     const input = state.host.querySelector('[data-gpi-input]');
     const text = String((input && input.value) || state.draft || '').trim();
     await sendText(text);
+  }
+  function composerEnterShouldSend(event) {
+    return event.key === 'Enter'
+      && !event.shiftKey
+      && !event.isComposing
+      && event.keyCode !== 229;
   }
   async function confirmWorkflowAction() {
     const confirmation = workflowConfirmation();
@@ -1683,8 +1749,6 @@
         }
         return;
       }
-      const modeChoice = event.target.closest('[data-gpi-mode-choice]');
-      if (modeChoice) { state.agentMode = modeChoice.dataset.gpiModeChoice === 'research' ? 'research' : 'workspace'; render(); return; }
       const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
       if (modeSwitch) { switchMode(modeSwitch.dataset.gpiModeSwitch); return; }
       const accessMode = event.target.closest('[data-gpi-access-mode]');
@@ -1766,7 +1830,7 @@
       if (modelList) modelList.replaceChildren();
     });
     state.host.addEventListener('keydown', event => {
-      if (event.target.matches('[data-gpi-input]') && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      if (event.target.matches('[data-gpi-input]') && composerEnterShouldSend(event)) {
         event.preventDefault(); sendMessage();
       }
     });

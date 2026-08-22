@@ -164,8 +164,8 @@
     function stepLabel(step) {
       const done = step.status === 'complete';
       const failed = step.status === 'error';
-      if (step.kind === 'submitted') return tr('Message submitted to Pi AgentSession', '消息已提交给 Pi AgentSession');
-      if (step.kind === 'agent') return tr('Pi agent loop started', 'Pi Agent 循环已启动');
+      if (step.kind === 'submitted') return tr('Message submitted to EasyICU Copilot', '消息已提交给 EasyICU 研究助手');
+      if (step.kind === 'agent') return tr('Copilot workflow started', '研究助手工作流已启动');
       if (step.kind === 'turn') return done
         ? tr(`Model turn ${step.turn + 1} finished`, `模型回合 ${step.turn + 1} 已结束`)
         : tr(`Model turn ${step.turn + 1} is running`, `模型回合 ${step.turn + 1} 进行中`);
@@ -218,7 +218,7 @@
       const kicker = tr('Activity', '执行明细');
       if (running) {
         const title = latest && latest.kind !== 'submitted'
-          ? stepLabel(latest) : tr('Pi is preparing the next action', 'Pi 正在准备下一步');
+          ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步');
         const liveSteps = visibleSteps.slice(-20);
         return `<div class="gpi-activity-running" role="status">
           <div class="gpi-activity-live">

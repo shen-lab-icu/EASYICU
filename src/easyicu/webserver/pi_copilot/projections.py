@@ -80,7 +80,7 @@ def reject_sensitive_message(text: str) -> None:
             raise PiCopilotError(
                 "pi_message_phi_risk",
                 (
-                    "The Pi Copilot message looks like row-level patient data or "
+                    "The EasyICU Copilot message looks like row-level patient data or "
                     "an identifier. Use aggregate study metadata instead."
                 ),
                 status_code=400,

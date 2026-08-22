@@ -1184,7 +1184,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "data-ext-install-skill" in extensions_js
     assert "data-ext-test-mcp" in extensions_js
     assert "allowed_tools" in extensions_js
-    assert "Frozen into each new Pi session and Agent run" in extensions_js
+    assert "Frozen into each new Copilot session and Agent run" in extensions_js
     assert "capabilities: C0()" in settings_js
     assert "data-settings-zotero-test" in settings_js
     assert "data-settings-audit-refresh" in settings_js
@@ -2418,6 +2418,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "createGuidedSession" in guided_js
     assert "openGuidedProject" in guided_js
     assert "openGuidedProjectMemory(row, localDraftEl, 'draft')" in guided_js
+    assert "configuration_health.status === 'configuration_missing'" in projects_js
+    assert "配置已失效" in projects_js
+    assert ".gd-sess.configuration-missing" in projects_css
     assert "Memory is scoped to" in guided_js
     assert "Idea Mining and the Research Agent backend still own their artifacts" in guided_js
     assert "Pick a goal to start" in guided_js

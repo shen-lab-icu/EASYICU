@@ -61,7 +61,7 @@ class PiConversationReplayStore:
             if path.stat().st_size > MAX_REPLAY_BYTES:
                 raise PiCopilotError(
                     "pi_replay_store_too_large",
-                    "The Pi conversation replay exceeds its bounded contract.",
+                    "The Copilot conversation replay exceeds its bounded contract.",
                     status_code=500,
                 )
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -70,7 +70,7 @@ class PiConversationReplayStore:
         except json.JSONDecodeError as exc:
             raise PiCopilotError(
                 "pi_replay_store_invalid",
-                "The Pi conversation replay is invalid JSON.",
+                "The Copilot conversation replay is invalid JSON.",
                 status_code=500,
             ) from exc
         if (
@@ -79,7 +79,7 @@ class PiConversationReplayStore:
         ):
             raise PiCopilotError(
                 "pi_replay_store_invalid",
-                "The Pi conversation replay has an invalid schema.",
+                "The Copilot conversation replay has an invalid schema.",
                 status_code=500,
             )
         if (
@@ -88,7 +88,7 @@ class PiConversationReplayStore:
         ):
             raise PiCopilotError(
                 "pi_replay_scope_mismatch",
-                "The Pi conversation replay belongs to another project or session.",
+                "The Copilot conversation replay belongs to another project or session.",
                 status_code=409,
             )
         if not isinstance(payload.get("turns"), list) or not isinstance(
@@ -96,7 +96,7 @@ class PiConversationReplayStore:
         ):
             raise PiCopilotError(
                 "pi_replay_store_invalid",
-                "The Pi conversation replay has an invalid shape.",
+                "The Copilot conversation replay has an invalid shape.",
                 status_code=500,
             )
         return payload
@@ -114,7 +114,7 @@ class PiConversationReplayStore:
         if len(encoded) > MAX_REPLAY_BYTES:
             raise PiCopilotError(
                 "pi_replay_store_too_large",
-                "The Pi conversation replay exceeds its bounded contract.",
+                "The Copilot conversation replay exceeds its bounded contract.",
                 status_code=500,
             )
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -245,7 +245,7 @@ class PiConversationReplayStore:
             if not referenced and not already_archived:
                 raise PiCopilotError(
                     "pi_replay_child_job_unbound",
-                    "This child job was not submitted by the bound Pi conversation.",
+                    "This child job was not submitted by the bound Copilot conversation.",
                     status_code=409,
                 )
             payload["child_jobs"] = [
@@ -274,7 +274,7 @@ class PiConversationReplayStore:
             if not raw.isdigit() or int(raw) > total:
                 raise PiCopilotError(
                     "pi_replay_cursor_invalid",
-                    "The Pi conversation replay cursor is invalid.",
+                    "The Copilot conversation replay cursor is invalid.",
                     status_code=400,
                 )
             end = int(raw)

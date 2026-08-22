@@ -160,7 +160,7 @@ class PiSessionRecord(BaseModel):
     )
     pi_session_id: Optional[str] = None
     pi_session_file: Optional[str] = None
-    title: str = "Pi Copilot"
+    title: str = "EasyICU Copilot"
     agent_mode: AgentMode = "research"
     language: Literal["en", "zh"] = "en"
     thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"

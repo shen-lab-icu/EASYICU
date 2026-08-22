@@ -21,7 +21,8 @@ from easyicu.webserver import state_paths
 _CONFIG_PATH = state_paths.state_root() / "webserver_study_contexts.json"
 _LOCK = threading.RLock()
 
-_MAX_CONTEXTS = 80
+_MAX_LISTED_CONTEXTS = 80
+_MAX_STORED_CONTEXTS = 1000
 _MAX_COLLECTION_ITEMS = 64
 _MAX_NESTED_TEXT = 500
 _MAX_PATH_LENGTH = 4096
@@ -275,6 +276,13 @@ def _write_raw(payload: Dict[str, Any]) -> None:
     except OSError:
         pass
     serialized = json.dumps(payload, indent=2, ensure_ascii=False)
+    if len(serialized.encode("utf-8")) > _MAX_STORE_BYTES:
+        raise StudyContextError(
+            {
+                "error": "study_context_store_capacity_reached",
+                "max_bytes": _MAX_STORE_BYTES,
+            }
+        )
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{_CONFIG_PATH.name}.",
         suffix=".tmp",
@@ -1364,9 +1372,17 @@ def list_contexts() -> Dict[str, Any]:
     with _LOCK:
         raw = _read_raw()
         contexts = _contexts_from_raw(raw)
+        listed = contexts[:_MAX_LISTED_CONTEXTS]
+        active_id = raw.get("active_id")
+        if active_id and not any(row.get("id") == active_id for row in listed):
+            active_row = next(
+                (row for row in contexts if row.get("id") == active_id), None
+            )
+            if active_row is not None and listed:
+                listed[-1] = active_row
         return {
-            "contexts": contexts,
-            "active_id": raw.get("active_id"),
+            "contexts": listed,
+            "active_id": active_id,
         }
 
 
@@ -1377,6 +1393,19 @@ def get_context(context_id: str) -> Optional[Dict[str, Any]]:
             if context.get("id") == clean_id:
                 return context
     return None
+
+
+def existing_context_ids(context_ids: List[str]) -> set[str]:
+    """Return existing identifiers with one bounded store read."""
+    clean_ids = {_identifier(value, field="id") for value in context_ids}
+    if not clean_ids:
+        return set()
+    with _LOCK:
+        return {
+            str(context.get("id"))
+            for context in _contexts_from_raw(_read_raw())
+            if context.get("id") in clean_ids
+        }
 
 
 def get_active_context() -> Optional[Dict[str, Any]]:
@@ -1502,23 +1531,19 @@ def upsert_context(
         contexts = [row for row in contexts if row.get("id") != context_id]
         contexts.insert(0, context)
         active_id = context_id if active else raw.get("active_id")
-        trimmed = contexts[:_MAX_CONTEXTS]
-        if active_id and not any(row.get("id") == active_id for row in trimmed):
-            active_row = next(
-                (row for row in contexts if row.get("id") == active_id), None
+        if len(contexts) > _MAX_STORED_CONTEXTS:
+            raise StudyContextError(
+                {
+                    "error": "study_context_store_capacity_reached",
+                    "max_contexts": _MAX_STORED_CONTEXTS,
+                }
             )
-            if active_row is not None and trimmed:
-                trimmed[-1] = active_row
-            else:
-                active_id = context_id
-        if active_id and not any(row.get("id") == active_id for row in trimmed):
-            active_id = context_id
         _write_raw(
             {
                 "schema_version": 1,
                 "updated_at": timestamp,
                 "active_id": active_id,
-                "contexts": trimmed,
+                "contexts": contexts,
             }
         )
         return context

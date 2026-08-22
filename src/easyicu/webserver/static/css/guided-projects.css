@@ -89,6 +89,12 @@
   border-color:var(--accent-border);background:color-mix(in srgb,var(--accent-soft) 50%,var(--surface));
   box-shadow:var(--shadow-1)
 }
+.gd-sess.configuration-missing{
+  border-color:color-mix(in srgb,var(--warn) 34%,var(--hair));
+  background:color-mix(in srgb,var(--warn-soft) 42%,transparent)
+}
+.gd-sess.configuration-missing .gd-sess-status{background:var(--warn)}
+.gd-sess.configuration-missing .ss-m{color:color-mix(in srgb,var(--warn) 74%,var(--ink))}
 .gd-sess-status{width:8px;height:8px;border-radius:50%;background:var(--ink-5)}
 .gd-sess.active .gd-sess-status{background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
 .gd-sess-body{min-width:0;display:grid;gap:3px}

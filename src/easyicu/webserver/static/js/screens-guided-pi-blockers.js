@@ -34,8 +34,8 @@
       order: 10,
       title: () => t('Node.js was not found', '未找到 Node.js'),
       fix: () => t(
-        `Pi runs on Node.js. Install Node ${MIN_NODE} or newer, then reopen this page.`,
-        `Pi 依赖 Node.js 运行。请安装 Node ${MIN_NODE} 或更高版本，然后重新打开本页。`,
+        `The Copilot runtime requires Node.js. Install Node ${MIN_NODE} or newer, then reopen this page.`,
+        `研究助手运行环境依赖 Node.js。请安装 Node ${MIN_NODE} 或更高版本，然后重新打开本页。`,
       ),
     },
     node_version_supported: {
@@ -45,18 +45,18 @@
         const found = runtime && runtime.node_version;
         return found
           ? t(
-            `Found Node ${found}; Pi needs ${MIN_NODE} or newer. Upgrade Node, then reopen this page.`,
-            `检测到 Node ${found}，而 Pi 需要 ${MIN_NODE} 或更高版本。请升级 Node 后重新打开本页。`,
+            `Found Node ${found}; the Copilot runtime needs ${MIN_NODE} or newer. Upgrade Node, then reopen this page.`,
+            `检测到 Node ${found}，研究助手运行环境需要 ${MIN_NODE} 或更高版本。请升级 Node 后重新打开本页。`,
           )
           : t(
-            `Pi needs Node ${MIN_NODE} or newer. Upgrade Node, then reopen this page.`,
-            `Pi 需要 Node ${MIN_NODE} 或更高版本。请升级 Node 后重新打开本页。`,
+            `The Copilot runtime needs Node ${MIN_NODE} or newer. Upgrade Node, then reopen this page.`,
+            `研究助手运行环境需要 Node ${MIN_NODE} 或更高版本。请升级 Node 后重新打开本页。`,
           );
       },
     },
     entrypoint_available: {
       order: 30,
-      title: () => t('The Pi runtime is not installed yet', 'Pi 运行环境尚未安装'),
+      title: () => t('The Copilot runtime is not installed yet', '研究助手运行环境尚未安装'),
       fix: () => t(
         `Run \`${INSTALL_CMD}\` in your EasyICU environment to install the pinned runtime.`,
         `在 EasyICU 环境中运行 \`${INSTALL_CMD}\` 安装已固定版本的运行环境。`,
@@ -64,7 +64,7 @@
     },
     dependency_installed: {
       order: 40,
-      title: () => t('The Pi runtime files are incomplete', 'Pi 运行环境文件不完整'),
+      title: () => t('The Copilot runtime files are incomplete', '研究助手运行环境文件不完整'),
       fix: () => t(
         `The runtime folder exists but its packages are missing. Run \`${INSTALL_CMD}\` to reinstall.`,
         `运行环境目录存在但依赖包缺失。请运行 \`${INSTALL_CMD}\` 重新安装。`,
@@ -74,8 +74,8 @@
       order: 50,
       title: () => t('The runtime lockfile is missing', '运行环境 lockfile 缺失'),
       fix: () => t(
-        `EasyICU pins the Pi runtime to an exact version set, and that lock is absent. Run \`${INSTALL_CMD}\` to restore it.`,
-        `EasyICU 会把 Pi 运行环境固定到确切版本集合，当前缺少该锁定文件。请运行 \`${INSTALL_CMD}\` 恢复。`,
+        `EasyICU pins the Copilot runtime to an exact version set, and that lock is absent. Run \`${INSTALL_CMD}\` to restore it.`,
+        `EasyICU 会把研究助手运行环境固定到确切版本集合，当前缺少该锁定文件。请运行 \`${INSTALL_CMD}\` 恢复。`,
       ),
     },
     runtime_integrity_verified: {

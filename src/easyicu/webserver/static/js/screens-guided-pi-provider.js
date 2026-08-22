@@ -68,7 +68,7 @@
           <label><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Re-enter only to replace or re-verify', '仅在更换或重新验证时输入') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}" ${options.runtimeReady ? '' : 'required'}></label>
         </div>
         ${state.availableModels.length ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Models reported by this service:', '该服务返回的可用模型：')} ${esc(state.availableModels.slice(0, 12).join(', '))}</div>` : ''}
-        ${runtimeMissing.length ? `<div class="gpi-config-note warn gpi-blockers"><div class="gpi-blocker-lead">${tr('Fix these before the connection can open:', '连接开放前需要先解决：')}</div><ol class="gpi-blocker-list">${runtimeMissing.map(b => `<li><span class="gpi-blocker-title">${esc(b.title)}</span>${b.fix ? `<span class="gpi-blocker-fix">${esc(b.fix)}</span>` : ''}<span class="gpi-blocker-code mono" title="${esc(tr('Diagnostic code reported by the Pi runtime', 'Pi 运行环境上报的诊断码'))}">${esc(b.code)}</span></li>`).join('')}</ol></div>` : ''}
+        ${runtimeMissing.length ? `<div class="gpi-config-note warn gpi-blockers"><div class="gpi-blocker-lead">${tr('Fix these before the connection can open:', '连接开放前需要先解决：')}</div><ol class="gpi-blocker-list">${runtimeMissing.map(b => `<li><span class="gpi-blocker-title">${esc(b.title)}</span>${b.fix ? `<span class="gpi-blocker-fix">${esc(b.fix)}</span>` : ''}<span class="gpi-blocker-code mono" title="${esc(tr('Diagnostic code reported by the Copilot runtime', '研究助手运行环境上报的诊断码'))}">${esc(b.code)}</span></li>`).join('')}</ol></div>` : ''}
         <label class="gpi-optin"><input name="enable_ai" type="checkbox" required> <span>${tr('I authorize this verification request and external AI use. Conversation text, PHI-safe summaries, and workspace file contents may be sent to this service; scientific runs remain separately gated.', '我授权本次连接验证和外部 AI 使用。对话文字、经 PHI 安全投影的摘要和工作区文件内容可能发送到该服务；科研运行仍有独立门禁。')}</span></label>
         <button class="btn" type="submit" ${state.setupSaving || options.staticPreview ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify one model connection', '验证这一套模型连接')}</button>
         <div class="gpi-config-note ${options.apiResearchReady ? 'ok' : 'warn'}"><span class="gpi-dot"></span>${options.apiResearchReady ? tr('This verified connection is ready for both conversation and analysis.', '这套已验证连接已可同时用于对话和分析。') : tr('Choose the OpenAI Chat Completions protocol for one connection that supports both.', '请选择 OpenAI Chat Completions 协议，使这一套连接同时支持对话与分析。')}</div>
@@ -81,14 +81,14 @@
     return `
       <div class="gpi-setup-wrap gpi-provider-setup">
         <div class="gpi-setup gpi-provider-shell">
-          <div class="gpi-kicker">PI COPILOT · ONE MODEL CONNECTION</div>
+          <div class="gpi-kicker">EASYICU COPILOT · ONE MODEL CONNECTION</div>
           <h2>${tr('Choose one provider and model', '只选择一套提供方与模型')}</h2>
           <p>${tr('Use a ChatGPT/Codex account or one API connection. The choice powers both the conversation and governed scientific workflow; you do not configure a second analysis model elsewhere.', '可以使用 ChatGPT/Codex 账户，也可以配置一套 API。这一选择会同时用于对话与受治理的科研流程，无需再到其他页面配置第二个分析模型。')}</p>
           ${connectionChoice({ state, tr, esc })}
           ${state.researchProvider === 'api' ? apiConnectionForm(options) : ''}
           ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}
           <div class="gpi-setup-actions">
-            ${canCancel ? `<button class="btn" type="button" data-gpi-provider-done>${tr('Done', '完成')}</button>` : `<button class="gpi-link" type="button" data-gpi-legacy>${tr('Use local Guided workflow', '使用本地研究引导流程')}</button>`}
+            ${canCancel ? `<button class="btn primary" type="button" data-gpi-provider-done>${tr('Finish connection setup', '完成连接设置')}</button>` : `<button class="gpi-link" type="button" data-gpi-legacy>${tr('Use local Guided workflow', '使用本地研究引导流程')}</button>`}
           </div>
           <div class="gpi-consent">${tr('Choosing Continue with ChatGPT or Done authorizes external AI use. Account credentials stay in the browser-isolated Codex home; existing conversations never switch connection silently.', '选择“使用 ChatGPT 继续”或“完成”即授权使用外部 AI。账户凭据保留在浏览器隔离的 Codex 空间中；已有会话绝不会静默切换连接。')}</div>
         </div>

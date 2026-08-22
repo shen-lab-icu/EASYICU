@@ -188,7 +188,7 @@ function safeSessionFile(rawPath) {
   const file = realpathSync(candidate);
   const rel = relative(root, file);
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw Object.assign(new Error("session_file is outside the Pi session directory"), {
+    throw Object.assign(new Error("session_file is outside the Copilot session directory"), {
       code: "pi_session_file_outside_root",
     });
   }
@@ -474,7 +474,7 @@ function resourceLoader(agentMode, extensionSnapshot) {
       "Never ask for or reproduce patient rows, identifiers, timestamps, free-text notes, credentials, or raw files.",
       "Inspection results are bounded host projections. Explain their stable codes and owner; do not invent missing details.",
       "A tool request to save study setup, run, cancel, or replan can be blocked unless the user granted that action for this turn. Do not claim an action happened unless the tool confirms it.",
-      "A Pi session is UX history only. EasyICU study revision, run id, plan receipts, and evidence artefacts remain authoritative.",
+      "A Copilot session is UX history only. EasyICU study revision, run id, plan receipts, and evidence artefacts remain authoritative.",
       "Match the user's language and brevity. Answer the current request first. Unless the user asks for a report or explanation, use at most two short sentences around tool calls and let the UI timeline carry job ids, owners, status codes, and execution detail.",
       "At a governed confirmation gate, ask one direct question and stop. Do not repeat the full workflow, handoff report, or permission inventory unless the user asks for it. Never hide a blocker or weaken its exact stable code.",
       "Keep shared guidance case-neutral. Ask for unread study slots rather than filling defaults.",
@@ -683,7 +683,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
     hostTool(sessionId, { name: "easyicu_resume", executionMode: "sequential", label: "Resume EasyICU work", description: "Reattach to a live job or submit an explicit approved/rejected decision for a durable digest-bound Research Agent plan review. A terminal run_id is not resumable. A review decision needs a fresh provider-run grant.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })), run_id: optionalRunId, decision: Type.Optional(Type.Union([Type.Literal("approved"), Type.Literal("rejected")])), reviewer: Type.Optional(Type.String({ maxLength: 200 })), note: Type.Optional(Type.String({ maxLength: 1000 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_cancel", executionMode: "sequential", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request fresh plan", description: "For a superseded or non-resumable plan, start a new ResearchAgentPipeline planning run bound to the current StudyContext and a new run id. It never mutates or reuses the old plan and requires a fresh provider-run grant. Other in-place replan requests fail closed.", parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_list_extensions", label: "List frozen user extensions", description: "List the path-free Skill and MCP descriptors frozen into this Pi session, including content digests and explicit tool allowlists.", parameters: empty }),
+    hostTool(sessionId, { name: "easyicu_list_extensions", label: "List frozen user extensions", description: "List the path-free Skill and MCP descriptors frozen into this Copilot session, including content digests and explicit tool allowlists.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_load_skill", executionMode: "sequential", label: "Load frozen Skill", description: "Load the exact reviewed instructions for one conversation Skill frozen into this session. In workspace mode, the built-in web-prototype Skill is also available.", parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_call_mcp_tool", executionMode: "sequential", label: "Call allowlisted MCP tool", description: "Call one read-only external metadata tool from a server frozen into this session. The host enforces the MCP master switch, exact server/tool allowlist, bounded JSON, privacy projection, and one-turn authorization. MCP output never becomes current-study evidence automatically.", parameters: Type.Object({ server: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }), tool: Type.String({ minLength: 1, maxLength: 128 }), arguments: Type.Optional(Type.Record(Type.String({ maxLength: 160 }), Type.Unknown())) }, { additionalProperties: false }) }),
   ];
@@ -792,10 +792,10 @@ async function createSession(params) {
   const existing = sessions.get(externalId);
   if (existing) {
     if (existing.agentMode !== agentMode) {
-      throw Object.assign(new Error("Pi session execution scope cannot change"), { code: "pi_session_execution_scope_mismatch" });
+      throw Object.assign(new Error("Copilot session execution scope cannot change"), { code: "pi_session_execution_scope_mismatch" });
     }
     if (existing.extensionActivationSha256 !== extensionSnapshot.activation_sha256) {
-      throw Object.assign(new Error("Pi session extension activation cannot change"), { code: "pi_session_extension_scope_mismatch" });
+      throw Object.assign(new Error("Copilot session extension activation cannot change"), { code: "pi_session_extension_scope_mismatch" });
     }
     return sessionState(existing);
   }
@@ -873,10 +873,10 @@ async function promptSession(requestId, params) {
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const record = sessions.get(sessionId);
-  if (!record) throw Object.assign(new Error("Pi session is not open"), { code: "pi_session_not_open" });
+  if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
   if (!message) throw Object.assign(new Error("message is required"), { code: "pi_message_required" });
   if (activeRequestBySession.has(sessionId)) {
-    throw Object.assign(new Error("Pi session already has an active prompt"), { code: "pi_session_busy" });
+    throw Object.assign(new Error("Copilot session already has an active prompt"), { code: "pi_session_busy" });
   }
   record.budgetGuard.beginMessage();
   activeRequestBySession.set(sessionId, requestId);
@@ -924,7 +924,7 @@ async function handleRequest(request) {
     case "session.state": {
       assertExactKeys(params, new Set(["session_id", "transcript_cursor", "transcript_limit"]), "pi_session_state_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());
-      if (!record) throw Object.assign(new Error("Pi session is not open"), { code: "pi_session_not_open" });
+      if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
       const transcriptLimit = params.transcript_limit === undefined
         ? 100 : Number(params.transcript_limit);
       if (!Number.isInteger(transcriptLimit) || transcriptLimit < 1 || transcriptLimit > 200) {
@@ -938,7 +938,7 @@ async function handleRequest(request) {
     case "session.abort": {
       assertExactKeys(params, new Set(["session_id"]), "pi_session_abort_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());
-      if (!record) throw Object.assign(new Error("Pi session is not open"), { code: "pi_session_not_open" });
+      if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
       await record.session.abort();
       return { aborted: true, ...sessionState(record) };
     }
