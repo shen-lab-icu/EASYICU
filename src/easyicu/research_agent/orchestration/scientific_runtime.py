@@ -68,6 +68,29 @@ class ScientificRuntimeAuthorities:
         """
 
         authority = self.current_case
+        if isinstance(authority, SourceFeasibilityRuntimeAuthority):
+            bound = authority.development_execution_only_plan(
+                research_question=plan.research_question
+            )
+            step = authority.governed_step(bound)
+            return bound, [
+                ValidationFinding(
+                    validator="scientific_runtime_plan_compiler",
+                    severity="warning",
+                    message=(
+                        "Removed generic article-shaping additions and compiled "
+                        "the signed source-feasibility non-use decision."
+                    ),
+                    detail={
+                        "reason_code": "source_feasibility_fail_closed_host_compiled",
+                        "step_id": step.step_id,
+                        "output_products": list(authority.plan_outputs),
+                        "execution_contract_sha256": (
+                            authority.execution_contract_sha256
+                        ),
+                    },
+                )
+            ]
         if isinstance(authority, LandmarkSurvivalRuntimeAuthority):
             bound = authority.bind_plan(plan)
             step = authority.governed_step(bound)

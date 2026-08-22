@@ -584,6 +584,25 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
         "source_feasibility_development_execution_only_authority_compiled"
     )
 
+    generic_article_step = plan.steps[0].model_copy(
+        update={
+            "step_id": "02_generic_article_figure",
+            "method": "visualization",
+            "intent": "Add a generic article figure.",
+            "expected_outputs": ["figure:generic_article_figure"],
+        }
+    )
+    rebound, rebound_findings = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=authority,
+    ).bind_plan(plan.model_copy(update={"steps": [plan.steps[0], generic_article_step]}))
+    authority.validate_plan(rebound)
+    assert len(rebound.steps) == 1
+    assert rebound.steps[0].method == authority.plan_method
+    assert rebound_findings[0].detail["reason_code"] == (
+        "source_feasibility_fail_closed_host_compiled"
+    )
+
     forbidden = plan.steps[0].model_copy(
         update={
             "step_id": "02_psm",
