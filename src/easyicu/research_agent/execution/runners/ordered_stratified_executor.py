@@ -33,11 +33,27 @@ from .typed_input_binding import (
 )
 
 ORDERED_STRATIFIED_ANALYSIS_KIND = "ordered_stratified_analysis"
+ORDERED_STRATIFIED_PARENT_PRODUCT = "table:adjusted_association_estimates"
 
 
 def _typed_cohort_input(step: AnalysisStep) -> str:
     values = [value for value in step.inputs if is_closed_cohort_product_key(value)]
     return values[0] if len(values) == 1 else ""
+
+
+def ordered_stratified_consumed_input_keys(step: AnalysisStep) -> tuple[str, ...]:
+    """Return every resolved authority consumed by the typed adapter.
+
+    The cohort supplies values.  The adjusted-estimate product supplies the
+    upstream identity that binds this secondary analysis to its one primary
+    model; the selector verifies that relationship before execution, so the
+    host must issue an identity receipt for both authorities.
+    """
+
+    cohort = _typed_cohort_input(step)
+    if not cohort or ORDERED_STRATIFIED_PARENT_PRODUCT not in step.inputs:
+        return ()
+    return (cohort, ORDERED_STRATIFIED_PARENT_PRODUCT)
 
 
 def ordered_stratified_spec_for_step(
@@ -64,8 +80,8 @@ def ordered_stratified_spec_for_step(
         item
         for item in plan.steps[:position]
         if item.planned_analysis_role == "primary"
-        and "table:adjusted_association_estimates" in item.expected_outputs
-        and "table:adjusted_association_estimates" in step.inputs
+        and ORDERED_STRATIFIED_PARENT_PRODUCT in item.expected_outputs
+        and ORDERED_STRATIFIED_PARENT_PRODUCT in step.inputs
     ]
     if len(parents) != 1:
         return None
@@ -311,6 +327,11 @@ def run_ordered_stratified_from_env(
         values = continuous.loc[continuous_mask]
         rows.append(
             {
+                # Level values and their zero-based order are identifiers, not
+                # additive counts.  Mark every record explicitly so the generic
+                # aggregate-row gate cannot mistake a coincidental arithmetic
+                # equality (for example 3 == 0 + 1 + 2) for an overall row.
+                "row_role": "exposure_level",
                 "level_value": level,
                 "level_order": order,
                 "level_n": level_n,
