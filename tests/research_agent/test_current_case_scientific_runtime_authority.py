@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 import numpy as np
@@ -232,6 +233,10 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert bound.steps[1].method == authority.plan_method
     assert set(bound.steps[1].expected_outputs) == set(authority.plan_outputs)
     assert _typed_plan_dag_findings(bound) == []
+    cohort_selection = select_standard_executor(bound.steps[0], plan=bound)
+    assert cohort_selection is not None
+    assert cohort_selection.analysis_kind == "host_bound_analysis_cohort"
+    assert cohort_selection.consumed_input_keys == ()
     assert findings[0].detail["reason_code"] == (
         "landmark_survival_suite_host_compiled"
     )
@@ -311,6 +316,39 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     ].item()
     assert final_count == summary["n_landmark_population"]
     assert risk["excluded_since_prior_stage"].sum() >= 30
+
+
+def test_host_bound_cohort_root_publishes_exact_input_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _projection, authority = _authority("h1_ventilation_survival")
+    assert isinstance(authority, LandmarkSurvivalRuntimeAuthority)
+    plan = authority.development_execution_only_plan(
+        research_question="Run the sealed landmark survival development suite."
+    )
+    selected = select_standard_executor(plan.steps[0], plan=plan)
+    assert selected is not None
+
+    source = tmp_path / "cohort.parquet"
+    out_dir = tmp_path / "outputs"
+    pd.DataFrame({"stay_id": [1, 2], "value": [3.0, 4.0]}).to_parquet(
+        source,
+        index=False,
+    )
+    monkeypatch.setenv("COHORT_PARQUET", str(source))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+
+    exec(compile(selected.code, "<host_bound_cohort>", "exec"), {})
+
+    output = out_dir / "analysis_cohort.parquet"
+    summary = json.loads((out_dir / "step_summary.json").read_text())
+    assert output.read_bytes() == source.read_bytes()
+    assert summary["status"] == "ok"
+    assert summary["n_analysis_cohort"] == 2
+    assert summary["output_files"] == {
+        "table:analysis_cohort": "analysis_cohort.parquet"
+    }
 
 
 def test_landmark_survival_executor_keeps_case_labels_in_authority() -> None:

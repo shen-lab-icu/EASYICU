@@ -44,6 +44,11 @@ from .cohort_summary_executor import (
     cohort_summary_executor_code,
     cohort_summary_executor_owns_step,
 )
+from .host_bound_cohort_executor import (
+    HOST_BOUND_COHORT_ANALYSIS_KIND,
+    host_bound_cohort_executor_code,
+    host_bound_cohort_executor_owns_step,
+)
 from .ordered_stratified_executor import (
     ORDERED_STRATIFIED_ANALYSIS_KIND,
     ordered_stratified_consumed_input_keys,
@@ -349,6 +354,21 @@ def select_standard_executor(
         # whether it claimed could not be read as a list of consulted owners.
         _note(owner_key or selection.analysis_kind, True, "selected")
         return selection
+
+    if host_bound_cohort_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=HOST_BOUND_COHORT_ANALYSIS_KIND,
+                selection_reason="sealed_run_cohort_root_contract_preflight",
+                progress_message="Publishing the sealed run cohort as a typed root",
+                code=host_bound_cohort_executor_code(
+                    step,
+                    plausibility_scope=plausibility_scope,
+                ),
+                consumed_input_keys=(),
+            )
+        )
+    _missed(HOST_BOUND_COHORT_ANALYSIS_KIND)
 
     if current_case_scientific_runtime_authority is not None:
         sealed_current = load_current_case_scientific_runtime_authority(
