@@ -216,7 +216,12 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
         step_id="prediction_figure",
         planned_analysis_role="auxiliary",
         intent="Render prediction performance and calibration.",
-        inputs=list(PREDICTION_COMPOSITE_FIGURE_INPUTS),
+        inputs=[
+            "table:prediction_scores",
+            "table:model_performance",
+            "table:calibration",
+            "table:validation",
+        ],
         expected_outputs=["figure:prediction_figure"],
         method="visualization",
         input_consumption_contracts=[

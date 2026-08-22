@@ -109,7 +109,8 @@ def prediction_figure_executor_owns_step(
         step.planned_analysis_role == "auxiliary"
         and str(step.method or "").strip().casefold().split(" with ", 1)[0]
         == "visualization"
-        and tuple(step.inputs) == PREDICTION_COMPOSITE_FIGURE_INPUTS
+        and len(step.inputs) == len(PREDICTION_COMPOSITE_FIGURE_INPUTS)
+        and set(step.inputs) == set(PREDICTION_COMPOSITE_FIGURE_INPUTS)
         and _CAPABILITY.admits_step(step)
         and len(products) == 1
         and products[0] is not None
