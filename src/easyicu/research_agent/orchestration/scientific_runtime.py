@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from ..authority.current_case_scientific_runtime import (
     AssociationModelGridRuntimeAuthority,
     CurrentCaseScientificRuntimeAuthority,
+    LandmarkSplineRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
 from ..schema import AnalysisPlan, ValidationFinding
@@ -65,6 +66,27 @@ class ScientificRuntimeAuthorities:
         """
 
         authority = self.current_case
+        if isinstance(authority, LandmarkSplineRuntimeAuthority):
+            bound = authority.bind_plan(plan)
+            step = authority.governed_step(bound)
+            return bound, [
+                ValidationFinding(
+                    validator="scientific_runtime_plan_compiler",
+                    severity="warning",
+                    message=(
+                        "Compiled the signed landmark spline authority into the "
+                        "verified host-tool route."
+                    ),
+                    detail={
+                        "reason_code": "landmark_spline_host_compiled",
+                        "step_id": step.step_id,
+                        "output_products": list(authority.plan_outputs),
+                        "execution_contract_sha256": (
+                            authority.execution_contract_sha256
+                        ),
+                    },
+                )
+            ]
         if not isinstance(authority, AssociationModelGridRuntimeAuthority):
             return plan, []
         bound = authority.bind_plan(plan)

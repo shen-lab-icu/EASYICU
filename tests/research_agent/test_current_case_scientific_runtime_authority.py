@@ -26,6 +26,9 @@ from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
 )
 from easyicu.research_agent.orchestration.config import PipelineConfig
+from easyicu.research_agent.orchestration.scientific_runtime import (
+    ScientificRuntimeAuthorities,
+)
 from easyicu.research_agent.schema import AnalysisPlan
 
 
@@ -135,6 +138,33 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     )
     assert summary["n_primary_population"] == n
     assert summary["n_complete_case"] == n - 1
+
+
+def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    exact = _e2_plan(authority)
+    draft_step = exact.steps[0].model_copy(
+        update={
+            "method": "adjusted_association_models",
+            "intent": "Estimate a generic adjusted association.",
+            "expected_outputs": ["table:adjusted_association_estimates"],
+            "scientific_capability": "association_adjusted_v1",
+            "icu_rule_refs": [],
+        }
+    )
+    draft = exact.model_copy(update={"steps": [draft_step]})
+
+    bound, findings = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=authority,
+    ).bind_plan(draft)
+
+    authority.validate_plan(bound)
+    assert bound.steps[0].method == authority.plan_method
+    assert bound.steps[0].expected_outputs == list(authority.plan_outputs)
+    assert set(authority.required_columns).issubset(bound.steps[0].inputs)
+    assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
 
 
 def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
