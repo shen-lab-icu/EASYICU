@@ -42,6 +42,7 @@ from ..planning.study_design import (
     build_study_design_brief,
 )
 from ..planning.analysis_types import canonical_analysis_family, infer_analysis_type
+from ..planning.scientific_action_catalog import scientific_action_for_id
 from ..planning.study_design_playbook import (
     DisplayModuleSpec,
     DisplayTier,
@@ -555,6 +556,23 @@ def roles_covered_by_plan(
             )
         )
     planner_owned_roles = set(contract.planner_owned_result_roles)
+    runtime_roles_by_step: Dict[str, Set[str]] = {}
+    for step in plan.steps:
+        if step.scientific_action_id is None:
+            continue
+        try:
+            action = scientific_action_for_id(
+                analysis_type=plan.analysis_type,
+                action_id=step.scientific_action_id,
+            )
+        except ValueError:
+            continue
+        runtime_contract = action.runtime_contract
+        if runtime_contract is None or tuple(step.expected_outputs) != tuple(
+            product_id for product_id, _role in runtime_contract.outputs
+        ):
+            continue
+        runtime_roles_by_step[step.step_id] = set(runtime_contract.article_roles)
     covered: Set[str] = set()
     for requirement in contract.requirements:
         candidate_outputs = (
@@ -562,7 +580,16 @@ def roles_covered_by_plan(
             if requirement.role in planner_owned_roles
             else output_declarations
         )
-        if _plan_outputs_match_requirement(candidate_outputs, requirement):
+        eligible_runtime_roles = {
+            role
+            for step_id, roles in runtime_roles_by_step.items()
+            if requirement.role not in planner_owned_roles
+            or step_id in primary_lineage_ids
+            for role in roles
+        }
+        if requirement.role in eligible_runtime_roles or _plan_outputs_match_requirement(
+            candidate_outputs, requirement
+        ):
             covered.add(requirement.role)
     return covered
 
