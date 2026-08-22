@@ -160,6 +160,94 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     def plan_rule_ref(self) -> str:
         return f"scientific_runtime_contract:{self.execution_contract_sha256}"
 
+    @property
+    def development_execution_step_ids(self) -> tuple[str, str, str]:
+        return (
+            "00_authority_compiled_trajectory_representation",
+            "01_authority_compiled_trajectory_candidates",
+            "02_authority_compiled_trajectory_stability",
+        )
+
+    def development_execution_only_plan(
+        self,
+        *,
+        research_question: str,
+    ) -> AnalysisPlan:
+        """Project the three signed trajectory owners without a Planner call."""
+
+        representation_id, candidate_id, stability_id = (
+            self.development_execution_step_ids
+        )
+        plan = AnalysisPlan.model_validate(
+            {
+                "research_question": str(research_question),
+                "analysis_type": "trajectory_clustering",
+                "steps": [
+                    {
+                        "step_id": representation_id,
+                        "planned_analysis_role": "auxiliary",
+                        "intent": self.representation_plan_intent,
+                        "inputs": list(self.representation_plan_inputs),
+                        "expected_outputs": [
+                            *self.representation_required_outputs,
+                            "table:feature_availability",
+                        ],
+                        "method": self.representation_plan_method,
+                        "icu_rule_refs": [self.plan_rule_ref],
+                    },
+                    {
+                        "step_id": candidate_id,
+                        "planned_analysis_role": "primary",
+                        "intent": "Fit every signed candidate and select by BIC.",
+                        "inputs": [
+                            "artifact:trajectory_representation",
+                            "manifest:trajectory_representation_schema",
+                        ],
+                        "expected_outputs": [
+                            "artifact:candidate_cluster_assignments",
+                            "manifest:cluster_selection",
+                            "manifest:candidate_cluster_solution_schema",
+                        ],
+                        "method": OBSERVED_DATA_DIAG_GMM_METHOD,
+                        "icu_rule_refs": [self.plan_rule_ref],
+                    },
+                    {
+                        "step_id": stability_id,
+                        "planned_analysis_role": "auxiliary",
+                        "intent": "Execute the signed stability design.",
+                        "inputs": [
+                            "artifact:trajectory_representation",
+                            "artifact:candidate_cluster_assignments",
+                            "manifest:cluster_selection",
+                            "manifest:trajectory_representation_schema",
+                            "manifest:candidate_cluster_solution_schema",
+                        ],
+                        "expected_outputs": [
+                            "artifact:stability_freeze",
+                            "artifact:cluster_assignments",
+                            "manifest:cluster_stability_spec",
+                            "manifest:trajectory_missingness_policy",
+                            "table:cluster_assignments",
+                            "table:cluster_stability",
+                            "table:cluster_stability_assignments",
+                            "table:cluster_assignment_provenance",
+                        ],
+                        "method": "trajectory_cluster_stability",
+                        "icu_rule_refs": [self.plan_rule_ref],
+                        "trajectory_stability_spec": self.stability_spec.model_dump(
+                            mode="json"
+                        ),
+                    },
+                ],
+            }
+        )
+        self.validate_plan(plan)
+        return plan
+
+    def is_development_execution_only_plan(self, plan: AnalysisPlan) -> bool:
+        observed = {step.step_id for step in plan.steps}
+        return set(self.development_execution_step_ids).issubset(observed)
+
     def validate_plan(self, plan: AnalysisPlan) -> None:
         owners: dict[str, list[Any]] = {
             role: [step for step in plan.steps if role in trajectory_step_roles(step)]
