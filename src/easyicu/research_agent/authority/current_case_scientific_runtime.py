@@ -435,6 +435,16 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             raise ValueError(
                 "categorical adjustments must be members of the adjustment set"
             )
+        contrast_products = [
+            value
+            for value in self.plan_outputs
+            if value.startswith("table:")
+            and "contrast" in value.partition(":")[2]
+        ]
+        if len(contrast_products) != 1:
+            raise ValueError(
+                "landmark spline authority requires one typed contrasts table"
+            )
         self._verify_digest()
         return self
 
@@ -450,6 +460,15 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     *self.required_adjustment_columns,
                 )
             )
+        )
+
+    @property
+    def downstream_parent_product(self) -> str:
+        return next(
+            value
+            for value in self.plan_outputs
+            if value.startswith("table:")
+            and "contrast" in value.partition(":")[2]
         )
 
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
@@ -488,11 +507,32 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 ),
             }
         )
-        return plan.model_copy(
-            update={
-                "steps": [bound if step is candidate else step for step in plan.steps]
-            }
-        )
+        generic_parent = "table:adjusted_association_estimates"
+        replacement = self.downstream_parent_product
+        steps: list[AnalysisStep] = []
+        for step in plan.steps:
+            if step is candidate:
+                steps.append(bound)
+                continue
+            inputs = [
+                replacement if value == generic_parent else value
+                for value in step.inputs
+            ]
+            contracts = [
+                item.model_copy(update={"input_key": replacement})
+                if item.input_key == generic_parent
+                else item
+                for item in step.input_consumption_contracts
+            ]
+            steps.append(
+                step.model_copy(
+                    update={
+                        "inputs": list(dict.fromkeys(inputs)),
+                        "input_consumption_contracts": contracts,
+                    }
+                )
+            )
+        return plan.model_copy(update={"steps": steps})
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         primary = [

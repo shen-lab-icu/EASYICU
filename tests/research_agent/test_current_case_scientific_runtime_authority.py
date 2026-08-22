@@ -153,7 +153,19 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
             "icu_rule_refs": [],
         }
     )
-    draft = exact.model_copy(update={"steps": [draft_step]})
+    consumer = exact.steps[0].model_copy(
+        update={
+            "step_id": "02_display",
+            "planned_analysis_role": "auxiliary",
+            "method": "visualization",
+            "intent": "Render the signed primary result.",
+            "inputs": ["table:adjusted_association_estimates"],
+            "expected_outputs": ["figure:primary_result"],
+            "scientific_capability": None,
+            "icu_rule_refs": [],
+        }
+    )
+    draft = exact.model_copy(update={"steps": [draft_step, consumer]})
 
     bound, findings = ScientificRuntimeAuthorities(
         trajectory=None,
@@ -164,6 +176,7 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     assert bound.steps[0].method == authority.plan_method
     assert bound.steps[0].expected_outputs == list(authority.plan_outputs)
     assert set(authority.required_columns).issubset(bound.steps[0].inputs)
+    assert bound.steps[1].inputs == [authority.downstream_parent_product]
     assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
 
 
