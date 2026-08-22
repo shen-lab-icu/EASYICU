@@ -466,6 +466,27 @@ def persist_normalized_plan(
     revision = normalized.analysis_plan().revision
     evidence_id = plan_lifecycle_evidence_id(revision)
     path = Path(run_dir) / f"{evidence_id}.json"
+
+    def _register(value: NormalizedPlan) -> None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Planner proposal, deterministic host transformations, and the exact "
+                "normalized plan offered for approval."
+            ),
+            source_path=path,
+            evidence_id=evidence_id,
+            producer="plan_lifecycle_authority",
+            generation_mode="deterministic_skill",
+            metadata={
+                "plan_revision": revision,
+                "proposed_plan_sha256": value.proposed.plan_sha256,
+                "normalized_plan_sha256": value.plan_sha256,
+                "scientific_semantics_changed": value.scientific_semantics_changed,
+                "transformation_count": len(value.transformation_receipts),
+            },
+        )
+
     existing = evidence.get(evidence_id)
     if existing is not None:
         verified = verified_run_evidence_path(Path(run_dir), existing)
@@ -489,28 +510,27 @@ def persist_normalized_plan(
             )
         return verified
     if path.exists():
-        raise PlanLifecycleAuthorityError(
-            f"unregistered plan lifecycle path already exists: {path.name}"
-        )
+        if path.is_symlink() or not path.is_file():
+            raise PlanLifecycleAuthorityError(
+                f"unregistered plan lifecycle path is not a regular file: {path.name}"
+            )
+        try:
+            observed = NormalizedPlan.model_validate_json(path.read_bytes())
+        except Exception as exc:
+            raise PlanLifecycleAuthorityError(
+                f"unregistered plan lifecycle path is invalid: {path.name}"
+            ) from exc
+        if observed.plan_sha256 != normalized.plan_sha256:
+            raise PlanLifecycleAuthorityError(
+                f"plan lifecycle revision {revision} cannot be overwritten"
+            )
+        # Crash recovery: the immutable file can land before EvidenceStore's
+        # registration checkpoint. Re-register the exact existing bytes; never
+        # rewrite them from the reconstructed proposal narrative.
+        _register(observed)
+        return path
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
-    evidence.register_file(
-        kind="log",
-        description=(
-            "Planner proposal, deterministic host transformations, and the exact "
-            "normalized plan offered for approval."
-        ),
-        source_path=path,
-        evidence_id=evidence_id,
-        producer="plan_lifecycle_authority",
-        generation_mode="deterministic_skill",
-        metadata={
-            "plan_revision": revision,
-            "proposed_plan_sha256": normalized.proposed.plan_sha256,
-            "normalized_plan_sha256": normalized.plan_sha256,
-            "scientific_semantics_changed": normalized.scientific_semantics_changed,
-            "transformation_count": len(normalized.transformation_receipts),
-        },
-    )
+    _register(normalized)
     return path
 
 

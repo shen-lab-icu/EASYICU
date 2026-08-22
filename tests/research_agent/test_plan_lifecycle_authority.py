@@ -264,6 +264,7 @@ def test_normalized_and_approved_stages_are_immutable_evidence(
         expected_decision_set_sha256=approved.decision_set_sha256,
     ) == approved
 
+
     with pytest.raises(PlanLifecycleAuthorityError, match="reviewed plan digest"):
         load_approved_executable_plan(
             run_dir=tmp_path,
@@ -301,6 +302,52 @@ def test_normalized_and_approved_stages_are_immutable_evidence(
                 transformation_receipts=(),
                 plan=_plan(intent="Different proposal."),
             ),
+        )
+
+
+def test_unregistered_identical_normalized_file_is_recovered_after_crash(
+    tmp_path,
+) -> None:
+    normalized = _normalized()
+    path = tmp_path / "plan_lifecycle_revision_1.json"
+    original = normalized.model_dump_json(indent=2).encode("utf-8")
+    path.write_bytes(original)
+    evidence = EvidenceStore(tmp_path)
+
+    recovered = persist_normalized_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        normalized=normalized,
+    )
+
+    assert recovered == path
+    assert path.read_bytes() == original
+    assert evidence.get("plan_lifecycle_revision_1") is not None
+    assert load_normalized_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        revision=1,
+    ) == normalized
+
+
+def test_unregistered_different_normalized_file_still_fails_closed(tmp_path) -> None:
+    normalized = _normalized()
+    path = tmp_path / "plan_lifecycle_revision_1.json"
+    other_plan = _plan(intent="Different normalized plan.")
+    path.write_text(
+        NormalizedPlan.create(
+            proposed=ProposedPlan.create(plan=other_plan, source="planner_llm"),
+            transformation_receipts=(),
+            plan=other_plan,
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PlanLifecycleAuthorityError, match="cannot be overwritten"):
+        persist_normalized_plan(
+            run_dir=tmp_path,
+            evidence=EvidenceStore(tmp_path),
+            normalized=normalized,
         )
 
 
