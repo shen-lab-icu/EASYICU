@@ -83,6 +83,7 @@ def _binding(key: str, frame: pd.DataFrame, path: Path, step_id: str) -> dict[st
         "relative_path": str(path.relative_to(path.parents[1])),
         "sha256": digest,
         "evidence_id": f"evidence_{product}",
+        "produced_by_step": f"producer_{product}",
         "product_contract": {"columns": list(frame.columns), "row_count": len(frame)},
         "consumption_contract": {"input_key": key, "mode": "all_rows", "artifact_sha256": digest},
         "identity_row": {
@@ -227,3 +228,9 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
     assert rendered["rendering_only"] is True
     assert (figure_dir / "phenotype_figure.figure_contract.json").is_file()
     assert (figure_dir / "phenotype_figure.svg").is_file()
+    for key, parent_path in product_paths.items():
+        product = key.partition(":")[2]
+        source = pd.read_csv(figure_dir / f"{product}_source_data.csv")
+        assert source["source_table"].eq(parent_path.name).all()
+        assert source["source_step_id"].eq(f"producer_{product}").all()
+        assert source["source_row_index"].tolist() == list(range(len(source)))

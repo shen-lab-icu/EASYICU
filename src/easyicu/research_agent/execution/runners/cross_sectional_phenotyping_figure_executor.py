@@ -170,7 +170,12 @@ def run_cross_sectional_phenotyping_figure(
     source_files = []
     for key, item in bound.items():
         filename = f"{key.partition(':')[2]}_source_data.csv"
-        item.frame.to_csv(out_dir / filename, index=False)
+        source = item.frame.copy()
+        parent_name = item.path.name.split("__", 1)[-1]
+        source.insert(0, "source_step_id", item.binding.get("produced_by_step"))
+        source.insert(0, "source_table", parent_name)
+        source.insert(0, "source_row_index", range(len(source)))
+        source.to_csv(out_dir / filename, index=False)
         source_files.append(filename)
 
     palette = apply_publication_style(font_size=7.0)
