@@ -932,8 +932,13 @@ def _compile_model_terms(
         )
     covariates = [item.name for item in compiled if item.role == "covariate"]
     exposure_term = exposures[0]
-    exposure_levels = list(exposure_term.levels or ())
-    reference = str(exposure_term.reference_level or "")
+    treatment_coded = exposure_term.coding in {"binary", "categorical"}
+    exposure_levels = (
+        list(exposure_term.levels or ()) if treatment_coded else []
+    )
+    reference = (
+        str(exposure_term.reference_level or "") if treatment_coded else ""
+    )
     if exposure_levels:
         if len(exposure_levels) == 2:
             primary_contrast = next(

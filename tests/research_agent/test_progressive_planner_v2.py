@@ -1310,6 +1310,53 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
+def test_compiler_keeps_ordinal_linear_levels_out_of_treatment_contrasts() -> None:
+    payload = json.loads(json.dumps(_payload()))
+    primary = next(step for step in payload["steps"] if step["step_id"] == "05_primary")
+    primary["raw_inputs"].append("severity_stage")
+    primary["primary_exposure"] = "severity_stage"
+    primary["model_terms"][0] = {
+        "name": "severity_stage",
+        "role": "exposure",
+        "coding": "ordinal_linear",
+        "reference_level_index": None,
+    }
+    context = _context().model_copy(
+        update={
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="severity_stage",
+                    role=VariableRole.INTERVENTION,
+                    dtype="int64",
+                    observed_domain={
+                        "n_unique": 4,
+                        "is_binary": False,
+                        "levels": [0, 1, 2, 3],
+                    },
+                ),
+            ]
+        }
+    )
+
+    plan, _ = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload),
+        context=context,
+    )
+
+    requirement = next(
+        step for step in plan.steps if step.step_id == "05_primary"
+    ).model_requirements[0]
+    exposure_term = next(
+        term for term in requirement.model_terms if term.role == "exposure"
+    )
+    assert exposure_term.levels == ["0", "1", "2", "3"]
+    assert exposure_term.transform == "declared_level_index"
+    assert requirement.exposure_levels is None
+    assert requirement.exposure_reference_level is None
+    assert requirement.primary_contrast_level is None
+
+
 def test_report_orders_after_figure_without_reading_raster_as_data() -> None:
     payload = json.loads(json.dumps(_payload()))
     report = json.loads(json.dumps(payload["steps"][-1]))
