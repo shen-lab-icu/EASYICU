@@ -484,4 +484,9 @@ def test_legacy_controlled_method_without_typed_spec_remains_agent_authored() ->
         ordered_stratified_executor_owns_step,
     )
 
-    assert not ordered_stratified_executor_owns_step(_step())
+    step = _step()
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    assert not ordered_stratified_executor_owns_step(
+        step, plan=AnalysisPlan(research_question="Test", steps=[step])
+    )

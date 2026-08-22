@@ -16,6 +16,7 @@ from easyicu.research_agent.contracts.ordered_stratified import (
 )
 from easyicu.research_agent.execution.runners.ordered_stratified_executor import (
     ordered_stratified_executor_owns_step,
+    ordered_stratified_spec_for_step,
     run_ordered_stratified_from_env,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
@@ -28,7 +29,13 @@ def _step() -> AnalysisStep:
             "step_id": "ordered_trend",
             "planned_analysis_role": "secondary",
             "intent": "Compare an ordered exposure across two declared outcomes.",
-            "inputs": ["artifact:analysis_cohort", "severity", "death", "duration"],
+            "inputs": [
+                "artifact:analysis_cohort",
+                "table:adjusted_association_estimates",
+                "severity",
+                "death",
+                "duration",
+            ],
             "expected_outputs": [
                 "table:ordinal_trend_dose_response",
                 "table:ordered_stratified_outcomes",
@@ -36,16 +43,45 @@ def _step() -> AnalysisStep:
             ],
             "method": "ordinal_stratified_descriptive_analysis",
             "scientific_action_id": "association.ordinal_trend",
-            "ordered_stratified_spec": {
-                "ordered_exposure": "severity",
-                "ordered_levels": [0, 1, 2],
-                "cochran_armitage_scores": [0, 1, 2],
-                "binary_outcome": "death",
-                "continuous_outcome": "duration",
-                "trend_product": "table:ordinal_trend_dose_response",
-            },
         }
     )
+
+
+def _plan(step: AnalysisStep | None = None) -> AnalysisPlan:
+    child = step or _step()
+    primary = AnalysisStep.model_validate(
+        {
+            "step_id": "primary_model",
+            "planned_analysis_role": "primary",
+            "intent": "Fit the declared adjusted primary model.",
+            "inputs": ["artifact:analysis_cohort", "severity", "death"],
+            "expected_outputs": ["table:adjusted_association_estimates"],
+            "method": "adjusted_association_models",
+            "model_requirements": [
+                {
+                    "requirement_id": "primary",
+                    "outcome": "death",
+                    "outcome_type": "binary",
+                    "method_family": "statsmodels_logit_mle",
+                    "exposure_source": "severity",
+                    "analysis_role": "primary",
+                    "analysis_set": "source_aware",
+                    "covariates": [],
+                    "model_terms": [
+                        {
+                            "name": "severity",
+                            "role": "exposure",
+                            "coding": "ordinal_linear",
+                            "levels": ["0", "1", "2"],
+                            "reference_level": None,
+                            "transform": "declared_level_index",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    return AnalysisPlan(research_question="Test", steps=[primary, child])
 
 
 def _bind(tmp_path: Path, frame: pd.DataFrame) -> tuple[Path, Path]:
@@ -95,20 +131,21 @@ def _frame() -> pd.DataFrame:
 
 def test_typed_owner_executes_and_replays_without_coder(monkeypatch, tmp_path: Path) -> None:
     step = _step()
+    plan = _plan(step)
     out_dir, resolved_path = _bind(tmp_path, _frame())
     monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
     monkeypatch.setenv("EASYICU_RUN_DIR", str(resolved_path.parent))
     monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))
 
-    assert ordered_stratified_executor_owns_step(step)
-    selected = select_standard_executor(
-        step, plan=AnalysisPlan(research_question="Test", steps=[step])
-    )
+    assert ordered_stratified_executor_owns_step(step, plan=plan)
+    selected = select_standard_executor(step, plan=plan)
     assert selected is not None
     assert selected.analysis_kind == "ordered_stratified_analysis"
 
+    spec = ordered_stratified_spec_for_step(step, plan=plan)
+    assert spec is not None
     summary = run_ordered_stratified_from_env(
-        spec_payload=step.ordered_stratified_spec.model_dump(mode="json"),
+        spec_payload=spec.model_dump(mode="json"),
         typed_cohort_input="artifact:analysis_cohort",
         analysis_role="secondary",
     )
@@ -135,13 +172,17 @@ def test_typed_owner_fails_closed_on_undeclared_exposure_level(
     monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))
 
     with pytest.raises(RuntimeError, match="outside the declared level set"):
+        spec = ordered_stratified_spec_for_step(_step(), plan=_plan())
+        assert spec is not None
         run_ordered_stratified_from_env(
-            spec_payload=_step().ordered_stratified_spec.model_dump(mode="json"),
+            spec_payload=spec.model_dump(mode="json"),
             typed_cohort_input="artifact:analysis_cohort",
             analysis_role="secondary",
         )
 
 
 def test_method_label_without_typed_spec_does_not_select_owner() -> None:
-    step = _step().model_copy(update={"ordered_stratified_spec": None})
-    assert not ordered_stratified_executor_owns_step(step)
+    step = _step()
+    assert not ordered_stratified_executor_owns_step(
+        step, plan=AnalysisPlan(research_question="Test", steps=[step])
+    )
