@@ -1567,10 +1567,6 @@ def _build_trajectory_long_from_resolved_source(
                 raise MaterializedMetadataError(
                     f"trajectory concept {concept!r} owner receipts are not binary"
                 )
-            if bool(((observed == 1) & (available != 1)).any()):
-                raise MaterializedMetadataError(
-                    f"trajectory concept {concept!r} is observed but unavailable"
-                )
             if bool(((available == 1) & w[concept].isna()).any()):
                 raise MaterializedMetadataError(
                     f"trajectory concept {concept!r} is available without a value"

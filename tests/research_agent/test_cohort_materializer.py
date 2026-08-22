@@ -306,6 +306,40 @@ def test_trajectory_excludes_owner_unavailable_zero_and_preserves_locf_receipt(
     assert provenance["owner_receipt_concepts"] == ["sofa2_resp"]
 
 
+def test_trajectory_excludes_owner_observed_but_unscoreable_measurement(
+    monkeypatch, tmp_path
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 12.0],
+            "sofa2_resp": [None, 2.0],
+            # A direct respiratory-domain measurement can be insufficient to
+            # issue a score (for example SpO2 >= 98%). Observed and available
+            # are intentionally distinct owner claims.
+            "sofa2_resp_observed": [1, 1],
+            "sofa2_resp_available": [0, 1],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    long_df, provenance = M.build_trajectory_long(
+        data_path=tmp_path,
+        concepts=["sofa2_resp"],
+        window=(0.0, 12.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0]
+    assert long_df["evidence_state"].tolist() == ["direct_observed"]
+    assert provenance["evidence_state_counts"] == {
+        "sofa2_resp": {
+            "unavailable": 1,
+            "direct_observed": 1,
+        }
+    }
+
+
 def _write_native_sofa2_package(tmp_path, *, include_available=True):
     root = tmp_path / "native_sofa2"
     root.mkdir()
