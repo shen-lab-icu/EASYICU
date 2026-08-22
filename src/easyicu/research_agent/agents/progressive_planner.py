@@ -404,6 +404,24 @@ def _action_catalog(
                     "execution_mode": action.execution_mode,
                     "produces": action.produces,
                     "required_inputs": list(action.required_inputs),
+                    "runtime_contract": (
+                        {
+                            "outputs": [
+                                {
+                                    "product_id": product_id,
+                                    "semantic_role": semantic_role,
+                                }
+                                for product_id, semantic_role in action.runtime_contract.outputs
+                            ],
+                            "required_product_inputs": list(
+                                action.runtime_contract.required_product_inputs
+                            ),
+                            "article_roles": list(action.runtime_contract.article_roles),
+                            "standard_executor": action.runtime_contract.standard_executor,
+                        }
+                        if action.runtime_contract is not None
+                        else None
+                    ),
                 }
             )
     return tuple(action_ids), rows
@@ -1281,6 +1299,45 @@ class ProgressivePlannerAgent:
                 )
             )
         if outline_step.module_id == "visualization":
+            action_by_id = {
+                str(row.get("action_id")): row
+                for row in action_rows
+                if row.get("action_id")
+            }
+            direct_contracts = []
+            for prior in prefix_summary:
+                if prior.get("step_id") not in outline_step.depends_on:
+                    continue
+                action_row = action_by_id.get(
+                    str(prior.get("scientific_action_id") or "")
+                )
+                runtime_contract = (
+                    action_row.get("runtime_contract")
+                    if isinstance(action_row, Mapping)
+                    else None
+                )
+                if isinstance(runtime_contract, Mapping) and runtime_contract.get(
+                    "standard_executor"
+                ):
+                    direct_contracts.append(
+                        {
+                            "producer_step_id": prior.get("step_id"),
+                            "runtime_contract": runtime_contract,
+                        }
+                    )
+            executors = {
+                str(item["runtime_contract"].get("standard_executor") or "")
+                for item in direct_contracts
+            }
+            exact_profile = [
+                {
+                    "producer_step_id": item["producer_step_id"],
+                    "product_id": output.get("product_id"),
+                }
+                for item in direct_contracts
+                for output in item["runtime_contract"].get("outputs", [])
+                if isinstance(output, Mapping) and output.get("product_id")
+            ]
             blocks.append(
                 "Rendering-only source contract: set raw_inputs=[] and do not "
                 "bind artifact:analysis_cohort or any raw cohort column. Select "
@@ -1290,6 +1347,22 @@ class ProgressivePlannerAgent:
                 "source-data projection; move other article roles to separate "
                 "rendering steps instead of binding unused context."
             )
+            if (
+                len(executors) == 1
+                and "" not in executors
+                and 1 <= len(exact_profile) <= 4
+            ):
+                blocks.append(
+                    "Host-renderable direct-result profile (binding): set "
+                    "product_inputs to exactly these producer/product pairs in "
+                    "this order so the deterministic composite renderer can own "
+                    "the step:\n"
+                    + json.dumps(
+                        exact_profile,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
         if outline_step.module_id == "adjusted_association":
             reserved_coordinates = tuple(
                 name
@@ -1316,6 +1389,26 @@ class ProgressivePlannerAgent:
                     )
                 )
         if outline_step.module_id == "custom_analysis":
+            current_action = next(
+                (
+                    row
+                    for row in action_rows
+                    if row.get("action_id") == outline_step.scientific_action_id
+                ),
+                None,
+            )
+            if current_action and current_action.get("runtime_contract"):
+                blocks.append(
+                    "Host-owned scientific-action contract (binding): copy its "
+                    "outputs exactly, bind exactly its required_product_inputs "
+                    "from preceding depended-on producers, and do not substitute "
+                    "artifact products or contextual tables:\n"
+                    + json.dumps(
+                        current_action["runtime_contract"],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
             blocks.append(
                 "Custom-analysis output contract: a generic custom result uses "
                 "a runtime-materializable typed product id, "

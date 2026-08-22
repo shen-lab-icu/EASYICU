@@ -94,6 +94,10 @@ from easyicu.research_agent.schema import (
     UserPreferences,
     VariableRole,
 )
+from easyicu.research_agent.reporting.article_contract import (
+    build_article_analysis_contract,
+    roles_covered_by_plan,
+)
 
 
 def _context() -> ResearchContext:
@@ -465,6 +469,231 @@ def _payload() -> dict:
         ],
         "rationale": "Separate descriptive denominators from the adjusted association.",
     }
+
+
+def _prediction_payload() -> dict:
+    def step(**updates):
+        payload = {
+            "step_id": "step",
+            "planned_analysis_role": "auxiliary",
+            "module_id": "custom_analysis",
+            "objective": "Execute one fully declared prediction workflow step.",
+            "depends_on": [],
+            "raw_inputs": [],
+            "product_inputs": [],
+            "outputs": [],
+            "scientific_action_id": None,
+            "custom_method": "prediction_runtime",
+            "table_one_group_by": None,
+            "table_one_mode": None,
+            "table_one_variables": [],
+            "primary_exposure": None,
+            "outcome": None,
+            "outcome_type": None,
+            "model_terms": [],
+            "event_level_index": None,
+            "reference_exposure_level_index": None,
+            "comparison_exposure_level_index": None,
+            "primary_contrast_level_index": None,
+            "denominator_policy": None,
+            "missing_exposure_policy": None,
+            "missing_outcome_policy": None,
+            "confidence_level": None,
+            "sensitivity_spec_ids": [],
+            "literature_bindings": [],
+        }
+        payload.update(updates)
+        return payload
+
+    return {
+        "schema_version": "easyicu.progressive_plan_skeleton/1",
+        "analysis_type": "prediction_model",
+        "cohort": {
+            "name": "prediction_cohort",
+            "selection_mode": "all_input_rows",
+            "inclusion": [],
+            "exclusion": [],
+        },
+        "display_labels": [],
+        "robustness_intents": [],
+        "know_how_decisions": [],
+        "steps": [
+            step(
+                step_id="cohort",
+                module_id="cohort_definition",
+                objective="Bind and account for the prediction analysis cohort.",
+                custom_method=None,
+            ),
+            step(
+                step_id="primary_model",
+                planned_analysis_role="primary",
+                objective="Fit and evaluate the prespecified static prediction model.",
+                depends_on=["cohort"],
+                raw_inputs=["age_years", "sex_code", "outcome_flag"],
+                outputs=[
+                    {
+                        "product_id": "table:prediction_scores",
+                        "semantic_role": "custom",
+                    },
+                    {
+                        "product_id": "table:model_performance",
+                        "semantic_role": "custom",
+                    },
+                ],
+                scientific_action_id="prediction.discrimination_calibration",
+            ),
+            step(
+                step_id="validation",
+                planned_analysis_role="secondary",
+                objective="Summarize the fixed patient-separated validation split.",
+                depends_on=["primary_model"],
+                raw_inputs=["outcome_flag"],
+                product_inputs=[
+                    {
+                        "producer_step_id": "primary_model",
+                        "product_id": "table:prediction_scores",
+                    }
+                ],
+                outputs=[
+                    {
+                        "product_id": "table:validation",
+                        "semantic_role": "custom",
+                    }
+                ],
+                scientific_action_id="prediction.internal_validation",
+            ),
+            step(
+                step_id="calibration",
+                planned_analysis_role="secondary",
+                objective="Quantify calibration on the validation partition.",
+                depends_on=["primary_model"],
+                raw_inputs=["outcome_flag"],
+                product_inputs=[
+                    {
+                        "producer_step_id": "primary_model",
+                        "product_id": "table:prediction_scores",
+                    }
+                ],
+                outputs=[
+                    {
+                        "product_id": "table:calibration",
+                        "semantic_role": "custom",
+                    }
+                ],
+                scientific_action_id="prediction.calibration_metrics",
+            ),
+            step(
+                step_id="clinical_utility",
+                planned_analysis_role="secondary",
+                objective="Quantify net benefit across the fixed threshold grid.",
+                depends_on=["primary_model"],
+                raw_inputs=["outcome_flag"],
+                product_inputs=[
+                    {
+                        "producer_step_id": "primary_model",
+                        "product_id": "table:prediction_scores",
+                    }
+                ],
+                outputs=[
+                    {
+                        "product_id": "table:clinical_utility",
+                        "semantic_role": "custom",
+                    }
+                ],
+                scientific_action_id="prediction.decision_curve",
+            ),
+            step(
+                step_id="figure",
+                module_id="visualization",
+                objective="Render the four registered prediction result tables.",
+                depends_on=["primary_model", "validation", "calibration"],
+                product_inputs=[
+                    {
+                        "producer_step_id": "primary_model",
+                        "product_id": "table:prediction_scores",
+                    },
+                    {
+                        "producer_step_id": "primary_model",
+                        "product_id": "table:model_performance",
+                    },
+                    {
+                        "producer_step_id": "validation",
+                        "product_id": "table:validation",
+                    },
+                    {
+                        "producer_step_id": "calibration",
+                        "product_id": "table:calibration",
+                    },
+                ],
+                outputs=[
+                    {
+                        "product_id": "figure:prediction_results",
+                        "semantic_role": "figure",
+                    }
+                ],
+                custom_method=None,
+            ),
+        ],
+        "rationale": "Separate model fitting, validation, calibration and rendering.",
+    }
+
+
+def test_prediction_action_contract_compiles_exact_products_and_dependencies():
+    skeleton = ProgressivePlanSkeleton.model_validate(_prediction_payload())
+    plan, _receipt = compile_progressive_plan(skeleton=skeleton, context=_context())
+
+    primary = next(step for step in plan.steps if step.step_id == "primary_model")
+    validation = next(step for step in plan.steps if step.step_id == "validation")
+    figure = next(step for step in plan.steps if step.step_id == "figure")
+    assert primary.expected_outputs == [
+        "table:prediction_scores",
+        "table:model_performance",
+    ]
+    assert "artifact:analysis_cohort" in primary.inputs
+    assert validation.inputs == ["outcome_flag", "table:prediction_scores"]
+    assert figure.inputs == [
+        "table:prediction_scores",
+        "table:model_performance",
+        "table:validation",
+        "table:calibration",
+    ]
+    contract = build_article_analysis_contract(
+        _context(), analysis_type="prediction_model"
+    )
+    covered = roles_covered_by_plan(plan, contract)
+    assert {
+        "model_performance",
+        "validation",
+        "calibration",
+        "clinical_utility",
+    } <= covered
+
+
+def test_prediction_action_contract_rejects_artifact_outputs_and_wrong_figure_owner():
+    wrong_output = _prediction_payload()
+    wrong_output["steps"][1]["outputs"][0]["product_id"] = "artifact:prediction_scores"
+    with pytest.raises(
+        ProgressivePlanCompileError,
+        match="progressive_scientific_action_outputs_mismatch",
+    ):
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(wrong_output),
+            context=_context(),
+        )
+
+    wrong_owner = _prediction_payload()
+    wrong_owner["steps"][5]["product_inputs"][0] = {
+        "producer_step_id": "cohort",
+        "product_id": "table:cohort_flow",
+    }
+    with pytest.raises(
+        ProgressivePlanCompileError,
+        match="progressive_product_dependency_mismatch",
+    ):
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(wrong_owner),
+            context=_context(),
+        )
 
 
 def _skeleton() -> ProgressivePlanSkeleton:
