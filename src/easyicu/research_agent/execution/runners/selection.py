@@ -133,6 +133,11 @@ from .landmark_spline_executor import (
     landmark_spline_executor_code,
     landmark_spline_executor_owns_step,
 )
+from .landmark_spline_robustness_executor import (
+    LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND,
+    landmark_spline_robustness_executor_code,
+    landmark_spline_robustness_executor_owns_step,
+)
 from .source_feasibility_executor import (
     SOURCE_FEASIBILITY_ANALYSIS_KIND,
     source_feasibility_executor_code,
@@ -364,6 +369,32 @@ def select_standard_executor(
                     )
                 )
             _missed(LANDMARK_SPLINE_ANALYSIS_KIND)
+            if landmark_spline_robustness_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind=LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND,
+                        selection_reason=(
+                            "signed_landmark_spline_robustness_projection_preflight"
+                        ),
+                        progress_message=(
+                            "Using signed landmark spline robustness projection"
+                        ),
+                        code=landmark_spline_robustness_executor_code(
+                            step,
+                            authority=sealed_current,
+                            runtime_projection_sha256=projection_digest,
+                        ),
+                        consumed_input_keys=(
+                            sealed_current.downstream_parent_product,
+                            sealed_current.linear_sensitivity_product,
+                        ),
+                    )
+                )
+            _missed(LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND)
         elif isinstance(sealed_current, SourceFeasibilityRuntimeAuthority):
             if source_feasibility_executor_owns_step(
                 step,
