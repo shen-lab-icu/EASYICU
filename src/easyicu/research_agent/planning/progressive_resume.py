@@ -478,6 +478,18 @@ def restore_progressive_resume_prefix(
     state = ProgressivePrefixState()
     stored_available_product_refs: tuple[tuple[str, str], ...] = ()
     runtime_contract_migration_started = False
+    migrated_receipt_ids = {
+        str(value)
+        for value in checkpoint.prompt_metrics.get(
+            "runtime_contract_migrated_step_ids", []
+        )
+        if str(value).strip()
+    }
+    migrated_positions = {
+        index
+        for index, item in enumerate(outline.steps)
+        if item.step_id in migrated_receipt_ids
+    }
     for step_index, materialization in enumerate(materializations):
         outline_step = outline.steps[step_index]
         outline_step_sha256 = canonical_sha256(
@@ -494,10 +506,14 @@ def restore_progressive_resume_prefix(
             outline_step_sha256,
             stored_available_product_refs,
         )
-        if (
-            step_index >= len(stored_schema_authorities)
-            or stored_schema_authorities[step_index] != current_schema_authority
-        ):
+        schema_authority_matches = bool(
+            step_index < len(stored_schema_authorities)
+            and stored_schema_authorities[step_index] == current_schema_authority
+        )
+        migration_receipt_covers_drift = bool(
+            migrated_positions and step_index > min(migrated_positions)
+        )
+        if not schema_authority_matches and not migration_receipt_covers_drift:
             raise ProgressivePlanCompileError(
                 "progressive_resume_step_schema_authority_mismatch",
                 "development checkpoint step differs from the current strict "
