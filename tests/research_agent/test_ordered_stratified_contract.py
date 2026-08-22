@@ -479,11 +479,9 @@ def test_numeric_replay_is_wired_before_the_existing_in_run_repair_gate() -> Non
     assert repair_gate is not None and typed_ticket is not None
 
 
-def test_controlled_method_has_no_whole_step_deterministic_runner() -> None:
-    package_root = Path(__file__).resolve().parents[2] / "src/easyicu/research_agent"
-    runner_sources = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in package_root.glob("deterministic_*.py")
+def test_legacy_controlled_method_without_typed_spec_remains_agent_authored() -> None:
+    from easyicu.research_agent.execution.runners.ordered_stratified_executor import (
+        ordered_stratified_executor_owns_step,
     )
 
-    assert "ordinal_stratified_descriptive_analysis" not in runner_sources
+    assert not ordered_stratified_executor_owns_step(_step())

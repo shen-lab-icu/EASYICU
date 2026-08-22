@@ -374,6 +374,11 @@ def ordered_stratified_script_findings(
 
     if not is_ordered_stratified_analysis_step(step):
         return []
+    if step.ordered_stratified_spec is not None:
+        # The selected host adapter calls the reviewed primitives inside its
+        # sealed implementation.  This source-code audit is only for the legacy
+        # agent-authored implementation of the same controlled result contract.
+        return []
     try:
         tree = ast.parse(script_text)
     except SyntaxError:
