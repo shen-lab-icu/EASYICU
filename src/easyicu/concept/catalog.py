@@ -326,6 +326,9 @@ CONCEPT_DICTIONARY = {
     'mort_28d': ('28-day Mortality', '28天死亡率', 'boolean'),
     'mort_90d': ('90-day Mortality', '90天死亡率', 'boolean'),
     'mort_365d': ('1-year Mortality', '1年死亡率', 'boolean'),
+    'followup_days_28d': ('28-day Event/Censoring Time', '28天事件或删失时间', 'days'),
+    'followup_days_90d': ('90-day Event/Censoring Time', '90天事件或删失时间', 'days'),
+    'followup_days_365d': ('1-year Event/Censoring Time', '1年事件或删失时间', 'days'),
     'icu_free_days_28': ('ICU-free Days (to day 28)', 'ICU-free 天数 (至第28天)', 'days'),
     'vent_free_days_28': ('Ventilator-free Days (to day 28)', '无机械通气天数 (至第28天)', 'days'),
     'icu_readmission': ('ICU Readmission (same hospitalisation)', 'ICU 再入 (同次住院)', 'boolean'),
@@ -550,7 +553,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
-    'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
+    'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'followup_days_28d', 'followup_days_90d', 'followup_days_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
 }
 
 # Concepts present in the extraction dictionary but intentionally hidden from

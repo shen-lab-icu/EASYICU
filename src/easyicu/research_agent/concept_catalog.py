@@ -156,6 +156,18 @@ DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
         ["365-day mortality", "one-year mortality", "1-year mortality"],
         True,
     ),
+    "followup_days_28d": (
+        ["28-day event or censoring time", "28-day follow-up time"],
+        False,
+    ),
+    "followup_days_90d": (
+        ["90-day event or censoring time", "90-day follow-up time"],
+        False,
+    ),
+    "followup_days_365d": (
+        ["one-year event or censoring time", "365-day follow-up time"],
+        False,
+    ),
     "icu_free_days_28": (
         ["ICU-free days through day 28", "28-day ICU-free days", "ICFD-28"],
         False,

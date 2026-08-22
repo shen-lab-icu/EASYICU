@@ -9,6 +9,9 @@ Trial-style endpoints that the concept layer did not previously expose:
   (``admissions.dateofdeath``). eICU and HiRID carry only in-hospital
   mortality (use the existing ``death`` concept) -> these horizons are
   returned empty for them, by design, not as an error.
+* ``followup_days_28d`` / ``followup_days_90d`` /
+  ``followup_days_365d`` — the event-or-administrative-censoring time paired
+  with each fixed-horizon endpoint. Unknown follow-up remains missing.
 ``icu_free_days_28``, ``vent_free_days_28``, and ``icu_readmission`` are
 intentionally unavailable until their trajectory/follow-up evidence contracts
 can be satisfied. A current-extract stay LOS, hospital mortality flag, or
@@ -92,8 +95,22 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
         df["dod"] - df["intime"].dt.normalize()
     ).dt.total_seconds() / 86400.0
     df["los_days"] = pd.to_numeric(df["los"], errors="coerce")
+    # MIMIC-IV v3.1 documents a one-year post-discharge censoring window and
+    # states that a null patients.dod means the patient survived at least one
+    # year after the last hospital discharge.  ICU admission precedes that
+    # discharge, so 365 days is a conservative lower bound on follow-up from
+    # ICU admission for null-DOD rows.  Do not extrapolate beyond that bound.
+    # https://physionet.org/content/mimiciv/3.1/
+    df["followup_days"] = np.where(df["dod"].isna(), 365.0, np.nan)
     return df.rename(columns={stay_col: "_stay", "intime": "_intime"})[
-        ["_stay", "hadm_id", "_intime", "days_to_death", "los_days"]
+        [
+            "_stay",
+            "hadm_id",
+            "_intime",
+            "days_to_death",
+            "los_days",
+            "followup_days",
+        ]
     ]
 
 
@@ -165,8 +182,9 @@ def load_outcomes(
     """Load per-ICU-stay composite outcome endpoints for a database.
 
     Returns a DataFrame keyed by the database ICU stay id with
-    ``mort_28d``/``mort_90d``/``mort_365d`` (nullable boolean). DBs
-    without death follow-up return an empty frame.
+    ``mort_28d``/``mort_90d``/``mort_365d`` (nullable boolean) and the paired
+    ``followup_days_<horizon>d`` event/censoring times. DBs without death
+    follow-up return an empty frame.
     """
     db = normalize_database_key(database)
     database = db
@@ -206,6 +224,11 @@ def load_outcomes(
         endpoint[died_by] = True
         endpoint[known_alive] = False
         out[name] = endpoint
+        followup_name = f"followup_days_{horizon}d"
+        followup_time = np.full(len(base), np.nan, dtype="float64")
+        followup_time[died_by] = dtd[died_by]
+        followup_time[known_alive] = float(horizon)
+        out[followup_name] = followup_time
 
     if patient_values is not None:
         stay_col = _STAY_OUT_COL[db]
