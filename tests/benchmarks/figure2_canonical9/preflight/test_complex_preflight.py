@@ -71,6 +71,11 @@ def _sealed_authority_block(case: PreflightCase) -> tuple[str, str] | None:
             "no reviewed case scientific protocol exists for this task",
         )
     protocol = load_default_case_protocol(case.task_id)
+    if str(getattr(protocol, "review_status", "")).startswith("ai_development_"):
+        return (
+            "AI_DEVELOPMENT_REVIEW_ONLY",
+            "the development protocol still requires human scientific attestation",
+        )
     capture = getattr(protocol, "current_source_capture", None)
     if capture is not None and capture.causal_contrast_authorized is False:
         return (
@@ -383,11 +388,9 @@ def test_authority_blocked_case_is_refused_by_name_and_produces_nothing(
     apart from "something regressed". This asserts the refusal itself, so a
     silent change in either direction breaks CI:
 
-    * H1 has no reviewed case scientific protocol at all
-      (``SCIENTIFIC_CASE_PROTOCOL_UNKNOWN_TASK``). ``effect_scale``,
-      ``uncertainty_method`` and ``population`` are required fields with no
-      source, and the sealed survival executor pins only the estimator and the
-      PH diagnostic.
+    * H1 now has an AI-reviewed development protocol and deterministic suite,
+      but the formal zero-provider preflight remains blocked until human
+      scientific attestation is bound.
     * H2 has a protocol, and it records ``causal_contrast_authorized=False`` /
       ``H2_VERIFIED_NON_USE_UNAVAILABLE`` because verified non-use is
       unavailable, listing ``construct_binary_control_arm`` as forbidden.
@@ -411,7 +414,10 @@ def test_authority_blocked_case_is_refused_by_name_and_produces_nothing(
     assert run.case.analysis_type in run.raised
 
     # The blocker is the sealed authority's own code, not a test-local string.
-    if blocker_code != "SCIENTIFIC_CASE_PROTOCOL_UNKNOWN_TASK":
+    if blocker_code == "AI_DEVELOPMENT_REVIEW_ONLY":
+        protocol = load_default_case_protocol(run.case.task_id)
+        assert protocol.review_status.startswith("ai_development_")
+    elif blocker_code != "SCIENTIFIC_CASE_PROTOCOL_UNKNOWN_TASK":
         protocol = load_default_case_protocol(run.case.task_id)
         assert protocol.current_source_capture.reason_code == blocker_code
         assert protocol.current_source_capture.causal_contrast_authorized is False

@@ -1,4 +1,4 @@
-"""Typed, digestable E2/H2/H3 scientific protocols for Canonical9.
+"""Typed, digestable E2/H1/H2/H3 scientific protocols for Canonical9.
 
 This benchmark-local module owns the case-specific clinical and methods
 coordinates that must not leak into shared Planner prompts or generic KnowHow
@@ -108,6 +108,64 @@ class E2ScientificProtocol(_StrictFrozenModel):
             raise ValueError("E2 must retain the measured/unmeasured denominator")
         if "ssc_adult_2026" not in {item.citation_id for item in self.citations}:
             raise ValueError("E2 must cite the current 2026 adult SSC guideline")
+        return self
+
+
+class H1ScientificProtocol(_StrictFrozenModel):
+    schema_version: Literal["easyicu.figure2_h1_scientific_protocol/1"]
+    task_id: Literal["h1_ventilation_survival"]
+    protocol_version: str
+    review_status: Literal[
+        "ai_development_reviewed_human_attestation_pending"
+    ]
+    literature_search_cutoff: Literal["2026-08-22"]
+    source_database: Literal["mimic_iv_v3_1"]
+    time_zero: Literal["icu_admission"]
+    exposure_window_hours: tuple[Literal[0], Literal[24]]
+    landmark_hours: Literal[24]
+    primary_population_rule: Literal[
+        "valid_28d_endpoint_alive_at_24h_with_supported_ventilation_timing"
+    ]
+    exposure: Literal[
+        "first_observed_invasive_mechanical_ventilation_after_icu_admission_by_24h"
+    ]
+    comparator: Literal["no_observed_invasive_mechanical_ventilation_by_24h"]
+    prevalent_exposure_rule: Literal[
+        "exclude_first_observed_ventilation_at_or_before_icu_hour_0"
+    ]
+    endpoint: Literal["death_by_day_28_from_icu_admission"]
+    followup: Literal[
+        "event_or_administrative_censoring_time_through_day_28"
+    ]
+    adjustment_set: tuple[str, ...]
+    estimator: Literal["cox_ph_lifelines_efron"]
+    effect_measure: Literal["hazard_ratio"]
+    uncertainty_method: Literal["wald_95_ci"]
+    proportional_hazards_diagnostic: Literal["schoenfeld_residual_test"]
+    proportional_hazards_alpha: Literal[0.05]
+    proportional_hazards_policy: Literal["block_paper_authorization"]
+    interpretation: Literal["descriptive_prognostic_association_not_causal"]
+    reportability_rule: str
+    forbidden_interpretations: tuple[str, ...]
+    citations: tuple[ProtocolCitation, ...]
+
+    @model_validator(mode="after")
+    def _timing_and_source_contract_are_closed(self) -> "H1ScientificProtocol":
+        expected_adjustment = (
+            "age",
+            "sex",
+            "charlson_first",
+            "sofa2_max",
+        )
+        if self.adjustment_set != expected_adjustment:
+            raise ValueError("H1 adjustment_set drifted from the reviewed protocol")
+        citation_ids = {item.citation_id for item in self.citations}
+        if not {"mimic_iv_v31", "landmark_analysis", "immortal_time_bias"}.issubset(
+            citation_ids
+        ):
+            raise ValueError("H1 lacks source, landmark, or immortal-time evidence")
+        if not self.forbidden_interpretations:
+            raise ValueError("H1 must declare its causal and exposure boundaries")
         return self
 
 
@@ -291,7 +349,12 @@ class H3ScientificProtocol(_StrictFrozenModel):
 
 
 ScientificCaseProtocol = Annotated[
-    Union[E2ScientificProtocol, H2ScientificProtocol, H3ScientificProtocol],
+    Union[
+        E2ScientificProtocol,
+        H1ScientificProtocol,
+        H2ScientificProtocol,
+        H3ScientificProtocol,
+    ],
     Field(discriminator="task_id"),
 ]
 
@@ -310,6 +373,7 @@ class RuntimeScientificProjection(_StrictFrozenModel):
     task_id: Literal[
         "e1_sepsis3_prevalence_mortality",
         "e2_lactate_mortality",
+        "h1_ventilation_survival",
         "h2_vasopressor_causal",
         "h3_trajectory_clustering",
     ]
@@ -342,6 +406,9 @@ class RuntimeScientificProjection(_StrictFrozenModel):
                 "easyicu.association_model_grid_runtime_authority/1"
             ),
             "e2_lactate_mortality": "easyicu.landmark_spline_runtime_authority/1",
+            "h1_ventilation_survival": (
+                "easyicu.landmark_survival_runtime_authority/1"
+            ),
             "h2_vasopressor_causal": "easyicu.source_feasibility_runtime_authority/1",
             "h3_trajectory_clustering": (
                 "easyicu.trajectory_scientific_runtime_authority/1"
@@ -356,11 +423,13 @@ class RuntimeScientificProjection(_StrictFrozenModel):
 
 _PROTOCOL_FILENAMES = {
     "e2_lactate_mortality": "e2_lactate_mortality_20260809.json",
+    "h1_ventilation_survival": "h1_ventilation_survival_20260822.json",
     "h2_vasopressor_causal": "h2_vasopressor_causal_20260809.json",
     "h3_trajectory_clustering": "h3_trajectory_clustering_20260809.json",
 }
 _PROTOCOL_MODELS = {
     "e2_lactate_mortality": E2ScientificProtocol,
+    "h1_ventilation_survival": H1ScientificProtocol,
     "h2_vasopressor_causal": H2ScientificProtocol,
     "h3_trajectory_clustering": H3ScientificProtocol,
 }
@@ -382,7 +451,7 @@ def load_case_scientific_protocol(
     path: Path,
     *,
     expected_task_id: str,
-) -> E2ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
+) -> E2ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
     """Strict-load a case protocol and assign failures to this owner module."""
 
     try:
@@ -596,8 +665,71 @@ def _h2_deterministic_execution_contract(
     ).model_dump(mode="json")
 
 
+def _h1_deterministic_execution_contract(
+    protocol: H1ScientificProtocol,
+) -> dict[str, Any]:
+    outputs = [
+        "table:h1_landmark_table_one",
+        "table:h1_landmark_risk_set_flow",
+        "table:h1_landmark_km_curve",
+        "table:h1_landmark_cox_summary",
+        "table:h1_landmark_ph_diagnostics",
+        "log:h1_landmark_survival_receipt",
+        "figure:h1_landmark_survival_suite",
+    ]
+    return build_current_case_scientific_runtime_authority(
+        {
+            "schema_version": "easyicu.landmark_survival_runtime_authority/1",
+            "authority_kind": "landmark_survival_suite",
+            "protocol_content_sha256": case_protocol_content_sha256(protocol),
+            "plan_method": "signed_landmark_survival_suite",
+            "plan_intent": (
+                "Execute the signed 24-hour landmark ventilation-survival suite "
+                "with explicit prevalent-exposure exclusion and PH auditing."
+            ),
+            "plan_outputs": outputs,
+            "exposure_status_column": "mech_vent_max",
+            "exposure_onset_column": "mech_vent_first_time",
+            "event_column": "mort_28d",
+            "followup_time_column": "followup_days_28d",
+            "landmark_hours": float(protocol.landmark_hours),
+            "endpoint_horizon_days": 28.0,
+            "exposure_window_hours": [
+                float(value) for value in protocol.exposure_window_hours
+            ],
+            "prevalent_exposure_cutoff_hours": 0.0,
+            "prevalent_exposure_action": "exclude",
+            "exposed_group_label": "Incident ventilation by 24 h",
+            "comparator_group_label": "No incident ventilation by 24 h",
+            "analysis_unit_label": "ICU stays",
+            "derived_exposure_column": "incident_ventilation_by_24h",
+            "derived_event_column": "death_after_24h_by_day28",
+            "derived_time_column": "followup_days_from_24h_landmark",
+            "adjustment_columns": list(protocol.adjustment_set),
+            "categorical_adjustment_columns": ["sex"],
+            "table_one_columns": list(protocol.adjustment_set),
+            "estimator": protocol.estimator,
+            "effect_measure": protocol.effect_measure,
+            "uncertainty_method": protocol.uncertainty_method,
+            "proportional_hazards_diagnostic": (
+                protocol.proportional_hazards_diagnostic
+            ),
+            "proportional_hazards_alpha": protocol.proportional_hazards_alpha,
+            "proportional_hazards_policy": protocol.proportional_hazards_policy,
+            "interpretation": protocol.interpretation,
+            "table_one_product": outputs[0],
+            "risk_set_product": outputs[1],
+            "km_product": outputs[2],
+            "cox_product": outputs[3],
+            "ph_product": outputs[4],
+            "receipt_product": outputs[5],
+            "figure_product": outputs[6],
+        }
+    ).model_dump(mode="json")
+
+
 def _projection_agent_content(
-    protocol: E2ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+    protocol: E2ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
     execution_contract: Mapping[str, Any],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Render only typed protocol fields; never maintain a second science source."""
@@ -620,6 +752,24 @@ def _projection_agent_content(
                 "report the variable-opportunity measured-subset analysis only as a secondary descriptive sensitivity.",
                 "The estimand is descriptive/prognostic and must never be described as causal.",
                 "The only primary owner must use method="
+                f"{execution_contract['plan_method']}, intent="
+                f"{execution_contract['plan_intent']!r}, and icu_rule_refs must "
+                f"contain {rule_ref}.",
+            ),
+        )
+    if isinstance(protocol, H1ScientificProtocol):
+        rule_ref = (
+            "scientific_runtime_contract:"
+            + str(execution_contract["execution_contract_sha256"])
+        )
+        return (
+            tuple(execution_contract["plan_outputs"]),
+            (
+                "Use a 24-hour landmark and start the survival clock only after exposure classification.",
+                "Exclude first observed ventilation at or before ICU hour 0 as prevalent exposure; do not reclassify it as incident.",
+                "Use mort_28d with followup_days_28d as one paired event/censoring endpoint; never turn unknown follow-up into a non-event.",
+                "Interpret the hazard ratio as a descriptive prognostic association, never a causal ventilation effect.",
+                "The sole plan step must use method="
                 f"{execution_contract['plan_method']}, intent="
                 f"{execution_contract['plan_intent']!r}, and icu_rule_refs must "
                 f"contain {rule_ref}.",
@@ -684,7 +834,7 @@ def _projection_agent_content(
 
 
 def build_runtime_scientific_projection(
-    protocol: E2ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+    protocol: E2ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
 ) -> RuntimeScientificProjection:
     """Compile the signed protocol into its sole deterministic runtime projection."""
 
@@ -692,6 +842,8 @@ def build_runtime_scientific_projection(
     canonical_protocol_json = _canonical_json_bytes(protocol_payload).decode("utf-8")
     if isinstance(protocol, E2ScientificProtocol):
         execution_contract = _e2_deterministic_execution_contract(protocol)
+    elif isinstance(protocol, H1ScientificProtocol):
+        execution_contract = _h1_deterministic_execution_contract(protocol)
     elif isinstance(protocol, H2ScientificProtocol):
         execution_contract = _h2_deterministic_execution_contract(protocol)
     else:
@@ -737,7 +889,7 @@ def load_runtime_scientific_projection(
 
 def load_default_case_protocol(
     task_id: str,
-) -> E2ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
+) -> E2ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
     return load_case_scientific_protocol(
         default_case_protocol_path(task_id),
         expected_task_id=task_id,
@@ -747,6 +899,7 @@ def load_default_case_protocol(
 __all__ = [
     "RuntimeScientificProjection",
     "E2ScientificProtocol",
+    "H1ScientificProtocol",
     "H2ScientificProtocol",
     "H3ScientificProtocol",
     "ScientificCaseProtocolError",

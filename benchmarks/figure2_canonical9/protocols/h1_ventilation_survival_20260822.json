@@ -1,0 +1,61 @@
+{
+  "schema_version": "easyicu.figure2_h1_scientific_protocol/1",
+  "task_id": "h1_ventilation_survival",
+  "protocol_version": "h1_ventilation_survival/20260822-v1",
+  "review_status": "ai_development_reviewed_human_attestation_pending",
+  "literature_search_cutoff": "2026-08-22",
+  "source_database": "mimic_iv_v3_1",
+  "time_zero": "icu_admission",
+  "exposure_window_hours": [0, 24],
+  "landmark_hours": 24,
+  "primary_population_rule": "valid_28d_endpoint_alive_at_24h_with_supported_ventilation_timing",
+  "exposure": "first_observed_invasive_mechanical_ventilation_after_icu_admission_by_24h",
+  "comparator": "no_observed_invasive_mechanical_ventilation_by_24h",
+  "prevalent_exposure_rule": "exclude_first_observed_ventilation_at_or_before_icu_hour_0",
+  "endpoint": "death_by_day_28_from_icu_admission",
+  "followup": "event_or_administrative_censoring_time_through_day_28",
+  "adjustment_set": [
+    "age",
+    "sex",
+    "charlson_first",
+    "sofa2_max"
+  ],
+  "estimator": "cox_ph_lifelines_efron",
+  "effect_measure": "hazard_ratio",
+  "uncertainty_method": "wald_95_ci",
+  "proportional_hazards_diagnostic": "schoenfeld_residual_test",
+  "proportional_hazards_alpha": 0.05,
+  "proportional_hazards_policy": "block_paper_authorization",
+  "interpretation": "descriptive_prognostic_association_not_causal",
+  "reportability_rule": "Development execution may report the landmark population, Kaplan-Meier curves, adjusted hazard ratio, confidence interval, and PH audit only as analysis_only while human scientific attestation is pending. A PH violation blocks paper authorization, and all text must preserve the observational, source-specific exposure boundary.",
+  "forbidden_interpretations": [
+    "Do not interpret the hazard ratio as the causal effect of mechanical ventilation.",
+    "Do not call ventilation first observed at ICU hour 0 an incident exposure.",
+    "Do not treat an absent death date as unknown follow-up in MIMIC-IV v3.1 within the documented one-year censoring window.",
+    "Do not generalize the first-observed procedure timestamp to pre-ICU ventilation history.",
+    "Do not describe the 0-24-hour SOFA-2 adjustment as purely pre-exposure baseline confounding control."
+  ],
+  "citations": [
+    {
+      "citation_id": "mimic_iv_v31",
+      "title": "MIMIC-IV version 3.1",
+      "year": 2024,
+      "url": "https://physionet.org/content/mimiciv/3.1/",
+      "doi": "10.13026/kpb9-mt58"
+    },
+    {
+      "citation_id": "landmark_analysis",
+      "title": "Landmark analysis at the 25-year landmark point",
+      "year": 2011,
+      "url": "https://doi.org/10.1002/sim.4177",
+      "doi": "10.1002/sim.4177"
+    },
+    {
+      "citation_id": "immortal_time_bias",
+      "title": "Immortal time bias in pharmacoepidemiology",
+      "year": 2008,
+      "url": "https://doi.org/10.1093/aje/kwm324",
+      "doi": "10.1093/aje/kwm324"
+    }
+  ]
+}

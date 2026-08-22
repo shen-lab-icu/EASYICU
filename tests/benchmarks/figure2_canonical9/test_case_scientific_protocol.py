@@ -15,8 +15,9 @@ from benchmarks.figure2_canonical9.case_scientific_protocol import (
 )
 
 
-def test_e2_h2_h3_protocols_are_strict_and_content_digestable() -> None:
+def test_e2_h1_h2_h3_protocols_are_strict_and_content_digestable() -> None:
     e2 = load_default_case_protocol("e2_lactate_mortality")
+    h1 = load_default_case_protocol("h1_ventilation_survival")
     h2 = load_default_case_protocol("h2_vasopressor_causal")
     h3 = load_default_case_protocol("h3_trajectory_clustering")
 
@@ -24,6 +25,9 @@ def test_e2_h2_h3_protocols_are_strict_and_content_digestable() -> None:
     assert e2.primary_model.exposure_form == "restricted_cubic_spline"
     assert e2.primary_model.knot_quantiles == (0.10, 0.50, 0.90)
     assert "ssc_adult_2026" in {item.citation_id for item in e2.citations}
+    assert h1.landmark_hours == 24
+    assert h1.proportional_hazards_policy == "block_paper_authorization"
+    assert h1.review_status == "ai_development_reviewed_human_attestation_pending"
     assert h2.current_source_capture.reason_code == "H2_VERIFIED_NON_USE_UNAVAILABLE"
     assert h2.current_source_capture.verified_non_use_available is False
     assert h2.current_source_capture.binary_control_arm_authorized is False
@@ -51,7 +55,7 @@ def test_e2_h2_h3_protocols_are_strict_and_content_digestable() -> None:
         h3_execution["upper_boundary_action"]
         == "fail_closed_if_selected_at_upper_boundary"
     )
-    for protocol in (e2, h2, h3):
+    for protocol in (e2, h1, h2, h3):
         assert len(case_protocol_content_sha256(protocol)) == 64
         projection = build_runtime_scientific_projection(protocol)
         assert projection.protocol_content_sha256 == case_protocol_content_sha256(
@@ -227,25 +231,14 @@ def test_h2_has_no_authority_for_a_causal_primary_result_contract() -> None:
     assert h2.future_unblock_contract.new_clinical_and_methods_review_required is True
 
 
-def test_h1_has_no_sealed_scientific_protocol_to_compile_from() -> None:
-    """H1's survival coordinates have no authority, so it must stay fail-closed.
+def test_h1_development_protocol_is_explicitly_not_human_attested() -> None:
+    h1 = load_default_case_protocol("h1_ventilation_survival")
+    projection = build_runtime_scientific_projection(h1)
 
-    ``FamilyPrimaryResultRequirement`` requires ``effect_scale``,
-    ``uncertainty_method`` and ``population`` -- none of which is pinned by the
-    sealed survival executor (it fixes only the estimator and the PH
-    diagnostic) or derivable from the typed endpoint contract. The sealed
-    case protocols cover e2/h2/h3 only, so for H1 there is no reviewed source
-    for them at all.
-
-    This test exists so that "H1's preflight is red" cannot quietly be fixed by
-    inventing those three strings in a fixture. Making H1 pass requires a
-    reviewed H1 case scientific protocol, and this assertion is what will fail
-    when one is added -- at which point the compilation can be written against
-    it rather than against a guess.
-    """
-
-    with pytest.raises(
-        ScientificCaseProtocolError,
-        match="SCIENTIFIC_CASE_PROTOCOL_UNKNOWN_TASK: h1_ventilation_survival",
-    ):
-        default_case_protocol_path("h1_ventilation_survival")
+    assert h1.review_status == "ai_development_reviewed_human_attestation_pending"
+    assert projection.deterministic_execution_contract is not None
+    assert (
+        projection.deterministic_execution_contract["schema_version"]
+        == "easyicu.landmark_survival_runtime_authority/1"
+    )
+    assert "human_attested" not in projection.model_dump_json()

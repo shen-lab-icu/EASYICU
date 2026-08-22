@@ -1,12 +1,13 @@
 """Digest-bound current-run scientific authority for caller-reviewed cases.
 
-The shared engine does not know E1, E2 or H2.  It knows three execution shapes:
+The shared engine does not know E1, E2, H1 or H2.  It knows execution shapes:
 one composed grid of already-supported adjusted-association fits, one frozen
-landmark spline association, and one source-feasibility result that must fail
-closed without estimating an effect.  A benchmark-local compiler chooses the
-columns and scientific constants, seals them, and passes the immutable value
-object here.  Plan validation and deterministic executors then consume the
-same object, so signed rules cannot stop at prompt prose.
+landmark spline association, one fixed-landmark survival suite, and one
+source-feasibility result that must fail closed without estimating an effect.
+A benchmark-local compiler chooses the columns and scientific constants, seals
+them, and passes the immutable value object here. Plan validation and
+deterministic executors then consume the same object, so signed rules cannot
+stop at prompt prose.
 """
 
 from __future__ import annotations
@@ -608,6 +609,216 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         self.governed_step(plan)
 
 
+class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
+    """Closed fixed-landmark survival suite over one typed cohort.
+
+    The authority chooses no case science. A caller-reviewed protocol supplies
+    the time origin, exposure timing rule, endpoint columns, adjustment set and
+    output products. The host then performs one deterministic risk-set build,
+    Table 1, Kaplan-Meier summary, adjusted Cox fit, PH audit and composite
+    figure without routing any of those mechanical operations through a Coder.
+    """
+
+    schema_version: Literal["easyicu.landmark_survival_runtime_authority/1"]
+    authority_kind: Literal["landmark_survival_suite"]
+    plan_method: Literal["signed_landmark_survival_suite"]
+    plan_intent: str = Field(min_length=1)
+    plan_outputs: tuple[str, ...]
+    exposure_status_column: str = Field(min_length=1)
+    exposure_onset_column: str = Field(min_length=1)
+    event_column: str = Field(min_length=1)
+    followup_time_column: str = Field(min_length=1)
+    landmark_hours: float = Field(gt=0)
+    endpoint_horizon_days: float = Field(gt=0)
+    exposure_window_hours: tuple[float, float]
+    prevalent_exposure_cutoff_hours: float
+    prevalent_exposure_action: Literal["exclude"]
+    exposed_group_label: str = Field(min_length=1)
+    comparator_group_label: str = Field(min_length=1)
+    analysis_unit_label: str = Field(min_length=1)
+    derived_exposure_column: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    derived_event_column: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    derived_time_column: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    adjustment_columns: tuple[str, ...]
+    categorical_adjustment_columns: tuple[str, ...]
+    table_one_columns: tuple[str, ...]
+    estimator: Literal["cox_ph_lifelines_efron"]
+    effect_measure: Literal["hazard_ratio"]
+    uncertainty_method: Literal["wald_95_ci"]
+    proportional_hazards_diagnostic: Literal["schoenfeld_residual_test"]
+    proportional_hazards_alpha: float = Field(gt=0, lt=1)
+    proportional_hazards_policy: Literal[
+        "report_only", "block_paper_authorization"
+    ]
+    interpretation: Literal["descriptive_prognostic_association_not_causal"]
+    table_one_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
+    risk_set_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
+    km_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
+    cox_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
+    ph_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
+    receipt_product: str = Field(pattern=r"^log:[a-z][a-z0-9_]{0,79}$")
+    figure_product: str = Field(pattern=r"^figure:[a-z][a-z0-9_]{0,79}$")
+
+    @model_validator(mode="after")
+    def _closed_contract(self) -> "LandmarkSurvivalRuntimeAuthority":
+        window_start, window_end = self.exposure_window_hours
+        if not (
+            window_start
+            <= self.prevalent_exposure_cutoff_hours
+            < window_end
+        ):
+            raise ValueError(
+                "landmark survival prevalent cutoff must fall inside the exposure window"
+            )
+        if window_end != self.landmark_hours or window_start >= window_end:
+            raise ValueError(
+                "landmark survival exposure window must end at the landmark"
+            )
+        if self.landmark_hours / 24.0 >= self.endpoint_horizon_days:
+            raise ValueError(
+                "landmark survival landmark must precede the endpoint horizon"
+            )
+        source_columns = (
+            self.exposure_status_column,
+            self.exposure_onset_column,
+            self.event_column,
+            self.followup_time_column,
+            *self.adjustment_columns,
+        )
+        if len(source_columns) != len(set(source_columns)):
+            raise ValueError("landmark survival source columns must be unique")
+        if len(self.adjustment_columns) != len(set(self.adjustment_columns)):
+            raise ValueError("landmark survival adjustment columns must be unique")
+        if not set(self.categorical_adjustment_columns).issubset(
+            self.adjustment_columns
+        ):
+            raise ValueError(
+                "landmark survival categorical adjustments must be adjusted columns"
+            )
+        if not set(self.table_one_columns).issubset(self.adjustment_columns):
+            raise ValueError(
+                "landmark survival Table 1 columns must come from the adjustment set"
+            )
+        derived = {
+            self.derived_exposure_column,
+            self.derived_event_column,
+            self.derived_time_column,
+        }
+        if len(derived) != 3 or derived & set(source_columns):
+            raise ValueError(
+                "landmark survival derived columns must be distinct from source columns"
+            )
+        products = (
+            self.table_one_product,
+            self.risk_set_product,
+            self.km_product,
+            self.cox_product,
+            self.ph_product,
+            self.receipt_product,
+            self.figure_product,
+        )
+        if len(products) != len(set(products)):
+            raise ValueError("landmark survival output products must be unique")
+        if self.plan_outputs != products:
+            raise ValueError(
+                "landmark survival plan outputs must equal the seven owned products"
+            )
+        self._verify_digest()
+        return self
+
+    @property
+    def required_columns(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (
+                    self.exposure_status_column,
+                    self.exposure_onset_column,
+                    self.event_column,
+                    self.followup_time_column,
+                    *self.adjustment_columns,
+                )
+            )
+        )
+
+    def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
+        """Collapse the signed survival suite into its one deterministic owner."""
+
+        primary = [
+            step for step in plan.steps if step.planned_analysis_role == "primary"
+        ]
+        if len(primary) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark survival authority requires exactly one primary step"
+            )
+        candidate = primary[0]
+        cohort_input = sole_typed_cohort_input(candidate)
+        if not cohort_input:
+            cohort_inputs = {
+                value
+                for step in plan.steps
+                for value in step.inputs
+                if value in {"artifact:analysis_cohort", "table:analysis_cohort", "dataset:analysis_cohort"}
+                or value.startswith("cohort:")
+            }
+            if len(cohort_inputs) != 1:
+                raise CurrentCaseScientificAuthorityError(
+                    "landmark survival suite requires one typed cohort input"
+                )
+            cohort_input = next(iter(cohort_inputs))
+        bound = candidate.model_copy(
+            update={
+                "planned_analysis_role": "primary",
+                "method": self.plan_method,
+                "intent": self.plan_intent,
+                "inputs": [cohort_input, *self.required_columns],
+                "expected_outputs": list(self.plan_outputs),
+                "scientific_capability": None,
+                "model_requirements": [],
+                "family_primary_result_requirement": None,
+                "table_one_spec": None,
+                "input_consumption_contracts": [],
+                "icu_rule_refs": list(
+                    dict.fromkeys([*candidate.icu_rule_refs, self.plan_rule_ref])
+                ),
+            }
+        )
+        return plan.model_copy(update={"steps": [bound]})
+
+    def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        if len(plan.steps) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark survival suite must have exactly one owner step"
+            )
+        step = plan.steps[0]
+        issues: list[str] = []
+        if step.planned_analysis_role != "primary":
+            issues.append("planned_analysis_role")
+        if step.method != self.plan_method:
+            issues.append("method")
+        if step.intent != self.plan_intent:
+            issues.append("intent")
+        if tuple(step.expected_outputs) != self.plan_outputs:
+            issues.append("expected_outputs")
+        if not set(self.required_columns).issubset(step.inputs):
+            issues.append("required_inputs")
+        if not sole_typed_cohort_input(step):
+            issues.append("typed_cohort_input")
+        if step.model_requirements or step.family_primary_result_requirement is not None:
+            issues.append("nested_model_contract")
+        if step.table_one_spec is not None:
+            issues.append("nested_table_one_contract")
+        if issues:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark survival plan drifted from signed authority: "
+                + ", ".join(issues)
+            )
+        self._require_rule_ref(step)
+        return step
+
+    def validate_plan(self, plan: AnalysisPlan) -> None:
+        self.governed_step(plan)
+
+
 class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
     schema_version: Literal["easyicu.source_feasibility_runtime_authority/1"]
     authority_kind: Literal["source_feasibility_fail_closed"]
@@ -696,6 +907,7 @@ CurrentCaseScientificRuntimeAuthority = Annotated[
     Union[
         AssociationModelGridRuntimeAuthority,
         LandmarkSplineRuntimeAuthority,
+        LandmarkSurvivalRuntimeAuthority,
         SourceFeasibilityRuntimeAuthority,
     ],
     Field(discriminator="authority_kind"),
@@ -711,6 +923,7 @@ def load_current_case_scientific_runtime_authority(
         (
             AssociationModelGridRuntimeAuthority,
             LandmarkSplineRuntimeAuthority,
+            LandmarkSurvivalRuntimeAuthority,
             SourceFeasibilityRuntimeAuthority,
         ),
     ):
@@ -742,6 +955,7 @@ __all__ = [
     "CurrentCaseScientificAuthorityError",
     "CurrentCaseScientificRuntimeAuthority",
     "LandmarkSplineRuntimeAuthority",
+    "LandmarkSurvivalRuntimeAuthority",
     "SourceFeasibilityRuntimeAuthority",
     "build_current_case_scientific_runtime_authority",
     "load_current_case_scientific_runtime_authority",

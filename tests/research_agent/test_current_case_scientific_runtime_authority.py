@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,7 @@ from benchmarks.figure2_canonical9.case_scientific_protocol import (
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     LandmarkSplineRuntimeAuthority,
+    LandmarkSurvivalRuntimeAuthority,
     SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
@@ -21,6 +23,9 @@ from easyicu.research_agent.execution.runners.landmark_spline_executor import (
 )
 from easyicu.research_agent.execution.runners.landmark_spline_robustness_executor import (
     run_landmark_spline_robustness,
+)
+from easyicu.research_agent.execution.runners.landmark_survival_executor import (
+    run_landmark_survival_suite,
 )
 from easyicu.research_agent.execution.runners.source_feasibility_executor import (
     run_source_feasibility_fail_closed,
@@ -84,6 +89,33 @@ def _h2_plan(authority: SourceFeasibilityRuntimeAuthority) -> AnalysisPlan:
                     "method": authority.plan_method,
                     "icu_rule_refs": [authority.plan_rule_ref],
                 }
+            ],
+        }
+    )
+
+
+def _h1_draft_plan() -> AnalysisPlan:
+    return AnalysisPlan.model_validate(
+        {
+            "research_question": "Estimate the ventilation survival association.",
+            "analysis_type": "survival",
+            "steps": [
+                {
+                    "step_id": "01_primary_survival",
+                    "planned_analysis_role": "primary",
+                    "intent": "Draft the primary survival analysis.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:cox_summary"],
+                    "method": "cox_proportional_hazards",
+                },
+                {
+                    "step_id": "02_figure",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Draft a survival figure.",
+                    "inputs": ["table:cox_summary"],
+                    "expected_outputs": ["figure:survival"],
+                    "method": "visualization",
+                },
             ],
         }
     )
@@ -181,6 +213,88 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     assert set(authority.required_columns).issubset(bound.steps[0].inputs)
     assert bound.steps[1].inputs == [authority.downstream_parent_product]
     assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
+
+
+def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
+    tmp_path: Path,
+) -> None:
+    projection, authority = _authority("h1_ventilation_survival")
+    assert isinstance(authority, LandmarkSurvivalRuntimeAuthority)
+    bound, findings = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=authority,
+    ).bind_plan(_h1_draft_plan())
+    authority.validate_plan(bound)
+    assert len(bound.steps) == 1
+    assert bound.steps[0].method == authority.plan_method
+    assert set(bound.steps[0].expected_outputs) == set(authority.plan_outputs)
+    assert findings[0].detail["reason_code"] == (
+        "landmark_survival_suite_host_compiled"
+    )
+
+    selected = select_standard_executor(
+        bound.steps[0],
+        plan=bound,
+        current_case_scientific_runtime_authority=authority,
+        scientific_runtime_projection_sha256=projection.runtime_projection_sha256,
+    )
+    assert selected is not None
+    assert selected.analysis_kind == "signed_landmark_survival_suite"
+
+    rng = np.random.default_rng(20260822)
+    n = 900
+    exposed = rng.binomial(1, 0.38, n)
+    onset = np.where(exposed == 1, rng.uniform(1.0, 23.9, n), np.nan)
+    onset[:30] = 0.0
+    exposed[:30] = 1
+    age = rng.normal(64.0, 14.0, n)
+    sex = rng.choice(["Female", "Male"], n)
+    charlson = rng.poisson(3.0, n).astype(float)
+    sofa2 = rng.integers(0, 18, n).astype(float)
+    rate = np.exp(-3.8 + 0.55 * exposed + 0.018 * (age - 64.0))
+    event_time = rng.exponential(1.0 / rate)
+    event = event_time <= 28.0
+    followup = np.minimum(event_time, 28.0)
+    frame = pd.DataFrame(
+        {
+            "mech_vent_max": exposed,
+            "mech_vent_first_time": onset,
+            "mort_28d": event.astype(int),
+            "followup_days_28d": followup,
+            "age": age,
+            "sex": sex,
+            "charlson_first": charlson,
+            "sofa2_max": sofa2,
+        }
+    )
+    summary = run_landmark_survival_suite(
+        frame=frame,
+        authority=authority,
+        runtime_projection_sha256=projection.runtime_projection_sha256,
+        out_dir=tmp_path,
+        input_product="dataset:analysis_cohort",
+        input_evidence_id="sha256:" + "a" * 64,
+        input_sha256="a" * 64,
+    )
+    assert summary["status"] == "ok"
+    assert summary["analysis_only"] is True
+    assert summary["n_landmark_population"] < n
+    assert set(summary["output_files"]) == set(authority.plan_outputs)
+    assert (tmp_path / "landmark_survival_suite.svg").is_file()
+    risk = pd.read_csv(tmp_path / "landmark_risk_set_flow.csv")
+    final_count = risk.loc[
+        risk["stage"] == "landmark_analysis_population", "count"
+    ].item()
+    assert final_count == summary["n_landmark_population"]
+    assert risk["excluded_since_prior_stage"].sum() >= 30
+
+
+def test_landmark_survival_executor_keeps_case_labels_in_authority() -> None:
+    from easyicu.research_agent.execution.runners import landmark_survival_executor
+
+    source = inspect.getsource(landmark_survival_executor)
+    assert "Incident ventilation" not in source
+    assert "ICU stays" not in source
 
 
 def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
