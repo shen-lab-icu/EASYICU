@@ -418,6 +418,7 @@ def _parse_foundation_materialization(
     raw: str,
     *,
     host_cohort: ProgressiveCohortIntent | None,
+    allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> ProgressiveFoundationMaterialization:
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
@@ -434,6 +435,28 @@ def _parse_foundation_materialization(
             unique_decisions: list[Any] = []
             seen_decisions: set[str] = set()
             for decision in decisions:
+                if isinstance(decision, dict) and allowed_know_how_decisions:
+                    card = allowed_know_how_decisions.get(
+                        str(decision.get("card_id") or "")
+                    )
+                    expected_citations = (
+                        (card.get("claims") or {}).get(decision.get("claim_id"))
+                        if isinstance(card, Mapping)
+                        else None
+                    )
+                    observed_citations = decision.get("citation_ids")
+                    # Citation order is presentation, not scientific authority.
+                    # Canonicalize a permutation of the exact authority set;
+                    # missing, added, or repeated citations remain untouched and
+                    # fail in verify_know_how_decisions downstream.
+                    if (
+                        isinstance(observed_citations, list)
+                        and expected_citations is not None
+                        and len(observed_citations) == len(expected_citations)
+                        and set(observed_citations) == set(expected_citations)
+                    ):
+                        decision = dict(decision)
+                        decision["citation_ids"] = list(expected_citations)
                 coordinate = json.dumps(
                     decision,
                     ensure_ascii=False,
@@ -444,7 +467,7 @@ def _parse_foundation_materialization(
                     continue
                 seen_decisions.add(coordinate)
                 unique_decisions.append(decision)
-            if len(unique_decisions) != len(decisions):
+            if unique_decisions != decisions:
                 payload = dict(payload)
                 foundation = dict(foundation)
                 foundation["know_how_decisions"] = unique_decisions
@@ -1755,6 +1778,7 @@ class ProgressivePlannerAgent:
                 parsed = _parse_foundation_materialization(
                     raw,
                     host_cohort=host_cohort,
+                    allowed_know_how_decisions=allowed_know_how_decisions,
                 )
                 validate_progressive_foundation(
                     parsed.foundation,
