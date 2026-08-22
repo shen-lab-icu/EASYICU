@@ -226,7 +226,12 @@ def run_landmark_association_figure(
         if missing:
             raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
     _finite(contrast, ("lactate_mmol_l", "adjusted_odds_ratio", "ci_low", "ci_high"))
-    _finite(risk, ("estimate", "ci_low", "ci_high"))
+    shown_risk = risk.loc[
+        risk["estimate_type"].astype(str).isin(["outcome_risk", "prevalence"])
+    ].copy()
+    if shown_risk.empty:
+        raise ValueError("absolute-risk context has no displayable estimate rows")
+    _finite(shown_risk, ("estimate", "ci_low", "ci_high"))
     _finite(robustness, ("range_low", "range_high"))
     _finite(process, ("n_total", "measured_one_n"))
 
@@ -259,13 +264,12 @@ def run_landmark_association_figure(
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
     ax = axes[0, 1]
-    shown = risk.loc[
-        risk["estimate_type"].astype(str).isin(["outcome_risk", "prevalence"])
-    ].copy()
-    positions = np.arange(len(shown))
-    estimates = 100.0 * pd.to_numeric(shown["estimate"])
+    positions = np.arange(len(shown_risk))
+    estimates = 100.0 * pd.to_numeric(shown_risk["estimate"])
     ax.barh(positions, estimates, color=palette["orange"])
-    ax.set_yticks(positions, [_label(value) for value in shown["label"]], fontsize=5.8)
+    ax.set_yticks(
+        positions, [_label(value) for value in shown_risk["label"]], fontsize=5.8
+    )
     ax.set_xlabel("Percent")
     ax.set_title("Absolute-risk context", loc="left", pad=12)
     add_panel_label(ax, "B", x=-0.12, y=1.04)
