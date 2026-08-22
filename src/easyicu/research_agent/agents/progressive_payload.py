@@ -8,6 +8,7 @@ from functools import lru_cache
 from typing import Any, Mapping, Sequence, get_args
 
 from ..planning.method_literature import METHOD_CARDS
+from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..planning.progressive_contract import (
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveFoundationMaterialization,
@@ -228,6 +229,17 @@ def _bind_step_module_shape(
         generic_properties["outputs"]["items"]["properties"][
             "semantic_role"
         ] = {"type": "string", "const": "custom"}
+        generic_properties["outputs"]["items"]["properties"]["product_id"] = {
+            "type": "string",
+            "pattern": (
+                r"^(?:"
+                + "|".join(
+                    re.escape(kind)
+                    for kind in sorted(PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS)
+                )
+                + r"):[a-z][a-z0-9_]*$"
+            ),
+        }
         generic_properties["sensitivity_spec_ids"]["maxItems"] = 0
 
         scientific_sensitivity = copy.deepcopy(custom)
