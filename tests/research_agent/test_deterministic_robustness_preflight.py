@@ -1340,8 +1340,13 @@ import json
 import os
 from pathlib import Path
 import pandas as pd
+from easyicu.research_agent.execution.runners.typed_input_binding import (
+    load_step_cohort_frame,
+)
 
-frame = pd.read_parquet(os.environ["COHORT_PARQUET"])
+frame, _cohort_path = load_step_cohort_frame(
+    typed_cohort_input="artifact:analysis_cohort"
+)
 out = Path(os.environ["STEP_OUT_DIR"])
 out.mkdir(parents=True, exist_ok=True)
 pd.DataFrame([{
@@ -1380,6 +1385,9 @@ summary = {
         "step_id": "primary",
         "script_path": script_path,
         "script_sha256": hashlib.sha256(script_path.read_bytes()).hexdigest(),
+        "summary": {
+            "input_bindings": [{"input_key": "artifact:analysis_cohort"}],
+        },
         "primary_contract": {
             "exposure_source": "exposure",
             "exposure_expression": "exposure",
