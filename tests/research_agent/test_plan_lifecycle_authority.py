@@ -139,13 +139,16 @@ def test_lifecycle_v2_seals_materialized_cohort_concept_authority(tmp_path) -> N
         evidence=evidence,
         approved=approved,
     )
-    assert load_approved_executable_plan(
-        run_dir=tmp_path,
-        evidence=evidence,
-        revision=1,
-        expected_plan_sha256=approved.plan_sha256,
-        expected_decision_set_sha256=approved.decision_set_sha256,
-    ) == approved
+    assert (
+        load_approved_executable_plan(
+            run_dir=tmp_path,
+            evidence=evidence,
+            revision=1,
+            expected_plan_sha256=approved.plan_sha256,
+            expected_decision_set_sha256=approved.decision_set_sha256,
+        )
+        == approved
+    )
 
 
 def test_lifecycle_v2_refuses_unsealed_materialized_concept() -> None:
@@ -237,11 +240,14 @@ def test_normalized_and_approved_stages_are_immutable_evidence(
         normalized=normalized,
     )
     assert lineage_path.name == "plan_lifecycle_revision_1.json"
-    assert load_normalized_plan(
-        run_dir=tmp_path,
-        evidence=evidence,
-        revision=1,
-    ) == normalized
+    assert (
+        load_normalized_plan(
+            run_dir=tmp_path,
+            evidence=evidence,
+            revision=1,
+        )
+        == normalized
+    )
 
     review = PlanReviewAuthority.create(plan=normalized.plan_payload)
     approved = ApprovedExecutablePlan.create(
@@ -256,14 +262,16 @@ def test_normalized_and_approved_stages_are_immutable_evidence(
     )
     assert approved_path.name == "approved_executable_plan_revision_1.json"
     assert evidence.get("approved_executable_plan_revision_1") is not None
-    assert load_approved_executable_plan(
-        run_dir=tmp_path,
-        evidence=evidence,
-        revision=1,
-        expected_plan_sha256=approved.plan_sha256,
-        expected_decision_set_sha256=approved.decision_set_sha256,
-    ) == approved
-
+    assert (
+        load_approved_executable_plan(
+            run_dir=tmp_path,
+            evidence=evidence,
+            revision=1,
+            expected_plan_sha256=approved.plan_sha256,
+            expected_decision_set_sha256=approved.decision_set_sha256,
+        )
+        == approved
+    )
 
     with pytest.raises(PlanLifecycleAuthorityError, match="reviewed plan digest"):
         load_approved_executable_plan(
@@ -285,11 +293,14 @@ def test_normalized_and_approved_stages_are_immutable_evidence(
     tampered = json.loads(lineage_path.read_text(encoding="utf-8"))
     tampered["plan_payload"]["research_question"] = "Changed after approval."
     lineage_path.write_text(json.dumps(tampered), encoding="utf-8")
-    assert load_normalized_plan(
-        run_dir=tmp_path,
-        evidence=evidence,
-        revision=1,
-    ) == normalized
+    assert (
+        load_normalized_plan(
+            run_dir=tmp_path,
+            evidence=evidence,
+            revision=1,
+        )
+        == normalized
+    )
     with pytest.raises(PlanLifecycleAuthorityError, match="cannot be overwritten"):
         persist_normalized_plan(
             run_dir=tmp_path,
@@ -323,11 +334,14 @@ def test_unregistered_identical_normalized_file_is_recovered_after_crash(
     assert recovered == path
     assert path.read_bytes() == original
     assert evidence.get("plan_lifecycle_revision_1") is not None
-    assert load_normalized_plan(
-        run_dir=tmp_path,
-        evidence=evidence,
-        revision=1,
-    ) == normalized
+    assert (
+        load_normalized_plan(
+            run_dir=tmp_path,
+            evidence=evidence,
+            revision=1,
+        )
+        == normalized
+    )
 
 
 def test_unregistered_different_normalized_file_still_fails_closed(tmp_path) -> None:
@@ -349,6 +363,41 @@ def test_unregistered_different_normalized_file_still_fails_closed(tmp_path) -> 
             evidence=EvidenceStore(tmp_path),
             normalized=normalized,
         )
+
+
+def test_registered_revision_preserves_a_different_digest_variant(tmp_path) -> None:
+    evidence = EvidenceStore(tmp_path)
+    original = _normalized()
+    original_path = persist_normalized_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        normalized=original,
+    )
+    different_plan = _plan(intent="Deterministically closed plan.")
+    variant = NormalizedPlan.create(
+        proposed=ProposedPlan.create(plan=different_plan, source="resumed"),
+        transformation_receipts=(),
+        plan=different_plan,
+    )
+
+    variant_path = persist_normalized_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        normalized=variant,
+    )
+
+    assert original_path.read_bytes() == original.model_dump_json(indent=2).encode()
+    assert variant_path.name == (
+        f"plan_lifecycle_revision_1_{variant.plan_sha256[:8]}.json"
+    )
+    assert evidence.get(variant_path.stem) is not None
+    assert NormalizedPlan.model_validate_json(variant_path.read_bytes()) == variant
+    repeated = persist_normalized_plan(
+        run_dir=tmp_path,
+        evidence=evidence,
+        normalized=variant,
+    )
+    assert NormalizedPlan.model_validate_json(repeated.read_bytes()) == variant
 
 
 def test_approval_refuses_a_review_of_a_different_plan() -> None:

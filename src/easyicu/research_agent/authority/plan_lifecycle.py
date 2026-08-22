@@ -7,6 +7,7 @@ every host transformation to an auditable before/after digest.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -29,17 +30,10 @@ class PlanLifecycleAuthorityError(RuntimeError):
 
 def _cohort_concept_ids(values: Sequence[str] | None) -> tuple[str, ...]:
     cleaned = tuple(
-        sorted(
-            {
-                str(value).strip()
-                for value in (values or ())
-                if str(value).strip()
-            }
-        )
+        sorted({str(value).strip() for value in (values or ()) if str(value).strip()})
     )
     if len(cleaned) > 2_048 or any(
-        len(value) > 200 or any(ord(char) < 32 for char in value)
-        for value in cleaned
+        len(value) > 200 or any(ord(char) < 32 for char in value) for value in cleaned
     ):
         raise ValueError("cohort concept authority is invalid")
     return cleaned
@@ -106,9 +100,9 @@ class ProposedPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[
-        "easyicu.proposed_plan/1", "easyicu.proposed_plan/2"
-    ] = "easyicu.proposed_plan/1"
+    schema_version: Literal["easyicu.proposed_plan/1", "easyicu.proposed_plan/2"] = (
+        "easyicu.proposed_plan/1"
+    )
     source: str = Field(min_length=1, max_length=120)
     cohort_concept_ids: tuple[str, ...] = ()
     plan_payload: dict[str, Any]
@@ -151,11 +145,7 @@ class ProposedPlan(BaseModel):
                     else "easyicu.proposed_plan/1"
                 ),
                 "source": str(source),
-                **(
-                    {"cohort_concept_ids": concept_ids}
-                    if concept_ids
-                    else {}
-                ),
+                **({"cohort_concept_ids": concept_ids} if concept_ids else {}),
                 "plan_payload": payload,
                 "plan_sha256": canonical_sha256(payload),
             }
@@ -249,7 +239,10 @@ class NormalizedPlan(BaseModel):
             self.plan_payload,
             cohort_concept_ids=self.proposed.cohort_concept_ids,
         )
-        if payload != self.plan_payload or canonical_sha256(payload) != self.plan_sha256:
+        if (
+            payload != self.plan_payload
+            or canonical_sha256(payload) != self.plan_sha256
+        ):
             raise ValueError("normalized plan payload/digest mismatch")
         cursor = self.proposed.plan_sha256
         for receipt in self.transformation_receipts:
@@ -259,8 +252,7 @@ class NormalizedPlan(BaseModel):
         if cursor != self.plan_sha256:
             raise ValueError("transformation chain does not end at normalized plan")
         expected_semantics = any(
-            item.scientific_semantics_changed
-            for item in self.transformation_receipts
+            item.scientific_semantics_changed for item in self.transformation_receipts
         )
         if self.scientific_semantics_changed != expected_semantics:
             raise ValueError("normalized plan semantic-change projection mismatch")
@@ -317,9 +309,7 @@ class ApprovedExecutablePlan(BaseModel):
     schema_version: Literal[
         "easyicu.approved_executable_plan/1",
         "easyicu.approved_executable_plan/2",
-    ] = (
-        "easyicu.approved_executable_plan/1"
-    )
+    ] = "easyicu.approved_executable_plan/1"
     cohort_concept_ids: tuple[str, ...] = ()
     plan_payload: dict[str, Any]
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -341,7 +331,10 @@ class ApprovedExecutablePlan(BaseModel):
             self.plan_payload,
             cohort_concept_ids=concept_ids,
         )
-        if payload != self.plan_payload or canonical_sha256(payload) != self.plan_sha256:
+        if (
+            payload != self.plan_payload
+            or canonical_sha256(payload) != self.plan_sha256
+        ):
             raise ValueError("approved executable plan payload/digest mismatch")
         unsigned = _unsigned_approved_payload(self)
         if canonical_sha256(unsigned) != self.authority_sha256:
@@ -372,11 +365,7 @@ class ApprovedExecutablePlan(BaseModel):
                 else "easyicu.approved_executable_plan/1"
             ),
             **(
-                {
-                    "cohort_concept_ids": (
-                        normalized.proposed.cohort_concept_ids
-                    )
-                }
+                {"cohort_concept_ids": (normalized.proposed.cohort_concept_ids)}
                 if normalized.proposed.cohort_concept_ids
                 else {}
             ),
@@ -467,15 +456,17 @@ def persist_normalized_plan(
     evidence_id = plan_lifecycle_evidence_id(revision)
     path = Path(run_dir) / f"{evidence_id}.json"
 
-    def _register(value: NormalizedPlan) -> None:
+    def _register(
+        value: NormalizedPlan, *, selected_evidence_id: str, selected_path: Path
+    ) -> None:
         evidence.register_file(
             kind="log",
             description=(
                 "Planner proposal, deterministic host transformations, and the exact "
                 "normalized plan offered for approval."
             ),
-            source_path=path,
-            evidence_id=evidence_id,
+            source_path=selected_path,
+            evidence_id=selected_evidence_id,
             producer="plan_lifecycle_authority",
             generation_mode="deterministic_skill",
             metadata={
@@ -504,11 +495,40 @@ def persist_normalized_plan(
         # the same immutable public plan (for example ``generated`` versus
         # ``resumed``).  The first registered lineage remains authoritative;
         # it may be reused only when its exact normalized plan is unchanged.
-        if observed.plan_sha256 != normalized.plan_sha256:
+        if observed.plan_sha256 == normalized.plan_sha256:
+            return verified
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != existing.sha256
+        ):
             raise PlanLifecycleAuthorityError(
                 f"plan lifecycle revision {revision} cannot be overwritten"
             )
-        return verified
+        # Deterministic host closure can legitimately produce more than one
+        # immutable public plan at the same Planner revision. Preserve the
+        # original revision authority and bind the derived lifecycle by its
+        # exact normalized-plan digest instead of overwriting either artifact.
+        evidence_id = f"{evidence_id}_{normalized.plan_sha256[:8]}"
+        path = Path(run_dir) / f"{evidence_id}.json"
+        existing = evidence.get(evidence_id)
+        if existing is not None:
+            verified = verified_run_evidence_path(Path(run_dir), existing)
+            if verified is None:
+                raise PlanLifecycleAuthorityError(
+                    f"registered plan lifecycle {evidence_id!r} is unavailable"
+                )
+            try:
+                observed = NormalizedPlan.model_validate_json(verified.read_bytes())
+            except Exception as exc:
+                raise PlanLifecycleAuthorityError(
+                    f"registered plan lifecycle {evidence_id!r} is invalid"
+                ) from exc
+            if observed.plan_sha256 != normalized.plan_sha256:
+                raise PlanLifecycleAuthorityError(
+                    f"plan lifecycle digest variant {evidence_id!r} is inconsistent"
+                )
+            return verified
     if path.exists():
         if path.is_symlink() or not path.is_file():
             raise PlanLifecycleAuthorityError(
@@ -527,10 +547,10 @@ def persist_normalized_plan(
         # Crash recovery: the immutable file can land before EvidenceStore's
         # registration checkpoint. Re-register the exact existing bytes; never
         # rewrite them from the reconstructed proposal narrative.
-        _register(observed)
+        _register(observed, selected_evidence_id=evidence_id, selected_path=path)
         return path
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
-    _register(normalized)
+    _register(normalized, selected_evidence_id=evidence_id, selected_path=path)
     return path
 
 
