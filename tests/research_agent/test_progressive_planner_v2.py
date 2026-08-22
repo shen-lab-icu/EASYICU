@@ -920,6 +920,11 @@ def test_custom_step_schema_separates_generic_and_scientific_sensitivity_shapes(
     assert generic_properties["outputs"]["items"]["properties"][
         "semantic_role"
     ]["const"] == "custom"
+    generic_product_pattern = generic_properties["outputs"]["items"]["properties"][
+        "product_id"
+    ]["pattern"]
+    assert "table" in generic_product_pattern
+    assert "custom" not in generic_product_pattern
     assert generic_properties["sensitivity_spec_ids"]["maxItems"] == 0
 
     scientific_properties = scientific["properties"]

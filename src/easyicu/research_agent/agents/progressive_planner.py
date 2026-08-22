@@ -1250,10 +1250,13 @@ class ProgressivePlannerAgent:
         if outline_step.module_id == "custom_analysis":
             blocks.append(
                 "Custom-analysis output contract: a generic custom result uses "
-                "semantic_role='custom' and sensitivity_spec_ids=[]. A "
+                "a runtime-materializable typed product id, "
+                "semantic_role='custom', and sensitivity_spec_ids=[]. Keep a "
+                "secondary custom step in this generic shape. A "
                 "scientific sensitivity uses exactly one table output with "
                 "semantic_role='scientific_sensitivity' and a non-empty unique "
-                "sensitivity_spec_ids roster. Do not mix these two shapes."
+                "sensitivity_spec_ids roster, and is valid only when the outline "
+                "role is sensitivity. Do not mix these two shapes."
             )
         blocks.append(
             "Return one ProgressiveStepMaterialization only. Copy every "
