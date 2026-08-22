@@ -345,6 +345,45 @@ def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
     assert set(contract.required_roles) <= covered
 
 
+def test_host_exposure_outcome_distribution_covers_descriptive_result(ra):
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+    )
+
+    context = _context(
+        ra,
+        "Estimate exposure prevalence and its adjusted association with mortality.",
+        exposure="exposure",
+    )
+    contract = build_article_analysis_contract(
+        context,
+        analysis_type="ordinal_dose_response",
+    )
+    plan = ra.schema.AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="ordinal_dose_response",
+        steps=[
+            ra.schema.AnalysisStep(
+                step_id="primary_adjusted_estimate",
+                intent="Estimate the adjusted association.",
+                method="adjusted association",
+                planned_analysis_role="primary",
+                expected_outputs=["table:adjusted_association_estimates"],
+            ),
+            ra.schema.AnalysisStep(
+                step_id="absolute_risk_context",
+                intent="Report exposure prevalence and absolute outcome risks.",
+                method="descriptive",
+                planned_analysis_role="auxiliary",
+                expected_outputs=["table:exposure_outcome_distribution"],
+            ),
+        ],
+    )
+
+    assert "descriptive_result" in roles_covered_by_plan(plan, contract)
+
+
 def test_article_contract_ignores_role_words_in_step_prose_and_wrong_kinds(ra):
     from easyicu.research_agent.reporting.article_contract import (
         build_article_analysis_contract,
