@@ -360,11 +360,9 @@ def render_association_publication_figure(
             color=palette["blue_soft"],
         )
         robustness_title = "Robustness estimates"
-        robustness_role = "robustness_estimates"
     else:
         _robustness_ranges(axes[1, 0], robustness, color=palette["blue_soft"])
         robustness_title = "Robustness ranges"
-        robustness_role = "robustness_ranges"
     add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
 
     if missingness is not None:
@@ -373,14 +371,12 @@ def render_association_publication_figure(
         quality_value = "missing_pct"
         quality_xlabel = "Missing (%)"
         quality_title = "Measurement missingness"
-        quality_role = "data_quality"
     else:
         quality = availability.sort_values("availability_pct", ascending=True)
         quality_label = "concept" if "concept" in quality.columns else "variable"
         quality_value = "availability_pct"
         quality_xlabel = "Available among eligible (%)"
         quality_title = "Measurement availability"
-        quality_role = "measurement_availability"
     positions = np.arange(len(quality))
     axes[1, 1].barh(positions, quality[quality_value], color=palette["orange"])
     axes[1, 1].set_yticks(
@@ -397,7 +393,7 @@ def render_association_publication_figure(
         (
             "A",
             absolute_title,
-            "absolute_risk",
+            "descriptive_result",
             (
                 "table:exposure_outcome_distribution"
                 if distribution is not None
@@ -407,14 +403,14 @@ def render_association_publication_figure(
         (
             "B",
             "Primary adjusted association",
-            "primary_estimate",
+            "primary_estimand",
             "table:adjusted_association_estimates",
         ),
-        ("C", robustness_title, robustness_role, robustness_key),
+        ("C", robustness_title, "robustness", robustness_key),
         (
             "D",
             quality_title,
-            quality_role,
+            "data_quality",
             (
                 "table:measurement_missingness"
                 if missingness is not None

@@ -445,6 +445,12 @@ def test_source_aware_association_contract_uses_eligible_availability(
     contract = json.loads(
         (out_dir / "publication_figure.figure_contract.json").read_text()
     )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+        "data_quality",
+    ]
     panel_d = next(panel for panel in contract["panels"] if panel["panel_id"] == "D")
     assert panel_d["title"] == "Measurement availability"
     assert panel_d["metadata"]["source_products"] == ["table:measurement_process_audit"]
