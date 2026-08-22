@@ -560,6 +560,29 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
     assert isinstance(authority, SourceFeasibilityRuntimeAuthority)
     plan = _h2_plan(authority)
     authority.validate_plan(plan)
+    execution_only_plan = authority.development_execution_only_plan(
+        research_question="Record whether the current source identifies the contrast."
+    )
+    authority.validate_plan(execution_only_plan)
+    assert len(execution_only_plan.steps) == 1
+    assert execution_only_plan.steps[0].planned_analysis_role == "auxiliary"
+    assert execution_only_plan.steps[0].model_requirements == []
+    assert execution_only_plan.steps[0].family_primary_result_requirement is None
+    assert not any(
+        step.planned_analysis_role == "primary" for step in execution_only_plan.steps
+    )
+    projected = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=authority,
+    ).development_execution_only_plan(
+        research_question="Record whether the current source identifies the contrast."
+    )
+    assert projected is not None
+    projected_plan, projected_finding = projected
+    authority.validate_plan(projected_plan)
+    assert projected_finding.detail["reason_code"] == (
+        "source_feasibility_development_execution_only_authority_compiled"
+    )
 
     forbidden = plan.steps[0].model_copy(
         update={
