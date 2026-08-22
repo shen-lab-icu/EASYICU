@@ -16,6 +16,8 @@ from easyicu.webserver import sources as source_store
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.app import app
 from easyicu.webserver.routes import agent as agent_routes
+from easyicu.webserver.routes import guided as guided_routes
+from easyicu.webserver.pi_copilot.project_authority import ProjectAuthorityStore
 
 
 @pytest.fixture(autouse=True)
@@ -1527,10 +1529,10 @@ def test_active_context_reconciles_job_lost_on_server_restart(tmp_path: Path) ->
     assert active["current_stage"] == "agent_interrupted"
 
 
-def test_context_retention_never_drops_the_active_row(
+def test_context_listing_limit_never_deletes_stored_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(context_store, "_MAX_CONTEXTS", 3)
+    monkeypatch.setattr(context_store, "_MAX_LISTED_CONTEXTS", 3)
     context_store.upsert_context({"id": "active-study"}, active=True)
     for context_id in ("inactive-1", "inactive-2", "inactive-3"):
         context_store.upsert_context({"id": context_id}, active=False)
@@ -1540,6 +1542,53 @@ def test_context_retention_never_drops_the_active_row(
     assert listed["active_id"] == "active-study"
     assert len(listed["contexts"]) == 3
     assert "active-study" in {row["id"] for row in listed["contexts"]}
+    assert context_store.get_context("inactive-1")["id"] == "inactive-1"
+
+
+def test_context_capacity_fails_without_evicting_existing_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(context_store, "_MAX_STORED_CONTEXTS", 2)
+    context_store.upsert_context({"id": "study-1"})
+    context_store.upsert_context({"id": "study-2"})
+
+    with pytest.raises(context_store.StudyContextError) as error:
+        context_store.upsert_context({"id": "study-3"})
+
+    assert error.value.detail["error"] == "study_context_store_capacity_reached"
+    assert context_store.get_context("study-1")["id"] == "study-1"
+    assert context_store.get_context("study-2")["id"] == "study-2"
+    assert context_store.get_context("study-3") is None
+
+
+def test_guided_project_list_reports_configuration_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority = ProjectAuthorityStore(tmp_path / "project-authority.json")
+    context_store.upsert_context({"id": "study-ready"})
+    authority.bind("project-ready", "study-ready")
+    authority.bind("project-missing", "study-missing")
+    monkeypatch.setattr(guided_routes, "ProjectAuthorityStore", lambda: authority)
+    monkeypatch.setattr(
+        guided_routes.guided_sessions,
+        "list_guided_drafts",
+        lambda **_kwargs: {
+            "drafts": [
+                {"id": "project-ready"},
+                {"id": "project-missing"},
+                {"id": "project-new"},
+            ]
+        },
+    )
+
+    result = guided_routes.post_guided_drafts_list({"limit": 10})
+
+    assert [row["configuration_health"] for row in result["drafts"]] == [
+        {"status": "ready", "can_continue": True},
+        {"status": "configuration_missing", "can_continue": False},
+        {"status": "unbound", "can_continue": True},
+    ]
 
 
 def test_context_store_and_atomic_temp_are_private() -> None:

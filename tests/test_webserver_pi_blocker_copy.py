@@ -76,7 +76,7 @@ def test_setup_panel_keeps_the_raw_code_available_but_demoted() -> None:
     css = _asset("css", "guided-pi.css")
 
     assert 'class="gpi-blocker-code mono"' in panel
-    assert "Diagnostic code reported by the Pi runtime" in panel
+    assert "Diagnostic code reported by the Copilot runtime" in panel
     assert ".gpi-blocker-code{" in css
     assert ".gpi-config-note.gpi-blockers{display:block}" in css
 

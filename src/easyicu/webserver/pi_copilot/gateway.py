@@ -352,12 +352,12 @@ class PiGatewayClient:
                 if missing == ["runtime_integrity_verified"]:
                     raise PiCopilotError(
                         "pi_runtime_integrity_mismatch",
-                        "The installed Pi runtime does not match the packaged content manifest.",
+                        "The installed Copilot runtime does not match the packaged content manifest.",
                         status_code=503,
                     )
                 raise PiCopilotError(
                     "pi_gateway_not_installed",
-                    "The pinned Pi Copilot sidecar is not installed.",
+                    "The pinned Copilot runtime is not installed.",
                     status_code=503,
                     details={"missing": missing},
                 )

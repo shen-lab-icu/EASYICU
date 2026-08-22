@@ -15,10 +15,14 @@
   }
 
   function projectMeta(row, t) {
-    // A Guided draft remains metadata-only storage even after Pi binds a real
+    // A Guided draft remains metadata-only storage even after Copilot binds a real
     // StudyContext and Research Agent run.  Do not expose that persistence
     // implementation as the project's scientific lifecycle status.
-    const status = row.workflow_status === 'analysis_review'
+    const configurationMissing = row.configuration_health
+      && row.configuration_health.status === 'configuration_missing';
+    const status = configurationMissing
+      ? t('Configuration expired', '配置已失效')
+      : row.workflow_status === 'analysis_review'
       ? t('Results to review', '结果待审阅')
       : row.workflow_status === 'plan_review'
         ? t('Plan to review', '计划待审阅')
@@ -83,12 +87,14 @@
         : rows.length
           ? externalHtml + rows.slice(0, 8).map((row, i) => {
             const active = activeId === row.id;
+            const configurationMissing = row.configuration_health
+              && row.configuration_health.status === 'configuration_missing';
             const title = row.title || t('Guided study', '研究项目');
             const meta = projectMeta(row, t);
             const time = fmtRunTime(row.updated_at || row.created_at);
             return `
             <div class="gd-sessline">
-              <button class="gd-sess draft ${active ? 'active' : ''}" data-localdraft="${i}" title="${t('Open research project', '打开研究项目')}: ${esc(title)}" ${active ? 'aria-current="true"' : ''}>
+              <button class="gd-sess draft ${active ? 'active' : ''} ${configurationMissing ? 'configuration-missing' : ''}" data-localdraft="${i}" title="${configurationMissing ? t('Configuration is missing; open recovery options', '研究配置已失效；打开恢复选项') : t('Open research project', '打开研究项目')}: ${esc(title)}" ${active ? 'aria-current="true"' : ''}>
                 <span class="gd-sess-status" aria-hidden="true"></span>
                 <span class="gd-sess-body"><span class="ss-t">${esc(title)}</span><span class="ss-m">${esc(meta)}</span></span>
                 <span class="ss-time">${esc(time)}</span>
@@ -96,10 +102,10 @@
               <button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from project list', '从项目列表移除')}" aria-label="${t('Remove from project list', '从项目列表移除')}: ${esc(title)}">${icon('close', 12)}</button>
             </div>`;
           }).join('')
-          : (externalHtml || `<div class="gd-empty-local"><div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div><div class="ss-m">${t('Create or open a project before starting a Pi conversation.', '开始 Pi 对话前，请先创建或打开一个项目。')}</div></div>`);
+          : (externalHtml || `<div class="gd-empty-local"><div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div><div class="ss-m">${t('Create or open a project before starting a Copilot conversation.', '开始研究助手对话前，请先创建或打开一个项目。')}</div></div>`);
     host.innerHTML = `
       <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></div>
-      <div class="gd-project-summary">${icon('folder', 14)}<div><strong>${t('Local research workspace', '本地研究工作区')}</strong><span>${t('Study setup, runs, and evidence stay here. Pi keeps the conversation.', '研究配置、运行和证据保存在这里；对话由 Pi 管理。')}</span></div></div>
+      <div class="gd-project-summary">${icon('folder', 14)}<div><strong>${t('Local research workspace', '本地研究工作区')}</strong><span>${t('Study setup, runs, evidence, and conversation history stay here.', '研究配置、运行、证据和对话历史都保存在这里。')}</span></div></div>
       ${draftHtml}`;
   }
 
@@ -227,7 +233,7 @@
           <span class="gds-ico">${icon('folder', 15)}</span>
           <div>
             <strong>${t('Choose a local folder', '选择本地文件夹')}</strong>
-            <span>${t('Open a project folder for study setup, runs, and evidence, or choose an EasyICU export folder to review extracted data. Pi manages conversation history separately.', '项目文件夹用于保存研究配置、运行和证据；如果要审阅已提取数据，请选择 EasyICU export 文件夹。对话历史由 Pi 单独管理。')}</span>
+            <span>${t('Open a project folder for study setup, runs, evidence, and conversation history, or choose an EasyICU export folder to review extracted data.', '项目文件夹用于保存研究配置、运行、证据和对话历史；如果要审阅已提取数据，请选择 EasyICU export 文件夹。')}</span>
           </div>
           <button class="gd-folder-close" type="button" data-folder-dialog-close aria-label="${t('Close', '关闭')}">×</button>
         </div>
@@ -237,7 +243,7 @@
         </div>
         ${mode === 'open' ? `
           <div class="gds-choice">
-            <div class="gds-choice-head"><strong>${t('Open project or extracted data folder', '打开项目或已提取数据文件夹')}</strong><span>${t('Required setup stays here instead of jumping to Classic Workspace. Use a project folder for study state and evidence; Pi keeps its own conversations. Use an EasyICU export folder to review previously extracted data.', '必需配置都留在这里完成，不强制跳到其他页面。项目文件夹保存研究状态和证据，Pi 单独保存对话；EasyICU export 文件夹用于审阅之前提取的数据。')}</span></div>
+            <div class="gds-choice-head"><strong>${t('Open project or extracted data folder', '打开项目或已提取数据文件夹')}</strong><span>${t('Required setup stays here instead of jumping to Classic Workspace. Use a project folder for study state, evidence, and conversations. Use an EasyICU export folder to review previously extracted data.', '必需配置都留在这里完成，不强制跳到其他页面。项目文件夹保存研究状态、证据和对话；EasyICU export 文件夹用于审阅之前提取的数据。')}</span></div>
             <div class="gds-path-row">
               <label class="gds-field"><span>${t('Local folder path', '本地文件夹路径')}</span><input data-existing-project-dir placeholder="${t('Paste a local project or EasyICU export folder path', '粘贴本地项目或 EasyICU 导出文件夹路径')}" autocomplete="off" /></label>
               <button class="btn sm" type="button" data-browseprojectfolder>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>

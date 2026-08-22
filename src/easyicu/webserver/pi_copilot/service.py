@@ -161,7 +161,7 @@ class PiCopilotService:
             if self.store_path.stat().st_size > 2 * 1024 * 1024:
                 raise PiCopilotError(
                     "pi_session_store_too_large",
-                    "The Pi Copilot metadata store exceeds its bounded contract.",
+                    "The Copilot metadata store exceeds its bounded contract.",
                     status_code=500,
                 )
             raw = json.loads(self.store_path.read_text(encoding="utf-8"))
@@ -170,14 +170,14 @@ class PiCopilotService:
         except json.JSONDecodeError as exc:
             raise PiCopilotError(
                 "pi_session_store_invalid",
-                "The Pi Copilot metadata store is invalid JSON.",
+                "The Copilot metadata store is invalid JSON.",
                 status_code=500,
             ) from exc
         rows = raw.get("sessions") if isinstance(raw, dict) else None
         if not isinstance(rows, list):
             raise PiCopilotError(
                 "pi_session_store_invalid",
-                "The Pi Copilot metadata store has an invalid shape.",
+                "The Copilot metadata store has an invalid shape.",
                 status_code=500,
             )
         records = []
@@ -201,7 +201,7 @@ class PiCopilotService:
             except Exception as exc:
                 raise PiCopilotError(
                     "pi_session_store_invalid",
-                    "The Pi Copilot metadata store contains an invalid session.",
+                    "The Copilot metadata store contains an invalid session.",
                     status_code=500,
                 ) from exc
         return records
@@ -251,7 +251,7 @@ class PiCopilotService:
         if record is None:
             raise PiCopilotError(
                 "pi_session_not_found",
-                "The requested Pi Copilot session does not exist.",
+                "The requested Copilot session does not exist.",
                 status_code=404,
             )
         return record
@@ -280,7 +280,7 @@ class PiCopilotService:
                 if len(evicted) != overflow:
                     raise PiCopilotError(
                         "pi_session_retention_protected",
-                        "Pi session retention cannot evict an active or presentation-pinned conversation.",
+                        "Copilot session retention cannot evict an active or presentation-pinned conversation.",
                         status_code=409,
                     )
                 evicted_ids = {row.session_id for row in evicted}
@@ -386,7 +386,7 @@ class PiCopilotService:
             raise PiCopilotError(
                 str(exc.detail.get("error") or "external_llm_opt_in_required"),
                 (
-                    "Pi Copilot is an external shell-model call. Enable AI in "
+                    "EasyICU Copilot uses an external model call. Enable AI in "
                     "EasyICU Settings and explicitly opt in for this session."
                 ),
                 status_code=403,
@@ -634,7 +634,7 @@ class PiCopilotService:
                 )
                 raise PiCopilotError(
                     "pi_project_initialization_required",
-                    "Confirm a new Pi study setup before opening this project.",
+                    "Confirm a new Copilot study setup before opening this project.",
                     status_code=409,
                     details={
                         "project_id": project_id,
@@ -644,7 +644,7 @@ class PiCopilotService:
                 )
             else:
                 initial = {
-                    "title": str(title or "Pi Copilot").strip()[:160] or "Pi Copilot",
+                    "title": str(title or "EasyICU Copilot").strip()[:160] or "EasyICU Copilot",
                     "current_stage": "study_setup",
                     "last_route": "guided",
                 }
@@ -710,7 +710,7 @@ class PiCopilotService:
         if not clean_project or len(clean_project) > 160:
             raise PiCopilotError(
                 "pi_project_binding_required",
-                "A research project is required for Pi initialization.",
+                "A research project is required for Copilot initialization.",
                 status_code=409,
             )
         with self._project_initialization_lock(clean_project):
@@ -744,7 +744,7 @@ class PiCopilotService:
         if len(legacy_context_ids) > 1:
             raise PiCopilotError(
                 "pi_project_study_context_mismatch",
-                "Legacy Pi sessions disagree about this project's StudyContext.",
+                "Legacy Copilot sessions disagree about this project's StudyContext.",
                 status_code=409,
                 details={"project_id": clean_project},
             )
@@ -777,7 +777,7 @@ class PiCopilotService:
             ):
                 raise PiCopilotError(
                     "pi_project_study_context_mismatch",
-                    "Saved Pi sessions disagree with the Agent handoff StudyContext.",
+                    "Saved Copilot sessions disagree with the Agent handoff StudyContext.",
                     status_code=409,
                 )
             requested_context_id = binding_receipt.study_context_id
@@ -856,7 +856,7 @@ class PiCopilotService:
                 ):
                     raise PiCopilotError(
                         "pi_session_project_authority_mismatch",
-                        "A legacy Pi session belongs to another StudyContext.",
+                        "A legacy Copilot session belongs to another StudyContext.",
                         status_code=409,
                         details={"project_id": clean_project},
                     )
@@ -896,14 +896,14 @@ class PiCopilotService:
         if not clean_project:
             raise PiCopilotError(
                 "pi_project_binding_required",
-                "A research project is required for this Pi session operation.",
+                "A research project is required for this Copilot session operation.",
                 status_code=409,
             )
         record = self._get_record(session_id)
         if record.project_id != clean_project:
             raise PiCopilotError(
                 "pi_session_project_mismatch",
-                "This Pi conversation belongs to a different EasyICU research project.",
+                "This Copilot conversation belongs to a different EasyICU research project.",
                 status_code=409,
                 details={
                     "session_id": record.session_id,
@@ -913,7 +913,7 @@ class PiCopilotService:
         if not record.binding.study_context_id:
             raise PiCopilotError(
                 "pi_project_initialization_required",
-                "Initialize this project's StudyContext before reading its Pi sessions.",
+                "Initialize this project's StudyContext before reading its Copilot sessions.",
                 status_code=409,
                 details={"project_id": clean_project},
             )
@@ -927,7 +927,7 @@ class PiCopilotService:
         self,
         *,
         project_id: str,
-        title: str = "Pi Copilot",
+        title: str = "EasyICU Copilot",
         agent_mode: str = "research",
         language: str = "en",
         thinking_level: str = "off",
@@ -939,7 +939,7 @@ class PiCopilotService:
         if not clean_project_id:
             raise PiCopilotError(
                 "pi_project_binding_required",
-                "Select or create an EasyICU research project before starting a Pi conversation.",
+                "Select or create an EasyICU research project before starting a Copilot conversation.",
                 status_code=409,
             )
         selected_model_connection = research_provider or ResearchProviderBinding()
@@ -1015,7 +1015,7 @@ class PiCopilotService:
             project_id=clean_project_id,
             pi_session_id=str(state.get("pi_session_id") or "") or None,
             pi_session_file=str(state.get("session_file") or "") or None,
-            title=str(title or "Pi Copilot").strip()[:160] or "Pi Copilot",
+            title=str(title or "EasyICU Copilot").strip()[:160] or "EasyICU Copilot",
             agent_mode=resolved_mode,
             language=resolved_language,
             thinking_level=resolved_thinking,
@@ -1207,12 +1207,12 @@ class PiCopilotService:
         if not text:
             raise PiCopilotError(
                 "pi_message_required",
-                "A Pi Copilot message is required.",
+                "An EasyICU Copilot message is required.",
             )
         if len(text) > MAX_MESSAGE_CHARS:
             raise PiCopilotError(
                 "pi_message_too_long",
-                "The Pi Copilot message exceeds its bounded contract.",
+                "The EasyICU Copilot message exceeds its bounded contract.",
                 details={"max_chars": MAX_MESSAGE_CHARS},
             )
         reject_sensitive_message(text)
@@ -1221,7 +1221,7 @@ class PiCopilotService:
             raise PiCopilotError(
                 "pi_session_authority_stale",
                 (
-                    "The EasyICU study/run binding changed after this Pi session "
+                    "The EasyICU study/run binding changed after this Copilot session "
                     "was saved. Rebind before sending another message."
                 ),
                 status_code=409,
@@ -1252,7 +1252,7 @@ class PiCopilotService:
             if record.session_id in self._busy_sessions:
                 raise PiCopilotError(
                     "pi_session_busy",
-                    "This Pi Copilot session already has an active message.",
+                    "This EasyICU Copilot session already has an active message.",
                     status_code=409,
                 )
             self._busy_sessions.add(record.session_id)
@@ -1561,7 +1561,7 @@ class PiCopilotService:
         if not clean_project_id:
             raise PiCopilotError(
                 "pi_project_binding_required",
-                "A research project is required to list Pi conversations.",
+                "A research project is required to list Copilot conversations.",
                 status_code=409,
             )
         max_items = max(1, min(100, int(limit or 30)))
@@ -1569,7 +1569,7 @@ class PiCopilotService:
         if clean_agent_mode and clean_agent_mode not in {"research", "workspace"}:
             raise PiCopilotError(
                 "pi_agent_mode_invalid",
-                "Pi conversation mode must be research or workspace.",
+                "Copilot conversation mode must be research or workspace.",
                 status_code=422,
             )
         with self._lock:

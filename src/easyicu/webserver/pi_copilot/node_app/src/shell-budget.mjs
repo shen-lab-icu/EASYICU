@@ -162,7 +162,7 @@ export function restoredShellBudgetState(
     if (pricingBinding && calls > 0) {
       throw budgetError(
         "pi_shell_cost_history_unavailable",
-        "This existing Pi session predates cost receipts and cannot adopt a priced budget.",
+        "This existing Copilot session predates cost receipts and cannot adopt a priced budget.",
       );
     }
     return { providerCalls: calls, reservedCostMicroUsd: 0 };
@@ -243,7 +243,7 @@ export class ShellBudgetGuard {
     if (this.sessionProviderCalls >= this.maxProviderCallsPerSession) {
       throw budgetError(
         "pi_shell_session_provider_call_budget_exhausted",
-        "The provider-call ceiling for this Pi session is exhausted.",
+        "The provider-call ceiling for this Copilot session is exhausted.",
         {
           provider_calls: this.sessionProviderCalls,
           provider_call_budget: this.maxProviderCallsPerSession,
@@ -296,7 +296,7 @@ export class ShellBudgetGuard {
       ) {
         throw budgetError(
           "pi_shell_session_cost_budget_exhausted",
-          "The conservative provider-cost ceiling for this Pi session is exhausted.",
+          "The conservative provider-cost ceiling for this Copilot session is exhausted.",
           {
             reserved_cost_micro_usd: this.sessionReservedCostMicroUsd,
             next_call_reserved_cost_micro_usd: reservedCostMicroUsd,

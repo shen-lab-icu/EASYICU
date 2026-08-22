@@ -60,7 +60,7 @@
     const data = registry();
     const rows = data && Array.isArray(data.skills) ? data.skills : [];
     return `<section class="settings-ext-manager" data-ext-manager="skills">
-      <div class="settings-ext-head"><div><b>${tr('User-installed Skills', '用户安装的 Skill')}</b><span>${tr('Frozen into each new Pi session and Agent run. Writing Skills are advisory and cannot override evidence rules.', '在每个新 Pi 会话和 Agent 运行中固化版本。写作 Skill 仅作辅助，不能覆盖证据规则。')}</span></div><span class="pill info">${rows.filter(row => row.enabled).length}/${rows.length} ${tr('active', '启用')}</span></div>
+      <div class="settings-ext-head"><div><b>${tr('User-installed Skills', '用户安装的 Skill')}</b><span>${tr('Frozen into each new Copilot session and Agent run. Writing Skills are advisory and cannot override evidence rules.', '在每个新的研究助手会话和 Agent 运行中固化版本。写作 Skill 仅作辅助，不能覆盖证据规则。')}</span></div><span class="pill info">${rows.filter(row => row.enabled).length}/${rows.length} ${tr('active', '启用')}</span></div>
       ${statusBlock()}${skillCards(rows)}
       <details class="settings-ext-add"><summary>${tr('Add or update a SKILL.md', '添加或更新 SKILL.md')}</summary>
         <div class="settings-ext-form">

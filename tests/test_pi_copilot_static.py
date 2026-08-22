@@ -75,6 +75,60 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
 
+def test_user_facing_copilot_copy_hides_the_pi_runtime_brand() -> None:
+    scripts = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((STATIC / "js").glob("*.js"))
+    )
+    product_copy = re.sub(r"/\*.*?\*/", "", scripts, flags=re.S)
+    # One literal remains solely to map legacy persisted default titles.
+    product_copy = product_copy.replace("title === 'Pi Copilot'", "")
+
+    assert not re.search(r"\bPi\b|PI AGENTSESSION|PI COPILOT", product_copy)
+    assert "EasyICU Copilot" in product_copy
+    assert "EasyICU 研究助手" in product_copy
+
+
+def test_activation_initializes_first_use_projects_and_surfaces_failures() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    panel = owner.split("function activatePanel()", 1)[1].split(
+        "function projectRequiredPanel()", 1
+    )[0]
+    create = owner.split("async function createSession()", 1)[1].split(
+        "async function openSession", 1
+    )[0]
+    load_status = owner.split("async function loadStatus()", 1)[1].split(
+        "function stopCodexPoll", 1
+    )[0]
+
+    assert 'class="gpi-error" role="alert"' in panel
+    assert "state.projectInitialization && state.projectInitialization.required" in create
+    assert "confirm_initialization: true" in create
+    assert create.index("confirm_initialization: true") < create.index(
+        "createPiCopilotSession"
+    )
+    assert "if (expectedProjectId !== projectId()) return;" in create
+    assert "try { await prepareProject(); }" in load_status
+    assert "catch (error) { state.error = errorText(error); }" in load_status
+    assert "pi_project_study_context_missing" in owner
+    assert "当前项目保存的研究配置已不存在" in owner
+    assert "关联的研究配置已经失效" in panel
+    assert "EasyICU 不会静默创建或绑定另一份配置" in panel
+    assert 'data-newstudy' in panel
+    assert 'data-refreshdrafts' in panel
+    assert "state.projectIssue === 'pi_project_study_context_missing'" in panel
+    assert "state.projectIssue = error.code" in owner
+    render = owner.split("function render()", 1)[1].split(
+        "async function loadStatus()", 1
+    )[0]
+    panel_selection = render.split("state.host.innerHTML", 1)[1]
+    assert panel_selection.index(
+        "state.projectIssue === 'pi_project_study_context_missing'"
+    ) < (
+        panel_selection.index("state.showSetup || !connectionReady()")
+    )
+
+
 def test_get_requests_preserve_typed_backend_error_codes() -> None:
     api_owner = _read("js/api.js")
     get_json = api_owner.split("async function getJSON(path)", 1)[1].split(
@@ -162,7 +216,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     )
     assert "Conversation memory" not in guided
     assert "对话记忆" not in guided
-    assert "Pi keeps the conversation" in projects_owner
+    assert "Study setup, runs, evidence, and conversation history stay here." in projects_owner
     assert "function renderShellRail(ctx)" in projects_owner
     assert 'class="gd-rail"' in projects_owner
     assert 'class="gd-rail"' not in guided
@@ -252,6 +306,14 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "data-gpi-demo" in pi_owner
     assert "data-gpi-demo-exit" in pi_owner
     assert "查看完整科研流程演示" in pi_owner
+    assert "开始研究对话" in pi_owner
+    assert "研究进度会自动保存" in pi_owner
+    assert "开始前，先创建空白研究配置" not in pi_owner
+    assert "gpi-mode-intro" not in pi_owner
+    assert "data-gpi-mode-choice" not in pi_owner
+    assert "gpi-secondary-actions" in pi_owner
+    assert "我同意——启用 EasyICU 研究助手" not in pi_owner
+    assert "align-self:flex-start" in _read("css/guided-pi.css")
     assert "state.demoMode ? demoPanel()" in pi_owner
     assert "extraction_ready" in pi_owner
     assert "plan_ready" in pi_owner
@@ -317,6 +379,43 @@ def test_scientific_review_continues_as_one_question_in_chat() -> None:
     assert "review.authorization_questions" in owner
     assert "questions[0].question" in owner
     assert "请一次只问我一个尚未解决的科学设定问题" in owner
+
+
+def test_pi_composer_enter_sends_without_breaking_shift_enter_or_ime() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    owner = STATIC / "js" / "screens-guided-pi.js"
+    script = r"""
+const fs = require('fs');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+const match = source.match(/function composerEnterShouldSend\(event\) \{([\s\S]*?)\n  \}/);
+if (!match) throw new Error('composerEnterShouldSend helper not found');
+const shouldSend = new Function('event', match[1]);
+const cases = {
+  enter: shouldSend({key: 'Enter', shiftKey: false, isComposing: false, keyCode: 13}),
+  shiftEnter: shouldSend({key: 'Enter', shiftKey: true, isComposing: false, keyCode: 13}),
+  composing: shouldSend({key: 'Enter', shiftKey: false, isComposing: true, keyCode: 13}),
+  legacyIme: shouldSend({key: 'Enter', shiftKey: false, isComposing: false, keyCode: 229}),
+  otherKey: shouldSend({key: 'a', shiftKey: false, isComposing: false, keyCode: 65}),
+};
+process.stdout.write(JSON.stringify(cases));
+"""
+    result = subprocess.run(
+        [node, "-e", script, str(owner)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout) == {
+        "enter": True,
+        "shiftEnter": False,
+        "composing": False,
+        "legacyIme": False,
+        "otherKey": False,
+    }
 
 
 def test_agent_handoff_receipt_is_forwarded_to_project_initialization() -> None:
@@ -392,6 +491,8 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert ".gpi-tool" not in owner
     assert "gpi-avatar" not in owner
     assert ".gd-conv.pi-active" in owner
+    assert ".gd-main.threecol.gpi-setup-focus" in owner
+    assert ".gd-main.threecol.gpi-setup-focus>.gd-aside{display:none}" in owner
     assert "!important" not in owner
     assert ":has(" not in owner
     for foreign in (".patient-", ".cohort-", ".crossdb-", ".settings-", ".idea-"):
@@ -406,6 +507,18 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
         "css/tweaks.css",
     ):
         assert ".gpi-" not in _read(relative)
+
+
+def test_model_connection_setup_owns_the_temporary_focus_layout() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    provider = _read("js/screens-guided-pi-provider.js")
+    projects_css = _read("css/guided-projects.css")
+
+    assert "main.classList.toggle('gpi-setup-focus', setupFocused)" in owner
+    assert "state.showSetup || !connectionReady()" in owner
+    assert "Finish connection setup" in provider
+    assert "完成连接设置" in provider
+    assert "gpi-setup-focus" not in projects_css
 
 
 def test_scientific_plan_review_has_a_readable_multidimensional_preview() -> None:

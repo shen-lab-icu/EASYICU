@@ -4019,7 +4019,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <div class="gd-main threecol">
           ${guidedProjectRenderer('renderShellRail')}
           <div class="gd-conv">
-            <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('Pi Copilot conversation', 'Pi Copilot 对话')}"></div>
+            <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('EasyICU Copilot conversation', 'EasyICU 研究助手对话')}"></div>
             <div class="gd-legacy-shell" id="gdLegacyShell">
               <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
               <div class="gd-suggest" id="gdSuggest"></div>
