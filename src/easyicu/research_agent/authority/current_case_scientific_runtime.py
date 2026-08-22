@@ -759,20 +759,22 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                 "landmark survival authority requires exactly one primary step"
             )
         candidate = primary[0]
-        cohort_input = sole_typed_cohort_input(candidate)
-        if not cohort_input:
-            cohort_inputs = {
-                value
-                for step in plan.steps
-                for value in step.inputs
-                if value in {"artifact:analysis_cohort", "table:analysis_cohort", "dataset:analysis_cohort"}
-                or value.startswith("cohort:")
+        # The run input is already a digest-sealed cohort, but typed DAG inputs
+        # still require a declared producer.  Publish that existing authority
+        # through the generic host cohort materializer instead of pretending
+        # the scientific suite produced its own input or asking a Coder to copy
+        # bytes.  The host materializer recognises this exact product contract.
+        cohort_input = "table:analysis_cohort"
+        cohort_owner = AnalysisStep.model_validate(
+            {
+                "step_id": "00_host_bound_analysis_cohort",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Bind the locked run cohort as the analysis row authority.",
+                "inputs": [],
+                "expected_outputs": [cohort_input],
+                "method": "host_materialized_locked_cohort",
             }
-            if len(cohort_inputs) != 1:
-                raise CurrentCaseScientificAuthorityError(
-                    "landmark survival suite requires one typed cohort input"
-                )
-            cohort_input = next(iter(cohort_inputs))
+        )
         bound = candidate.model_copy(
             update={
                 "planned_analysis_role": "primary",
@@ -790,7 +792,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                 ),
             }
         )
-        return plan.model_copy(update={"steps": [bound]})
+        return plan.model_copy(update={"steps": [cohort_owner, bound]})
 
     def development_execution_only_plan(
         self,
@@ -813,7 +815,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                         "step_id": "01_authority_compiled_survival_suite",
                         "planned_analysis_role": "primary",
                         "intent": self.plan_intent,
-                        "inputs": ["dataset:analysis_cohort"],
+                        "inputs": ["table:analysis_cohort"],
                         "expected_outputs": list(self.plan_outputs),
                         "method": self.plan_method,
                         "icu_rule_refs": [self.plan_rule_ref],
@@ -838,11 +840,29 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
         )
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
-        if len(plan.steps) != 1:
+        if len(plan.steps) != 2:
             raise CurrentCaseScientificAuthorityError(
-                "landmark survival suite must have exactly one owner step"
+                "landmark survival suite must have one cohort owner and one suite owner"
             )
-        step = plan.steps[0]
+        cohort_owners = [
+            step
+            for step in plan.steps
+            if step.method == "host_materialized_locked_cohort"
+        ]
+        suite_owners = [step for step in plan.steps if step.method == self.plan_method]
+        if len(cohort_owners) != 1 or len(suite_owners) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark survival plan lacks its unique cohort or suite owner"
+            )
+        cohort_owner = cohort_owners[0]
+        if (
+            cohort_owner.inputs
+            or tuple(cohort_owner.expected_outputs) != ("table:analysis_cohort",)
+        ):
+            raise CurrentCaseScientificAuthorityError(
+                "landmark survival cohort owner drifted from host materialization"
+            )
+        step = suite_owners[0]
         issues: list[str] = []
         if step.planned_analysis_role != "primary":
             issues.append("planned_analysis_role")
