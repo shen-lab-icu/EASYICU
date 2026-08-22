@@ -108,7 +108,16 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
     monkeypatch.setattr(
         outcomes,
         "load_outcomes",
-        record("outcome", pd.DataFrame({"stay_id": [7], "mort_28d": [False]})),
+        record(
+            "outcome",
+            pd.DataFrame(
+                {
+                    "stay_id": [7],
+                    "mort_28d": [False],
+                    "followup_days_28d": [28.0],
+                }
+            ),
+        ),
     )
     monkeypatch.setattr(
         microbiology,
@@ -124,6 +133,7 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
             "circ_failure",
             "charlson",
             "mort_28d",
+            "followup_days_28d",
             "culture_positive",
         ],
         patient_ids={"stay_id": [7]},
@@ -140,6 +150,7 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
         "circ_failure",
         "charlson",
         "mort_28d",
+        "followup_days_28d",
         "culture_positive",
     }
     assert set(calls) == {"aki", "circ", "charlson", "outcome", "micro"}
@@ -1186,7 +1197,7 @@ def test_mimic_same_calendar_day_death_is_not_lost_to_midnight_precision(
     assert bool(result.loc[1, "mort_28d"]) is True
 
 
-def test_mimic_absent_death_date_is_censored_not_known_alive(monkeypatch):
+def test_mimic_absent_death_date_has_documented_one_year_followup(monkeypatch):
     import easyicu.scores.outcomes as outcomes
 
     icu = pd.DataFrame(
@@ -1207,8 +1218,44 @@ def test_mimic_absent_death_date_is_censored_not_known_alive(monkeypatch):
 
     result = outcomes.load_outcomes("miiv").set_index("stay_id")
 
-    assert pd.isna(result.loc[1, "mort_28d"])
-    assert pd.isna(result.loc[1, "mort_365d"])
+    assert bool(result.loc[1, "mort_28d"]) is False
+    assert bool(result.loc[1, "mort_365d"]) is False
+    assert result.loc[1, "followup_days_28d"] == 28.0
+    assert result.loc[1, "followup_days_365d"] == 365.0
+
+
+def test_fixed_horizon_followup_time_pairs_events_and_censoring(monkeypatch):
+    import easyicu.scores.outcomes as outcomes
+
+    icu = pd.DataFrame(
+        {
+            "subject_id": [1, 2, 3],
+            "hadm_id": [10, 20, 30],
+            "stay_id": [1, 2, 3],
+            "intime": ["2020-01-01", "2020-01-01", "2020-01-01"],
+            "los": [2.0, 2.0, 2.0],
+        }
+    )
+    patients = pd.DataFrame(
+        {
+            "subject_id": [1, 2, 3],
+            "dod": ["2020-01-06", "2020-02-10", None],
+        }
+    )
+    monkeypatch.setattr(
+        outcomes,
+        "_raw_table",
+        lambda database, data_path, table: icu if table == "icustays" else patients,
+    )
+
+    result = outcomes.load_outcomes("miiv").set_index("stay_id")
+
+    assert bool(result.loc[1, "mort_28d"]) is True
+    assert result.loc[1, "followup_days_28d"] == 5.0
+    assert bool(result.loc[2, "mort_28d"]) is False
+    assert result.loc[2, "followup_days_28d"] == 28.0
+    assert bool(result.loc[3, "mort_28d"]) is False
+    assert result.loc[3, "followup_days_28d"] == 28.0
 
 
 def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
