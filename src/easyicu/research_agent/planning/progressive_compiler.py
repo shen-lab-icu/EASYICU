@@ -505,12 +505,6 @@ def _compile_ordered_stratified_contract(
             step_index=step_index,
             path="outputs",
         )
-    for product in (
-        "table:ordered_stratified_outcomes",
-        "test:ordinal_trend",
-    ):
-        if product not in {item[0] for item in output_pairs}:
-            output_pairs.append((product, "custom"))
     return True
 
 
