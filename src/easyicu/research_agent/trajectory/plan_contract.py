@@ -68,6 +68,9 @@ STABILITY_EXECUTOR_INPUTS = frozenset(
 # prevents an unrelated method (for example cluster-robust regression) from
 # claiming the calculator merely by declaring stability-shaped filenames.
 TRAJECTORY_STABILITY_METHOD_HEAD = "trajectory_cluster_stability"
+TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD = (
+    "trajectory_cluster_stability_characterization"
+)
 
 #: The method key a group-discovery study declares when it has no fixed-window
 #: trajectory. It is ``llm_coded`` with no runner in the method suite, which is
@@ -96,6 +99,14 @@ STABILITY_EXECUTOR_OUTPUTS = frozenset(
         "table:cluster_stability",
         "table:cluster_stability_assignments",
         "table:cluster_assignment_provenance",
+    }
+)
+
+STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS = frozenset(
+    {
+        *STABILITY_EXECUTOR_OUTPUTS,
+        "table:trajectory_profiles",
+        "table:cluster_sizes",
     }
 )
 
@@ -1041,34 +1052,52 @@ def evaluate_trajectory_plan_dag(
             str(value).strip().lower() for value in spec_step.expected_outputs
         }
         candidate_owner = role_owners.get("candidate_selection")
+        closed_stability_contract = (
+            local_method_head == TRAJECTORY_STABILITY_METHOD_HEAD
+            and local_roles == frozenset({"stability_freeze"})
+            and local_outputs == STABILITY_EXECUTOR_OUTPUTS
+        )
+        closed_stability_characterization_contract = (
+            local_method_head == TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD
+            and local_roles == frozenset({"stability_freeze", "characterization"})
+            and local_outputs == STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS
+        )
         if (
-            local_method_head != TRAJECTORY_STABILITY_METHOD_HEAD
-            or local_roles != frozenset({"stability_freeze"})
+            not (
+                closed_stability_contract
+                or closed_stability_characterization_contract
+            )
             or role_owners.get("stability_freeze") != spec_step.step_id
             or candidate_owner is None
             or candidate_owner == spec_step.step_id
             or step_index.get(candidate_owner, len(steps))
             >= step_index.get(spec_step.step_id, -1)
             or local_inputs != STABILITY_EXECUTOR_INPUTS
-            or local_outputs != STABILITY_EXECUTOR_OUTPUTS
         ):
             findings.append(
                 _finding(
                     "trajectory_stability_spec_contract_invalid",
                     "A planner-owned trajectory stability spec requires one later, "
                     "dedicated stability owner using method head "
-                    f"{TRAJECTORY_STABILITY_METHOD_HEAD!r}, the closed standard "
+                    f"{TRAJECTORY_STABILITY_METHOD_HEAD!r} (or the closed combined "
+                    "stability-characterization method), the matching standard "
                     "executor input/output contract, and a distinct preceding "
                     "candidate owner.",
                     step_id=spec_step.step_id,
                     declared_method_head=local_method_head,
-                    required_method_head=TRAJECTORY_STABILITY_METHOD_HEAD,
+                    required_method_heads=[
+                        TRAJECTORY_STABILITY_METHOD_HEAD,
+                        TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
+                    ],
                     roles=sorted(local_roles),
                     candidate_owner_step_id=candidate_owner,
                     declared_inputs=sorted(local_inputs),
                     required_inputs=sorted(STABILITY_EXECUTOR_INPUTS),
                     declared_outputs=sorted(local_outputs),
-                    required_outputs=sorted(STABILITY_EXECUTOR_OUTPUTS),
+                    required_output_contracts=[
+                        sorted(STABILITY_EXECUTOR_OUTPUTS),
+                        sorted(STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS),
+                    ],
                 )
             )
     for step in steps:
@@ -2152,6 +2181,8 @@ def trajectory_role_code_contract(
 __all__ = [
     "STABILITY_EXECUTOR_INPUTS",
     "STABILITY_EXECUTOR_OUTPUTS",
+    "STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS",
+    "TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD",
     "TRAJECTORY_STABILITY_METHOD_HEAD",
     "non_trajectory_clustering_stability_guide",
     "TrajectoryPlanDagEvaluation",
