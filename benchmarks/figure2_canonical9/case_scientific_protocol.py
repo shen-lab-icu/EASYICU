@@ -693,6 +693,11 @@ def _h1_deterministic_execution_contract(
             "exposure_onset_column": "mech_vent_first_time",
             "event_column": "mort_28d",
             "followup_time_column": "followup_days_28d",
+            "endpoint_time_origin": "ICU admission",
+            "endpoint_censoring_rule": (
+                "Observed death time or administrative censoring at 28 days; "
+                "exclude rows without documented horizon support."
+            ),
             "landmark_hours": float(protocol.landmark_hours),
             "endpoint_horizon_days": 28.0,
             "exposure_window_hours": [

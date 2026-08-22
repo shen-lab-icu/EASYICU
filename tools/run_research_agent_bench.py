@@ -1481,6 +1481,23 @@ def _run_one_arm(
             pipeline_options,
             runtime_projection,
         )
+        runtime_endpoint = None
+        runtime_primary_exposure = None
+        current_case_authority = opts.get(
+            "current_case_scientific_runtime_authority"
+        )
+        if current_case_authority is not None:
+            from easyicu.research_agent.authority.current_case_scientific_runtime import (
+                LandmarkSurvivalRuntimeAuthority,
+                load_current_case_scientific_runtime_authority,
+            )
+
+            sealed_current_case = load_current_case_scientific_runtime_authority(
+                current_case_authority
+            )
+            if isinstance(sealed_current_case, LandmarkSurvivalRuntimeAuthority):
+                runtime_endpoint = sealed_current_case.research_context_endpoint()
+                runtime_primary_exposure = sealed_current_case.exposure_status_column
         opts.setdefault(
             "reporting_checklist_names",
             list(checklist_names_for_kind(getattr(item, "kind", None))),
@@ -1550,8 +1567,13 @@ def _run_one_arm(
             trajectory_authority_ref=getattr(item, "trajectory_authority_ref", None),
             cohort_name=f"bench_{item.key}",
             database=database,
-            target_outcome=item.target_outcome,
-            primary_exposure=operational_exposure,
+            target_outcome=(
+                runtime_endpoint.name
+                if runtime_endpoint is not None
+                else item.target_outcome
+            ),
+            endpoint=runtime_endpoint,
+            primary_exposure=(runtime_primary_exposure or operational_exposure),
             concept_descriptions=concept_descriptions,
             inclusion_criteria=item.inclusion_criteria,
             id_columns=(getattr(item, "id_columns", None) or None),

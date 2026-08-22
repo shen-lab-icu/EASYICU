@@ -23,7 +23,12 @@ from ..contracts.association_execution import (
     sole_primary_model_requirement,
 )
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
-from ..schema import AnalysisPlan, AnalysisStep, ArtifactConsumptionContract
+from ..schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ArtifactConsumptionContract,
+    EndpointSpec,
+)
 
 
 class CurrentCaseScientificAuthorityError(ValueError):
@@ -629,6 +634,8 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
     exposure_onset_column: str = Field(min_length=1)
     event_column: str = Field(min_length=1)
     followup_time_column: str = Field(min_length=1)
+    endpoint_time_origin: str = Field(min_length=1)
+    endpoint_censoring_rule: str = Field(min_length=1)
     landmark_hours: float = Field(gt=0)
     endpoint_horizon_days: float = Field(gt=0)
     exposure_window_hours: tuple[float, float]
@@ -800,6 +807,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             {
                 "research_question": str(research_question),
                 "analysis_type": "survival",
+                "endpoint": self.research_context_endpoint().model_dump(mode="json"),
                 "steps": [
                     {
                         "step_id": "01_authority_compiled_survival_suite",
@@ -814,6 +822,20 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             }
         )
         return self.bind_plan(draft)
+
+    def research_context_endpoint(self) -> EndpointSpec:
+        """Project the sealed event/time pair into the shared endpoint contract."""
+
+        return EndpointSpec(
+            name=self.event_column,
+            kind="time_to_event",
+            absence_semantics="absent_row_is_unmeasured",
+            levels=[0, 1],
+            event_column=self.event_column,
+            time_column=self.followup_time_column,
+            time_origin=self.endpoint_time_origin,
+            censoring_rule=self.endpoint_censoring_rule,
+        )
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         if len(plan.steps) != 1:
