@@ -36,7 +36,7 @@ def test_planner_action_guide_closes_family_and_auxiliary_boundaries():
     assert "import another family prefix" in guide
 
 
-def test_prediction_methods_bind_reviewed_resources_without_upgrading_owner():
+def test_prediction_methods_bind_reviewed_resources_and_exact_host_contracts():
     delong = _action("prediction_model", "delong_ci")
     dca = _action("prediction_model", "decision_curve")
     conformal = _action("prediction_model", "conformal_intervals")
@@ -46,7 +46,7 @@ def test_prediction_methods_bind_reviewed_resources_without_upgrading_owner():
     assert delong.kernel_imports == (
         "easyicu.research_agent.methods.delong_auc",
     )
-    assert dca.execution_mode == "coder_generated"
+    assert dca.execution_mode == "host_owned"
     assert dca.kernel_imports == (
         "easyicu.research_agent.methods.decision_curve",
     )
@@ -56,6 +56,22 @@ def test_prediction_methods_bind_reviewed_resources_without_upgrading_owner():
     )
     assert shap.execution_mode == "coder_generated"
     assert shap.software_packages == ("shap",)
+    assert dca.runtime_contract is not None
+    assert dca.runtime_contract.required_product_inputs == (
+        "table:prediction_scores",
+    )
+    assert dca.runtime_contract.outputs == (
+        ("table:clinical_utility", "custom"),
+    )
+
+    primary = _action("prediction_model", "discrimination_calibration")
+    assert primary.execution_mode == "host_owned"
+    assert primary.runtime_contract is not None
+    assert primary.runtime_contract.outputs == (
+        ("table:prediction_scores", "custom"),
+        ("table:model_performance", "custom"),
+    )
+    assert primary.runtime_contract.article_roles == ("model_performance",)
 
 
 def test_dynamic_prediction_is_a_typed_coder_action_with_reviewed_primitives():

@@ -159,6 +159,18 @@ from .feasibility_protocol_executor import (
     feasibility_protocol_executor_code,
     feasibility_protocol_executor_owns_step,
 )
+from .prediction_model_executor import (
+    PREDICTION_MODEL_ANALYSIS_KIND,
+    prediction_model_consumed_input_keys,
+    prediction_model_executor_code,
+    prediction_model_executor_owns_step,
+)
+from .prediction_figure_executor import (
+    PREDICTION_COMPOSITE_FIGURE_INPUTS,
+    PREDICTION_FIGURE_ANALYSIS_KIND,
+    prediction_figure_executor_code,
+    prediction_figure_executor_owns_step,
+)
 
 
 def _consumed_typed_cohort_inputs(step: AnalysisStep) -> tuple[str, ...]:
@@ -439,6 +451,18 @@ def select_standard_executor(
         )
     _missed(FEASIBILITY_PROTOCOL_ANALYSIS_KIND)
 
+    if prediction_model_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=PREDICTION_MODEL_ANALYSIS_KIND,
+                selection_reason="typed_static_prediction_contract_preflight",
+                progress_message="Using deterministic static prediction adapter",
+                code=prediction_model_executor_code(step),
+                consumed_input_keys=prediction_model_consumed_input_keys(step),
+            )
+        )
+    _missed(PREDICTION_MODEL_ANALYSIS_KIND)
+
     if cohort_summary_executor_owns_step(step):
         # This executor emits the flag-only receipt itself, so a receipt
         # obligation no longer sends a step the host can compute exactly to
@@ -622,6 +646,23 @@ def select_standard_executor(
             )
         )
     _missed("landmark_association_composite_figure")
+    if prediction_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined(PREDICTION_FIGURE_ANALYSIS_KIND)
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=PREDICTION_FIGURE_ANALYSIS_KIND,
+                selection_reason="static_prediction_figure_contract_preflight",
+                progress_message="Using source-bound static prediction renderer",
+                code=prediction_figure_executor_code(step),
+                consumed_input_keys=PREDICTION_COMPOSITE_FIGURE_INPUTS,
+                host_sealed_renderer=True,
+            )
+        )
+    _missed(PREDICTION_FIGURE_ANALYSIS_KIND)
     if composite_descriptive_figure_executor_owns_step(
         step, resolved_bindings=resolved_bindings
     ):

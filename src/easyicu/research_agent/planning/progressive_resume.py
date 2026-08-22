@@ -420,6 +420,7 @@ def compile_progressive_prefix(
         {
             "step_id": step.step_id,
             "module_id": candidate_steps[index].module_id,
+            "scientific_action_id": candidate_steps[index].scientific_action_id,
             "skeleton_sha256": receipt.compiled_steps[index].skeleton_sha256,
             "compiled_step_sha256": (
                 receipt.compiled_steps[index].compiled_step_sha256

@@ -77,6 +77,7 @@ from .progressive_contract import (
 from .robustness_contract import RobustnessSpec
 from .preplan_know_how import verify_know_how_decisions
 from .scientific_action_catalog import (
+    ScientificAction,
     ScientificActionGapError,
     scientific_action_for_id,
     validate_plan_scientific_action_selections,
@@ -561,6 +562,52 @@ def _validate_outputs(
             )
 
 
+def _validate_scientific_action_runtime_contract(
+    *,
+    action: ScientificAction | None,
+    step: ProgressiveSkeletonStep,
+    step_index: int,
+    outputs: Sequence[tuple[str, str]],
+) -> None:
+    """Enforce the exact product boundary published by the action owner."""
+
+    contract = action.runtime_contract if action is not None else None
+    if contract is None:
+        return
+    if tuple(outputs) != contract.outputs:
+        raise _fail(
+            "progressive_scientific_action_outputs_mismatch",
+            f"{action.action_id} requires exact outputs {list(contract.outputs)!r}",
+            step=step,
+            step_index=step_index,
+            path="outputs",
+        )
+    declared_inputs = tuple(reference.product_id for reference in step.product_inputs)
+    if declared_inputs != contract.required_product_inputs:
+        raise _fail(
+            "progressive_scientific_action_inputs_mismatch",
+            f"{action.action_id} requires exact product inputs "
+            f"{list(contract.required_product_inputs)!r}",
+            step=step,
+            step_index=step_index,
+            path="product_inputs",
+        )
+    non_dependencies = sorted(
+        {
+            reference.producer_step_id
+            for reference in step.product_inputs
+            if reference.producer_step_id not in step.depends_on
+        }
+    )
+    if non_dependencies:
+        raise _fail(
+            "progressive_scientific_action_dependency_mismatch",
+            "scientific-action product inputs must come from direct dependencies",
+            step=step,
+            step_index=step_index,
+            path="product_inputs",
+            detail={"non_dependency_producers": non_dependencies},
+        )
 def _compile_binary_association_sensitivity_capability(
     *,
     skeleton: ProgressivePlanSkeleton,
@@ -1246,6 +1293,15 @@ def _compile_inputs(
     producers: Mapping[str, str],
     outputs_by_step: Mapping[str, Sequence[str]],
 ) -> tuple[list[str], list[ArtifactConsumptionContract]]:
+    action = (
+        scientific_action_for_id(
+            analysis_type=skeleton.analysis_type,
+            action_id=step.scientific_action_id,
+        )
+        if step.scientific_action_id is not None
+        else None
+    )
+    runtime_contract = action.runtime_contract if action is not None else None
     reserved_coordinates = set(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
@@ -1319,10 +1375,28 @@ def _compile_inputs(
     inputs = list(raw)
     if (
         step.module_id not in {"cohort_definition", "visualization"}
+        and not (
+            runtime_contract is not None
+            and runtime_contract.required_product_inputs
+        )
         and "artifact:analysis_cohort" in producers
     ):
         inputs.append("artifact:analysis_cohort")
     refs = list(step.product_inputs)
+    if step.module_id == "visualization" and len(refs) > _MAX_VISUALIZATION_SOURCE_PRODUCTS:
+        raise _fail(
+            "progressive_visualization_source_budget_exceeded",
+            "a rendering-only visualization binds too many direct result sources "
+            "for one independently traceable figure",
+            step=step,
+            step_index=step_index,
+            path="product_inputs",
+            detail={
+                "source_products": [reference.product_id for reference in refs],
+                "source_product_count": len(refs),
+                "max_source_products": _MAX_VISUALIZATION_SOURCE_PRODUCTS,
+            },
+        )
     if step.module_id == "visualization" and not refs:
         for dependency in step.depends_on:
             for product_id in outputs_by_step.get(dependency, ()):
@@ -1339,6 +1413,32 @@ def _compile_inputs(
                 step=step,
                 step_index=step_index,
                 path="product_inputs",
+            )
+        reference_product = typed_product(reference.product_id)
+        strict_visualization_reference = (
+            step.module_id == "visualization"
+            and reference_product is not None
+            and reference_product[0] in {"table", "statistic"}
+        )
+        if (
+            runtime_contract is not None
+            and (
+                reference.producer_step_id != owner or owner not in step.depends_on
+            )
+        ) or (strict_visualization_reference and owner not in step.depends_on):
+            raise _fail(
+                "progressive_product_dependency_mismatch",
+                "a strict result consumer must bind the exact product owner as "
+                "a direct dependency",
+                step=step,
+                step_index=step_index,
+                path="product_inputs",
+                detail={
+                    "product_id": reference.product_id,
+                    "declared_producer": reference.producer_step_id,
+                    "registered_producer": owner,
+                    "depends_on": list(step.depends_on),
+                },
             )
         # Product ids have one preceding owner by construction. Resolve that
         # owner from the host registry instead of making the model repeat an
@@ -1560,6 +1660,21 @@ def _compile_one_step(
     host_interpretation_source_key: str | None = None,
     host_missing_data_binding: tuple[str, tuple[str, ...], str] | None = None,
 ) -> _CompiledStep:
+    action: ScientificAction | None = None
+    if step.scientific_action_id is not None:
+        try:
+            action = scientific_action_for_id(
+                analysis_type=skeleton.analysis_type,
+                action_id=step.scientific_action_id,
+            )
+        except ScientificActionGapError as exc:
+            raise _fail(
+                "progressive_scientific_action_invalid",
+                str(exc),
+                step=step,
+                step_index=step_index,
+                path="scientific_action_id",
+            ) from exc
     try:
         output_pairs = _canonical_outputs(step)
     except ValueError as exc:
@@ -1579,6 +1694,12 @@ def _compile_one_step(
         output_pairs=output_pairs,
     )
     _validate_outputs(output_pairs, step=step, step_index=step_index)
+    _validate_scientific_action_runtime_contract(
+        action=action,
+        step=step,
+        step_index=step_index,
+        outputs=output_pairs,
+    )
     association_sensitivity_capability = (
         _compile_binary_association_sensitivity_capability(
             skeleton=skeleton,

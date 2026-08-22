@@ -40,6 +40,7 @@ from .study_design_playbook import StudyDesignFamily
 
 __all__ = [
     "ScientificAction",
+    "ScientificActionRuntimeContract",
     "ScientificActionCatalog",
     "ScientificActionGapError",
     "ScientificActionResolution",
@@ -57,6 +58,53 @@ ScientificExecutionMode = Literal[
     "coder_generated",
     "not_available",
 ]
+
+
+@dataclass(frozen=True)
+class ScientificActionRuntimeContract:
+    """Exact progressive-plan shape owned by one deterministic adapter.
+
+    The method-suite prose remains useful to reviewers, but it cannot tell the
+    compiler which product identity a downstream step may bind.  This small
+    contract is the machine-readable boundary: the Planner still chooses the
+    action and variables, while the host fixes only its typed result products
+    and direct upstream products.
+    """
+
+    outputs: Tuple[Tuple[str, str], ...]
+    required_product_inputs: Tuple[str, ...] = ()
+    article_roles: Tuple[str, ...] = ()
+    standard_executor: str = ""
+
+
+_RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
+    "prediction.discrimination_calibration": ScientificActionRuntimeContract(
+        outputs=(
+            ("table:prediction_scores", "custom"),
+            ("table:model_performance", "custom"),
+        ),
+        article_roles=("model_performance",),
+        standard_executor="prediction_model",
+    ),
+    "prediction.internal_validation": ScientificActionRuntimeContract(
+        outputs=(("table:validation", "custom"),),
+        required_product_inputs=("table:prediction_scores",),
+        article_roles=("validation",),
+        standard_executor="prediction_model",
+    ),
+    "prediction.calibration_metrics": ScientificActionRuntimeContract(
+        outputs=(("table:calibration", "custom"),),
+        required_product_inputs=("table:prediction_scores",),
+        article_roles=("calibration",),
+        standard_executor="prediction_model",
+    ),
+    "prediction.decision_curve": ScientificActionRuntimeContract(
+        outputs=(("table:clinical_utility", "custom"),),
+        required_product_inputs=("table:prediction_scores",),
+        article_roles=("clinical_utility",),
+        standard_executor="prediction_model",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -79,6 +127,7 @@ class ScientificAction:
     alternative_action_ids: Tuple[str, ...] = ()
     primary_for_analysis_types: Tuple[str, ...] = ()
     notes: str = ""
+    runtime_contract: ScientificActionRuntimeContract | None = None
 
 
 @dataclass(frozen=True)
@@ -194,14 +243,16 @@ def _compile_action(
             f"{family}.{method.key}: unknown_kernels={unknown_kernels!r}, "
             f"unknown_packages={unknown_packages!r}"
         )
+    action_id = f"{family}.{method.key}"
+    runtime_contract = _RUNTIME_CONTRACTS.get(action_id)
     return ScientificAction(
-        action_id=f"{family}.{method.key}",
+        action_id=action_id,
         analysis_family=family,
         method_key=method.key,
         name=method.name,
         purpose=method.purpose,
         tier=method.tier,
-        execution_mode=_execution_mode(method),
+        execution_mode=("host_owned" if runtime_contract is not None else _execution_mode(method)),
         produces=method.produces,
         runner=method.runner,
         kernel_imports=tuple(
@@ -214,6 +265,7 @@ def _compile_action(
         alternative_action_ids=method.alternative_action_ids,
         primary_for_analysis_types=method.primary_for_analysis_types,
         notes=method.notes,
+        runtime_contract=runtime_contract,
     )
 
 
