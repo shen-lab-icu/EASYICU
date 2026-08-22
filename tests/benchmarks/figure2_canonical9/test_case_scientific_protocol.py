@@ -136,11 +136,13 @@ def test_launcher_cannot_override_a_signed_runtime_execution_contract() -> None:
         load_default_case_protocol("e2_lactate_mortality")
     ).model_dump(mode="json")
     bound = _bind_runtime_scientific_projection_options({}, projection)
-    assert bound["current_case_scientific_runtime_authority"] == (
-        projection["deterministic_execution_contract"]
+    assert (
+        bound["current_case_scientific_runtime_authority"]
+        == (projection["deterministic_execution_contract"])
     )
-    assert bound["scientific_runtime_projection_sha256"] == (
-        projection["runtime_projection_sha256"]
+    assert (
+        bound["scientific_runtime_projection_sha256"]
+        == (projection["runtime_projection_sha256"])
     )
 
     with pytest.raises(ValueError, match="AUTHORITY_OVERRIDE_FORBIDDEN"):
@@ -158,9 +160,47 @@ def test_launcher_cannot_override_a_signed_runtime_execution_contract() -> None:
         load_default_case_protocol("h1_ventilation_survival")
     ).model_dump(mode="json")
     h1_bound = _bind_runtime_scientific_projection_options({}, h1_projection)
-    assert h1_bound["current_case_scientific_runtime_authority"] == (
-        h1_projection["deterministic_execution_contract"]
+    assert (
+        h1_bound["current_case_scientific_runtime_authority"]
+        == (h1_projection["deterministic_execution_contract"])
     )
+
+
+def test_only_owner_compiled_zero_input_projection_can_skip_materialized_inputs() -> (
+    None
+):
+    from tools.run_research_agent_bench import (
+        _development_projection_uses_no_materialized_inputs,
+    )
+
+    def row_for(task_id: str) -> dict[str, object]:
+        projection = build_runtime_scientific_projection(
+            load_default_case_protocol(task_id)
+        )
+        return {
+            "key": task_id,
+            "question": "Execute the signed development diagnostic.",
+            "case_scientific_protocol_sha256": projection.protocol_content_sha256,
+            "runtime_scientific_projection": projection.model_dump(mode="json"),
+            "runtime_scientific_projection_sha256": (
+                projection.runtime_projection_sha256
+            ),
+        }
+
+    assert _development_projection_uses_no_materialized_inputs(
+        row_for("h2_vasopressor_causal")
+    )
+    assert not _development_projection_uses_no_materialized_inputs(
+        row_for("h1_ventilation_survival")
+    )
+    assert not _development_projection_uses_no_materialized_inputs(
+        row_for("h3_trajectory_clustering")
+    )
+
+    mismatched = row_for("h2_vasopressor_causal")
+    mismatched["runtime_scientific_projection_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="declared digest mismatch"):
+        _development_projection_uses_no_materialized_inputs(mismatched)
 
 
 def test_h3_protocol_rejects_post_hoc_candidate_k_drift(tmp_path) -> None:

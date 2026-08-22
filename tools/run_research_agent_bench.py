@@ -172,6 +172,67 @@ def _bind_runtime_scientific_projection_options(
     return options
 
 
+def _development_projection_uses_no_materialized_inputs(
+    row: Mapping[str, Any],
+) -> bool:
+    """Prove that a reviewed development projection is input-independent.
+
+    This is intentionally stronger than trusting an ``inputs: []`` field from
+    the JSONL.  The signed runtime projection and its declared digests are
+    loaded, the owner authority compiles the execution-only plan, and every
+    governed step must declare no materialized input.  Authorities without an
+    execution-only compiler remain data-consuming by default.
+    """
+
+    raw_projection = row.get("runtime_scientific_projection")
+    if not isinstance(raw_projection, Mapping):
+        return False
+
+    from benchmarks.figure2_canonical9.case_scientific_protocol import (
+        load_runtime_scientific_projection,
+    )
+    from easyicu.research_agent.orchestration.scientific_runtime import (
+        ScientificRuntimeAuthorities,
+    )
+
+    projection = load_runtime_scientific_projection(raw_projection)
+    task_id = str(row.get("key") or row.get("id") or "").strip()
+    if projection.task_id != task_id:
+        raise ValueError("runtime scientific projection task mismatch")
+    if str(row.get("runtime_scientific_projection_sha256") or "").strip() != (
+        projection.runtime_projection_sha256
+    ):
+        raise ValueError("runtime scientific projection declared digest mismatch")
+    if str(row.get("case_scientific_protocol_sha256") or "").strip() != (
+        projection.protocol_content_sha256
+    ):
+        raise ValueError("runtime projection and case protocol digest mismatch")
+
+    contract = projection.deterministic_execution_contract
+    if not isinstance(contract, Mapping):
+        return False
+    schema_version = str(contract.get("schema_version") or "")
+    authorities = ScientificRuntimeAuthorities.load(
+        trajectory=(
+            contract
+            if schema_version == "easyicu.trajectory_scientific_runtime_authority/1"
+            else None
+        ),
+        current_case=(
+            None
+            if schema_version == "easyicu.trajectory_scientific_runtime_authority/1"
+            else contract
+        ),
+    )
+    compiled = authorities.development_execution_only_plan(
+        research_question=str(row.get("question") or row.get("research_question") or "")
+    )
+    if compiled is None:
+        return False
+    plan, _finding = compiled
+    return bool(plan.steps) and all(not step.inputs for step in plan.steps)
+
+
 def _is_figure2_task_id(value: object) -> bool:
     """Return True only for an exact frozen Canonical9 identifier."""
 
@@ -5681,6 +5742,14 @@ def _run_ehrflowbench_jsonl(
         raw_trajectory_authority_path = row.get("trajectory_authority_path")
         raw_trajectory_authority_ref = row.get("trajectory_authority_ref")
         trajectory_authority_required = row.get("trajectory_authority_required")
+        input_independent_development_projection = bool(
+            (pipeline_options or {}).get("development_diagnostic")
+        ) and _development_projection_uses_no_materialized_inputs(row)
+        if input_independent_development_projection:
+            raw_trajectory_path = None
+            raw_trajectory_authority_path = None
+            raw_trajectory_authority_ref = None
+            trajectory_authority_required = False
         trajectory_authority_declared = (
             raw_trajectory_authority_path is not None
             or raw_trajectory_authority_ref is not None
@@ -5816,6 +5885,14 @@ def _run_ehrflowbench_jsonl(
                 else None
             ),
         )
+        if input_independent_development_projection:
+            item.protocol_adapter["diagnostics"].append(
+                {
+                    "field": "trajectory_authority",
+                    "status": "not_applicable_to_input_independent_execution_only_plan",
+                    "default": None,
+                }
+            )
         row_pipeline_options = dict(pipeline_options or {})
         if frozen_input_authority_by_task and key in frozen_input_authority_by_task:
             # Bind THIS task's frozen input digest so _bind_benchmark_execution_input

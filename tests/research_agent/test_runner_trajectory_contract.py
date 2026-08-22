@@ -595,6 +595,89 @@ def test_ehrflowbench_rejects_missing_declared_trajectory(tmp_path, monkeypatch)
     ]
 
 
+def test_zero_input_development_projection_ignores_unrelated_trajectory_binding(
+    tmp_path,
+    monkeypatch,
+):
+    import tools.run_research_agent_bench as bench
+    from benchmarks.figure2_canonical9.case_scientific_protocol import (
+        build_runtime_scientific_projection,
+        load_default_case_protocol,
+    )
+
+    cohort = tmp_path / "cohort.csv"
+    cohort.write_text("stay_id,death,vaso_ind\n1,0,1\n", encoding="utf-8")
+    missing_trajectory = tmp_path / "irrelevant-missing-trajectory.parquet"
+    projection = build_runtime_scientific_projection(
+        load_default_case_protocol("h2_vasopressor_causal")
+    )
+    jsonl = tmp_path / "zero-input-items.jsonl"
+    jsonl.write_text(
+        json.dumps(
+            {
+                "key": "h2_vasopressor_causal",
+                "question": "Emit the signed source feasibility decision.",
+                "cohort_path": str(cohort),
+                "target_outcome": "death",
+                "operational_exposure": "vaso_ind",
+                "case_scientific_protocol_sha256": (projection.protocol_content_sha256),
+                "runtime_scientific_projection": projection.model_dump(mode="json"),
+                "runtime_scientific_projection_sha256": (
+                    projection.runtime_projection_sha256
+                ),
+                "trajectory_path": str(missing_trajectory),
+                "trajectory_authority_required": True,
+                "trajectory_authority_path": str(tmp_path / "irrelevant.json"),
+                "trajectory_authority_ref": {"invalid": "unused"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    seen: list[object] = []
+
+    def fake_run_one(**kwargs):
+        seen.append(kwargs["item"])
+        return {"item_key": "h2_vasopressor_causal", **_COMPLETED_AWARE_ARM}
+
+    monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run_one)
+    monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
+    monkeypatch.setattr(bench, "_render_markdown", lambda **_kwargs: "ok")
+
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl,
+            out_root=tmp_path / "development-out",
+            seed=7,
+            arms=["aware"],
+            pipeline_options={"development_diagnostic": True},
+            provider="openai",
+            model="model",
+        )
+        == 0
+    )
+    assert len(seen) == 1
+    assert seen[0].trajectory_path is None
+    assert seen[0].trajectory_authority_ref is None
+    assert seen[0].protocol_adapter["diagnostics"][-1]["status"] == (
+        "not_applicable_to_input_independent_execution_only_plan"
+    )
+
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl,
+            out_root=tmp_path / "formal-out",
+            seed=7,
+            arms=["aware"],
+            pipeline_options={"development_diagnostic": False},
+            provider="openai",
+            model="model",
+        )
+        == bench._PENDING_ITEMS_EXIT_CODE
+    )
+    assert len(seen) == 1
+
+
 def test_ehrflowbench_rejects_trajectory_symlink_before_resolution(
     tmp_path,
     monkeypatch,
