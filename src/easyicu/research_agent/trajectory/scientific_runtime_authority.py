@@ -193,6 +193,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                         "expected_outputs": [
                             *self.representation_required_outputs,
                             "table:feature_availability",
+                            "table:cohort_flow",
                             "manifest:trajectory_window_manifest",
                         ],
                         "method": self.representation_plan_method,
@@ -342,7 +343,12 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                 + ", ".join(issues)
             )
 
-    def validate_selection(self, payload: Mapping[str, Any]) -> None:
+    def validate_selection(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        allow_prespecified_boundary_rejection: bool = False,
+    ) -> None:
         candidates = payload.get("candidates")
         candidate_k = (
             tuple(item.get("n_clusters") for item in candidates)
@@ -381,7 +387,10 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             )
             if selected_index != expected_index:
                 issues.append("minimum_bic_selection")
-            if selected == max(self.candidate_cluster_counts):
+            if (
+                selected == max(self.candidate_cluster_counts)
+                and not allow_prespecified_boundary_rejection
+            ):
                 raise TrajectoryScientificAuthorityError(
                     "candidate range does not contain an interior optimum: "
                     + self.upper_boundary_reason_code

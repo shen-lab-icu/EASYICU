@@ -355,6 +355,19 @@ def test_signed_representation_excludes_owner_unavailable_zero(tmp_path: Path) -
                 "owner_available": 0,
             }
         )
+    for concept in ("sofa2_resp", "lact"):
+        rows.append(
+            {
+                "stay_id": 9,
+                "charttime": 0.0,
+                "concept": concept,
+                "value_num": None,
+                "value_str": None,
+                "evidence_state": "unavailable",
+                "owner_observed": 0,
+                "owner_available": 0,
+            }
+        )
     trajectory_path = tmp_path / "trajectory.parquet"
     pd.DataFrame(rows).to_parquet(trajectory_path, index=False)
     out_dir = tmp_path / "representation"
@@ -369,6 +382,20 @@ def test_signed_representation_excludes_owner_unavailable_zero(tmp_path: Path) -
     assert summary["status"] == "ok"
     representation = pd.read_parquet(out_dir / "trajectory_representation.parquet")
     assert representation["sofa2_resp__h0_12"].max() == 0.0
+    membership = pd.read_csv(out_dir / "trajectory_membership.csv")
+    unavailable = membership.loc[membership["stay_id"].eq(9)].iloc[0]
+    assert not bool(unavailable["included_in_clustering"])
+    flow = dict(
+        pd.read_csv(out_dir / "cohort_flow.csv")[["metric", "n"]].itertuples(
+            index=False, name=None
+        )
+    )
+    assert flow == {
+        "input_cohort": 9,
+        "meets_min_observed_windows": 8,
+        "excluded_insufficient_windows": 1,
+        "included_in_clustering": 8,
+    }
     schema = json.loads(
         (out_dir / "trajectory_representation_schema.json").read_text("utf-8")
     )
@@ -522,6 +549,69 @@ def test_signed_candidate_and_stability_share_one_scaling_and_selection_contract
     }
     assert len(profiles) == 3 * len(authority.representation_columns)
     assert sizes["n"].sum() == len(representation)
+
+    rejected_out = run_dir / "rejected_candidate"
+    rejected_out.mkdir()
+    rejected_assignments = pd.DataFrame(
+        {
+            "stay_id": representation["stay_id"],
+            "candidate_cluster": np.arange(len(representation)) % 4,
+        }
+    )
+    rejected_assignments_path = rejected_out / "candidate_cluster_assignments.csv"
+    rejected_assignments.to_csv(rejected_assignments_path, index=False)
+    rejected_selection = json.loads(
+        (candidate_out / "cluster_selection.json").read_text("utf-8")
+    )
+    upper_k = max(authority.candidate_cluster_counts)
+    rejected_selection["selected_n_clusters"] = upper_k
+    for candidate in rejected_selection["candidates"]:
+        candidate["criterion_value"] = (
+            0.0 if candidate["n_clusters"] == upper_k else 100.0
+        )
+    rejected_selection_path = rejected_out / "cluster_selection.json"
+    rejected_selection_path.write_text(json.dumps(rejected_selection), encoding="utf-8")
+    rejected_schema = json.loads(
+        (candidate_out / "candidate_cluster_solution_schema.json").read_text("utf-8")
+    )
+    rejected_schema.update(
+        {
+            "selected_n_clusters": upper_k,
+            "selected_model_id": f"signed-observed-data-diag-gmm-k{upper_k}",
+            "selected_criterion_value": 0.0,
+            "candidate_assignments_sha256": _sha256(rejected_assignments_path),
+            "scientific_selection_status": "failed_closed",
+            "stability_authorized": False,
+            "scientific_selection_reason_code": authority.upper_boundary_reason_code,
+        }
+    )
+    rejected_schema_path = rejected_out / "candidate_cluster_solution_schema.json"
+    rejected_schema_path.write_text(json.dumps(rejected_schema), encoding="utf-8")
+    rejected_inputs = json.loads(json.dumps(stability_inputs))
+    rejected_inputs["inputs"]["artifact:candidate_cluster_assignments"] = _binding(
+        run_dir, rejected_assignments_path, "rejected-candidate-assignments"
+    )
+    rejected_inputs["inputs"]["manifest:cluster_selection"] = _binding(
+        run_dir, rejected_selection_path, "rejected-cluster-selection"
+    )
+    rejected_inputs["inputs"][
+        "manifest:candidate_cluster_solution_schema"
+    ] = _binding(run_dir, rejected_schema_path, "rejected-candidate-schema")
+    rejected_stability_out = run_dir / "rejected_stability"
+    rejected_summary = run_trajectory_stability(
+        spec=authority.stability_spec,
+        out_dir=rejected_stability_out,
+        run_dir=run_dir,
+        resolved_inputs=rejected_inputs,
+        scientific_runtime_authority=authority,
+        runtime_projection_sha256="2" * 64,
+        include_characterization=True,
+    )
+    assert rejected_summary["status"] == "ok"
+    assert rejected_summary["scientific_status"] == "failed_closed"
+    assert rejected_summary["stability_refits_executed"] == 0
+    assert pd.read_csv(rejected_stability_out / "cluster_assignments.csv").empty
+    assert pd.read_csv(rejected_stability_out / "trajectory_profiles.csv").empty
 
     selection_path = candidate_out / "cluster_selection.json"
     selection = json.loads(selection_path.read_text("utf-8"))
