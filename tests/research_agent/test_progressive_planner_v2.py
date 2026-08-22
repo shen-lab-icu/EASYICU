@@ -17,6 +17,7 @@ from easyicu.research_agent.agents.progressive_payload import (
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
     _complete_case_variable_roster,
+    _parse_foundation_materialization,
     candidate_analysis_types,
 )
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
@@ -550,6 +551,55 @@ def _foundation_payload(payload: dict | None = None) -> dict:
             "know_how_decisions": source.get("know_how_decisions", []),
         },
     }
+
+
+def test_foundation_parser_collapses_only_exact_duplicate_know_how_decisions() -> None:
+    payload = _foundation_payload()
+    decision = {
+        "card_id": "card_a",
+        "card_version": "1.0.0",
+        "card_sha256": "a" * 64,
+        "claim_id": "claim_a",
+        "disposition": "adopted",
+        "reason_code": "fits_estimand",
+        "rationale": "The retrieved claim matches the prespecified estimand.",
+        "citation_ids": ["citation_a"],
+    }
+    payload["foundation"]["know_how_decisions"] = [decision, dict(decision)]
+
+    parsed = _parse_foundation_materialization(
+        json.dumps(payload),
+        host_cohort=None,
+    )
+
+    assert len(parsed.foundation.know_how_decisions) == 1
+
+
+def test_foundation_parser_rejects_conflicting_duplicate_know_how_decisions() -> None:
+    payload = _foundation_payload()
+    adopted = {
+        "card_id": "card_a",
+        "card_version": "1.0.0",
+        "card_sha256": "a" * 64,
+        "claim_id": "claim_a",
+        "disposition": "adopted",
+        "reason_code": "fits_estimand",
+        "rationale": "The retrieved claim matches the prespecified estimand.",
+        "citation_ids": ["citation_a"],
+    }
+    rejected = {
+        **adopted,
+        "disposition": "rejected",
+        "reason_code": "does_not_fit_estimand",
+        "rationale": "The retrieved claim conflicts with the prespecified estimand.",
+    }
+    payload["foundation"]["know_how_decisions"] = [adopted, rejected]
+
+    with pytest.raises(ValueError, match="must not repeat a card/claim pair"):
+        _parse_foundation_materialization(
+            json.dumps(payload),
+            host_cohort=None,
+        )
 
 
 def _walk_objects(node):

@@ -422,6 +422,33 @@ def _parse_foundation_materialization(
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
         raise ValueError("progressive Planner response root must be an object")
+    foundation = payload.get("foundation")
+    if isinstance(foundation, dict):
+        decisions = foundation.get("know_how_decisions")
+        if isinstance(decisions, list):
+            # An exact duplicate carries no additional scientific choice and is
+            # a common structured-generation artifact. Collapse only bytewise-
+            # equivalent JSON objects; two different decisions for the same
+            # card/claim coordinate still reach the model validator and fail
+            # closed as a real conflict.
+            unique_decisions: list[Any] = []
+            seen_decisions: set[str] = set()
+            for decision in decisions:
+                coordinate = json.dumps(
+                    decision,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if coordinate in seen_decisions:
+                    continue
+                seen_decisions.add(coordinate)
+                unique_decisions.append(decision)
+            if len(unique_decisions) != len(decisions):
+                payload = dict(payload)
+                foundation = dict(foundation)
+                foundation["know_how_decisions"] = unique_decisions
+                payload["foundation"] = foundation
     if host_cohort is not None:
         foundation = payload.get("foundation")
         if not isinstance(foundation, dict):
@@ -986,7 +1013,10 @@ class ProgressivePlannerAgent:
         blocks.append(
             "Return one ProgressiveFoundationMaterialization only. Bind cohort "
             "selection, display labels, robustness intents, and any authorized "
-            "know-how decisions. Do not return executable step fields."
+            "know-how decisions. Emit at most one decision for each exact "
+            "card_id/claim_id pair. Every cohort predicate must use an interval "
+            "with end_offset_hours greater than start_offset_hours. Do not return "
+            "executable step fields."
         )
         blocks.append(
             "robustness_intents are only for the generic host replay owner. "
