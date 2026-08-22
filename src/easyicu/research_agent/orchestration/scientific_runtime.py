@@ -67,6 +67,34 @@ class ScientificRuntimeAuthorities:
         authorities continue to require the Planner's exact step unchanged.
         """
 
+        trajectory_authority = self.trajectory
+        if (
+            trajectory_authority is not None
+            and trajectory_authority.is_development_execution_only_plan(plan)
+        ):
+            bound = trajectory_authority.development_execution_only_plan(
+                research_question=plan.research_question
+            )
+            return bound, [
+                ValidationFinding(
+                    validator="scientific_runtime_plan_compiler",
+                    severity="warning",
+                    message=(
+                        "Removed generic article-shaping additions and compiled "
+                        "the three signed trajectory execution owners."
+                    ),
+                    detail={
+                        "reason_code": (
+                            "trajectory_development_execution_only_authority_compiled"
+                        ),
+                        "step_ids": [step.step_id for step in bound.steps],
+                        "execution_contract_sha256": (
+                            trajectory_authority.execution_contract_sha256
+                        ),
+                    },
+                )
+            ]
+
         authority = self.current_case
         if isinstance(authority, SourceFeasibilityRuntimeAuthority):
             bound = authority.development_execution_only_plan(
@@ -165,6 +193,29 @@ class ScientificRuntimeAuthorities:
         """Return a host-projected plan only when its sealed authority opts in."""
 
         authority = self.current_case
+        trajectory_authority = self.trajectory
+        if authority is None and trajectory_authority is not None:
+            plan = trajectory_authority.development_execution_only_plan(
+                research_question=research_question
+            )
+            return plan, ValidationFinding(
+                validator="scientific_runtime_plan_compiler",
+                severity="warning",
+                message=(
+                    "Used the digest-bound trajectory authority for an explicit "
+                    "development execution-only run without a Planner call."
+                ),
+                detail={
+                    "reason_code": (
+                        "trajectory_development_execution_only_authority_compiled"
+                    ),
+                    "analysis_only": True,
+                    "step_ids": [step.step_id for step in plan.steps],
+                    "execution_contract_sha256": (
+                        trajectory_authority.execution_contract_sha256
+                    ),
+                },
+            )
         if isinstance(authority, LandmarkSurvivalRuntimeAuthority):
             if not authority.development_execution_only_allowed:
                 return None

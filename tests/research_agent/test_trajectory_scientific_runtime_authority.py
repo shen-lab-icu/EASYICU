@@ -20,6 +20,9 @@ from easyicu.research_agent.execution.runners.trajectory_stability_executor impo
 from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
 )
+from easyicu.research_agent.orchestration.scientific_runtime import (
+    ScientificRuntimeAuthorities,
+)
 from easyicu.research_agent.schema import AnalysisPlan, TrajectoryStabilitySpec
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     TrajectoryScientificAuthorityError,
@@ -224,6 +227,54 @@ def test_signed_trajectory_contract_owns_all_three_real_execution_steps() -> Non
         assert selected is not None
         assert selected.analysis_kind == expected_kind
         assert authority.execution_contract_sha256 in selected.code
+
+
+def test_signed_trajectory_authority_projects_and_rebinds_execution_only_plan() -> None:
+    authority = _authority()
+    plan = authority.development_execution_only_plan(
+        research_question="Assess fixed-window trajectory phenotypes."
+    )
+    authority.validate_plan(plan)
+    assert [step.step_id for step in plan.steps] == list(
+        authority.development_execution_step_ids
+    )
+    assert [step.method for step in plan.steps] == [
+        authority.representation_plan_method,
+        "observed_data_diagonal_gaussian_mixture_candidate_selection",
+        "trajectory_cluster_stability",
+    ]
+
+    authorities = ScientificRuntimeAuthorities(
+        trajectory=authority,
+        current_case=None,
+    )
+    projected = authorities.development_execution_only_plan(
+        research_question=plan.research_question
+    )
+    assert projected is not None
+    projected_plan, projected_finding = projected
+    authority.validate_plan(projected_plan)
+    assert projected_finding.detail["reason_code"] == (
+        "trajectory_development_execution_only_authority_compiled"
+    )
+
+    generic_step = plan.steps[-1].model_copy(
+        update={
+            "step_id": "03_generic_article_figure",
+            "method": "visualization",
+            "intent": "Add a generic article figure.",
+            "expected_outputs": ["figure:generic_article_figure"],
+            "trajectory_stability_spec": None,
+        }
+    )
+    rebound, rebound_findings = authorities.bind_plan(
+        plan.model_copy(update={"steps": [*plan.steps, generic_step]})
+    )
+    authority.validate_plan(rebound)
+    assert len(rebound.steps) == 3
+    assert rebound_findings[0].detail["reason_code"] == (
+        "trajectory_development_execution_only_authority_compiled"
+    )
 
 
 def test_signed_representation_excludes_owner_unavailable_zero(tmp_path: Path) -> None:
