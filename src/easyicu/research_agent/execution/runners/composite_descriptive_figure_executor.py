@@ -52,6 +52,12 @@ COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS = (
     "table:robustness_summary",
     "table:measurement_missingness",
 )
+COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS = (
+    "table:adjusted_association_estimates",
+    "table:absolute_risk_context",
+    "table:robustness_summary",
+    "table:measurement_process_audit",
+)
 
 _REQUIRED_COLUMNS = {
     "table:cohort_flow": frozenset({"n_remaining"}),
@@ -71,7 +77,7 @@ _REQUIRED_COLUMNS = {
         {"variable", "n_total", "missing_n", "missing_pct"}
     ),
     "table:measurement_process_audit": frozenset(
-        {"concept", "n_total", "measured_one_n"}
+        {"concept", "n_total", "measured_one_n", "eligible_n"}
     ),
     "table:robustness_summary": frozenset(
         {
@@ -86,6 +92,17 @@ _REQUIRED_COLUMNS = {
     "table:adjusted_association_estimates": frozenset(
         {"fit_status", "estimate", "ci_low", "ci_high", "effect_scale", "model_id"}
     ),
+    "table:absolute_risk_context": frozenset(
+        {
+            "estimate_type",
+            "label",
+            "n",
+            "event_n",
+            "estimate",
+            "ci_low",
+            "ci_high",
+        }
+    ),
     "table:robustness_matrix": frozenset(
         {"spec_id", "point_estimate", "ci_low", "ci_high", "effect_scale", "converged"}
     ),
@@ -99,6 +116,7 @@ _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES = (
     COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+    COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
 )
 _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES = tuple(
     TypedInputCapability(required=frozenset(profile))
@@ -318,6 +336,7 @@ def run_composite_descriptive_figure(
     if tuple(input_keys) in {
         COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
         COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+        COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
     }:
         from .association_publication_figure_renderer import (
             render_association_publication_figure,

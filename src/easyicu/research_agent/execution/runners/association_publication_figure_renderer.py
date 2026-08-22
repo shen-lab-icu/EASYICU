@@ -142,6 +142,45 @@ def _robustness_ranges(ax: Any, frame: pd.DataFrame, *, color: str) -> None:
     ax.set_title("Robustness ranges", loc="left", pad=12)
 
 
+def _absolute_risk_context(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.loc[frame["estimate_type"].astype(str).eq("outcome_risk")].copy()
+    if result.empty:
+        raise ValueError("absolute-risk context has no outcome_risk rows")
+    result["n"] = _integers(result, "n")
+    result["event_n"] = _integers(result, "event_n")
+    result["estimate"] = _finite(result, "estimate")
+    result["ci_low"] = _finite(result, "ci_low")
+    result["ci_high"] = _finite(result, "ci_high")
+    if (
+        (result["n"] <= 0).any()
+        or (result["event_n"] < 0).any()
+        or (result["event_n"] > result["n"]).any()
+    ):
+        raise ValueError(
+            "absolute-risk counts do not nest within positive denominators"
+        )
+    expected = result["event_n"].astype(float) / result["n"].astype(float)
+    if not np.isclose(result["estimate"], expected, rtol=0.0, atol=5e-7).all():
+        raise ValueError("absolute-risk estimates do not reconcile to counts")
+    if (result["ci_low"] > result["estimate"]).any() or (
+        result["estimate"] > result["ci_high"]
+    ).any():
+        raise ValueError("absolute-risk intervals must contain their estimates")
+    return result
+
+
+def _measurement_availability(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    result["measured_one_n"] = _integers(result, "measured_one_n")
+    result["eligible_n"] = _integers(result, "eligible_n")
+    if (result["eligible_n"] <= 0).any() or (
+        result["measured_one_n"] > result["eligible_n"]
+    ).any():
+        raise ValueError("measurement counts do not nest within eligible denominators")
+    result["availability_pct"] = 100.0 * result["measured_one_n"] / result["eligible_n"]
+    return result
+
+
 def render_association_publication_figure(
     *,
     bound: Mapping[str, BoundTypedInput],
@@ -158,7 +197,16 @@ def render_association_publication_figure(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    distribution = bound["table:exposure_outcome_distribution"].frame.copy()
+    distribution = (
+        bound["table:exposure_outcome_distribution"].frame.copy()
+        if "table:exposure_outcome_distribution" in bound
+        else None
+    )
+    absolute_context = (
+        _absolute_risk_context(bound["table:absolute_risk_context"].frame)
+        if "table:absolute_risk_context" in bound
+        else None
+    )
     adjusted = _validate_interval_table(
         bound["table:adjusted_association_estimates"].frame,
         estimate_column="estimate",
@@ -175,46 +223,67 @@ def render_association_publication_figure(
             robustness,
             estimate_column="point_estimate",
         )
-    missingness = bound["table:measurement_missingness"].frame.copy()
+    missingness = (
+        bound["table:measurement_missingness"].frame.copy()
+        if "table:measurement_missingness" in bound
+        else None
+    )
+    availability = (
+        _measurement_availability(bound["table:measurement_process_audit"].frame)
+        if "table:measurement_process_audit" in bound
+        and "table:measurement_missingness" not in bound
+        else None
+    )
 
-    levels = distribution.loc[
-        distribution["row_role"].astype(str).eq("exposure_level")
-    ].copy()
-    if levels.empty:
-        raise ValueError("exposure/outcome distribution has no exposure-level rows")
-    for column in ("outcome_events", "outcome_denominator"):
-        levels[column] = _integers(levels, column)
-    levels["outcome_rate_pct"] = _finite(levels, "outcome_rate_pct")
-    if (levels["outcome_denominator"] <= 0).any() or (
-        levels["outcome_events"] > levels["outcome_denominator"]
-    ).any():
-        raise ValueError("outcome counts do not nest within positive denominators")
-    expected_rates = 100.0 * levels["outcome_events"] / levels["outcome_denominator"]
-    if not np.isclose(
-        levels["outcome_rate_pct"], expected_rates, rtol=0.0, atol=5e-6
-    ).all():
-        raise ValueError("outcome percentage does not reconcile to counts")
-    has_risk_ci = {"ci_low_pct", "ci_high_pct"} <= set(levels.columns)
-    if has_risk_ci:
-        levels["ci_low_pct"] = _finite(levels, "ci_low_pct")
-        levels["ci_high_pct"] = _finite(levels, "ci_high_pct")
-        if (levels["ci_low_pct"] > levels["outcome_rate_pct"]).any() or (
-            levels["outcome_rate_pct"] > levels["ci_high_pct"]
+    if distribution is not None:
+        levels = distribution.loc[
+            distribution["row_role"].astype(str).eq("exposure_level")
+        ].copy()
+        if levels.empty:
+            raise ValueError("exposure/outcome distribution has no exposure-level rows")
+        for column in ("outcome_events", "outcome_denominator"):
+            levels[column] = _integers(levels, column)
+        levels["outcome_rate_pct"] = _finite(levels, "outcome_rate_pct")
+        if (levels["outcome_denominator"] <= 0).any() or (
+            levels["outcome_events"] > levels["outcome_denominator"]
         ).any():
-            raise ValueError("risk confidence intervals must contain reported rates")
+            raise ValueError("outcome counts do not nest within positive denominators")
+        expected_rates = (
+            100.0 * levels["outcome_events"] / levels["outcome_denominator"]
+        )
+        if not np.isclose(
+            levels["outcome_rate_pct"], expected_rates, rtol=0.0, atol=5e-6
+        ).all():
+            raise ValueError("outcome percentage does not reconcile to counts")
+        has_risk_ci = {"ci_low_pct", "ci_high_pct"} <= set(levels.columns)
+        if has_risk_ci:
+            levels["ci_low_pct"] = _finite(levels, "ci_low_pct")
+            levels["ci_high_pct"] = _finite(levels, "ci_high_pct")
+            if (levels["ci_low_pct"] > levels["outcome_rate_pct"]).any() or (
+                levels["outcome_rate_pct"] > levels["ci_high_pct"]
+            ).any():
+                raise ValueError(
+                    "risk confidence intervals must contain reported rates"
+                )
+    else:
+        levels = absolute_context
+        has_risk_ci = True
 
-    for column in ("n_total", "missing_n"):
-        missingness[column] = _integers(missingness, column)
-    missingness["missing_pct"] = _finite(missingness, "missing_pct")
-    if (missingness["n_total"] <= 0).any() or (
-        missingness["missing_n"] > missingness["n_total"]
-    ).any():
-        raise ValueError("missingness counts do not nest within positive denominators")
-    expected_missing = 100.0 * missingness["missing_n"] / missingness["n_total"]
-    if not np.isclose(
-        missingness["missing_pct"], expected_missing, rtol=0.0, atol=5e-6
-    ).all():
-        raise ValueError("missingness percentage does not reconcile to counts")
+    if missingness is not None:
+        for column in ("n_total", "missing_n"):
+            missingness[column] = _integers(missingness, column)
+        missingness["missing_pct"] = _finite(missingness, "missing_pct")
+        if (missingness["n_total"] <= 0).any() or (
+            missingness["missing_n"] > missingness["n_total"]
+        ).any():
+            raise ValueError(
+                "missingness counts do not nest within positive denominators"
+            )
+        expected_missing = 100.0 * missingness["missing_n"] / missingness["n_total"]
+        if not np.isclose(
+            missingness["missing_pct"], expected_missing, rtol=0.0, atol=5e-6
+        ).all():
+            raise ValueError("missingness percentage does not reconcile to counts")
     if (
         robustness_key == "table:robustness_matrix"
         and not robustness["converged"].astype(bool).all()
@@ -229,31 +298,44 @@ def render_association_publication_figure(
 
     ax = axes[0, 0]
     x = np.arange(len(levels))
-    values = levels["outcome_rate_pct"].to_numpy(dtype=float)
-    yerr = None
-    if has_risk_ci:
+    if distribution is not None:
+        values = levels["outcome_rate_pct"].to_numpy(dtype=float)
+        yerr = None
+        if has_risk_ci:
+            yerr = np.vstack(
+                [values - levels["ci_low_pct"], levels["ci_high_pct"] - values]
+            )
+        exposure_name = str(levels.iloc[0].get("exposure_column") or "exposure")
+        level_labels = []
+        for value in levels["exposure_level"]:
+            numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+            raw = (
+                str(int(numeric))
+                if pd.notna(numeric) and float(numeric).is_integer()
+                else str(value)
+            )
+            level_labels.append(labels.get(f"{exposure_name}={raw}", _label(value)))
+        absolute_title = "Absolute risk by exposure level"
+    else:
+        values = 100.0 * levels["estimate"].to_numpy(dtype=float)
         yerr = np.vstack(
-            [values - levels["ci_low_pct"], levels["ci_high_pct"] - values]
+            [
+                values - 100.0 * levels["ci_low"].to_numpy(dtype=float),
+                100.0 * levels["ci_high"].to_numpy(dtype=float) - values,
+            ]
         )
+        level_labels = [_label(value) for value in levels["label"]]
+        absolute_title = "Absolute risk by source state"
     ax.bar(x, values, color=palette["orange"], yerr=yerr, capsize=2.5)
-    exposure_name = str(levels.iloc[0].get("exposure_column") or "exposure")
-    level_labels = []
-    for value in levels["exposure_level"]:
-        numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-        raw = (
-            str(int(numeric))
-            if pd.notna(numeric) and float(numeric).is_integer()
-            else str(value)
-        )
-        level_labels.append(labels.get(f"{exposure_name}={raw}", _label(value)))
     ax.set_xticks(x, level_labels)
     ax.set_ylabel("Observed outcome risk (%)")
-    ax.set_title("Absolute risk by exposure level", loc="left", pad=12)
+    ax.set_title(absolute_title, loc="left", pad=12)
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
     adjusted_label = (
         "contrast"
         if "contrast" in adjusted.columns
+        and adjusted["contrast"].notna().all()
         and adjusted["contrast"].astype(str).str.strip().ne("").all()
         else "model_id"
     )
@@ -285,25 +367,60 @@ def render_association_publication_figure(
         robustness_role = "robustness_ranges"
     add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
 
-    missing_order = missingness.sort_values("missing_pct", ascending=True)
-    missing_label = "label" if "label" in missing_order.columns else "variable"
-    positions = np.arange(len(missing_order))
-    axes[1, 1].barh(positions, missing_order["missing_pct"], color=palette["orange"])
+    if missingness is not None:
+        quality = missingness.sort_values("missing_pct", ascending=True)
+        quality_label = "label" if "label" in quality.columns else "variable"
+        quality_value = "missing_pct"
+        quality_xlabel = "Missing (%)"
+        quality_title = "Measurement missingness"
+        quality_role = "data_quality"
+    else:
+        quality = availability.sort_values("availability_pct", ascending=True)
+        quality_label = "concept" if "concept" in quality.columns else "variable"
+        quality_value = "availability_pct"
+        quality_xlabel = "Available among eligible (%)"
+        quality_title = "Measurement availability"
+        quality_role = "measurement_availability"
+    positions = np.arange(len(quality))
+    axes[1, 1].barh(positions, quality[quality_value], color=palette["orange"])
     axes[1, 1].set_yticks(
         positions,
-        [_label(value) for value in missing_order[missing_label]],
+        [_label(value) for value in quality[quality_label]],
         fontsize=5.5,
     )
     axes[1, 1].set_xlim(0, 100)
-    axes[1, 1].set_xlabel("Missing (%)")
-    axes[1, 1].set_title("Measurement missingness", loc="left", pad=12)
+    axes[1, 1].set_xlabel(quality_xlabel)
+    axes[1, 1].set_title(quality_title, loc="left", pad=12)
     add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
 
     panel_specs = (
-        ("A", "Absolute risk by exposure level", "absolute_risk", input_keys[0]),
-        ("B", "Primary adjusted association", "primary_estimate", input_keys[1]),
+        (
+            "A",
+            absolute_title,
+            "absolute_risk",
+            (
+                "table:exposure_outcome_distribution"
+                if distribution is not None
+                else "table:absolute_risk_context"
+            ),
+        ),
+        (
+            "B",
+            "Primary adjusted association",
+            "primary_estimate",
+            "table:adjusted_association_estimates",
+        ),
         ("C", robustness_title, robustness_role, robustness_key),
-        ("D", "Measurement missingness", "data_quality", input_keys[3]),
+        (
+            "D",
+            quality_title,
+            quality_role,
+            (
+                "table:measurement_missingness"
+                if missingness is not None
+                else "table:measurement_process_audit"
+            ),
+        ),
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
