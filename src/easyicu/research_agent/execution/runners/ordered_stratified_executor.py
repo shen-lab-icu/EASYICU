@@ -96,18 +96,13 @@ def ordered_stratified_spec_for_step(
         value for value in bare_inputs if value not in {exposure, binary_outcome}
     ]
     trend_products = [
-        value
-        for value in step.expected_outputs
-        if value.startswith("table:")
-        and value != "table:ordered_stratified_outcomes"
+        value for value in step.expected_outputs if value.startswith("table:")
     ]
     if (
         exposure not in bare_inputs
         or binary_outcome not in bare_inputs
         or len(remaining) != 1
         or len(trend_products) != 1
-        or "table:ordered_stratified_outcomes" not in step.expected_outputs
-        or "test:ordinal_trend" not in step.expected_outputs
     ):
         return None
     levels = list(terms[0].levels or [])
@@ -372,14 +367,13 @@ def run_ordered_stratified_from_env(
 
     stratified_path = out_dir / _product_filename(spec.stratified_product)
     trend_path = out_dir / _product_filename(spec.trend_product)
-    test_path = out_dir / _product_filename(spec.test_product)
     pd.DataFrame(rows).to_csv(stratified_path, index=False)
     trend_frame = pd.DataFrame(trend_rows)
     trend_frame.to_csv(trend_path, index=False)
-    trend_frame.to_csv(test_path, index=False)
 
     contract = {
         "schema_version": CONTRACT_SCHEMA_VERSION,
+        "execution_owner": "ordered_stratified_executor_v1",
         "ordered_exposure_column": spec.ordered_exposure,
         "ordered_levels": list(spec.ordered_levels),
         "cochran_armitage_scores": list(spec.cochran_armitage_scores),
@@ -417,9 +411,10 @@ def run_ordered_stratified_from_env(
         },
         CONTRACT_KEY: contract,
         "output_files": {
-            spec.stratified_product: stratified_path.name,
             spec.trend_product: trend_path.name,
-            spec.test_product: test_path.name,
+        },
+        "audit_files": {
+            "ordered_stratified_table": stratified_path.name,
         },
     }
     (out_dir / "step_summary.json").write_text(

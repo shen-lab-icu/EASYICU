@@ -38,8 +38,6 @@ def _step() -> AnalysisStep:
             ],
             "expected_outputs": [
                 "table:ordinal_trend_dose_response",
-                "table:ordered_stratified_outcomes",
-                "test:ordinal_trend",
             ],
             "method": "ordinal_stratified_descriptive_analysis",
             "scientific_action_id": "association.ordinal_trend",

@@ -343,27 +343,29 @@ def ordered_stratified_structure_findings(
             )
         )
 
-    outputs = [str(value or "").lower() for value in step.expected_outputs]
-    if not any(
-        value.startswith("table:") and "stratified" in value for value in outputs
-    ):
-        findings.append(
-            _finding(
-                "missing_planned_stratified_output",
-                "The controlled method requires a planned table:*stratified* output.",
-                step_id=step.step_id,
-                expected_outputs=list(step.expected_outputs),
+    if contract.get("execution_owner") != "ordered_stratified_executor_v1":
+        outputs = [str(value or "").lower() for value in step.expected_outputs]
+        if not any(
+            value.startswith("table:") and "stratified" in value
+            for value in outputs
+        ):
+            findings.append(
+                _finding(
+                    "missing_planned_stratified_output",
+                    "The controlled method requires a planned table:*stratified* output.",
+                    step_id=step.step_id,
+                    expected_outputs=list(step.expected_outputs),
+                )
             )
-        )
-    if not any(value == "test:ordinal_trend" for value in outputs):
-        findings.append(
-            _finding(
-                "missing_planned_trend_output",
-                "The controlled method requires expected output test:ordinal_trend.",
-                step_id=step.step_id,
-                expected_outputs=list(step.expected_outputs),
+        if not any(value == "test:ordinal_trend" for value in outputs):
+            findings.append(
+                _finding(
+                    "missing_planned_trend_output",
+                    "The controlled method requires expected output test:ordinal_trend.",
+                    step_id=step.step_id,
+                    expected_outputs=list(step.expected_outputs),
+                )
             )
-        )
     return findings
 
 
