@@ -105,6 +105,43 @@ def _forest(
     ax.set_title(title, loc="left", pad=12)
 
 
+def _robustness_ranges(ax: Any, frame: pd.DataFrame, *, color: str) -> None:
+    """Render reported robustness ranges without inventing point estimates."""
+
+    result = frame.copy()
+    for column in ("total_specs", "converged_specs", "non_independent_specs"):
+        result[column] = _integers(result, column)
+    result["range_low"] = _finite(result, "range_low")
+    result["range_high"] = _finite(result, "range_high")
+    if (result["total_specs"] <= 0).any():
+        raise ValueError("robustness summary total_specs must be positive")
+    if (
+        (result["converged_specs"] < 0).any()
+        or (result["converged_specs"] > result["total_specs"]).any()
+        or (result["non_independent_specs"] < 0).any()
+        or (result["non_independent_specs"] > result["total_specs"]).any()
+    ):
+        raise ValueError("robustness summary counts do not nest within total_specs")
+    if (result["range_low"] > result["range_high"]).any():
+        raise ValueError("robustness summary ranges are reversed")
+
+    positions = np.arange(len(result))
+    for position, (_, row) in zip(positions, result.iterrows()):
+        ax.plot(
+            [float(row["range_low"]), float(row["range_high"])],
+            [position, position],
+            color=color,
+            linewidth=2.2,
+            solid_capstyle="round",
+        )
+    ax.set_yticks(positions, [_label(value) for value in result["axis"]], fontsize=5.8)
+    ax.invert_yaxis()
+    if (result[["range_low", "range_high"]] > 0).all().all():
+        ax.axvline(1.0, color="#777777", linewidth=0.8, linestyle="--")
+    ax.set_xlabel("Reported estimate range")
+    ax.set_title("Robustness ranges", loc="left", pad=12)
+
+
 def render_association_publication_figure(
     *,
     bound: Mapping[str, BoundTypedInput],
@@ -127,10 +164,17 @@ def render_association_publication_figure(
         estimate_column="estimate",
         require_fitted=True,
     )
-    robustness = _validate_interval_table(
-        bound["table:robustness_matrix"].frame,
-        estimate_column="point_estimate",
+    robustness_key = (
+        "table:robustness_matrix"
+        if "table:robustness_matrix" in bound
+        else "table:robustness_summary"
     )
+    robustness = bound[robustness_key].frame.copy()
+    if robustness_key == "table:robustness_matrix":
+        robustness = _validate_interval_table(
+            robustness,
+            estimate_column="point_estimate",
+        )
     missingness = bound["table:measurement_missingness"].frame.copy()
 
     levels = distribution.loc[
@@ -171,7 +215,10 @@ def render_association_publication_figure(
         missingness["missing_pct"], expected_missing, rtol=0.0, atol=5e-6
     ).all():
         raise ValueError("missingness percentage does not reconcile to counts")
-    if not robustness["converged"].astype(bool).all():
+    if (
+        robustness_key == "table:robustness_matrix"
+        and not robustness["converged"].astype(bool).all()
+    ):
         raise ValueError("robustness matrix contains non-converged rows")
 
     source_files = [_source_copy(bound[key], out_dir) for key in input_keys]
@@ -204,25 +251,38 @@ def render_association_publication_figure(
     ax.set_title("Absolute risk by exposure level", loc="left", pad=12)
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
+    adjusted_label = (
+        "contrast"
+        if "contrast" in adjusted.columns
+        and adjusted["contrast"].astype(str).str.strip().ne("").all()
+        else "model_id"
+    )
     _forest(
         axes[0, 1],
         adjusted,
         estimate_column="estimate",
-        label_column="model_id",
+        label_column=adjusted_label,
         title="Primary adjusted association",
         color=palette["blue"],
     )
     add_panel_label(axes[0, 1], "B", x=-0.12, y=1.04)
 
-    robustness_labels = "spec_id" if "spec_id" in robustness.columns else "axis"
-    _forest(
-        axes[1, 0],
-        robustness,
-        estimate_column="point_estimate",
-        label_column=robustness_labels,
-        title="Robustness estimates",
-        color=palette["blue_soft"],
-    )
+    if robustness_key == "table:robustness_matrix":
+        robustness_labels = "spec_id" if "spec_id" in robustness.columns else "axis"
+        _forest(
+            axes[1, 0],
+            robustness,
+            estimate_column="point_estimate",
+            label_column=robustness_labels,
+            title="Robustness estimates",
+            color=palette["blue_soft"],
+        )
+        robustness_title = "Robustness estimates"
+        robustness_role = "robustness_estimates"
+    else:
+        _robustness_ranges(axes[1, 0], robustness, color=palette["blue_soft"])
+        robustness_title = "Robustness ranges"
+        robustness_role = "robustness_ranges"
     add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
 
     missing_order = missingness.sort_values("missing_pct", ascending=True)
@@ -242,14 +302,14 @@ def render_association_publication_figure(
     panel_specs = (
         ("A", "Absolute risk by exposure level", "absolute_risk", input_keys[0]),
         ("B", "Primary adjusted association", "primary_estimate", input_keys[1]),
-        ("C", "Robustness estimates", "robustness", input_keys[2]),
+        ("C", robustness_title, robustness_role, robustness_key),
         ("D", "Measurement missingness", "data_quality", input_keys[3]),
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
             "The bound tables jointly show observed absolute risk, the primary "
-            "adjusted association, robustness estimates, and measurement missingness."
+            "adjusted association, robustness evidence, and measurement missingness."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,

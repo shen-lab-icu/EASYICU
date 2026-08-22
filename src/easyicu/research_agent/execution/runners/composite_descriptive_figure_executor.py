@@ -46,6 +46,12 @@ COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS = (
     "table:robustness_matrix",
     "table:measurement_missingness",
 )
+COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS = (
+    "table:exposure_outcome_distribution",
+    "table:adjusted_association_estimates",
+    "table:robustness_summary",
+    "table:measurement_missingness",
+)
 
 _REQUIRED_COLUMNS = {
     "table:cohort_flow": frozenset({"n_remaining"}),
@@ -92,6 +98,7 @@ _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES = (
     COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
     COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
+    COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
 )
 _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES = tuple(
     TypedInputCapability(required=frozenset(profile))
@@ -308,7 +315,10 @@ def run_composite_descriptive_figure(
         if missing:
             raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
 
-    if tuple(input_keys) == COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS:
+    if tuple(input_keys) in {
+        COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
+        COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+    }:
         from .association_publication_figure_renderer import (
             render_association_publication_figure,
         )
