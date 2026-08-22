@@ -35,6 +35,8 @@ from ...planning.dependence_authority import context_patient_group_authority
 from ...prediction_validation_owner import run_prediction_validation
 from ...intake.materialized_metadata import (
     MaterializedCohortAuthority,
+    MaterializedCohortAuthorityRef,
+    VerifiedMaterializedCohortAuthority,
     load_verified_materialized_cohort_authority,
 )
 from ...research_context.typed import (
@@ -190,17 +192,45 @@ def _patient_group_authority(
     *,
     context: ResearchContextAuthority,
     source_cohort: Path,
+    run_dir: Path,
 ) -> PlannedDependenceRequirement | None:
     """Resolve only a context- or verified-ancestry-issued patient grouping."""
 
     direct = context_patient_group_authority(context)
     if direct is not None:
         return direct
+
     verified = load_verified_materialized_cohort_authority(Path(source_cohort))
+    authority_root = Path(source_cohort).parent
+    if verified is None:
+        materialized_inputs = getattr(context, "materialized_inputs", None)
+        context_cohort = getattr(materialized_inputs, "cohort", None)
+        if context_cohort is not None:
+            cohort_file = str(context_cohort.cohort_file)
+            if Path(cohort_file).name != cohort_file:
+                raise RuntimeError("typed context cohort file is not run-local")
+            expected = MaterializedCohortAuthorityRef.from_dict(
+                context_cohort.authority_ref
+            )
+            authority_root = Path(run_dir)
+            verified = load_verified_materialized_cohort_authority(
+                authority_root / cohort_file,
+                expected_authority=expected,
+            )
+    return _patient_group_from_verified(verified, authority_root=authority_root)
+
+
+def _patient_group_from_verified(
+    verified: VerifiedMaterializedCohortAuthority | None,
+    *,
+    authority_root: Path,
+) -> PlannedDependenceRequirement | None:
+    """Resolve an exact grouping rule from one verified authority ancestry."""
+
     if verified is None or verified.authority.parent_authority_sha256 is None:
         return None
     parent_sha256 = verified.authority.parent_authority_sha256
-    parent_path = Path(source_cohort).parent / (
+    parent_path = Path(authority_root) / (
         f"cohort_authority.sha256-{parent_sha256}.json"
     )
     if not parent_path.is_file() or sha256_file(parent_path) != parent_sha256:
@@ -333,6 +363,7 @@ def run_prediction_model(
     group_authority = _patient_group_authority(
         context=context,
         source_cohort=Path(source_cohort),
+        run_dir=Path(run_dir),
     )
     if not outcome_column or group_authority is None:
         raise RuntimeError("prediction requires typed outcome and patient-group authority")
