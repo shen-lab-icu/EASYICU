@@ -1624,6 +1624,55 @@ def test_outline_requires_custom_owner_for_explicit_separate_product() -> None:
     ]
 
 
+def test_outline_rejects_categorical_distribution_for_continuous_exposure() -> None:
+    payload = _outline_payload()
+    distribution = next(
+        step
+        for step in payload["steps"]
+        if step["module_id"] == "exposure_outcome_distribution"
+    )
+    distribution["variable_names"] = ["age_years", "outcome_flag"]
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            closed_domain_variables=(
+                "exposure_flag",
+                "outcome_flag",
+                "sex_code",
+            ),
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_outline_distribution_domain_unavailable"
+    )
+    assert caught.value.details["step_id"] == distribution["step_id"]
+
+
+def test_retrieved_data_cards_expose_module_compatibility_without_level_values() -> None:
+    cards = ProgressivePlannerAgent._retrieved_data_cards(
+        _context(),
+        ("exposure_flag", "age_years"),
+    )
+    by_name = {card["name"]: card for card in cards}
+
+    assert by_name["exposure_flag"]["supports_closed_level_contrast"] is True
+    assert by_name["exposure_flag"]["closed_domain_level_count"] == 2
+    assert by_name["age_years"]["supports_closed_level_contrast"] is False
+    assert by_name["age_years"]["closed_domain_level_count"] == 0
+    assert "observed_domain" not in by_name["exposure_flag"]
+
+
 def test_outline_rejects_repeated_host_compiled_singleton_module() -> None:
     outline = ProgressivePlanOutline.model_validate(
         _outline_with_repeated_robustness()

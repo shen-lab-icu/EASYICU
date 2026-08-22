@@ -7,6 +7,7 @@ import re
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..canonical_json import canonical_sha256
+from ..authority.declared_levels import observed_levels_for
 from ..cohort.schema import (
     materialized_input_column_authority,
     validate_plan_typed_bindings_against_context,
@@ -647,8 +648,12 @@ class ProgressivePlannerAgent:
         variables: Sequence[str],
     ) -> list[dict[str, Any]]:
         selected = set(variables)
-        return [
-            variable.model_dump(
+        variable_map = {variable.name: variable for variable in context.variables}
+        cards = []
+        for variable in context.variables:
+            if variable.name not in selected:
+                continue
+            card = variable.model_dump(
                 mode="json",
                 include={
                     "name",
@@ -658,9 +663,13 @@ class ProgressivePlannerAgent:
                     "derived_from_concepts",
                 },
             )
-            for variable in context.variables
-            if variable.name in selected
-        ]
+            level_count = len(
+                observed_levels_for(name=variable.name, variables=variable_map)
+            )
+            card["closed_domain_level_count"] = level_count
+            card["supports_closed_level_contrast"] = level_count >= 2
+            cards.append(card)
+        return cards
 
     @staticmethod
     def _user_prompt(
@@ -881,6 +890,7 @@ class ProgressivePlannerAgent:
         allowed_literature_citation_keys: Sequence[str],
         required_custom_products: Sequence[str] = (),
         required_visualization_step: bool = False,
+        closed_domain_variables: Sequence[str] | None = None,
     ) -> None:
         if outline.analysis_type not in set(analysis_types):
             raise ProgressivePlanCompileError(
@@ -892,6 +902,11 @@ class ProgressivePlannerAgent:
         allowed = set(allowed_actions)
         available_variables = set(variable_names)
         available_citations = set(allowed_literature_citation_keys)
+        closed_domains = (
+            set(closed_domain_variables)
+            if closed_domain_variables is not None
+            else None
+        )
         allowed_modules = set(
             progressive_module_ids_for_analysis_types((outline.analysis_type,))
         )
@@ -968,6 +983,20 @@ class ProgressivePlannerAgent:
                     "progressive_outline_variable_unavailable",
                     "outline selected variable(s) outside the retrieved roster: "
                     + ", ".join(unknown_variables),
+                    step_id=step.step_id,
+                    step_index=index,
+                    path="variable_names",
+                )
+            if step.module_id == "exposure_outcome_distribution" and (
+                closed_domains is not None
+                and len(set(step.variable_names) & closed_domains) < 2
+            ):
+                raise ProgressivePlanCompileError(
+                    "progressive_outline_distribution_domain_unavailable",
+                    "exposure_outcome_distribution is categorical-only and "
+                    "requires at least two selected variables with closed "
+                    "domains of two or more levels; use adjusted_association, "
+                    "custom_analysis, or visualization for a continuous exposure",
                     step_id=step.step_id,
                     step_index=index,
                     path="variable_names",
@@ -1494,6 +1523,20 @@ class ProgressivePlannerAgent:
         analysis_types, variables, action_ids, action_rows = self._request_authorities(
             context
         )
+        context_variable_map = {
+            variable.name: variable for variable in context.variables
+        }
+        closed_domain_variables = tuple(
+            variable.name
+            for variable in context.variables
+            if len(
+                observed_levels_for(
+                    name=variable.name,
+                    variables=context_variable_map,
+                )
+            )
+            >= 2
+        )
         resolved_planning_contract_context = bind_literature_citation_authority(
             planning_contract_context,
             allowed_citations,
@@ -1648,6 +1691,7 @@ class ProgressivePlannerAgent:
                     allowed_literature_citation_keys=allowed_citations,
                     required_custom_products=required_custom_products,
                     required_visualization_step=required_visualization_step,
+                    closed_domain_variables=closed_domain_variables,
                 )
                 return parsed
 
@@ -1675,6 +1719,7 @@ class ProgressivePlannerAgent:
             allowed_literature_citation_keys=allowed_citations,
             required_custom_products=required_custom_products,
             required_visualization_step=required_visualization_step,
+            closed_domain_variables=closed_domain_variables,
         )
         self.last_outline = outline
         self.last_foundation = None
