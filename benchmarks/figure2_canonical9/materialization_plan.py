@@ -273,23 +273,30 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
             "vent_start",
             "vent_end",
             "vent_ind",
-            "mort_28d",
             "charlson",
-            "sofa2_cardio",
-            "sofa2_coag",
-            "sofa2_liver",
-            "sofa2_renal",
+            "sofa2",
+            *_SOFA2_COMPONENTS,
             "lact",
         ),
-        static_concepts=(*_STATIC_CORE, "los_hosp"),
+        static_concepts=(
+            "age",
+            "sex",
+            "los_icu",
+            "adm",
+            "los_hosp",
+            "mort_28d",
+            "followup_days_28d",
+        ),
         exposure_concept="vent_24h_any",
         operational_exposure="mech_vent_max",
         positive_only_event_concepts=("mech_vent",),
         notes=(
             "Derive vent_24h_any only from typed ventilation status/timing within "
-            "ICU hours 0-24. Align exposure and follow-up at a defensible landmark "
-            "and explicitly audit prevalent exposure, immortal time, and PH."
+            "ICU hours 0-24. Pair mort_28d with followup_days_28d, start follow-up "
+            "after the 24-hour landmark, exclude first observed ventilation at or "
+            "before ICU hour 0 as prevalent, and audit risk-set attrition and PH."
         ),
+        task_protocol_version="h1_ventilation_survival/20260822-v1",
     ),
     Canonical9MaterializationSpec(
         task_id="h2_vasopressor_causal",
@@ -398,6 +405,7 @@ def validate_canonical9_mimic_iv_plan() -> None:
             )
     for task_id in (
         "e2_lactate_mortality",
+        "h1_ventilation_survival",
         "h2_vasopressor_causal",
         "h3_trajectory_clustering",
     ):

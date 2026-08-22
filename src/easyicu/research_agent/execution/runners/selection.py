@@ -9,6 +9,7 @@ from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...authority.current_case_scientific_runtime import (
     AssociationModelGridRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
+    LandmarkSurvivalRuntimeAuthority,
     SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
@@ -147,6 +148,11 @@ from .landmark_spline_robustness_executor import (
     LANDMARK_SPLINE_ROBUSTNESS_ANALYSIS_KIND,
     landmark_spline_robustness_executor_code,
     landmark_spline_robustness_executor_owns_step,
+)
+from .landmark_survival_executor import (
+    LANDMARK_SURVIVAL_ANALYSIS_KIND,
+    landmark_survival_executor_code,
+    landmark_survival_executor_owns_step,
 )
 from .source_feasibility_executor import (
     SOURCE_FEASIBILITY_ANALYSIS_KIND,
@@ -378,6 +384,31 @@ def select_standard_executor(
                     )
                 )
             _missed(ASSOCIATION_MODEL_GRID_ANALYSIS_KIND)
+        elif isinstance(sealed_current, LandmarkSurvivalRuntimeAuthority):
+            if landmark_survival_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind=LANDMARK_SURVIVAL_ANALYSIS_KIND,
+                        selection_reason=(
+                            "signed_landmark_survival_suite_contract_preflight"
+                        ),
+                        progress_message=(
+                            "Using signed deterministic landmark survival suite"
+                        ),
+                        code=landmark_survival_executor_code(
+                            step,
+                            authority=sealed_current,
+                            runtime_projection_sha256=projection_digest,
+                            plausibility_scope=plausibility_scope,
+                        ),
+                        consumed_input_keys=_consumed_typed_cohort_inputs(step),
+                    )
+                )
+            _missed(LANDMARK_SURVIVAL_ANALYSIS_KIND)
         elif isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
             if landmark_spline_executor_owns_step(
                 step,
