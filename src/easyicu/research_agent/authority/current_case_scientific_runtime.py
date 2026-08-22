@@ -452,6 +452,48 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             )
         )
 
+    def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
+        """Compile the signed deterministic primary into one draft plan.
+
+        The Planner owns the study-specific surrounding design. The caller's
+        digest-bound authority owns the exact landmark estimator, columns, and
+        products, so copying those coordinates is mechanical wiring rather than
+        a new scientific decision.
+        """
+
+        primary = [
+            step for step in plan.steps if step.planned_analysis_role == "primary"
+        ]
+        if len(primary) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark spline authority requires exactly one primary step"
+            )
+        candidate = primary[0]
+        cohort_input = sole_typed_cohort_input(candidate)
+        if not cohort_input:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark spline primary requires one typed cohort input"
+            )
+        bound = candidate.model_copy(
+            update={
+                "method": self.plan_method,
+                "intent": self.plan_intent,
+                "scientific_capability": "association_freeform_v1",
+                "expected_outputs": list(self.plan_outputs),
+                "inputs": [cohort_input, *self.required_columns],
+                "model_requirements": [],
+                "family_primary_result_requirement": None,
+                "icu_rule_refs": list(
+                    dict.fromkeys([*candidate.icu_rule_refs, self.plan_rule_ref])
+                ),
+            }
+        )
+        return plan.model_copy(
+            update={
+                "steps": [bound if step is candidate else step for step in plan.steps]
+            }
+        )
+
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
