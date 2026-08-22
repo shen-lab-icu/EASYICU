@@ -749,7 +749,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
         )
 
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
-        """Collapse the signed survival suite into its one deterministic owner."""
+        """Compile the signed survival analysis and its source-bound renderer."""
 
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
@@ -781,7 +781,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                 "method": self.plan_method,
                 "intent": self.plan_intent,
                 "inputs": [cohort_input, *self.required_columns],
-                "expected_outputs": list(self.plan_outputs),
+                "expected_outputs": list(self.analysis_plan_outputs),
                 "scientific_capability": None,
                 "model_requirements": [],
                 "family_primary_result_requirement": None,
@@ -792,7 +792,32 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                 ),
             }
         )
-        return plan.model_copy(update={"steps": [cohort_owner, bound]})
+        figure_owner = AnalysisStep.model_validate(
+            {
+                "step_id": "02_authority_compiled_survival_figure",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Render the signed survival evidence suite from its exact result tables.",
+                "inputs": list(self.figure_input_products),
+                "expected_outputs": [self.figure_product],
+                "method": "signed_landmark_survival_figure",
+                "input_consumption_contracts": [
+                    {"input_key": value, "mode": "all_rows"}
+                    for value in self.figure_input_products
+                ],
+                "icu_rule_refs": [self.plan_rule_ref],
+            }
+        )
+        return plan.model_copy(update={"steps": [cohort_owner, bound, figure_owner]})
+
+    @property
+    def analysis_plan_outputs(self) -> tuple[str, ...]:
+        return tuple(
+            value for value in self.plan_outputs if value != self.figure_product
+        )
+
+    @property
+    def figure_input_products(self) -> tuple[str, ...]:
+        return (self.km_product, self.cox_product, self.risk_set_product)
 
     def development_execution_only_plan(
         self,
@@ -840,9 +865,11 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
         )
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
-        if len(plan.steps) != 2:
+        """Return the deterministic analysis owner after validating the suite."""
+
+        if len(plan.steps) != 3:
             raise CurrentCaseScientificAuthorityError(
-                "landmark survival suite must have one cohort owner and one suite owner"
+                "landmark survival suite must have cohort, analysis and figure owners"
             )
         cohort_owners = [
             step
@@ -850,9 +877,14 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             if step.method == "host_materialized_locked_cohort"
         ]
         suite_owners = [step for step in plan.steps if step.method == self.plan_method]
-        if len(cohort_owners) != 1 or len(suite_owners) != 1:
+        figure_owners = [
+            step
+            for step in plan.steps
+            if step.method == "signed_landmark_survival_figure"
+        ]
+        if len(cohort_owners) != 1 or len(suite_owners) != 1 or len(figure_owners) != 1:
             raise CurrentCaseScientificAuthorityError(
-                "landmark survival plan lacks its unique cohort or suite owner"
+                "landmark survival plan lacks a unique cohort, analysis or figure owner"
             )
         cohort_owner = cohort_owners[0]
         if (
@@ -870,7 +902,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             issues.append("method")
         if step.intent != self.plan_intent:
             issues.append("intent")
-        if tuple(step.expected_outputs) != self.plan_outputs:
+        if tuple(step.expected_outputs) != self.analysis_plan_outputs:
             issues.append("expected_outputs")
         if not set(self.required_columns).issubset(step.inputs):
             issues.append("required_inputs")
@@ -886,7 +918,31 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                 + ", ".join(issues)
             )
         self._require_rule_ref(step)
+        figure = figure_owners[0]
+        expected_contracts = {
+            (value, "all_rows") for value in self.figure_input_products
+        }
+        observed_contracts = {
+            (item.input_key, item.mode) for item in figure.input_consumption_contracts
+        }
+        if (
+            tuple(figure.inputs) != self.figure_input_products
+            or tuple(figure.expected_outputs) != (self.figure_product,)
+            or observed_contracts != expected_contracts
+        ):
+            raise CurrentCaseScientificAuthorityError(
+                "landmark survival figure owner drifted from its signed sources"
+            )
+        self._require_rule_ref(figure)
         return step
+
+    def governed_figure_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        self.governed_step(plan)
+        return next(
+            step
+            for step in plan.steps
+            if step.method == "signed_landmark_survival_figure"
+        )
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
         self.governed_step(plan)

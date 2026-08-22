@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import shutil
 import textwrap
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -40,6 +41,20 @@ def landmark_survival_executor_owns_step(
     if not isinstance(sealed, LandmarkSurvivalRuntimeAuthority):
         return False
     return sealed.governed_step(plan) == step
+
+
+def landmark_survival_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    plan: AnalysisPlan,
+    authority: LandmarkSurvivalRuntimeAuthority | Mapping[str, Any] | None,
+) -> bool:
+    if authority is None:
+        return False
+    sealed = load_current_case_scientific_runtime_authority(authority)
+    if not isinstance(sealed, LandmarkSurvivalRuntimeAuthority):
+        return False
+    return sealed.governed_figure_step(plan) == step
 
 
 def landmark_survival_executor_scaffold(
@@ -231,7 +246,6 @@ def _table_one(frame: Any, sealed: LandmarkSurvivalRuntimeAuthority):
 
 def _render_figure(
     *,
-    analysis: Any,
     km_table: Any,
     cox_row: Mapping[str, Any],
     risk_flow: Any,
@@ -403,7 +417,7 @@ def _render_figure(
             "Kaplan-Meier estimates use the post-landmark clock. The Cox model "
             "reports a Wald 95% confidence interval and a Schoenfeld residual audit."
         ),
-        image_integrity_note="All plotted values are rendered from deterministic source tables emitted in the same step.",
+        image_integrity_note="All plotted values are rendered from digest-bound upstream result tables.",
     )
     outputs = save_publication_figure(
         fig,
@@ -662,18 +676,6 @@ def run_landmark_survival_suite(
     cox_table.to_csv(cox_path, index=False)
     ph_table.to_csv(ph_path, index=False)
     analysis.to_parquet(analysis_path, index=False)
-    figure_outputs = _render_figure(
-        analysis=analysis,
-        km_table=km_table,
-        cox_row=primary_row,
-        risk_flow=risk_flow,
-        sealed=sealed,
-        out_dir=out_dir,
-    )
-    figure_file = figure_outputs.get("svg") or figure_outputs.get("png")
-    if figure_file is None:
-        raise ValueError("landmark survival figure export is missing")
-
     receipt = {
         "schema_version": "easyicu.landmark_survival_runtime_receipt/1",
         "protocol_content_sha256": sealed.protocol_content_sha256,
@@ -714,7 +716,6 @@ def run_landmark_survival_suite(
         sealed.cox_product: cox_path.name,
         sealed.ph_product: ph_path.name,
         sealed.receipt_product: receipt_path.name,
-        sealed.figure_product: figure_file.name,
     }
     return {
         "status": "ok",
@@ -737,15 +738,124 @@ def run_landmark_survival_suite(
         "analysis_only": True,
         "human_attestation_required": True,
         "analysis_cohort_file": analysis_path.name,
-        "figure_assets": {key: value.name for key, value in figure_outputs.items()},
         "scientific_runtime_receipt": receipt,
         "output_files": output_files,
     }
+
+
+def run_landmark_survival_figure(
+    *,
+    km_table: Any,
+    cox_table: Any,
+    risk_flow: Any,
+    source_paths: Mapping[str, Path],
+    authority: LandmarkSurvivalRuntimeAuthority | Mapping[str, Any],
+    out_dir: Path,
+) -> dict[str, Any]:
+    """Render only from the three digest-bound result tables it declares."""
+
+    import pandas as pd
+
+    sealed = load_current_case_scientific_runtime_authority(authority)
+    if not isinstance(sealed, LandmarkSurvivalRuntimeAuthority):
+        raise TypeError("landmark survival figure received the wrong authority kind")
+    primary = cox_table.loc[
+        cox_table["term"].astype(str).eq(sealed.derived_exposure_column)
+    ]
+    if len(primary) != 1:
+        raise ValueError("landmark survival figure lacks one primary Cox row")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    copied_sources: list[str] = []
+    for product in sealed.figure_input_products:
+        source = Path(source_paths[product]).resolve()
+        destination = out_dir / source.name
+        shutil.copyfile(source, destination)
+        if (
+            hashlib.sha256(source.read_bytes()).digest()
+            != hashlib.sha256(destination.read_bytes()).digest()
+        ):
+            raise ValueError("landmark survival figure source changed while copying")
+        copied_sources.append(destination.name)
+    outputs = _render_figure(
+        km_table=pd.DataFrame(km_table),
+        cox_row=primary.iloc[0].to_dict(),
+        risk_flow=pd.DataFrame(risk_flow),
+        sealed=sealed,
+        out_dir=out_dir,
+    )
+    figure_file = outputs.get("svg") or outputs.get("png")
+    if figure_file is None:
+        raise ValueError("landmark survival figure export is missing")
+    return {
+        "status": "ok",
+        "rendering_only": True,
+        "deterministic_standard_analysis": "signed_landmark_survival_figure",
+        "source_data_files": copied_sources,
+        "figure_assets": {key: value.name for key, value in outputs.items()},
+        "output_files": {sealed.figure_product: figure_file.name},
+    }
+
+
+def landmark_survival_figure_executor_code(
+    step: AnalysisStep,
+    *,
+    authority: LandmarkSurvivalRuntimeAuthority | Mapping[str, Any],
+) -> str:
+    """Return the host-owned renderer for the sealed survival result tables."""
+
+    sealed = load_current_case_scientific_runtime_authority(authority)
+    if not isinstance(sealed, LandmarkSurvivalRuntimeAuthority):
+        raise TypeError("landmark survival figure requires its sealed authority")
+    authority_json = json.dumps(sealed.model_dump(mode="json"), sort_keys=True)
+    return textwrap.dedent(
+        f"""
+        import json
+        import os
+        from pathlib import Path
+
+        from easyicu.research_agent.execution.runners.landmark_survival_executor import (
+            run_landmark_survival_figure,
+        )
+        from easyicu.research_agent.execution.runners.typed_input_binding import (
+            load_typed_input,
+            run_dir_from_env,
+        )
+
+        authority = json.loads({json.dumps(authority_json)})
+        input_products = {sealed.figure_input_products!r}
+        bindings = {{
+            product: load_typed_input(
+                input_key=product,
+                run_dir=run_dir_from_env(),
+                resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]).resolve(),
+                expected_evidence_kind="table",
+                require_consumption_contract=True,
+            )
+            for product in input_products
+        }}
+        summary = run_landmark_survival_figure(
+            km_table=bindings[{sealed.km_product!r}].frame,
+            cox_table=bindings[{sealed.cox_product!r}].frame,
+            risk_flow=bindings[{sealed.risk_set_product!r}].frame,
+            source_paths={{key: value.path for key, value in bindings.items()}},
+            authority=authority,
+            out_dir=Path(os.environ["STEP_OUT_DIR"]),
+        )
+        (Path(os.environ["STEP_OUT_DIR"]) / "step_summary.json").write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+        """
+    ).strip()
 
 
 __all__ = [
     "LANDMARK_SURVIVAL_ANALYSIS_KIND",
     "landmark_survival_executor_code",
     "landmark_survival_executor_owns_step",
+    "landmark_survival_figure_executor_code",
+    "landmark_survival_figure_executor_owns_step",
+    "run_landmark_survival_figure",
     "run_landmark_survival_suite",
 ]

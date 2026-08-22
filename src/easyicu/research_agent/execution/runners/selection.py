@@ -158,6 +158,8 @@ from .landmark_survival_executor import (
     LANDMARK_SURVIVAL_ANALYSIS_KIND,
     landmark_survival_executor_code,
     landmark_survival_executor_owns_step,
+    landmark_survival_figure_executor_code,
+    landmark_survival_figure_executor_owns_step,
 )
 from .source_feasibility_executor import (
     SOURCE_FEASIBILITY_ANALYSIS_KIND,
@@ -429,6 +431,29 @@ def select_standard_executor(
                     )
                 )
             _missed(LANDMARK_SURVIVAL_ANALYSIS_KIND)
+            if landmark_survival_figure_executor_owns_step(
+                step,
+                plan=plan,
+                authority=sealed_current,
+            ):
+                return _selected(
+                    StandardExecutorSelection(
+                        analysis_kind="signed_landmark_survival_figure",
+                        selection_reason=(
+                            "signed_landmark_survival_figure_contract_preflight"
+                        ),
+                        progress_message=(
+                            "Using source-bound landmark survival renderer"
+                        ),
+                        code=landmark_survival_figure_executor_code(
+                            step,
+                            authority=sealed_current,
+                        ),
+                        consumed_input_keys=sealed_current.figure_input_products,
+                        host_sealed_renderer=True,
+                    )
+                )
+            _missed("signed_landmark_survival_figure")
         elif isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
             if landmark_spline_executor_owns_step(
                 step,
