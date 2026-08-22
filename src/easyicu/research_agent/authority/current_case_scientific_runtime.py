@@ -1031,6 +1031,33 @@ class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
     def validate_plan(self, plan: AnalysisPlan) -> None:
         self.governed_step(plan)
 
+    def development_execution_only_plan(
+        self,
+        *,
+        research_question: str,
+    ) -> AnalysisPlan:
+        """Project the sealed non-identifiability decision without a Planner."""
+
+        plan = AnalysisPlan.model_validate(
+            {
+                "research_question": str(research_question),
+                "analysis_type": "causal_inference",
+                "steps": [
+                    {
+                        "step_id": "00_authority_compiled_source_feasibility",
+                        "planned_analysis_role": "auxiliary",
+                        "intent": self.plan_intent,
+                        "inputs": [],
+                        "expected_outputs": list(self.plan_outputs),
+                        "method": self.plan_method,
+                        "icu_rule_refs": [self.plan_rule_ref],
+                    }
+                ],
+            }
+        )
+        self.validate_plan(plan)
+        return plan
+
 
 CurrentCaseScientificRuntimeAuthority = Annotated[
     Union[

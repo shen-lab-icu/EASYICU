@@ -10,6 +10,7 @@ from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
     LandmarkSurvivalRuntimeAuthority,
+    SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
 from ..schema import AnalysisPlan, ValidationFinding
@@ -141,9 +142,10 @@ class ScientificRuntimeAuthorities:
         """Return a host-projected plan only when its sealed authority opts in."""
 
         authority = self.current_case
-        if not isinstance(authority, LandmarkSurvivalRuntimeAuthority):
-            return None
-        if not authority.development_execution_only_allowed:
+        if isinstance(authority, LandmarkSurvivalRuntimeAuthority):
+            if not authority.development_execution_only_allowed:
+                return None
+        elif not isinstance(authority, SourceFeasibilityRuntimeAuthority):
             return None
         plan = authority.development_execution_only_plan(
             research_question=research_question
@@ -157,7 +159,11 @@ class ScientificRuntimeAuthorities:
                 "development execution-only run without another Planner call."
             ),
             detail={
-                "reason_code": "development_execution_only_authority_compiled",
+                "reason_code": (
+                    "source_feasibility_development_execution_only_authority_compiled"
+                    if isinstance(authority, SourceFeasibilityRuntimeAuthority)
+                    else "development_execution_only_authority_compiled"
+                ),
                 "analysis_only": True,
                 "step_id": step.step_id,
                 "execution_contract_sha256": authority.execution_contract_sha256,
