@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.execution.runners.composite_descriptive_figure_executor import (
+    COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
     COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
     composite_descriptive_figure_executor_owns_step,
@@ -82,6 +83,55 @@ def _robustness_frames() -> dict[str, pd.DataFrame]:
         }
     )
     return frames
+
+
+def _association_frames() -> dict[str, pd.DataFrame]:
+    return {
+        "table:exposure_outcome_distribution": pd.DataFrame(
+            {
+                "row_role": ["exposure_level", "exposure_level", "overall"],
+                "exposure_level": [0, 1, -1],
+                "exposure_column": ["exposure"] * 3,
+                "n_rows": [60, 40, 100],
+                "exposure_denominator": [100, 100, 100],
+                "exposure_pct": [60.0, 40.0, 100.0],
+                "outcome_events": [6, 8, 14],
+                "outcome_denominator": [60, 40, 100],
+                "outcome_rate_pct": [10.0, 20.0, 14.0],
+                "ci_low_pct": [5.0, 12.0, 8.0],
+                "ci_high_pct": [15.0, 28.0, 20.0],
+            }
+        ),
+        "table:adjusted_association_estimates": pd.DataFrame(
+            {
+                "fit_status": ["fitted"],
+                "estimate": [1.4],
+                "ci_low": [1.1],
+                "ci_high": [1.8],
+                "effect_scale": ["odds_ratio"],
+                "model_id": ["primary_adjusted"],
+            }
+        ),
+        "table:robustness_matrix": pd.DataFrame(
+            {
+                "spec_id": ["primary", "complete_case"],
+                "point_estimate": [1.4, 1.3],
+                "ci_low": [1.1, 1.0],
+                "ci_high": [1.8, 1.7],
+                "effect_scale": ["OR", "OR"],
+                "converged": [True, True],
+            }
+        ),
+        "table:measurement_missingness": pd.DataFrame(
+            {
+                "variable": ["age", "lactate"],
+                "label": ["Age", "Lactate"],
+                "n_total": [100, 100],
+                "missing_n": [0, 20],
+                "missing_pct": [0.0, 20.0],
+            }
+        ),
+    }
 
 
 def _binding(key: str, frame: pd.DataFrame, path: Path) -> dict[str, object]:
@@ -201,7 +251,58 @@ def test_robustness_four_table_contract_selects_and_renders(tmp_path: Path) -> N
     )
 
 
-def test_renderer_preserves_exact_source_rows_and_exports_figure(tmp_path: Path) -> None:
+def test_association_four_table_contract_selects_and_renders(tmp_path: Path) -> None:
+    frames = _association_frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep.model_validate(
+        {
+            **_step().model_dump(mode="json"),
+            "step_id": "publication_figure_suite",
+            "inputs": list(COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS),
+            "expected_outputs": ["figure:publication_figure_suite"],
+            "input_consumption_contracts": [
+                {"input_key": key, "mode": "all_rows"}
+                for key in COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS
+            ],
+        }
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Estimate an association.", steps=[step]),
+        resolved_bindings=bindings,
+    )
+    assert selection is not None
+    assert selection.host_sealed_renderer is True
+    assert (
+        selection.consumed_input_keys == COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS
+    )
+
+    out_dir = tmp_path / "outputs"
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="publication_figure_suite",
+        input_keys=COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
+    )
+    assert summary["status"] == "ok"
+    assert summary["deterministic_standard_analysis"] == "composite_association_figure"
+    assert summary["source_inputs"] == list(
+        COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS
+    )
+    for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
+        assert (out_dir / f"publication_figure_suite.{suffix}").is_file()
+
+
+def test_renderer_preserves_exact_source_rows_and_exports_figure(
+    tmp_path: Path,
+) -> None:
     frames = _frames()
     bindings = {}
     for key, frame in frames.items():

@@ -40,6 +40,12 @@ COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS = (
     "table:missingness_measurement_audit",
     "table:robustness_summary",
 )
+COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS = (
+    "table:exposure_outcome_distribution",
+    "table:adjusted_association_estimates",
+    "table:robustness_matrix",
+    "table:measurement_missingness",
+)
 
 _REQUIRED_COLUMNS = {
     "table:cohort_flow": frozenset({"n_remaining"}),
@@ -71,11 +77,21 @@ _REQUIRED_COLUMNS = {
             "range_high",
         }
     ),
+    "table:adjusted_association_estimates": frozenset(
+        {"fit_status", "estimate", "ci_low", "ci_high", "effect_scale", "model_id"}
+    ),
+    "table:robustness_matrix": frozenset(
+        {"spec_id", "point_estimate", "ci_low", "ci_high", "effect_scale", "converged"}
+    ),
+    "table:measurement_missingness": frozenset(
+        {"variable", "n_total", "missing_n", "missing_pct"}
+    ),
 }
 
 _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES = (
     COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
     COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
+    COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
 )
 _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES = tuple(
     TypedInputCapability(required=frozenset(profile))
@@ -163,7 +179,9 @@ def composite_descriptive_figure_executor_code(
     *,
     display_labels: Mapping[str, str] | None = None,
 ) -> str:
-    product = _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    product = (
+        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    )
     if product is None:
         raise ValueError("composite descriptive figure has no safe figure product")
     return textwrap.dedent(
@@ -231,9 +249,11 @@ def _assert_percentage(
     denominator: pd.Series,
     label: str,
 ) -> None:
-    if (denominator <= 0).any() or (numerator < 0).any() or (
-        numerator > denominator
-    ).any():
+    if (
+        (denominator <= 0).any()
+        or (numerator < 0).any()
+        or (numerator > denominator).any()
+    ):
         raise ValueError(f"{label} counts do not nest within positive denominators")
     expected = 100.0 * numerator.astype(float) / denominator.astype(float)
     # Source tables may persist percentages rounded to six decimal places.
@@ -288,6 +308,20 @@ def run_composite_descriptive_figure(
         if missing:
             raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
 
+    if tuple(input_keys) == COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS:
+        from .association_publication_figure_renderer import (
+            render_association_publication_figure,
+        )
+
+        return render_association_publication_figure(
+            bound=bound,
+            out_dir=out_dir,
+            step_id=step_id,
+            figure_product=figure_product,
+            input_keys=input_keys,
+            display_labels=display_labels,
+        )
+
     flow = bound["table:cohort_flow"].frame.copy()
     distribution = bound["table:exposure_outcome_distribution"].frame.copy()
     missingness = bound["table:missingness_measurement_audit"].frame.copy()
@@ -308,13 +342,9 @@ def run_composite_descriptive_figure(
     if levels.empty:
         raise ValueError("exposure/outcome distribution has no exposure-level rows")
     levels["n_rows"] = _integer_series(levels, "n_rows")
-    levels["exposure_denominator"] = _integer_series(
-        levels, "exposure_denominator"
-    )
+    levels["exposure_denominator"] = _integer_series(levels, "exposure_denominator")
     levels["outcome_events"] = _integer_series(levels, "outcome_events")
-    levels["outcome_denominator"] = _integer_series(
-        levels, "outcome_denominator"
-    )
+    levels["outcome_denominator"] = _integer_series(levels, "outcome_denominator")
     levels["exposure_pct"] = _finite_series(levels, "exposure_pct")
     levels["outcome_rate_pct"] = _finite_series(levels, "outcome_rate_pct")
     _assert_percentage(
@@ -365,12 +395,9 @@ def run_composite_descriptive_figure(
             raise ValueError("robustness summary counts or ranges are inconsistent")
 
     source_files = [
-        _write_exact_source(bound[key], out_dir=out_dir)
-        for key in input_keys
+        _write_exact_source(bound[key], out_dir=out_dir) for key in input_keys
     ]
-    evidence = {
-        key: str(item.evidence_id or "") for key, item in bound.items()
-    }
+    evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
 
     palette = apply_publication_style(font_size=7.0)
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
@@ -430,9 +457,7 @@ def run_composite_descriptive_figure(
     add_panel_label(ax, "B", x=-0.12, y=1.04)
 
     missing_order = missingness.sort_values("missing_pct", ascending=True)
-    missing_label_column = (
-        "label" if "label" in missing_order.columns else "variable"
-    )
+    missing_label_column = "label" if "label" in missing_order.columns else "variable"
     ax = axes[1, 0]
     positions = np.arange(len(missing_order))
     ax.barh(positions, missing_order["missing_pct"], color=palette["orange"])
@@ -452,9 +477,7 @@ def run_composite_descriptive_figure(
             "_display_pct", ascending=True
         )
         positions = np.arange(len(process_order))
-        ax.barh(
-            positions, process_order["_display_pct"], color=palette["blue_soft"]
-        )
+        ax.barh(positions, process_order["_display_pct"], color=palette["blue_soft"])
         ax.set_yticks(
             positions,
             [_reader_label(value) for value in process_order["concept"]],
@@ -497,9 +520,24 @@ def run_composite_descriptive_figure(
     add_panel_label(ax, "D", x=-0.12, y=1.04)
 
     panel_specs = [
-        ("A", "Cohort accounting", "cohort_accounting", [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[0]]),
-        ("B", "Exposure and observed outcome", "descriptive_result", [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[1]]),
-        ("C", "Measurement missingness", "data_quality", [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[2]]),
+        (
+            "A",
+            "Cohort accounting",
+            "cohort_accounting",
+            [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[0]],
+        ),
+        (
+            "B",
+            "Exposure and observed outcome",
+            "descriptive_result",
+            [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[1]],
+        ),
+        (
+            "C",
+            "Measurement missingness",
+            "data_quality",
+            [COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS[2]],
+        ),
         ("D", panel_d_title, panel_d_role, [panel_d_input]),
     ]
     contract = make_figure_contract(
@@ -521,9 +559,7 @@ def run_composite_descriptive_figure(
                 "evidence_ids": [evidence[sources[0]]],
                 "metadata": {
                     "source_products": sources,
-                    "source_data": [
-                        f"{sources[0].partition(':')[2]}_source_data.csv"
-                    ],
+                    "source_data": [f"{sources[0].partition(':')[2]}_source_data.csv"],
                 },
             }
             for panel_id, title, role, sources in panel_specs
@@ -582,6 +618,7 @@ def run_composite_descriptive_figure(
 
 
 __all__ = [
+    "COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS",
     "COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS",
     "COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS",
     "composite_descriptive_figure_consumed_input_keys",
