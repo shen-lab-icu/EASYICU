@@ -445,8 +445,22 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             raise ValueError(
                 "landmark spline authority requires one typed contrasts table"
             )
+        if len(self._table_products_containing("curve")) != 1:
+            raise ValueError("landmark spline authority requires one typed curve table")
+        if len(self._table_products_containing("linear", "sensitivity")) != 1:
+            raise ValueError(
+                "landmark spline authority requires one typed linear-sensitivity table"
+            )
         self._verify_digest()
         return self
+
+    def _table_products_containing(self, *tokens: str) -> tuple[str, ...]:
+        return tuple(
+            value
+            for value in self.plan_outputs
+            if value.startswith("table:")
+            and all(token in value.partition(":")[2] for token in tokens)
+        )
 
     @property
     def required_columns(self) -> tuple[str, ...]:
@@ -470,6 +484,14 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             if value.startswith("table:")
             and "contrast" in value.partition(":")[2]
         )
+
+    @property
+    def curve_product(self) -> str:
+        return self._table_products_containing("curve")[0]
+
+    @property
+    def linear_sensitivity_product(self) -> str:
+        return self._table_products_containing("linear", "sensitivity")[0]
 
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the signed deterministic primary into one draft plan.
@@ -518,12 +540,28 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 replacement if value == generic_parent else value
                 for value in step.inputs
             ]
+            if (
+                step.planned_analysis_role == "sensitivity"
+                and replacement in inputs
+                and self.linear_sensitivity_product not in inputs
+            ):
+                inputs.append(self.linear_sensitivity_product)
             contracts = [
                 item.model_copy(update={"input_key": replacement})
                 if item.input_key == generic_parent
                 else item
                 for item in step.input_consumption_contracts
             ]
+            if step.planned_analysis_role == "sensitivity" and replacement in inputs:
+                contracted = {item.input_key for item in contracts}
+                contracts.extend(
+                    ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
+                    for input_key in (
+                        replacement,
+                        self.linear_sensitivity_product,
+                    )
+                    if input_key not in contracted
+                )
             steps.append(
                 step.model_copy(
                     update={

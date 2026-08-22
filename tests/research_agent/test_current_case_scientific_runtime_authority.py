@@ -19,6 +19,9 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
 from easyicu.research_agent.execution.runners.landmark_spline_executor import (
     run_landmark_spline_association,
 )
+from easyicu.research_agent.execution.runners.landmark_spline_robustness_executor import (
+    run_landmark_spline_robustness,
+)
 from easyicu.research_agent.execution.runners.source_feasibility_executor import (
     run_source_feasibility_fail_closed,
 )
@@ -178,6 +181,118 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     assert set(authority.required_columns).issubset(bound.steps[0].inputs)
     assert bound.steps[1].inputs == [authority.downstream_parent_product]
     assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
+
+
+def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
+    tmp_path: Path,
+) -> None:
+    projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    robustness = AnalysisPlan.model_validate(
+        {
+            "research_question": "Project signed sensitivity results.",
+            "analysis_type": "association_study",
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_robustness",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Summarize signed robustness results.",
+                    "inputs": [
+                        "dataset:analysis_cohort",
+                        "table:adjusted_association_estimates",
+                    ],
+                    "expected_outputs": [
+                        "statistic:primary_or",
+                        "statistic:complete_case_n",
+                        "table:robustness_summary",
+                        "log:missingness_strategy_notes",
+                        "table:robustness_matrix",
+                    ],
+                    "method": "robustness_sensitivity",
+                    "robustness_replay_spec": {
+                        "products": [
+                            {"product_id": "primary_or", "output": "primary_effect"},
+                            {
+                                "product_id": "complete_case_n",
+                                "output": "complete_case_n",
+                            },
+                            {
+                                "product_id": "robustness_summary",
+                                "output": "robustness_summary",
+                            },
+                            {
+                                "product_id": "missingness_strategy_notes",
+                                "output": "missingness_strategy_notes",
+                            },
+                            {
+                                "product_id": "robustness_matrix",
+                                "output": "robustness_matrix",
+                            },
+                        ]
+                    },
+                },
+            ],
+        }
+    )
+    bound = authority.bind_plan(robustness)
+    step = bound.steps[1]
+    assert authority.downstream_parent_product in step.inputs
+    assert authority.linear_sensitivity_product in step.inputs
+    assert {item.input_key for item in step.input_consumption_contracts} == {
+        authority.downstream_parent_product,
+        authority.linear_sensitivity_product,
+    }
+
+    selected = select_standard_executor(
+        step,
+        plan=bound,
+        current_case_scientific_runtime_authority=authority,
+        scientific_runtime_projection_sha256=projection.runtime_projection_sha256,
+    )
+    assert selected is not None
+    assert selected.analysis_kind == "signed_landmark_spline_robustness"
+
+    contrasts = pd.DataFrame(
+        {
+            "exposure_value": [1.0, 5.0],
+            "reference_value": [2.1, 2.1],
+            "adjusted_odds_ratio": [0.8, 2.0],
+            "ci_low": [0.7, 1.8],
+            "ci_high": [0.9, 2.2],
+        }
+    )
+    linear = pd.DataFrame(
+        {
+            "per_unit": [1.0],
+            "adjusted_odds_ratio": [1.25],
+            "ci_low": [1.2],
+            "ci_high": [1.3],
+            "n": [44095],
+            "events": [5480],
+        }
+    )
+    summary = run_landmark_spline_robustness(
+        step=step,
+        authority=authority,
+        runtime_projection_sha256=projection.runtime_projection_sha256,
+        contrasts=contrasts,
+        linear_sensitivity=linear,
+        contrast_evidence_id="contrast_evidence",
+        linear_evidence_id="linear_evidence",
+        out_dir=tmp_path,
+    )
+    assert summary["status"] == "ok"
+    assert summary["primary_or"] == 2.0
+    assert summary["primary_effect_is_nonlinear_curve_summary"] is False
+    assert summary["complete_case_n"] == 44095
+    matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
+    assert set(matrix["axis"]) == {"primary", "functional_form", "missing"}
+    assert matrix.loc[matrix["axis"] == "missing", "independent_variant"].item() in (
+        False,
+        0,
+    )
 
 
 def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
