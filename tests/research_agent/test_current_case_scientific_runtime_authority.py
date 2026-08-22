@@ -346,6 +346,7 @@ def test_host_bound_cohort_root_publishes_exact_input_bytes(
     assert output.read_bytes() == source.read_bytes()
     assert summary["status"] == "ok"
     assert summary["n_analysis_cohort"] == 2
+    assert summary["analysis_cohort_n"] == 2
     assert summary["output_files"] == {
         "table:analysis_cohort": "analysis_cohort.parquet"
     }
