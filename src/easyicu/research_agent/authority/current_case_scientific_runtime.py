@@ -624,6 +624,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
     plan_method: Literal["signed_landmark_survival_suite"]
     plan_intent: str = Field(min_length=1)
     plan_outputs: tuple[str, ...]
+    development_execution_only_allowed: bool = False
     exposure_status_column: str = Field(min_length=1)
     exposure_onset_column: str = Field(min_length=1)
     event_column: str = Field(min_length=1)
@@ -783,6 +784,36 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             }
         )
         return plan.model_copy(update={"steps": [bound]})
+
+    def development_execution_only_plan(
+        self,
+        *,
+        research_question: str,
+    ) -> AnalysisPlan:
+        """Mechanically project this complete authority into one dev-only plan."""
+
+        if not self.development_execution_only_allowed:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark survival authority does not allow execution-only development"
+            )
+        draft = AnalysisPlan.model_validate(
+            {
+                "research_question": str(research_question),
+                "analysis_type": "survival",
+                "steps": [
+                    {
+                        "step_id": "01_authority_compiled_survival_suite",
+                        "planned_analysis_role": "primary",
+                        "intent": self.plan_intent,
+                        "inputs": ["dataset:analysis_cohort"],
+                        "expected_outputs": list(self.plan_outputs),
+                        "method": self.plan_method,
+                        "icu_rule_refs": [self.plan_rule_ref],
+                    }
+                ],
+            }
+        )
+        return self.bind_plan(draft)
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         if len(plan.steps) != 1:
