@@ -37,11 +37,11 @@ def _frames() -> dict[str, pd.DataFrame]:
         ),
         INPUTS[1]: pd.DataFrame(
             {
-                "label": ["Observed", "Observed"],
-                "estimate_type": ["prevalence", "outcome_risk"],
-                "estimate": [0.54, 0.14],
-                "ci_low": [0.53, 0.13],
-                "ci_high": [0.55, 0.15],
+                "label": ["Observed", "Observed", "Distribution"],
+                "estimate_type": ["prevalence", "outcome_risk", "distribution"],
+                "estimate": [0.54, 0.14, None],
+                "ci_low": [0.53, 0.13, None],
+                "ci_high": [0.55, 0.15, None],
             }
         ),
         INPUTS[2]: pd.DataFrame(
