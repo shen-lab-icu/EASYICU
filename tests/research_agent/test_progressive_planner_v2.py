@@ -18,6 +18,7 @@ from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
     _complete_case_variable_roster,
     _parse_foundation_materialization,
+    _parse_step_materialization,
     candidate_analysis_types,
 )
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
@@ -555,6 +556,33 @@ def _foundation_payload(payload: dict | None = None) -> dict:
             "know_how_decisions": source.get("know_how_decisions", []),
         },
     }
+
+
+def test_step_materialization_parser_collapses_normalized_raw_input_duplicates() -> None:
+    payload = _materialization_payloads()[0]
+    payload["step"]["raw_inputs"] = ["age_years", " age_years ", "sex_code"]
+
+    parsed = _parse_step_materialization(json.dumps(payload))
+
+    assert parsed.step.raw_inputs == ["age_years", "sex_code"]
+
+
+@pytest.mark.parametrize(
+    ("field", "values"),
+    [
+        ("raw_inputs", ["age_years", " "]),
+        ("depends_on", ["01_cohort", "01_cohort"]),
+    ],
+)
+def test_step_materialization_parser_keeps_other_invalid_rosters_fail_closed(
+    field: str,
+    values: list[str],
+) -> None:
+    payload = _materialization_payloads()[1]
+    payload["step"][field] = values
+
+    with pytest.raises(ValueError, match="unique non-empty values"):
+        _parse_step_materialization(json.dumps(payload))
 
 
 def test_foundation_parser_collapses_only_exact_duplicate_know_how_decisions() -> None:

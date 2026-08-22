@@ -416,6 +416,28 @@ def _parse_model(raw: str, model: type[Any]) -> Any:
     return model.model_validate(payload)
 
 
+def _parse_step_materialization(raw: str) -> ProgressiveStepMaterialization:
+    payload = json.loads(str(raw or "").strip())
+    if not isinstance(payload, dict):
+        raise ValueError("progressive Planner response root must be an object")
+    step = payload.get("step")
+    raw_inputs = step.get("raw_inputs") if isinstance(step, dict) else None
+    if isinstance(raw_inputs, list) and all(
+        isinstance(raw_input, str) for raw_input in raw_inputs
+    ):
+        normalized = [raw_input.strip() for raw_input in raw_inputs]
+        if all(normalized):
+            # Repeating an exact normalized source-column name adds no
+            # scientific meaning and is a common structured-generation
+            # artifact. Preserve first-seen order and leave every other roster
+            # strict so dependency and sensitivity conflicts still fail closed.
+            canonical_step = dict(step)
+            canonical_step["raw_inputs"] = list(dict.fromkeys(normalized))
+            payload = dict(payload)
+            payload["step"] = canonical_step
+    return ProgressiveStepMaterialization.model_validate(payload)
+
+
 def _parse_foundation_materialization(
     raw: str,
     *,
@@ -1442,10 +1464,7 @@ class ProgressivePlannerAgent:
                 materialization = call_llm_with_structured_retry(
                     self.llm,
                     step_messages,
-                    parser=lambda raw: _parse_model(
-                        raw,
-                        ProgressiveStepMaterialization,
-                    ),
+                    parser=_parse_step_materialization,
                     role="progressive_planner_step_materialization",
                     max_retries=1,
                     max_tokens=_MAX_STEP_OUTPUT_TOKENS,
