@@ -52,6 +52,7 @@ from ...robustness.panel import (
     validate_robustness_specs,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
+from ...contracts.cohort_product_keys import is_closed_cohort_product_key
 from ...contracts.result_envelope import (
     MODEL_SUMMARY_ANALYSIS_DEFINITION_KEY,
     MODEL_SUMMARY_COVARIATE_KEYS,
@@ -1889,6 +1890,85 @@ def _verified_complete_case_equivalence(
     return row, coefficient_rows, contract_copy, None
 
 
+def _variant_typed_manifest_path(
+    *,
+    source: Dict[str, Any],
+    spec: RobustnessSpec,
+    variant_cohort: Any,
+    cohort_path: Path,
+    cohort_sha256: str,
+    replay_root: Path,
+) -> Optional[Path]:
+    """Issue a replay-local typed cohort binding when the source used one."""
+
+    source_bindings = (source.get("summary") or {}).get("input_bindings") or []
+    cohort_keys = [
+        str(item.get("input_key") or "")
+        for item in source_bindings
+        if isinstance(item, Mapping)
+        and is_closed_cohort_product_key(item.get("input_key"))
+    ]
+    if not cohort_keys:
+        return None
+    if len(cohort_keys) != 1:
+        raise ValueError("registered primary model has no unique typed cohort binding")
+    cohort_key = cohort_keys[0]
+    declared_kind, _, product = cohort_key.partition(":")
+    replay_evidence_id = f"robustness_replay_{spec.spec_id}_cohort"
+    identity_row = {
+        "input_key": cohort_key,
+        "declared_kind": declared_kind,
+        "product": product,
+        "evidence_id": replay_evidence_id,
+        "sha256": cohort_sha256,
+        "produced_by_step": spec.spec_id,
+    }
+    binding = {
+        "absolute_path": str(cohort_path),
+        "relative_path": cohort_path.name,
+        "sha256": cohort_sha256,
+        "declared_kind": declared_kind,
+        "evidence_kind": "table",
+        "product": product,
+        "evidence_id": replay_evidence_id,
+        "produced_by_step": spec.spec_id,
+        "identity_row": identity_row,
+        "product_contract": {
+            "schema_version": "easyicu.host_typed_product.v4",
+            "tabular_format": "parquet",
+            "columns": [str(column) for column in variant_cohort.columns],
+            "row_count": int(len(variant_cohort)),
+            "identity_row": identity_row,
+        },
+        "consumption_contract": {
+            "schema_version": "easyicu.verified_artifact_consumption/1",
+            "input_key": cohort_key,
+            "mode": "all_rows",
+            "artifact_sha256": cohort_sha256,
+            "verified_row_count": int(len(variant_cohort)),
+        },
+    }
+    replay_manifest = {
+        "step_id": source["step_id"],
+        "inputs": {cohort_key: binding},
+    }
+    current_manifest_path = os.environ.get("EASYICU_RESOLVED_INPUTS_JSON")
+    if current_manifest_path:
+        try:
+            current_manifest = _load_json_object(Path(current_manifest_path))
+        except Exception:
+            current_manifest = {}
+        raw_input_contracts = current_manifest.get("raw_input_contracts")
+        if isinstance(raw_input_contracts, dict):
+            replay_manifest["raw_input_contracts"] = raw_input_contracts
+    replay_manifest_path = replay_root / "resolved_inputs.json"
+    replay_manifest_path.write_text(
+        json.dumps(replay_manifest, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
+    return replay_manifest_path
+
+
 def _replay_primary_model_on_frame(
     *,
     spec: RobustnessSpec,
@@ -1927,10 +2007,28 @@ def _replay_primary_model_on_frame(
             error=f"locked variant cohort could not be persisted: {exc}",
         )
 
+    try:
+        replay_manifest_path = _variant_typed_manifest_path(
+            source=source,
+            spec=spec,
+            variant_cohort=variant_cohort,
+            cohort_path=cohort_path,
+            cohort_sha256=input_cohort_sha256,
+            replay_root=replay_root,
+        )
+    except ValueError as exc:
+        return _blocked_structured_replay(
+            spec=spec,
+            error=str(exc),
+        )
+
     env = os.environ.copy()
     env["COHORT_PARQUET"] = str(cohort_path)
     env["STEP_OUT_DIR"] = str(replay_outputs)
     env["MPLCONFIGDIR"] = str(replay_root / "matplotlib")
+    if replay_manifest_path is not None:
+        env["EASYICU_RUN_DIR"] = str(replay_root)
+        env["EASYICU_RESOLVED_INPUTS_JSON"] = str(replay_manifest_path)
     try:
         completed = subprocess.run(
             [sys.executable, str(source["script_path"])],
