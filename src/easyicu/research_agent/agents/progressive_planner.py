@@ -2203,6 +2203,20 @@ class ProgressivePlannerAgent:
             if resume_checkpoint is not None
             else ProgressivePrefixState()
         )
+        if resume_checkpoint is not None:
+            migrated_step_ids = [
+                current.step.step_id
+                for stored, current in zip(
+                    resume_checkpoint.materializations,
+                    prefix_state.materializations,
+                    strict=True,
+                )
+                if stored != current
+            ]
+            if migrated_step_ids:
+                self.last_prompt_metrics["runtime_contract_migrated_step_ids"] = (
+                    migrated_step_ids
+                )
         self.last_materializations = list(prefix_state.materializations)
         self.last_resume_validated = resume_checkpoint is not None
 
