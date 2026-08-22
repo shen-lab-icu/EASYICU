@@ -1549,6 +1549,22 @@ def _build_trajectory_long_from_resolved_source(
                 "receipt; refusing to treat a SOFA-2 value as directly observed"
             )
         if has_observed:
+            receipt_presence = w[[observed_name, available_name]].notna()
+            if bool(receipt_presence.any(axis=1).ne(receipt_presence.all(axis=1)).any()):
+                raise MaterializedMetadataError(
+                    f"trajectory concept {concept!r} has an incomplete owner evidence "
+                    "receipt row"
+                )
+            receipt_rows = receipt_presence.all(axis=1)
+            if bool((w[concept].notna() & ~receipt_rows).any()):
+                raise MaterializedMetadataError(
+                    f"trajectory concept {concept!r} has a value without an owner "
+                    "evidence receipt"
+                )
+            # A wide module contains rows emitted by its other concepts. When
+            # this concept, observed and available are all null, the owner made
+            # no claim for this row; it is not a malformed binary receipt.
+            w = w.loc[receipt_rows].copy()
             observed = _require_finite_numeric(
                 pd.to_numeric(w[observed_name], errors="coerce"),
                 original=w[observed_name],

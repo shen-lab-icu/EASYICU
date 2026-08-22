@@ -340,6 +340,60 @@ def test_trajectory_excludes_owner_observed_but_unscoreable_measurement(
     }
 
 
+def test_trajectory_ignores_wide_module_row_without_owner_claim(
+    monkeypatch, tmp_path
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 12.0],
+            "sofa2_resp": [None, 2.0],
+            "sofa2_resp_observed": [None, 1],
+            "sofa2_resp_available": [None, 1],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    long_df, _ = M.build_trajectory_long(
+        data_path=tmp_path,
+        concepts=["sofa2_resp"],
+        window=(0.0, 12.0),
+    )
+
+    assert long_df["charttime"].tolist() == [12.0]
+
+
+@pytest.mark.parametrize(
+    ("value", "observed", "available", "message"),
+    [
+        (2.0, None, None, "value without an owner evidence receipt"),
+        (2.0, 1, None, "incomplete owner evidence receipt row"),
+    ],
+)
+def test_trajectory_rejects_row_level_owner_receipt_gaps(
+    monkeypatch, tmp_path, value, observed, available, message
+):
+    synthetic = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sofa2_resp": [value],
+            "sofa2_resp_observed": [observed],
+            "sofa2_resp_available": [available],
+        }
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    monkeypatch.setattr(M, "_load_concept", lambda *args: synthetic.copy())
+
+    with pytest.raises(M.MaterializedMetadataError, match=message):
+        M.build_trajectory_long(
+            data_path=tmp_path,
+            concepts=["sofa2_resp"],
+            window=(0.0, 12.0),
+        )
+
+
 def _write_native_sofa2_package(tmp_path, *, include_available=True):
     root = tmp_path / "native_sofa2"
     root.mkdir()
