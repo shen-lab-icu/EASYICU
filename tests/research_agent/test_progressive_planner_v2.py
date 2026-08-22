@@ -1385,6 +1385,38 @@ def test_table_one_compiler_reports_known_missing_group_rows() -> None:
     assert table_step.table_one_spec.missing_group_policy == "exclude_and_report"
 
 
+def test_distribution_compiler_reports_known_missing_exposure_rows() -> None:
+    context = _context()
+    variables = [
+        variable.model_copy(
+            update={
+                "missingness": MissingnessProfile(
+                    fraction_missing=0.1,
+                    n_missing=12,
+                    n_total=120,
+                    missingness_severity="medium",
+                )
+            }
+        )
+        if variable.name == "exposure_flag"
+        else variable
+        for variable in context.variables
+    ]
+    plan, _ = compile_progressive_plan(
+        skeleton=_skeleton(),
+        context=context.model_copy(update={"variables": variables}),
+    )
+
+    distribution_step = next(
+        step for step in plan.steps if step.step_id == "03_distribution"
+    )
+    assert distribution_step.exposure_outcome_distribution_spec is not None
+    assert (
+        distribution_step.exposure_outcome_distribution_spec.missing_exposure_policy
+        == "exclude_from_denominator"
+    )
+
+
 def test_report_orders_after_figure_without_reading_raster_as_data() -> None:
     payload = json.loads(json.dumps(_payload()))
     report = json.loads(json.dumps(payload["steps"][-1]))

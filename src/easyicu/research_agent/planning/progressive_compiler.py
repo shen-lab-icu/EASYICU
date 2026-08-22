@@ -879,6 +879,18 @@ def _compile_distribution(
         step=step,
         step_index=step_index,
     )
+    exposure_missingness = variables[exposure].missingness
+    missing_exposure_policy = step.missing_exposure_policy
+    if (
+        missing_exposure_policy == "fail_closed"
+        and exposure_missingness is not None
+        and exposure_missingness.n_missing > 0
+    ):
+        # A fail-closed policy is executable only when the sealed context says
+        # the exposure is complete.  When exact missing counts are already
+        # known, retain the Planner's declared levels while making the omitted
+        # denominator explicit in the typed distribution table.
+        missing_exposure_policy = "exclude_from_denominator"
     if counts_only:
         # The typed StudyContext has already forbidden uncertainty and effect
         # contrasts. Compile only the observed denominators, counts, and
@@ -892,7 +904,7 @@ def _compile_distribution(
             outcome_positive_value=event,
             level_match_policy="exact_typed",
             denominator_policy=step.denominator_policy,
-            missing_exposure_policy=step.missing_exposure_policy,
+            missing_exposure_policy=missing_exposure_policy,
             missing_outcome_policy=step.missing_outcome_policy,
             undeclared_outcome_policy="fail_closed",
             interval_method="none_counts_only",
@@ -936,7 +948,7 @@ def _compile_distribution(
             outcome_positive_value=event,
             level_match_policy="exact_typed",
             denominator_policy=step.denominator_policy,
-            missing_exposure_policy=step.missing_exposure_policy,
+            missing_exposure_policy=missing_exposure_policy,
             missing_outcome_policy=step.missing_outcome_policy,
             undeclared_outcome_policy="fail_closed",
             interval_method="wilson",
