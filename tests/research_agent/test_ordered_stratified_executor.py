@@ -9,6 +9,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.audits.aggregate_row import (
+    unlabelled_aggregate_row_findings,
+)
 from easyicu.research_agent.contracts.ordered_stratified import (
     ordered_stratified_numeric_findings,
     ordered_stratified_script_findings,
@@ -139,6 +142,10 @@ def test_typed_owner_executes_and_replays_without_coder(monkeypatch, tmp_path: P
     selected = select_standard_executor(step, plan=plan)
     assert selected is not None
     assert selected.analysis_kind == "ordered_stratified_analysis"
+    assert selected.consumed_input_keys == (
+        "artifact:analysis_cohort",
+        "table:adjusted_association_estimates",
+    )
 
     spec = ordered_stratified_spec_for_step(step, plan=plan)
     assert spec is not None
@@ -156,6 +163,12 @@ def test_typed_owner_executes_and_replays_without_coder(monkeypatch, tmp_path: P
     )
     assert not ordered_stratified_script_findings(
         step=step, script_text=selected.code
+    )
+    stratified = pd.read_csv(out_dir / "ordered_stratified_outcomes.csv")
+    assert set(stratified["row_role"]) == {"exposure_level"}
+    assert not unlabelled_aggregate_row_findings(
+        step_id=step.step_id,
+        out_dir=out_dir,
     )
 
 

@@ -45,6 +45,7 @@ from .cohort_summary_executor import (
 )
 from .ordered_stratified_executor import (
     ORDERED_STRATIFIED_ANALYSIS_KIND,
+    ordered_stratified_consumed_input_keys,
     ordered_stratified_executor_code,
     ordered_stratified_executor_owns_step,
 )
@@ -463,7 +464,7 @@ def select_standard_executor(
                 selection_reason="typed_ordered_stratified_contract_preflight",
                 progress_message="Using deterministic ordered-trend adapter",
                 code=ordered_stratified_executor_code(step, plan=plan),
-                consumed_input_keys=_consumed_typed_cohort_inputs(step),
+                consumed_input_keys=ordered_stratified_consumed_input_keys(step),
             )
         )
     _missed(ORDERED_STRATIFIED_ANALYSIS_KIND)
