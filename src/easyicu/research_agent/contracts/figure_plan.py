@@ -31,9 +31,7 @@ class PlannedFigurePanelSpec(BaseModel):
 
     @field_validator("source_products")
     @classmethod
-    def _source_products_are_unique_typed_inputs(
-        cls, values: List[str]
-    ) -> List[str]:
+    def _source_products_are_unique_typed_inputs(cls, values: List[str]) -> List[str]:
         cleaned = [str(value or "").strip() for value in values]
         if any(not is_canonical_typed_product_token(value) for value in cleaned):
             raise ValueError(
@@ -97,6 +95,62 @@ ROBUSTNESS_FIGURE_KNOWN_INPUTS = frozenset(
         ROBUSTNESS_COMPLETE_CASE_INPUT,
     }
 )
+LANDMARK_ASSOCIATION_COMPOSITE_INPUTS = frozenset(
+    {
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    }
+)
+
+
+def landmark_association_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind a four-panel landmark-association display to typed parents."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    contrast = [
+        value
+        for value in cleaned
+        if value.startswith("table:")
+        and value.partition(":")[2].endswith("landmark_rcs_contrasts")
+    ]
+    if (
+        len(contrast) != 1
+        or len(cleaned) != 4
+        or len(cleaned) != len(set(cleaned))
+        or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(cleaned)
+    ):
+        raise ValueError("landmark composite requires its four exact typed tables")
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="association_contrasts",
+            article_role="relationship",
+            chart_type="contrast_forest",
+            source_products=(contrast[0],),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="absolute_risk_context",
+            article_role="context",
+            chart_type="absolute_risk",
+            source_products=("table:absolute_risk_context",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_summary",
+            article_role="robustness",
+            chart_type="sensitivity_range",
+            source_products=("table:robustness_summary",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="measurement_process",
+            article_role="data_quality",
+            chart_type="availability_panel",
+            source_products=("table:measurement_process_audit",),
+        ),
+    )
+
+
 DATA_QUALITY_AUDIT_ROLES = (
     "measurement_missingness",
     "measurement_process",
@@ -164,6 +218,7 @@ def resolve_data_quality_figure_inputs(
     if set(resolved) != set(DATA_QUALITY_AUDIT_ROLES):
         return None
     return resolved
+
 
 EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS = (
     DeterministicFigurePanelTemplate(
@@ -293,6 +348,8 @@ __all__ = [
     "PlannedFigurePanelSpec",
     "data_quality_audit_source_candidates",
     "measurement_availability_figure_panels",
+    "LANDMARK_ASSOCIATION_COMPOSITE_INPUTS",
+    "landmark_association_composite_panels",
     "robustness_figure_panels",
     "resolve_data_quality_figure_inputs",
 ]

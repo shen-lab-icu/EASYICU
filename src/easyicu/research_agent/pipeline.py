@@ -161,7 +161,10 @@ from .authority.table_one_binding import (
 from .authority.resume_plan import (
     load_compatible_resume_plan as _load_compatible_resume_plan,
 )
-from .authority import pipeline_cache as _pipeline_cache, plan_lifecycle as _plan_lifecycle
+from .authority import (
+    pipeline_cache as _pipeline_cache,
+    plan_lifecycle as _plan_lifecycle,
+)
 from .planning.analysis_blueprint import (
     build_analysis_blueprint,
     render_analysis_blueprint_for_prompt,
@@ -403,6 +406,7 @@ from .plan_utils import (
 )
 from .planning.figure_plan_shaping import (
     bind_deterministic_figure_panels,
+    close_empty_deterministic_figure_contracts,
     ensure_cohort_accounting_figure_step,
     ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
     ensure_primary_result_figure_step,
@@ -888,6 +892,23 @@ def _migrate_legacy_resume_figure_render_edges(
                 f"resume_from_step_id={cut_step_id!r} is not in the active analysis plan"
             )
 
+    eligible_figure_ids = [
+        str(step.step_id)
+        for index, step in enumerate(plan.steps)
+        if str(step.step_id) not in completed_step_ids
+        and (cut_index is None or index >= cut_index)
+    ]
+    closed_plan, _closure_findings = close_empty_deterministic_figure_contracts(
+        plan=plan,
+        eligible_step_ids=eligible_figure_ids,
+    )
+    initially_closed_ids = [
+        str(before.step_id)
+        for before, after in zip(plan.steps, closed_plan.steps)
+        if before != after
+    ]
+    plan = closed_plan
+
     producer_ids: Dict[tuple[str, str], set[str]] = {}
     producer_tokens: Dict[tuple[str, str], List[tuple[str, str]]] = {}
     for producer_step in plan.steps:
@@ -955,7 +976,7 @@ def _migrate_legacy_resume_figure_render_edges(
         return list(dict.fromkeys(dependencies)), dependency_producers
 
     revised_steps = list(plan.steps)
-    migrated_step_ids: List[str] = []
+    migrated_step_ids: List[str] = list(initially_closed_ids)
 
     for index in range(1, len(plan.steps)):
         parent = plan.steps[index - 1]
@@ -1526,8 +1547,13 @@ def _resume_compatible_plan(
                 "resume checkpoint has no digest-verified analysis plan "
                 "evidence compatible with every completed step"
             )
-    return plan, reused_plan_path, proposed_plan, reused_prior_plan, plan_generation_mode
-
+    return (
+        plan,
+        reused_plan_path,
+        proposed_plan,
+        reused_prior_plan,
+        plan_generation_mode,
+    )
 
 
 def _run_preplan_literature_and_hypothesis(
@@ -1711,7 +1737,13 @@ def _run_preplan_literature_and_hypothesis(
                     resume_state=resume_state,
                     aborted_result=aborted,
                 )
-                return terminal_result, agent_context, allowed_literature_citation_keys, direct_comparator_literature_keys, preplan_literature
+                return (
+                    terminal_result,
+                    agent_context,
+                    allowed_literature_citation_keys,
+                    direct_comparator_literature_keys,
+                    preplan_literature,
+                )
             note = render_hypothesis_blueprint_for_prompt(
                 blueprint,
                 literature=preplan_literature,
@@ -1738,7 +1770,6 @@ def _run_preplan_literature_and_hypothesis(
         direct_comparator_literature_keys,
         preplan_literature,
     )
-
 
 
 class ResearchAgentPipeline:
@@ -2803,9 +2834,9 @@ class ResearchAgentPipeline:
                     progress_callback=planner_progress,
                 )
                 if progressive:
-                    planner_run_kwargs[
-                        "required_primary_cohort_selection_mode"
-                    ] = self._required_primary_cohort_selection_mode
+                    planner_run_kwargs["required_primary_cohort_selection_mode"] = (
+                        self._required_primary_cohort_selection_mode
+                    )
                     progressive_result = run_progressive_planner(
                         planner=planner,
                         context=agent_context,
@@ -2827,9 +2858,7 @@ class ResearchAgentPipeline:
                     )
                     plan = progressive_result.plan
                     plan_generation_mode = progressive_result.generation_mode
-                    planner_prompt_metrics = dict(
-                        progressive_result.prompt_metrics
-                    )
+                    planner_prompt_metrics = dict(progressive_result.prompt_metrics)
                 else:
                     plan = planner.run(agent_context, **planner_run_kwargs)
                     planner_prompt_metrics = know_how_binding.prompt_metrics(
@@ -2879,9 +2908,7 @@ class ResearchAgentPipeline:
                         detail={"dropped_keys": dropped_keys},
                     )
                 )
-            plan_normalizations = list(
-                dropped_plan_keys.get("normalizations", [])
-            )
+            plan_normalizations = list(dropped_plan_keys.get("normalizations", []))
             if plan_normalizations:
                 findings.append(
                     ValidationFinding(
@@ -3094,6 +3121,10 @@ class ResearchAgentPipeline:
                 context=context,
             )
             findings.extend(audit_panel_findings)
+            plan, empty_figure_findings = close_empty_deterministic_figure_contracts(
+                plan=plan
+            )
+            findings.extend(empty_figure_findings)
             plan, deterministic_panel_findings = bind_deterministic_figure_panels(
                 plan=plan
             )
@@ -3250,7 +3281,8 @@ class ResearchAgentPipeline:
             proposed_source=plan_generation_mode,
             pre_normalization_plan=host_normalization_input,
             normalized_plan=plan,
-            resume_scientific_semantics_changed=plan_generation_mode in {
+            resume_scientific_semantics_changed=plan_generation_mode
+            in {
                 "resume_with_scientific_migration",
                 "resume_with_authority_restore",
             },
@@ -3291,7 +3323,9 @@ class ResearchAgentPipeline:
             "llm_progressive_v2",
             "llm_progressive_v2_dev_resume",
         }:
-            lifecycle_evidence_id = _plan_lifecycle.plan_lifecycle_evidence_id(plan.revision)
+            lifecycle_evidence_id = _plan_lifecycle.plan_lifecycle_evidence_id(
+                plan.revision
+            )
             persist_progressive_planning_authority(
                 run_dir=run_dir,
                 evidence=evidence,
@@ -4441,9 +4475,7 @@ class ResearchAgentPipeline:
                 "preview_max_chars": plan_result.repro_envelope.preview_max_chars,
                 "include_previews": plan_result.repro_envelope.include_previews,
                 "env_snapshot": dict(plan_result.repro_envelope.env_snapshot),
-                "calls": [
-                    item.to_json() for item in plan_result.repro_envelope.calls
-                ],
+                "calls": [item.to_json() for item in plan_result.repro_envelope.calls],
             }
         plan_handoff = {
             "context": plan_result.context.model_dump(mode="json"),
@@ -4505,9 +4537,7 @@ class ResearchAgentPipeline:
             plan_handoff=plan_handoff,
             execution_coordinates=execution_coordinates,
         )
-        write_human_review_checkpoint(
-            human_review_checkpoint_path(run_dir), checkpoint
-        )
+        write_human_review_checkpoint(human_review_checkpoint_path(run_dir), checkpoint)
         return checkpoint
 
     def _restore_role_handoff(
@@ -4558,9 +4588,7 @@ class ResearchAgentPipeline:
                 base = base_role_resolver(role)
                 if base is None or isinstance(base, HardStopClient):
                     return base
-                return HardStopClient(
-                    base, role=role, task=self._provider_hard_stop
-                )
+                return HardStopClient(base, role=role, task=self._provider_hard_stop)
 
         else:
             stopped_role_resolver = base_role_resolver
@@ -4634,6 +4662,7 @@ class ResearchAgentPipeline:
             evidence=evidence,
             submission_profile_name=self._submission_profile_name,
         )
+
     @_pipeline_instance_lifecycle("run")
     @exclusive_run_execution
     @_one_capability_job
@@ -5181,7 +5210,39 @@ class ResearchAgentPipeline:
         )
 
         def _plan_invoker():
-            return _pipeline_run___plan_invoker(_emit_progress=_emit_progress, cohort_name=cohort_name, cohort_path=cohort_path, concept_descriptions=concept_descriptions, cross_database_validation=cross_database_validation, database=database, endpoint=endpoint, exclusion_criteria=exclusion_criteria, experiment_spec_path=experiment_spec_path, id_columns=id_columns, inclusion_criteria=inclusion_criteria, llm=llm, notes=notes, outcome_columns=outcome_columns, primary_exposure=primary_exposure, question=question, resume_context_evidence_path=resume_context_evidence_path, resume_from_step_id=resume_from_step_id, resume_state=resume_state, run_dir=run_dir, run_environment_identity=run_environment_identity, run_id=run_id, run_language=run_language, run_scientific_identity=run_scientific_identity, self=self, skill_obj=skill_obj, staged_trajectory_binding=staged_trajectory_binding, target_outcome=target_outcome, time_columns=time_columns, time_windows=time_windows, user_preferences=user_preferences)
+            return _pipeline_run___plan_invoker(
+                _emit_progress=_emit_progress,
+                cohort_name=cohort_name,
+                cohort_path=cohort_path,
+                concept_descriptions=concept_descriptions,
+                cross_database_validation=cross_database_validation,
+                database=database,
+                endpoint=endpoint,
+                exclusion_criteria=exclusion_criteria,
+                experiment_spec_path=experiment_spec_path,
+                id_columns=id_columns,
+                inclusion_criteria=inclusion_criteria,
+                llm=llm,
+                notes=notes,
+                outcome_columns=outcome_columns,
+                primary_exposure=primary_exposure,
+                question=question,
+                resume_context_evidence_path=resume_context_evidence_path,
+                resume_from_step_id=resume_from_step_id,
+                resume_state=resume_state,
+                run_dir=run_dir,
+                run_environment_identity=run_environment_identity,
+                run_id=run_id,
+                run_language=run_language,
+                run_scientific_identity=run_scientific_identity,
+                self=self,
+                skill_obj=skill_obj,
+                staged_trajectory_binding=staged_trajectory_binding,
+                target_outcome=target_outcome,
+                time_columns=time_columns,
+                time_windows=time_windows,
+                user_preferences=user_preferences,
+            )
 
         from .orchestration.workflow import orchestration_runtime_receipt
 
@@ -5193,16 +5254,64 @@ class ResearchAgentPipeline:
         )
 
         def _provenance_hook(plan_result):
-            return _pipeline_run___provenance_hook(plan_result, cohort_path=cohort_path, orchestration_receipt_path=orchestration_receipt_path, run_dir=run_dir, self=self, source_files=source_files)
+            return _pipeline_run___provenance_hook(
+                plan_result,
+                cohort_path=cohort_path,
+                orchestration_receipt_path=orchestration_receipt_path,
+                run_dir=run_dir,
+                self=self,
+                source_files=source_files,
+            )
 
         def _execute_invoker(plan_result):
-            return _pipeline_run___execute_invoker(plan_result, _emit_progress=_emit_progress, cohort_path=cohort_path, notes=notes, resume_from_step_id=resume_from_step_id, run_dir=run_dir, run_id=run_id, self=self, skill_obj=skill_obj, staged_trajectory_binding=staged_trajectory_binding, stop_after_step_id=stop_after_step_id)
+            return _pipeline_run___execute_invoker(
+                plan_result,
+                _emit_progress=_emit_progress,
+                cohort_path=cohort_path,
+                notes=notes,
+                resume_from_step_id=resume_from_step_id,
+                run_dir=run_dir,
+                run_id=run_id,
+                self=self,
+                skill_obj=skill_obj,
+                staged_trajectory_binding=staged_trajectory_binding,
+                stop_after_step_id=stop_after_step_id,
+            )
 
         def _write_invoker(plan_result, execute_result):
-            return _pipeline_run___write_invoker(plan_result, execute_result, _emit_progress=_emit_progress, force_writer_probe=force_writer_probe, manuscript_authors=manuscript_authors, manuscript_title=manuscript_title, run_dir=run_dir, run_id=run_id, run_language=run_language, self=self, stop_after_analysis=stop_after_analysis)
+            return _pipeline_run___write_invoker(
+                plan_result,
+                execute_result,
+                _emit_progress=_emit_progress,
+                force_writer_probe=force_writer_probe,
+                manuscript_authors=manuscript_authors,
+                manuscript_title=manuscript_title,
+                run_dir=run_dir,
+                run_id=run_id,
+                run_language=run_language,
+                self=self,
+                stop_after_analysis=stop_after_analysis,
+            )
 
         def _finalise_invoker(plan_result, execute_result, write_result):
-            return _pipeline_run___finalise_invoker(plan_result, execute_result, write_result, _emit_progress=_emit_progress, audit_logger=audit_logger, cache_key=cache_key, cohort_path=cohort_path, database=database, experiment_spec_path=experiment_spec_path, notes=notes, run_dir=run_dir, run_id=run_id, run_scientific_identity=run_scientific_identity, self=self, stop_after_analysis=stop_after_analysis, target_outcome=target_outcome)
+            return _pipeline_run___finalise_invoker(
+                plan_result,
+                execute_result,
+                write_result,
+                _emit_progress=_emit_progress,
+                audit_logger=audit_logger,
+                cache_key=cache_key,
+                cohort_path=cohort_path,
+                database=database,
+                experiment_spec_path=experiment_spec_path,
+                notes=notes,
+                run_dir=run_dir,
+                run_id=run_id,
+                run_scientific_identity=run_scientific_identity,
+                self=self,
+                stop_after_analysis=stop_after_analysis,
+                target_outcome=target_outcome,
+            )
 
         # The recorder needs this run's own EvidenceStore, which lives on the
         # plan result rather than in ``run()``'s locals. Keep the live handoff
@@ -5212,13 +5321,23 @@ class ResearchAgentPipeline:
         reviewed_plan: List[Any] = []
 
         def _review_evidence_store():
-            return _pipeline_run___review_evidence_store(reviewed_plan=reviewed_plan, run_dir=run_dir, self=self)
+            return _pipeline_run___review_evidence_store(
+                reviewed_plan=reviewed_plan, run_dir=run_dir, self=self
+            )
 
         def _human_review_invoker(plan_result):
-            return _pipeline_run___human_review_invoker(plan_result, reviewed_plan=reviewed_plan, self=self)
+            return _pipeline_run___human_review_invoker(
+                plan_result, reviewed_plan=reviewed_plan, self=self
+            )
 
         def _human_review_recorder(records):
-            return _pipeline_run___human_review_recorder(records, _review_evidence_store=_review_evidence_store, run_dir=run_dir, run_id=run_id, self=self)
+            return _pipeline_run___human_review_recorder(
+                records,
+                _review_evidence_store=_review_evidence_store,
+                run_dir=run_dir,
+                run_id=run_id,
+                self=self,
+            )
 
         gate = self._human_review_gate
         from .orchestration.workflow import WorkflowPaused, build_pipeline_workflow
@@ -5229,20 +5348,37 @@ class ResearchAgentPipeline:
             "decision_payloads": None,
         }
 
-        def _prepare_human_review_execution(decision_records: Sequence[Mapping[str, Any]]):
-            return _pipeline_run___prepare_human_review_execution(decision_records, checkpoint_commit=checkpoint_commit)
+        def _prepare_human_review_execution(
+            decision_records: Sequence[Mapping[str, Any]],
+        ):
+            return _pipeline_run___prepare_human_review_execution(
+                decision_records, checkpoint_commit=checkpoint_commit
+            )
 
-        def _commit_human_review_execution(decision_records: Sequence[Mapping[str, Any]]):
-            return _pipeline_run___commit_human_review_execution(decision_records, checkpoint_commit=checkpoint_commit, reviewed_plan=reviewed_plan, run_dir=run_dir)
+        def _commit_human_review_execution(
+            decision_records: Sequence[Mapping[str, Any]],
+        ):
+            return _pipeline_run___commit_human_review_execution(
+                decision_records,
+                checkpoint_commit=checkpoint_commit,
+                reviewed_plan=reviewed_plan,
+                run_dir=run_dir,
+            )
 
         def _commit_human_review_execution_start():
-            return _pipeline_run___commit_human_review_execution_start(checkpoint_commit=checkpoint_commit)
+            return _pipeline_run___commit_human_review_execution_start(
+                checkpoint_commit=checkpoint_commit
+            )
 
         def _commit_human_review_write_start():
-            return _pipeline_run___commit_human_review_write_start(checkpoint_commit=checkpoint_commit)
+            return _pipeline_run___commit_human_review_write_start(
+                checkpoint_commit=checkpoint_commit
+            )
 
         def _commit_human_review_finalize_start():
-            return _pipeline_run___commit_human_review_finalize_start(checkpoint_commit=checkpoint_commit)
+            return _pipeline_run___commit_human_review_finalize_start(
+                checkpoint_commit=checkpoint_commit
+            )
 
         workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
@@ -5295,9 +5431,7 @@ class ResearchAgentPipeline:
                 skill_obj=skill_obj,
             )
             if durable_checkpoint is not None:
-                checkpoint_commit["path"] = str(
-                    human_review_checkpoint_path(run_dir)
-                )
+                checkpoint_commit["path"] = str(human_review_checkpoint_path(run_dir))
                 if self._provider_hard_stop is not None:
                     self._provider_hard_stop.pause()
         return self._pipeline_result_or_pending(
@@ -5337,9 +5471,7 @@ class ResearchAgentPipeline:
             self._pending_human_review = None
             if checkpoint_commit and checkpoint_commit.get("path"):
                 path = Path(str(checkpoint_commit["path"]))
-                checkpoint = load_human_review_checkpoint(
-                    path, require_pending=False
-                )
+                checkpoint = load_human_review_checkpoint(path, require_pending=False)
                 if checkpoint.state in {
                     "executing",
                     "write_in_progress",
@@ -6211,6 +6343,7 @@ def _renderer_for_upstream_family(family: Optional[str]):
         "descriptive": _render_descriptive_publication_bundle_from_prior_outputs,
     }.get(key)
 
+
 def _render_publication_bundle_from_prior_outputs_for_step(
     *,
     run_dir: Path,
@@ -6315,6 +6448,7 @@ def _render_publication_bundle_from_prior_outputs_for_step(
             return repair_id
     return None
 
+
 def _resolve_upstream_analysis_method(
     run_dir: Path, current_step_id: str
 ) -> Optional[str]:
@@ -6340,6 +6474,7 @@ def _resolve_upstream_analysis_method(
     if method:
         return str(method).strip().lower()
     return None
+
 
 def _planned_primary_association_contract(
     run_dir: Path,
@@ -6379,6 +6514,7 @@ def _planned_primary_association_contract(
     if not str(contract.get("exposure_source") or "").strip():
         return None
     return contract
+
 
 def _absolute_risk_parent_digest_seal(
     run_dir: Path,
@@ -6453,6 +6589,7 @@ def _absolute_risk_parent_digest_seal(
     ):
         return None
     return sealed
+
 
 def _sealed_renderer_parent_digest_seal(
     run_dir: Path,
@@ -6536,6 +6673,7 @@ def _sealed_renderer_parent_digest_seal(
         return None
     return sealed
 
+
 def _resolve_upstream_figure_data_family(
     run_dir: Path, current_step_id: str
 ) -> Optional[str]:
@@ -6598,6 +6736,7 @@ def _resolve_upstream_figure_data_family(
             if has_result_product or not has_distribution:
                 return _INCOMPATIBLE_FIGURE_DATA_FAMILY
     return family
+
 
 def deterministic_figure_repair_id_for_upstream(
     run_dir: Path, step_id: str
@@ -6696,6 +6835,7 @@ def deterministic_figure_repair_id_for_upstream(
     if repair_id == "ordered_category_distribution_publication_bundle_v1":
         return repair_id
     return None
+
 
 def _render_association_publication_bundle_from_prior_outputs(
     *,
@@ -7419,6 +7559,7 @@ def _render_association_publication_bundle_from_prior_outputs(
     )
     return observed_repair_id
 
+
 def _render_sensitivity_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -8026,12 +8167,14 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         return "sensitivity_publication_bundle_from_locked_summary_v1"
     return "sensitivity_publication_bundle_from_parent_outputs_v2"
 
+
 def deterministic_figure_family_supported_for_upstream(
     run_dir: Path, step_id: str
 ) -> bool:
     """Compatibility boolean for the typed automatic-renderer gate."""
 
     return deterministic_figure_repair_id_for_upstream(run_dir, step_id) is not None
+
 
 def _renderer_for_upstream_method(method: Optional[str]):
     """Map an exact controlled parent method to a deterministic renderer."""
@@ -8053,6 +8196,7 @@ def _renderer_for_upstream_method(method: Optional[str]):
         "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
         "missingness": _render_missingness_publication_bundle_from_prior_outputs,
     }.get(key)
+
 
 def _render_authorized_sealed_publication_bundle(
     *,
@@ -8467,7 +8611,41 @@ def _step_summary_has_any_key(path: Path, keys: Sequence[str]) -> bool:
 
 __all__ = ["ResearchAgentPipeline"]
 
-def _pipeline_run___plan_invoker(*, _emit_progress: Any, cohort_name: Any, cohort_path: Any, concept_descriptions: Any, cross_database_validation: Any, database: Any, endpoint: Any, exclusion_criteria: Any, experiment_spec_path: Any, id_columns: Any, inclusion_criteria: Any, llm: Any, notes: Any, outcome_columns: Any, primary_exposure: Any, question: Any, resume_context_evidence_path: Any, resume_from_step_id: Any, resume_state: Any, run_dir: Any, run_environment_identity: Any, run_id: Any, run_language: Any, run_scientific_identity: Any, self: Any, skill_obj: Any, staged_trajectory_binding: Any, target_outcome: Any, time_columns: Any, time_windows: Any, user_preferences: Any):
+
+def _pipeline_run___plan_invoker(
+    *,
+    _emit_progress: Any,
+    cohort_name: Any,
+    cohort_path: Any,
+    concept_descriptions: Any,
+    cross_database_validation: Any,
+    database: Any,
+    endpoint: Any,
+    exclusion_criteria: Any,
+    experiment_spec_path: Any,
+    id_columns: Any,
+    inclusion_criteria: Any,
+    llm: Any,
+    notes: Any,
+    outcome_columns: Any,
+    primary_exposure: Any,
+    question: Any,
+    resume_context_evidence_path: Any,
+    resume_from_step_id: Any,
+    resume_state: Any,
+    run_dir: Any,
+    run_environment_identity: Any,
+    run_id: Any,
+    run_language: Any,
+    run_scientific_identity: Any,
+    self: Any,
+    skill_obj: Any,
+    staged_trajectory_binding: Any,
+    target_outcome: Any,
+    time_columns: Any,
+    time_windows: Any,
+    user_preferences: Any,
+):
     return self._run_plan_phase(
         question=question,
         cohort_path=cohort_path,
@@ -8502,7 +8680,15 @@ def _pipeline_run___plan_invoker(*, _emit_progress: Any, cohort_name: Any, cohor
     )
 
 
-def _pipeline_run___provenance_hook(plan_result, *, cohort_path: Any, orchestration_receipt_path: Any, run_dir: Any, self: Any, source_files: Any):
+def _pipeline_run___provenance_hook(
+    plan_result,
+    *,
+    cohort_path: Any,
+    orchestration_receipt_path: Any,
+    run_dir: Any,
+    self: Any,
+    source_files: Any,
+):
     try:
         provenance = build_provenance_bundle(
             cohort_path=cohort_path,
@@ -8566,7 +8752,20 @@ def _pipeline_run___provenance_hook(plan_result, *, cohort_path: Any, orchestrat
         )
 
 
-def _pipeline_run___execute_invoker(plan_result, *, _emit_progress: Any, cohort_path: Any, notes: Any, resume_from_step_id: Any, run_dir: Any, run_id: Any, self: Any, skill_obj: Any, staged_trajectory_binding: Any, stop_after_step_id: Any):
+def _pipeline_run___execute_invoker(
+    plan_result,
+    *,
+    _emit_progress: Any,
+    cohort_path: Any,
+    notes: Any,
+    resume_from_step_id: Any,
+    run_dir: Any,
+    run_id: Any,
+    self: Any,
+    skill_obj: Any,
+    staged_trajectory_binding: Any,
+    stop_after_step_id: Any,
+):
     return self._run_execute_phase(
         plan_result=plan_result,
         cohort_path=cohort_path,
@@ -8581,7 +8780,20 @@ def _pipeline_run___execute_invoker(plan_result, *, _emit_progress: Any, cohort_
     )
 
 
-def _pipeline_run___write_invoker(plan_result, execute_result, *, _emit_progress: Any, force_writer_probe: Any, manuscript_authors: Any, manuscript_title: Any, run_dir: Any, run_id: Any, run_language: Any, self: Any, stop_after_analysis: Any):
+def _pipeline_run___write_invoker(
+    plan_result,
+    execute_result,
+    *,
+    _emit_progress: Any,
+    force_writer_probe: Any,
+    manuscript_authors: Any,
+    manuscript_title: Any,
+    run_dir: Any,
+    run_id: Any,
+    run_language: Any,
+    self: Any,
+    stop_after_analysis: Any,
+):
     try:
         return self._run_write_phase(
             plan_result=plan_result,
@@ -8606,8 +8818,7 @@ def _pipeline_run___write_invoker(plan_result, execute_result, *, _emit_progress
                 validator=validator,
                 severity="error",
                 message=(
-                    "STRICT evidence enforcement blocked manuscript "
-                    f"generation: {exc}"
+                    f"STRICT evidence enforcement blocked manuscript generation: {exc}"
                 ),
                 detail=getattr(exc, "detail", {}) or None,
             )
@@ -8628,7 +8839,25 @@ def _pipeline_run___write_invoker(plan_result, execute_result, *, _emit_progress
         return _WritePhaseResult(literature=None, bound_path=bound_path)
 
 
-def _pipeline_run___finalise_invoker(plan_result, execute_result, write_result, *, _emit_progress: Any, audit_logger: Any, cache_key: Any, cohort_path: Any, database: Any, experiment_spec_path: Any, notes: Any, run_dir: Any, run_id: Any, run_scientific_identity: Any, self: Any, stop_after_analysis: Any, target_outcome: Any):
+def _pipeline_run___finalise_invoker(
+    plan_result,
+    execute_result,
+    write_result,
+    *,
+    _emit_progress: Any,
+    audit_logger: Any,
+    cache_key: Any,
+    cohort_path: Any,
+    database: Any,
+    experiment_spec_path: Any,
+    notes: Any,
+    run_dir: Any,
+    run_id: Any,
+    run_scientific_identity: Any,
+    self: Any,
+    stop_after_analysis: Any,
+    target_outcome: Any,
+):
     return self._finalise_success(
         plan_result=plan_result,
         execute_result=execute_result,
@@ -8648,12 +8877,12 @@ def _pipeline_run___finalise_invoker(plan_result, execute_result, write_result, 
     )
 
 
-def _pipeline_run___review_evidence_store(*, reviewed_plan: Any, run_dir: Any, self: Any):
+def _pipeline_run___review_evidence_store(
+    *, reviewed_plan: Any, run_dir: Any, self: Any
+):
     if reviewed_plan:
         return reviewed_plan[-1].evidence
-    return EvidenceStore(
-        run_dir, enforcement_mode=self._evidence_enforcement_mode
-    )
+    return EvidenceStore(run_dir, enforcement_mode=self._evidence_enforcement_mode)
 
 
 def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
@@ -8704,7 +8933,9 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
     return requests
 
 
-def _pipeline_run___human_review_recorder(records, *, _review_evidence_store: Any, run_dir: Any, run_id: Any, self: Any):
+def _pipeline_run___human_review_recorder(
+    records, *, _review_evidence_store: Any, run_dir: Any, run_id: Any, self: Any
+):
     self._record_human_review_records(
         records,
         run_id=run_id,
@@ -8713,7 +8944,9 @@ def _pipeline_run___human_review_recorder(records, *, _review_evidence_store: An
     )
 
 
-def _pipeline_run___prepare_human_review_execution(decision_records: Sequence[Mapping[str, Any]], *, checkpoint_commit: Any) -> None:
+def _pipeline_run___prepare_human_review_execution(
+    decision_records: Sequence[Mapping[str, Any]], *, checkpoint_commit: Any
+) -> None:
     path = checkpoint_commit.get("path")
     if path is None:
         return
@@ -8725,7 +8958,13 @@ def _pipeline_run___prepare_human_review_execution(decision_records: Sequence[Ma
     )
 
 
-def _pipeline_run___commit_human_review_execution(decision_records: Sequence[Mapping[str, Any]], *, checkpoint_commit: Any, reviewed_plan: Any, run_dir: Any) -> None:
+def _pipeline_run___commit_human_review_execution(
+    decision_records: Sequence[Mapping[str, Any]],
+    *,
+    checkpoint_commit: Any,
+    reviewed_plan: Any,
+    run_dir: Any,
+) -> None:
     path = checkpoint_commit.get("path")
     if path is None:
         return
@@ -8744,7 +8983,9 @@ def _pipeline_run___commit_human_review_execution(decision_records: Sequence[Map
     )
 
 
-def _pipeline_run___commit_human_review_execution_start(*, checkpoint_commit: Any) -> None:
+def _pipeline_run___commit_human_review_execution_start(
+    *, checkpoint_commit: Any
+) -> None:
     path = checkpoint_commit.get("path")
     if path is None:
         return
@@ -8757,7 +8998,9 @@ def _pipeline_run___commit_human_review_write_start(*, checkpoint_commit: Any) -
         mark_human_review_execution_phase(Path(path), "write_in_progress")
 
 
-def _pipeline_run___commit_human_review_finalize_start(*, checkpoint_commit: Any) -> None:
+def _pipeline_run___commit_human_review_finalize_start(
+    *, checkpoint_commit: Any
+) -> None:
     path = checkpoint_commit.get("path")
     if path is not None:
         mark_human_review_execution_phase(Path(path), "finalize_in_progress")

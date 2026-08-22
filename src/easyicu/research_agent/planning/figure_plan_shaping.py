@@ -22,11 +22,13 @@ from ..contracts.figure_plan import (
     EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
     GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
     GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT,
+    LANDMARK_ASSOCIATION_COMPOSITE_INPUTS,
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     ROBUSTNESS_FIGURE_INPUT,
     ROBUSTNESS_FIGURE_KNOWN_INPUTS,
     data_quality_audit_source_candidates,
+    landmark_association_composite_panels,
     measurement_availability_figure_panels,
     robustness_figure_panels,
 )
@@ -57,10 +59,11 @@ _PRIMARY_RESULT_FIGURE_TEMPLATES = {
     ),
 }
 
+
 def _method_head(method: str) -> str:
-    normalized = re.sub(
-        r"[^a-z0-9]+", "_", str(method or "").strip().lower()
-    ).strip("_")
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(method or "").strip().lower()).strip(
+        "_"
+    )
     return normalized.split("_with_", 1)[0]
 
 
@@ -80,8 +83,7 @@ def dedicated_renderer_consumes_typed_source(
         figure_products = [
             product
             for output in step.expected_outputs or []
-            if (product := typed_product(output)) is not None
-            and product[0] == "figure"
+            if (product := typed_product(output)) is not None and product[0] == "figure"
         ]
         all_row_inputs = {
             str(contract.input_key)
@@ -106,9 +108,7 @@ def _next_step_id(steps: Sequence[AnalysisStep], suffix: str) -> str:
 
 
 def _next_figure_output(steps: Sequence[AnalysisStep], base: str) -> str:
-    occupied = {
-        str(output) for step in steps for output in step.expected_outputs or []
-    }
+    occupied = {str(output) for step in steps for output in step.expected_outputs or []}
     output = base
     suffix = 2
     while output in occupied:
@@ -150,8 +150,7 @@ def _data_quality_panel_templates(sources: tuple[str, str]):
         panel.model_copy(
             update={
                 "source_products": tuple(
-                    replacements.get(source, source)
-                    for source in panel.source_products
+                    replacements.get(source, source) for source in panel.source_products
                 )
             }
         )
@@ -179,7 +178,11 @@ def _dedicated_renderer_consumes_exact_sources(
             for contract in step.input_consumption_contracts or []
             if contract.mode == "all_rows"
         }
-        if inputs == required and all_row_inputs == required and len(figure_outputs) == 1:
+        if (
+            inputs == required
+            and all_row_inputs == required
+            and len(figure_outputs) == 1
+        ):
             return True
     return False
 
@@ -342,7 +345,9 @@ def ensure_data_quality_figure_step(
 
     del context
     steps = list(plan.steps or [])
-    required_inputs, candidates, missing, ambiguous = _closed_data_quality_sources(steps)
+    required_inputs, candidates, missing, ambiguous = _closed_data_quality_sources(
+        steps
+    )
     if missing or ambiguous:
         return plan, [
             ValidationFinding(
@@ -433,9 +438,7 @@ def bind_deterministic_figure_panels(
             GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS
         ),
         frozenset({MISSINGNESS_MEASUREMENT_AUDIT_INPUT}): (
-            measurement_availability_figure_panels(
-                MISSINGNESS_MEASUREMENT_AUDIT_INPUT
-            )
+            measurement_availability_figure_panels(MISSINGNESS_MEASUREMENT_AUDIT_INPUT)
         ),
         frozenset(DATA_QUALITY_FIGURE_REQUIRED_INPUTS): DATA_QUALITY_FIGURE_PANELS,
     }
@@ -458,9 +461,8 @@ def bind_deterministic_figure_panels(
             and input_set <= ROBUSTNESS_FIGURE_KNOWN_INPUTS
         ):
             templates = robustness_figure_panels(step.inputs)
-        if (
-            data_quality_sources is not None
-            and input_set == frozenset(data_quality_sources)
+        if data_quality_sources is not None and input_set == frozenset(
+            data_quality_sources
         ):
             templates = _data_quality_panel_templates(data_quality_sources)
         if input_set == frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}):
@@ -477,9 +479,7 @@ def bind_deterministic_figure_panels(
                     and distribution.schema_version
                     == "easyicu.exposure_outcome_distribution/3"
                 ):
-                    templates = (
-                        EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS
-                    )
+                    templates = EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS
         if templates is None and len(input_set) == 1:
             input_key = next(iter(input_set))
             kind, separator, product = input_key.partition(":")
@@ -561,8 +561,114 @@ def bind_deterministic_figure_panels(
     return (plan.model_copy(update={"steps": steps}) if changed else plan), findings
 
 
+def close_empty_deterministic_figure_contracts(
+    *,
+    plan: AnalysisPlan,
+    eligible_step_ids: Sequence[str] | None = None,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Close output and all-row contracts when typed inputs fix a renderer.
+
+    This is a schema migration for legacy visualization steps, not a scientific
+    choice: it applies only to exact input profiles already owned by a sealed
+    deterministic renderer and preserves step ids, order, intent, and inputs.
+    """
+
+    eligible = None if eligible_step_ids is None else set(eligible_step_ids)
+    occupied_outputs = {
+        str(output) for step in plan.steps for output in step.expected_outputs
+    }
+    data_quality_sources, _candidates, _missing, _ambiguous = (
+        _closed_data_quality_sources(plan.steps)
+    )
+    changed = False
+    findings: list[ValidationFinding] = []
+    steps: list[AnalysisStep] = []
+    for step in plan.steps:
+        step_id = str(step.step_id)
+        inputs = tuple(str(value) for value in step.inputs)
+        input_set = frozenset(inputs)
+        templates = None
+        if input_set == frozenset({COHORT_FLOW_INPUT}):
+            templates = COHORT_FLOW_FIGURE_PANELS
+        elif (
+            ROBUSTNESS_FIGURE_INPUT in input_set
+            and input_set <= ROBUSTNESS_FIGURE_KNOWN_INPUTS
+        ):
+            templates = robustness_figure_panels(inputs)
+        elif data_quality_sources is not None and input_set == frozenset(
+            data_quality_sources
+        ):
+            templates = _data_quality_panel_templates(data_quality_sources)
+        elif (
+            LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= input_set
+            and len(input_set) == 4
+            and any(
+                value.startswith("table:")
+                and value.partition(":")[2].endswith("landmark_rcs_contrasts")
+                for value in input_set
+            )
+        ):
+            templates = landmark_association_composite_panels(inputs)
+        if (
+            templates is None
+            or (eligible is not None and step_id not in eligible)
+            or _method_head(str(step.method or "")) != "visualization"
+            or step.planned_analysis_role != "auxiliary"
+            or step.expected_outputs
+            or step.model_requirements
+            or step.trajectory_stability_spec is not None
+        ):
+            steps.append(step)
+            continue
+        base = re.sub(r"[^a-z0-9]+", "_", step_id.lower()).strip("_")
+        base = re.sub(r"^[0-9]+_", "", base) or "deterministic_figure"
+        figure_output = f"figure:{base}"
+        suffix = 2
+        while figure_output in occupied_outputs:
+            figure_output = f"figure:{base}_{suffix}"
+            suffix += 1
+        occupied_outputs.add(figure_output)
+        contracts = [
+            ArtifactConsumptionContract(input_key=value, mode="all_rows")
+            for value in inputs
+            if typed_product(value) is not None
+            and typed_product(value)[0] in {"artifact", "table"}
+        ]
+        revised = step.model_copy(
+            update={
+                "expected_outputs": [figure_output],
+                "input_consumption_contracts": contracts,
+                "figure_panels": [
+                    panel.bind(figure_output=figure_output) for panel in templates
+                ],
+                "icu_rule_refs": list(
+                    dict.fromkeys([*step.icu_rule_refs, "visualization_rule"])
+                ),
+            }
+        )
+        steps.append(revised)
+        changed = True
+        findings.append(
+            ValidationFinding(
+                validator="deterministic_figure_plan_binding",
+                severity="warning",
+                message=(
+                    f"Closed empty visualization contract for step {step_id!r} "
+                    "from its exact typed renderer inputs."
+                ),
+                detail={
+                    "reason": "empty_visualization_contract_closed",
+                    "step_id": step_id,
+                    "figure_output": figure_output,
+                },
+            )
+        )
+    return (plan.model_copy(update={"steps": steps}) if changed else plan), findings
+
+
 __all__ = [
     "bind_deterministic_figure_panels",
+    "close_empty_deterministic_figure_contracts",
     "dedicated_renderer_consumes_typed_source",
     "ensure_cohort_accounting_figure_step",
     "ensure_data_quality_figure_step",
