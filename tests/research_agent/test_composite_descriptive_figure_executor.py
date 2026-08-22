@@ -9,6 +9,7 @@ import pytest
 
 from easyicu.research_agent.execution.runners.composite_descriptive_figure_executor import (
     COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
+    COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
     COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
     composite_descriptive_figure_executor_owns_step,
@@ -132,6 +133,22 @@ def _association_frames() -> dict[str, pd.DataFrame]:
             }
         ),
     }
+
+
+def _association_summary_frames() -> dict[str, pd.DataFrame]:
+    frames = _association_frames()
+    frames.pop("table:robustness_matrix")
+    frames["table:robustness_summary"] = pd.DataFrame(
+        {
+            "axis": ["primary", "missingness"],
+            "total_specs": [1, 2],
+            "converged_specs": [1, 2],
+            "non_independent_specs": [0, 0],
+            "range_low": [1.1, 1.0],
+            "range_high": [1.8, 1.7],
+        }
+    )
+    return frames
 
 
 def _binding(key: str, frame: pd.DataFrame, path: Path) -> dict[str, object]:
@@ -298,6 +315,58 @@ def test_association_four_table_contract_selects_and_renders(tmp_path: Path) -> 
     )
     for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
         assert (out_dir / f"publication_figure_suite.{suffix}").is_file()
+
+
+def test_association_summary_contract_renders_ranges_without_point_estimates(
+    tmp_path: Path,
+) -> None:
+    frames = _association_summary_frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep.model_validate(
+        {
+            **_step().model_dump(mode="json"),
+            "step_id": "publication_figure_suite",
+            "inputs": list(COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS),
+            "expected_outputs": ["figure:publication_figure_suite"],
+            "input_consumption_contracts": [
+                {"input_key": key, "mode": "all_rows"}
+                for key in COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS
+            ],
+        }
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Estimate an association.", steps=[step]),
+        resolved_bindings=bindings,
+    )
+    assert selection is not None
+    assert selection.host_sealed_renderer is True
+    assert selection.consumed_input_keys == (
+        COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS
+    )
+
+    out_dir = tmp_path / "outputs"
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="publication_figure_suite",
+        input_keys=COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+    )
+    assert summary["status"] == "ok"
+    contract = json.loads(
+        (out_dir / "publication_figure_suite.figure_contract.json").read_text()
+    )
+    panel_c = next(panel for panel in contract["panels"] if panel["panel_id"] == "C")
+    assert panel_c["title"] == "Robustness ranges"
+    assert panel_c["role"] == "robustness"
+    assert panel_c["metadata"]["source_products"] == ["table:robustness_summary"]
 
 
 def test_renderer_preserves_exact_source_rows_and_exports_figure(
