@@ -25,6 +25,10 @@ from easyicu.research_agent.execution.runners.selection import select_standard_e
 from easyicu.research_agent.planning.scientific_action_catalog import (
     scientific_actions_for_analysis_type,
 )
+from easyicu.research_agent.reporting.article_contract import (
+    build_article_analysis_contract,
+    roles_covered_by_plan,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -130,6 +134,20 @@ def test_phenotyping_owner_selects_only_the_exact_action_contract() -> None:
     assert selection.analysis_kind == PHENOTYPING_ANALYSIS_KIND
     widened = step.model_copy(update={"expected_outputs": [*step.expected_outputs, "table:extra"]})
     assert not cross_sectional_phenotyping_executor_owns_step(widened)
+
+
+def test_exact_runtime_action_products_cover_their_published_article_roles() -> None:
+    step = _primary_step()
+    plan = AnalysisPlan(
+        research_question="Discover phenotypes.",
+        analysis_type="trajectory_clustering",
+        steps=[step],
+    )
+    contract = build_article_analysis_contract(
+        _context(360), analysis_type="trajectory_clustering"
+    )
+    covered = roles_covered_by_plan(plan, contract)
+    assert {"phenotype_structure", "phenotype_profile"} <= covered
 
 
 def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path: Path) -> None:
