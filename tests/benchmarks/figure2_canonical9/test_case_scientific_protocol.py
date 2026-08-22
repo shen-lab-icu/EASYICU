@@ -154,6 +154,14 @@ def test_launcher_cannot_override_a_signed_runtime_execution_contract() -> None:
             projection,
         )
 
+    h1_projection = build_runtime_scientific_projection(
+        load_default_case_protocol("h1_ventilation_survival")
+    ).model_dump(mode="json")
+    h1_bound = _bind_runtime_scientific_projection_options({}, h1_projection)
+    assert h1_bound["current_case_scientific_runtime_authority"] == (
+        h1_projection["deterministic_execution_contract"]
+    )
+
 
 def test_h3_protocol_rejects_post_hoc_candidate_k_drift(tmp_path) -> None:
     payload = json.loads(
