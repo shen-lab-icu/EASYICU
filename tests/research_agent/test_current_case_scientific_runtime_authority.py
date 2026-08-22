@@ -19,6 +19,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
 from easyicu.research_agent.execution.runners.landmark_spline_executor import (
     run_landmark_spline_association,
 )
@@ -264,11 +265,19 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     selected = select_standard_executor(
         bound.steps[1],
         plan=bound,
+        plausibility_scope=FlagOnlyPlausibilityScope(
+            step_id=bound.steps[1].step_id,
+            expected_columns=("age",),
+            source_contracts_sha256="a" * 64,
+            authority_kind="test",
+        ),
         current_case_scientific_runtime_authority=authority,
         scientific_runtime_projection_sha256=projection.runtime_projection_sha256,
     )
     assert selected is not None
     assert selected.analysis_kind == "signed_landmark_survival_suite"
+    assert "analysis_frame = bound.frame" in selected.code
+    assert "frame=analysis_frame" in selected.code
 
     rng = np.random.default_rng(20260822)
     n = 900
