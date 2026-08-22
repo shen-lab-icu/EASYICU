@@ -1701,6 +1701,39 @@ def test_outline_rejects_categorical_distribution_for_continuous_exposure() -> N
     assert caught.value.details["step_id"] == distribution["step_id"]
 
 
+def test_outline_cannot_substitute_unrelated_closed_domains_for_primary_pair() -> None:
+    payload = _outline_payload()
+    distribution = next(
+        step
+        for step in payload["steps"]
+        if step["module_id"] == "exposure_outcome_distribution"
+    )
+    distribution["variable_names"] = ["outcome_flag", "sex_code", "age_years"]
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "age_years",
+                "exposure_flag",
+                "outcome_flag",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            closed_domain_variables=("outcome_flag", "sex_code"),
+            primary_exposure="age_years",
+            target_outcome="outcome_flag",
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_outline_distribution_domain_unavailable"
+    )
+    assert caught.value.details["step_id"] == distribution["step_id"]
+
+
 def test_outline_rejects_missing_method_layer_before_checkpoint() -> None:
     payload = _outline_payload()
     for step in payload["steps"]:

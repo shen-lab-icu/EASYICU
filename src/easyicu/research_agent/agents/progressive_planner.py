@@ -892,6 +892,8 @@ class ProgressivePlannerAgent:
         required_custom_products: Sequence[str] = (),
         required_visualization_step: bool = False,
         closed_domain_variables: Sequence[str] | None = None,
+        primary_exposure: str | None = None,
+        target_outcome: str | None = None,
         context_required_method_layers: Sequence[str] | None = None,
     ) -> None:
         if outline.analysis_type not in set(analysis_types):
@@ -991,7 +993,19 @@ class ProgressivePlannerAgent:
                 )
             if step.module_id == "exposure_outcome_distribution" and (
                 closed_domains is not None
-                and len(set(step.variable_names) & closed_domains) < 2
+                and (
+                    (
+                        primary_exposure is not None
+                        and target_outcome is not None
+                        and not {primary_exposure, target_outcome}.issubset(
+                            closed_domains
+                        )
+                    )
+                    or (
+                        (primary_exposure is None or target_outcome is None)
+                        and len(set(step.variable_names) & closed_domains) < 2
+                    )
+                )
             ):
                 raise ProgressivePlanCompileError(
                     "progressive_outline_distribution_domain_unavailable",
@@ -1732,6 +1746,8 @@ class ProgressivePlannerAgent:
                     required_custom_products=required_custom_products,
                     required_visualization_step=required_visualization_step,
                     closed_domain_variables=closed_domain_variables,
+                    primary_exposure=context.primary_exposure,
+                    target_outcome=context.target_outcome,
                     context_required_method_layers=(
                         required_method_layers_for_context(context)
                     ),
@@ -1763,6 +1779,8 @@ class ProgressivePlannerAgent:
             required_custom_products=required_custom_products,
             required_visualization_step=required_visualization_step,
             closed_domain_variables=closed_domain_variables,
+            primary_exposure=context.primary_exposure,
+            target_outcome=context.target_outcome,
             context_required_method_layers=required_method_layers_for_context(
                 context
             ),
