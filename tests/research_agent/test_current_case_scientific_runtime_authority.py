@@ -28,6 +28,7 @@ from easyicu.research_agent.execution.runners.landmark_spline_robustness_executo
 )
 from easyicu.research_agent.execution.runners.landmark_survival_executor import (
     run_landmark_survival_suite,
+    run_landmark_survival_figure,
 )
 from easyicu.research_agent.execution.runners.source_feasibility_executor import (
     run_source_feasibility_fail_closed,
@@ -39,7 +40,10 @@ from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
 )
-from easyicu.research_agent.plan_utils import _typed_plan_dag_findings
+from easyicu.research_agent.plan_utils import (
+    _typed_plan_dag_findings,
+    effect_output_authorized,
+)
 from easyicu.research_agent.schema import AnalysisPlan
 
 
@@ -228,11 +232,13 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         current_case=authority,
     ).bind_plan(_h1_draft_plan())
     authority.validate_plan(bound)
-    assert len(bound.steps) == 2
+    assert len(bound.steps) == 3
     assert bound.steps[0].method == "host_materialized_locked_cohort"
     assert bound.steps[0].expected_outputs == ["table:analysis_cohort"]
     assert bound.steps[1].method == authority.plan_method
-    assert set(bound.steps[1].expected_outputs) == set(authority.plan_outputs)
+    assert set(bound.steps[1].expected_outputs) == set(authority.analysis_plan_outputs)
+    assert bound.steps[2].inputs == list(authority.figure_input_products)
+    assert bound.steps[2].expected_outputs == [authority.figure_product]
     assert _typed_plan_dag_findings(bound) == []
     cohort_selection = select_standard_executor(bound.steps[0], plan=bound)
     assert cohort_selection is not None
@@ -251,7 +257,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert execution_only is not None
     execution_only_plan, execution_only_finding = execution_only
     authority.validate_plan(execution_only_plan)
-    assert len(execution_only_plan.steps) == 2
+    assert len(execution_only_plan.steps) == 3
     assert _typed_plan_dag_findings(execution_only_plan) == []
     assert execution_only_finding.detail["reason_code"] == (
         "development_execution_only_authority_compiled"
@@ -278,6 +284,27 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert selected.analysis_kind == "signed_landmark_survival_suite"
     assert "analysis_frame = bound.frame" in selected.code
     assert "frame=analysis_frame" in selected.code
+    figure_selected = select_standard_executor(
+        bound.steps[2],
+        plan=bound,
+        current_case_scientific_runtime_authority=authority,
+        scientific_runtime_projection_sha256=projection.runtime_projection_sha256,
+    )
+    assert figure_selected is not None
+    assert figure_selected.analysis_kind == "signed_landmark_survival_figure"
+    assert figure_selected.host_sealed_renderer is True
+    assert effect_output_authorized(
+        bound.steps[1],
+        step_record={
+            "deterministic_standard_analysis": "signed_landmark_survival_suite",
+            "deterministic_standard_selection_reason": (
+                "signed_landmark_survival_suite_contract_preflight"
+            ),
+            "standard_executor_candidates": {
+                "claimed_by": "signed_landmark_survival_suite"
+            },
+        },
+    )
 
     rng = np.random.default_rng(20260822)
     n = 900
@@ -317,14 +344,35 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert summary["status"] == "ok"
     assert summary["analysis_only"] is True
     assert summary["n_landmark_population"] < n
-    assert set(summary["output_files"]) == set(authority.plan_outputs)
-    assert (tmp_path / "landmark_survival_suite.svg").is_file()
+    assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
+    assert not (tmp_path / "landmark_survival_suite.svg").exists()
     risk = pd.read_csv(tmp_path / "landmark_risk_set_flow.csv")
     final_count = risk.loc[
         risk["stage"] == "landmark_analysis_population", "count"
     ].item()
     assert final_count == summary["n_landmark_population"]
     assert risk["excluded_since_prior_stage"].sum() >= 30
+
+    figure_dir = tmp_path / "figure"
+    figure_summary = run_landmark_survival_figure(
+        km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
+        cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
+        risk_flow=risk,
+        source_paths={
+            authority.km_product: tmp_path / "landmark_km_curve.csv",
+            authority.cox_product: tmp_path / "landmark_cox_summary.csv",
+            authority.risk_set_product: tmp_path / "landmark_risk_set_flow.csv",
+        },
+        authority=authority,
+        out_dir=figure_dir,
+    )
+    assert figure_summary["status"] == "ok"
+    assert (figure_dir / "landmark_survival_suite.svg").is_file()
+    assert set(figure_summary["source_data_files"]) == {
+        "landmark_km_curve.csv",
+        "landmark_cox_summary.csv",
+        "landmark_risk_set_flow.csv",
+    }
 
 
 def test_host_bound_cohort_root_publishes_exact_input_bytes(

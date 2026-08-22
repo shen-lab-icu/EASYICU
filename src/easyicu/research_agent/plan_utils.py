@@ -956,6 +956,35 @@ def _signed_standard_effect_output_authorized(
     )
 
 
+def _signed_landmark_survival_effect_output_authorized(
+    step: AnalysisStep,
+    step_record: Optional[Mapping[str, Any]],
+) -> bool:
+    """Recognize the digest-bound deterministic survival suite as effect owner."""
+
+    if not isinstance(step_record, Mapping):
+        return False
+    candidates = step_record.get("standard_executor_candidates")
+    typed_outputs = [typed_product(value) for value in step.expected_outputs or ()]
+    return bool(
+        step.method == "signed_landmark_survival_suite"
+        and step.planned_analysis_role == "primary"
+        and any(
+            product is not None and product[0] == "table" for product in typed_outputs
+        )
+        and any(
+            re.fullmatch(r"scientific_runtime_contract:[0-9a-f]{64}", str(ref))
+            for ref in (step.icu_rule_refs or [])
+        )
+        and step_record.get("deterministic_standard_analysis")
+        == "signed_landmark_survival_suite"
+        and step_record.get("deterministic_standard_selection_reason")
+        == "signed_landmark_survival_suite_contract_preflight"
+        and isinstance(candidates, Mapping)
+        and candidates.get("claimed_by") == "signed_landmark_survival_suite"
+    )
+
+
 def effect_output_authorized(
     step: AnalysisStep,
     *,
@@ -976,6 +1005,7 @@ def effect_output_authorized(
         or bool(getattr(step, "model_requirements", None))
         or association_binary_sensitivity_contract(step) is not None
         or _signed_standard_effect_output_authorized(step, step_record)
+        or _signed_landmark_survival_effect_output_authorized(step, step_record)
     )
 
 
