@@ -22,36 +22,115 @@ from ...methods.ordered_trends import (
     jonckheere_terpstra_trend,
     wilson_interval,
 )
-from ...schema import AnalysisStep, OrderedStratifiedSpec
+from ...contracts.model_terms import level_spelling
+from ...contracts.ordered_stratified_spec import OrderedStratifiedSpec
+from ...contracts.cohort_product_keys import is_closed_cohort_product_key
+from ...schema import AnalysisPlan, AnalysisStep
 from .typed_input_binding import (
     load_typed_cohort,
     run_dir_from_env,
-    sole_typed_cohort_input,
 )
 
 ORDERED_STRATIFIED_ANALYSIS_KIND = "ordered_stratified_analysis"
 
 
-def ordered_stratified_executor_owns_step(step: AnalysisStep) -> bool:
-    spec = step.ordered_stratified_spec
-    return bool(
-        spec is not None
-        and str(step.method or "").strip().casefold() == CONTROLLED_METHOD
-        and step.scientific_action_id == "association.ordinal_trend"
-        and sole_typed_cohort_input(step)
-        and {
-            spec.stratified_product,
-            spec.trend_product,
-            spec.test_product,
-        }.issubset(set(step.expected_outputs))
+def _typed_cohort_input(step: AnalysisStep) -> str:
+    values = [value for value in step.inputs if is_closed_cohort_product_key(value)]
+    return values[0] if len(values) == 1 else ""
+
+
+def ordered_stratified_spec_for_step(
+    step: AnalysisStep, *, plan: AnalysisPlan
+) -> OrderedStratifiedSpec | None:
+    """Project one closed adapter spec from same-plan typed declarations."""
+
+    if (
+        str(step.method or "").strip().casefold() != CONTROLLED_METHOD
+        or step.scientific_action_id != "association.ordinal_trend"
+        or not _typed_cohort_input(step)
+    ):
+        return None
+    try:
+        position = next(index for index, item in enumerate(plan.steps) if item is step)
+    except StopIteration:
+        positions = [
+            index for index, item in enumerate(plan.steps) if item.step_id == step.step_id
+        ]
+        if len(positions) != 1:
+            return None
+        position = positions[0]
+    parents = [
+        item
+        for item in plan.steps[:position]
+        if item.planned_analysis_role == "primary"
+        and "table:adjusted_association_estimates" in item.expected_outputs
+        and "table:adjusted_association_estimates" in step.inputs
+    ]
+    if len(parents) != 1:
+        return None
+    requirements = [
+        requirement
+        for requirement in parents[0].model_requirements
+        if requirement.analysis_role == "primary"
+        and requirement.outcome_type == "binary"
+        and requirement.required_for_step_success
+    ]
+    if len(requirements) != 1:
+        return None
+    requirement = requirements[0]
+    terms = [
+        term
+        for term in requirement.model_terms or []
+        if term.role == "exposure"
+        and term.name == requirement.exposure_source
+        and term.coding == "ordinal_linear"
+        and term.transform == "declared_level_index"
+        and len(term.levels or []) >= 3
+    ]
+    if len(terms) != 1:
+        return None
+    exposure = requirement.exposure_source
+    binary_outcome = requirement.outcome
+    bare_inputs = [value for value in step.inputs if ":" not in value]
+    remaining = [
+        value for value in bare_inputs if value not in {exposure, binary_outcome}
+    ]
+    trend_products = [
+        value
+        for value in step.expected_outputs
+        if value.startswith("table:")
+        and value != "table:ordered_stratified_outcomes"
+    ]
+    if (
+        exposure not in bare_inputs
+        or binary_outcome not in bare_inputs
+        or len(remaining) != 1
+        or len(trend_products) != 1
+        or "table:ordered_stratified_outcomes" not in step.expected_outputs
+        or "test:ordinal_trend" not in step.expected_outputs
+    ):
+        return None
+    levels = list(terms[0].levels or [])
+    return OrderedStratifiedSpec(
+        ordered_exposure=exposure,
+        ordered_levels=levels,
+        cochran_armitage_scores=list(range(len(levels))),
+        binary_outcome=binary_outcome,
+        continuous_outcome=remaining[0],
+        trend_product=trend_products[0],
     )
 
 
-def ordered_stratified_executor_code(step: AnalysisStep) -> str:
-    if not ordered_stratified_executor_owns_step(step):
+def ordered_stratified_executor_owns_step(
+    step: AnalysisStep, *, plan: AnalysisPlan
+) -> bool:
+    return ordered_stratified_spec_for_step(step, plan=plan) is not None
+
+
+def ordered_stratified_executor_code(step: AnalysisStep, *, plan: AnalysisPlan) -> str:
+    spec = ordered_stratified_spec_for_step(step, plan=plan)
+    if spec is None:
         raise ValueError("step is not owned by the ordered-stratified executor")
-    spec = step.ordered_stratified_spec
-    assert spec is not None
     return textwrap.dedent(
         f"""
         from easyicu.research_agent.execution.runners.ordered_stratified_executor import (
@@ -60,7 +139,7 @@ def ordered_stratified_executor_code(step: AnalysisStep) -> str:
 
         run_ordered_stratified_from_env(
             spec_payload={spec.model_dump(mode="json")!r},
-            typed_cohort_input={sole_typed_cohort_input(step)!r},
+            typed_cohort_input={_typed_cohort_input(step)!r},
             analysis_role={step.planned_analysis_role!r},
         )
         """
@@ -71,6 +150,31 @@ def _level_mask(series: pd.Series, level: Any) -> pd.Series:
     if isinstance(level, (int, float)) and not isinstance(level, bool):
         return pd.to_numeric(series, errors="coerce") == float(level)
     return series.notna() & (series.astype(str) == str(level))
+
+
+def _resolved_ordered_levels(series: pd.Series, declared: Sequence[Any]) -> list[Any]:
+    observed = []
+    for value in pd.unique(series.dropna()):
+        observed.append(value.item() if isinstance(value, np.generic) else value)
+    by_spelling: dict[str, list[Any]] = {}
+    for value in observed:
+        by_spelling.setdefault(level_spelling(value), []).append(value)
+    resolved: list[Any] = []
+    for token in declared:
+        matches = by_spelling.get(level_spelling(token), [])
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"declared ordered level {token!r} does not resolve uniquely "
+                "against the bound cohort"
+            )
+        resolved.append(matches[0])
+    undeclared = sorted(set(by_spelling) - {level_spelling(value) for value in declared})
+    if undeclared:
+        raise RuntimeError(
+            "ordered exposure contains non-missing values outside the declared "
+            f"level set: {undeclared!r}"
+        )
+    return resolved
 
 
 def _holm(p_values: Sequence[float]) -> list[float]:
@@ -150,6 +254,13 @@ def run_ordered_stratified_from_env(
     missing = sorted(required - set(frame.columns))
     if missing:
         raise RuntimeError("ordered-stratified cohort is missing: " + ", ".join(missing))
+
+    resolved_levels = _resolved_ordered_levels(
+        frame[spec.ordered_exposure], spec.ordered_levels
+    )
+    spec = OrderedStratifiedSpec.model_validate(
+        {**spec.model_dump(mode="python"), "ordered_levels": resolved_levels}
+    )
 
     masks = [_level_mask(frame[spec.ordered_exposure], level) for level in spec.ordered_levels]
     membership = sum(mask.astype(int) for mask in masks)

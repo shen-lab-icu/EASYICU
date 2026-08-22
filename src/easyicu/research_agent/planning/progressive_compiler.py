@@ -38,7 +38,6 @@ from ..schema import (
     ExposureOutcomeRiskDifferenceContrast,
     MeasurementAuditProduct,
     MeasurementAuditSpec,
-    OrderedStratifiedSpec,
     KnowHowDecision,
     PlannedModelRequirement,
     ResearchContext,
@@ -403,7 +402,7 @@ def _canonical_outputs(step: ProgressiveSkeletonStep) -> list[tuple[str, str]]:
     return list(by_product.items())
 
 
-def _compile_ordered_stratified_spec(
+def _compile_ordered_stratified_contract(
     *,
     context: ResearchContext,
     skeleton: ProgressivePlanSkeleton,
@@ -411,11 +410,11 @@ def _compile_ordered_stratified_spec(
     step_index: int,
     variables: Mapping[str, Any],
     output_pairs: list[tuple[str, str]],
-) -> OrderedStratifiedSpec | None:
+) -> bool:
     """Bind the ordinal-trend action to prior typed Planner coordinates."""
 
     if step.scientific_action_id != "association.ordinal_trend":
-        return None
+        return False
     if step.module_id != "custom_analysis" or step.planned_analysis_role != "secondary":
         raise _fail(
             "progressive_ordered_trend_shape_invalid",
@@ -512,14 +511,7 @@ def _compile_ordered_stratified_spec(
     ):
         if product not in {item[0] for item in output_pairs}:
             output_pairs.append((product, "custom"))
-    return OrderedStratifiedSpec(
-        ordered_exposure=exposure,
-        ordered_levels=levels,
-        cochran_armitage_scores=list(range(len(levels))),
-        binary_outcome=binary_outcome,
-        continuous_outcome=continuous_outcome,
-        trend_product=declared_trends[0],
-    )
+    return True
 
 
 def _validate_outputs(
@@ -1566,7 +1558,7 @@ def _compile_one_step(
             step_index=step_index,
             path="outputs",
         ) from exc
-    ordered_stratified_spec = _compile_ordered_stratified_spec(
+    ordered_stratified_contract = _compile_ordered_stratified_contract(
         context=context,
         skeleton=skeleton,
         step=step,
@@ -1616,7 +1608,7 @@ def _compile_one_step(
     )
     method = (
         "ordinal_stratified_descriptive_analysis"
-        if ordered_stratified_spec is not None
+        if ordered_stratified_contract
         else step.custom_method or _METHOD_BY_MODULE[step.module_id]
     )
     kwargs: dict[str, Any] = {
@@ -1633,8 +1625,6 @@ def _compile_one_step(
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,
     }
-    if ordered_stratified_spec is not None:
-        kwargs["ordered_stratified_spec"] = ordered_stratified_spec
     if step.module_id == "cohort_definition":
         kwargs["cohort_definition_spec"] = CohortDefinitionSpec(
             identity_column=_identity_column(

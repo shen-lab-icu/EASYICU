@@ -374,11 +374,6 @@ def ordered_stratified_script_findings(
 
     if not is_ordered_stratified_analysis_step(step):
         return []
-    if step.ordered_stratified_spec is not None:
-        # The selected host adapter calls the reviewed primitives inside its
-        # sealed implementation.  This source-code audit is only for the legacy
-        # agent-authored implementation of the same controlled result contract.
-        return []
     try:
         tree = ast.parse(script_text)
     except SyntaxError:
@@ -393,6 +388,12 @@ def ordered_stratified_script_findings(
             called_names.add(target.id)
         elif isinstance(target, ast.Attribute):
             called_names.add(target.attr)
+
+    if "run_ordered_stratified_from_env" in called_names:
+        # This exact entrypoint is the host adapter. Its body calls the reviewed
+        # primitives; legacy agent-authored implementations remain subject to
+        # the direct-call audit below.
+        return []
 
     findings: list[ValidationFinding] = []
     required = {

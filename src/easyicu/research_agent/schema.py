@@ -50,7 +50,6 @@ from .contracts.exposure_outcome_distribution import (
 from .contracts.family_primary import FamilyPrimaryResultRequirement
 from .contracts.figure_plan import PlannedFigurePanelSpec
 from .contracts.model_terms import ModelTermSpec, validate_model_term_roster
-from .contracts.ordered_stratified_spec import OrderedStratifiedSpec
 from .contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND as PLANNED_MODEL_REQUIREMENTS_OUTPUT,
     ASSOCIATION_GLM_BINOMIAL_ESTIMATOR,
@@ -2070,13 +2069,6 @@ class AnalysisStep(BaseModel):
             "different step and must not claim it to reach a host runner."
         ),
     )
-    ordered_stratified_spec: Optional[OrderedStratifiedSpec] = Field(
-        default=None,
-        description=(
-            "Typed ordered exposure, binary endpoint, continuous endpoint, "
-            "scores, and products for the deterministic ordered-trend owner."
-        ),
-    )
 
     @field_validator("scientific_capability")
     @classmethod
@@ -2202,30 +2194,6 @@ class AnalysisStep(BaseModel):
                 spec=self.robustness_replay_spec,
                 field="robustness_replay_spec",
             )
-        if self.ordered_stratified_spec is not None:
-            spec = self.ordered_stratified_spec
-            required_inputs = {
-                spec.ordered_exposure,
-                spec.binary_outcome,
-                spec.continuous_outcome,
-            }
-            missing_inputs = sorted(required_inputs - set(self.inputs))
-            if missing_inputs:
-                raise ValueError(
-                    "ordered_stratified_spec columns must be explicit step inputs; "
-                    f"missing {missing_inputs!r}"
-                )
-            required_outputs = {
-                spec.stratified_product,
-                spec.trend_product,
-                spec.test_product,
-            }
-            missing_outputs = sorted(required_outputs - set(self.expected_outputs))
-            if missing_outputs:
-                raise ValueError(
-                    "ordered_stratified_spec products must be declared outputs; "
-                    f"missing {missing_outputs!r}"
-                )
         consumption_keys = [
             contract.input_key for contract in self.input_consumption_contracts
         ]

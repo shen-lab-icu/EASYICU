@@ -456,13 +456,13 @@ def select_standard_executor(
             )
         )
     _missed("descriptive_cohort_summary")
-    if ordered_stratified_executor_owns_step(step):
+    if ordered_stratified_executor_owns_step(step, plan=plan):
         return _selected(
             StandardExecutorSelection(
                 analysis_kind=ORDERED_STRATIFIED_ANALYSIS_KIND,
                 selection_reason="typed_ordered_stratified_contract_preflight",
                 progress_message="Using deterministic ordered-trend adapter",
-                code=ordered_stratified_executor_code(step),
+                code=ordered_stratified_executor_code(step, plan=plan),
                 consumed_input_keys=_consumed_typed_cohort_inputs(step),
             )
         )
