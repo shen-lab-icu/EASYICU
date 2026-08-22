@@ -15,6 +15,7 @@ from ...contracts.ordered_stratified import (
     CONTRACT_KEY,
     CONTRACT_SCHEMA_VERSION,
     CONTROLLED_METHOD,
+    SCIENTIFIC_ACTION_ID,
 )
 from ...methods.ordered_trends import (
     OrderedTrendResult,
@@ -46,7 +47,7 @@ def ordered_stratified_spec_for_step(
 
     if (
         str(step.method or "").strip().casefold() != CONTROLLED_METHOD
-        or step.scientific_action_id != "association.ordinal_trend"
+        or step.scientific_action_id != SCIENTIFIC_ACTION_ID
         or not _typed_cohort_input(step)
     ):
         return None

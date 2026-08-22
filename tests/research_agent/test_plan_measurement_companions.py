@@ -107,6 +107,49 @@ def test_plan_companion_closure_is_idempotent():
     assert findings == []
 
 
+def test_fixed_typed_executor_roster_is_not_expanded_by_suffix_inference():
+    context = ResearchContext(
+        research_question="Compare an ordered exposure across outcomes.",
+        cohort=CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[
+            ConceptDescriptor(name="severity_max", dtype="int64"),
+            ConceptDescriptor(name="severity_measured", dtype="int64"),
+            ConceptDescriptor(name="severity_n", dtype="int64"),
+            ConceptDescriptor(name="death", dtype="int64"),
+            ConceptDescriptor(name="duration", dtype="float64"),
+        ],
+    )
+    step = AnalysisStep(
+        step_id="ordered_trend",
+        planned_analysis_role="secondary",
+        intent="Compare the ordered exposure across two declared outcomes.",
+        method="ordinal_stratified_descriptive_analysis",
+        scientific_action_id="association.ordinal_trend",
+        inputs=[
+            "severity_max",
+            "death",
+            "duration",
+            "artifact:analysis_cohort",
+            "table:adjusted_association_estimates",
+        ],
+        expected_outputs=["table:ordinal_trend_dose_response"],
+    )
+    plan = AnalysisPlan(research_question=context.research_question, steps=[step])
+
+    revised, findings = close_measurement_companion_inputs(
+        plan=plan,
+        context=context,
+    )
+
+    assert revised == plan
+    assert findings == []
+
+
 def test_plan_closes_explicit_measured_or_count_inputs_to_registered_pair():
     context = ResearchContext(
         research_question="Audit selected ICU measurement provenance.",
