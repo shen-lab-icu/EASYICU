@@ -793,6 +793,14 @@ class ProgressivePlannerAgent:
             "required nonstandard analysis needs a custom_analysis step with its "
             "own run-authorized product; never duplicate a singleton module."
         )
+        blocks.append(
+            "Primary-lineage rule: every secondary custom_analysis result must "
+            "be downstream of the primary analysis through depends_on so its "
+            "later typed input can consume the primary product. Put descriptive "
+            "absolute-risk or other headline context after the primary model; "
+            "an isolated raw-cohort custom result cannot satisfy a Planner-owned "
+            "article result role."
+        )
         if know_how_context:
             blocks.append(
                 "Retrieved protocol know-how (record every required claim disposition):\n"
@@ -970,6 +978,44 @@ class ProgressivePlannerAgent:
                 findings=(
                     {"required_products": list(required_custom_products)},
                 ),
+            )
+        primary_step_ids = {
+            step.step_id
+            for step in outline.steps
+            if step.planned_analysis_role == "primary"
+        }
+        upstream_by_step = {
+            step.step_id: set(step.depends_on) for step in outline.steps
+        }
+
+        def _has_primary_ancestor(step_id: str) -> bool:
+            pending = list(upstream_by_step.get(step_id, ()))
+            visited: set[str] = set()
+            while pending:
+                candidate = pending.pop()
+                if candidate in primary_step_ids:
+                    return True
+                if candidate in visited:
+                    continue
+                visited.add(candidate)
+                pending.extend(upstream_by_step.get(candidate, ()))
+            return False
+
+        detached_secondary_custom = [
+            step.step_id
+            for step in outline.steps
+            if step.module_id == "custom_analysis"
+            and step.planned_analysis_role == "secondary"
+            and not _has_primary_ancestor(step.step_id)
+        ]
+        if detached_secondary_custom:
+            raise ProgressivePlanCompileError(
+                "progressive_outline_secondary_custom_off_primary_lineage",
+                "secondary custom_analysis steps must descend from the primary "
+                "analysis so their typed result remains on the primary lineage: "
+                + ", ".join(detached_secondary_custom),
+                path="steps.depends_on",
+                findings=({"step_ids": detached_secondary_custom},),
             )
         for index, step in enumerate(outline.steps):
             if step.module_id not in allowed_modules:
