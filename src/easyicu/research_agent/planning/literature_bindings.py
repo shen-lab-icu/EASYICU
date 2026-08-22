@@ -50,6 +50,22 @@ def _method_layers_by_source_key() -> dict[str, set[str]]:
     return layers
 
 
+def method_layers_for_source_keys(source_keys: Sequence[str]) -> tuple[str, ...]:
+    """Project the method layers that exact source keys can support."""
+
+    selected = set(normalize_literature_citation_keys(source_keys))
+    layers_by_key = _method_layers_by_source_key()
+    return tuple(
+        sorted(
+            {
+                layer
+                for source_key in selected
+                for layer in layers_by_key.get(source_key, set())
+            }
+        )
+    )
+
+
 def _method_elements_by_source_key() -> dict[str, set[str]]:
     elements: dict[str, set[str]] = {}
     for card in METHOD_CARDS:
@@ -268,6 +284,7 @@ def validate_literature_citation_bindings(
 
 __all__ = [
     "allowed_method_source_keys",
+    "method_layers_for_source_keys",
     "missing_required_method_layers",
     "normalize_literature_citation_keys",
     "validate_literature_citation_bindings",

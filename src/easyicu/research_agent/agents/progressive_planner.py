@@ -20,6 +20,7 @@ from ..planning.analysis_types import (
     validate_host_authorized_analysis_family,
 )
 from ..planning.literature_bindings import (
+    method_layers_for_source_keys,
     missing_required_method_layers,
     validate_literature_citation_bindings,
 )
@@ -891,6 +892,7 @@ class ProgressivePlannerAgent:
         required_custom_products: Sequence[str] = (),
         required_visualization_step: bool = False,
         closed_domain_variables: Sequence[str] | None = None,
+        context_required_method_layers: Sequence[str] | None = None,
     ) -> None:
         if outline.analysis_type not in set(analysis_types):
             raise ProgressivePlanCompileError(
@@ -1022,6 +1024,36 @@ class ProgressivePlannerAgent:
                     step_id=step.step_id,
                     step_index=index,
                     path="scientific_action_id",
+                )
+        if context_required_method_layers is not None and available_citations:
+            required_method_layers = set(context_required_method_layers)
+            if any(
+                step.module_id == "adjusted_association" for step in outline.steps
+            ):
+                required_method_layers.add("interpretation")
+            selected_outline_citations = tuple(
+                citation
+                for step in outline.steps
+                for citation in step.literature_citation_keys
+            )
+            missing_outline_layers = sorted(
+                required_method_layers
+                - set(method_layers_for_source_keys(selected_outline_citations))
+            )
+            if missing_outline_layers:
+                raise ProgressivePlanCompileError(
+                    "progressive_outline_method_layer_unbound",
+                    "outline citation allocation cannot cover required method "
+                    "layer(s): " + ", ".join(missing_outline_layers),
+                    path="steps.literature_citation_keys",
+                    findings=(
+                        {
+                            "missing_method_layers": missing_outline_layers,
+                            "selected_citation_keys": list(
+                                dict.fromkeys(selected_outline_citations)
+                            ),
+                        },
+                    ),
                 )
 
     @staticmethod
@@ -1700,6 +1732,9 @@ class ProgressivePlannerAgent:
                     required_custom_products=required_custom_products,
                     required_visualization_step=required_visualization_step,
                     closed_domain_variables=closed_domain_variables,
+                    context_required_method_layers=(
+                        required_method_layers_for_context(context)
+                    ),
                 )
                 return parsed
 
@@ -1728,6 +1763,9 @@ class ProgressivePlannerAgent:
             required_custom_products=required_custom_products,
             required_visualization_step=required_visualization_step,
             closed_domain_variables=closed_domain_variables,
+            context_required_method_layers=required_method_layers_for_context(
+                context
+            ),
         )
         self.last_outline = outline
         self.last_foundation = None

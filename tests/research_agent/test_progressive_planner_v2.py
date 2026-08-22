@@ -1701,6 +1701,41 @@ def test_outline_rejects_categorical_distribution_for_continuous_exposure() -> N
     assert caught.value.details["step_id"] == distribution["step_id"]
 
 
+def test_outline_rejects_missing_method_layer_before_checkpoint() -> None:
+    payload = _outline_payload()
+    for step in payload["steps"]:
+        step["literature_citation_keys"] = [
+            key
+            for key in step["literature_citation_keys"]
+            if key != "strobe_2007"
+        ]
+    payload["steps"][0]["literature_citation_keys"] = ["record_2015"]
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(
+                "strobe_2007",
+                "record_2015",
+                "durrleman_splines_1989",
+            ),
+            context_required_method_layers=("reporting_standard",),
+        )
+
+    assert caught.value.reason_code == "progressive_outline_method_layer_unbound"
+    assert caught.value.details["findings"][0]["missing_method_layers"] == [
+        "interpretation"
+    ]
+
+
 def test_retrieved_data_cards_expose_module_compatibility_without_level_values() -> None:
     cards = ProgressivePlannerAgent._retrieved_data_cards(
         _context(),
