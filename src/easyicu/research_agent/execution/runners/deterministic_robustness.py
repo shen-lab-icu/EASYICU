@@ -1654,6 +1654,20 @@ def _fit_structured_robustness_rows(
                         source=source,
                         primary_data=primary_data,
                     )
+                    if error and "membership is not identical" in error:
+                        replay = _replay_primary_model_for_complete_case(
+                            spec=spec,
+                            source=source,
+                            primary_data=primary_data,
+                            out_dir=out_dir,
+                        )
+                        rows.append(replay["row"])
+                        variant_coefficients.extend(replay["coefficient_rows"])
+                        variant_contracts.extend(replay["contracts"])
+                        replay_index.append(replay["index"])
+                        if replay["error"]:
+                            warnings.append(f"{spec.spec_id}: {replay['error']}")
+                        continue
                     rows.append(row)
                     if contract_copy is not None:
                         variant_contracts.append(contract_copy)
@@ -1875,34 +1889,22 @@ def _verified_complete_case_equivalence(
     return row, coefficient_rows, contract_copy, None
 
 
-def _replay_primary_model_for_cohort(
+def _replay_primary_model_on_frame(
     *,
     spec: RobustnessSpec,
     source: Dict[str, Any],
-    data: Any,
-    context: Any,
+    variant_cohort: Any,
     out_dir: Path,
+    replay_root: Path,
+    note_prefix: str,
+    cohort_override: Optional[Dict[str, Any]] = None,
+    missing_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Run the completed primary analysis script on one locked cohort override."""
+    """Replay sealed primary code on an already materialized variant cohort."""
 
-    if spec.cohort_override is None:
-        error = "cohort-axis specification has no locked cohort override"
-        return _blocked_structured_replay(spec=spec, error=error)
-
-    replay_slug = re.sub(r"[^a-z0-9]+", "_", spec.spec_id.lower()).strip("_")
-    replay_root = (out_dir / "model_replays" / (replay_slug or "variant")).resolve()
-    if replay_root.exists():
-        shutil.rmtree(replay_root)
     replay_outputs = replay_root / "outputs"
     replay_outputs.mkdir(parents=True, exist_ok=True)
     try:
-        data_for_filter = _data_with_predicate_aliases(
-            data=data,
-            cohort_definition=spec.cohort_override,
-            exposure=str(source["primary_contract"].get("exposure_source") or ""),
-            context=context,
-        )
-        variant_cohort = build_cohort(spec.cohort_override, data=data_for_filter)
         cohort_path = replay_root / "cohort.parquet"
         variant_cohort.to_parquet(cohort_path, index=False)
         input_cohort_sha256 = _sha256_file(cohort_path)
@@ -1922,7 +1924,7 @@ def _replay_primary_model_for_cohort(
     except Exception as exc:
         return _blocked_structured_replay(
             spec=spec,
-            error=f"locked cohort override could not be materialised: {exc}",
+            error=f"locked variant cohort could not be persisted: {exc}",
         )
 
     env = os.environ.copy()
@@ -1956,6 +1958,7 @@ def _replay_primary_model_for_cohort(
         ),
         encoding="utf-8",
     )
+    input_n = int(len(variant_cohort))
     if completed.returncode != 0:
         return _blocked_structured_replay(
             spec=spec,
@@ -1964,7 +1967,7 @@ def _replay_primary_model_for_cohort(
                 f"exit code {completed.returncode}"
             ),
             replay_root=replay_root,
-            input_n=int(len(variant_cohort)),
+            input_n=input_n,
         )
 
     summary_path = replay_outputs / "step_summary.json"
@@ -1975,7 +1978,7 @@ def _replay_primary_model_for_cohort(
             spec=spec,
             error=f"replayed primary step has no readable summary: {exc}",
             replay_root=replay_root,
-            input_n=int(len(variant_cohort)),
+            input_n=input_n,
         )
     contract = _primary_contract_from_summary(replay_summary)
     replay_coefficient_path = _coefficient_path_from_summary(
@@ -1988,7 +1991,7 @@ def _replay_primary_model_for_cohort(
             spec=spec,
             error="replayed primary step did not emit its primary model contract",
             replay_root=replay_root,
-            input_n=int(len(variant_cohort)),
+            input_n=input_n,
         )
     if replay_coefficient_path is None:
         return _blocked_structured_replay(
@@ -1998,7 +2001,7 @@ def _replay_primary_model_for_cohort(
                 "coefficient companion"
             ),
             replay_root=replay_root,
-            input_n=int(len(variant_cohort)),
+            input_n=input_n,
         )
     source_contract = source["primary_contract"]
     for field in ("exposure_source", "exposure_expression"):
@@ -2007,7 +2010,7 @@ def _replay_primary_model_for_cohort(
                 spec=spec,
                 error=f"replayed primary model changed locked {field}",
                 replay_root=replay_root,
-                input_n=int(len(variant_cohort)),
+                input_n=input_n,
             )
 
     row, coefficient_rows, _contract_copy, error = _structured_model_row(
@@ -2017,12 +2020,8 @@ def _replay_primary_model_for_cohort(
         coefficient_path=replay_coefficient_path,
         contract=contract,
         evidence_id="model_replay_index",
-        note_prefix=(
-            "Exact registered primary-model code replay on the locked cohort "
-            f"override {spec.cohort_override.name}."
-        ),
+        note_prefix=note_prefix,
     )
-    input_n = int(len(variant_cohort))
     if error is None and (row.n <= 0 or row.n > input_n):
         return _blocked_structured_replay(
             spec=spec,
@@ -2039,7 +2038,8 @@ def _replay_primary_model_for_cohort(
         coefficient_path=replay_coefficient_path,
         spec_id=spec.spec_id,
         replay_mode="exact_registered_primary_model_code",
-        cohort_override=spec.cohort_override.to_dict(),
+        cohort_override=cohort_override,
+        missing_override=missing_override,
     )
     index = {
         "spec_id": spec.spec_id,
@@ -2062,6 +2062,101 @@ def _replay_primary_model_for_cohort(
         "index": index,
         "error": error,
     }
+
+
+def _replay_primary_model_for_complete_case(
+    *,
+    spec: RobustnessSpec,
+    source: Dict[str, Any],
+    primary_data: Any,
+    out_dir: Path,
+) -> Dict[str, Any]:
+    """Refit sealed primary code on one explicitly locked complete-case set."""
+
+    variables = complete_case_variables(spec)
+    if variables is None:
+        return _blocked_structured_replay(
+            spec=spec,
+            error="complete-case replay requires explicit locked variables",
+        )
+    data_columns = {str(column) for column in getattr(primary_data, "columns", [])}
+    missing_columns = [column for column in variables if column not in data_columns]
+    if missing_columns:
+        return _blocked_structured_replay(
+            spec=spec,
+            error=(
+                "complete-case replay variables are absent: "
+                + ", ".join(missing_columns)
+            ),
+        )
+    variant_cohort = primary_data.dropna(subset=variables).copy()
+    if variant_cohort.empty:
+        return _blocked_structured_replay(
+            spec=spec,
+            error="locked complete-case cohort is empty",
+        )
+    replay_slug = re.sub(r"[^a-z0-9]+", "_", spec.spec_id.lower()).strip("_")
+    replay_root = (out_dir / "model_replays" / (replay_slug or "variant")).resolve()
+    if replay_root.exists():
+        shutil.rmtree(replay_root)
+    return _replay_primary_model_on_frame(
+        spec=spec,
+        source=source,
+        variant_cohort=variant_cohort,
+        out_dir=out_dir,
+        replay_root=replay_root,
+        note_prefix=(
+            "Exact registered primary-model code replay on the locked "
+            "complete-case membership."
+        ),
+        missing_override=dict(spec.missing_override or {}),
+    )
+
+
+def _replay_primary_model_for_cohort(
+    *,
+    spec: RobustnessSpec,
+    source: Dict[str, Any],
+    data: Any,
+    context: Any,
+    out_dir: Path,
+) -> Dict[str, Any]:
+    """Run the completed primary analysis script on one locked cohort override."""
+
+    if spec.cohort_override is None:
+        error = "cohort-axis specification has no locked cohort override"
+        return _blocked_structured_replay(spec=spec, error=error)
+
+    replay_slug = re.sub(r"[^a-z0-9]+", "_", spec.spec_id.lower()).strip("_")
+    replay_root = (out_dir / "model_replays" / (replay_slug or "variant")).resolve()
+    if replay_root.exists():
+        shutil.rmtree(replay_root)
+    try:
+        data_for_filter = _data_with_predicate_aliases(
+            data=data,
+            cohort_definition=spec.cohort_override,
+            exposure=str(source["primary_contract"].get("exposure_source") or ""),
+            context=context,
+        )
+        variant_cohort = build_cohort(spec.cohort_override, data=data_for_filter)
+    except Exception as exc:
+        return _blocked_structured_replay(
+            spec=spec,
+            error=f"locked cohort override could not be materialised: {exc}",
+        )
+
+    return _replay_primary_model_on_frame(
+        spec=spec,
+        source=source,
+        variant_cohort=variant_cohort,
+        out_dir=out_dir,
+        replay_root=replay_root,
+        note_prefix=(
+            "Exact registered primary-model code replay on the locked cohort "
+            f"override {spec.cohort_override.name}."
+        ),
+        cohort_override=spec.cohort_override.to_dict(),
+    )
 
 
 def _structured_model_row(
@@ -2389,6 +2484,7 @@ def _variant_model_evidence(
     replay_mode: str,
     analysis_set: Optional[str] = None,
     cohort_override: Optional[Dict[str, Any]] = None,
+    missing_override: Optional[Dict[str, Any]] = None,
     # Required for the same reason as ``_structured_model_row``: the guessed
     # ``coefficients.csv`` never existed, and here the read is wrapped in a bare
     # ``except`` that returns empty coefficients -- so a guess would not even
@@ -2418,6 +2514,8 @@ def _variant_model_evidence(
         contract["replay_mode"] = replay_mode
         if cohort_override is not None:
             contract["cohort_override"] = cohort_override
+        if missing_override is not None:
+            contract["missing_override"] = missing_override
         evidence_contracts.append(contract)
 
     try:
