@@ -1,11 +1,8 @@
-"""Contracts for agent-authored ordered-group descriptive analyses.
+"""Contracts for deterministic ordered-group descriptive analyses.
 
-The analysis agent still resolves the planned columns, declares the category
-order, builds outcome-specific masks, and assembles the output tables.  This
-module supplies only the trust boundary around that work: a closed schema plus
-an independent replay against the locked cohort.  It is intentionally keyed to
-one controlled method name and contains no benchmark-, database-, or clinical-
-variable aliases.
+The Planner declares the scientific coordinates while a host executor builds
+the output tables.  This module supplies their dependency-neutral trust
+boundary and contains no benchmark-, database-, or clinical-variable aliases.
 """
 
 from __future__ import annotations
@@ -28,6 +25,7 @@ from ..methods.ordered_trends import (
 from ..schema import AnalysisStep, ValidationFinding
 
 CONTROLLED_METHOD = "ordinal_stratified_descriptive_analysis"
+SCIENTIFIC_ACTION_ID = "association.ordinal_trend"
 CONTRACT_KEY = "ordered_stratified_contract"
 CONTRACT_SCHEMA_VERSION = "1.0"
 
@@ -112,6 +110,15 @@ def is_ordered_stratified_analysis_step(step: AnalysisStep) -> bool:
     if outputs and all(_is_rendering_product(value) for value in outputs):
         return False
     return True
+
+
+def has_fixed_ordered_stratified_input_roster(step: AnalysisStep) -> bool:
+    """Whether the host contract owns this step's exact scientific inputs."""
+
+    return (
+        is_ordered_stratified_analysis_step(step)
+        and step.scientific_action_id == SCIENTIFIC_ACTION_ID
+    )
 
 
 def _finding(kind: str, message: str, **detail: Any) -> ValidationFinding:

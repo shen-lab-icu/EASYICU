@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..contracts.ordered_stratified import (
+    has_fixed_ordered_stratified_input_roster,
+)
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from .evidence_store import EvidenceStore, sha256_of_bytes, sha256_of_file
 from .plan_scope import (
@@ -39,7 +42,6 @@ _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
     "_min",
     "_sum",
 )
-
 
 @dataclass(frozen=True)
 class RegisteredPlanInputClosure:
@@ -105,6 +107,12 @@ def close_measurement_companion_inputs(
     additions_by_step: Dict[str, List[str]] = {}
     for step in plan.steps or []:
         inputs = [str(value) for value in (step.inputs or [])]
+        # This host-owned contract already fixes the exact exposure/outcome
+        # roster. Suffix closure would infer new mandatory scientific inputs
+        # that its executor neither selected nor consumes.
+        if has_fixed_ordered_stratified_input_roster(step):
+            revised_steps.append(step)
+            continue
         seen = set(inputs)
         additions: List[str] = []
         for input_name in list(inputs):
