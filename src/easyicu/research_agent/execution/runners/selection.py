@@ -389,8 +389,11 @@ def select_standard_executor(
                             runtime_projection_sha256=projection_digest,
                         ),
                         consumed_input_keys=(
-                            sealed_current.downstream_parent_product,
-                            sealed_current.linear_sensitivity_product,
+                            *(
+                                value
+                                for value in step.inputs
+                                if ":" in value
+                            ),
                         ),
                     )
                 )

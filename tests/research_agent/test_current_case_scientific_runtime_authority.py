@@ -282,11 +282,28 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         contrast_evidence_id="contrast_evidence",
         linear_evidence_id="linear_evidence",
         out_dir=tmp_path,
+        input_bindings=[
+            {
+                "input_key": authority.downstream_parent_product,
+                "evidence_id": "contrast_evidence",
+                "sha256": "a" * 64,
+                "loaded": True,
+                "row_count": 2,
+            },
+            {
+                "input_key": authority.linear_sensitivity_product,
+                "evidence_id": "linear_evidence",
+                "sha256": "b" * 64,
+                "loaded": True,
+                "row_count": 1,
+            },
+        ],
     )
     assert summary["status"] == "ok"
     assert summary["primary_or"] == 2.0
     assert summary["primary_effect_is_nonlinear_curve_summary"] is False
     assert summary["complete_case_n"] == 44095
+    assert len(summary["input_bindings"]) == 2
     matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
     assert set(matrix["axis"]) == {"primary", "functional_form", "missing"}
     assert matrix.loc[matrix["axis"] == "missing", "independent_variant"].item() in (

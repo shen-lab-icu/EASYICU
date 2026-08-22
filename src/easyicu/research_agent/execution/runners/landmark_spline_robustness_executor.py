@@ -158,6 +158,7 @@ def run_landmark_spline_robustness(
     contrast_evidence_id: str,
     linear_evidence_id: str,
     out_dir: Path,
+    input_bindings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Project already-fitted signed outputs into the robustness contract."""
 
@@ -368,6 +369,7 @@ def run_landmark_spline_robustness(
             "The scalar display anchor does not summarize the whole nonlinear curve.",
             "The missing-data row documents the primary analysis set and is not an independent refit.",
         ],
+        "input_bindings": list(input_bindings or []),
         "output_files": files,
     }
     (out_dir / "step_summary.json").write_text(
@@ -392,26 +394,52 @@ def run_bound_landmark_spline_robustness(
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         raise TypeError("landmark robustness executor received wrong authority kind")
-    contrast = load_typed_input(
-        input_key=sealed.downstream_parent_product,
-        run_dir=run_dir,
-        resolved_inputs=resolved_inputs,
-        step_id=step.step_id,
-        expected_declared_kind="table",
-        expected_evidence_kind="table",
-        minimum_row_count=2,
-        require_consumption_contract=True,
-    )
-    linear = load_typed_input(
-        input_key=sealed.linear_sensitivity_product,
-        run_dir=run_dir,
-        resolved_inputs=resolved_inputs,
-        step_id=step.step_id,
-        expected_declared_kind="table",
-        expected_evidence_kind="table",
-        minimum_row_count=1,
-        require_consumption_contract=True,
-    )
+    manifest = json.loads(resolved_inputs.read_text(encoding="utf-8"))
+    resolved = manifest.get("inputs") if isinstance(manifest, dict) else None
+    if not isinstance(resolved, dict) or not resolved:
+        raise ValueError("landmark robustness resolved-input manifest is empty")
+    loaded = {}
+    receipts = []
+    for input_key in resolved:
+        bound = load_typed_input(
+            input_key=input_key,
+            run_dir=run_dir,
+            resolved_inputs=manifest,
+            step_id=step.step_id,
+            expected_declared_kind=(
+                "table" if input_key.startswith("table:") else None
+            ),
+            expected_evidence_kind="table",
+            minimum_row_count=(
+                2
+                if input_key == sealed.downstream_parent_product
+                else 1
+            ),
+            require_consumption_contract=(
+                input_key
+                in {
+                    sealed.downstream_parent_product,
+                    sealed.linear_sensitivity_product,
+                }
+            ),
+        )
+        loaded[input_key] = bound
+        receipts.append(
+            {
+                "input_key": input_key,
+                "evidence_id": bound.evidence_id,
+                "sha256": bound.sha256,
+                "loaded": True,
+                "row_count": bound.row_count,
+            }
+        )
+    try:
+        contrast = loaded[sealed.downstream_parent_product]
+        linear = loaded[sealed.linear_sensitivity_product]
+    except KeyError as exc:
+        raise ValueError(
+            "landmark robustness manifest lacks one signed parent product"
+        ) from exc
     return run_landmark_spline_robustness(
         step=step,
         authority=sealed,
@@ -421,6 +449,7 @@ def run_bound_landmark_spline_robustness(
         contrast_evidence_id=contrast.evidence_id,
         linear_evidence_id=linear.evidence_id,
         out_dir=out_dir,
+        input_bindings=receipts,
     )
 
 
