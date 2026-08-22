@@ -1201,6 +1201,14 @@ class ProgressivePlannerAgent:
                         separators=(",", ":"),
                     )
                 )
+        if outline_step.module_id == "custom_analysis":
+            blocks.append(
+                "Custom-analysis output contract: a generic custom result uses "
+                "semantic_role='custom' and sensitivity_spec_ids=[]. A "
+                "scientific sensitivity uses exactly one table output with "
+                "semantic_role='scientific_sensitivity' and a non-empty unique "
+                "sensitivity_spec_ids roster. Do not mix these two shapes."
+            )
         blocks.append(
             "Return one ProgressiveStepMaterialization only. Copy every "
             "outline-owned coordinate exactly. Return foundation=null; the host "
