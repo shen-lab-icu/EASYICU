@@ -10,6 +10,7 @@ import pytest
 from easyicu.research_agent.execution.runners.composite_descriptive_figure_executor import (
     COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+    COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
     COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
     COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
     composite_descriptive_figure_executor_owns_step,
@@ -65,6 +66,7 @@ def _frames() -> dict[str, pd.DataFrame]:
                 "concept": ["age", "lactate"],
                 "n_total": [100, 100],
                 "measured_one_n": [100, 80],
+                "eligible_n": [100, 100],
             }
         ),
     }
@@ -111,6 +113,7 @@ def _association_frames() -> dict[str, pd.DataFrame]:
                 "ci_high": [1.8],
                 "effect_scale": ["odds_ratio"],
                 "model_id": ["primary_adjusted"],
+                "contrast": [None],
             }
         ),
         "table:robustness_matrix": pd.DataFrame(
@@ -146,6 +149,32 @@ def _association_summary_frames() -> dict[str, pd.DataFrame]:
             "non_independent_specs": [0, 0],
             "range_low": [1.1, 1.0],
             "range_high": [1.8, 1.7],
+        }
+    )
+    return frames
+
+
+def _source_aware_association_frames() -> dict[str, pd.DataFrame]:
+    frames = _association_summary_frames()
+    frames.pop("table:exposure_outcome_distribution")
+    frames.pop("table:measurement_missingness")
+    frames["table:absolute_risk_context"] = pd.DataFrame(
+        {
+            "estimate_type": ["outcome_risk", "outcome_risk", "prevalence"],
+            "label": ["Observed", "No source", "Observed"],
+            "n": [60, 40, 60],
+            "event_n": [12, 4, None],
+            "estimate": [0.2, 0.1, 0.6],
+            "ci_low": [0.12, 0.03, 0.5],
+            "ci_high": [0.28, 0.17, 0.7],
+        }
+    )
+    frames["table:measurement_process_audit"] = pd.DataFrame(
+        {
+            "concept": ["exposure", "outcome_time"],
+            "n_total": [100, 100],
+            "measured_one_n": [60, 20],
+            "eligible_n": [100, 20],
         }
     )
     return frames
@@ -367,6 +396,58 @@ def test_association_summary_contract_renders_ranges_without_point_estimates(
     assert panel_c["title"] == "Robustness ranges"
     assert panel_c["role"] == "robustness"
     assert panel_c["metadata"]["source_products"] == ["table:robustness_summary"]
+
+
+def test_source_aware_association_contract_uses_eligible_availability(
+    tmp_path: Path,
+) -> None:
+    frames = _source_aware_association_frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep.model_validate(
+        {
+            **_step().model_dump(mode="json"),
+            "step_id": "publication_figure",
+            "inputs": list(COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS),
+            "expected_outputs": ["figure:publication_figure"],
+            "input_consumption_contracts": [
+                {"input_key": key, "mode": "all_rows"}
+                for key in COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS
+            ],
+        }
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Estimate an association.", steps=[step]),
+        resolved_bindings=bindings,
+    )
+    assert selection is not None
+    assert selection.host_sealed_renderer is True
+    assert (
+        selection.consumed_input_keys
+        == COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS
+    )
+
+    out_dir = tmp_path / "outputs"
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="publication_figure",
+        input_keys=COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
+    )
+    assert summary["status"] == "ok"
+    contract = json.loads(
+        (out_dir / "publication_figure.figure_contract.json").read_text()
+    )
+    panel_d = next(panel for panel in contract["panels"] if panel["panel_id"] == "D")
+    assert panel_d["title"] == "Measurement availability"
+    assert panel_d["metadata"]["source_products"] == ["table:measurement_process_audit"]
 
 
 def test_renderer_preserves_exact_source_rows_and_exports_figure(
