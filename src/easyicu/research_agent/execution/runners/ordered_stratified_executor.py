@@ -100,8 +100,17 @@ def ordered_stratified_spec_for_step(
         for term in requirement.model_terms or []
         if term.role == "exposure"
         and term.name == requirement.exposure_source
-        and term.coding == "ordinal_linear"
-        and term.transform == "declared_level_index"
+        and (
+            (
+                term.coding == "ordinal_linear"
+                and term.transform == "declared_level_index"
+            )
+            or (
+                term.coding == "categorical"
+                and term.transform == "treatment_contrast"
+                and term.reference_level is not None
+            )
+        )
         and len(term.levels or []) >= 3
     ]
     if len(terms) != 1:

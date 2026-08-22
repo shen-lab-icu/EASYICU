@@ -197,3 +197,36 @@ def test_method_label_without_typed_spec_does_not_select_owner() -> None:
     assert not ordered_stratified_executor_owns_step(
         step, plan=AnalysisPlan(research_question="Test", steps=[step])
     )
+
+
+def test_typed_owner_accepts_declared_order_from_primary_treatment_contrasts() -> None:
+    step = _step()
+    plan = _plan(step)
+    primary = plan.steps[0]
+    requirement = primary.model_requirements[0]
+    exposure = requirement.model_terms[0]
+    categorical_exposure = exposure.model_copy(
+        update={
+            "coding": "categorical",
+            "transform": "treatment_contrast",
+            "reference_level": "0",
+        }
+    )
+    categorical_requirement = requirement.model_copy(
+        update={
+            "model_terms": [categorical_exposure],
+            "exposure_levels": ["0", "1", "2"],
+            "exposure_reference_level": "0",
+            "primary_contrast_level": "2",
+        }
+    )
+    categorical_primary = primary.model_copy(
+        update={"model_requirements": [categorical_requirement]}
+    )
+    categorical_plan = plan.model_copy(update={"steps": [categorical_primary, step]})
+
+    spec = ordered_stratified_spec_for_step(step, plan=categorical_plan)
+
+    assert spec is not None
+    assert spec.ordered_levels == ["0", "1", "2"]
+    assert ordered_stratified_executor_owns_step(step, plan=categorical_plan)
