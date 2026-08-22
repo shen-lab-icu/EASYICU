@@ -313,6 +313,15 @@ def run_trajectory_scientific_candidate_selection(
             "failed_closed" if scientific_rejection else "selected"
         ),
         "stability_authorized": scientific_rejection is None,
+        "output_files": {
+            "artifact:candidate_cluster_assignments": (
+                "candidate_cluster_assignments.csv"
+            ),
+            "manifest:cluster_selection": "cluster_selection.json",
+            "manifest:candidate_cluster_solution_schema": (
+                "candidate_cluster_solution_schema.json"
+            ),
+        },
     }
     if scientific_rejection:
         summary.update(
