@@ -23,7 +23,16 @@ from easyicu.research_agent.execution.runners.selection import (
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
 )
-from easyicu.research_agent.schema import AnalysisPlan, TrajectoryStabilitySpec
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    CohortDescriptor,
+    ResearchContext,
+    TrajectoryStabilitySpec,
+)
+from easyicu.research_agent.trajectory.plan_contract import (
+    evaluate_trajectory_plan_dag,
+    trajectory_step_roles,
+)
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     TrajectoryScientificAuthorityError,
     build_trajectory_scientific_runtime_authority,
@@ -211,7 +220,9 @@ def test_signed_plan_rejects_representation_inputs_and_intent_drift() -> None:
 
 def test_signed_trajectory_contract_owns_all_three_real_execution_steps() -> None:
     authority = _authority()
-    plan = _signed_plan(authority)
+    plan = authority.development_execution_only_plan(
+        research_question="Assess fixed-window trajectory phenotypes."
+    )
     expected_kinds = (
         "trajectory_signed_representation",
         "trajectory_signed_candidate_selection",
@@ -241,8 +252,34 @@ def test_signed_trajectory_authority_projects_and_rebinds_execution_only_plan() 
     assert [step.method for step in plan.steps] == [
         authority.representation_plan_method,
         "observed_data_diagonal_gaussian_mixture_candidate_selection",
-        "trajectory_cluster_stability",
+        "trajectory_cluster_stability_characterization",
     ]
+    assert "manifest:trajectory_window_manifest" in plan.steps[0].expected_outputs
+    assert trajectory_step_roles(plan.steps[-1]) == frozenset(
+        {"stability_freeze", "characterization"}
+    )
+    context = ResearchContext(
+        research_question=plan.research_question,
+        cohort=CohortDescriptor(
+            cohort_name="signed-long-trajectory",
+            database="test",
+            n_patients=120,
+            n_stays=120,
+            id_columns=["stay_id"],
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    evaluation = evaluate_trajectory_plan_dag(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=True,
+    )
+    assert [
+        finding
+        for finding in evaluation.findings
+        if finding.severity == "error"
+    ] == []
 
     authorities = ScientificRuntimeAuthorities(
         trajectory=authority,
@@ -336,6 +373,16 @@ def test_signed_representation_excludes_owner_unavailable_zero(tmp_path: Path) -
         (out_dir / "trajectory_representation_schema.json").read_text("utf-8")
     )
     authority.validate_representation_schema(schema)
+    window_manifest = json.loads(
+        (out_dir / "trajectory_window_manifest.json").read_text("utf-8")
+    )
+    assert window_manifest["panel_product"] == "artifact:trajectory_representation"
+    assert [item["family"] for item in window_manifest["families"]] == list(
+        authority.coordinate_concepts
+    )
+    assert summary["output_files"]["manifest:trajectory_window_manifest"] == (
+        "trajectory_window_manifest.json"
+    )
 
 
 def test_signed_candidate_and_stability_share_one_scaling_and_selection_contract(
@@ -454,6 +501,7 @@ def test_signed_candidate_and_stability_share_one_scaling_and_selection_contract
         resolved_inputs=stability_inputs,
         scientific_runtime_authority=authority,
         runtime_projection_sha256="2" * 64,
+        include_characterization=True,
     )
 
     assert stability_summary["status"] == "ok", stability_summary
@@ -461,6 +509,19 @@ def test_signed_candidate_and_stability_share_one_scaling_and_selection_contract
         stability_summary["coordinate_scaling_sha256"]
         == (candidate_summary["coordinate_scaling_sha256"])
     )
+    profiles = pd.read_csv(stability_out / "trajectory_profiles.csv")
+    sizes = pd.read_csv(stability_out / "cluster_sizes.csv")
+    assert set(profiles.columns) == {
+        "cluster",
+        "source_column",
+        "window_start_hours",
+        "window_end_hours",
+        "summary_statistic",
+        "value",
+        "n_observed",
+    }
+    assert len(profiles) == 3 * len(authority.representation_columns)
+    assert sizes["n"].sum() == len(representation)
 
     selection_path = candidate_out / "cluster_selection.json"
     selection = json.loads(selection_path.read_text("utf-8"))

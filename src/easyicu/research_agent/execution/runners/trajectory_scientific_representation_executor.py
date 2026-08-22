@@ -248,6 +248,33 @@ def run_trajectory_scientific_representation(
     }
     sealed.validate_representation_schema(schema)
     _write_json(out_dir / "trajectory_representation_schema.json", schema)
+    window_manifest = {
+        "schema_version": "easyicu.trajectory_window_manifest/1",
+        "panel_product": "artifact:trajectory_representation",
+        "families": [
+            {
+                "family": concept,
+                "ordered_source_columns": [
+                    {
+                        "name": (
+                            f"{concept}__h{start}_{start + sealed.grid_width_hours}"
+                        ),
+                        "window_start_hours": start,
+                        "window_end_hours": start + sealed.grid_width_hours,
+                    }
+                    for start in range(
+                        sealed.window_start_hours,
+                        sealed.window_end_hours,
+                        sealed.grid_width_hours,
+                    )
+                ],
+            }
+            for concept in sealed.coordinate_concepts
+        ],
+        "scientific_runtime_authority": authority_binding,
+        "runtime_projection_sha256": runtime_projection_sha256,
+    }
+    _write_json(out_dir / "trajectory_window_manifest.json", window_manifest)
     state_counts = {
         str(key): int(value)
         for key, value in trajectory["evidence_state"].value_counts().items()
@@ -276,6 +303,19 @@ def run_trajectory_scientific_representation(
         "runtime_projection_sha256": runtime_projection_sha256,
         "representation_sha256": schema["representation_sha256"],
         "sofa_coordinate_columns": sofa_columns,
+        "output_files": {
+            "artifact:trajectory_representation": (
+                "trajectory_representation.parquet"
+            ),
+            "table:trajectory_membership": "trajectory_membership.csv",
+            "table:feature_availability": "feature_availability.csv",
+            "manifest:trajectory_representation_schema": (
+                "trajectory_representation_schema.json"
+            ),
+            "manifest:trajectory_window_manifest": (
+                "trajectory_window_manifest.json"
+            ),
+        },
     }
     _write_json(out_dir / "step_summary.json", summary)
     return summary

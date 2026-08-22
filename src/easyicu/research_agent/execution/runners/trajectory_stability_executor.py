@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -35,8 +36,10 @@ from ...trajectory.plan_contract import (
     OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
     STABILITY_EXECUTOR_INPUTS,
     STABILITY_EXECUTOR_OUTPUTS,
+    STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS,
     TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION,
     TRAJECTORY_REPRESENTATION_SCHEMA_VERSION,
+    TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
     TRAJECTORY_STABILITY_METHOD_HEAD,
     trajectory_step_roles,
 )
@@ -80,17 +83,27 @@ def _step_contract_is_closed(step: AnalysisStep) -> bool:
     if step.trajectory_stability_spec is None:
         return False
     method_head = _normalise(step.method).split("_with_", 1)[0]
-    if method_head != TRAJECTORY_STABILITY_METHOD_HEAD:
-        return False
-    if trajectory_step_roles(step) != frozenset({"stability_freeze"}):
-        return False
+    roles = trajectory_step_roles(step)
     inputs = {str(item).strip().lower() for item in step.inputs or []}
     outputs = {str(item).strip().lower() for item in step.expected_outputs or []}
-    return (
+    shared_closed = (
         len(step.inputs or []) == len(STABILITY_EXECUTOR_INPUTS)
-        and len(step.expected_outputs or []) == len(STABILITY_EXECUTOR_OUTPUTS)
         and inputs == STABILITY_EXECUTOR_INPUTS
-        and outputs == STABILITY_EXECUTOR_OUTPUTS
+    )
+    if not shared_closed:
+        return False
+    if method_head == TRAJECTORY_STABILITY_METHOD_HEAD:
+        return (
+            roles == frozenset({"stability_freeze"})
+            and len(step.expected_outputs or []) == len(STABILITY_EXECUTOR_OUTPUTS)
+            and outputs == STABILITY_EXECUTOR_OUTPUTS
+        )
+    return (
+        method_head == TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD
+        and roles == frozenset({"stability_freeze", "characterization"})
+        and len(step.expected_outputs or [])
+        == len(STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS)
+        and outputs == STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS
     )
 
 
@@ -116,7 +129,16 @@ def trajectory_stability_executor_owns_step(
     if stability_owners != [step] or candidates[0].step_id == step.step_id:
         return False
     order = {item.step_id: index for index, item in enumerate(plan.steps)}
-    return order[candidates[0].step_id] < order[step.step_id]
+    if order[candidates[0].step_id] >= order[step.step_id]:
+        return False
+    if "characterization" in trajectory_step_roles(step):
+        characterization_owners = [
+            item
+            for item in plan.steps
+            if "characterization" in trajectory_step_roles(item)
+        ]
+        return characterization_owners == [step]
+    return True
 
 
 def trajectory_stability_executor_code(
@@ -133,6 +155,10 @@ def trajectory_stability_executor_code(
     if not trajectory_stability_executor_owns_step(step, plan=plan):
         raise ValueError("step does not satisfy the trajectory stability contract")
     payload = step.trajectory_stability_spec.model_dump(mode="json")
+    include_characterization = (
+        _normalise(step.method).split("_with_", 1)[0]
+        == TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD
+    )
     authority_payload = (
         load_trajectory_scientific_runtime_authority(
             scientific_runtime_authority
@@ -157,7 +183,8 @@ def trajectory_stability_executor_code(
         "run_dir=Path(os.environ['EASYICU_RUN_DIR']), "
         "resolved_inputs=os.environ['EASYICU_RESOLVED_INPUTS_JSON'], "
         "scientific_runtime_authority=scientific_runtime_authority, "
-        f"runtime_projection_sha256={runtime_projection_sha256!r})\n"
+        f"runtime_projection_sha256={runtime_projection_sha256!r}, "
+        f"include_characterization={include_characterization!r})\n"
     )
 
 
@@ -917,6 +944,7 @@ def run_trajectory_stability(
         TrajectoryScientificRuntimeAuthority | Mapping[str, Any] | None
     ) = None,
     runtime_projection_sha256: str | None = None,
+    include_characterization: bool = False,
 ) -> Mapping[str, Any]:
     """Execute exactly one frozen stability design and always write a summary."""
 
@@ -1311,6 +1339,40 @@ def run_trajectory_stability(
             {id_column: ids.tolist(), "cluster": reference_array.tolist()}
         )
         final_assignments.to_csv(out_dir / "cluster_assignments.csv", index=False)
+        if include_characterization:
+            profile_rows: list[dict[str, Any]] = []
+            for cluster in sorted(pd.unique(reference_array), key=str):
+                mask = reference_array == cluster
+                for column in representation_columns:
+                    values = pd.to_numeric(
+                        representation.loc[mask, column], errors="coerce"
+                    ).dropna()
+                    match = re.fullmatch(r".+__h(-?\d+)_(-?\d+)", column)
+                    if match is None:
+                        raise ValueError(
+                            f"representation column lacks a signed window: {column}"
+                        )
+                    profile_rows.append(
+                        {
+                            "cluster": cluster,
+                            "source_column": column,
+                            "window_start_hours": int(match.group(1)),
+                            "window_end_hours": int(match.group(2)),
+                            "summary_statistic": "mean",
+                            "value": float(values.mean()),
+                            "n_observed": int(len(values)),
+                        }
+                    )
+            pd.DataFrame(profile_rows).to_csv(
+                out_dir / "trajectory_profiles.csv", index=False
+            )
+            (
+                final_assignments.groupby("cluster", sort=True)
+                .size()
+                .rename("n")
+                .reset_index()
+                .to_csv(out_dir / "cluster_sizes.csv", index=False)
+            )
         provenance = final_assignments.copy()
         provenance["stability_inclusion_n"] = inclusion_counts
         provenance["assignment_agreement_n"] = agreement_counts
@@ -1418,6 +1480,13 @@ def run_trajectory_stability(
                 "trajectory_coordinate_scaling_manifest.json"
             ),
         }
+        if include_characterization:
+            output_files.update(
+                {
+                    "table:trajectory_profiles": "trajectory_profiles.csv",
+                    "table:cluster_sizes": "cluster_sizes.csv",
+                }
+            )
         summary.update(
             {
                 "status": ("ok" if threshold_passed is not False else "failed_closed"),

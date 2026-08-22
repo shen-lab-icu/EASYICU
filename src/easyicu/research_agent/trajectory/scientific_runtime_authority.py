@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..schema import AnalysisPlan, TrajectoryStabilitySpec
 from .plan_contract import (
     OBSERVED_DATA_DIAG_GMM_METHOD,
+    STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS,
+    TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
     trajectory_step_roles,
 )
 
@@ -191,6 +193,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                         "expected_outputs": [
                             *self.representation_required_outputs,
                             "table:feature_availability",
+                            "manifest:trajectory_window_manifest",
                         ],
                         "method": self.representation_plan_method,
                         "icu_rule_refs": [self.plan_rule_ref],
@@ -222,17 +225,10 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                             "manifest:trajectory_representation_schema",
                             "manifest:candidate_cluster_solution_schema",
                         ],
-                        "expected_outputs": [
-                            "artifact:stability_freeze",
-                            "artifact:cluster_assignments",
-                            "manifest:cluster_stability_spec",
-                            "manifest:trajectory_missingness_policy",
-                            "table:cluster_assignments",
-                            "table:cluster_stability",
-                            "table:cluster_stability_assignments",
-                            "table:cluster_assignment_provenance",
-                        ],
-                        "method": "trajectory_cluster_stability",
+                        "expected_outputs": sorted(
+                            STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS
+                        ),
+                        "method": TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
                         "icu_rule_refs": [self.plan_rule_ref],
                         "trajectory_stability_spec": self.stability_spec.model_dump(
                             mode="json"
