@@ -765,10 +765,15 @@ def run_landmark_survival_figure(
     if len(primary) != 1:
         raise ValueError("landmark survival figure lacks one primary Cox row")
     out_dir.mkdir(parents=True, exist_ok=True)
+    source_filename_by_product = {
+        sealed.km_product: "landmark_km_curve.csv",
+        sealed.cox_product: "landmark_cox_summary.csv",
+        sealed.risk_set_product: "landmark_risk_set_flow.csv",
+    }
     copied_sources: list[str] = []
     for product in sealed.figure_input_products:
         source = Path(source_paths[product]).resolve()
-        destination = out_dir / source.name
+        destination = out_dir / source_filename_by_product[product]
         shutil.copyfile(source, destination)
         if (
             hashlib.sha256(source.read_bytes()).digest()
