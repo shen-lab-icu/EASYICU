@@ -60,7 +60,7 @@ def landmark_survival_executor_scaffold(
     authority_json = json.dumps(sealed.model_dump(mode="json"), sort_keys=True)
     receipt_code = (
         render_standard_plausibility_receipt_code(
-            plausibility_scope, frame_name="bound.frame"
+            plausibility_scope, frame_name="analysis_frame"
         )
         if plausibility_scope is not None and plausibility_scope.expected_columns
         else ""
@@ -88,6 +88,7 @@ def landmark_survival_executor_scaffold(
             expected_evidence_kind="table",
             exclusive=True,
         )
+        analysis_frame = bound.frame
         """
     ).strip()
     if receipt_code:
@@ -95,7 +96,7 @@ def landmark_survival_executor_scaffold(
     prologue += "\n\n" + textwrap.dedent(
         f"""
         summary = run_landmark_survival_suite(
-            frame=bound.frame,
+            frame=analysis_frame,
             authority=authority,
             runtime_projection_sha256={runtime_projection_sha256!r},
             out_dir=Path(os.environ["STEP_OUT_DIR"]),
