@@ -86,6 +86,11 @@ def test_conversational_data_workbench_assets_are_route_owned() -> None:
     css = _read("css/guided-pi-data-preview.css")
 
     assert index.index("css/guided-pi-data-preview.css") < index.index(
+        "js/screens-viz-embedded.js"
+    )
+    assert index.index("js/screens-viz-context.js") < index.index("js/screens-viz.js")
+    assert index.index("js/screens-viz.js") < index.index("js/screens-viz-embedded.js")
+    assert index.index("js/screens-viz-embedded.js") < index.index(
         "js/screens-guided-pi-data-preview.js"
     )
     assert index.index("js/screens-guided-pi-data-preview.js") < index.index(
@@ -95,11 +100,12 @@ def test_conversational_data_workbench_assets_are_route_owned() -> None:
         "js/screens-guided-pi.js"
     )
     assert "window.EU_GUIDED_PI_DATA_PREVIEW" in preview
+    assert "window.EU_VIZ_EMBEDDED_WORKBENCH" in _read("js/screens-viz-embedded.js")
     assert "data_workbench_snapshot" in resources
-    assert ".gpi-data-preview" in css
+    assert ".gpi-viz-embed" in css
     for path in sorted((STATIC / "css").glob("*.css")):
         if path.name != "guided-pi-data-preview.css":
-            assert ".gpi-data-preview" not in path.read_text(encoding="utf-8")
+            assert ".gpi-viz-embed" not in path.read_text(encoding="utf-8")
     for marker in (".patient-", ".cohort-", ".crossdb-", ".extract-"):
         assert marker not in css
 

@@ -231,48 +231,6 @@
     const available = new Set(registrySources().map(source => String(source.id || '').trim()).filter(Boolean));
     return expected.length >= 2 && expected.every(sourceId => available.has(sourceId));
   }
-  window.EU_VIZ_CONTEXT = {
-    snapshot(route) {
-      const activePath = registryActivePath();
-      const source = registrySources().find(row => row.path === activePath) || registrySources()[0] || {};
-      const dataSource = {
-        path: source.path || activePath || (window.EU_DATA === 'real' ? defaultExportPath() : ''),
-        label: source.label || (window.EU_DATA === 'real' ? 'Local EasyICU export' : 'Demo data'),
-        database: source.database || (window.EU_DATA === 'real' ? '' : 'demo'),
-      };
-      const unique = values => Array.from(new Set((values || []).filter(Boolean)));
-      if (route === 'patient') {
-        const drill = patientDrilldown() || {};
-        const summary = drill.summary || {};
-        return {
-          data_source: dataSource,
-          cohort: {
-            entity_count: summary.entities,
-            full_entity_count: summary.entities,
-            review_entities: summary.review_entities,
-            review_entity_cap: summary.review_entity_cap,
-            review_scope: summary.review_scope,
-            module_count: summary.modules,
-          },
-          modules: unique((drill.module_profiles || []).map(row => row.module || row.id)),
-        };
-      }
-      if (route === 'cohort') {
-        const review = cohortReview() || {};
-        const selected = review.feature_selection && review.feature_selection.selected || [];
-        const catalog = review.feature_catalog && review.feature_catalog.modules || [];
-        return { data_source: dataSource, cohort: { cohort_size: review.summary && review.summary.cohort_size, comparison: cohortCompare }, modules: unique(selected.map(row => row.module).concat(catalog.map(row => row.module))), outcome: cohortSurvivalOutcome, comparator: cohortCompare };
-      }
-      const xdb = window.EU_CROSSDB_WORKSPACE || {};
-      return {
-        data_source: null,
-        crossdb_selection: xdb.selection_receipt || {},
-        cohort: { source_count: xdb.source_count, source_type: xdb.source_type, comparison_mode: xdb.compatibility_gate && xdb.compatibility_gate.comparison_mode },
-        modules: unique(xdb.shared_modules || []),
-        comparator: 'cross_database_descriptive',
-      };
-    },
-  };
   function repaintCrossRawProgress() {
     const restoreCancelFocus = document.activeElement && document.activeElement.matches('[data-crossdb-cancel]');
     repaintScreen('crossdb');
@@ -4078,8 +4036,8 @@
     };
   }
 
-  function cohortSnapshotBody() {
-    const review = cohortReview();
+  function cohortSnapshotBody(reviewOverride) {
+    const review = reviewOverride || cohortReview();
     if (review && review.summary) {
       const s = review.summary;
       return `
@@ -4236,8 +4194,8 @@
       </div>`;
   }
 
-  function cohortGroupsBody() {
-    const review = cohortReview();
+  function cohortGroupsBody(reviewOverride) {
+    const review = reviewOverride || cohortReview();
     if (review && review.summary) {
       const s = review.summary || {};
       const source = review.source || {};
@@ -4964,4 +4922,25 @@
       crossResults.bind(root, window.EU_CROSSDB_WORKSPACE, crossResultsConfig());
     },
   };
+
+  const vizContextOwner = window.EU_VIZ_CONTEXT_OWNER; if (vizContextOwner && typeof vizContextOwner.init === 'function') {
+    vizContextOwner.init({
+      activePath: registryActivePath, sources: registrySources, defaultExportPath, patient: patientDrilldown, cohort: cohortReview,
+      cohortComparison: () => cohortCompare, cohortOutcome: () => cohortSurvivalOutcome, crossdb: () => window.EU_CROSSDB_WORKSPACE || {},
+      hydrate: {
+        patient(payload) {
+          window.EU_DATA = 'real'; patientView = 'loaded'; window.EU_PATIENT_DRILLDOWN = payload; window.EU_VIZ_WORKSPACE = patientWorkspaceFromDrilldown(payload); vizErr = null; window.EU_HASWORK = true;
+          const reviewOwner = window.EU_PATIENT_REVIEW || {}; if (reviewOwner.navigation && reviewOwner.navigation.prime) reviewOwner.navigation.prime(payload);
+          if (reviewOwner.tables && reviewOwner.tables.prime) reviewOwner.tables.prime(payload); if (reviewOwner.features && reviewOwner.features.prime) reviewOwner.features.prime(payload);
+        },
+        cohort(payload) { window.EU_DATA = 'real'; cohortView = 'loaded'; window.EU_COHORT_REVIEW = payload; syncCohortFeatureSelection(payload); window.EU_VIZ_WORKSPACE = cohortWorkspaceFromReview(payload); vizErr = null; window.EU_HASWORK = true; },
+        crossdb(payload) { window.EU_DATA = 'real'; window.EU_CROSSDB_WORKSPACE = payload; crossSetup.presetLoaded(); const first = (payload.sources || [])[0]; window.EU_VIZ_WORKSPACE = first ? { route: 'crossdb', database: first.database, summary: first.summary } : null; vizErr = null; window.EU_HASWORK = true; },
+      },
+      cohortBegin: () => cohortCharts && cohortCharts.begin(),
+      cohortPanels: { groups: cohortGroupsBody, profile: cohortSnapshotBody, coverage: cohortCoverageBody, survival: cohortSurvivalBody, sofa: cohortSofaBody },
+      cohortMount: root => cohortCharts && typeof cohortCharts.mount === 'function' ? cohortCharts.mount(root) : 0,
+      patientSeriesHelpers: { t, esc, fmtInt, fmtNum, fmtPct, icon, axisSpark, signalLabel: patientSignalLabel, seriesLabel: patientSeriesLabel, signalKey: ptSignalKey, demoHours: () => null },
+      crossdbResultsConfig(repaint) { const config = crossResultsConfig(); return { ...config, repaint: typeof repaint === 'function' ? repaint : config.repaint, expandScope: null, exportPayload: null }; },
+    });
+  }
 })();
