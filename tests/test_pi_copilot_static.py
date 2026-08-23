@@ -44,6 +44,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"
         in index
     )
+    assert "js/screens-guided-pi-project.js?v=20260823-project-owner1" in index
     assert "js/screens-guided-pi.js?v=20260817-visible-activity2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -70,6 +71,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-provider.js"
     )
     assert index.index("js/screens-guided-pi-provider.js") < index.index(
+        "js/screens-guided-pi-project.js"
+    )
+    assert index.index("js/screens-guided-pi-project.js") < index.index(
         "js/screens-guided-pi.js"
     )
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
@@ -91,6 +95,7 @@ def test_user_facing_copilot_copy_hides_the_pi_runtime_brand() -> None:
 
 def test_activation_initializes_first_use_projects_and_surfaces_failures() -> None:
     owner = _read("js/screens-guided-pi.js")
+    project_owner = _read("js/screens-guided-pi-project.js")
     panel = owner.split("function activatePanel()", 1)[1].split(
         "function projectRequiredPanel()", 1
     )[0]
@@ -110,14 +115,16 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     assert "if (expectedProjectId !== projectId()) return;" in create
     assert "try { await prepareProject(); }" in load_status
     assert "catch (error) { state.error = errorText(error); }" in load_status
-    assert "pi_project_study_context_missing" in owner
+    assert "pi_project_study_context_missing" in project_owner
     assert "当前项目保存的研究配置已不存在" in owner
     assert "关联的研究配置已经失效" in panel
     assert "EasyICU 不会静默创建或绑定另一份配置" in panel
     assert 'data-newstudy' in panel
     assert 'data-refreshdrafts' in panel
     assert "state.projectIssue === 'pi_project_study_context_missing'" in panel
-    assert "state.projectIssue = error.code" in owner
+    assert "state.projectIssue = error.code" in project_owner
+    assert "confirm_initialization: false" in project_owner
+    assert "confirm_initialization: false" not in owner
     render = owner.split("function render()", 1)[1].split(
         "async function loadStatus()", 1
     )[0]
@@ -420,9 +427,10 @@ process.stdout.write(JSON.stringify(cases));
 
 def test_agent_handoff_receipt_is_forwarded_to_project_initialization() -> None:
     owner = _read("js/screens-guided-pi.js")
+    project_owner = _read("js/screens-guided-pi-project.js")
     guided = _read("js/screens-guided.js")
 
-    assert "binding_receipt: state.project.binding_receipt || undefined" in owner
+    assert "binding_receipt: bindingReceipt || undefined" in project_owner
     assert "binding_receipt: project.binding_receipt || null" in owner
     assert (
         "study_context_id: guidedBinding.binding_receipt && guidedBinding.binding_receipt.study_context_id"

@@ -19,7 +19,7 @@ from ...figures.publication import (
 from .typed_input_binding import BoundTypedInput, sha256_file
 
 
-def _finite(frame: pd.DataFrame, column: str) -> pd.Series:
+def _association_finite_series(frame: pd.DataFrame, column: str) -> pd.Series:
     values = pd.to_numeric(frame[column], errors="coerce")
     if values.isna().any() or not np.isfinite(values.to_numpy(dtype=float)).all():
         raise ValueError(f"{column!r} must contain only finite numeric values")
@@ -27,7 +27,7 @@ def _finite(frame: pd.DataFrame, column: str) -> pd.Series:
 
 
 def _integers(frame: pd.DataFrame, column: str) -> pd.Series:
-    values = _finite(frame, column)
+    values = _association_finite_series(frame, column)
     if not np.isclose(values, np.rint(values), rtol=0.0, atol=1e-9).all():
         raise ValueError(f"{column!r} must contain only integer-like values")
     return values.astype("int64")
@@ -55,9 +55,9 @@ def _validate_interval_table(
     require_fitted: bool = False,
 ) -> pd.DataFrame:
     result = frame.copy()
-    result[estimate_column] = _finite(result, estimate_column)
-    result["ci_low"] = _finite(result, "ci_low")
-    result["ci_high"] = _finite(result, "ci_high")
+    result[estimate_column] = _association_finite_series(result, estimate_column)
+    result["ci_low"] = _association_finite_series(result, "ci_low")
+    result["ci_high"] = _association_finite_series(result, "ci_high")
     if (result["ci_low"] > result[estimate_column]).any() or (
         result[estimate_column] > result["ci_high"]
     ).any():
@@ -111,8 +111,8 @@ def _robustness_ranges(ax: Any, frame: pd.DataFrame, *, color: str) -> None:
     result = frame.copy()
     for column in ("total_specs", "converged_specs", "non_independent_specs"):
         result[column] = _integers(result, column)
-    result["range_low"] = _finite(result, "range_low")
-    result["range_high"] = _finite(result, "range_high")
+    result["range_low"] = _association_finite_series(result, "range_low")
+    result["range_high"] = _association_finite_series(result, "range_high")
     if (result["total_specs"] <= 0).any():
         raise ValueError("robustness summary total_specs must be positive")
     if (
@@ -148,9 +148,9 @@ def _absolute_risk_context(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("absolute-risk context has no outcome_risk rows")
     result["n"] = _integers(result, "n")
     result["event_n"] = _integers(result, "event_n")
-    result["estimate"] = _finite(result, "estimate")
-    result["ci_low"] = _finite(result, "ci_low")
-    result["ci_high"] = _finite(result, "ci_high")
+    result["estimate"] = _association_finite_series(result, "estimate")
+    result["ci_low"] = _association_finite_series(result, "ci_low")
+    result["ci_high"] = _association_finite_series(result, "ci_high")
     if (
         (result["n"] <= 0).any()
         or (result["event_n"] < 0).any()
@@ -243,7 +243,9 @@ def render_association_publication_figure(
             raise ValueError("exposure/outcome distribution has no exposure-level rows")
         for column in ("outcome_events", "outcome_denominator"):
             levels[column] = _integers(levels, column)
-        levels["outcome_rate_pct"] = _finite(levels, "outcome_rate_pct")
+        levels["outcome_rate_pct"] = _association_finite_series(
+            levels, "outcome_rate_pct"
+        )
         if (levels["outcome_denominator"] <= 0).any() or (
             levels["outcome_events"] > levels["outcome_denominator"]
         ).any():
@@ -257,8 +259,10 @@ def render_association_publication_figure(
             raise ValueError("outcome percentage does not reconcile to counts")
         has_risk_ci = {"ci_low_pct", "ci_high_pct"} <= set(levels.columns)
         if has_risk_ci:
-            levels["ci_low_pct"] = _finite(levels, "ci_low_pct")
-            levels["ci_high_pct"] = _finite(levels, "ci_high_pct")
+            levels["ci_low_pct"] = _association_finite_series(levels, "ci_low_pct")
+            levels["ci_high_pct"] = _association_finite_series(
+                levels, "ci_high_pct"
+            )
             if (levels["ci_low_pct"] > levels["outcome_rate_pct"]).any() or (
                 levels["outcome_rate_pct"] > levels["ci_high_pct"]
             ).any():
@@ -272,7 +276,9 @@ def render_association_publication_figure(
     if missingness is not None:
         for column in ("n_total", "missing_n"):
             missingness[column] = _integers(missingness, column)
-        missingness["missing_pct"] = _finite(missingness, "missing_pct")
+        missingness["missing_pct"] = _association_finite_series(
+            missingness, "missing_pct"
+        )
         if (missingness["n_total"] <= 0).any() or (
             missingness["missing_n"] > missingness["n_total"]
         ).any():

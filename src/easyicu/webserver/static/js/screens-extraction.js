@@ -326,7 +326,7 @@
     ['Lab — Chemistry', '实验室-生化', 49, true, true],
     ['SOFA-2 scores', 'SOFA-2 评分', 10, true, true],
     ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true, true],
-    ['Outcome', '结局', 10, true, true],
+    ['Outcome', '结局', 13, true, true],
     // —— additional modules ——
     ['SOFA-1 scores', 'SOFA-1 评分', 7, true, false],
     ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, true, false],
