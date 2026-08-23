@@ -59,6 +59,40 @@ _NON_CODE_QUARANTINE_VALIDATORS = frozenset(
         "provider_call_budget_receipt",
     }
 )
+_NON_CODE_QUARANTINE_ISSUE_CODES = frozenset(
+    {"llm_concept_audit_provider_failure"}
+)
+
+
+def quarantine_findings_require_code_repair(
+    findings: Tuple[Dict[str, Any], ...] | List[Dict[str, Any]],
+) -> bool:
+    """Whether persisted quarantine findings describe a code defect.
+
+    An LLM concept-auditor transport/budget failure is wrapped by the auditor
+    validator, but it remains control-plane state.  Treating it as a semantic
+    code finding forces an impossible rewrite of digest-identical valid code
+    on every resume.  Mixed or genuinely semantic findings remain fail-closed.
+    """
+
+    def _is_control_plane(finding: Dict[str, Any]) -> bool:
+        detail = finding.get("detail")
+        issue_code = (
+            str(detail.get("issue_code") or "")
+            if isinstance(detail, dict)
+            else ""
+        )
+        return (
+            str(finding.get("validator") or "")
+            in _NON_CODE_QUARANTINE_VALIDATORS
+            or issue_code in _NON_CODE_QUARANTINE_ISSUE_CODES
+        )
+
+    return bool(findings) and not all(
+        _is_control_plane(finding)
+        for finding in findings
+        if isinstance(finding, dict)
+    )
 
 
 def _agent_origin_generation_mode(payload: Dict[str, Any]) -> Optional[str]:
@@ -643,10 +677,7 @@ class ResumeController:
         )
         if draft is None:
             return None
-        if all(
-            str(finding.get("validator") or "") in _NON_CODE_QUARANTINE_VALIDATORS
-            for finding in draft.findings
-        ):
+        if not quarantine_findings_require_code_repair(list(draft.findings)):
             # Provider allowance/receipt failures are control-plane state, not
             # defects in the candidate code. Keeping them as mandatory Coder
             # constraints makes an exhausted budget demand an impossible code
