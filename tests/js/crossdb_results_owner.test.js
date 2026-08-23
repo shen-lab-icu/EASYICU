@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 global.window = global;
+global.setTimeout = callback => { callback(); return 1; };
+global.clearTimeout = () => {};
 global.EU_CROSSDB_CHARTS = {
   begin() {},
   dispose() {},
@@ -177,7 +179,7 @@ assert.match(allFeatures, /All mapped features/);
 const featureQuery = fakeControl();
 featureQuery.value = 'oxygen';
 owner.bind(rootWith({ '[data-crossdb-feature-query]': [featureQuery] }), payload, config);
-featureQuery.fire('keydown', { key: 'Enter' });
+featureQuery.fire('input');
 const searchedFeatures = owner.render(payload, config);
 assert.match(searchedFeatures, /Oxygen Saturation/);
 assert.doesNotMatch(searchedFeatures, /Heart Rate/);

@@ -14,6 +14,25 @@
   const TABS = new Set(['overview', 'coverage', 'distributions', 'quality']);
   const SCOPES = new Set(['core', 'all']);
   const chartOwner = window.EU_CROSSDB_CHARTS;
+  let queryTimer = null;
+
+  function applyFeatureQuery(input, config, restoreFocus) {
+    if (queryTimer) clearTimeout(queryTimer);
+    queryTimer = null;
+    const caret = Number(input && input.selectionStart);
+    state.query = input && input.value || '';
+    state.feature = null;
+    repaint(config);
+    if (!restoreFocus || typeof document === 'undefined') return;
+    setTimeout(() => {
+      const next = document.querySelector('[data-crossdb-feature-query]');
+      if (!next || typeof next.focus !== 'function') return;
+      next.focus({ preventScroll: true });
+      if (Number.isFinite(caret) && typeof next.setSelectionRange === 'function') {
+        next.setSelectionRange(caret, caret);
+      }
+    }, 0);
+  }
 
   function helpersOf(config) {
     return Object.assign({
@@ -451,22 +470,20 @@
       repaint(config);
     }));
     root.querySelectorAll('[data-crossdb-feature-query]').forEach(input => {
+      input.addEventListener('input', () => {
+        if (queryTimer) clearTimeout(queryTimer);
+        queryTimer = setTimeout(() => applyFeatureQuery(input, config, true), 160);
+      });
       input.addEventListener('keydown', event => {
         if (event.key !== 'Enter') return;
         event.preventDefault();
-        state.query = input.value || '';
-        state.feature = null;
-        repaint(config);
+        applyFeatureQuery(input, config, false);
       });
       input.addEventListener('change', () => {
-        state.query = input.value || '';
-        state.feature = null;
-        repaint(config);
+        applyFeatureQuery(input, config, false);
       });
       input.addEventListener('search', () => {
-        state.query = input.value || '';
-        state.feature = null;
-        repaint(config);
+        applyFeatureQuery(input, config, false);
       });
     });
     root.querySelectorAll('[data-crossdb-feature]').forEach(button => button.addEventListener('click', () => {
@@ -486,6 +503,8 @@
   }
 
   function reset() {
+    if (queryTimer) clearTimeout(queryTimer);
+    queryTimer = null;
     if (chartOwner && typeof chartOwner.dispose === 'function') chartOwner.dispose();
     state.tab = 'overview';
     state.scope = 'all';

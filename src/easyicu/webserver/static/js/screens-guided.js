@@ -4832,7 +4832,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       }
       send.addEventListener('click', handleTextLocal);
       input.addEventListener('input', () => { guidedComposerDraft = input.value; });
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); handleTextLocal(); } });
+      input.addEventListener('keydown', (e) => { if (window.EU_COMPOSER_KEYBOARD.enterShouldSend(e)) { e.preventDefault(); handleTextLocal(); } });
     },
   };
 

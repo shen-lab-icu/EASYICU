@@ -232,6 +232,30 @@ const flush = async () => {
   assert.equal(drill.selected.ref, 'ent_25');
   assert.ok(repaints >= 8);
 
+  tables.reset();
+  const demoDrill = {
+    demo: true,
+    source: { database: 'miiv', path_hash: 'official-demo-a' },
+    data_tables: {
+      modules: [{ module: 'demographics' }, { module: 'labs' }],
+      module_picker: { default_module: 'demographics' },
+      table_previews: [
+        { module: 'demographics', page: 1, page_size: 24, rows: [{ entity: 'demo_1', age: 61 }] },
+        { module: 'labs', page: 1, page_size: 24, rows: [{ entity: 'demo_1', lactate: 2.4 }] },
+      ],
+    },
+  };
+  const demoConfig = {
+    drill: () => demoDrill,
+    repaint: () => { repaints += 1; },
+  };
+  tables.prime(demoDrill);
+  tables.load(demoConfig, { module: 'labs', page: 1, pageSize: 24 });
+  assert.equal(tables.activePreview(demoDrill).module, 'labs');
+  tables.prime(demoDrill);
+  assert.equal(tables.activePreview(demoDrill).module, 'labs');
+  assert.equal(calls.table.length, 4, 'demo module switching stays local');
+
   process.stdout.write(JSON.stringify({ ok: true, table_calls: calls.table.length }));
 })().catch(error => {
   process.stderr.write(String(error && error.stack || error));
