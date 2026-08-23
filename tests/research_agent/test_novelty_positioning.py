@@ -54,6 +54,46 @@ def _plan() -> AnalysisPlan:
     return AnalysisPlan(
         research_question="Question",
         analysis_type="association",
+        design_selection={
+            "schema_version": "easyicu.research_design_selection/1",
+            "claim_ceiling": "analysis_only",
+            "candidates": [
+                {
+                    "design_id": "adjusted_primary",
+                    "analysis_type": "association",
+                    "estimand": "Adjusted exposure contrast for hospital mortality.",
+                    "time_zero": "Start of the eligible ICU episode.",
+                    "observation_window": "Exposure in 0-24h and hospital mortality follow-up.",
+                    "primary_method": "Adjusted logistic regression",
+                    "required_variables": ["exposure", "death"],
+                    "assumptions": ["The declared adjustment set is adequate."],
+                    "literature_citation_keys": ["direct_2025"],
+                    "novelty_positioning": "Compare the ICU exposure definition with prior cohorts.",
+                    "figure_role": "Show the adjusted estimate and uncertainty.",
+                    "supports": "A prespecified adjusted association estimate.",
+                    "cannot_prove": "A causal effect without stronger identification.",
+                    "disposition": "selected",
+                    "decision_reason": "The exposure and mortality anchors require adjusted estimation.",
+                },
+                {
+                    "design_id": "crude_alternative",
+                    "analysis_type": "association",
+                    "estimand": "Unadjusted exposure contrast for hospital mortality.",
+                    "time_zero": "Start of the eligible ICU episode.",
+                    "observation_window": "Exposure in 0-24h and hospital mortality follow-up.",
+                    "primary_method": "Unadjusted risk comparison",
+                    "required_variables": ["exposure", "death"],
+                    "assumptions": ["Crude group differences are interpretable."],
+                    "literature_citation_keys": ["direct_2025"],
+                    "novelty_positioning": "Provide a crude comparator to prior cohorts.",
+                    "figure_role": "Show the crude outcome difference.",
+                    "supports": "A descriptive group contrast.",
+                    "cannot_prove": "An adjusted or causal exposure effect.",
+                    "disposition": "rejected",
+                    "decision_reason": "Reject because confounding is central to the exposure question.",
+                },
+            ],
+        },
         steps=[
             AnalysisStep(
                 step_id="primary",
@@ -108,18 +148,30 @@ def test_unsigned_packet_exposes_comparator_but_never_claims_novelty() -> None:
     assert packet.comparators[0].source_excerpt.startswith("Study-design excerpt:")
     assert packet.comparison_dimensions["population_and_setting"].study
     assert packet.comparison_dimensions["analysis_and_robustness_route"].study
-    assert packet.comparison_dimensions[
-        "data_source_and_transportability"
-    ].study
+    assert packet.comparison_dimensions["data_source_and_transportability"].study
     assert packet.comparison_dimensions[
         "clinical_decision_or_methodological_contribution"
     ].study
-    assert packet.comparison_dimensions[
-        "analysis_and_robustness_route"
-    ].comparator is None
-    assert packet.comparison_dimensions[
-        "analysis_and_robustness_route"
-    ].difference is None
+    assert (
+        "selected_estimand=Adjusted exposure contrast"
+        in packet.comparison_dimensions["outcome_and_estimand"].study
+    )
+    assert (
+        "selected_method=Adjusted logistic regression"
+        in packet.comparison_dimensions["analysis_and_robustness_route"].study
+    )
+    assert (
+        "cannot_prove=A causal effect"
+        in packet.comparison_dimensions[
+            "clinical_decision_or_methodological_contribution"
+        ].study
+    )
+    assert (
+        packet.comparison_dimensions["analysis_and_robustness_route"].comparator is None
+    )
+    assert (
+        packet.comparison_dimensions["analysis_and_robustness_route"].difference is None
+    )
     assert len(packet.context_sha256) == 64
     assert len(packet.plan_sha256) == 64
     assert len(packet.literature_sha256) == 64

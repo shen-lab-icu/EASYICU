@@ -805,6 +805,10 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.planning.design_selection"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.planning.literature_bindings"
     ],
     [
@@ -7408,6 +7412,10 @@
       "easyicu.research_agent.contracts.product_identity"
     ],
     [
+      "easyicu.research_agent.planning.progressive_contract",
+      "easyicu.research_agent.planning.design_selection"
+    ],
+    [
       "easyicu.research_agent.planning.progressive_resume",
       "easyicu.research_agent.canonical_json"
     ],
@@ -9201,6 +9209,10 @@
     ],
     [
       "easyicu.research_agent.schema",
+      "easyicu.research_agent.planning.design_selection"
+    ],
+    [
+      "easyicu.research_agent.schema",
       "easyicu.research_agent.planning.literature_contract"
     ],
     [
@@ -9304,9 +9316,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2318,
+    "edge_count": 2321,
     "largest_scc_size": 0,
-    "module_count": 576,
+    "module_count": 577,
     "package_count": 32,
     "top_level_module_count": 34
   },
@@ -9701,6 +9713,7 @@
     "easyicu.research_agent.planning.capability_registry": "planning/capability_registry.py",
     "easyicu.research_agent.planning.cohort_contract": "planning/cohort_contract.py",
     "easyicu.research_agent.planning.dependence_authority": "planning/dependence_authority.py",
+    "easyicu.research_agent.planning.design_selection": "planning/design_selection.py",
     "easyicu.research_agent.planning.endpoint_contract": "planning/endpoint_contract.py",
     "easyicu.research_agent.planning.figure_plan_shaping": "planning/figure_plan_shaping.py",
     "easyicu.research_agent.planning.figure_step_contract": "planning/figure_step_contract.py",
@@ -9924,6 +9937,6 @@
     "easyicu.research_agent.trajectory"
   ],
   "schema_version": 2,
-  "tool_sha256": "ec691582f918f2678714525cfeb74639bea2322d339f622644e9fa2255b5099a",
+  "tool_sha256": "d12bb9dbd3fc930cd900a8674a790b9e7776fbaece6dd95f68b66fb8bd8839b2",
   "tool_version": "1.3.0"
 }

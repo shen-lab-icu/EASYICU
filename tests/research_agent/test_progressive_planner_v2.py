@@ -703,10 +703,57 @@ def _skeleton() -> ProgressivePlanSkeleton:
 
 def _outline_payload(payload: dict | None = None) -> dict:
     source = payload or _payload()
+    analysis_type = source["analysis_type"]
     return {
         "schema_version": "easyicu.progressive_plan_outline/1",
-        "analysis_type": source["analysis_type"],
+        "analysis_type": analysis_type,
         "cohort_objective": "Use the sealed cohort and preserve its denominator.",
+        "design_selection": {
+            "schema_version": "easyicu.research_design_selection/1",
+            "claim_ceiling": "analysis_only",
+            "candidates": [
+                {
+                    "design_id": "selected_primary_design",
+                    "analysis_type": analysis_type,
+                    "estimand": "Adjusted exposure contrast for outcome_flag.",
+                    "time_zero": "Start of the sealed synthetic cohort episode.",
+                    "observation_window": "The prespecified episode observation window.",
+                    "primary_method": "Host-owned primary analysis method",
+                    "required_variables": ["exposure_flag", "outcome_flag"],
+                    "assumptions": ["The declared adjustment set is adequate."],
+                    "literature_citation_keys": [],
+                    "novelty_positioning": "Tests the question in the sealed cohort context.",
+                    "figure_role": "Show the primary estimate with its uncertainty.",
+                    "supports": "The prespecified primary association estimate.",
+                    "cannot_prove": "A causal effect without stronger identification.",
+                    "disposition": "selected",
+                    "decision_reason": (
+                        "Directly binds exposure_flag and outcome_flag to the "
+                        "prespecified primary question."
+                    ),
+                },
+                {
+                    "design_id": "rejected_alternative_design",
+                    "analysis_type": analysis_type,
+                    "estimand": "Unadjusted exposure contrast for outcome_flag.",
+                    "time_zero": "Start of the sealed synthetic cohort episode.",
+                    "observation_window": "The prespecified episode observation window.",
+                    "primary_method": "Unadjusted descriptive contrast",
+                    "required_variables": ["exposure_flag", "outcome_flag"],
+                    "assumptions": ["Crude group differences are interpretable."],
+                    "literature_citation_keys": [],
+                    "novelty_positioning": "Provides a less adjusted comparator design.",
+                    "figure_role": "Show only the crude group contrast.",
+                    "supports": "A descriptive difference between exposure groups.",
+                    "cannot_prove": "An adjusted or causal exposure effect.",
+                    "disposition": "rejected",
+                    "decision_reason": (
+                        "Reject because exposure_flag confounding is not addressed "
+                        "for the outcome_flag question."
+                    ),
+                },
+            ],
+        },
         "steps": [
             {
                 "step_id": step["step_id"],
@@ -3290,6 +3337,9 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     plan = agent.run(_context())
 
     assert len(plan.steps) == 7
+    assert plan.design_selection is not None
+    assert plan.design_selection.selected.design_id == "selected_primary_design"
+    assert plan.design_selection.claim_ceiling == "analysis_only"
     assert len(llm.calls) == 9
     requests = [call[1]["structured_output"] for call in llm.calls]
     assert requests[0].name == "easyicu_progressive_plan_outline_v1"
