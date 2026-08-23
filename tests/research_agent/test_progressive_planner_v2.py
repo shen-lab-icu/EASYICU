@@ -2413,6 +2413,49 @@ def test_outline_rejects_missing_method_layer_before_checkpoint() -> None:
     ]
 
 
+def test_outline_requires_functional_form_source_for_continuous_model_inputs() -> None:
+    payload = _outline_payload()
+    payload["steps"][0]["literature_citation_keys"] = ["strobe_2007"]
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(
+                "strobe_2007",
+                "durrleman_splines_1989",
+            ),
+            continuous_domain_variables=("age_years",),
+            context_required_method_layers=("reporting_standard",),
+        )
+
+    assert caught.value.reason_code == "progressive_outline_method_layer_unbound"
+    assert caught.value.details["findings"][0]["missing_method_layers"] == [
+        "functional_form"
+    ]
+
+
+def test_outline_prompt_maps_method_sources_to_their_layers() -> None:
+    prompt = ProgressivePlannerAgent.request_messages(
+        _context(),
+        allowed_literature_citation_keys=(
+            "strobe_2007",
+            "durrleman_splines_1989",
+        ),
+    )[-1].content
+
+    assert "Host-known method layers for sealed citation keys" in prompt
+    assert '"citation_key":"durrleman_splines_1989"' in prompt
+    assert '"method_layers":["functional_form"]' in prompt
+
+
 def test_retrieved_data_cards_expose_module_compatibility_without_level_values() -> None:
     cards = ProgressivePlannerAgent._retrieved_data_cards(
         _context(),
