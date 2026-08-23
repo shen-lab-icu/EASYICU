@@ -10,6 +10,7 @@ remain useful without being mislabeled as article-grade evidence.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -127,6 +128,73 @@ def _read_json(run_dir: Path, name: str) -> Mapping[str, Any]:
 
 def _model_covariates(plan: Optional[AnalysisPlan]) -> tuple[str, ...]:
     return _plan_model_covariates(plan)
+
+
+def _registered_figure_adjustment_authority(
+    run_dir: Path,
+    *,
+    figure_evidence_ids: set[str],
+) -> tuple[Optional[tuple[str, ...]], list[str]]:
+    """Resolve a figure's executed adjustment roster from registered receipts.
+
+    A host-owned executor may compile its model contract after the Planner plan
+    is frozen. In that case the registered runtime receipt, not missing plan
+    prose, is the authority for whether the rendered estimate is adjusted.
+    Only digest-matching runner receipts produced by the same step as a plotted
+    evidence record are accepted.
+    """
+
+    authority = _read_json(run_dir / "evidence", "evidence_authority.json")
+    records = [
+        record
+        for record in authority.get("records") or []
+        if isinstance(record, Mapping)
+    ]
+    plotted_steps = {
+        str(record.get("produced_by_step") or "").strip()
+        for record in records
+        if str(record.get("evidence_id") or "").strip() in figure_evidence_ids
+        and str(record.get("produced_by_step") or "").strip()
+    }
+    rosters: dict[tuple[str, ...], list[str]] = {}
+    root = run_dir.resolve()
+    for record in records:
+        if str(record.get("produced_by_step") or "").strip() not in plotted_steps:
+            continue
+        if record.get("producer") != "runner" or record.get("kind") != "log":
+            continue
+        relative_path = str(record.get("relative_path") or "").strip()
+        if not relative_path.endswith("_runtime_receipt.json"):
+            continue
+        try:
+            path = (run_dir / relative_path).resolve()
+            path.relative_to(root)
+            raw = path.read_bytes()
+        except (OSError, ValueError):
+            continue
+        if hashlib.sha256(raw).hexdigest() != str(record.get("sha256") or ""):
+            continue
+        try:
+            receipt = json.loads(raw)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(receipt, Mapping):
+            continue
+        schema_version = str(receipt.get("schema_version") or "").strip()
+        if not re.fullmatch(r"easyicu\.[a-z0-9_]+_runtime_receipt/1", schema_version):
+            continue
+        adjustment_columns = receipt.get("adjustment_columns")
+        if not isinstance(adjustment_columns, list) or any(
+            not isinstance(value, str) or not value.strip()
+            for value in adjustment_columns
+        ):
+            continue
+        roster = tuple(value.strip() for value in adjustment_columns)
+        rosters.setdefault(roster, []).append(relative_path)
+    if len(rosters) != 1:
+        return None, []
+    roster, refs = next(iter(rosters.items()))
+    return roster, sorted(set(refs))
 
 
 def _scientific_steps(plan: Optional[AnalysisPlan]) -> list[Any]:
@@ -411,10 +479,9 @@ def _primary_figure_facts(
         for path in figure_contract_paths(run_dir)
         if figure_contract_tier(path, run_dir) == "primary_publication"
     ]
-    covariates = _model_covariates(plan)
-    expected_label = "adjusted" if covariates else "unadjusted"
     labels: list[str] = []
     roles: list[str] = []
+    figure_evidence_ids: set[str] = set()
     absolute_risk_panel_present = False
     for path in primary_contracts:
         raw = _read_json(path.parent, path.name)
@@ -426,6 +493,11 @@ def _primary_figure_facts(
                 or panel_has_absolute_risk_context(panel)
             )
             roles.append(str(panel.get("role") or "").strip().casefold())
+            figure_evidence_ids.update(
+                str(value).strip()
+                for value in panel.get("evidence_ids") or []
+                if str(value).strip()
+            )
             labels.append(
                 " ".join(
                     [
@@ -434,6 +506,19 @@ def _primary_figure_facts(
                     ]
                 ).casefold()
             )
+    plan_covariates = _model_covariates(plan)
+    executed_covariates, execution_refs = _registered_figure_adjustment_authority(
+        run_dir,
+        figure_evidence_ids=figure_evidence_ids,
+    )
+    covariates = (
+        plan_covariates
+        if plan_covariates
+        else executed_covariates
+        if executed_covariates is not None
+        else ()
+    )
+    expected_label = "adjusted" if covariates else "unadjusted"
     conflicting = (
         any("adjusted" in label and "unadjusted" not in label for label in labels)
         if expected_label == "unadjusted"
@@ -443,6 +528,15 @@ def _primary_figure_facts(
         "expected_adjustment_label": expected_label,
         "primary_contract_paths": [str(path.relative_to(run_dir)) for path in primary_contracts],
         "primary_panel_roles": roles,
+        "adjustment_covariates": list(covariates),
+        "adjustment_authority": (
+            "plan"
+            if plan_covariates
+            else "runtime_receipt"
+            if executed_covariates is not None
+            else "not_established"
+        ),
+        "adjustment_authority_refs": execution_refs,
         "adjustment_label_conflict": conflicting,
         "absolute_risk_panel_present": absolute_risk_panel_present,
     }

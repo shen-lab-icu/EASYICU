@@ -10,6 +10,7 @@ it consumes registered tables/statistics, creates a claim-first
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -59,18 +60,19 @@ from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFi
 from ..planning.study_design import infer_study_design_family
 
 
-# EvidenceStore records are immutable by content digest.  The v1 source-data
-# ids predate explicit checkpoint roots, so byte-identical replays would reuse
-# those records and silently discard the new lineage metadata.  Version the
-# producer contract once instead of mutating historical evidence in place.
-PUBLICATION_SOURCE_CHECKPOINT_LINEAGE_VERSION = "checkpoint_v1"
-
-
-def _checkpoint_lineage_source_id(stem: str) -> str:
-    return (
-        f"publication_figure_source_{stem}_"
-        f"{PUBLICATION_SOURCE_CHECKPOINT_LINEAGE_VERSION}"
+# EvidenceStore records are immutable by content digest. Byte-identical figure
+# source data can legitimately be regenerated from a different active
+# checkpoint, so the record id must also bind the checkpoint roots instead of
+# reusing stale metadata from an earlier HEAD.
+def _checkpoint_lineage_source_id(
+    stem: str,
+    checkpoint_source_ids: Sequence[str],
+) -> str:
+    roots = sorted(
+        {str(eid).strip() for eid in checkpoint_source_ids if str(eid).strip()}
     )
+    root_digest = hashlib.sha256("\n".join(roots).encode("utf-8")).hexdigest()[:12]
+    return f"publication_figure_source_{stem}_checkpoint_{root_digest}"
 
 
 class _PrimaryLineageEvidenceView:
@@ -536,7 +538,10 @@ class PublicationFigureSkill:
                 kind="table",
                 description=f"Source data copied for the {rendered.generation_mode}.",
                 source_path=copy_path,
-                evidence_id=_checkpoint_lineage_source_id(name),
+                evidence_id=_checkpoint_lineage_source_id(
+                    name,
+                    rendered.source_evidence_ids,
+                ),
                 aliases=[
                     "publication_figure_source_data",
                     f"publication_figure_source_{name}",
@@ -1016,7 +1021,8 @@ class PublicationFigureSkill:
                     evidence_id=_checkpoint_lineage_source_id(
                         Path(source_name).stem.removeprefix(
                             "publication_figure_source_"
-                        )
+                        ),
+                        upstream_source_ids,
                     ),
                     aliases=[
                         Path(source_name).stem,
@@ -1524,7 +1530,10 @@ class PublicationFigureSkill:
             kind="table",
             description="Source data copied for the robustness-panel publication figure.",
             source_path=source_copy,
-            evidence_id=_checkpoint_lineage_source_id("robustness_panel"),
+            evidence_id=_checkpoint_lineage_source_id(
+                "robustness_panel",
+                [source_record.evidence_id],
+            ),
             aliases=["publication_figure_source_data"],
             producer=self.name,
             generation_mode="deterministic_figure_skill",
@@ -1539,7 +1548,10 @@ class PublicationFigureSkill:
                 "publication figure."
             ),
             source_path=axis_summary_copy,
-            evidence_id=_checkpoint_lineage_source_id("robustness_axis_summary"),
+            evidence_id=_checkpoint_lineage_source_id(
+                "robustness_axis_summary",
+                [source_record.evidence_id],
+            ),
             aliases=["publication_figure_axis_summary_source_data"],
             producer=self.name,
             generation_mode="deterministic_figure_skill",
@@ -1652,7 +1664,8 @@ class PublicationFigureSkill:
                     description="Source data copied beside a promoted publication figure.",
                     source_path=out_dir / source_name,
                     evidence_id=_checkpoint_lineage_source_id(
-                        Path(source_name).stem
+                        Path(source_name).stem,
+                        source_ids,
                     ),
                     aliases=[source_name, Path(source_name).stem],
                     inputs=source_ids,
