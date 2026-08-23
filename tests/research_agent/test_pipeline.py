@@ -7468,7 +7468,7 @@ def test_display_suite_keeps_step_contracts_supporting_not_primary(
     display_audit = json.loads(
         (tmp_path / artifact_paths["display_suite_audit"]).read_text(encoding="utf-8")
     )
-    assert display_audit["schema_version"] == "easyicu.display_suite_audit/2"
+    assert display_audit["schema_version"] == "easyicu.display_suite_audit/3"
     assert display_audit["primary_publication_panel_count"] == 1
     assert display_audit["supporting_panel_count"] == 3
     assert display_audit["primary_publication_contract_paths"] == [
