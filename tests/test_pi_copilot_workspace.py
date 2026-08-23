@@ -61,6 +61,21 @@ def test_project_workspace_writes_reads_edits_checks_and_previews(tmp_path: Path
     assert workspace.list_files("project-a")[0]["file"] == "demo/index.html"
 
 
+def test_existing_project_root_is_read_only_and_reuses_owned_project(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace = ProjectWorkspace(workspace_root)
+
+    assert workspace.existing_project_root("project-a") is None
+    assert not workspace_root.exists()
+
+    created = workspace.project_root("project-a")
+    assert workspace.existing_project_root("project-a") == created
+    assert workspace.existing_project_root("project-b") is None
+    assert not (workspace_root / "projects" / project_workspace_id("project-b")).exists()
+
+
 def test_preview_refuses_bytes_changed_after_static_check(tmp_path: Path) -> None:
     workspace = ProjectWorkspace(tmp_path / "workspace")
     written = workspace.write_file("project-a", "index.html", "<h1>A</h1>")
