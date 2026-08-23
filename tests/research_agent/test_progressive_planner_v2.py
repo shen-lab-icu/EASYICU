@@ -16,6 +16,7 @@ from easyicu.research_agent.agents.progressive_payload import (
 )
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
+    _action_catalog,
     _bind_runtime_action_dependencies,
     _complete_case_variable_roster,
     _parse_foundation_materialization,
@@ -2193,6 +2194,47 @@ def test_outline_rejects_categorical_distribution_for_continuous_exposure() -> N
         == "progressive_outline_distribution_domain_unavailable"
     )
     assert caught.value.details["step_id"] == distribution["step_id"]
+
+
+def test_action_catalog_exposes_domain_semantics_to_planner() -> None:
+    _action_ids, rows = _action_catalog(("association_study",))
+    ordinal = next(
+        row for row in rows if row["action_id"] == "association.ordinal_trend"
+    )
+
+    assert ">=3 ordered levels" in ordinal["purpose"]
+    assert ordinal["name"]
+    assert "notes" in ordinal
+
+
+def test_outline_rejects_ordinal_action_for_binary_primary_exposure() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom["scientific_action_id"] = "association.ordinal_trend"
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            ordered_domain_variables=(),
+            primary_exposure="exposure_flag",
+            target_outcome="outcome_flag",
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_outline_ordered_trend_domain_unsupported"
+    )
+    assert caught.value.details["step_id"] == custom["step_id"]
 
 
 def test_outline_cannot_substitute_unrelated_closed_domains_for_primary_pair() -> None:
