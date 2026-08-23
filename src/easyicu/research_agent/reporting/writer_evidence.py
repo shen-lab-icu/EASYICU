@@ -197,6 +197,7 @@ def _preferred_writer_evidence_names(
     preferred = [
         "table_one",
         "cohort_summary",
+        "research_context",
         "outcome_incidence",
         "outcome_rate",
         "mortality_rate",
@@ -213,6 +214,11 @@ def _preferred_writer_evidence_names(
     for name in step_aliases:
         if name not in out and is_citable(name):
             out.append(name)
+    if per_step_records is not None:
+        for claim in evidence.authoritative_numeric_claims(per_step_records):
+            name = str(claim.evidence_id)
+            if name not in out and is_citable(name):
+                out.append(name)
     if out:
         return out
     clean_names: List[str] = []
@@ -737,6 +743,7 @@ def _render_writer_evidence_digest_v2(
     secondary_lines: List[str] = []
     derived_lines: List[str] = []
     scientific_claim_lines: List[str] = []
+    numeric_citation_lines: List[str] = []
     if evidence is not None:
         scientific_claims = evidence.authoritative_scientific_claims(all_records)
         if scientific_claims:
@@ -758,6 +765,22 @@ def _render_writer_evidence_digest_v2(
             if claim.source_field == "__easyicu_numeric_claim_overflow__":
                 continue
             claims_by_step.setdefault(claim.step_id, []).append(claim)
+        if claims_by_step:
+            numeric_citation_lines.extend(
+                [
+                    "Writer instruction: every numeric value must cite the exact "
+                    "evidence ID assigned to its step below. Do not substitute a "
+                    "different step alias or a semantically similar artifact."
+                ]
+            )
+            for step_id in sorted(claims_by_step):
+                evidence_ids = list(
+                    dict.fromkeys(claim.evidence_id for claim in claims_by_step[step_id])
+                )
+                numeric_citation_lines.append(
+                    f"- {step_id}: "
+                    + ", ".join(f"{{evidence:{item}}}" for item in evidence_ids)
+                )
         for step_id in sorted(claims_by_step.keys()):
             step_claims = claims_by_step[step_id]
             # Preserve registration order (which matches step_summary
@@ -792,6 +815,7 @@ def _render_writer_evidence_digest_v2(
                         for src_step, src_field in getattr(c, "derived_from", [])
                     )
                     derived_lines.append(f"  {c.source_field}={c.value}")
+                    derived_lines.append(f"    cite={{evidence:{c.evidence_id}}}")
                     derived_lines.append(f"    formula={c.formula}")
                     if sources:
                         derived_lines.append(f"    sources={sources}")
@@ -818,6 +842,7 @@ def _render_writer_evidence_digest_v2(
                         value=c.value,
                         canonical=c.canonical,
                     )
+                    + f"; cite={{evidence:{c.evidence_id}}}"
                 )
             if truncated:
                 secondary_lines.append(
@@ -869,6 +894,14 @@ def _render_writer_evidence_digest_v2(
                 )
 
     extra_blocks: List[str] = []
+    if numeric_citation_lines:
+        extra_blocks.extend(
+            [
+                "",
+                "## numeric citation authority",
+                *numeric_citation_lines,
+            ]
+        )
     robustness_lines = _render_robustness_panel_block(
         run_dir=run_dir,
         evidence=evidence,
@@ -1245,7 +1278,8 @@ def _render_robustness_panel_block(
             f"point={_fmt_panel_number(primary.point_estimate)}, "
             f"CI=[{_fmt_panel_number(primary.ci_low)}, "
             f"{_fmt_panel_number(primary.ci_high)}], "
-            f"n={primary.n}"
+            f"n={primary.n}, "
+            f"cite={{evidence:{primary.evidence_id}}}"
         )
         lines.extend(
             _primary_effect_interpretation_lines(
