@@ -16,6 +16,7 @@ from easyicu.webserver.copilot_data_workbench import (
 from easyicu.webserver.pi_copilot import tools as tool_owner
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
+    PiCopilotError,
     PiSessionRecord,
     ToolExecutionContext,
 )
@@ -227,11 +228,20 @@ def test_patient_timeline_stays_browser_only_and_uses_pseudonymous_ordinal(
                     "lane": "vitals",
                     "status": "ready",
                     "signals": [
-                        {"feature": "hr", "times": [0, 1], "values": [80, 92]}
+                        {
+                            "feature": "resp",
+                            "unit": "/min",
+                            "times": [0, 1],
+                            "values": [18, 22],
+                        }
                     ],
                 }
             ],
-            "patient_overview": {},
+            "patient_overview": {
+                "dashboard": {
+                    "trend_panels": [{"cards": [{"unit": "/min"}]}]
+                }
+            },
             "trajectory_review": {},
             "quality_metrics": {},
             "eligibility_flow": {},
@@ -255,7 +265,62 @@ def test_patient_timeline_stays_browser_only_and_uses_pseudonymous_ordinal(
         project_id="project-data-workbench", digest=resource["snapshot_sha256"]
     )
     assert snapshot["payload"]["selected"]["ref"] == "ent_browser_only"
-    assert snapshot["payload"]["time_lanes"][0]["signals"][0]["values"] == [80, 92]
+    signal = snapshot["payload"]["time_lanes"][0]["signals"][0]
+    assert signal["values"] == [18, 22]
+    assert signal["unit"] == "1/min"
+    assert (
+        snapshot["payload"]["patient_overview"]["dashboard"]["trend_panels"][0][
+            "cards"
+        ][0]["unit"]
+        == "1/min"
+    )
+
+
+def test_patient_timeline_rejects_unknown_leading_slash_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export = tmp_path / "export"
+    export.mkdir()
+    store = CopilotDataWorkbenchSnapshotStore(tmp_path / "snapshots")
+    monkeypatch.setattr(tool_owner.sources, "load_registry", lambda: _registry(export))
+    monkeypatch.setattr(
+        patient_drilldown,
+        "patient_review_entity_page",
+        lambda _body: {
+            "navigation": {"options": [{"ordinal": 1, "ref": "ent_browser_only"}]}
+        },
+    )
+    monkeypatch.setattr(
+        patient_drilldown,
+        "patient_review_drilldown",
+        lambda _body: {
+            "source": {"id": "source-mimic", "label": "MIMIC-IV export"},
+            "summary": {"entities": 120},
+            "selected": {"label": "Entity 1", "ref": "ent_browser_only"},
+            "time_lanes": [
+                {
+                    "lane": "vitals",
+                    "signals": [
+                        {
+                            "feature": "resp",
+                            "unit": "/private/not-a-clinical-unit",
+                            "times": [0],
+                            "values": [18],
+                        }
+                    ],
+                }
+            ],
+            "privacy": {"direct_identifiers_returned": False},
+        },
+    )
+    monkeypatch.setattr(tool_owner, "CopilotDataWorkbenchSnapshotStore", lambda: store)
+
+    with pytest.raises(PiCopilotError) as blocked:
+        tool_owner._review_patient_timeline(
+            _context(), {"source_id": "source-mimic", "entity_ordinal": 1}
+        )
+
+    assert blocked.value.code == "copilot_data_workbench_path_forbidden"
 
 
 def test_crossdb_tool_keeps_paths_host_side_and_seals_aggregate_view(
@@ -285,7 +350,27 @@ def test_crossdb_tool_keeps_paths_host_side_and_seals_aggregate_view(
             "rows": [{"key": "cohort_size", "values": [100, 80], "delta": 20}],
             "availability": [],
             "feature_density": [],
-            "feature_distributions": [],
+            "feature_distributions": [
+                {
+                    "module": "vitals",
+                    "features": [
+                        {
+                            "feature": "hr",
+                            "values": [
+                                {"source": "mimic", "present": True, "median": 84},
+                                {"source": "eicu", "present": True, "median": 88},
+                            ],
+                        },
+                        {
+                            "feature": "resp",
+                            "values": [
+                                {"source": "mimic", "present": True, "median": 18},
+                                {"source": "eicu", "present": True, "median": 20},
+                            ],
+                        },
+                    ],
+                }
+            ],
             "shared_modules": ["vitals"],
             "all_modules": ["vitals"],
             "compatibility_gate": {"status": "compatible"},
@@ -297,7 +382,8 @@ def test_crossdb_tool_keeps_paths_host_side_and_seals_aggregate_view(
     monkeypatch.setattr(tool_owner, "CopilotDataWorkbenchSnapshotStore", lambda: store)
 
     result = tool_owner._compare_data_sources(
-        _context(), {"source_ids": ["mimic", "eicu"]}
+        _context(),
+        {"source_ids": ["mimic", "eicu"], "features": ["vitals:hr"]},
     )
 
     assert captured == [{"paths": [str(first), str(second)]}]
@@ -308,6 +394,20 @@ def test_crossdb_tool_keeps_paths_host_side_and_seals_aggregate_view(
         project_id="project-data-workbench", digest=resource["snapshot_sha256"]
     )
     assert snapshot["payload"]["rows"][0]["delta"] == 20
+    assert snapshot["payload"]["feature_distributions"] == [
+        {
+            "module": "vitals",
+            "features": [
+                {
+                    "feature": "hr",
+                    "values": [
+                        {"source": "mimic", "present": True, "median": 84},
+                        {"source": "eicu", "present": True, "median": 88},
+                    ],
+                }
+            ],
+        }
+    ]
 
 
 def test_demo_preparation_requires_extract_grant_before_job_submission(

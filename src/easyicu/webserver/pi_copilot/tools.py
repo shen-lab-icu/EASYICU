@@ -35,6 +35,7 @@ from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
     CopilotDataWorkbenchSnapshotStore,
     build_snapshot as build_data_workbench_snapshot,
+    project_patient_snapshot_payload,
 )
 from easyicu.webserver.ideas import mining as idea_mining
 
@@ -1058,11 +1059,8 @@ def _review_patient_timeline(
             summary="The Patient Review owner could not open that pseudonymous entity timeline.",
             owner="easyicu.webserver.patient_drilldown",
         )
-    resource = _persist_workbench_snapshot(
-        context,
-        view="patient_timeline",
-        title=f"Patient timeline · Entity {ordinal}",
-        payload={
+    patient_snapshot_payload = project_patient_snapshot_payload(
+        {
             "source": payload.get("source"),
             "summary": payload.get("summary"),
             "eligibility_flow": payload.get("eligibility_flow"),
@@ -1073,7 +1071,13 @@ def _review_patient_timeline(
             "quality_metrics": payload.get("quality_metrics"),
             "blocked_features": payload.get("blocked_features"),
             "provenance": payload.get("provenance"),
-        },
+        }
+    )
+    resource = _persist_workbench_snapshot(
+        context,
+        view="patient_timeline",
+        title=f"Patient timeline · Entity {ordinal}",
+        payload=patient_snapshot_payload,
         privacy=payload.get("privacy") if isinstance(payload.get("privacy"), Mapping) else {},
     )
     lanes = payload.get("time_lanes")
@@ -1170,11 +1174,20 @@ def _compare_data_sources(
     for module in payload.get("feature_distributions") or []:
         if not isinstance(module, Mapping):
             continue
+        module_name = str(module.get("module") or "").strip().lower()
         rows = [
             row
             for row in (module.get("features") or [])
             if isinstance(row, Mapping)
-            and (not feature_names or str(row.get("feature") or "").lower() in feature_names)
+            and (
+                not feature_names
+                or str(row.get("feature") or "").strip().lower() in feature_names
+                or (
+                    module_name
+                    and f"{module_name}:{str(row.get('feature') or '').strip().lower()}"
+                    in feature_names
+                )
+            )
         ]
         if not feature_names:
             rows = rows[:4]

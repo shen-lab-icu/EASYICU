@@ -4,13 +4,13 @@
 > 分支：`codex/easyicu-desktop-app-v1`
 > worktree：`/Users/haibo/Documents/GitHub/EASYICU-desktop-app-v1`
 > 起始基线：`912ed0b`
-> 状态：功能、原生工作台视图复用、聚焦回归、正式 Copilot 浏览器链路和 Apple Silicon 冻结包 smoke 均通过；未推送、未合并 `main`
+> 状态：功能、原生工作台视图复用、聚焦回归和正式本地 API Copilot 浏览器链路均通过；当前 Patient/Cross-DB 适配修复尚未重建进 Apple Silicon 冻结包；未推送、未合并 `main`
 
 ## 结论
 
 正式 EasyICU Copilot 对话页现可在同一会话中完成受治理的数据发现与审阅：准备官方 demo 数据源、查看队列汇总和筛选漏斗、查看有界特征分布、按匿名实体序号查看患者时间序列，以及比较 2–6 个已注册数据库。结果由既有 Data Extraction、Cohort、Patient 与 Cross-DB owner 产生，Copilot 只负责会话参数、工具调用和右侧结果投影，不复制科学执行逻辑。
 
-Web 与桌面 App 使用同一套 FastAPI 原生前端和 API，因此本次改动同时进入 Web 源码和重新构建的 `.app` / DMG。`#agent` 仍是 Project Monitor，没有被改造成第二个聊天页。
+Web 与桌面 App 使用同一套 FastAPI 原生前端和 API，因此桌面 App 下一次重建会继承这些改动。当前浏览器验收运行的是隔离分支 Web 源码；既有 `.app` / DMG 是本轮 Patient/Cross-DB 适配修复前的构建，不能把新修复声称为已经进入安装包。`#agent` 仍是 Project Monitor，没有被改造成第二个聊天页。
 
 ## 对话工具与责任边界
 
@@ -53,9 +53,11 @@ passed
 
 Python 聚焦范围覆盖新 Data Workbench、数据包快照、Pi 静态/合同/研究工作流和 Web 路由合同。JS 合同包含新结果投影与资源 owner，桌面边界和 Tauri Rust 测试保持通过。
 
-## 正式 Copilot 浏览器验收
+正式 API 实跑后的新增 Patient/Cross-DB 修复直接矩阵为 `20 passed, 5 warnings`，Ruff、`git diff --check` 与 JS contracts `25/25` 通过。扩大的相邻矩阵为 `302 passed, 2 failed, 5 warnings`；两项失败来自同一工作树中另一条并行改动尚未同步的旧断言（sidecar 已有 34 个工具但测试仍断言 30；Guided 脚本 cache key 已更新但静态测试仍钉旧版本），不在本提交路径内，也未用越界补丁掩盖。
 
-在隔离本地服务、合成导出和支持流式 tool-call 的本地 mock provider 上，从正式 EasyICU Copilot 对话页完成三条真实产品链：
+## Mock provider 组件链路验收
+
+在隔离本地服务、合成导出和支持流式 tool-call 的本地 mock provider 上，从正式 EasyICU Copilot 对话页完成三条组件链：
 
 1. “查看队列并展示 Heart Rate 分布”触发 `easyicu_review_cohort`，返回 `easyicu_feature_distribution_ready`，owner 为 `cohort_review`。
 2. “查看 Entity 3 的时间序列”触发 `easyicu_review_patient_timeline`，返回 `easyicu_patient_timeline_ready`，owner 为 `patient_drilldown`。
@@ -82,7 +84,26 @@ Python 聚焦范围覆盖新 Data Workbench、数据包快照、Pi 静态/合同
 - `task_logs/browser_qa_20260823/native_copilot_patient_preview.png`
 - `task_logs/browser_qa_20260823/native_copilot_crossdb_preview.png`
 
-## 桌面发行物复验
+以上 `native_copilot_*` 证据用于验证原生渲染器复用与同快照跳转，不作为真实模型/API 调用证据。
+
+## 正式本地 API Copilot 实跑
+
+在隔离状态目录与 `1440×1000` 桌面视口，正式 Copilot 连接本机 `8317/v1` 的 OpenAI-compatible API，模型为 `gpt-5.6-luna`。凭证只保存在隔离的私有 credential store；任务日志、截图和 Git diff 均不包含凭证。数据使用 EasyICU 官方 MIMIC-IV v2.2 与 eICU v2.0.1 demo 导出，不是完整数据库。
+
+1. Cohort：自然语言请求队列概况与 `vitals:hr` 分布；Luna 实际调用 4 个 EasyICU 工具，`easyicu_review_cohort` 返回 `easyicu_feature_distribution_ready`。右侧打开原生 Cohort Statistics，显示 MIMIC-IV demo 的 140 stays 与 Heart Rate stay-level 描述性分布。
+2. Patient：自然语言请求匿名 Entity 3 时间序列；首次正式 API 调用暴露真实边界错误——合法临床单位 `/min` 被 host-path 检查误判。修复只在 Patient 投影的精确 `unit` 字段把已知 `/min` 规范化为 `1/min`，没有放宽共享 path validator；任意 `/private/...` 单位仍以 `copilot_data_workbench_path_forbidden` 失败关闭。复验返回 `easyicu_patient_timeline_ready`，原生 Patient Review 显示 5 个时序轨道和 15 个特征卡。
+3. Cross-DB：自然语言请求 MIMIC-IV/eICU Heart Rate 对比；首次正式 API 结果发现规范 id `vitals:hr` 与 owner 内部 `module=vitals, feature=hr` 匹配失败，导致原生 Distribution 为 0。修复为模块限定的规范匹配后，Luna 新会话实际调用 5 个 EasyICU 工具，返回 `easyicu_crossdb_comparison_ready`；右侧显示 2 sources、1 bounded module、1 available feature profile、Heart Rate 2/2 sources 和两条描述性分布曲线。队列规模为 MIMIC-IV 140 stays、eICU 2,520 stays，共享目录仍为 19 个模块。
+
+正式 API 截图：
+
+- `output/playwright/api_copilot_20260823/01_api_connection_ready.png`
+- `output/playwright/api_copilot_20260823/02_api_cohort_native_preview.png`
+- `output/playwright/api_copilot_20260823/03_api_patient_native_preview.png`
+- `output/playwright/api_copilot_20260823/04_api_crossdb_native_preview.png`
+
+最终隔离页 `scrollWidth == clientWidth`，未发现非预期横向溢出，console 为 0 error / 0 warning。新会话的 API 请求、5 次工具调用、快照加载和原生渲染均成功；最终快照仅含 `vitals/hr` 的有界聚合投影，隐私收据明确 `direct_identifiers_returned=false`、`raw_rows_returned=false`、`secrets_returned=false`。
+
+## 修复前桌面发行物复验
 
 重新执行 `desktop/scripts/build_macos.py` 后得到：
 
@@ -91,11 +112,11 @@ Python 聚焦范围覆盖新 Data Workbench、数据包快照、Pi 静态/合同
 - DMG 大小：451,508,667 bytes
 - SHA-256：`a68ffd37165ed10b35b33ac52b6b2f963b0b705623dfaa9d7a0698cc50221b68`
 
-`codesign --verify --deep --strict` 和 `hdiutil verify` 均通过。冻结 App 已直接确认包含 `screens-viz-context.js`、`screens-viz-embedded.js` 及新的 Copilot adapter/CSS；桌面 Python 边界 14 passed、Rust 3 passed。冻结后端在前一轮隔离端口 smoke 中：无 token 的 `/api/catalog` 返回 403，正确 token 返回 200，Copilot 状态和快照路由保持 fail closed。
+`codesign --verify --deep --strict` 和 `hdiutil verify` 均通过。该冻结 App 已直接确认包含 `screens-viz-context.js`、`screens-viz-embedded.js` 及 Copilot adapter/CSS；桌面 Python 边界 14 passed、Rust 3 passed。冻结后端在前一轮隔离端口 smoke 中：无 token 的 `/api/catalog` 返回 403，正确 token 返回 200，Copilot 状态和快照路由保持 fail closed。它没有包含随后由正式 API 实跑发现的 `/min` 投影和 `vitals:hr` Cross-DB 映射修复，需在最终 exact-head 收口后重建。
 
 ## 没有声称的内容
 
-- 浏览器验收使用合成导出和本地 mock provider，不是 MIMIC/eICU 真实数据验证、真实供应商模型验证或临床验证。
+- Mock provider 验收使用合成导出；新增正式 API 验收使用本地 8317 的 `gpt-5.6-luna` 和官方 demo 导出。二者都不是完整 MIMIC/eICU 数据验证、临床验证或正式科研结果。
 - 本轮没有运行完整 exact-head CI、Web E1、完整 Research Agent 科学任务或论文产出。
 - ICD 条件仍由既有队列/extraction owner 解析；本轮没有另造任意 ICD 查询语言，也不把现有聚合队列审阅夸大为所有 ICD 查询均已验证。
 - 下载、转换和格式导出继续由既有受控 job 执行；本轮验证了对话入口与授权复用，没有重新下载全部官方数据。

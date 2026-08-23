@@ -33,6 +33,9 @@ ALLOWED_VIEWS = frozenset(
     }
 )
 MAX_SNAPSHOT_BYTES = 768 * 1024
+_PATH_SAFE_CLINICAL_UNIT_ALIASES = {
+    "/min": "1/min",
+}
 
 
 class CopilotDataWorkbenchError(RuntimeError):
@@ -109,6 +112,30 @@ def build_snapshot(
         ) from exc
     snapshot["snapshot_sha256"] = _digest_payload(snapshot)
     return snapshot
+
+
+def project_patient_snapshot_payload(value: Any) -> Any:
+    """Copy a Patient Review projection while making known rate units path-safe.
+
+    Patient Review legitimately emits ``/min`` for respiratory rate.  The
+    durable snapshot boundary must continue to reject arbitrary leading-slash
+    strings, so the Copilot adapter normalizes only exact clinical ``unit``
+    fields instead of weakening the shared host-path detector.
+    """
+
+    def visit(child: Any, *, field: str = "") -> Any:
+        if isinstance(child, Mapping):
+            return {
+                str(key): visit(item, field=str(key).strip().lower())
+                for key, item in child.items()
+            }
+        if isinstance(child, list):
+            return [visit(item) for item in child]
+        if field == "unit" and isinstance(child, str):
+            return _PATH_SAFE_CLINICAL_UNIT_ALIASES.get(child.strip(), child)
+        return child
+
+    return visit(value)
 
 
 class CopilotDataWorkbenchSnapshotStore:
@@ -243,4 +270,5 @@ __all__ = [
     "CopilotDataWorkbenchSnapshotStore",
     "SCHEMA_VERSION",
     "build_snapshot",
+    "project_patient_snapshot_payload",
 ]
