@@ -207,7 +207,9 @@ None.
         "visual_qa_passed": False,
         "visual_qa_errors": [],
     }
-    assert by_code["UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE"].requires_user_authorization
+    assert by_code[
+        "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE"
+    ].requires_user_authorization
     assert by_code["UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE"].authorization_question
     assert audit.facts["newest_direct_comparator_year"] == 2018
     assert audit.facts["manuscript"]["thin_sections"] == [
@@ -381,6 +383,9 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
     assert audit.facts["primary_figure"]["expected_adjustment_label"] == "adjusted"
     assert audit.facts["primary_figure"]["adjustment_covariates"] == ["age", "sex"]
     assert audit.facts["primary_figure"]["adjustment_authority"] == "runtime_receipt"
+    assert audit.facts["primary_covariates"] == ["age", "sex"]
+    assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" in codes
+    assert "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE" not in codes
 
     receipt_path.write_text("{}", encoding="utf-8")
     tampered = build_scientific_maturity_audit(

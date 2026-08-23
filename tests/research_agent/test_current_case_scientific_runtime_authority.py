@@ -381,6 +381,11 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         "landmark_cox_summary.csv",
         "landmark_risk_set_flow.csv",
     }
+    contract = json.loads(
+        (figure_dir / "landmark_survival_suite.figure_contract.json").read_text()
+    )
+    assert contract["panels"][0]["title"].startswith("Unadjusted landmark")
+    assert "direction can differ" in contract["statistics_note"]
 
 
 def test_host_bound_cohort_root_publishes_exact_input_bytes(
