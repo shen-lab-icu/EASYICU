@@ -1,0 +1,18 @@
+[package]
+name = "easyicu-desktop"
+version = "1.0.0"
+description = "Local-first desktop shell for EasyICU"
+authors = ["Haibo Zhu and EasyICU contributors"]
+edition = "2021"
+
+[lib]
+name = "easyicu_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-shell = "2.3.5"
+uuid = { version = "1.18.1", features = ["v4"] }
