@@ -39,8 +39,9 @@ an explicit namespace, do not `git mv` function bodies).
 
 from __future__ import annotations
 
-from pathlib import Path
+import math
 import re
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +113,136 @@ def test_escaping_owner_loads_before_every_consumer() -> None:
     assert scripts[0] == "html-escape.js", (
         f"html-escape.js must be the first js/ script; found {scripts[0]}"
     )
+
+
+def test_copilot_product_labels_have_one_shared_owner() -> None:
+    owner = STATIC / "js" / "product-labels.js"
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert owner.is_file()
+    assert "window.EU_PRODUCT_LABELS" in owner.read_text(encoding="utf-8")
+    title_consumers = []
+    for path in sorted((STATIC / "js").glob("screens-*.js")):
+        source = path.read_text(encoding="utf-8")
+        owns_project_flow = re.search(
+            r"\b(?:project_title|study_context_id|data-localdraft|bindProject)\b",
+            source,
+        )
+        reads_title = re.search(
+            r"\b(?:context|row|project|session)\.(?:title|project_title)\b",
+            source,
+        )
+        if owns_project_flow and reads_title:
+            title_consumers.append(path)
+
+    assert title_consumers, "project/session title consumers should be discoverable"
+    offenders = [
+        path.name
+        for path in title_consumers
+        if "EU_PRODUCT_LABELS.projectTitle" not in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], f"project title consumers bypass the shared owner: {offenders}"
+    owner_pos = index.index("js/product-labels.js?")
+    for path in title_consumers:
+        assert owner_pos < index.index(f"js/{path.name}")
+
+
+def test_persisted_default_title_producers_are_covered_by_product_label_owner() -> None:
+    owner = (STATIC / "js" / "product-labels.js").read_text(encoding="utf-8")
+    copilot_defaults = owner.split(
+        "const COPILOT_DEFAULT_TITLES = new Set([", 1
+    )[1].split("]);", 1)[0]
+    project_defaults = owner.split(
+        "const PROJECT_DEFAULT_TITLES = new Set([", 1
+    )[1].split("]);", 1)[0]
+    covered_defaults = set(
+        re.findall(r"'([^']+)'", copilot_defaults + project_defaults)
+    )
+    context_store = (STATIC / "js" / "study-context.js").read_text(
+        encoding="utf-8"
+    )
+    guided_store = (
+        ROOT / "src" / "easyicu" / "webserver" / "guided_sessions.py"
+    ).read_text(encoding="utf-8")
+    context_default = re.search(
+        r"title:\s*metadataText\(raw\.title,\s*160\).*?\|\|\s*'([^']+)'",
+        context_store,
+    )
+    guided_default = re.search(
+        r'body\.get\("title"\).*?,\s*"([^"]+)",\s*max_len=90',
+        guided_store,
+        re.S,
+    )
+    assert context_default, "StudyContext persisted-title default should be discoverable"
+    assert guided_default, "Guided persisted-title default should be discoverable"
+
+    producer_defaults = {context_default.group(1), guided_default.group(1)}
+    missing = sorted(producer_defaults - covered_defaults)
+    assert missing == [], f"persisted default titles missing from product-labels.js: {missing}"
+
+
+def _oklch_to_linear_rgb(value: str) -> tuple[float, float, float]:
+    match = re.fullmatch(
+        r"oklch\(([\d.]+)%\s+([\d.]+)\s+([\d.]+)\)", value.strip()
+    )
+    assert match, f"unsupported OKLCH token: {value}"
+    lightness, chroma, hue = (float(part) for part in match.groups())
+    lightness /= 100
+    angle = math.radians(hue)
+    a = chroma * math.cos(angle)
+    b = chroma * math.sin(angle)
+    l_ = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3
+    m_ = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3
+    s_ = (lightness - 0.0894841775 * a - 1.2914855480 * b) ** 3
+    channels = (
+        4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_,
+        -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_,
+        -0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_,
+    )
+    return tuple(max(0.0, min(1.0, channel)) for channel in channels)
+
+
+def _relative_luminance(rgb: tuple[float, float, float]) -> float:
+    return sum(weight * channel for weight, channel in zip((0.2126, 0.7152, 0.0722), rgb))
+
+
+def _contrast(foreground: str, background: str) -> float:
+    values = sorted(
+        (
+            _relative_luminance(_oklch_to_linear_rgb(foreground)),
+            _relative_luminance(_oklch_to_linear_rgb(background)),
+        ),
+        reverse=True,
+    )
+    return (values[0] + 0.05) / (values[1] + 0.05)
+
+
+def test_runtime_appearance_tokens_meet_contrast_and_status_hierarchy() -> None:
+    tokens = (STATIC / "css" / "tokens.css").read_text(encoding="utf-8")
+    tweaks = (STATIC / "js" / "tweaks.js").read_text(encoding="utf-8")
+    properties = dict(re.findall(r"--([\w-]+):\s*([^;]+);", tokens))
+
+    for name in ("accent", "ok", "warn", "bad", "info"):
+        ratio = _contrast(properties[name], properties[f"{name}-soft"])
+        assert ratio >= 4.5, f"--{name} is only {ratio:.2f}:1 on --{name}-soft"
+
+    luminance = {
+        name: _relative_luminance(_oklch_to_linear_rgb(properties[name]))
+        for name in ("ok", "warn", "bad")
+    }
+    assert luminance["ok"] / luminance["warn"] >= 1.4
+    assert luminance["warn"] / luminance["bad"] >= 1.4
+
+    # The appearance editor may rotate hue, but must preserve the accessible
+    # accent lightness/chroma contract owned by tokens.css.
+    assert "`oklch(52% 0.07 ${h})`" in tweaks
+    runtime_accent = "oklch(52% 0.07 205)"
+    assert _contrast(runtime_accent, properties["accent-soft"]) >= 4.5
+
+
+def test_idea_history_preserves_full_title_for_truncated_rows() -> None:
+    ideas = (STATIC / "js" / "screens-ideas.js").read_text(encoding="utf-8")
+    assert 'data-idea-record-key="${esc(r.id)}" title="${esc(r.title)}"' in ideas
 
 
 # A categorical palette is an array literal holding three or more colours.

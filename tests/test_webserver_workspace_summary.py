@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -10,10 +11,11 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from easyicu import concept_catalog
-from easyicu.webserver.app import app
+from easyicu.webserver.app import ContentHashedStaticFiles, STATIC_DIR, app
 from easyicu.webserver import agent_runs
 from easyicu.webserver import cohort_review
 from easyicu.webserver import copilot_sessions
@@ -513,17 +515,60 @@ def _add_sofa1_module(root: Path) -> None:
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-def test_native_static_assets_are_served_no_store() -> None:
+def test_native_static_assets_revalidate_with_etag_and_support_gzip() -> None:
     client = TestClient(app)
 
-    js_res = client.get("/js/screens-viz.js")
+    js_res = client.get("/js/screens-viz.js", headers={"Accept-Encoding": "gzip"})
     css_res = client.get("/css/screens.css")
+    index_res = client.get("/")
 
     assert js_res.status_code == 200
     assert css_res.status_code == 200
-    assert js_res.headers["cache-control"] == "no-store"
-    assert css_res.headers["cache-control"] == "no-store"
-    assert js_res.headers["pragma"] == "no-cache"
+    assert js_res.headers["cache-control"] == "no-cache"
+    assert css_res.headers["cache-control"] == "no-cache"
+    assert index_res.headers["cache-control"] == "no-store"
+    assert js_res.headers["content-encoding"] == "gzip"
+    assert "accept-encoding" in js_res.headers["vary"].lower()
+    expected_etag = hashlib.sha256(
+        (STATIC_DIR / "js" / "screens-viz.js").read_bytes()
+    ).hexdigest()
+    assert js_res.headers["etag"] == f'"{expected_etag}"'
+
+    unchanged = client.get(
+        "/js/screens-viz.js",
+        headers={"If-None-Match": js_res.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+
+
+def test_static_etag_refreshes_when_file_changes_while_server_is_running(
+    tmp_path: Path,
+) -> None:
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    asset = static_root / "asset.css"
+    asset.write_text("a{color:red}", encoding="utf-8")
+    static_app = FastAPI()
+    static_app.mount(
+        "/",
+        ContentHashedStaticFiles(directory=str(static_root), html=False),
+        name="static-test",
+    )
+    client = TestClient(static_app)
+
+    first = client.get("/asset.css")
+    asset.write_text("a{color:tan}", encoding="utf-8")
+    changed = client.get(
+        "/asset.css",
+        headers={"If-None-Match": first.headers["etag"]},
+    )
+
+    assert changed.status_code == 200
+    assert changed.text == "a{color:tan}"
+    assert changed.headers["etag"] != first.headers["etag"]
+    assert changed.headers["etag"] == (
+        f'"{hashlib.sha256(asset.read_bytes()).hexdigest()}"'
+    )
 
 
 def test_settings_update_and_reset_are_local_and_whitelisted(

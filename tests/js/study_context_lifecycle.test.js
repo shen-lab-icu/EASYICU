@@ -327,6 +327,7 @@ require(path.resolve(process.argv[2]));
   assert.deepEqual(saveBodies[saveCount], { id: dirty.id }, 'clean activation must send an id-only merge');
   assert.equal(activated.current_stage, 'review', 'activation must not roll back a server-advanced stage');
 
+  require(path.resolve(process.argv[6]));
   require(path.resolve(process.argv[5]));
   global.EU_WORKSPACE_REGISTRY = {
     active_path: '/exports/active-single',

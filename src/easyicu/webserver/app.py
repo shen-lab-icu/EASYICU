@@ -7,12 +7,17 @@ and their backing services.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import Headers
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.responses import FileResponse
+from starlette.staticfiles import NotModifiedResponse
 
 from easyicu.webserver.host_security import (
     PROXY_HEADERS,
@@ -55,6 +60,36 @@ from easyicu.webserver.routes.workspaces import router as workspaces_router
 STATIC_DIR = Path(__file__).with_name("static")
 
 
+class ContentHashedStaticFiles(StaticFiles):
+    """Serve packaged assets with ETags derived from bytes, not mtimes."""
+
+    def __init__(self, *, directory: str, html: bool) -> None:
+        super().__init__(directory=directory, html=html)
+        root = Path(directory)
+        self._content_etags = {
+            path.resolve(): (
+                (path.stat().st_mtime_ns, path.stat().st_size),
+                f'"{hashlib.sha256(path.read_bytes()).hexdigest()}"',
+            )
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        request_headers = Headers(scope=scope)
+        response = FileResponse(full_path, status_code=status_code, stat_result=stat_result)
+        key = Path(full_path).resolve()
+        stamp = (stat_result.st_mtime_ns, stat_result.st_size)
+        cached = self._content_etags.get(key)
+        if cached is None or cached[0] != stamp:
+            cached = (stamp, f'"{hashlib.sha256(key.read_bytes()).hexdigest()}"')
+            self._content_etags[key] = cached
+        response.headers["ETag"] = cached[1]
+        if self.is_not_modified(response.headers, request_headers):
+            return NotModifiedResponse(response.headers)
+        return response
+
+
 def _package_version() -> str:
     """Single source of truth for the version reported by the web API.
 
@@ -72,6 +107,7 @@ def _package_version() -> str:
 
 
 app = FastAPI(title="EasyICU", version=_package_version())
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 @app.on_event("startup")
@@ -172,9 +208,17 @@ async def native_ui_security_headers(request: Request, call_next):
         ),
     )
     path = request.url.path
-    if path in {"/", "/index.html"} or path.startswith(("/js/", "/css/")):
+    if path in {"/", "/index.html"}:
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
+    elif path.startswith(("/js/", "/css/", "/vendor/")):
+        # StaticFiles provides content-derived ETags. ``no-cache`` permits the
+        # browser to retain bytes while requiring revalidation, so unchanged
+        # assets can return 304 without pretending these unhashed filenames are
+        # immutable.
+        response.headers["Cache-Control"] = "no-cache"
+        if "Pragma" in response.headers:
+            del response.headers["Pragma"]
     return response
 
 
@@ -200,7 +244,11 @@ app.include_router(job_lifecycle_router)
 
 
 # Static frontend last, mounted at root, with HTML serving so "/" -> index.html.
-app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+app.mount(
+    "/",
+    ContentHashedStaticFiles(directory=str(STATIC_DIR), html=True),
+    name="static",
+)
 
 # No ``main()`` here on purpose. This module used to carry a second entry point
 # that bound port 8502 while the real console script (``easyicu-webapp`` ->
