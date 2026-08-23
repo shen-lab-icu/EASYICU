@@ -62,6 +62,56 @@ def test_policy_preserves_metadata_but_filters_uncited_numeric_result() -> None:
     assert result.removed_result_sentences == ("Mortality was 20%.",)
 
 
+def test_policy_keeps_registered_numeric_fact_for_later_provenance_binding() -> None:
+    sentence = "Mortality was 20% {evidence:outcome_rate}."
+
+    result = filter_evidence_bound_scaffold(
+        sentence,
+        resolve_claim=_resolver,
+        resolve_evidence=lambda ref: ref == "outcome_rate",
+    )
+
+    assert result.scaffold == sentence + "\n"
+    assert result.filtered_sentences == ()
+
+
+def test_policy_rejects_numeric_fact_with_unregistered_evidence() -> None:
+    sentence = "Mortality was 20% {evidence:unregistered}."
+
+    result = filter_evidence_bound_scaffold(
+        sentence,
+        resolve_claim=_resolver,
+        resolve_evidence=lambda _ref: False,
+    )
+
+    assert result.scaffold == "\n"
+    assert result.removed_result_sentences == (sentence,)
+
+
+def test_registered_evidence_does_not_bypass_qualitative_claim_authority() -> None:
+    sentence = "Patients had higher mortality {evidence:outcome_rate}."
+
+    result = filter_evidence_bound_scaffold(
+        sentence,
+        resolve_claim=_resolver,
+        resolve_evidence=lambda ref: ref == "outcome_rate",
+    )
+
+    assert result.scaffold == "\n"
+    assert result.unsupported_scientific_claim_sentences == (sentence,)
+
+
+def test_exact_literature_key_keeps_only_nonnumeric_background_context() -> None:
+    context = "Sepsis-3 mortality remains clinically important [@paper_2024]."
+    numeric = "Prior mortality was 20% [@paper_2024]."
+
+    kept = filter_evidence_bound_scaffold(context, resolve_claim=_resolver)
+    blocked = filter_evidence_bound_scaffold(numeric, resolve_claim=_resolver)
+
+    assert kept.scaffold == context + "\n"
+    assert blocked.scaffold == "\n"
+
+
 @pytest.mark.parametrize(
     "sentence",
     [
