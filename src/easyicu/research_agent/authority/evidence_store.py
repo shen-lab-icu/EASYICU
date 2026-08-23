@@ -3001,9 +3001,16 @@ class EvidenceStore:
 
     def enforce_evidence_bound_scaffold(self, scaffold: str) -> tuple[str, List[str]]:
         """Apply the manuscript claim policy and enforce this store's mode."""
+        verified_ids = {record.evidence_id for record in self.verified_records()}
+
+        def resolve_evidence(ref: str) -> bool:
+            record = self.get(ref)
+            return record is not None and record.evidence_id in verified_ids
+
         result = filter_evidence_bound_scaffold(
             scaffold,
             resolve_claim=self._scientific_claim_by_ref,
+            resolve_evidence=resolve_evidence,
         )
         if result.filtered_sentences and (
             self.enforcement_mode is EvidenceEnforcementMode.STRICT

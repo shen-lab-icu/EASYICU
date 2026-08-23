@@ -15,6 +15,7 @@ from typing import Callable, Optional
 from .scientific_claims import ScientificClaim
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
+EvidenceResolver = Callable[[str], bool]
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ _HEADING_RESULT_CONTEXT_RE = re.compile(
     re.I,
 )
 _HEADING_NUMERIC_RE = re.compile(r"(?:\d|%|\bp\s*[<=>])", re.I)
+_VERSIONED_TERM_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*-\d+\b")
 _HEADING_RESULT_VERB_RE = re.compile(
     r"\b(?:was|were|had|showed|demonstrated|differ(?:ed|s)?|varied)\b",
     re.I,
@@ -180,6 +182,40 @@ def _looks_result_like_sentence(sentence: str) -> bool:
     return bool(_RESULT_TOKEN_RE.search(prose))
 
 
+def _evidence_refs(sentence: str) -> tuple[str, ...]:
+    refs: list[str] = []
+    for match in _VALID_EVIDENCE_TOKEN_RE.finditer(sentence):
+        body = match.group(0).strip("{}").strip()
+        for item in body.split(","):
+            ref = item.strip()
+            if ref.lower().startswith("evidence:"):
+                ref = ref.split(":", 1)[1].strip()
+            if ref:
+                refs.append(ref)
+    return tuple(dict.fromkeys(refs))
+
+
+def _has_registered_evidence(
+    sentence: str,
+    *,
+    resolve_evidence: EvidenceResolver | None,
+) -> bool:
+    if resolve_evidence is None:
+        return False
+    refs = _evidence_refs(sentence)
+    return bool(refs) and any(resolve_evidence(ref) for ref in refs)
+
+
+def _has_nonnumeric_literature_context(sentence: str) -> bool:
+    if _LITERATURE_CITATION_MARKER_RE.search(sentence) is None:
+        return False
+    prose = _VALID_EVIDENCE_TOKEN_RE.sub(
+        "", _LITERATURE_CITATION_MARKER_RE.sub("", sentence)
+    )
+    prose = _VERSIONED_TERM_RE.sub("", prose)
+    return _HEADING_NUMERIC_RE.search(prose) is None
+
+
 def _split_sentences(text: str) -> list[str]:
     parts = [
         part.strip()
@@ -221,7 +257,7 @@ def _heading_requires_evidence(content: str) -> bool:
     # identify the study coordinate; their suffix is not a reported numeric
     # result.  Any surrounding assertion ("was higher", "20%") remains caught
     # by the unchanged assertion and numeric checks.
-    numeric_semantic = re.sub(r"\b[A-Za-z][A-Za-z0-9]*-\d+\b", "", semantic)
+    numeric_semantic = _VERSIONED_TERM_RE.sub("", semantic)
     return bool(
         _HEADING_NUMERIC_RE.search(numeric_semantic)
         and _HEADING_RESULT_CONTEXT_RE.search(semantic)
@@ -232,6 +268,7 @@ def filter_evidence_bound_scaffold(
     scaffold: str,
     *,
     resolve_claim: ClaimResolver,
+    resolve_evidence: EvidenceResolver | None = None,
 ) -> ScaffoldPolicyResult:
     """Filter unsupported result prose while preserving Markdown structure."""
 
@@ -298,6 +335,18 @@ def filter_evidence_bound_scaffold(
                 filtered_claims.append(rejected)
                 continue
             if _looks_result_like_sentence(sentence):
+                # Registered evidence may authorize a numeric fact; the later
+                # numeric-provenance gate still binds every value to its exact
+                # owner and refuses foreign or ambiguous citations.  Exact
+                # literature keys may authorize nonnumeric background context,
+                # while numeric literature claims remain fail-closed.  Neither
+                # route bypasses the qualitative scientific-claim gate above.
+                if _has_registered_evidence(
+                    sentence,
+                    resolve_evidence=resolve_evidence,
+                ) or _has_nonnumeric_literature_context(sentence):
+                    kept.append(sentence.strip())
+                    continue
                 rejected = sentence.strip()
                 removed.append(rejected)
                 filtered_claims.append(rejected)
