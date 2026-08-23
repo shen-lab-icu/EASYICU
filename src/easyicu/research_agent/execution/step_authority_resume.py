@@ -36,6 +36,10 @@ from ..authority.step_runtime import (
     select_explicit_step_capsule_for_targeted_resume,
 )
 from ..schema import AnalysisStep, ResearchContext
+from ..orchestration.resume import (
+    load_quarantined_concept_draft,
+    quarantine_findings_require_code_repair,
+)
 from .concept_audit import (
     verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
 )
@@ -370,8 +374,19 @@ def _adopt_resume_context(
         and isinstance(prior_step_record, Mapping)
         and prior_step_record.get("quarantined_requires_repair") is True
     ):
-        step_record["step_authority_capsule_cache_miss"] = "quarantine_not_migrated"
-        step_attempt_state.selected_resume_capsule = None
+        quarantine_draft = load_quarantined_concept_draft(
+            run_dir=run_dir,
+            step_id=step.step_id,
+        )
+        if quarantine_draft is None or quarantine_findings_require_code_repair(
+            list(quarantine_draft.findings)
+        ):
+            step_record["step_authority_capsule_cache_miss"] = (
+                "quarantine_not_migrated"
+            )
+            step_attempt_state.selected_resume_capsule = None
+        else:
+            step_record["step_authority_control_plane_quarantine_ignored"] = True
     return coder_context
 
 
