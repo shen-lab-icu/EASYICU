@@ -31,6 +31,10 @@ from easyicu.webserver import (
     study_contexts,
 )
 from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
+from easyicu.webserver.copilot_data_workbench import (
+    CopilotDataWorkbenchError,
+    CopilotDataWorkbenchSnapshotStore,
+)
 
 from .contracts import (
     MAX_MESSAGE_CHARS,
@@ -96,6 +100,9 @@ class PiCopilotService:
         extension_registry: Optional[ExtensionRegistry] = None,
         replay_store: Optional[PiConversationReplayStore] = None,
         review_snapshot_store: Optional[DataPackageReviewSnapshotStore] = None,
+        data_workbench_snapshot_store: Optional[
+            CopilotDataWorkbenchSnapshotStore
+        ] = None,
         codex_gateway_pool: Optional[CodexPiGatewayPool] = None,
     ) -> None:
         self.store_path = (
@@ -130,6 +137,16 @@ class PiCopilotService:
                 if store_path is None
                 else self.store_path.with_name(
                     f"{self.store_path.stem}.data-package-reviews"
+                )
+            )
+        )
+        self.data_workbench_snapshot_store = (
+            data_workbench_snapshot_store
+            or CopilotDataWorkbenchSnapshotStore(
+                None
+                if store_path is None
+                else self.store_path.with_name(
+                    f"{self.store_path.stem}.copilot-data-workbench"
                 )
             )
         )
@@ -1297,6 +1314,7 @@ class PiCopilotService:
                     and projected.get("code")
                     in {
                         "easyicu_extraction_submitted",
+                        "easyicu_demo_source_preparation_submitted",
                         "easyicu_run_submitted",
                         "easyicu_full_run_submitted",
                     }
@@ -1798,6 +1816,46 @@ class PiCopilotService:
                 "reportable": False,
                 "human_signoff": "not_applicable",
                 "analysis_results_withheld": True,
+            },
+        }
+
+    def get_data_workbench_snapshot(
+        self,
+        *,
+        project_id: str,
+        snapshot_sha256: str,
+    ) -> Dict[str, Any]:
+        """Open one exact project-scoped browser-only Data Workbench snapshot."""
+
+        clean = self._assert_project_initialized(project_id)
+        try:
+            snapshot = self.data_workbench_snapshot_store.load(
+                project_id=clean,
+                digest=str(snapshot_sha256 or ""),
+            )
+        except CopilotDataWorkbenchError as exc:
+            status_code = (
+                404
+                if exc.code == "copilot_data_workbench_snapshot_not_found"
+                else 409
+            )
+            raise PiCopilotError(
+                exc.code,
+                exc.message,
+                status_code=status_code,
+                details=exc.details,
+            ) from exc
+        return {
+            "ok": True,
+            "view": str(snapshot.get("view") or ""),
+            "payload": self._browser_artifact_payload(snapshot.get("payload") or {}),
+            "privacy": dict(snapshot.get("privacy") or {}),
+            "governance": {
+                "claim_ceiling": "descriptive_review",
+                "reportable": False,
+                "human_signoff": "not_applicable",
+                "browser_only": True,
+                "model_visible_patient_payload": False,
             },
         }
 

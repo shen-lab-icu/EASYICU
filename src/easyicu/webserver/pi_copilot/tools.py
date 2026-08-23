@@ -20,11 +20,21 @@ from easyicu.webserver import (
     agent_pipeline_runs,
     agent_runs,
     capabilities,
+    cohort_review,
+    crossdb_review,
+    dataio,
+    demo_sources,
     jobs,
     literature_authority,
+    patient_drilldown,
     settings,
     sources,
     study_contexts,
+)
+from easyicu.webserver.copilot_data_workbench import (
+    CopilotDataWorkbenchError,
+    CopilotDataWorkbenchSnapshotStore,
+    build_snapshot as build_data_workbench_snapshot,
 )
 from easyicu.webserver.ideas import mining as idea_mining
 
@@ -61,6 +71,9 @@ READ_TOOLS = frozenset(
         "easyicu_list_data_sources",
         "easyicu_list_source_concepts",
         "easyicu_inspect_data_package",
+        "easyicu_review_cohort",
+        "easyicu_review_patient_timeline",
+        "easyicu_compare_data_sources",
         "easyicu_inspect_workflow",
         "easyicu_inspect_context",
         "easyicu_inspect_plan",
@@ -86,6 +99,7 @@ CONTROL_TOOLS = frozenset(
         "easyicu_search_literature",
         "easyicu_prepare_idea_handoff",
         "easyicu_accept_idea_handoff",
+        "easyicu_prepare_demo_source",
         "easyicu_start_extraction",
         "easyicu_run",
         "easyicu_cancel",
@@ -744,6 +758,520 @@ def _inspect_data_package(
                 "label": "Data package review",
                 "media_type": "application/json",
             },
+        },
+    )
+
+
+def _project_id_for_workbench(context: ToolExecutionContext) -> str:
+    project_id = str(context.session.project_id or "").strip()
+    if not project_id:
+        raise PiCopilotError(
+            "pi_project_required",
+            "A bound Copilot project is required for a Data Workbench view.",
+        )
+    return project_id
+
+
+def _registered_source_choice(
+    context: ToolExecutionContext, requested_source_id: Any = None
+) -> Dict[str, Any]:
+    """Resolve an exact registered export while keeping its path host-side."""
+
+    registry = sources.load_registry()
+    rows = [
+        row
+        for row in (registry.get("sources") or [])
+        if isinstance(row, Mapping) and row.get("ok") and row.get("id")
+    ]
+    requested = str(requested_source_id or "").strip()
+    if requested:
+        source = next(
+            (row for row in rows if str(row.get("id") or "") == requested), None
+        )
+    else:
+        study = _bound_context(context.session.binding) or {}
+        bound = study.get("data_source")
+        bound = bound if isinstance(bound, Mapping) else {}
+        bound_path = str(bound.get("path") or "").strip()
+        active_path = str(registry.get("active_path") or "").strip()
+        source = next(
+            (
+                row
+                for row in rows
+                if bound_path and str(row.get("path") or "").strip() == bound_path
+            ),
+            None,
+        )
+        if source is None:
+            source = next(
+                (
+                    row
+                    for row in rows
+                    if active_path
+                    and str(row.get("path") or "").strip() == active_path
+                ),
+                None,
+            )
+    if source is None:
+        return {}
+    if not str(source.get("path") or "").strip():
+        return {}
+    return dict(source)
+
+
+def _data_workbench_resource(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "kind": "data_workbench_snapshot",
+        "view": str(snapshot.get("view") or "")[:80],
+        "snapshot_sha256": str(snapshot.get("snapshot_sha256") or "")[:64],
+        "label": str(snapshot.get("title") or "Data Workbench")[:160],
+        "media_type": "application/json",
+    }
+
+
+def _persist_workbench_snapshot(
+    context: ToolExecutionContext,
+    *,
+    view: str,
+    title: str,
+    payload: Mapping[str, Any],
+    privacy: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    try:
+        snapshot = build_data_workbench_snapshot(
+            project_id=_project_id_for_workbench(context),
+            view=view,
+            title=title,
+            payload=payload,
+            privacy=privacy,
+        )
+        CopilotDataWorkbenchSnapshotStore().persist(snapshot)
+    except CopilotDataWorkbenchError as exc:
+        raise PiCopilotError(
+            exc.code,
+            exc.message,
+            status_code=409,
+            details=exc.details,
+        ) from exc
+    return _data_workbench_resource(snapshot)
+
+
+def _requested_workbench_features(
+    payload: Mapping[str, Any], requested: Any
+) -> list[str]:
+    if requested in (None, []):
+        return []
+    if not isinstance(requested, list):
+        raise PiCopilotError(
+            "pi_workbench_features_invalid",
+            "Data Workbench features must be a bounded list of exact concept or module:column identifiers.",
+        )
+    raw = [str(value or "").strip() for value in requested if str(value or "").strip()]
+    if len(raw) > 8:
+        raise PiCopilotError(
+            "pi_workbench_features_too_many",
+            "Select at most eight features for one conversational view.",
+        )
+    catalog = payload.get("feature_catalog")
+    catalog = catalog if isinstance(catalog, Mapping) else {}
+    features = [
+        feature
+        for module in (catalog.get("modules") or [])
+        if isinstance(module, Mapping)
+        for feature in (module.get("features") or [])
+        if isinstance(feature, Mapping) and feature.get("id")
+    ]
+    by_id = {str(row.get("id") or "").lower(): str(row.get("id")) for row in features}
+    by_column: Dict[str, list[str]] = {}
+    for row in features:
+        column = str(row.get("column") or "").lower()
+        by_column.setdefault(column, []).append(str(row.get("id")))
+    resolved: list[str] = []
+    unknown: list[str] = []
+    ambiguous: Dict[str, list[str]] = {}
+    for value in raw:
+        lower = value.lower()
+        match = by_id.get(lower)
+        if match:
+            if match not in resolved:
+                resolved.append(match)
+            continue
+        candidates = by_column.get(lower) or []
+        if len(candidates) == 1:
+            if candidates[0] not in resolved:
+                resolved.append(candidates[0])
+        elif len(candidates) > 1:
+            ambiguous[value] = candidates[:8]
+        else:
+            unknown.append(value)
+    if unknown or ambiguous:
+        raise PiCopilotError(
+            "pi_workbench_feature_not_resolved",
+            "One or more requested features do not resolve uniquely in this registered export.",
+            details={"unknown": unknown, "ambiguous": ambiguous},
+        )
+    return resolved
+
+
+def _review_cohort(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open cohort attrition and selected-feature distributions in Copilot."""
+
+    _require_args(params, allowed=("source_id", "features"))
+    source = _registered_source_choice(context, params.get("source_id"))
+    if not source:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_not_registered",
+            summary="Choose a validated registered EasyICU export before reviewing its cohort.",
+            owner="easyicu.webserver.sources",
+        )
+    source_path = str(source.get("path") or "")
+    try:
+        base = cohort_review.cohort_review_summary({"source_path": source_path})
+        feature_ids = _requested_workbench_features(base, params.get("features"))
+        payload = (
+            cohort_review.cohort_review_summary(
+                {"source_path": source_path, "selected_features": feature_ids}
+            )
+            if feature_ids
+            else base
+        )
+        from easyicu.webserver.patient_drilldown.eligibility import (
+            _eligibility_flow_payload,
+        )
+
+        description = dataio.describe_export_source(source_path)
+        eligibility = _eligibility_flow_payload(
+            Path(source_path), description, dict(payload.get("summary") or {})
+        )
+    except cohort_review.CohortReviewError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=str((exc.detail or {}).get("error") or "cohort_review_blocked"),
+            summary="The Cohort Review owner could not produce this aggregate view.",
+            owner="easyicu.webserver.cohort_review",
+            details={
+                "reason_code": str((exc.detail or {}).get("error") or "")[:160]
+            },
+        )
+    view = "feature_distribution" if feature_ids else "cohort_summary"
+    title = "Feature distribution" if feature_ids else "Cohort and filter flow"
+    resource = _persist_workbench_snapshot(
+        context,
+        view=view,
+        title=title,
+        payload={
+            "source": payload.get("source"),
+            "summary": payload.get("summary"),
+            "eligibility_flow": eligibility,
+            "groups": payload.get("groups"),
+            "feature_catalog": payload.get("feature_catalog"),
+            "feature_selection": payload.get("feature_selection"),
+            "selected_feature_distributions": payload.get(
+                "selected_feature_distributions"
+            ),
+            "coverage": payload.get("coverage"),
+            "quality": payload.get("quality"),
+            "survival_analysis": payload.get("survival_analysis"),
+            "blocked_features": payload.get("blocked_features"),
+            "provenance": payload.get("provenance"),
+        },
+        privacy=payload.get("privacy") if isinstance(payload.get("privacy"), Mapping) else {},
+    )
+    summary = payload.get("summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    cohort_size = summary.get("cohort_size")
+    return _result(
+        context,
+        status="ok",
+        code=(
+            "easyicu_feature_distribution_ready"
+            if feature_ids
+            else "easyicu_cohort_review_ready"
+        ),
+        summary=(
+            f"Prepared a path-free conversational Data Workbench view for {cohort_size or 0} ICU stays"
+            + (f" and {len(feature_ids)} selected features." if feature_ids else ".")
+        ),
+        owner="easyicu.webserver.cohort_review",
+        details={
+            "source_id": str(source.get("id") or "")[:80],
+            "cohort_size": cohort_size,
+            "selected_features": feature_ids,
+            "resource": resource,
+        },
+    )
+
+
+def _review_patient_timeline(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open one bounded pseudonymous patient timeline without model-visible rows."""
+
+    _require_args(params, allowed=("source_id", "entity_ordinal"))
+    source = _registered_source_choice(context, params.get("source_id"))
+    if not source:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_not_registered",
+            summary="Choose a validated registered EasyICU export before opening a patient timeline.",
+            owner="easyicu.webserver.sources",
+        )
+    ordinal = params.get("entity_ordinal", 1)
+    if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 1:
+        raise PiCopilotError(
+            "pi_entity_ordinal_invalid",
+            "The patient timeline requires a positive pseudonymous entity ordinal.",
+        )
+    page_size = 24
+    page = ((ordinal - 1) // page_size) + 1
+    source_path = str(source.get("path") or "")
+    try:
+        navigation = patient_drilldown.patient_review_entity_page(
+            {
+                "source_path": source_path,
+                "entity_page": page,
+                "entity_page_size": page_size,
+            }
+        )
+        options = ((navigation.get("navigation") or {}).get("options") or [])
+        selected = next(
+            (row for row in options if int(row.get("ordinal") or 0) == ordinal), None
+        )
+        if not selected or not selected.get("ref"):
+            raise patient_drilldown.PatientReviewError(
+                {"error": "unknown_entity_ordinal"}
+            )
+        payload = patient_drilldown.patient_review_drilldown(
+            {"source_path": source_path, "entity_ref": selected["ref"]}
+        )
+    except patient_drilldown.PatientReviewError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=str((exc.detail or {}).get("error") or "patient_review_blocked"),
+            summary="The Patient Review owner could not open that pseudonymous entity timeline.",
+            owner="easyicu.webserver.patient_drilldown",
+        )
+    resource = _persist_workbench_snapshot(
+        context,
+        view="patient_timeline",
+        title=f"Patient timeline · Entity {ordinal}",
+        payload={
+            "source": payload.get("source"),
+            "summary": payload.get("summary"),
+            "eligibility_flow": payload.get("eligibility_flow"),
+            "selected": payload.get("selected"),
+            "time_lanes": payload.get("time_lanes"),
+            "patient_overview": payload.get("patient_overview"),
+            "trajectory_review": payload.get("trajectory_review"),
+            "quality_metrics": payload.get("quality_metrics"),
+            "blocked_features": payload.get("blocked_features"),
+            "provenance": payload.get("provenance"),
+        },
+        privacy=payload.get("privacy") if isinstance(payload.get("privacy"), Mapping) else {},
+    )
+    lanes = payload.get("time_lanes")
+    lane_count = len(lanes) if isinstance(lanes, list) else 0
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_patient_timeline_ready",
+        summary=(
+            f"Prepared a bounded browser-only timeline for pseudonymous Entity {ordinal} "
+            f"with {lane_count} available time lanes. Direct identifiers, raw rows, "
+            "timestamps, and host locations stayed inside the browser-only boundary."
+        ),
+        owner="easyicu.webserver.patient_drilldown",
+        details={
+            "source_id": str(source.get("id") or "")[:80],
+            "entity_ordinal": ordinal,
+            "available_time_lane_count": lane_count,
+            "resource": resource,
+        },
+    )
+
+
+def _compare_data_sources(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open an aggregate Cross-DB comparison using exact registered source ids."""
+
+    _require_args(params, allowed=("source_ids", "features"), required=("source_ids",))
+    raw_ids = params.get("source_ids")
+    if not isinstance(raw_ids, list):
+        raise PiCopilotError(
+            "pi_crossdb_sources_invalid",
+            "Cross-DB comparison requires a list of registered source ids.",
+        )
+    source_ids = list(dict.fromkeys(str(value or "").strip() for value in raw_ids))
+    source_ids = [value for value in source_ids if value]
+    if len(source_ids) < 2 or len(source_ids) > 6:
+        raise PiCopilotError(
+            "pi_crossdb_source_count_invalid",
+            "Select between two and six registered exports for one Cross-DB view.",
+        )
+    registry = sources.load_registry()
+    registered = {
+        str(row.get("id") or ""): row
+        for row in (registry.get("sources") or [])
+        if isinstance(row, Mapping) and row.get("ok") and row.get("id")
+    }
+    missing = [source_id for source_id in source_ids if source_id not in registered]
+    if missing:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_crossdb_source_not_registered",
+            summary="One or more Cross-DB source ids are not validated registered exports.",
+            owner="easyicu.webserver.sources",
+            details={"missing_source_ids": missing},
+        )
+    paths = [str(registered[source_id].get("path") or "") for source_id in source_ids]
+    try:
+        payload = crossdb_review.crossdb_review_summary({"paths": paths})
+    except crossdb_review.CrossdbReviewError as exc:
+        detail = exc.detail or {}
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "crossdb_review_blocked"),
+            summary="The Cross-DB owner blocked this comparison because its registered exports are not safely comparable.",
+            owner="easyicu.webserver.crossdb_review",
+            details={
+                "source_count": len(source_ids),
+                "compatibility": str(
+                    (detail.get("compatibility_gate") or {}).get("status") or "blocked"
+                )[:80],
+            },
+        )
+    requested_features = params.get("features")
+    if requested_features not in (None, []) and not isinstance(requested_features, list):
+        raise PiCopilotError(
+            "pi_crossdb_features_invalid",
+            "Cross-DB features must be a bounded list of exact feature identifiers.",
+        )
+    if isinstance(requested_features, list) and len(requested_features) > 8:
+        raise PiCopilotError(
+            "pi_crossdb_feature_limit",
+            "Cross-DB comparison accepts at most eight requested features.",
+        )
+    feature_names = {
+        str(value or "").strip().lower()
+        for value in (requested_features or [])[:8]
+        if str(value or "").strip()
+    }
+    distributions = []
+    for module in payload.get("feature_distributions") or []:
+        if not isinstance(module, Mapping):
+            continue
+        rows = [
+            row
+            for row in (module.get("features") or [])
+            if isinstance(row, Mapping)
+            and (not feature_names or str(row.get("feature") or "").lower() in feature_names)
+        ]
+        if not feature_names:
+            rows = rows[:4]
+        if rows:
+            distributions.append({**dict(module), "features": rows})
+        if sum(len(row.get("features") or []) for row in distributions) >= 16:
+            break
+    resource = _persist_workbench_snapshot(
+        context,
+        view="crossdb_comparison",
+        title="Cross-database comparison",
+        payload={
+            "source_count": payload.get("source_count"),
+            "sources": payload.get("sources"),
+            "selection_receipt": payload.get("selection_receipt"),
+            "rows": payload.get("rows"),
+            "availability": payload.get("availability"),
+            "feature_density": payload.get("feature_density"),
+            "feature_distributions": distributions,
+            "shared_modules": payload.get("shared_modules"),
+            "all_modules": payload.get("all_modules"),
+            "compatibility_gate": payload.get("compatibility_gate"),
+            "blocked_features": payload.get("blocked_features"),
+            "provenance": payload.get("provenance"),
+        },
+        privacy=payload.get("privacy") if isinstance(payload.get("privacy"), Mapping) else {},
+    )
+    gate = payload.get("compatibility_gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    shared = payload.get("shared_modules") or []
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_crossdb_comparison_ready",
+        summary=(
+            f"Prepared a descriptive Cross-DB comparison for {len(source_ids)} registered exports "
+            f"with {len(shared)} shared modules. Inferential and matched-cohort claims remain blocked."
+        ),
+        owner="easyicu.webserver.crossdb_review",
+        details={
+            "source_ids": source_ids,
+            "source_count": len(source_ids),
+            "shared_module_count": len(shared),
+            "compatibility": str(gate.get("status") or "")[:80],
+            "resource": resource,
+        },
+    )
+
+
+def _prepare_demo_source(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Start the existing official download -> convert -> export -> register owner."""
+
+    _require_args(params, allowed=("source_id",), required=("source_id",))
+    source_id = str(params.get("source_id") or "").strip()
+    try:
+        source = demo_sources.get_source(source_id)
+    except KeyError:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_demo_source_unknown",
+            summary="Choose one allowlisted official EasyICU demo source id.",
+            owner="easyicu.webserver.demo_sources",
+            details={"allowed_source_ids": list(demo_sources.allowed_source_ids())},
+        )
+    grant_block = _consume_action(context, "extract")
+    if grant_block is not None:
+        return grant_block
+    try:
+        job = jobs.MANAGER.submit(
+            "demo-source-prepare", demo_sources.make_prepare_runner(source.id)
+        )
+    except jobs.JobCapacityError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code="job_capacity_exceeded",
+            summary="Wait for a running local data job to finish before preparing the demo source.",
+            owner="easyicu.webserver.jobs",
+            details={"running": exc.running, "max_running": exc.max_running},
+        )
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_demo_source_preparation_submitted",
+        summary=(
+            "Submitted the existing official demo-source pipeline: download, validate, "
+            "convert, all-module export, and registration will run locally."
+        ),
+        owner="easyicu.webserver.demo_sources",
+        details={
+            "job_id": job.id,
+            "kind": job.kind,
+            "status": job.status,
+            "source_id": source.id,
         },
     )
 
@@ -3736,6 +4264,9 @@ _DISPATCH = {
     "easyicu_list_data_sources": _list_data_sources,
     "easyicu_list_source_concepts": _list_source_concepts,
     "easyicu_inspect_data_package": _inspect_data_package,
+    "easyicu_review_cohort": _review_cohort,
+    "easyicu_review_patient_timeline": _review_patient_timeline,
+    "easyicu_compare_data_sources": _compare_data_sources,
     "easyicu_inspect_workflow": _inspect_workflow,
     "easyicu_inspect_context": _inspect_context,
     "easyicu_inspect_plan": _inspect_plan,
@@ -3754,6 +4285,7 @@ _DISPATCH = {
     "easyicu_search_literature": _search_literature,
     "easyicu_prepare_idea_handoff": _prepare_idea_handoff,
     "easyicu_accept_idea_handoff": _accept_idea_handoff,
+    "easyicu_prepare_demo_source": _prepare_demo_source,
     "easyicu_start_extraction": _start_extraction,
     "easyicu_run": _run,
     "easyicu_resume": _resume,
