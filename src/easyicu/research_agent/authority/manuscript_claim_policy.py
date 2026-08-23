@@ -216,6 +216,45 @@ def _has_nonnumeric_literature_context(sentence: str) -> bool:
     return _HEADING_NUMERIC_RE.search(prose) is None
 
 
+def _canonical_duplicate_claim_token(
+    sentence: str,
+    *,
+    resolve_claim: ClaimResolver,
+) -> str | None:
+    """Collapse exact host prose followed by its duplicate claim token.
+
+    A bounded repair may conservatively emit both the digest's exact rendered
+    sentence and the token that represents it.  Keeping both would duplicate
+    the claim, while rejecting the entire manuscript loses valid host-owned
+    prose.  Canonicalize only an exact normalized text match; any paraphrase or
+    additional assertion remains malformed and fail-closed.
+    """
+
+    matches = list(_SCIENTIFIC_CLAIM_TOKEN_RE.finditer(sentence))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    suffix = sentence[match.end() :].strip()
+    if suffix and suffix not in {".", "!", "?", "。", "！", "？"}:
+        return None
+    claim = resolve_claim(match.group("ref"))
+    if claim is None:
+        return None
+    observed = _VALID_EVIDENCE_TOKEN_RE.sub("", sentence[: match.start()])
+
+    def normalized(value: str) -> str:
+        without_terminal_punctuation = re.sub(
+            r"(?:[.!?。！？]\s*)+$",
+            "",
+            value.strip(),
+        )
+        return " ".join(without_terminal_punctuation.split())
+
+    if normalized(observed) != normalized(claim.render_text()):
+        return None
+    return f"{{claim:{claim.claim_ref}}}"
+
+
 def _split_sentences(text: str) -> list[str]:
     parts = [
         part.strip()
@@ -295,6 +334,21 @@ def filter_evidence_bound_scaffold(
         if not content.strip():
             filtered_lines.append(line)
             continue
+        canonical_line_claim = _canonical_duplicate_claim_token(
+            content,
+            resolve_claim=resolve_claim,
+        )
+        if canonical_line_claim is not None:
+            content = canonical_line_claim
+        elif (
+            _SCIENTIFIC_CLAIM_TOKEN_RE.search(content) is not None
+            and _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(content.strip()) is None
+        ):
+            rejected = content.strip()
+            unsupported_scientific_claims.append(rejected)
+            filtered_claims.append(rejected)
+            filtered_lines.append("")
+            continue
         sentences = _split_sentences(content)
         if (
             len(sentences) == 1
@@ -308,6 +362,12 @@ def filter_evidence_bound_scaffold(
             continue
         kept: list[str] = []
         for sentence in sentences:
+            canonical_claim = _canonical_duplicate_claim_token(
+                sentence,
+                resolve_claim=resolve_claim,
+            )
+            if canonical_claim is not None:
+                sentence = canonical_claim
             if _contains_malformed_authority_placeholder(sentence):
                 rejected = sentence.strip()
                 unsupported_scientific_claims.append(rejected)
