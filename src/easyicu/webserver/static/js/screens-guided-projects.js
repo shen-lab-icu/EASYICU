@@ -14,6 +14,10 @@
     };
   }
 
+  function projectTitle(value, fallback) {
+    return window.EU_PRODUCT_LABELS.projectTitle(value, fallback);
+  }
+
   function projectMeta(row, t) {
     // A Guided draft remains metadata-only storage even after Copilot binds a real
     // StudyContext and Research Agent run.  Do not expose that persistence
@@ -76,7 +80,7 @@
       <div class="gd-sessline">
         <div class="gd-sess draft active" aria-current="true">
           <span class="gd-sess-status" aria-hidden="true"></span>
-          <span class="gd-sess-body"><span class="ss-t">${esc(external.title || external.id)}</span><span class="ss-m">${external.study_context_id ? `${t('Bound StudyContext', '已绑定 StudyContext')} · r${esc(external.study_context_revision == null ? '—' : external.study_context_revision)}` : t('Project selected · setup continues here', '项目已选择 · 在此继续配置')}</span></span>
+          <span class="gd-sess-body"><span class="ss-t">${esc(projectTitle(external.title, external.question || external.id))}</span><span class="ss-m">${external.study_context_id ? `${t('Bound StudyContext', '已绑定 StudyContext')} · r${esc(external.study_context_revision == null ? '—' : external.study_context_revision)}` : t('Project selected · setup continues here', '项目已选择 · 在此继续配置')}</span></span>
           <span class="ss-time">${t('current', '当前')}</span>
         </div>
       </div>` : '';
@@ -89,7 +93,7 @@
             const active = activeId === row.id;
             const configurationMissing = row.configuration_health
               && row.configuration_health.status === 'configuration_missing';
-            const title = row.title || t('Guided study', '研究项目');
+            const title = projectTitle(row.title, row.question || t('Guided study', '研究项目'));
             const meta = projectMeta(row, t);
             const time = fmtRunTime(row.updated_at || row.created_at);
             return `
@@ -158,7 +162,7 @@
         ${rows.length ? `<div class="gds-known-list">${rows.map((row, i) => `
           <button class="gds-known-row" type="button" data-known-project="${i}">
             <span class="gds-known-kind">${row.kind === 'run' ? icon('history', 13) : icon('file', 13)}</span>
-            <span><strong>${esc(row.title)}</strong><small>${esc(row.subtitle)}</small><code>${esc(compactPath(row.project_dir))}</code></span>
+            <span><strong>${esc(projectTitle(row.title, row.question))}</strong><small>${esc(row.subtitle)}</small><code>${esc(compactPath(row.project_dir))}</code></span>
             <span class="gds-known-open">${icon('arrow', 13)}</span>
           </button>`).join('')}</div>` : ''}
       </div>`;

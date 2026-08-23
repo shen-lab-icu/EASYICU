@@ -14,6 +14,7 @@
   const { esc, escAttr: attr } = window.EU_HTML;
   const S = (window.SCREENS = window.SCREENS || {});
   const IDEA = window.EU_GUIDED_IDEA;
+  const projectTitle = (value, fallback) => window.EU_PRODUCT_LABELS.projectTitle(value, fallback);
 
   /* The idea sub-flow owns its own state and reaches the shell only through
      these. Thread and chips are handed over as accessors because the shell
@@ -2687,7 +2688,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function removeLocalGuidedDraft(row) {
     if (!row || !row.id || !window.EU_API || !window.EU_API.removeGuidedDraft) return;
-    const title = row.title || 'Guided draft';
+    const title = projectTitle(row.title, row.question || t('Guided draft', '引导草稿'));
     const ok = window.confirm(t(
       `Remove "${title}" from the Guided draft list? The local project folder will not be deleted.`,
       `从研究引导草稿列表移除“${title}”？本地项目文件夹不会被删除。`,
@@ -2988,16 +2989,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     guidedCopilot = { loading: false, error: null, session, last: result || guidedCopilot.last };
     restoreGuidedSlotsFromSession(session);
     const projectId = String((session && session.draft_id) || (row && row.id) || '').trim();
-    const projectTitle = String(
-      (session && session.project_title) ||
-      (row && (row.title || row.study_id || row.run_label)) ||
-      projectId
-    ).trim();
+    const title = projectTitle(
+      (session && session.project_title) || (row && row.title),
+      (row && (row.question || row.study_id || row.run_label)) || projectId,
+    );
     if (projectId && window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
       if (window.EU_GUIDED_PROJECT_CONTINUITY) {
         window.EU_GUIDED_PROJECT_CONTINUITY.remember(projectId);
       }
-      window.EU_GUIDED_PI.bindProject({ id: projectId, title: projectTitle });
+      window.EU_GUIDED_PI.bindProject({ id: projectId, title });
     }
     renderAside();
     renderSessions();
@@ -3071,7 +3071,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const restoredFlow = restoreGuidedSlotsFromSession(session);
     currentId = 'frontdoor';
     thread = [];
-    const title = (session && session.project_title) || (row && (row.title || row.study_id || row.run_label)) || 'local project';
+    const title = projectTitle(
+      (session && session.project_title) || (row && row.title),
+      (row && (row.question || row.study_id || row.run_label)) || t('Local project', '本地项目'),
+    );
     const path = row && row.project_dir ? compactPath(row.project_dir) : (session && session.project_dir ? compactPath(session.project_dir) : '~/easyicu/projects');
     const nounEn = kind === 'run' ? 'Agent run project' : 'guided draft';
     const nounZh = kind === 'run' ? 'Agent run 项目' : '引导草稿';
@@ -3157,7 +3160,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     window.EU_API.openGuidedProject({
       project_dir: row.project_dir,
       draft_id: row.id || null,
-      title: row.title || row.study_id || row.run_label || 'local project',
+      title: projectTitle(
+        row.title,
+        row.question || row.study_id || row.run_label || t('Local project', '本地项目'),
+      ),
       mode: 'local',
       context: guidedBackendContext(),
     }).then(result => {
@@ -3408,7 +3414,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       rows.push({
         kind,
         project_dir: row.project_dir,
-        title: row.title || row.study_id || row.run_label || (kind === 'run' ? 'Agent run folder' : 'Guided Copilot folder'),
+        title: projectTitle(
+          row.title,
+          row.question || row.study_id || row.run_label || (kind === 'run'
+            ? t('Agent run folder', 'Agent 运行文件夹')
+            : t('Guided Copilot folder', '研究引导文件夹')),
+        ),
         subtitle: kind === 'run'
           ? `${row.readiness_status || row.gate_status || 'analysis_only'} · ${row.artifact_count || 0} artifacts · ${fmtRunTime(row.updated_at)}`
           : `${row.status || 'metadata_only'} · ${row.depth || 'full'} · ${row.data_mode || 'local'} · ${fmtRunTime(row.updated_at || row.created_at)}`,

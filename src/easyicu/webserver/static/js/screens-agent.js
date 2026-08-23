@@ -42,7 +42,10 @@
   window.__euAgentPreset = function () { agSel = 'sepsis'; agTab = 'outputs'; };
 
   function seedStudy(row) {
-    const title = row.title || row.question || 'Idea-derived study';
+    const title = window.EU_PRODUCT_LABELS.projectTitle(
+      row.title,
+      row.question || t('Research idea', '研究想法'),
+    );
     const q = row.question || title;
     const pre = row.pre_experiment_summary || {};
     const source = row.source || {};

@@ -55,10 +55,8 @@
       : apiResearchReady();
   }
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
-  function displaySessionTitle(value) {
-    const title = String(value || '').trim();
-    return !title || title === 'Pi Copilot' ? 'EasyICU Copilot' : title;
-  }
+  function displaySessionTitle(value) { return window.EU_PRODUCT_LABELS.copilotTitle(value); }
+  function displayProjectTitle(value, fallback) { return window.EU_PRODUCT_LABELS.projectTitle(value, fallback); }
   function agentMode() {
     return (state.session && state.session.agent_mode) || state.agentMode || 'research';
   }
@@ -423,9 +421,9 @@
     if (state.projectIssue === 'pi_project_study_context_missing') {
       return `
         <div class="gpi-activate gpi-project-recovery">
-          <div class="gpi-kicker">EASYICU COPILOT · PROJECT RECOVERY</div>
+          <div class="gpi-kicker">${tr('EASYICU COPILOT · PROJECT RECOVERY', 'EASYICU COPILOT · 项目恢复')}</div>
           <h2>${tr('This old project can no longer be opened', '这个旧项目已无法继续打开')}</h2>
-          <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
+          <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</strong></div>
           ${providerBindingSummary()}
           <div class="gpi-recovery-card" role="alert">
             <span class="gpi-recovery-icon">${iconHtml('folder', 20)}</span>
@@ -444,9 +442,9 @@
     }
     return `
       <div class="gpi-activate">
-        <div class="gpi-kicker">EASYICU COPILOT · RESEARCH WORKSPACE</div>
+        <div class="gpi-kicker">${tr('EASYICU COPILOT · RESEARCH WORKSPACE', 'EASYICU COPILOT · 科研工作区')}</div>
         <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
-        <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc((state.project && state.project.title) || projectId())}</strong></div>
+        <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</strong></div>
         ${providerBindingSummary()}
         ${state.error ? `<div class="gpi-error" role="alert">${esc(state.error)}</div>` : ''}
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
@@ -663,7 +661,7 @@
     return `
       <div class="gpi-panel">
         <header class="gpi-head">
-          <div><div class="gpi-kicker">EASYICU COPILOT · ${esc((state.project && state.project.title) || projectId())}</div><div class="gpi-title">${esc(displaySessionTitle(session.title))} <span class="gpi-live" role="status" aria-live="polite">${state.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
+          <div><div class="gpi-kicker">EASYICU COPILOT · ${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</div><div class="gpi-title">${esc(displaySessionTitle(session.title))} <span class="gpi-live" role="status" aria-live="polite">${state.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
           <div class="gpi-head-meta">
             <div class="gpi-mode-switch" role="group" aria-label="${tr('Agent mode', 'Agent 模式')}">
               <button type="button" data-gpi-mode-switch="research" aria-pressed="${!workspace}">${tr('Research', '研究')}</button>
@@ -708,7 +706,7 @@
     const reviewResources = typeof demo.reviewResources === 'function' ? demo.reviewResources() : [];
     return `<div class="gpi-panel gpi-demo-panel">
       <header class="gpi-head">
-        <div><div class="gpi-kicker">EASYICU COPILOT · REVIEWER DEMONSTRATION</div><div class="gpi-title">${tr('Complete governed workflow', '完整受治理科研流程')} <span class="gpi-live">${tr('complete', '已完成')}</span></div></div>
+        <div><div class="gpi-kicker">${tr('EASYICU COPILOT · REVIEWER DEMONSTRATION', 'EASYICU COPILOT · 审稿人演示')}</div><div class="gpi-title">${tr('Complete governed workflow', '完整受治理科研流程')} <span class="gpi-live">${tr('complete', '已完成')}</span></div></div>
         <div class="gpi-head-meta"><span>${tr('Registered source run · 94,458 ICU stays', '登记 source run · 94,458 ICU stays')}</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
       </header>
       ${workflowHtml(workflow)}
@@ -752,7 +750,7 @@
         ? ` · r${receipt.study_context_revision}` : '';
       head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${tr('Project authority', '项目权威状态')}</div><div class="asub">${tr('Loading the bound StudyContext workflow.', '正在读取已绑定的 StudyContext 流程。')}</div>`;
       body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite">
-        <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Bound project', '已绑定项目')}</div><strong>${esc((state.project && state.project.title) || projectId())}${esc(revision)}</strong><div class="gd-pipeline-value">${tr('Loading authoritative configuration…', '正在读取权威配置…')}</div></div></div>
+        <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Bound project', '已绑定项目')}</div><strong>${esc(displayProjectTitle(state.project && state.project.title, projectId()))}${esc(revision)}</strong><div class="gd-pipeline-value">${tr('Loading authoritative configuration…', '正在读取权威配置…')}</div></div></div>
       </div>`;
       return;
     }
@@ -1050,7 +1048,7 @@
         const bindingReceipt = state.project && state.project.binding_receipt;
         const initialized = await api().initializePiCopilotProject({
           project_id: expectedProjectId,
-          title: (state.project && state.project.title) || expectedProjectId,
+          title: displayProjectTitle(state.project && state.project.title, expectedProjectId),
           confirm_initialization: true,
           binding_receipt: bindingReceipt || undefined,
         });
@@ -1063,7 +1061,7 @@
       }
       const payload = await api().createPiCopilotSession({
         project_id: expectedProjectId,
-        title: `${(state.project && state.project.title) || tr('Research project', '研究项目')} · ${state.agentMode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}`,
+        title: `${displayProjectTitle(state.project && state.project.title, tr('Research project', '研究项目'))} · ${state.agentMode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}`,
         agent_mode: state.agentMode,
         language: window.EU_LANG === 'zh' ? 'zh' : 'en',
         thinking_level: 'off', external_llm_opt_in: true,
@@ -1484,7 +1482,7 @@
     const next = project && String(project.id || '').trim()
       ? {
           id: String(project.id).trim(),
-          title: String(project.title || project.id).trim(),
+          title: displayProjectTitle(project.title, project.id),
           binding_receipt: project.binding_receipt || null,
         }
       : null;

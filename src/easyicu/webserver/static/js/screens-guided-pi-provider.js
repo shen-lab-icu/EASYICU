@@ -16,7 +16,7 @@
     return `
       <section class="gpi-provider-section" aria-labelledby="gpi-model-connection-title">
         <div class="gpi-provider-heading">
-          <div><div class="gpi-kicker">ONE MODEL CONNECTION</div><h3 id="gpi-model-connection-title">${tr('Account or API', '账户或 API')}</h3></div>
+          <div><div class="gpi-kicker">${tr('ONE MODEL CONNECTION', '单一模型连接')}</div><h3 id="gpi-model-connection-title">${tr('Account or API', '账户或 API')}</h3></div>
           <span class="gpi-provider-lock">${tr('Frozen when the conversation starts', '会话创建时冻结')}</span>
         </div>
         <p>${tr('The same selected provider and model powers Copilot conversation and the governed plan → execute → verify workflow. EasyICU still isolates their context, permissions, and evidence rules internally.', '同一个提供方与模型同时用于 Copilot 对话和受治理的“计划 → 执行 → 核验”流程；EasyICU 仍会在内部隔离上下文、权限与证据规则。')}</p>
@@ -81,7 +81,7 @@
     return `
       <div class="gpi-setup-wrap gpi-provider-setup">
         <div class="gpi-setup gpi-provider-shell">
-          <div class="gpi-kicker">EASYICU COPILOT · ONE MODEL CONNECTION</div>
+          <div class="gpi-kicker">${tr('EASYICU COPILOT · ONE MODEL CONNECTION', 'EASYICU COPILOT · 单一模型连接')}</div>
           <h2>${tr('Choose one provider and model', '只选择一套提供方与模型')}</h2>
           <p>${tr('Use a ChatGPT/Codex account or one API connection. The choice powers both the conversation and governed scientific workflow; you do not configure a second analysis model elsewhere.', '可以使用 ChatGPT/Codex 账户，也可以配置一套 API。这一选择会同时用于对话与受治理的科研流程，无需再到其他页面配置第二个分析模型。')}</p>
           ${connectionChoice({ state, tr, esc })}

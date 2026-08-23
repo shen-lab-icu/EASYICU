@@ -80,15 +80,16 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
 
 
 def test_user_facing_copilot_copy_hides_the_pi_runtime_brand() -> None:
+    label_owner = STATIC / "js" / "product-labels.js"
     scripts = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((STATIC / "js").glob("*.js"))
+        if path != label_owner
     )
     product_copy = re.sub(r"/\*.*?\*/", "", scripts, flags=re.S)
-    # One literal remains solely to map legacy persisted default titles.
-    product_copy = product_copy.replace("title === 'Pi Copilot'", "")
 
     assert not re.search(r"\bPi\b|PI AGENTSESSION|PI COPILOT", product_copy)
+    assert "'Pi Copilot'" in label_owner.read_text(encoding="utf-8")
     assert "EasyICU Copilot" in product_copy
     assert "EasyICU 研究助手" in product_copy
 
@@ -454,6 +455,7 @@ def test_agent_handoff_project_remains_visible_without_a_guided_folder() -> None
                 / "js"
                 / "guided_project_handoff.test.js"
             ),
+            str(STATIC / "js" / "product-labels.js"),
             str(STATIC / "js" / "screens-guided-projects.js"),
         ],
         check=False,

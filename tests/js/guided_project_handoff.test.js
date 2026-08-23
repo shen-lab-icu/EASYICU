@@ -10,7 +10,7 @@ global.document = {
   getElementById(id) { return id === 'gdSessions' ? host : null; },
 };
 
-require(path.resolve(process.argv[2]));
+for (const modulePath of process.argv.slice(2)) require(path.resolve(modulePath));
 
 function context(selectedGuidedDraft) {
   return {
