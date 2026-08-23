@@ -804,7 +804,10 @@ def run_robustness_figure(
             zorder=0,
             label="primary estimate",
         )
-        ax.legend(loc="lower right", frameon=False, fontsize=6.1)
+        # Sensitivity rows and their intervals occupy the lower/right region;
+        # keep the anchor key in the otherwise empty upper-left quadrant so it
+        # cannot obscure a result marker or confidence interval.
+        ax.legend(loc="upper left", frameon=False, fontsize=6.1)
     ax.set_yticks(positions)
     ax.set_yticklabels([_reader_label(label) for label in rows["__label"]])
     ax.invert_yaxis()
