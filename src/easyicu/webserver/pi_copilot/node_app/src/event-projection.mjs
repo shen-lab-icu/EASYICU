@@ -157,6 +157,20 @@ function projectedResource(value) {
       media_type: "application/json",
     };
   }
+  if (value.kind === "data_workbench_snapshot") {
+    const view = boundedText(value.view, 80).trim();
+    const snapshotSha256 = safeSha256(value.snapshot_sha256);
+    if (![
+      "cohort_summary", "feature_distribution", "patient_timeline", "crossdb_comparison",
+    ].includes(view) || !snapshotSha256) return undefined;
+    return {
+      kind: "data_workbench_snapshot",
+      view,
+      snapshot_sha256: snapshotSha256,
+      label: boundedText(value.label || "Data Workbench", 160),
+      media_type: "application/json",
+    };
+  }
   const file = safeRelativeFile(value.file);
   if (!file) return undefined;
   const kind = value.kind === "webpage" ? "webpage" : "file";

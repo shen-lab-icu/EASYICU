@@ -432,6 +432,20 @@ def get_pi_copilot_data_package_review(
         _raise_http(exc)
 
 
+@router.get("/api/copilot/pi/projects/{project_id}/data-workbench-snapshot")
+def get_pi_copilot_data_workbench_snapshot(
+    project_id: ShortText,
+    snapshot_sha256: Sha256Text,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_data_workbench_snapshot(
+            project_id=project_id,
+            snapshot_sha256=snapshot_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
 @router.get(
     "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}"
 )

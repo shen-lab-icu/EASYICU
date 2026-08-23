@@ -439,6 +439,27 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "label": _bounded_text(value.get("label"), 160),
             "media_type": "application/json",
         }
+    if kind == "data_workbench_snapshot":
+        view = stable_code(value.get("view"))
+        digest = _bounded_text(value.get("snapshot_sha256"), 64).lower()
+        if (
+            view
+            not in {
+                "cohort_summary",
+                "feature_distribution",
+                "patient_timeline",
+                "crossdb_comparison",
+            }
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        ):
+            return None
+        return {
+            "kind": kind,
+            "view": view,
+            "snapshot_sha256": digest,
+            "label": _bounded_text(value.get("label") or "Data Workbench", 160),
+            "media_type": "application/json",
+        }
     if kind in {"file", "webpage"}:
         file_name = _bounded_text(value.get("file"), 240).replace("\\", "/")
         parts = file_name.split("/")

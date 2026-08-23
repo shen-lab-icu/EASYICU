@@ -144,50 +144,11 @@
   function iconHtml(name, size) {
     return typeof window.icon === 'function' ? window.icon(name, size || 16, 1.55) : '';
   }
-  function resourceName(resource) {
-    return resource && String(resource.label || resource.artifact || resource.file || '').trim();
-  }
-  function resourceKey(resource) {
-    if (!resource) return '';
-    if (resource.kind === 'literature_source') return `literature:${resource.pmid || resource.doi || resource.url || ''}`;
-    if (resource.kind === 'demo_artifact') return `demo:${resource.artifact || ''}`;
-    if (resource.kind === 'demo_document') return `demo-document:${resource.artifact || ''}`;
-    if (resource.kind === 'data_package_review') return `data-package:${resource.study_context_id || ''}:${resource.study_revision || 0}:${resource.review_sha256 || ''}`;
-    return resource.kind === 'research_artifact' || resource.kind === 'research_document' || resource.kind === 'system_validation_document'
-      ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
-      : `${resource.kind || 'file'}:${resource.file || ''}`;
-  }
-  function resourceLabel(resource) {
-    if (!resource) return '';
-    if (resource.kind === 'demo_artifact' && window.EU_GUIDED_PI_DEMO && typeof window.EU_GUIDED_PI_DEMO.artifactLabel === 'function') {
-      return window.EU_GUIDED_PI_DEMO.artifactLabel(resource.artifact || resource.label || '');
-    }
-    if (resource.kind === 'research_artifact' && window.AGENT_RENDER && typeof window.AGENT_RENDER.artifactTitle === 'function') {
-      return window.AGENT_RENDER.artifactTitle(resource.artifact || resource.label || '');
-    }
-    return resourceName(resource);
-  }
-  function resourceButton(resource, label) {
-    if (!resource) return '';
-    const kind = resource.kind === 'demo_document' ? 'demo_document' : (resource.kind === 'demo_artifact' ? 'demo_artifact' : (resource.kind === 'data_package_review' ? 'data_package_review' : (resource.kind === 'system_validation_document' ? 'system_validation_document' : (resource.kind === 'research_document' ? 'research_document' : (resource.kind === 'research_artifact' ? 'research_artifact' : (resource.kind === 'literature_source' ? 'literature_source' : (resource.kind === 'webpage' ? 'webpage' : 'file')))))));
-    return `<button class="gpi-resource-link" type="button"
-      data-gpi-resource-kind="${esc(kind)}"
-      data-gpi-resource-file="${esc(resource.file || '')}"
-      data-gpi-resource-run="${esc(resource.run_id || '')}"
-      data-gpi-resource-artifact="${esc(resource.artifact || '')}"
-      data-gpi-resource-label="${esc(resource.kind === 'demo_artifact' ? (resource.title || resourceLabel(resource)) : (resource.label || resource.artifact || resource.file || ''))}"
-      data-gpi-resource-media="${esc(resource.media_type || 'text/plain')}"
-      data-gpi-resource-url="${esc(resource.url || '')}"
-      data-gpi-resource-title="${esc(resource.title || resource.label || '')}"
-      data-gpi-resource-year="${esc(resource.year || '')}"
-      data-gpi-resource-venue="${esc(resource.venue || '')}"
-      data-gpi-resource-relevance="${esc(resource.relevance || '')}"
-      data-gpi-resource-doi="${esc(resource.doi || '')}"
-      data-gpi-resource-pmid="${esc(resource.pmid || '')}"
-      data-gpi-resource-study="${esc(resource.study_context_id || '')}"
-      data-gpi-resource-revision="${esc(resource.study_revision == null ? '' : resource.study_revision)}"
-      data-gpi-resource-digest="${esc(resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}">${esc(label || resourceLabel(resource))}</button>`;
-  }
+  const RESOURCE_OWNER = window.EU_GUIDED_PI_RESOURCES.create({ esc });
+  const resourceName = RESOURCE_OWNER.name;
+  const resourceKey = RESOURCE_OWNER.key;
+  const resourceLabel = RESOURCE_OWNER.label;
+  const resourceButton = RESOURCE_OWNER.button;
   const ACTIVITY = window.EU_GUIDED_PI_ACTIVITY.create({
     tr, esc, iconHtml, resourceName, resourceKey, resourceButton,
   });
@@ -1684,26 +1645,7 @@
       const resource = event.target.closest('[data-gpi-resource-kind]');
       if (resource) {
         if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
-          window.EU_GUIDED_PI_PREVIEW.open({
-            file: resource.dataset.gpiResourceFile,
-            kind: resource.dataset.gpiResourceKind,
-            run_id: resource.dataset.gpiResourceRun,
-            artifact: resource.dataset.gpiResourceArtifact,
-            label: resource.dataset.gpiResourceLabel,
-            media_type: resource.dataset.gpiResourceMedia,
-            url: resource.dataset.gpiResourceUrl,
-            title: resource.dataset.gpiResourceTitle,
-            year: resource.dataset.gpiResourceYear,
-            venue: resource.dataset.gpiResourceVenue,
-            relevance: resource.dataset.gpiResourceRelevance,
-            doi: resource.dataset.gpiResourceDoi,
-            pmid: resource.dataset.gpiResourcePmid,
-            study_context_id: resource.dataset.gpiResourceStudy,
-            study_revision: resource.dataset.gpiResourceRevision,
-            review_sha256: resource.dataset.gpiResourceDigest,
-            checked_sha256: resource.dataset.gpiResourceDigest,
-            sha256: resource.dataset.gpiResourceDigest,
-          }, projectId());
+          window.EU_GUIDED_PI_PREVIEW.open(RESOURCE_OWNER.fromButton(resource), projectId());
         }
         return;
       }

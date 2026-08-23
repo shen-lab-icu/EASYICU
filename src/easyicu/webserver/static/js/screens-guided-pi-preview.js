@@ -105,6 +105,17 @@
         media_type: 'application/json',
       };
     }
+    if (value.kind === 'data_workbench_snapshot') {
+      const view = String(value.view || '').trim();
+      const snapshotSha256 = String(value.snapshot_sha256 || '').trim().toLowerCase();
+      if (!['cohort_summary', 'feature_distribution', 'patient_timeline', 'crossdb_comparison'].includes(view)) return null;
+      if (!/^[a-f0-9]{64}$/.test(snapshotSha256)) return null;
+      return {
+        kind: 'data_workbench_snapshot', view, snapshot_sha256: snapshotSha256,
+        label: String(value.label || tr('Data Workbench', '数据工作台')).slice(0, 160),
+        media_type: 'application/json',
+      };
+    }
     const file = String(value.file || '').trim().replace(/\\/g, '/');
     if (!file || file.startsWith('/') || file.includes('\0')) return null;
     if (file.split('/').some(part => !part || part === '.' || part === '..')) return null;
@@ -129,7 +140,8 @@
   function isSystemValidationDocument() { return !!state.resource && state.resource.kind === 'system_validation_document'; }
   function isDemoArtifact() { return !!state.resource && state.resource.kind === 'demo_artifact'; }
   function isDataPackageReview() { return !!state.resource && state.resource.kind === 'data_package_review'; }
-  function isStructuredArtifact() { return isResearchArtifact() || isDemoArtifact() || isDataPackageReview(); }
+  function isDataWorkbenchSnapshot() { return !!state.resource && state.resource.kind === 'data_workbench_snapshot'; }
+  function isStructuredArtifact() { return isResearchArtifact() || isDemoArtifact() || isDataPackageReview() || isDataWorkbenchSnapshot(); }
   function isLiteratureSource() { return !!state.resource && state.resource.kind === 'literature_source'; }
   function isHtml() {
     return !!state.resource && (
@@ -198,12 +210,15 @@
   function dataPackageProvenance() {
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Registered export · Pre-analysis review', '已登记数据源 · 分析前审阅'))}</strong><span>${esc(tr('Aggregate denominator and availability only; event rates, comparisons, and effect estimates are withheld until the governed analysis.', '仅展示聚合分母与可用性；事件率、组间比较和效应量留待受治理分析。'))}</span></div>`;
   }
+  function dataWorkbenchProvenance() {
+    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Conversational Data Workbench · Descriptive review', '对话式数据工作台 · 描述性审阅'))}</strong><span>${esc(tr('The browser opens an immutable local snapshot. Patient timelines remain pseudonymous and browser-only; reportable claims require the governed analysis path.', '浏览器打开不可变的本地快照。患者时间序列保持伪匿名且仅限浏览器；可报告结论仍需经过受治理分析流程。'))}</span></div>`;
+  }
   function render() {
     if (!state.host || !state.resource) return;
     setAsideOpen(true);
     const tabs = isLiteratureSource() ? '' : isStructuredArtifact() ? `
       <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
-        ${isDataPackageReview() ? `<button type="button" role="tab" data-gpi-preview-mode="workbench" aria-selected="${state.mode === 'workbench'}">${icon('grid', 14)} ${tr('Workbench', '数据工作台')}</button>` : ''}
+        ${isDataPackageReview() || isDataWorkbenchSnapshot() ? `<button type="button" role="tab" data-gpi-preview-mode="workbench" aria-selected="${state.mode === 'workbench'}">${icon('grid', 14)} ${tr('Workbench', '数据工作台')}</button>` : ''}
         <button type="button" role="tab" data-gpi-preview-mode="structured" aria-selected="${state.mode === 'structured'}">${icon('list', 14)} ${tr('Readable', '可读视图')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} JSON</button>
       </div>` : state.resource.kind === 'webpage' && isHtml() ? `
@@ -228,7 +243,7 @@
       body = url
         ? `<iframe class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
         : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The checked file digest is missing. Run the static check and prepare the preview again.', '文件检查摘要缺失。请重新执行静态检查并准备预览。')}</span></div>`;
-    } else if (state.mode === 'workbench' && isDataPackageReview()) {
+    } else if (state.mode === 'workbench' && (isDataPackageReview() || isDataWorkbenchSnapshot())) {
       body = `<div data-gpi-workbench-mount></div>`;
     } else if (state.mode === 'structured' && isStructuredArtifact()) {
       const renderer = window.AGENT_RENDER;
@@ -247,10 +262,11 @@
     }
     const reference = isDataPackageReview()
       ? `${state.resource.study_context_id} · rev ${state.resource.study_revision}`
+      : isDataWorkbenchSnapshot() ? `${state.resource.view} · ${state.resource.snapshot_sha256.slice(0, 12)}`
       : isStructuredArtifact() || isDocument()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : isLiteratureSource() ? state.resource.url : state.resource.file;
-    const provenance = isDemoArtifact() ? demoProvenance() : isDemoDocument() ? demoDocumentProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
+    const provenance = isDemoArtifact() ? demoProvenance() : isDemoDocument() ? demoDocumentProvenance() : isDataWorkbenchSnapshot() ? dataWorkbenchProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
       <div class="gpi-preview-provenance is-research" role="note">
         <strong>${tr('Literature metadata · Search receipt', '文献元数据 · 检索回执')}</strong>
         <span>${tr('Design evidence, separate from patient/result evidence.', '设计依据；与患者/结果证据分开治理。')}</span>
@@ -268,10 +284,12 @@
       ${provenance}
       ${tabs}
       <div class="gpi-preview-body">${body}</div>`;
-    if (state.mode === 'workbench' && isDataPackageReview() && !state.loading && !state.error) {
-      const owner = window.EU_GUIDED_PI_WORKBENCH_PREVIEW;
+    if (state.mode === 'workbench' && (isDataPackageReview() || isDataWorkbenchSnapshot()) && !state.loading && !state.error) {
+      const owner = isDataWorkbenchSnapshot()
+        ? window.EU_GUIDED_PI_DATA_PREVIEW
+        : window.EU_GUIDED_PI_WORKBENCH_PREVIEW;
       const mount = state.host.querySelector('[data-gpi-workbench-mount]');
-      if (owner && typeof owner.mount === 'function') owner.mount(mount, state.payload || {});
+      if (owner && typeof owner.mount === 'function') owner.mount(mount, state.payload || {}, state.resource.view);
     }
   }
   async function loadResource() {
@@ -302,6 +320,11 @@
         payload = await api.loadPiCopilotDataPackageReview(
           state.projectId, state.resource.study_revision, state.resource.review_sha256,
         );
+      } else if (isDataWorkbenchSnapshot()) {
+        if (!api.loadPiCopilotDataWorkbenchSnapshot) throw new Error(tr('The conversational Data Workbench API is unavailable.', '对话式数据工作台接口不可用。'));
+        payload = await api.loadPiCopilotDataWorkbenchSnapshot(
+          state.projectId, state.resource.snapshot_sha256,
+        );
       } else {
         if (!api.loadPiCopilotWorkspaceFile) throw new Error(tr('The workspace file API is unavailable.', '工作区文件接口不可用。'));
         payload = await api.loadPiCopilotWorkspaceFile(state.projectId, state.resource.file);
@@ -327,7 +350,7 @@
     state.payload = null;
     state.governance = null;
     state.error = '';
-    state.mode = safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
+    state.mode = safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
     render();
     if (state.mode !== 'web' && state.mode !== 'source' && state.mode !== 'document') loadResource();
   }
