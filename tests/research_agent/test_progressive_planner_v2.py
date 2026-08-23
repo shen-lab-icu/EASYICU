@@ -912,6 +912,52 @@ def test_host_materialization_keeps_one_schema_ledger_entry_per_step(
     assert len(agent.last_prompt_metrics["step_materialization_schema_sha256"]) == 7
 
 
+def test_checkpoint_resume_reuses_host_materialized_null_schema_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materializations = _materialization_payloads()
+    dependency_context = {
+        "cohort_file_sha256": "b" * 64,
+        "llm_signature": "codex:gpt-test",
+        "prompt_version": "test-v1",
+    }
+    monkeypatch.setattr(
+        "easyicu.research_agent.agents.progressive_planner.llm_is_mockish",
+        lambda _llm: False,
+    )
+    source_llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(materializations[index]) for index in (3, 4, 5)],
+        ]
+    )
+    source_llm.supports_strict_json_schema = True
+    source_checkpoints = []
+    ProgressivePlannerAgent(source_llm).run(
+        _context(),
+        checkpoint_callback=source_checkpoints.append,
+        resume_dependency_context=dependency_context,
+    )
+    resume_checkpoint = source_checkpoints[4]
+    assert resume_checkpoint.prompt_metrics[
+        "step_materialization_schema_sha256"
+    ][:3] == [None, None, None]
+
+    resumed_llm = ScriptedMockLLMClient(
+        [json.dumps(materializations[index]) for index in (3, 4, 5)]
+    )
+    resumed_llm.supports_strict_json_schema = True
+    plan = ProgressivePlannerAgent(resumed_llm).run(
+        _context(),
+        resume_checkpoint=resume_checkpoint,
+        resume_dependency_context=dependency_context,
+    )
+
+    assert len(plan.steps) == 7
+    assert len(resumed_llm.calls) == 3
+
+
 def test_step_materialization_parser_collapses_normalized_raw_input_duplicates() -> None:
     payload = _materialization_payloads()[0]
     payload["step"]["raw_inputs"] = ["age_years", " age_years ", "sex_code"]
