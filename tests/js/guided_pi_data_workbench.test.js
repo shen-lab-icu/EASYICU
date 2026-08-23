@@ -16,6 +16,14 @@ function load(relative) {
 global.window = global;
 global.EU_LANG = 'en';
 global.EU_HTML = { esc: value => String(value == null ? '' : value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;') };
+global.EU_VIZ_EMBEDDED_WORKBENCH = {
+  render(payload, view) {
+    const source = payload && payload.source || {};
+    const selected = payload && payload.selected || {};
+    return `<section data-native-workbench="${view}"><h2>${source.label || selected.label || ''}</h2></section>`;
+  },
+  mount(host, payload, view) { host.innerHTML = this.render(payload, view); },
+};
 
 load('src/easyicu/webserver/static/js/screens-guided-pi-resources.js');
 load('src/easyicu/webserver/static/js/screens-guided-pi-data-preview.js');
@@ -35,7 +43,7 @@ test('data workbench resource keeps only immutable coordinates in the button', (
   assert.doesNotMatch(html, /source_path|stay_id|patient_id/);
 });
 
-test('cohort preview renders metrics, filter funnel, and feature histogram', () => {
+test('cohort preview delegates to the native embedded workbench', () => {
   const html = global.EU_GUIDED_PI_DATA_PREVIEW.render({
     source: { label: 'MIMIC-IV export' },
     summary: { cohort_size: 120, modules: 2, mortality_pct: 12.5 },
@@ -53,13 +61,12 @@ test('cohort preview renders metrics, filter funnel, and feature histogram', () 
       summary: { median: 72, min: 40, max: 140 },
     }],
   }, 'feature_distribution');
-  assert.match(html, /Conversational Data Workbench/);
-  assert.match(html, /Cohort filter funnel/);
-  assert.match(html, /Heart rate/);
-  assert.match(html, /gpi-data-bars/);
+  assert.match(html, /data-native-workbench="feature_distribution"/);
+  assert.match(html, /MIMIC-IV export/);
+  assert.doesNotMatch(html, /gpi-data-bars/);
 });
 
-test('patient preview renders bounded pseudonymous series without direct identifier labels', () => {
+test('patient preview delegates without exposing direct identifier labels', () => {
   const html = global.EU_GUIDED_PI_DATA_PREVIEW.render({
     selected: { label: 'Entity 3', outcome: 'Survived' },
     time_lanes: [{
@@ -70,7 +77,6 @@ test('patient preview renders bounded pseudonymous series without direct identif
     }],
   }, 'patient_timeline');
   assert.match(html, /Entity 3/);
-  assert.match(html, /<polyline/);
-  assert.match(html, /browser-only pseudonymous review/i);
+  assert.match(html, /data-native-workbench="patient_timeline"/);
   assert.doesNotMatch(html, /stay_id|subject_id|hadm_id/);
 });
