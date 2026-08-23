@@ -155,6 +155,24 @@ def test_policy_applies_qualitative_claim_gate_to_markdown_headings() -> None:
     )
 
 
+def test_policy_preserves_versioned_clinical_term_in_structural_title() -> None:
+    title = "# Retrospective ICU Study of Sepsis-3 and In-Hospital Mortality"
+
+    result = filter_evidence_bound_scaffold(title, resolve_claim=_resolver)
+
+    assert result.scaffold == title + "\n"
+    assert result.filtered_sentences == ()
+
+
+def test_versioned_term_does_not_hide_assertive_numeric_title() -> None:
+    title = "# Sepsis-3 mortality was 20%"
+
+    result = filter_evidence_bound_scaffold(title, resolve_claim=_resolver)
+
+    assert result.scaffold == "\n"
+    assert result.filtered_sentences
+
+
 @pytest.mark.parametrize(
     "heading",
     [

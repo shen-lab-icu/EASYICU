@@ -217,8 +217,13 @@ def _heading_requires_evidence(content: str) -> bool:
         semantic
     ):
         return True
+    # Versioned clinical or data terms such as ``Sepsis-3`` and ``SOFA-2``
+    # identify the study coordinate; their suffix is not a reported numeric
+    # result.  Any surrounding assertion ("was higher", "20%") remains caught
+    # by the unchanged assertion and numeric checks.
+    numeric_semantic = re.sub(r"\b[A-Za-z][A-Za-z0-9]*-\d+\b", "", semantic)
     return bool(
-        _HEADING_NUMERIC_RE.search(semantic)
+        _HEADING_NUMERIC_RE.search(numeric_semantic)
         and _HEADING_RESULT_CONTEXT_RE.search(semantic)
     )
 
