@@ -171,6 +171,30 @@ function projectedResource(value) {
       media_type: "application/json",
     };
   }
+  if (value.kind === "native_workspace") {
+    const route = boundedText(value.route, 80).trim();
+    const studyContextId = safeStableId(value.study_context_id);
+    const studyRevision = Number(value.study_revision);
+    const state = boundedText(value.state, 40).trim();
+    const jobId = safeJobId(value.job_id);
+    if (
+      route !== "extraction"
+      || !studyContextId
+      || !Number.isInteger(studyRevision)
+      || studyRevision < 0
+      || !["setup", "running", "review"].includes(state)
+    ) return undefined;
+    return {
+      kind: "native_workspace",
+      route,
+      state,
+      study_context_id: studyContextId,
+      study_revision: studyRevision,
+      label: boundedText(value.label || "Data Extraction", 160),
+      media_type: "application/vnd.easyicu.native-workspace",
+      ...(jobId ? { job_id: jobId } : {}),
+    };
+  }
   const file = safeRelativeFile(value.file);
   if (!file) return undefined;
   const kind = value.kind === "webpage" ? "webpage" : "file";

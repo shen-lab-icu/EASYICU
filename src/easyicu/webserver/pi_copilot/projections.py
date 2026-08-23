@@ -460,6 +460,30 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "label": _bounded_text(value.get("label") or "Data Workbench", 160),
             "media_type": "application/json",
         }
+    if kind == "native_workspace":
+        route = stable_code(value.get("route"))
+        study_id = stable_code(value.get("study_context_id"))
+        revision = value.get("study_revision")
+        state = stable_code(value.get("state"))
+        job_id = stable_code(value.get("job_id"))
+        if (
+            route != "extraction"
+            or not study_id
+            or not isinstance(revision, int)
+            or revision < 0
+            or state not in {"setup", "running", "review"}
+        ):
+            return None
+        return {
+            "kind": kind,
+            "route": route,
+            "state": state,
+            "study_context_id": study_id,
+            "study_revision": revision,
+            "label": _bounded_text(value.get("label") or "Data Extraction", 160),
+            "media_type": "application/vnd.easyicu.native-workspace",
+            **({"job_id": job_id} if job_id else {}),
+        }
     if kind in {"file", "webpage"}:
         file_name = _bounded_text(value.get("file"), 240).replace("\\", "/")
         parts = file_name.split("/")
