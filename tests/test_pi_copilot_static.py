@@ -75,6 +75,31 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
 
 
+def test_conversational_data_workbench_assets_are_route_owned() -> None:
+    index = _read("index.html")
+    preview = _read("js/screens-guided-pi-data-preview.js")
+    resources = _read("js/screens-guided-pi-resources.js")
+    css = _read("css/guided-pi-data-preview.css")
+
+    assert index.index("css/guided-pi-data-preview.css") < index.index(
+        "js/screens-guided-pi-data-preview.js"
+    )
+    assert index.index("js/screens-guided-pi-data-preview.js") < index.index(
+        "js/screens-guided-pi-preview.js"
+    )
+    assert index.index("js/screens-guided-pi-resources.js") < index.index(
+        "js/screens-guided-pi.js"
+    )
+    assert "window.EU_GUIDED_PI_DATA_PREVIEW" in preview
+    assert "data_workbench_snapshot" in resources
+    assert ".gpi-data-preview" in css
+    for path in sorted((STATIC / "css").glob("*.css")):
+        if path.name != "guided-pi-data-preview.css":
+            assert ".gpi-data-preview" not in path.read_text(encoding="utf-8")
+    for marker in (".patient-", ".cohort-", ".crossdb-", ".extract-"):
+        assert marker not in css
+
+
 def test_user_facing_copilot_copy_hides_the_pi_runtime_brand() -> None:
     scripts = "\n".join(
         path.read_text(encoding="utf-8")
@@ -173,6 +198,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     pi_owner = _read("js/screens-guided-pi.js")
     activity_owner = _read("js/screens-guided-pi-activity.js")
     provider_owner = _read("js/screens-guided-pi-provider.js")
+    resource_owner = _read("js/screens-guided-pi-resources.js")
     api = _read("js/api.js")
     assert 'id="gdPiShell"' in guided
     assert 'id="gdLegacyShell"' in guided
@@ -244,9 +270,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "Auto-approve" in pi_owner
     assert "Full access" in pi_owner
     assert "data-gpi-grant" not in pi_owner
-    assert "data-gpi-resource-file" in pi_owner
-    assert "data-gpi-resource-run" in pi_owner
-    assert "data-gpi-resource-artifact" in pi_owner
+    assert "data-gpi-resource-file" in resource_owner
+    assert "data-gpi-resource-run" in resource_owner
+    assert "data-gpi-resource-artifact" in resource_owner
+    assert "RESOURCE_OWNER.fromButton(resource)" in pi_owner
     assert 'data-gpi-mode-switch="workspace"' in pi_owner
     assert "agentMode: 'research'" in pi_owner
     assert "pendingAuthorityRebind" in pi_owner
@@ -416,6 +443,7 @@ process.stdout.write(JSON.stringify(cases));
     }
     index = _read("index.html")
     pi_owner = _read("js/screens-guided-pi.js")
+    resource_owner = _read("js/screens-guided-pi-resources.js")
     fallback_owner = _read("js/screens-guided.js")
     assert index.index("js/composer-keyboard.js") < index.index("js/screens-guided-pi.js")
     assert "EU_COMPOSER_KEYBOARD.enterShouldSend(event)" in pi_owner
@@ -747,6 +775,7 @@ def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
 def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     demo = _read("js/screens-guided-pi-demo.js")
     pi_owner = _read("js/screens-guided-pi.js")
+    resource_owner = _read("js/screens-guided-pi-resources.js")
     preview = _read("js/screens-guided-pi-preview.js")
     assert "展示真实规划生命周期，在计划审阅处暂停" in demo
     assert "计划草案 1/5 未满足科学合同；正在重试" in demo
@@ -767,8 +796,8 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "https://pubmed.ncbi.nlm.nih.gov/17938396/" in demo
     assert "kind: 'demo_artifact'" in demo
     assert "title: item ? item.title : name" in demo
-    assert "resource.kind === 'demo_artifact'" in pi_owner
-    assert "resource.title || resourceLabel(resource)" in pi_owner
+    assert "resource.kind === 'demo_artifact'" in resource_owner
+    assert "resource.title || label(resource)" in resource_owner
     assert "value.kind === 'demo_artifact'" in preview
     assert "Reviewer demonstration complete · Engineering evidence" in preview
     assert "Bounded reviewer projection · Standard Web renderer" in preview
@@ -961,12 +990,13 @@ def test_pi_messages_project_governed_tool_artifacts_beside_the_answer() -> None
 
 
 def test_workspace_resource_button_preserves_checked_preview_digest() -> None:
-    owner = _read("js/screens-guided-pi.js")
+    owner = _read("js/screens-guided-pi-resources.js")
 
     assert (
-        "resource.review_sha256 || resource.checked_sha256 || resource.sha256" in owner
+        "resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256"
+        in owner
     )
-    assert "checked_sha256: resource.dataset.gpiResourceDigest" in owner
+    assert "checked_sha256: element.dataset.gpiResourceDigest" in owner
 
 
 def test_complete_research_demo_reuses_the_unchanged_agent_figure() -> None:

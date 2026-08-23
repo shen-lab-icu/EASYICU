@@ -35,6 +35,64 @@ class DataPackageReviewError(RuntimeError):
         self.details = dict(details or {})
 
 
+def verify_path_free_snapshot(payload: Mapping[str, Any]) -> None:
+    """Public boundary contract for durable browser snapshot projections."""
+
+    def fail(location: tuple[str, ...], reason: str) -> None:
+        raise DataPackageReviewError(
+            "data_package_review_snapshot_path_forbidden",
+            "The aggregate review snapshot contains a host-path-shaped field.",
+            details={
+                "field": ".".join(location)[:500],
+                "reason": reason,
+            },
+        )
+
+    def host_path_value(value: str) -> bool:
+        clean = value.strip()
+        lowered = clean.lower()
+        windows_drive = (
+            len(clean) >= 3
+            and clean[0].isalpha()
+            and clean[1] == ":"
+            and clean[2] in {"/", "\\"}
+        )
+        return bool(
+            clean.startswith("/")
+            or clean.startswith("\\")
+            or windows_drive
+            or lowered.startswith("file://")
+            or clean == "~"
+            or clean.startswith("~/")
+            or clean.startswith("~\\")
+        )
+
+    def visit(value: Any, location: tuple[str, ...]) -> None:
+        if isinstance(value, Mapping):
+            for raw_key, child in value.items():
+                key = str(raw_key)
+                normalized = key.strip().lower()
+                child_location = (*location, key)
+                if (
+                    normalized == "path"
+                    or normalized.endswith("_path")
+                    or normalized.endswith("_paths")
+                ):
+                    fail(child_location, "path_key")
+                visit(child, child_location)
+            return
+        if isinstance(value, (list, tuple)):
+            for index, child in enumerate(value):
+                visit(child, (*location, str(index)))
+            return
+        if isinstance(value, Path):
+            fail(location, "path_object")
+        if isinstance(value, str) and host_path_value(value):
+            fail(location, "absolute_path_value")
+
+    visit(payload, ())
+
+
 class DataPackageReviewSnapshotStore:
     """Persist immutable aggregate review receipts for conversation replay.
 
@@ -92,60 +150,7 @@ class DataPackageReviewSnapshotStore:
     @staticmethod
     def _verify_path_free(payload: Mapping[str, Any]) -> None:
         """Reject host-path keys and values before durable replay storage."""
-
-        def fail(location: tuple[str, ...], reason: str) -> None:
-            raise DataPackageReviewError(
-                "data_package_review_snapshot_path_forbidden",
-                "The aggregate review snapshot contains a host-path-shaped field.",
-                details={
-                    "field": ".".join(location)[:500],
-                    "reason": reason,
-                },
-            )
-
-        def host_path_value(value: str) -> bool:
-            clean = value.strip()
-            lowered = clean.lower()
-            windows_drive = (
-                len(clean) >= 3
-                and clean[0].isalpha()
-                and clean[1] == ":"
-                and clean[2] in {"/", "\\"}
-            )
-            return bool(
-                clean.startswith("/")
-                or clean.startswith("\\")
-                or windows_drive
-                or lowered.startswith("file://")
-                or clean == "~"
-                or clean.startswith("~/")
-                or clean.startswith("~\\")
-            )
-
-        def visit(value: Any, location: tuple[str, ...]) -> None:
-            if isinstance(value, Mapping):
-                for raw_key, child in value.items():
-                    key = str(raw_key)
-                    normalized = key.strip().lower()
-                    child_location = (*location, key)
-                    if (
-                        normalized == "path"
-                        or normalized.endswith("_path")
-                        or normalized.endswith("_paths")
-                    ):
-                        fail(child_location, "path_key")
-                    visit(child, child_location)
-                return
-            if isinstance(value, (list, tuple)):
-                for index, child in enumerate(value):
-                    visit(child, (*location, str(index)))
-                return
-            if isinstance(value, Path):
-                fail(location, "path_object")
-            if isinstance(value, str) and host_path_value(value):
-                fail(location, "absolute_path_value")
-
-        visit(payload, ())
+        verify_path_free_snapshot(payload)
 
     def _path(self, study_id: str, revision: int, digest: str) -> Path:
         study_key = hashlib.sha256(study_id.encode("utf-8")).hexdigest()[:24]
@@ -635,4 +640,5 @@ __all__ = [
     "DataPackageReviewError",
     "DataPackageReviewSnapshotStore",
     "build_registered_data_package_review",
+    "verify_path_free_snapshot",
 ]
