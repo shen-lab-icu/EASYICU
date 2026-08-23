@@ -1319,6 +1319,9 @@ def _candidate_success_prepare_transition(
             attempt.worker_progress.runner_repair_name
             and is_sealed_renderer_repair(attempt.worker_progress.runner_repair_name)
         ),
+        resumed_from_generation_mode=attempt.step_record.get(
+            "resumed_from_generation_mode"
+        ),
     ):
         state.visual_step_summary = _write_host_input_binding_receipts(
             out_dir=state.run_result.out_dir,

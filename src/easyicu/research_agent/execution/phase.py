@@ -3618,6 +3618,9 @@ def _step_prepare_post_candidate_figures(
             worker_progress.runner_repair_name
             and is_sealed_renderer_repair(worker_progress.runner_repair_name)
         ),
+        resumed_from_generation_mode=step_record.get(
+            "resumed_from_generation_mode"
+        ),
     ):
         step_summary = _write_host_input_binding_receipts(
             out_dir=run_result.out_dir,
