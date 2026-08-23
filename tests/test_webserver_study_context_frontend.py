@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.webserver import study_contexts
+from tools.run_js_contracts import CONTRACTS
 
 
 STATIC = Path(__file__).parents[1] / "src" / "easyicu" / "webserver" / "static"
@@ -295,14 +296,15 @@ def test_study_context_source_boundary_and_history_activation_in_javascript(
     node = _node_binary()
     if not node:
         pytest.skip("Node.js is unavailable")
+    owner_paths = [
+        str(STATIC / "js" / owner)
+        for owner in CONTRACTS["study_context_lifecycle.test.js"]
+    ]
     result = subprocess.run(
         [
             node,
             str(ROOT / "tests" / "js" / "study_context_lifecycle.test.js"),
-            str(STATIC / "js" / "study-context.js"),
-            str(STATIC / "js" / "screens-viz-study-context.js"),
-            str(STATIC / "js" / "screens-guided-study-context.js"),
-            str(STATIC / "js" / "screens-agent-study-context.js"),
+            *owner_paths,
         ],
         check=False,
         capture_output=True,

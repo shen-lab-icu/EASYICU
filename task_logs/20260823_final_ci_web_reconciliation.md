@@ -43,3 +43,13 @@ Isolated browser QA used `EASYICU_HOME=/tmp/easyicu-final-ci-browser-state-20260
 - static `product-labels.js` returned content-derived SHA-256 ETag and `Cache-Control: no-cache`.
 
 This is a compatibility/reconciliation checkpoint only. It does not establish full exact-head CI for the new Web commit, desktop UAT completion, Provider readiness, E1 execution, or paper authority.
+
+## Full-suite follow-up
+
+An independent full-suite run of the reconciliation checkpoint `4d2e8a8` completed with `1 failed / 14,697 passed / 74 skipped`. The failure was real and isolated to `test_study_context_source_boundary_and_history_activation_in_javascript`: the JavaScript harness had gained `product-labels.js`, but this pytest caller still maintained an older positional owner list. The canonical `tools/run_js_contracts.py` caller passed because its separate list was current.
+
+The follow-up fix removes that duplicate list. The pytest caller now consumes `CONTRACTS["study_context_lifecycle.test.js"]` directly from the JS contract runner, preserving its positional order and making missing future owner updates fail at the single contract owner. Verification after the change:
+
+- the previously failing pytest file: `10 passed`;
+- JavaScript contracts through the canonical runner: `24/24` passed;
+- no new full-suite run was performed on the follow-up commit, so `14,698 passed` is the expected arithmetic closure, not an exact-head claim.
