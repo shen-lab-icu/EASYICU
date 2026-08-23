@@ -209,8 +209,7 @@ def test_renderer_does_not_draw_unit_height_bars_when_sizes_are_missing(tmp_path
     stability_axis = rendered.fig.axes[2]
     assert not stability_axis.patches
     assert any(
-        text.get_text() == "Cluster sizes unavailable"
-        for text in stability_axis.texts
+        text.get_text() == "Cluster sizes unavailable" for text in stability_axis.texts
     )
     plt.close(rendered.fig)
 
@@ -273,8 +272,8 @@ def test_renderer_accepts_canonical_phenotype_product_names(tmp_path: Path):
         "cluster_stability",
     ]
     assert rendered.panels[2]["claim"] == (
-        "The qualified overall silhouette value is shown; cluster sizes were "
-        "unavailable from the registered profile evidence."
+        "The qualified overall silhouette value is shown; cluster sizes and "
+        "resampling stability were unavailable."
     )
     stability_source = rendered.source_frames["phenotype_stability_plot_data"]
     assert stability_source["overall_silhouette"].tolist() == [0.2774, 0.2774]
@@ -283,4 +282,52 @@ def test_renderer_accepts_canonical_phenotype_product_names(tmp_path: Path):
         for axis in rendered.fig.axes
         for text in axis.texts
     )
+    plt.close(rendered.fig)
+
+
+def test_renderer_preserves_executor_standardised_centroids_and_plots_ari(
+    tmp_path: Path,
+):
+    import matplotlib.pyplot as plt
+
+    evidence = EvidenceStore(tmp_path)
+    profiles = _long_profiles().rename(columns={"label": "display_label"})
+    profiles["standardised_centroid"] = [-0.24, 0.88, 0.43, 0.36, -0.71, -0.55]
+    _register(evidence, tmp_path, "phenotype_profiles", profiles)
+    _register(
+        evidence,
+        tmp_path,
+        "cluster_stability",
+        pd.DataFrame(
+            {
+                "replicate": [1, 2, 3],
+                "adjusted_rand_index": [0.43, 0.12, 0.31],
+            }
+        ),
+    )
+    rendered = render_phenotype_figure(
+        context=ResearchContext(
+            research_question="Identify phenotypes by clustering.",
+            cohort={
+                "cohort_name": "c",
+                "database": "synthetic",
+                "n_patients": 270,
+                "n_stays": 270,
+            },
+            variables=[],
+        ),
+        plan=AnalysisPlan(research_question="q", steps=[]),
+        evidence=evidence,
+        run_dir=tmp_path,
+    )
+
+    assert rendered is not None
+    profile_source = rendered.source_frames["phenotype_profile_plot_data"]
+    assert sorted(profile_source["standardised_value"].round(2)) == sorted(
+        profiles["standardised_centroid"].round(2)
+    )
+    stability_source = rendered.source_frames["phenotype_stability_plot_data"]
+    assert stability_source["adjusted_rand_index"].tolist() == [0.43, 0.12, 0.31]
+    assert rendered.panels[2]["claim"].startswith("Adjusted Rand indices")
+    assert rendered.fig.axes[2].get_ylabel() == "Adjusted Rand index"
     plt.close(rendered.fig)

@@ -138,3 +138,9 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     assert "Lactate (mmol/L; reference 2.1)" in svg
     assert "Cohort share" in svg
     assert "Observed outcome risk" in svg
+    contract = pd.read_json(
+        tmp_path / "outputs" / "display_suite.figure_contract.json", typ="series"
+    )
+    assert contract["panels"][0]["metadata"]["estimate_geometry"] == (
+        "discrete_contrasts_with_95ci"
+    )

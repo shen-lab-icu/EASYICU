@@ -285,8 +285,10 @@ def run_landmark_association_figure(
     y = pd.to_numeric(contrast["adjusted_odds_ratio"])
     low = pd.to_numeric(contrast["ci_low"])
     high = pd.to_numeric(contrast["ci_high"])
+    # These are prespecified contrasts, not samples from a continuous fitted
+    # curve. Connecting them would imply unsupported interpolation.
     ax.errorbar(
-        x, y, yerr=[y - low, high - y], fmt="o-", color=palette["blue"], capsize=3
+        x, y, yerr=[y - low, high - y], fmt="o", color=palette["blue"], capsize=3
     )
     ax.axhline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
     references = pd.to_numeric(
@@ -432,6 +434,11 @@ def run_landmark_association_figure(
                 "evidence_ids": [evidence[source] for source in panel.source_products],
                 "metadata": {
                     "source_products": list(panel.source_products),
+                    "estimate_geometry": (
+                        "discrete_contrasts_with_95ci"
+                        if panel.panel_id == "association_contrasts"
+                        else "direct_table_projection"
+                    ),
                     "source_data": [
                         f"{source.partition(':')[2]}_source_data.csv"
                         for source in panel.source_products

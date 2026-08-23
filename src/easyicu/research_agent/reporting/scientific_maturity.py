@@ -360,7 +360,9 @@ def _manuscript_section_word_counts(manuscript: str) -> dict[str, int]:
     """Count words under top-level article headings, including subheadings."""
 
     matches = list(
-        re.finditer(r"^(?P<marks>#{1,3})\s+(?P<title>.+?)\s*$", manuscript, re.MULTILINE)
+        re.finditer(
+            r"^(?P<marks>#{1,3})\s+(?P<title>.+?)\s*$", manuscript, re.MULTILINE
+        )
     )
     aliases = {
         "abstract": {"abstract"},
@@ -390,9 +392,7 @@ def _manuscript_section_word_counts(manuscript: str) -> dict[str, int]:
             if len(candidate.group("marks")) <= level:
                 end = candidate.start()
                 break
-        output[section] = len(
-            re.findall(r"\b[\w'-]+\b", manuscript[match.end() : end])
-        )
+        output[section] = len(re.findall(r"\b[\w'-]+\b", manuscript[match.end() : end]))
     return output
 
 
@@ -419,11 +419,7 @@ def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
         {"funding"},
         {"conflicts of interest", "conflict of interest"},
     )
-    missing = [
-        sorted(group)[0]
-        for group in required_groups
-        if not (headings & group)
-    ]
+    missing = [sorted(group)[0] for group in required_groups if not (headings & group)]
     section_word_counts = _manuscript_section_word_counts(manuscript)
     # These are structural anti-stub floors, not a target-journal word limit.
     # A journal-ready manuscript may be much longer, but a core section below
@@ -463,7 +459,9 @@ def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
             audit.get("methods_method_source_missing")
         ),
         "pdf_present": (run_dir / "manuscript_scaffold.pdf").is_file(),
-        "pdf_receipt_present": (run_dir / "manuscript_pdf_render_receipt.json").is_file()
+        "pdf_receipt_present": (
+            run_dir / "manuscript_pdf_render_receipt.json"
+        ).is_file()
         or (run_dir / "manuscript_pdf_receipt.json").is_file(),
     }
 
@@ -489,8 +487,7 @@ def _primary_figure_facts(
             if not isinstance(panel, Mapping):
                 continue
             absolute_risk_panel_present = (
-                absolute_risk_panel_present
-                or panel_has_absolute_risk_context(panel)
+                absolute_risk_panel_present or panel_has_absolute_risk_context(panel)
             )
             roles.append(str(panel.get("role") or "").strip().casefold())
             figure_evidence_ids.update(
@@ -526,7 +523,9 @@ def _primary_figure_facts(
     )
     return {
         "expected_adjustment_label": expected_label,
-        "primary_contract_paths": [str(path.relative_to(run_dir)) for path in primary_contracts],
+        "primary_contract_paths": [
+            str(path.relative_to(run_dir)) for path in primary_contracts
+        ],
         "primary_panel_roles": roles,
         "adjustment_covariates": list(covariates),
         "adjustment_authority": (
@@ -602,7 +601,6 @@ def build_scientific_maturity_audit(
         for step in scientific_steps
         if not step.literature_citation_keys
     ]
-    covariates = _model_covariates(plan)
     association_study = _association_study(plan)
     preferences = context.user_preferences
     covariate_selection = (
@@ -610,9 +608,7 @@ def build_scientific_maturity_audit(
         if preferences is not None
         else "planner_selectable"
     )
-    covariate_rationales = dict(
-        getattr(preferences, "covariate_rationales", {}) or {}
-    )
+    covariate_rationales = dict(getattr(preferences, "covariate_rationales", {}) or {})
     covariate_temporal_roles = dict(
         getattr(preferences, "covariate_temporal_roles", {}) or {}
     )
@@ -655,9 +651,7 @@ def build_scientific_maturity_audit(
         else _read_json(run_dir, "display_suite_audit.json")
     )
     publication = (
-        dict(publication_bundle)
-        if isinstance(publication_bundle, Mapping)
-        else {}
+        dict(publication_bundle) if isinstance(publication_bundle, Mapping) else {}
     )
     reviewer = (
         dict(reviewer_report)
@@ -669,6 +663,7 @@ def build_scientific_maturity_audit(
     endpoint = _endpoint_semantic_facts(context)
     manuscript = _manuscript_facts(run_dir)
     primary_figure = _primary_figure_facts(run_dir, plan)
+    covariates = tuple(primary_figure["adjustment_covariates"])
 
     if not searched or not sources_returning:
         findings.append(
@@ -1387,18 +1382,14 @@ def build_scientific_maturity_audit(
             "association_study": association_study,
             "post_baseline_exposure": post_baseline,
             "exposure_window": exposure_window,
-            "primary_exposure_time_anchor_alignment": (
-                time_anchor_alignment.to_dict()
-            ),
+            "primary_exposure_time_anchor_alignment": (time_anchor_alignment.to_dict()),
             "patient_identity_available": patient_identity,
             "repeat_units_possible": repeat_units_possible,
             "method_source_gaps": method_source_gaps,
             "method_layers_by_step": method_layers_by_step,
             "required_method_layers": required_method_layers,
             "missing_method_layers": missing_method_layers,
-            "unsupported_method_bindings": method_facts[
-                "unsupported_method_bindings"
-            ],
+            "unsupported_method_bindings": method_facts["unsupported_method_bindings"],
             "novelty": novelty,
             **robustness,
             "display_suite_complete": bool(display.get("display_suite_complete")),

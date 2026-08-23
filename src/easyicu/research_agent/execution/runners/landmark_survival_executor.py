@@ -115,8 +115,10 @@ def landmark_survival_executor_scaffold(
     ).strip()
     if receipt_code:
         prologue += "\n\n" + receipt_code.strip()
-    prologue += "\n\n" + textwrap.dedent(
-        f"""
+    prologue += (
+        "\n\n"
+        + textwrap.dedent(
+            f"""
         summary = run_landmark_survival_suite(
             frame=analysis_frame,
             authority=authority,
@@ -127,7 +129,8 @@ def landmark_survival_executor_scaffold(
             input_sha256=bound.sha256,
         )
         """
-    ).strip()
+        ).strip()
+    )
     epilogue: list[str] = []
     if receipt_code:
         epilogue.append('summary["plausibility_audit"] = plausibility_audit')
@@ -141,7 +144,9 @@ def landmark_survival_executor_scaffold(
             "print(json.dumps(summary, ensure_ascii=False, allow_nan=False))",
         ]
     )
-    return HostScaffoldedScript(prologue=prologue, body="", epilogue="\n".join(epilogue))
+    return HostScaffoldedScript(
+        prologue=prologue, body="", epilogue="\n".join(epilogue)
+    )
 
 
 def landmark_survival_executor_code(
@@ -225,19 +230,13 @@ def _table_one(frame: Any, sealed: LandmarkSurvivalRuntimeAuthority):
             values = numeric.loc[frame[group].eq(exposure_value)].dropna()
             row[f"{label}_n"] = int(len(values))
             row[f"{label}_mean"] = float(values.mean()) if len(values) else None
-            row[f"{label}_sd"] = (
-                float(values.std(ddof=1)) if len(values) > 1 else None
+            row[f"{label}_sd"] = float(values.std(ddof=1)) if len(values) > 1 else None
+            row[f"{label}_median"] = float(values.median()) if len(values) else None
+            row[f"{label}_q1"] = float(values.quantile(0.25)) if len(values) else None
+            row[f"{label}_q3"] = float(values.quantile(0.75)) if len(values) else None
+            means[exposure_value] = (
+                float(values.mean()) if len(values) else float("nan")
             )
-            row[f"{label}_median"] = (
-                float(values.median()) if len(values) else None
-            )
-            row[f"{label}_q1"] = (
-                float(values.quantile(0.25)) if len(values) else None
-            )
-            row[f"{label}_q3"] = (
-                float(values.quantile(0.75)) if len(values) else None
-            )
-            means[exposure_value] = float(values.mean()) if len(values) else float("nan")
             variances[exposure_value] = (
                 float(values.var(ddof=1)) if len(values) > 1 else float("nan")
             )
@@ -309,7 +308,7 @@ def _render_figure(
     ax_km.set_xlim(0.0, sealed.endpoint_horizon_days - sealed.landmark_hours / 24.0)
     ax_km.set_xlabel(f"Days after the {sealed.landmark_hours:g}-hour landmark")
     ax_km.set_ylabel("Survival probability")
-    ax_km.set_title("Landmark Kaplan-Meier survival", loc="left")
+    ax_km.set_title("Unadjusted landmark Kaplan-Meier survival", loc="left")
     ax_km.legend(loc="lower left", fontsize=6.4)
     ax_km.grid(axis="y", color=palette["neutral_light"], linewidth=0.55)
     add_panel_label(ax_km, "A", x=-0.09)
@@ -365,7 +364,10 @@ def _render_figure(
     ax_flow.barh(y, display["count"], color=palette["teal"])
     ax_flow.set_yticks(
         y,
-        [display_labels.get(value, value.replace("_", " ")) for value in display["stage"]],
+        [
+            display_labels.get(value, value.replace("_", " "))
+            for value in display["stage"]
+        ],
         fontsize=5.8,
     )
     for row_index, count in enumerate(display["count"].astype(int)):
@@ -392,10 +394,10 @@ def _render_figure(
         panels=[
             {
                 "panel_id": "A",
-                "title": "Landmark Kaplan-Meier survival",
+                "title": "Unadjusted landmark Kaplan-Meier survival",
                 "role": "temporal_absolute_risk",
                 "chart_type": "kaplan_meier_curve",
-                "claim": "Absolute post-landmark survival is displayed by the frozen incident-exposure groups.",
+                "claim": "Unadjusted absolute post-landmark survival is displayed by the frozen incident-exposure groups.",
                 "evidence_ids": [],
                 "review_risk": "This is an observational landmark comparison and does not identify a causal exposure effect.",
             },
@@ -419,10 +421,16 @@ def _render_figure(
             },
         ],
         export_formats=("svg", "pdf", "png"),
-        source_data=("landmark_km_curve.csv", "landmark_cox_summary.csv", "landmark_risk_set_flow.csv"),
+        source_data=(
+            "landmark_km_curve.csv",
+            "landmark_cox_summary.csv",
+            "landmark_risk_set_flow.csv",
+        ),
         statistics_note=(
-            "Kaplan-Meier estimates use the post-landmark clock. The Cox model "
-            "reports a Wald 95% confidence interval and a Schoenfeld residual audit."
+            "Kaplan-Meier estimates are unadjusted and use the post-landmark clock; "
+            "their direction can differ from the covariate-adjusted Cox estimate. "
+            "The Cox model reports a Wald 95% confidence interval and a Schoenfeld "
+            "residual audit."
         ),
         image_integrity_note="All plotted values are rendered from digest-bound upstream result tables.",
     )
@@ -471,7 +479,11 @@ def run_landmark_survival_suite(
         sealed.exposure_onset_column,
         sealed.event_column,
         sealed.followup_time_column,
-        *(column for column in sealed.adjustment_columns if column not in sealed.categorical_adjustment_columns),
+        *(
+            column
+            for column in sealed.adjustment_columns
+            if column not in sealed.categorical_adjustment_columns
+        ),
     }
     for column in numeric_columns:
         working[column] = pd.to_numeric(working[column], errors="coerce")
@@ -486,10 +498,7 @@ def run_landmark_survival_suite(
         & np.isfinite(followup)
         & followup.ge(0)
         & followup.le(float(sealed.endpoint_horizon_days))
-        & (
-            event.eq(1)
-            | followup.ge(float(sealed.endpoint_horizon_days))
-        )
+        & (event.eq(1) | followup.ge(float(sealed.endpoint_horizon_days)))
     )
     landmark_days = sealed.landmark_hours / 24.0
     alive_at_landmark = followup.gt(landmark_days)
@@ -517,15 +526,25 @@ def run_landmark_survival_suite(
     analysis[sealed.derived_event_column] = event.loc[eligible_mask].astype(int)
     analysis[sealed.derived_time_column] = followup.loc[eligible_mask] - landmark_days
     if len(analysis) < 100 or analysis[sealed.derived_exposure_column].nunique() != 2:
-        raise ValueError("landmark survival risk set lacks an estimable exposure contrast")
+        raise ValueError(
+            "landmark survival risk set lacks an estimable exposure contrast"
+        )
     if int(analysis[sealed.derived_event_column].sum()) < 10:
         raise ValueError("landmark survival risk set has insufficient event support")
 
     risk_rows = [
         ("source_rows", len(working)),
         ("valid_fixed_horizon_endpoint", int(endpoint_valid.sum())),
-        ("alive_and_observed_at_landmark", int((endpoint_valid & alive_at_landmark).sum())),
-        ("exposure_status_and_timing_supported", int((endpoint_valid & alive_at_landmark & status_valid & timing_known).sum())),
+        (
+            "alive_and_observed_at_landmark",
+            int((endpoint_valid & alive_at_landmark).sum()),
+        ),
+        (
+            "exposure_status_and_timing_supported",
+            int(
+                (endpoint_valid & alive_at_landmark & status_valid & timing_known).sum()
+            ),
+        ),
         ("landmark_analysis_population", len(analysis)),
     ]
     risk_flow = pd.DataFrame(
@@ -535,7 +554,9 @@ def run_landmark_survival_suite(
                 "stage": stage,
                 "count": int(count),
                 "source_denominator": int(len(working)),
-                "percent_of_source": 100.0 * count / len(working) if len(working) else None,
+                "percent_of_source": 100.0 * count / len(working)
+                if len(working)
+                else None,
                 "excluded_since_prior_stage": (
                     0 if index == 0 else int(risk_rows[index - 1][1] - count)
                 ),
@@ -547,7 +568,9 @@ def run_landmark_survival_suite(
     table_one = _table_one(analysis, sealed)
     km_rows: list[dict[str, Any]] = []
     for exposure_value in (0, 1):
-        subset = analysis.loc[analysis[sealed.derived_exposure_column].eq(exposure_value)]
+        subset = analysis.loc[
+            analysis[sealed.derived_exposure_column].eq(exposure_value)
+        ]
         estimate = km_estimate(
             subset[sealed.derived_time_column], subset[sealed.derived_event_column]
         )
@@ -601,10 +624,15 @@ def run_landmark_survival_suite(
         )
         encoded.loc[model_source[column].isna(), :] = float("nan")
         if encoded.empty:
-            raise ValueError(f"landmark survival categorical column {column!r} has no contrast")
+            raise ValueError(
+                f"landmark survival categorical column {column!r} has no contrast"
+            )
         pieces.append(encoded)
     model_frame = pd.concat(pieces, axis=1).dropna().astype(float)
-    if len(model_frame) < 100 or int(model_frame[sealed.derived_event_column].sum()) < 10:
+    if (
+        len(model_frame) < 100
+        or int(model_frame[sealed.derived_event_column].sum()) < 10
+    ):
         raise ValueError("landmark survival complete-case model is not estimable")
     covariates = [
         column
@@ -631,9 +659,7 @@ def run_landmark_survival_suite(
             "p_value": summary["p"].astype(float),
         }
     )
-    primary_rows = cox_table.loc[
-        cox_table["term"].eq(sealed.derived_exposure_column)
-    ]
+    primary_rows = cox_table.loc[cox_table["term"].eq(sealed.derived_exposure_column)]
     if len(primary_rows) != 1:
         raise ValueError("landmark survival Cox result lacks one exposure row")
     primary_row = primary_rows.iloc[0].to_dict()
@@ -717,7 +743,9 @@ def run_landmark_survival_suite(
     }
     receipt_path = out_dir / "landmark_survival_runtime_receipt.json"
     receipt_path.write_text(
-        json.dumps(receipt, indent=2, ensure_ascii=False, sort_keys=True, allow_nan=False),
+        json.dumps(
+            receipt, indent=2, ensure_ascii=False, sort_keys=True, allow_nan=False
+        ),
         encoding="utf-8",
     )
     output_files = {
