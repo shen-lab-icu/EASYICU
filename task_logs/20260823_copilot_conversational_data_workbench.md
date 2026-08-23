@@ -4,7 +4,7 @@
 > 分支：`codex/easyicu-desktop-app-v1`
 > worktree：`/Users/haibo/Documents/GitHub/EASYICU-desktop-app-v1`
 > 起始基线：`912ed0b`
-> 状态：功能、聚焦回归、正式 Copilot 浏览器链路和 Apple Silicon 冻结包 smoke 均通过；未推送、未合并 `main`
+> 状态：功能、原生工作台视图复用、聚焦回归、正式 Copilot 浏览器链路和 Apple Silicon 冻结包 smoke 均通过；未推送、未合并 `main`
 
 ## 结论
 
@@ -25,9 +25,9 @@ Web 与桌面 App 使用同一套 FastAPI 原生前端和 API，因此本次改�
 
 ## 前端实现
 
-- `screens-guided-pi-data-preview.js` 和 `guided-pi-data-preview.css` 是正式 Copilot 数据预览的 JS/CSS owner。
+- `screens-guided-pi-data-preview.js` 是正式 Copilot 预览适配器；`screens-viz-embedded.js` 是只读嵌入 owner，复用 Patient、Cohort 和 Cross-DB 的原生渲染器，`screens-viz-context.js` 负责显式快照/水合合同。
 - 从超预算的 `screens-guided-pi.js` 抽出 `screens-guided-pi-resources.js`，共享状态通过显式 namespace 传递，没有把新逻辑继续堆入 broad shell。
-- 右侧预览支持队列 KPI、筛选漏斗、直方分布、匿名患者时间序列和跨库矩阵；宽表只在组件内部横向滚动，不制造页面级溢出。
+- 右侧预览支持原生队列面板、特征分布、匿名患者 ECharts 时间序列和完整 Cross-DB 结果标签页；嵌入态隐藏原视图的下游跳转，只保留顶部显式“打开完整工作台”，并用同一快照水合目标页。
 
 ## 自动化验证
 
@@ -39,7 +39,7 @@ Ruff
 All checks passed
 
 python tools/run_js_contracts.py
-24/24 passed
+25/25 passed
 
 Desktop boundary
 14 passed, 1 warning
@@ -67,16 +67,31 @@ Python 聚焦范围覆盖新 Data Workbench、数据包快照、Pi 静态/合同
 - `task_logs/browser_qa_20260823/copilot_patient_timeline.png`
 - `task_logs/browser_qa_20260823/copilot_crossdb_comparison.png`
 
+## 原生工作台复用复验
+
+在 1440×1000 桌面视口重新加载隔离服务后，Copilot 右侧不再绘制一套简化卡片，而是直接调用现有原生 owner：
+
+- Cohort 复用原生组间对照、队列画像、覆盖、生存和 SOFA 面板；已选特征分布作为 Cohort owner 的只读补充面板。
+- Patient 复用原生时间序列工作区和 ECharts mount，实测 5 个时序特征均完成绘图。
+- Cross-DB 复用原生 Overview/Coverage/Distributions/Quality 标签、筛选与图表绑定；内部旧导航在嵌入态被隐藏。
+- “打开完整 Cohort Statistics”实测跳到 `#cohort`，目标页显示同一份 `8,742` 住院、`14.8%` mortality 和组间聚合，不重新构造另一份结果。
+
+三类视图 `scrollWidth == clientWidth`，console 0 error；只读边界实测为两个原生下游动作均 `hidden=true`、`aria-disabled=true`，顶部完整工作台按钮保持可见。新增 `viz_embedded_workbench.test.js` 后 JS contracts 为 25/25；相关 Python/静态边界矩阵 152 passed、4 warnings。截图：
+
+- `task_logs/browser_qa_20260823/native_copilot_cohort_preview.png`
+- `task_logs/browser_qa_20260823/native_copilot_patient_preview.png`
+- `task_logs/browser_qa_20260823/native_copilot_crossdb_preview.png`
+
 ## 桌面发行物复验
 
 重新执行 `desktop/scripts/build_macos.py` 后得到：
 
 - App：`desktop/src-tauri/target/release/bundle/macos/EasyICU.app`
 - DMG：`desktop/src-tauri/target/release/bundle/dmg/EasyICU_1.0.0_aarch64.dmg`
-- DMG 大小：450,548,074 bytes
-- SHA-256：`5aec7eee2c7e214d4c8cc924e0d806a94f8d3af1a59f40e0a5a6be85a398c4f6`
+- DMG 大小：451,508,667 bytes
+- SHA-256：`a68ffd37165ed10b35b33ac52b6b2f963b0b705623dfaa9d7a0698cc50221b68`
 
-`codesign --verify --deep --strict` 和 `hdiutil verify` 均通过。冻结后端在隔离端口启动后：无 token 的 `/api/catalog` 返回 403，正确 token 返回 200，Copilot 状态和新 CSS/JS 返回成功，新快照路由对未初始化项目返回预期 409，证明路由已打包且保持 fail closed。
+`codesign --verify --deep --strict` 和 `hdiutil verify` 均通过。冻结 App 已直接确认包含 `screens-viz-context.js`、`screens-viz-embedded.js` 及新的 Copilot adapter/CSS；桌面 Python 边界 14 passed、Rust 3 passed。冻结后端在前一轮隔离端口 smoke 中：无 token 的 `/api/catalog` 返回 403，正确 token 返回 200，Copilot 状态和快照路由保持 fail closed。
 
 ## 没有声称的内容
 
