@@ -27,6 +27,13 @@ from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
 
 LANDMARK_SURVIVAL_ANALYSIS_KIND = "signed_landmark_survival_suite"
+#: The figure half of the same sealed authority. Named here, beside the
+#: suite it renders, so the selector spells it the way its five siblings in
+#: the ``isinstance(sealed_current, ...)`` chain are spelled -- every other
+#: authority-gated kind is a module constant, and this one arrived as a bare
+#: literal, which is what made
+#: ``test_report_names_every_owner_the_selector_consults`` single it out.
+LANDMARK_SURVIVAL_FIGURE_ANALYSIS_KIND = "signed_landmark_survival_figure"
 
 
 def landmark_survival_executor_owns_step(

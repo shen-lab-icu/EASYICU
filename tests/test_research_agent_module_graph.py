@@ -222,3 +222,23 @@ def test_production_research_agent_import_graph_is_acyclic() -> None:
     assert snapshot["metrics"]["cyclic_scc_count"] == 0
     assert snapshot["metrics"]["cyclic_module_count"] == 0
     assert snapshot["metrics"]["largest_scc_size"] == 0
+
+
+def test_checked_in_module_graph_baseline_has_no_regression() -> None:
+    """The counterpart of ``test_arch_measure``'s baseline lock.
+
+    Added 2026-08-22. Until then nothing in ``tests/`` or ``.github/``
+    referenced ``arch_baselines/research_agent_module_graph.json``: the tool
+    could emit and diff, but only the acyclicity assertion above ever ran, so
+    the module-count and canonical-surface ratchet drifted 8 days and 54
+    modules (519 -> 573) unnoticed. Keeping the baseline honest is the whole
+    reason it is checked in.
+    """
+
+    baseline = json.loads(
+        (TOOLS_DIR / "arch_baselines" / "research_agent_module_graph.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert graph.compare_snapshots(graph.build_snapshot(), baseline) == []

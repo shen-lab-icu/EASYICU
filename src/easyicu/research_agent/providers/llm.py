@@ -1281,6 +1281,23 @@ def _api_key_present(
     )
 
 
+def _external_llm_authorized(environment: Mapping[str, str]) -> bool:
+    """Whether this environment carries the canonical external-LLM opt-in.
+
+    ``CLAUDE.md`` makes ``ai_optin.check_external_llm_opt_in`` the canonical
+    gate for any path that may issue a real LLM call, and the CLIs that own the
+    user-facing prompt call it before stamping ``EASYICU_ALLOW_EXTERNAL_LLM``
+    into the environment they hand this factory. Reading that stamp here is
+    what makes the gate structural rather than a convention every future caller
+    has to remember.
+    """
+
+    from .client_trust import ALLOW_EXTERNAL_LLM_ENV
+
+    raw = str(environment.get(ALLOW_EXTERNAL_LLM_ENV, "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _backend_available(
     backend: str,
     *,
@@ -1289,11 +1306,17 @@ def _backend_available(
     environment: Mapping[str, str],
 ) -> bool:
     if backend in _CLI_BACKENDS:
-        external_allowed = str(
-            environment.get("EASYICU_ALLOW_EXTERNAL_LLM", "") or ""
-        ).strip().lower() in {"1", "true", "yes", "on"}
-        return cli_backend_available(backend) and external_allowed
+        return cli_backend_available(backend) and _external_llm_authorized(environment)
     if backend in _API_BACKENDS:
+        # Deliberately does NOT also require the opt-in stamp. An API backend
+        # requested without authorization must reach ``build_provider_client``
+        # and fail closed there with the precise
+        # ``EXTERNAL_LLM_NOT_AUTHORIZED`` ProviderConfigurationError. Screening
+        # it out here instead would silently degrade an explicitly requested
+        # real provider to the mock floor -- trading an actionable error for a
+        # wrong answer, which is exactly the fallback this codebase forbids.
+        # ``test_api_backend_without_opt_in_fails_closed_and_is_never_downgraded``
+        # locks that behaviour.
         return _api_key_present(
             backend,
             api_key,

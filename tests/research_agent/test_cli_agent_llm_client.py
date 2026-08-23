@@ -555,3 +555,53 @@ def test_internal_claude_readiness_without_status_command_is_explicitly_unverifi
     assert result.authentication_verified is None
     assert result.launch_ready is True
     assert result.subprocess_calls == 0
+
+
+def test_api_backend_without_opt_in_fails_closed_and_is_never_downgraded(monkeypatch):
+    """An API key alone must not buy a real client -- and must not buy a mock either.
+
+    Added 2026-08-22 because this boundary had no test at the ``build_llm_client``
+    level. ``_backend_available`` gates the CLI backends on
+    ``EASYICU_ALLOW_EXTERNAL_LLM`` but deliberately does *not* screen out an API
+    backend whose key is present: the request is allowed to reach
+    ``build_provider_client``, which fails closed with the precise
+    ``EXTERNAL_LLM_NOT_AUTHORIZED`` error naming the environment variable and
+    what approving it means.
+
+    The wrong repair here is to screen the backend out of the ladder so the run
+    quietly lands on the mock floor. That turns "you have not authorized this
+    provider" into a silently different answer, which is the fallback this
+    codebase forbids. Lock the loud failure.
+    """
+    from easyicu.research_agent.providers.client_trust import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+    )
+    from easyicu.research_agent.providers.llm import build_llm_client
+
+    _patch_cli(monkeypatch, set())
+    monkeypatch.delenv("EASYICU_ALLOW_EXTERNAL_LLM", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-present-but-not-authorized")
+
+    with pytest.raises(ProviderConfigurationError) as excinfo:
+        build_llm_client(prefer="openai", model="gpt-4o-mini")
+
+    # The stable reason code identifies the owner; the rendered message tells
+    # the operator the exact variable to set. Both matter, so lock both.
+    assert excinfo.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert excinfo.value.provider == "openai"
+    assert "EASYICU_ALLOW_EXTERNAL_LLM" in str(excinfo.value)
+
+
+def test_api_backend_is_selected_once_the_opt_in_stamp_is_present(monkeypatch):
+    """The positive half of the gate: authorization restores selection."""
+    from easyicu.research_agent.providers.llm import build_llm_client
+
+    _patch_cli(monkeypatch, set())
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-authorized")
+
+    selection = build_llm_client(prefer="openai", model="gpt-4o-mini")
+
+    assert selection.backend == "openai"
+    assert selection.client.name == "openai"

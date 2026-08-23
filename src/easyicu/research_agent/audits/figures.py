@@ -357,6 +357,88 @@ class FigureSourceDataValidator:
         raise ValueError(f"unsupported tabular suffix: {suffix or '<none>'}")
 
     @classmethod
+    def _digest_traceable_match(
+        cls,
+        *,
+        source_df: pd.DataFrame,
+        source_path: Path,
+        upstream_path: Path,
+    ) -> Optional[Dict[str, Any]]:
+        """The file-digest fast path, or ``None`` when it may not be trusted.
+
+        A byte-identical copy of a parent that shares no joinable key -- the
+        numeric-only survival curve this path was written for -- has nothing to
+        align on, so the row-wise comparison cannot verify what is in fact a
+        perfect reproduction. The digest answers for it, but only there and only
+        under the guard below.
+
+        THIS CHECK USED TO SIT AT THE TOP of ``_compare_source_to_upstream``
+        (2026-08-22), where it preempted every branch. That was wrong twice, and
+        the tests caught both:
+
+        * It answered a different question than the one asked. The contract is
+          to verify ``source_df`` -- the frame the caller holds -- against the
+          upstream table. Hashing ``source_path`` verifies the FILE instead, and
+          the production caller passes ONE panel group as ``source_df`` while
+          ``source_path`` names the whole file. A source file that happened to
+          match any upstream table skipped the per-group comparison outright.
+        * Preempting the branches below also relabelled results the
+          valueless-parent branch had already verified properly, turning
+          ``valueless_parent_reproduced`` into ``exact_file_digest_match`` and
+          silently changing a reason code other layers read.
+
+        Both close by running last instead of first and by requiring, through
+        :meth:`_frame_is_whole_file`, that the digest describes the artifact
+        actually being audited.
+        """
+
+        if not (source_path.is_file() and upstream_path.is_file()):
+            return None
+        if _sha256_file(source_path) != _sha256_file(upstream_path):
+            return None
+        if not cls._frame_is_whole_file(source_df, source_path):
+            return None
+        return {
+            "ok": True,
+            "reason": "exact_file_digest_match",
+            "source_table": source_path.name,
+            "upstream_table": upstream_path.name,
+            "n_source_rows": int(len(source_df)),
+            "join_mode": "exact_file_digest",
+        }
+
+    @classmethod
+    def _frame_is_whole_file(cls, frame: pd.DataFrame, path: Path) -> bool:
+        """Whether ``frame`` is the entire contents of ``path``.
+
+        A file digest only says something about the file. Callers of
+        ``_compare_source_to_upstream`` may hand a SUBSET of it -- the panel
+        grouping at ``_compare_source_to_upstream(source_df=group_df, ...)``
+        does exactly that -- and for those a matching file digest says nothing
+        about the frame actually being audited. Any doubt (unreadable file,
+        shape or column mismatch, values that do not compare equal) answers
+        False, so the caller falls through to a real comparison rather than
+        trusting a digest that describes something else.
+        """
+
+        try:
+            on_disk = cls._read_tabular(path)
+        except Exception:  # noqa: BLE001 - unreadable means "cannot confirm"
+            return False
+        if on_disk.shape != frame.shape or list(on_disk.columns) != list(
+            frame.columns
+        ):
+            return False
+        try:
+            return bool(
+                on_disk.reset_index(drop=True)
+                .astype(str)
+                .equals(frame.reset_index(drop=True).astype(str))
+            )
+        except Exception:  # noqa: BLE001 - uncomparable means "cannot confirm"
+            return False
+
+    @classmethod
     def _normalised_method_head(cls, method: Any) -> str:
         normalised = cls._normalise(method)
         return normalised.split("_with_", 1)[0]
@@ -3819,19 +3901,6 @@ class FigureSourceDataValidator:
         source_path: Path,
         upstream_path: Path,
     ) -> Dict[str, Any]:
-        if (
-            source_path.is_file()
-            and upstream_path.is_file()
-            and _sha256_file(source_path) == _sha256_file(upstream_path)
-        ):
-            return {
-                "ok": True,
-                "reason": "exact_file_digest_match",
-                "source_table": source_path.name,
-                "upstream_table": upstream_path.name,
-                "n_source_rows": int(len(source_df)),
-                "join_mode": "exact_file_digest",
-            }
         try:
             upstream_df = cls._read_tabular(upstream_path)
         except Exception as exc:
@@ -4054,7 +4123,14 @@ class FigureSourceDataValidator:
                 key_cols = (best[1],)
                 used_structural_fallback = True
         if key_cols is None:
-            return {
+            # A byte-identical copy that shares no joinable key has nothing to
+            # align on, so this is the one place the file digest may stand in
+            # for a row-wise comparison. See ``_digest_traceable_match``.
+            return cls._digest_traceable_match(
+                source_df=source_df,
+                source_path=source_path,
+                upstream_path=upstream_path,
+            ) or {
                 "ok": False,
                 "reason": "no_shared_key",
                 "upstream_table": upstream_path.name,

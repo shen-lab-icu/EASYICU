@@ -2251,8 +2251,12 @@ def _candidate_summary_transition(
     # Return once through the digest gate for the single final LLM
     # concept audit.  The output directory is intentionally retained;
     # on approval it proceeds without re-executing unchanged code.
+    #
+    # An unreachable `return _CandidateLoopAction.PROCEED` sat below this line
+    # until 2026-08-22 -- a leftover from before the digest gate took over.
+    # It changed nothing at runtime but read as a second live branch, which is
+    # the wrong thing for a reader auditing this state machine to believe.
     return _CandidateLoopAction.CONTINUE
-    return _CandidateLoopAction.PROCEED
 
 
 def _candidate_failure_transition(

@@ -152,6 +152,22 @@ TARGET_FILES: List[Path] = [
     RA / "figures" / "skill.py",
     RA / "figures" / "promotion_contract.py",
     RA / "authority" / "evidence_store.py",
+    # 2026-08-22 pipeline.py decomposition batch: the legacy resume-plan
+    # migration family (schema migration, robustness-lock restore, trajectory
+    # replay-product migration, figure render-edge restore) moved to
+    # orchestration/resume_plan_migration.py behind a facade import. The
+    # coordinator and every test-patched name stay in pipeline.py so the resume
+    # monkeypatch seams keep resolving; the new owner inherits the ratchet.
+    RA / "orchestration" / "resume_plan_migration.py",
+    # 2026-08-22: these three were the standing "3 of the top-12 files are
+    # outside TARGET_FILES" NOTE that every --diff run printed and nobody
+    # actioned. They are large, committed, and unowned by any in-flight refactor
+    # lane, so baselining them here measures committed bytes (the concern the
+    # audits/validators.py note above guards against) and stops the next
+    # unmanaged monolith from growing unmeasured.
+    RA / "discovery" / "idea_mining.py",
+    RA / "execution" / "runner.py",
+    RA / "execution" / "runners" / "deterministic_robustness.py",
 ]
 # (file, function name) — first match by name (top-level or nested).
 TARGET_FUNCTIONS: List[Tuple[str, str]] = [
