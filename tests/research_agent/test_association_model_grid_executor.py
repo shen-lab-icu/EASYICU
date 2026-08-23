@@ -18,6 +18,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     load_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.plan_input_closure import (
     close_measurement_companion_inputs,
 )
@@ -37,6 +38,10 @@ from easyicu.research_agent.contracts.declared_product import (
 )
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
+)
+from easyicu.research_agent.orchestration.resume_plan_migration import (
+    LegacyResumePlanMigrationError,
+    _migrate_resume_scientific_runtime_binding,
 )
 from easyicu.research_agent.plan_utils import effect_output_authorized
 from easyicu.research_agent.schema import (
@@ -158,6 +163,93 @@ def _cohort(n: int = 800) -> pd.DataFrame:
             "icu_readmission": readmission,
         }
     )
+
+
+def _saved_plan_missing_one_nonlinear_parent():
+    _projection, authority, plan, _findings = _authority_and_plan()
+    parent = plan.steps[0]
+    requirement = parent.model_requirements[0]
+    reduced = requirement.model_copy(
+        update={
+            "covariates": [
+                value for value in requirement.covariates if value != "charlson_max"
+            ],
+            "model_terms": [
+                value
+                for value in requirement.model_terms
+                if value.name != "charlson_max"
+            ],
+        }
+    )
+    saved = plan.model_copy(
+        update={
+            "steps": [
+                parent.model_copy(update={"model_requirements": [reduced]}),
+                *plan.steps[1:],
+            ]
+        }
+    )
+    return authority, saved
+
+
+def test_resume_recompiles_signed_binding_only_inside_requested_replay_cut(
+    tmp_path,
+):
+    authority, saved = _saved_plan_missing_one_nonlinear_parent()
+    evidence = EvidenceStore(tmp_path)
+
+    migrated, path, changed_ids, findings = (
+        _migrate_resume_scientific_runtime_binding(
+            plan=saved,
+            resume_state={"per_step_records": []},
+            resume_from_step_id=saved.steps[0].step_id,
+            scientific_runtime_authorities=ScientificRuntimeAuthorities(
+                current_case=authority,
+                trajectory=None,
+            ),
+            run_dir=tmp_path,
+            evidence=evidence,
+            prompt_version="test",
+            llm_signature="mock",
+        )
+    )
+
+    assert path == tmp_path / f"analysis_plan_revision_{migrated.revision}.json"
+    assert changed_ids == (saved.steps[0].step_id,)
+    assert "charlson_max" in migrated.steps[0].model_requirements[0].covariates
+    authority.validate_plan(migrated)
+    assert findings
+    record = evidence.get(f"analysis_plan_revision_{migrated.revision}")
+    assert record is not None
+    assert record.metadata["reason"] == "restore_signed_scientific_runtime_binding"
+
+
+def test_resume_refuses_signed_binding_that_would_change_a_completed_parent(
+    tmp_path,
+):
+    authority, saved = _saved_plan_missing_one_nonlinear_parent()
+
+    with pytest.raises(
+        LegacyResumePlanMigrationError,
+        match="would change completed steps",
+    ):
+        _migrate_resume_scientific_runtime_binding(
+            plan=saved,
+            resume_state={
+                "per_step_records": [
+                    {"step_id": saved.steps[0].step_id, "status": "ok"}
+                ]
+            },
+            resume_from_step_id=saved.steps[1].step_id,
+            scientific_runtime_authorities=ScientificRuntimeAuthorities(
+                current_case=authority,
+                trajectory=None,
+            ),
+            run_dir=tmp_path,
+            evidence=EvidenceStore(tmp_path),
+            prompt_version="test",
+            llm_signature="mock",
+        )
 
 
 def test_signed_standard_selection_authorizes_grid_effect_outputs_only_at_runtime():
