@@ -483,6 +483,22 @@ class _ResumeRevalidationLedger:
     retirement_records: Dict[str, Mapping[str, Any]]
 
 
+def _inline_history_checkpoint_payload(
+    state: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Project hydrated resume authority back to one live checkpoint form.
+
+    The authority loader hydrates an external JSONL history into the in-memory
+    ``step_attempt_history`` field but intentionally leaves its digest-bound
+    reference present.  A live partial checkpoint must store the inline form
+    only; persisting both makes the next resume ambiguous and fail-closed.
+    """
+
+    payload = dict(state)
+    payload.pop("step_attempt_history_ref", None)
+    return payload
+
+
 def _enforce_resume_cut(
     *,
     resume_from_step_id: Optional[str],
@@ -510,7 +526,7 @@ def _prepare_revalidation_ledger(
     """Merge monotonic history and build trusted replay indexes."""
 
     resume_state = request.resume_state
-    state = dict(resume_state)
+    state = _inline_history_checkpoint_payload(resume_state)
     authority_history = [
         dict(record)
         for record in (resume_state.get("per_step_records") or [])
@@ -1266,7 +1282,7 @@ def _commit_revalidation(
             try:
                 request.services.write_run_checkpoint(
                     checkpoint_path,
-                    request.resume_state,
+                    _inline_history_checkpoint_payload(request.resume_state),
                 )
             except (OSError, TypeError, ValueError) as rollback_exc:
                 raise RuntimeError(
