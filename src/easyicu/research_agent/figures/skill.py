@@ -58,6 +58,21 @@ from ..robustness.panel import RobustnessPanel, load_robustness_panel
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
 from ..planning.study_design import infer_study_design_family
 
+
+# EvidenceStore records are immutable by content digest.  The v1 source-data
+# ids predate explicit checkpoint roots, so byte-identical replays would reuse
+# those records and silently discard the new lineage metadata.  Version the
+# producer contract once instead of mutating historical evidence in place.
+PUBLICATION_SOURCE_CHECKPOINT_LINEAGE_VERSION = "checkpoint_v1"
+
+
+def _checkpoint_lineage_source_id(stem: str) -> str:
+    return (
+        f"publication_figure_source_{stem}_"
+        f"{PUBLICATION_SOURCE_CHECKPOINT_LINEAGE_VERSION}"
+    )
+
+
 class _PrimaryLineageEvidenceView:
     """Read-only evidence view limited to Planner-primary descendants."""
 
@@ -521,7 +536,7 @@ class PublicationFigureSkill:
                 kind="table",
                 description=f"Source data copied for the {rendered.generation_mode}.",
                 source_path=copy_path,
-                evidence_id=f"publication_figure_source_{name}",
+                evidence_id=_checkpoint_lineage_source_id(name),
                 aliases=[
                     "publication_figure_source_data",
                     f"publication_figure_source_{name}",
@@ -998,7 +1013,11 @@ class PublicationFigureSkill:
                     kind="table",
                     description="Source data copied for the publication figure skill.",
                     source_path=source_path,
-                    evidence_id=Path(source_name).stem,
+                    evidence_id=_checkpoint_lineage_source_id(
+                        Path(source_name).stem.removeprefix(
+                            "publication_figure_source_"
+                        )
+                    ),
                     aliases=[
                         Path(source_name).stem,
                         source_name,
@@ -1505,7 +1524,7 @@ class PublicationFigureSkill:
             kind="table",
             description="Source data copied for the robustness-panel publication figure.",
             source_path=source_copy,
-            evidence_id="publication_figure_source_robustness_panel",
+            evidence_id=_checkpoint_lineage_source_id("robustness_panel"),
             aliases=["publication_figure_source_data"],
             producer=self.name,
             generation_mode="deterministic_figure_skill",
@@ -1520,7 +1539,7 @@ class PublicationFigureSkill:
                 "publication figure."
             ),
             source_path=axis_summary_copy,
-            evidence_id="publication_figure_source_robustness_axis_summary",
+            evidence_id=_checkpoint_lineage_source_id("robustness_axis_summary"),
             aliases=["publication_figure_axis_summary_source_data"],
             producer=self.name,
             generation_mode="deterministic_figure_skill",
@@ -1632,7 +1651,9 @@ class PublicationFigureSkill:
                     kind="table",
                     description="Source data copied beside a promoted publication figure.",
                     source_path=out_dir / source_name,
-                    evidence_id=f"publication_figure_source_{Path(source_name).stem}",
+                    evidence_id=_checkpoint_lineage_source_id(
+                        Path(source_name).stem
+                    ),
                     aliases=[source_name, Path(source_name).stem],
                     inputs=source_ids,
                     producer=self.name,
