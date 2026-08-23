@@ -119,6 +119,7 @@ SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.reporting.reviewer",
     "easyicu.research_agent.reporting.review_artifacts",
     "easyicu.research_agent.reporting.display_suite",
+    "easyicu.research_agent.reporting.figure_claim_boundaries",
     "easyicu.research_agent.reporting.article_contract",
     "easyicu.research_agent.reporting.bibtex",
     "easyicu.research_agent.reporting.latex",

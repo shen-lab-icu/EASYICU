@@ -23,6 +23,7 @@ from ..figures.contracts import (
 from ..authority.runtime_artifacts import current_evidence_records
 from ..schema import AnalysisPlan, ResearchContext
 from ..planning.study_design import infer_study_design_family
+from .figure_claim_boundaries import build_figure_claim_boundary_audit
 
 # A "result-bearing" figure contract is one whose text carries the study's
 # actual findings (as opposed to audit/provenance displays). The base tokens
@@ -77,7 +78,7 @@ _AUDIT_DISPLAY_CATEGORIES = {
     "robustness",
 }
 
-DISPLAY_SUITE_AUDIT_SCHEMA_VERSION = "easyicu.display_suite_audit/2"
+DISPLAY_SUITE_AUDIT_SCHEMA_VERSION = "easyicu.display_suite_audit/3"
 DISPLAY_SUITE_AUDIT_REGISTRATION = (
     "display_suite_audit",
     "statistic",
@@ -146,6 +147,16 @@ def display_suite_audit_payload(gates: Mapping[str, Any]) -> Dict[str, Any]:
         "table_one_expected": gates["display_table_one_expected"],
         "table_one_present": gates["display_table_one_present"],
         "audit_context_present": gates["display_audit_context_present"],
+        "figure_claim_boundary_status": gates[
+            "display_figure_claim_boundary_status"
+        ],
+        "figure_claim_boundary_ready": gates[
+            "display_figure_claim_boundary_ready"
+        ],
+        "figure_claim_boundaries": gates["display_figure_claim_boundaries"],
+        "figure_claim_boundary_errors": gates[
+            "display_figure_claim_boundary_errors"
+        ],
         "errors": gates["display_suite_errors"],
     }
 
@@ -415,6 +426,21 @@ def summarize_display_suite_status(
             "article-level association displays need at least one complementary visual form "
             "such as flow, dot-interval absolute-risk, distribution, curve, or specification display."
         )
+    claim_boundaries = build_figure_claim_boundary_audit(
+        plan=plan,
+        run_dir=run_dir,
+        per_step_records=per_step_records,
+    )
+    if (
+        plan is not None
+        and plan.design_selection is not None
+        and primary_result_like_contracts > 0
+        and not claim_boundaries.boundary_ready
+    ):
+        errors.append(
+            "Primary result figures do not have complete selected-design "
+            "supports/cannot-prove boundaries."
+        )
 
     return {
         "display_suite_complete": not errors,
@@ -461,5 +487,11 @@ def summarize_display_suite_status(
         "display_table_one_expected": table_one_expected,
         "display_table_one_present": has_table_one,
         "display_audit_context_present": has_audit_context,
+        "display_figure_claim_boundary_status": claim_boundaries.status,
+        "display_figure_claim_boundary_ready": claim_boundaries.boundary_ready,
+        "display_figure_claim_boundaries": [
+            item.model_dump(mode="json") for item in claim_boundaries.figures
+        ],
+        "display_figure_claim_boundary_errors": list(claim_boundaries.errors),
         "display_suite_errors": errors,
     }

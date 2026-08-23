@@ -8369,6 +8369,22 @@
     ],
     [
       "easyicu.research_agent.reporting.display_suite",
+      "easyicu.research_agent.reporting.figure_claim_boundaries"
+    ],
+    [
+      "easyicu.research_agent.reporting.display_suite",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.reporting.figure_claim_boundaries",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.reporting.figure_claim_boundaries",
+      "easyicu.research_agent.figures.contracts"
+    ],
+    [
+      "easyicu.research_agent.reporting.figure_claim_boundaries",
       "easyicu.research_agent.schema"
     ],
     [
@@ -9316,9 +9332,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2321,
+    "edge_count": 2325,
     "largest_scc_size": 0,
-    "module_count": 577,
+    "module_count": 578,
     "package_count": 32,
     "top_level_module_count": 34
   },
@@ -9830,6 +9846,7 @@
     "easyicu.research_agent.reporting.bibtex": "reporting/bibtex.py",
     "easyicu.research_agent.reporting.completion": "reporting/completion.py",
     "easyicu.research_agent.reporting.display_suite": "reporting/display_suite.py",
+    "easyicu.research_agent.reporting.figure_claim_boundaries": "reporting/figure_claim_boundaries.py",
     "easyicu.research_agent.reporting.latex": "reporting/latex.py",
     "easyicu.research_agent.reporting.manuscript_literature": "reporting/manuscript_literature.py",
     "easyicu.research_agent.reporting.manuscript_post": "reporting/manuscript_post.py",
@@ -9937,6 +9954,6 @@
     "easyicu.research_agent.trajectory"
   ],
   "schema_version": 2,
-  "tool_sha256": "d12bb9dbd3fc930cd900a8674a790b9e7776fbaece6dd95f68b66fb8bd8839b2",
+  "tool_sha256": "ec079f2331d81229a8292340da45c393a5fe4ef0d0ff4e9698a661c93f139897",
   "tool_version": "1.3.0"
 }
