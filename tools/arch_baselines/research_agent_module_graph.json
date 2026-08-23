@@ -7505,6 +7505,10 @@
     ],
     [
       "easyicu.research_agent.planning.scientific_action_catalog",
+      "easyicu.research_agent.planning.method_adapter_catalog"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_action_catalog",
       "easyicu.research_agent.planning.study_design"
     ],
     [
@@ -9300,9 +9304,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2317,
+    "edge_count": 2318,
     "largest_scc_size": 0,
-    "module_count": 575,
+    "module_count": 576,
     "package_count": 32,
     "top_level_module_count": 34
   },
@@ -9705,6 +9709,7 @@
     "easyicu.research_agent.planning.final_plan_shape": "planning/final_plan_shape.py",
     "easyicu.research_agent.planning.literature_bindings": "planning/literature_bindings.py",
     "easyicu.research_agent.planning.literature_contract": "planning/literature_contract.py",
+    "easyicu.research_agent.planning.method_adapter_catalog": "planning/method_adapter_catalog.py",
     "easyicu.research_agent.planning.method_literature": "planning/method_literature.py",
     "easyicu.research_agent.planning.method_vocabulary": "planning/method_vocabulary.py",
     "easyicu.research_agent.planning.novelty_contract": "planning/novelty_contract.py",
@@ -9919,6 +9924,6 @@
     "easyicu.research_agent.trajectory"
   ],
   "schema_version": 2,
-  "tool_sha256": "2f8a316db7e00031c3d6d945091ca6df992f9425e64f72552aa53b83068c7a92",
+  "tool_sha256": "ec691582f918f2678714525cfeb74639bea2322d339f622644e9fa2255b5099a",
   "tool_version": "1.3.0"
 }
