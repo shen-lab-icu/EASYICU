@@ -211,6 +211,24 @@ class PublicationFigureSkill:
                 generated=False,
                 skipped_reason="existing_curated_publication_figure_bundle",
             )
+        promoted_bundle = _select_existing_step_publication_figure_bundle(
+            source_evidence
+        )
+        # A host-owned deterministic renderer has already consumed the exact
+        # typed inputs and written the manuscript bundle.  Preserve that richer
+        # result instead of synthesising a second, weaker family figure from a
+        # subset of its tables.  Generated/fallback bundles still pass through
+        # the existing strategy checks below.
+        if promoted_bundle is not None and _bundle_is_deterministic_standard(
+            promoted_bundle
+        ):
+            return self._promote_registered_publication_figure(
+                context=context,
+                evidence=evidence,
+                run_dir=run_dir,
+                bundle=promoted_bundle,
+                prompt_pack_version=prompt_pack_version,
+            )
         # Study-design-aware dispatch: survival / prediction / phenotyping /
         # causal questions render their own family figure (KM curve, ROC +
         # calibration, cluster heatmap, love plot) instead of being funnelled
@@ -254,9 +272,6 @@ class PublicationFigureSkill:
                     "association_table",
                 ],
             )
-        promoted_bundle = _select_existing_step_publication_figure_bundle(
-            source_evidence
-        )
         if promoted_bundle is not None and (
             primary is None or _bundle_primary_strategy_ready(context, promoted_bundle)
         ):
@@ -506,6 +521,7 @@ class PublicationFigureSkill:
                 aliases=[
                     "publication_figure_source_data",
                     f"publication_figure_source_{name}",
+                    copy_path.name,
                 ],
                 inputs=rendered.source_evidence_ids,
                 producer=self.name,
@@ -956,11 +972,49 @@ class PublicationFigureSkill:
                     "review_risk": "Zero-missingness summaries can otherwise look like empty plots if not annotated.",
                 }
             )
+        local_source_names = [source_copy.name]
+        if not strata_df.empty:
+            local_source_names.append(
+                "publication_figure_source_stratified_outcome.csv"
+            )
+        if not missingness_df.empty:
+            local_source_names.append("publication_figure_source_missingness.csv")
+        upstream_source_ids = [record.evidence_id for record in source_records]
+        source_metadata = _source_fingerprint_metadata(
+            evidence,
+            upstream_source_ids,
+        )
+        source_copy_records: List[EvidenceRecord] = []
+        for source_name in local_source_names:
+            source_path = out_dir / source_name
+            source_copy_records.append(
+                evidence.register_file(
+                    kind="table",
+                    description="Source data copied for the publication figure skill.",
+                    source_path=source_path,
+                    evidence_id=Path(source_name).stem,
+                    aliases=[
+                        Path(source_name).stem,
+                        source_name,
+                        *(
+                            ["publication_figure_source_data"]
+                            if source_name == source_copy.name
+                            else []
+                        ),
+                    ],
+                    inputs=upstream_source_ids,
+                    producer=self.name,
+                    generation_mode="deterministic_figure_skill",
+                    prompt_pack_version=prompt_pack_version,
+                    metadata=source_metadata,
+                    on_sha_change="new_id",
+                )
+            )
         contract = make_figure_contract(
             figure_id="easyicu_publication_figure",
             core_claim=core_claim,
             panels=panels,
-            source_data=[record.evidence_id for record in source_records],
+            source_data=local_source_names,
             statistics_note=(
                 (
                     "Panel A uses the prespecified comparison-minus-reference risk "
@@ -1002,26 +1056,13 @@ class PublicationFigureSkill:
             paths=paths,
             contract=contract,
             prompt_pack_version=prompt_pack_version,
+            source_evidence_ids=[
+                *upstream_source_ids,
+                *[record.evidence_id for record in source_copy_records],
+            ],
         )
         contract_evidence_id = contract_record.evidence_id
         figure_ids = [record.evidence_id for record in figure_records]
-        source_metadata = _source_fingerprint_metadata(
-            evidence,
-            _figure_contract_source_ids(contract),
-        )
-
-        source_copy_record = evidence.register_file(
-            kind="table",
-            description="Source data copied for the publication figure skill.",
-            source_path=source_copy,
-            evidence_id="publication_figure_source_primary_association",
-            aliases=["publication_figure_source_data"],
-            producer=self.name,
-            generation_mode="deterministic_figure_skill",
-            prompt_pack_version=prompt_pack_version,
-            metadata=source_metadata,
-            on_sha_change="new_id",
-        )
 
         summary = {
             "stage": self.name,
@@ -1029,8 +1070,11 @@ class PublicationFigureSkill:
             "generation_mode": "primary_association_publication_figure",
             "figure_id": contract.figure_id,
             "core_claim": contract.core_claim,
-            "source_evidence_ids": [record.evidence_id for record in source_records],
-            "source_copy_evidence_id": source_copy_record.evidence_id,
+            "source_evidence_ids": upstream_source_ids,
+            "source_copy_evidence_id": source_copy_records[0].evidence_id,
+            "source_copy_evidence_ids": [
+                record.evidence_id for record in source_copy_records
+            ],
             "figure_evidence_ids": figure_ids,
             "contract_evidence_id": contract_evidence_id,
             "audit_findings": [f.model_dump(mode="json") for f in audit_findings],
@@ -1567,9 +1611,39 @@ class PublicationFigureSkill:
                 *source_records,
             ]
         )
+        copied_source_names = _copy_promoted_source_data(
+            bundle=bundle,
+            run_dir=run_dir,
+            out_dir=out_dir,
+        )
+        promoted_source_records: List[EvidenceRecord] = []
+        for source_name in copied_source_names:
+            promoted_source_records.append(
+                evidence.register_file(
+                    kind="table",
+                    description="Source data copied beside a promoted publication figure.",
+                    source_path=out_dir / source_name,
+                    evidence_id=f"publication_figure_source_{Path(source_name).stem}",
+                    aliases=[source_name, Path(source_name).stem],
+                    inputs=source_ids,
+                    producer=self.name,
+                    generation_mode="deterministic_figure_skill",
+                    prompt_pack_version=prompt_pack_version,
+                    on_sha_change="new_id",
+                )
+            )
+        source_ids = list(
+            dict.fromkeys(
+                [
+                    *source_ids,
+                    *[record.evidence_id for record in promoted_source_records],
+                ]
+            )
+        )
         contract = contract_promoted_from_source(
             _verified_record_path(run_dir, contract_source),
             source_ids=source_ids,
+            source_data=copied_source_names or None,
         )
         contract_path = out_dir / "easyicu_publication_figure.figure_contract.json"
         contract_path.write_text(contract.to_json(indent=2), encoding="utf-8")
@@ -2015,6 +2089,79 @@ def _select_existing_step_publication_figure_bundle(
         return None
     ranked = sorted(viable, key=_step_publication_bundle_rank)
     return ranked[0]
+
+
+def _bundle_is_deterministic_standard(bundle: Mapping[str, Any]) -> bool:
+    """Whether the selected step bundle was wholly rendered by a host owner."""
+
+    records = [bundle.get("contract")]
+    figures = bundle.get("figures")
+    if isinstance(figures, Mapping):
+        records.extend(figures.get(suffix) for suffix in ("svg", "png"))
+    if any(record is None for record in records):
+        return False
+    return all(
+        str(
+            getattr(record, "generation_mode", None)
+            or (getattr(record, "metadata", None) or {}).get("generation_mode")
+            or ""
+        ).strip()
+        == "deterministic_standard"
+        for record in records
+    )
+
+
+def _copy_promoted_source_data(
+    *,
+    bundle: Mapping[str, Any],
+    run_dir: Path,
+    out_dir: Path,
+) -> List[str]:
+    """Copy every contract-declared local source table beside the promoted figure."""
+
+    payload = bundle.get("contract_payload")
+    if not isinstance(payload, Mapping):
+        return []
+    declared = payload.get("source_data")
+    if isinstance(declared, str):
+        raw_names = [declared]
+    elif isinstance(declared, (list, tuple)):
+        raw_names = [value for value in declared if isinstance(value, str)]
+    else:
+        raw_names = []
+    names: List[str] = []
+    for raw_name in raw_names:
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        safe_name = Path(name).name
+        if safe_name != name or safe_name in {".", ".."}:
+            raise ValueError(
+                "promoted figure source_data must use safe local basenames"
+            )
+        if safe_name not in names:
+            names.append(safe_name)
+    if not names:
+        return []
+
+    source_records = list(bundle.get("source_records") or [])
+    copied: List[str] = []
+    for name in names:
+        record = next(
+            (
+                candidate
+                for candidate in source_records
+                if _record_artifact_basename(candidate) == name
+            ),
+            None,
+        )
+        if record is None:
+            raise ValueError(
+                f"promoted figure source_data {name!r} has no registered table"
+            )
+        shutil.copy2(_verified_record_path(run_dir, record), out_dir / name)
+        copied.append(name)
+    return copied
 
 
 def _contract_payload_source_references(payload: Any) -> List[str]:
@@ -2834,6 +2981,24 @@ def _normalise_association_frame(
     if typed_distribution is not None:
         return typed_distribution
     cols = {str(c).lower(): c for c in frame.columns}
+    estimate_type_col = cols.get("estimate_type")
+    if estimate_type_col is not None:
+        estimate_types = {
+            str(value).strip().casefold()
+            for value in frame[estimate_type_col]
+            if str(value).strip() and str(value).strip().casefold() != "nan"
+        }
+        if estimate_types and estimate_types <= {
+            "prevalence",
+            "outcome_risk",
+            "continuous_distribution",
+            "distribution",
+        }:
+            # Absolute-risk and measurement-availability tables are contextual
+            # panels, not relative/contrast association estimates.  Treating
+            # their prevalence and event-rate rows as a forest mixes estimands
+            # on one untyped axis.
+            return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
     primary_token = _match_token(primary_exposure)
     if primary_token:
         match_cols = [
@@ -2883,6 +3048,7 @@ def _normalise_association_frame(
         [
             "point_estimate",
             "odds_ratio",
+            "adjusted_odds_ratio",
             "adjusted_or",
             "or",
             "hazard_ratio",
@@ -2941,9 +3107,36 @@ def _normalise_association_frame(
             "estimate_ci_high",
         ],
     )
+    synthetic_labels: Optional[pd.Series] = None
     if label_col is None:
-        label_col = estimate_col
-    if estimate_col is None or label_col is None:
+        reference_col = next(
+            (
+                column
+                for name, column in cols.items()
+                if name.startswith("reference_")
+                and name.removeprefix("reference_") in cols
+            ),
+            None,
+        )
+        if reference_col is not None:
+            reference_name = str(reference_col).lower().removeprefix("reference_")
+            exposure_col = cols.get(reference_name)
+            if exposure_col is not None:
+                exposure_name = _display_label(reference_name, display_labels)
+
+                def contrast_label(row: pd.Series) -> str:
+                    value = pd.to_numeric(
+                        pd.Series([row[exposure_col]]), errors="coerce"
+                    ).iloc[0]
+                    reference = pd.to_numeric(
+                        pd.Series([row[reference_col]]), errors="coerce"
+                    ).iloc[0]
+                    if pd.isna(value) or pd.isna(reference):
+                        return ""
+                    return f"{exposure_name}: {float(value):g} vs {float(reference):g}"
+
+                synthetic_labels = frame.apply(contrast_label, axis=1)
+    if estimate_col is None or (label_col is None and synthetic_labels is None):
         return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
 
     def association_label(value: Any) -> str:
@@ -2955,11 +3148,14 @@ def _normalise_association_frame(
                 return declared_contrast
         return _display_label(value, display_labels)
 
+    labels = (
+        synthetic_labels
+        if synthetic_labels is not None
+        else frame[label_col].astype(str).map(association_label)
+    )
     out = pd.DataFrame(
         {
-            "label": frame[label_col]
-            .astype(str)
-            .map(association_label),
+            "label": labels,
             "estimate": pd.to_numeric(frame[estimate_col], errors="coerce"),
         }
     )
@@ -2971,7 +3167,7 @@ def _normalise_association_frame(
         out["upper"] = pd.to_numeric(frame[upper_col], errors="coerce")
     else:
         out["upper"] = out["estimate"]
-    raw_label = frame[label_col].astype(str).str.strip().str.lower()
+    raw_label = labels.astype(str).str.strip().str.lower()
     out = out.loc[~raw_label.isin({"intercept", "const", "constant"})].copy()
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["estimate"])
     out["lower"] = out["lower"].fillna(out["estimate"])
