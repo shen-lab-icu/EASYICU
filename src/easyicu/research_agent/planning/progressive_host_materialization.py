@@ -13,6 +13,7 @@ from typing import Mapping, Sequence
 from ..authority.declared_levels import observed_levels_for
 from ..canonical_json import canonical_sha256
 from ..schema import ResearchContext
+from .method_literature import METHOD_CARDS
 from .progressive_contract import (
     ProgressiveLiteratureBinding,
     ProgressiveOutlineStep,
@@ -28,7 +29,7 @@ from .scientific_action_catalog import scientific_action_for_id
 
 
 _MODULE_DESIGN_ELEMENTS: Mapping[str, tuple[str, ...]] = {
-    "cohort_definition": ("population", "time_zero"),
+    "cohort_definition": ("population", "time_zero", "reporting"),
     "table_one": ("population", "reporting"),
     "exposure_outcome_distribution": ("exposure", "outcome", "reporting"),
     "measurement_audit": ("missing_data", "reporting"),
@@ -39,22 +40,32 @@ _MODULE_DESIGN_ELEMENTS: Mapping[str, tuple[str, ...]] = {
 
 
 def _bindings(step: ProgressiveOutlineStep) -> list[ProgressiveLiteratureBinding]:
-    elements = _MODULE_DESIGN_ELEMENTS.get(step.module_id)
-    if not elements:
+    desired = set(_MODULE_DESIGN_ELEMENTS.get(step.module_id, ()))
+    if not desired:
         return []
-    return [
-        ProgressiveLiteratureBinding(
-            citation_key=key,
-            design_elements=list(elements),
-            application=(
-                "Apply this Planner-selected source only to the declared "
-                f"{step.module_id} design coordinate; retain the source's "
-                "limitations and the run's evidence ceiling."
-            ),
-            divergence=None,
+    bindings = []
+    for key in step.literature_citation_keys:
+        cards = [card for card in METHOD_CARDS if card.source_key == key]
+        supported = set(
+            element for card in cards for element in card.design_elements
         )
-        for key in step.literature_citation_keys
-    ]
+        elements = sorted(desired & supported)
+        if not elements:
+            continue
+        card_ids = ", ".join(card.id for card in cards if desired & set(card.design_elements))
+        bindings.append(
+            ProgressiveLiteratureBinding(
+                citation_key=key,
+                design_elements=elements,
+                application=(
+                    f"Apply the host-curated method card(s) {card_ids} only "
+                    f"to the declared {step.module_id} coordinate and retain "
+                    "the run's evidence ceiling."
+                ),
+                divergence=None,
+            )
+        )
+    return bindings
 
 
 def _output(product_id: str, role: str) -> ProgressiveOutputIntent:
@@ -177,16 +188,12 @@ def host_materialize_progressive_step(
             missing_outcome_policy="exclude_from_denominator",
             confidence_level=0.95,
         )
-    elif module == "measurement_audit" and action is not None:
-        skeleton = _common_step(
-            outline_step,
-            raw_inputs=raw,
-            outputs=(
-                _output("table:measurement_missingness", "measurement_missingness"),
-                _output("table:measurement_source", "measurement_source"),
-                _output("table:event_timing", "event_timing"),
-            ),
-        )
+    elif module == "measurement_audit":
+        # The deterministic runner owns execution after the Planner declares
+        # which audit questions this study needs.  The outline currently does
+        # not carry that variable-length output-role roster, so choosing it
+        # here would silently replace a scientific requirement.
+        return None
     elif module == "robustness_replay" and action is not None:
         skeleton = _common_step(
             outline_step,
