@@ -4,13 +4,15 @@
 > 分支：`codex/easyicu-desktop-app-v1`
 > worktree：`/Users/haibo/Documents/GitHub/EASYICU-desktop-app-v1`
 > 基线：`1e5cda1657a524c4ced335d6950675f67f4fa72a`
-> 状态：桌面封装和本机分发包完成；全功能 UAT **未通过**，阻塞修复后才能考虑合并；未推送、未改写 `main`
+> 状态：桌面封装和本机分发包完成；首轮全功能 UAT 的阻塞项已在同一隔离分支修复并完成受影响链路复验；未推送、未改写 `main`
 
 ## 结论
 
 EasyICU 现可作为独立 macOS 应用启动。终端用户不需要源码目录、Python、Node 或 Git：Tauri 原生窗口负责应用生命周期，PyInstaller onedir 运行时承载现有 FastAPI WebApp，Node 运行时随包提供。科学执行、数据抽取、Idea Mining、Research Agent、EvidenceStore 和 publication gate 的 owner 均未复制到桌面层。
 
-但是，2026-08-23 的全页面/全控件 UAT 发现 4 类可复现功能缺陷，其中 eICU 官方 demo 无法完成准备，直接阻塞真实 Cross-DB 双库链路。因此当前发行物只能作为内部修复候选，**不能称为功能验收完成，也不建议合并 main**。
+2026-08-23 的首轮全页面/全控件 UAT 发现 4 类可复现功能缺陷，其中 eICU 官方 demo 无法完成准备，直接阻塞真实 Cross-DB 双库链路。同日已在本隔离分支完成 owner-level 修复和受影响链路复验：eICU 官方 demo 可导出并注册，MIMIC-IV + eICU 官方双库聚合可达；Patient、Cross-DB 和两个 Copilot composer 的交互回归通过。首轮报告中的 Extraction `Extract again` 在当前源码与重建桌面包中均能正常返回推荐抽取页，未为无法复现的现象增加冗余兜底。
+
+当前发行物可进入用户验收，但仍未做 Developer ID/notarization、Intel Mac/Windows、真实 Provider/E1 或 full exact-head CI，因此本任务不自行合并 `main`。
 
 本轮只建立并验证 macOS Apple Silicon 内测发行物。当前 app 使用 ad-hoc 签名，尚未进行 Apple Developer ID 签名和 notarization，因此不能称为公开发行就绪；Windows 也尚未构建或验证。
 
@@ -47,6 +49,41 @@ EasyICU 现可作为独立 macOS 应用启动。终端用户不需要源码目�
 | P2 | Guided local workflow 的 legacy composer 在 `Shift+Enter` 时直接发送；随后 Enter 又发送第二条，无法输入预期换行草稿。 | `screens-guided.js` 的 keydown handler 只判断 `e.key === 'Enter'`；Pi composer 已有 Shift/IME-safe 契约，但该 legacy local workflow 未覆盖。 |
 
 上述发现本轮只记录，不在验收任务中顺手修改生产代码，以保持“测试结果”和“修复结果”可独立审计。
+
+### UAT 缺陷修复与真实链路复验（2026-08-23）
+
+| 首轮发现 | 根因 / 处理 | 复验证据 |
+|---|---|---|
+| eICU demo preparation 阻塞 | `BaseICULoader._setup_data_path()` 未给 `eicu_demo` 配置 eICU prepared-table markers；补同布局身份验证和 Python 回归。 | 复用已下载、已转换的官方 eICU v2.0.1 缓存，真实导出 `19` 个模块、`1,654,369` 行并注册成功。随后将既有官方 MIMIC-IV v2.2 导出登记到同一隔离状态，真实 Cross-DB 返回 `source_count=2`、`shared_modules=19`、`compatibility=compatible`、`raw_rows_returned=false`。 |
+| Patient synthetic 模块切换回 SOFA-2 | demo 重绘时无条件 `reset()`；改用稳定 demo source key，只在来源变化时重置。 | Node owner 合同覆盖 demo `demographics → labs` 跨重绘保持；真实浏览器点击“实验室-生化”后 `aria-pressed=true` 且对应有界表格出现。 |
+| Cross-DB search 输入后不筛选 | 仅监听 Enter/change/search；增加 160 ms `input` debounce，并在重绘后恢复搜索焦点。 | Node owner 合同改为只触发 `input`；真实浏览器输入 `oxygen`、不按 Enter，结果由 307 个映射特征缩为 1 个，Heart Rate 消失。 |
+| legacy composer Shift+Enter 误发送 | legacy 与 Pi 各自实现键盘判断；新增 `composer-keyboard.js` 单一 owner，两个 composer 都复用 Enter/Shift/IME 契约。 | 可执行 JS + Python 静态合同覆盖 plain Enter、Shift+Enter、`isComposing`、legacy `keyCode 229` 和非 Enter；真实浏览器 Shift+Enter 后草稿未发送，plain Enter 后输入被提交清空。 |
+| Extraction `Extract again` | 修复前源码 owner 已有正确直接绑定，本轮无法在清除测试干扰后复现；未添加第二套 handler。 | 真实浏览器完成推荐 demo extraction，点击“重新抽取”后推荐抽取 heading 恢复且重复按钮消失。 |
+
+受影响页面 `extraction`、`patient`、`crossdb`、`guided` 在 1280×720 检查均 `scrollWidth == clientWidth`，无页面级横向溢出。
+
+聚焦回归：
+
+```text
+tests/test_patient_filter_correctness.py + tests/test_pi_copilot_static.py +
+tests/test_webserver_demo_sources.py
+115 passed, 4 warnings
+
+python tools/run_js_contracts.py
+23/23 passed
+
+desktop boundary tests
+14 passed
+
+Copilot data-source/concept/extraction/data-package/workbench contracts
+6 passed
+```
+
+### Copilot 与数据工作台的当前能力审计
+
+当前 Copilot 已经不是只能聊天的壳：它已有受治理工具可列出注册数据源、按 source/module/query 返回精确概念 ID、审阅绑定数据包的聚合分母/模块/概念可用性，并从对话中收集 StudyContext 后调用既有 Data Extraction owner。数据包可以作为 digest-bound、只读的嵌入式数据工作台显示在对话右侧；模型看不到主机路径或患者行。
+
+但当前合同还没有两个专用只读工具：单来源任意特征的聚合分布，以及运行抽取前的 ICD 队列计数预览。现有 extraction owner 能在正式执行时计算 ICD cohort report，Cohort/Cross-DB owner 也能生成聚合图表；下一步应把这些 owner 增加为 bounded receipt 工具并把返回值渲染为 Copilot resource，而不是把 Data Workspace 的私有读取/筛选逻辑复制进 Copilot。
 
 #### 已通过的主要功能链
 
@@ -120,7 +157,7 @@ checksum is VALID
 
 - App：`desktop/src-tauri/target/release/bundle/macos/EasyICU.app`，本机约 980 MB。
 - DMG：`desktop/src-tauri/target/release/bundle/dmg/EasyICU_1.0.0_aarch64.dmg`，本机约 438 MB。
-- DMG SHA-256：`41904be5fbb92f59f1b178db8f99e9ef3d6eacbe5fc10754266839e7bae9f7ef`。
+- 修复后 DMG：456,690,588 bytes；SHA-256：`a8f5ae63a343accc6fdcb1762570160315b65026c0123f519836d44dcfc748a2`。
 - 上述构建产物和 build/runtime 目录均被 `.gitignore` 排除，不进入源码提交。
 
 ## 尚未声称
@@ -133,4 +170,4 @@ checksum is VALID
 
 ## 合并判定与下一步
 
-当前判定：**不合并**。先在同一隔离分支分别修复 eICU demo preparation、三处重绘后事件绑定和 legacy composer Shift/IME 契约；补 owner-level 可执行回归后，重跑本页 UAT 受影响矩阵、官方 MIMIC/eICU pair、JS contracts 和 Web/desktop 聚焦 pytest。只有阻塞项归零，才进入用户验收和 main 合并决定。
+当前判定：首轮阻塞项已归零，分支和修复后 Apple Silicon 内测包可进入用户验收；**本任务不自行合并或推送**。公开发行前仍需 Developer ID/notarization、目标 macOS 矩阵、full exact-head CI；科学就绪仍需单独的真实 Provider/E1 证据。
