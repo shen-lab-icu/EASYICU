@@ -39,6 +39,17 @@ def _label(value: Any) -> str:
     return re.sub(r"[_\s]+", " ", str(value).strip()) or "Not reported"
 
 
+def _measurement_state_label(value: Any) -> str:
+    """Reader-facing label for generic measurement-source states."""
+
+    token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if token in {"observed", "measured", "source_present", "with_source"}:
+        return "Measured"
+    if token in {"no_source", "not_measured", "unmeasured", "source_absent"}:
+        return "Not measured"
+    return _label(value)
+
+
 def _source_copy(bound: BoundTypedInput, out_dir: Path) -> str:
     source = bound.frame.copy()
     source.insert(0, "source_row_index", source.index.astype(int))
@@ -369,7 +380,10 @@ def render_association_publication_figure(
                 100.0 * levels["ci_high"].to_numpy(dtype=float) - values,
             ]
         )
-        level_labels = [_label(value) for value in levels["label"]]
+        state_column = "group_value" if "group_value" in levels.columns else "label"
+        level_labels = [
+            _measurement_state_label(value) for value in levels[state_column]
+        ]
         absolute_title = "Absolute risk by source state"
     if distribution is not None:
         width = 0.36
@@ -399,13 +413,15 @@ def render_association_publication_figure(
     ax.set_title(absolute_title, loc="left", pad=12)
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
-    adjusted_label = (
-        "contrast"
-        if "contrast" in adjusted.columns
-        and adjusted["contrast"].notna().all()
-        and adjusted["contrast"].astype(str).str.strip().ne("").all()
-        else "model_id"
-    )
+    adjusted_label = "model_id"
+    for candidate in ("contrast", "exposure", "model_id"):
+        if (
+            candidate in adjusted.columns
+            and adjusted[candidate].notna().all()
+            and adjusted[candidate].astype(str).str.strip().ne("").all()
+        ):
+            adjusted_label = candidate
+            break
     _forest(
         axes[0, 1],
         adjusted,

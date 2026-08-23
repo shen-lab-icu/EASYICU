@@ -185,6 +185,15 @@ def _label(value: Any) -> str:
     return re.sub(r"[_\s]+", " ", str(value or "").strip()) or "Value"
 
 
+def _measurement_state_label(value: Any) -> str:
+    token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if token in {"observed", "measured", "source_present", "with_source"}:
+        return "Measured"
+    if token in {"no_source", "not_measured", "unmeasured", "source_absent"}:
+        return "Not measured"
+    return _label(value)
+
+
 def run_landmark_association_figure(
     *,
     out_dir: Path,
@@ -263,20 +272,86 @@ def run_landmark_association_figure(
         x, y, yerr=[y - low, high - y], fmt="o-", color=palette["blue"], capsize=3
     )
     ax.axhline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-    ax.set_xlabel("Exposure value")
+    references = pd.to_numeric(
+        contrast["reference_lactate_mmol_l"], errors="coerce"
+    ).dropna()
+    reference_note = (
+        f" (reference {float(references.iloc[0]):g})"
+        if references.nunique() == 1
+        else ""
+    )
+    ax.set_xlabel(f"Exposure value{reference_note}")
     ax.set_ylabel("Adjusted odds ratio")
     ax.set_title("Landmark association contrasts", loc="left", pad=12)
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
     ax = axes[0, 1]
-    positions = np.arange(len(shown_risk))
-    estimates = 100.0 * pd.to_numeric(shown_risk["estimate"])
-    ax.barh(positions, estimates, color=palette["orange"])
-    ax.set_yticks(
-        positions, [_label(value) for value in shown_risk["label"]], fontsize=5.8
+    group_column = "group_value" if "group_value" in shown_risk.columns else "label"
+    display = shown_risk.copy()
+    display["group_key"] = display[group_column].astype(str)
+    group_keys = list(dict.fromkeys(display["group_key"].tolist()))
+    positions = np.arange(len(group_keys), dtype=float)
+    height = 0.34
+    series_specs = (
+        ("prevalence", "Exposure measured", palette["blue_soft"], -height / 2),
+        ("outcome_risk", "Observed outcome risk", palette["orange"], height / 2),
     )
+    for estimate_type, legend_label, color, offset in series_specs:
+        subset = display.loc[display["estimate_type"].astype(str).eq(estimate_type)]
+        if subset["group_key"].duplicated().any():
+            raise ValueError(
+                f"absolute-risk context repeats {estimate_type!r} within a group"
+            )
+        by_group = subset.set_index("group_key")
+        values = np.array(
+            [
+                100.0 * float(by_group.loc[key, "estimate"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        valid = np.isfinite(values)
+        if not valid.any():
+            continue
+        lower = np.array(
+            [
+                100.0 * float(by_group.loc[key, "ci_low"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        upper = np.array(
+            [
+                100.0 * float(by_group.loc[key, "ci_high"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        xerr = np.vstack([values[valid] - lower[valid], upper[valid] - values[valid]])
+        ax.barh(
+            positions[valid] + offset,
+            values[valid],
+            height=height,
+            color=color,
+            xerr=xerr,
+            capsize=2.2,
+            label=legend_label,
+        )
+    ax.set_yticks(
+        positions,
+        [_measurement_state_label(value) for value in group_keys],
+        fontsize=5.8,
+    )
+    ax.invert_yaxis()
     ax.set_xlabel("Percent")
-    ax.set_title("Absolute-risk context", loc="left", pad=12)
+    ax.set_title("Measurement state and outcome risk", loc="left", pad=12)
+    ax.legend(frameon=False, fontsize=5.4, loc="lower right")
     add_panel_label(ax, "B", x=-0.12, y=1.04)
 
     ax = axes[1, 0]

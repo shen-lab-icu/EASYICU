@@ -134,3 +134,7 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     assert source["source_row_index"].tolist() == [0, 1]
     assert source["source_table"].nunique() == 1
     assert (tmp_path / "outputs" / "display_suite.figure_contract.json").is_file()
+    svg = (tmp_path / "outputs" / "display_suite.svg").read_text(encoding="utf-8")
+    assert "Exposure value (reference 2.1)" in svg
+    assert "Exposure measured" in svg
+    assert "Observed outcome risk" in svg
