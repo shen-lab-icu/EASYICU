@@ -234,6 +234,12 @@ def render_association_publication_figure(
         and "table:measurement_missingness" not in bound
         else None
     )
+    robustness_summary = (
+        bound["table:robustness_summary"].frame.copy()
+        if robustness_key == "table:robustness_matrix"
+        and "table:robustness_summary" in bound
+        else None
+    )
 
     if distribution is not None:
         levels = distribution.loc[
@@ -241,22 +247,38 @@ def render_association_publication_figure(
         ].copy()
         if levels.empty:
             raise ValueError("exposure/outcome distribution has no exposure-level rows")
-        for column in ("outcome_events", "outcome_denominator"):
+        for column in (
+            "n_rows",
+            "exposure_denominator",
+            "outcome_events",
+            "outcome_denominator",
+        ):
             levels[column] = _integers(levels, column)
+        levels["exposure_pct"] = _association_finite_series(
+            levels, "exposure_pct"
+        )
         levels["outcome_rate_pct"] = _association_finite_series(
             levels, "outcome_rate_pct"
         )
-        if (levels["outcome_denominator"] <= 0).any() or (
-            levels["outcome_events"] > levels["outcome_denominator"]
-        ).any():
-            raise ValueError("outcome counts do not nest within positive denominators")
+        if (
+            (levels["exposure_denominator"] <= 0).any()
+            or (levels["n_rows"] > levels["exposure_denominator"]).any()
+            or (levels["outcome_denominator"] <= 0).any()
+            or (levels["outcome_events"] > levels["outcome_denominator"]).any()
+        ):
+            raise ValueError("distribution counts do not nest within positive denominators")
+        expected_prevalence = (
+            100.0 * levels["n_rows"] / levels["exposure_denominator"]
+        )
         expected_rates = (
             100.0 * levels["outcome_events"] / levels["outcome_denominator"]
         )
         if not np.isclose(
+            levels["exposure_pct"], expected_prevalence, rtol=0.0, atol=5e-6
+        ).all() or not np.isclose(
             levels["outcome_rate_pct"], expected_rates, rtol=0.0, atol=5e-6
         ).all():
-            raise ValueError("outcome percentage does not reconcile to counts")
+            raise ValueError("distribution percentages do not reconcile to counts")
         has_risk_ci = {"ci_low_pct", "ci_high_pct"} <= set(levels.columns)
         if has_risk_ci:
             levels["ci_low_pct"] = _association_finite_series(levels, "ci_low_pct")
@@ -305,11 +327,28 @@ def render_association_publication_figure(
     ax = axes[0, 0]
     x = np.arange(len(levels))
     if distribution is not None:
-        values = levels["outcome_rate_pct"].to_numpy(dtype=float)
-        yerr = None
+        prevalence_values = levels["exposure_pct"].to_numpy(dtype=float)
+        risk_values = levels["outcome_rate_pct"].to_numpy(dtype=float)
+        risk_yerr = None
         if has_risk_ci:
-            yerr = np.vstack(
-                [values - levels["ci_low_pct"], levels["ci_high_pct"] - values]
+            risk_yerr = np.vstack(
+                [
+                    risk_values - levels["ci_low_pct"],
+                    levels["ci_high_pct"] - risk_values,
+                ]
+            )
+        prevalence_yerr = None
+        if {"exposure_ci_low_pct", "exposure_ci_high_pct"} <= set(levels.columns):
+            low = _association_finite_series(levels, "exposure_ci_low_pct")
+            high = _association_finite_series(levels, "exposure_ci_high_pct")
+            if (low > levels["exposure_pct"]).any() or (
+                levels["exposure_pct"] > high
+            ).any():
+                raise ValueError(
+                    "prevalence confidence intervals must contain reported prevalence"
+                )
+            prevalence_yerr = np.vstack(
+                [prevalence_values - low, high - prevalence_values]
             )
         exposure_name = str(levels.iloc[0].get("exposure_column") or "exposure")
         level_labels = []
@@ -321,7 +360,7 @@ def render_association_publication_figure(
                 else str(value)
             )
             level_labels.append(labels.get(f"{exposure_name}={raw}", _label(value)))
-        absolute_title = "Absolute risk by exposure level"
+        absolute_title = "Exposure prevalence and observed outcome risk"
     else:
         values = 100.0 * levels["estimate"].to_numpy(dtype=float)
         yerr = np.vstack(
@@ -332,9 +371,31 @@ def render_association_publication_figure(
         )
         level_labels = [_label(value) for value in levels["label"]]
         absolute_title = "Absolute risk by source state"
-    ax.bar(x, values, color=palette["orange"], yerr=yerr, capsize=2.5)
+    if distribution is not None:
+        width = 0.36
+        ax.bar(
+            x - width / 2,
+            prevalence_values,
+            width,
+            color=palette["blue_soft"],
+            yerr=prevalence_yerr,
+            capsize=2.5,
+            label="Exposure prevalence",
+        )
+        ax.bar(
+            x + width / 2,
+            risk_values,
+            width,
+            color=palette["orange"],
+            yerr=risk_yerr,
+            capsize=2.5,
+            label="Outcome risk",
+        )
+        ax.legend(frameon=False, fontsize=5.8)
+    else:
+        ax.bar(x, values, color=palette["orange"], yerr=yerr, capsize=2.5)
     ax.set_xticks(x, level_labels)
-    ax.set_ylabel("Observed outcome risk (%)")
+    ax.set_ylabel("Percent" if distribution is not None else "Observed outcome risk (%)")
     ax.set_title(absolute_title, loc="left", pad=12)
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
@@ -377,23 +438,47 @@ def render_association_publication_figure(
         quality_value = "missing_pct"
         quality_xlabel = "Missing (%)"
         quality_title = "Measurement missingness"
-    else:
+    elif availability is not None:
         quality = availability.sort_values("availability_pct", ascending=True)
         quality_label = "concept" if "concept" in quality.columns else "variable"
         quality_value = "availability_pct"
         quality_xlabel = "Available among eligible (%)"
         quality_title = "Measurement availability"
-    positions = np.arange(len(quality))
-    axes[1, 1].barh(positions, quality[quality_value], color=palette["orange"])
-    axes[1, 1].set_yticks(
-        positions,
-        [_label(value) for value in quality[quality_label]],
-        fontsize=5.5,
-    )
-    axes[1, 1].set_xlim(0, 100)
-    axes[1, 1].set_xlabel(quality_xlabel)
-    axes[1, 1].set_title(quality_title, loc="left", pad=12)
+    elif robustness_summary is not None:
+        _robustness_ranges(
+            axes[1, 1],
+            robustness_summary,
+            color=palette["orange"],
+        )
+        quality_title = "Robustness ranges"
+        quality_label = None
+        quality_value = None
+        quality_xlabel = "Reported estimate range"
+    else:  # pragma: no cover - guarded by exact typed profiles
+        raise ValueError("association composite has no fourth-panel source")
+    if robustness_summary is None:
+        positions = np.arange(len(quality))
+        axes[1, 1].barh(positions, quality[quality_value], color=palette["orange"])
+        axes[1, 1].set_yticks(
+            positions,
+            [_label(value) for value in quality[quality_label]],
+            fontsize=5.5,
+        )
+        axes[1, 1].set_xlim(0, 100)
+        axes[1, 1].set_xlabel(quality_xlabel)
+        axes[1, 1].set_title(quality_title, loc="left", pad=12)
     add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
+
+    fourth_source = (
+        "table:robustness_summary"
+        if robustness_summary is not None
+        else (
+            "table:measurement_missingness"
+            if missingness is not None
+            else "table:measurement_process_audit"
+        )
+    )
+    fourth_role = "robustness" if robustness_summary is not None else "data_quality"
 
     panel_specs = (
         (
@@ -416,19 +501,16 @@ def render_association_publication_figure(
         (
             "D",
             quality_title,
-            "data_quality",
-            (
-                "table:measurement_missingness"
-                if missingness is not None
-                else "table:measurement_process_audit"
-            ),
+            fourth_role,
+            fourth_source,
         ),
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
             "The bound tables jointly show observed absolute risk, the primary "
-            "adjusted association, robustness evidence, and measurement missingness."
+            "adjusted association, and the exact supporting context declared "
+            "by the Planner's four-table figure contract."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
