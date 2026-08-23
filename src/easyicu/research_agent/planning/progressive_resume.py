@@ -292,6 +292,7 @@ def validate_progressive_materialization_coordinate(
     outline_step: ProgressiveOutlineStep,
     outline_step_sha256: str,
     step_index: int,
+    require_literature_roster: bool = True,
 ) -> None:
     """Keep outline-owned coordinates immutable during materialization."""
 
@@ -336,7 +337,7 @@ def validate_progressive_materialization_coordinate(
     actual_citations = tuple(
         binding.citation_key for binding in step.literature_bindings
     )
-    if (
+    if require_literature_roster and (
         len(actual_citations) != len(set(actual_citations))
         or set(actual_citations) != set(expected_citations)
     ):
@@ -453,6 +454,7 @@ def restore_progressive_resume_prefix(
     allowed_literature_citation_keys: Sequence[str],
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
     reporting_method_source_keys: Sequence[str],
+    strict_step_schema_enabled: bool = False,
 ) -> ProgressivePrefixState:
     """Revalidate strict schemas and recompile every reused prefix step."""
 
@@ -496,20 +498,31 @@ def restore_progressive_resume_prefix(
         outline_step_sha256 = canonical_sha256(
             outline_step.model_dump(mode="json")
         )
-        validate_progressive_materialization_coordinate(
-            materialization,
-            outline_step=outline_step,
-            outline_step_sha256=outline_step_sha256,
-            step_index=step_index,
-        )
         current_schema_authority = step_schema_authority(
             outline_step,
             outline_step_sha256,
             stored_available_product_refs,
         )
+        stored_schema_authority = (
+            stored_schema_authorities[step_index]
+            if step_index < len(stored_schema_authorities)
+            else object()
+        )
+        host_materialized_replay = bool(
+            strict_step_schema_enabled
+            and stored_schema_authority is None
+            and current_schema_authority is None
+        )
+        validate_progressive_materialization_coordinate(
+            materialization,
+            outline_step=outline_step,
+            outline_step_sha256=outline_step_sha256,
+            step_index=step_index,
+            require_literature_roster=not host_materialized_replay,
+        )
         schema_authority_matches = bool(
             step_index < len(stored_schema_authorities)
-            and stored_schema_authorities[step_index] == current_schema_authority
+            and stored_schema_authority == current_schema_authority
         )
         migration_receipt_covers_drift = bool(
             migrated_positions and step_index > min(migrated_positions)

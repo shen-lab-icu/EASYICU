@@ -2378,6 +2378,9 @@ class ProgressivePlannerAgent:
                 allowed_literature_citation_keys=allowed_citations,
                 allowed_know_how_decisions=allowed_know_how_decisions,
                 reporting_method_source_keys=reporting_source_keys,
+                strict_step_schema_enabled=llm_supports_strict_json_schema(
+                    self.llm
+                ),
             )
             if resume_checkpoint is not None
             else ProgressivePrefixState()
