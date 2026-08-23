@@ -622,8 +622,7 @@ class PubMedLiteratureClient:
                     ),
                     "publication_types": (
                         list(
-                            article_metadata[record.pmid].get("publication_types")
-                            or []
+                            article_metadata[record.pmid].get("publication_types") or []
                         )
                         if record.pmid and record.pmid in article_metadata
                         else record.publication_types
@@ -1018,9 +1017,7 @@ def _publication_type_comparator_eligible(record: CitationRecord) -> bool:
 def _normalise_clinical_text(value: str) -> str:
     """Normalize punctuation without inventing a clinical synonym."""
 
-    return " ".join(
-        re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).split()
-    )
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).split())
 
 
 def _adult_population_required(context: ResearchContext) -> bool:
@@ -1192,12 +1189,41 @@ def build_pubmed_protocol_query_for_context(context: ResearchContext) -> str:
     """
 
     terms: List[str] = []
-    exposure = _protocol_search_term(context, context.primary_exposure)
-    outcome = _protocol_search_term(context, context.target_outcome)
-    for value in (exposure, outcome):
-        if value and value.casefold() not in {item.casefold() for item in terms}:
-            escaped = value.replace('"', "")
-            terms.append(f'"{escaped}"[Title/Abstract]')
+
+    def _identity_clause(name: Optional[str]) -> str:
+        if not name:
+            return ""
+        variable = context.variable(name)
+        concept = (
+            variable.source_concept or variable.name if variable is not None else name
+        )
+        identity = literature_concept_identity(concept)
+        if identity is None:
+            value = _protocol_search_term(context, name).replace('"', "")
+            return f'"{value}"[Title/Abstract]' if value else ""
+        alternatives: List[str] = []
+        for alternative in identity.retrieval_alternatives:
+            atoms = [
+                f'"{str(value).replace(chr(34), "")}"[Title/Abstract]'
+                for value in alternative
+                if str(value).strip()
+            ]
+            if atoms:
+                alternatives.append(
+                    atoms[0] if len(atoms) == 1 else "(" + " AND ".join(atoms) + ")"
+                )
+        if not alternatives:
+            return ""
+        return (
+            alternatives[0]
+            if len(alternatives) == 1
+            else "(" + " OR ".join(alternatives) + ")"
+        )
+
+    for name in (context.primary_exposure, context.target_outcome):
+        clause = _identity_clause(name)
+        if clause and clause.casefold() not in {item.casefold() for item in terms}:
+            terms.append(clause)
     if not terms:
         for variable in context.variables:
             if variable.role not in _QUERY_ROLES:
