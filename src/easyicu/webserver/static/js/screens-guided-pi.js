@@ -1604,7 +1604,10 @@
         state.session.session_id,
         { project_id: projectId() },
       );
-      state.session = payload.session; state.error = ''; render();
+      state.session = payload.session; state.error = '';
+      rememberSession(state.session && state.session.session_id);
+      await loadWorkflow();
+      render();
     } catch (error) { state.error = errorText(error); render(); }
   }
 
@@ -1749,5 +1752,5 @@
   function unmount() {
     stopCodexPoll(); closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
-  window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive };
+  window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive, rebind };
 })();
