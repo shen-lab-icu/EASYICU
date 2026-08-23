@@ -956,11 +956,49 @@ def post_agent_run_history(body: Dict[str, Any]) -> dict:
     seed_dir = str(
         body.get("project_seed_dir") or body.get("project_seed_path") or ""
     ).strip()
-    return agent_runs.list_run_history(
-        study_id=body.get("study_id"),
-        project_root=body.get("project_root") or _agent_seed_run_root(seed_dir),
-        limit=body_int(body, "limit", 50, min_value=1, max_value=200),
+    study_id = str(body.get("study_id") or "").strip() or None
+    limit = body_int(body, "limit", 50, min_value=1, max_value=200)
+    explicit_root = body.get("project_root") or _agent_seed_run_root(seed_dir)
+    if explicit_root:
+        return agent_runs.list_run_history(
+            study_id=study_id,
+            project_root=explicit_root,
+            limit=limit,
+        )
+
+    histories = [
+        agent_runs.list_run_history(study_id=study_id, limit=200),
+    ]
+    if study_id:
+        pipeline_root = _research_pipeline_workspace().existing_project_root(study_id)
+        if pipeline_root is not None:
+            histories.append(
+                agent_runs.list_run_history(
+                    study_id=study_id,
+                    project_root=str(pipeline_root),
+                    limit=200,
+                )
+            )
+
+    rows_by_dir: Dict[str, Dict[str, Any]] = {}
+    for history in histories:
+        for row in history.get("runs", []):
+            project_dir = str(row.get("project_dir") or "")
+            if project_dir:
+                rows_by_dir[project_dir] = row
+    rows = sorted(
+        rows_by_dir.values(),
+        key=lambda row: row.get("updated_at_epoch") or 0,
+        reverse=True,
     )
+    return {
+        "ok": True,
+        "project_root": str(state_paths.projects_root().resolve()),
+        "project_roots": [history.get("project_root") for history in histories],
+        "study_id": study_id,
+        "runs": rows[:limit],
+        "count": len(rows),
+    }
 
 
 @artifact_router.post("/api/agent-runs/artifact")

@@ -183,7 +183,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "js/app.js?v=20260817-project-monitor1" in index_html
     assert "js/copilot-dock.js?v=20260817-copilot-boundary1" in index_html
     assert "js/screens-extraction.js?v=20260817-copilot-boundary1" in index_html
-    assert "js/screens-agent.js?v=20260817-project-monitor-states2" in index_html
+    assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -667,7 +667,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260817-project-monitor-states2" in index_html
+    assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -804,6 +804,19 @@ def test_project_monitor_renders_one_load_state_and_fits_the_pipeline() -> None:
     assert ".ag-pipe .pd{ display:none; }" in layout_css
 
 
+def test_project_monitor_loads_persisted_run_history_before_claiming_zero() -> None:
+    agent_js = _static_js("screens-agent.js")
+
+    assert "function historyRowsForStudy(s)" in agent_js
+    assert "function monitorRunCount(s)" in agent_js
+    assert "return live || historyRunForStudy(selected)" in agent_js
+    assert "persisted && persisted.project_dir" in agent_js
+    assert "requestRunHistory();\n      if (window.__euRender)" in agent_js
+    assert "const noRun = monitorRunCount(s) === 0;" in agent_js
+    assert "Checking run history" in agent_js
+    assert "Run history unavailable" in agent_js
+
+
 def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     agent_js = _static_js("screens-agent.js")
     render_js = _static_js("screens-agent-render.js")
@@ -852,7 +865,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "easyicu_run_submitted" in guided_js
     assert "data-gpi-provider-form" in provider_js
     assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
-    assert "js/screens-agent.js?v=20260817-project-monitor-states2" in index_html
+    assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
@@ -1039,7 +1052,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert ".ag-wrap .ag-req-list" in agent_question_css
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
-    assert "js/screens-agent.js?v=20260817-project-monitor-states2" in index_html
+    assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
 
     for name in (
         "benchmark_scorecard.json",

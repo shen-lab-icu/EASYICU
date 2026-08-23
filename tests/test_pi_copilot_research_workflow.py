@@ -3281,6 +3281,17 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
         event.get("label", "").startswith("The model provider timed out")
         for event in Job.events
     )
+    history = agent_runs.list_run_history(
+        study_id="study-workflow",
+        project_root=str(project_root),
+    )
+    assert history["count"] == 1
+    assert history["runs"][0]["run_id"] == "run_job-timeout"
+    assert history["runs"][0]["run_status"] == "failed"
+    assert history["runs"][0]["gate_status"] == "blocked"
+    review = agent_runs.read_run_review(history["runs"][0]["project_dir"])
+    assert review["readiness"]["status"] == "blocked"
+    assert review["gate"]["reason"] == "research_pipeline_provider_timeout"
 
 
 def test_planner_failure_artifact_persists_only_safe_attempt_metadata(
@@ -4368,6 +4379,55 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     assert Path(captured["project_root"]) != tmp_path / "client-controlled"
     assert captured["budget_mode"] == "planner_canary"
     assert captured["development_resume_source_job_id"] == "prior-canary"
+
+
+def test_monitor_history_merges_default_and_copilot_pipeline_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver.routes import agent as agent_route
+
+    pipeline_root = tmp_path / "pi-project"
+    pipeline_root.mkdir()
+    calls: list[str | None] = []
+
+    class Workspace:
+        def existing_project_root(self, project_id: str) -> Path:
+            assert project_id == "study-workflow"
+            return pipeline_root
+
+    def history(*, study_id: str, project_root: str | None = None, limit: int) -> dict[str, Any]:
+        calls.append(project_root)
+        if project_root is None:
+            rows = [
+                {
+                    "run_id": "run_preflight",
+                    "project_dir": str(tmp_path / "default" / "run_preflight"),
+                    "updated_at_epoch": 10,
+                }
+            ]
+        else:
+            rows = [
+                {
+                    "run_id": "run_pipeline",
+                    "project_dir": str(pipeline_root / "study-workflow" / "run_pipeline"),
+                    "updated_at_epoch": 20,
+                }
+            ]
+        return {"ok": True, "project_root": project_root or "default", "runs": rows, "count": len(rows)}
+
+    monkeypatch.setattr(agent_route, "_research_pipeline_workspace", lambda: Workspace())
+    monkeypatch.setattr(agent_route.agent_runs, "list_run_history", history)
+    result = agent_route.post_agent_run_history(
+        {"study_id": "study-workflow", "limit": 50}
+    )
+
+    assert calls == [None, str(pipeline_root)]
+    assert result["count"] == 2
+    assert [row["run_id"] for row in result["runs"]] == [
+        "run_pipeline",
+        "run_preflight",
+    ]
 
 
 def test_pipeline_route_rejects_client_selected_full_reviewed_mode(

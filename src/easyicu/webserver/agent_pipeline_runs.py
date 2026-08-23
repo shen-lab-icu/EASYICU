@@ -736,6 +736,108 @@ def _write_pipeline_failure_diagnostic(
     return relative
 
 
+def _write_pipeline_failure_projection(
+    *,
+    wrapper_dir: Path,
+    study: Mapping[str, Any],
+    provider: Mapping[str, Any],
+    code: str,
+    failure_type: str,
+    diagnostic: Optional[str],
+) -> bool:
+    """Write a fail-closed terminal receipt that Project Monitor can index."""
+
+    run_id = wrapper_dir.name
+    provider_public = {
+        key: provider.get(key)
+        for key in (
+            "provider",
+            "model",
+            "client",
+            "provider_gate",
+            "credential_fingerprint",
+        )
+        if provider.get(key) is not None
+    }
+    gate = {
+        "status": "blocked",
+        "reason": code,
+        "reportable": False,
+        "draft_unlocked": False,
+        "checks": [
+            {
+                "id": "research_pipeline_execution",
+                "label": "Research Agent pipeline reached a governed result",
+                "passed": False,
+                "reason_code": code,
+            }
+        ],
+    }
+    payloads: Dict[str, Dict[str, Any]] = {
+        "run_context.json": {
+            "run_id": run_id,
+            "study_id": _clean_text(study.get("id"), 160),
+            "scientific_configuration_sha256": (
+                study_context_owner.scientific_configuration_sha256(study)
+            ),
+            "mode": "research_agent_pipeline",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "summary": {
+                "execution_complete": False,
+                "analysis_started": False,
+            },
+            "local_first": {"uploads": 0},
+        },
+        "quality_gate.json": {"gate": gate, "quality": []},
+        "source_run_manifest.json": {
+            "schema_version": "easyicu.web-research-pipeline-projection/1",
+            "engine": "easyicu.research_agent.pipeline",
+            "run_id": run_id,
+            "status": "failed",
+            "failure_code": code,
+            "failure_type": failure_type,
+            "diagnostic_available": bool(diagnostic),
+            "provider": provider_public,
+            "path_values_returned": False,
+            "analysis_started": False,
+            "publication_authorized": False,
+        },
+    }
+    privacy_scan = _projection_privacy_scan(payloads)
+    if not privacy_scan["passed"]:
+        provider_public = {}
+        payloads["source_run_manifest.json"]["provider"] = {}
+        privacy_scan = _projection_privacy_scan(payloads)
+    if not privacy_scan["passed"]:
+        return False
+    try:
+        for name, payload in payloads.items():
+            _write_json(wrapper_dir / name, payload)
+        artifacts = [_artifact_record(wrapper_dir / name) for name in payloads]
+        _write_json(
+            wrapper_dir / "evidence_ledger.json",
+            {
+                "schema_version": "easyicu.web-research-pipeline-ledger/1",
+                "run_id": run_id,
+                "run_type": "full",
+                "engine": "easyicu.research_agent.pipeline",
+                "status": "blocked",
+                "artifacts": artifacts,
+                "provider": provider_public,
+                "pipeline_evidence_count": 0,
+                "privacy": {
+                    "patient_rows_in_projection": False,
+                    "path_values_returned": False,
+                    "projection_scan_passed": bool(privacy_scan["passed"]),
+                },
+            },
+        )
+    except OSError:
+        return False
+    return True
+
+
 def _safe_relative(root: Path, raw: Any) -> Optional[Path]:
     text = str(raw or "").strip().replace("\\", "/")
     if not text or text.startswith("/") or "\0" in text:
@@ -3729,10 +3831,23 @@ def make_research_pipeline_run_runner(
                 acquisition=acquisition,
                 run_dir=Path(outcome.manifest_path).parent,
             )
-        except ResearchPipelineRunError:
+        except ResearchPipelineRunError as exc:
             _finish_web_provider_hard_stop(
                 provider_hard_stop,
                 error="research_pipeline_error",
+            )
+            diagnostic = _write_pipeline_failure_diagnostic(
+                wrapper_dir=wrapper_dir,
+                exc=exc,
+                code=exc.code,
+            )
+            _write_pipeline_failure_projection(
+                wrapper_dir=wrapper_dir,
+                study=study,
+                provider=provider_public,
+                code=exc.code,
+                failure_type=_pipeline_failure_category(exc),
+                diagnostic=diagnostic,
             )
             raise
         except Exception as exc:
@@ -3745,6 +3860,14 @@ def make_research_pipeline_run_runner(
                 wrapper_dir=wrapper_dir,
                 exc=exc,
                 code=code,
+            )
+            _write_pipeline_failure_projection(
+                wrapper_dir=wrapper_dir,
+                study=study,
+                provider=provider_public,
+                code=code,
+                failure_type=_pipeline_failure_category(exc),
+                diagnostic=diagnostic,
             )
             if code == "research_pipeline_provider_timeout":
                 _progress(
