@@ -678,7 +678,7 @@ def test_publication_figure_skill_promotes_deterministic_step_before_family_rend
     migrated_sources = [
         record
         for record in evidence.records()
-        if record.evidence_id.endswith("_checkpoint_v1")
+        if "_checkpoint_" in record.evidence_id
     ]
     assert migrated_sources
     assert all(

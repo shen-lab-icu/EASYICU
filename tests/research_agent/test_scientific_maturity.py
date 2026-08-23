@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -281,3 +282,120 @@ def test_primary_figure_absolute_risk_uses_shared_panel_semantics(tmp_path) -> N
     codes = {finding.code for finding in audit.findings}
     assert "PRIMARY_FIGURE_ABSOLUTE_RISK_CONTEXT_MISSING" not in codes
     assert audit.facts["primary_figure"]["absolute_risk_panel_present"] is True
+
+
+def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
+    tmp_path,
+) -> None:
+    context = ResearchContext(
+        research_question="Is an exposure associated with mortality?",
+        cohort=CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association",
+        steps=[],
+    )
+    figure_dir = tmp_path / "publication_figures"
+    figure_dir.mkdir()
+    (figure_dir / "adjusted.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "adjusted",
+                "core_claim": "Adjusted association.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Adjusted effect estimate",
+                        "role": "effect",
+                        "claim": "Adjusted estimate from the executed model.",
+                        "evidence_ids": ["table_primary_effect"],
+                    }
+                ],
+                "source_data": ["effect.csv"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    receipt_path = evidence_dir / "log_model_runtime_receipt.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.model_runtime_receipt/1",
+                "adjustment_columns": ["age", "sex"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt_sha = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    (evidence_dir / "evidence_authority.json").write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "evidence_id": "table_primary_effect",
+                        "kind": "table",
+                        "producer": "runner",
+                        "produced_by_step": "primary_model",
+                        "relative_path": "evidence/table_primary_effect.csv",
+                        "sha256": "not_needed_for_step_link",
+                    },
+                    {
+                        "evidence_id": "log_model_receipt",
+                        "kind": "log",
+                        "producer": "runner",
+                        "produced_by_step": "primary_model",
+                        "relative_path": "evidence/log_model_runtime_receipt.json",
+                        "sha256": receipt_sha,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audit = build_scientific_maturity_audit(
+        context=context,
+        plan=plan,
+        run_dir=tmp_path,
+        display_suite={"display_suite_complete": True},
+        publication_bundle={
+            "publication_figure_contract_ready": True,
+            "publication_figure_source_data_ready": True,
+            "publication_figure_visual_qa_passed": True,
+        },
+    )
+
+    codes = {finding.code for finding in audit.findings}
+    assert "PRIMARY_FIGURE_ADJUSTMENT_LABEL_CONFLICT" not in codes
+    assert audit.facts["primary_figure"]["expected_adjustment_label"] == "adjusted"
+    assert audit.facts["primary_figure"]["adjustment_covariates"] == ["age", "sex"]
+    assert audit.facts["primary_figure"]["adjustment_authority"] == "runtime_receipt"
+
+    receipt_path.write_text("{}", encoding="utf-8")
+    tampered = build_scientific_maturity_audit(
+        context=context,
+        plan=plan,
+        run_dir=tmp_path,
+        display_suite={"display_suite_complete": True},
+        publication_bundle={
+            "publication_figure_contract_ready": True,
+            "publication_figure_source_data_ready": True,
+            "publication_figure_visual_qa_passed": True,
+        },
+    )
+    assert tampered.facts["primary_figure"]["adjustment_authority"] == "not_established"
+    assert any(
+        finding.code == "PRIMARY_FIGURE_ADJUSTMENT_LABEL_CONFLICT"
+        for finding in tampered.findings
+    )
