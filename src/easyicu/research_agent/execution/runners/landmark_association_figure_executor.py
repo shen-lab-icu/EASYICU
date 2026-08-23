@@ -194,6 +194,23 @@ def _measurement_state_label(value: Any) -> str:
     return _label(value)
 
 
+def _continuous_exposure_label(column: str) -> str:
+    """Derive a reader-facing exposure label and common unit from its field."""
+
+    unit_suffixes = {
+        "_mmol_l": "mmol/L",
+        "_mg_dl": "mg/dL",
+        "_mg_l": "mg/L",
+        "_g_dl": "g/dL",
+    }
+    token = str(column or "").strip().lower()
+    for suffix, unit in unit_suffixes.items():
+        if token.endswith(suffix):
+            name = token[: -len(suffix)]
+            return f"{_label(name).title()} ({unit})"
+    return _label(column).title()
+
+
 def run_landmark_association_figure(
     *,
     out_dir: Path,
@@ -275,12 +292,15 @@ def run_landmark_association_figure(
     references = pd.to_numeric(
         contrast["reference_lactate_mmol_l"], errors="coerce"
     ).dropna()
-    reference_note = (
-        f" (reference {float(references.iloc[0]):g})"
-        if references.nunique() == 1
-        else ""
-    )
-    ax.set_xlabel(f"Exposure value{reference_note}")
+    exposure_label = _continuous_exposure_label("lactate_mmol_l")
+    if references.nunique() == 1:
+        reference = float(references.iloc[0])
+        exposure_label = (
+            f"{exposure_label[:-1]}; reference {reference:g})"
+            if exposure_label.endswith(")")
+            else f"{exposure_label} (reference {reference:g})"
+        )
+    ax.set_xlabel(exposure_label)
     ax.set_ylabel("Adjusted odds ratio")
     ax.set_title("Landmark association contrasts", loc="left", pad=12)
     add_panel_label(ax, "A", x=-0.12, y=1.04)
@@ -293,7 +313,7 @@ def run_landmark_association_figure(
     positions = np.arange(len(group_keys), dtype=float)
     height = 0.34
     series_specs = (
-        ("prevalence", "Exposure measured", palette["blue_soft"], -height / 2),
+        ("prevalence", "Cohort share", palette["blue_soft"], -height / 2),
         ("outcome_risk", "Observed outcome risk", palette["orange"], height / 2),
     )
     for estimate_type, legend_label, color, offset in series_specs:
