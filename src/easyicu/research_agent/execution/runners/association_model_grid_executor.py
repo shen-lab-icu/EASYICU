@@ -40,6 +40,12 @@ from .typed_input_binding import load_typed_input
 ASSOCIATION_MODEL_GRID_ANALYSIS_KIND = "association_model_grid"
 _CORE_COLUMNS = (
     "analysis_id",
+    "is_reference",
+    "exposure",
+    "outcome",
+    "adjustment_covariates",
+    "fitted_covariates",
+    "landmark_hours",
     "n_stays",
     "n_events",
     "estimate",
@@ -509,6 +515,21 @@ def run_association_model_grid(
             raise AssociationModelGridError("variant standard error is invalid")
         row = {
             "analysis_id": variant.analysis_id,
+            "is_reference": variant.analysis_id == sealed.reference_variant_id,
+            "exposure": requirement.exposure_source,
+            "outcome": requirement.outcome,
+            "adjustment_covariates": ";".join(
+                str(value) for value in (requirement.covariates or ())
+            ),
+            "fitted_covariates": ";".join(str(value) for value in covariates),
+            "landmark_hours": next(
+                (
+                    float(rule.landmark_hours)
+                    for rule in variant.filters
+                    if isinstance(rule, AssociationModelGridLandmarkFilter)
+                ),
+                None,
+            ),
             "n_stays": n_stays,
             "n_events": n_events,
             "estimate": estimate,
@@ -575,6 +596,9 @@ def run_association_model_grid(
             "variant_ids": list(sealed.sensitivity_ids),
             "reference_variant_id": sealed.reference_variant_id,
             "adapter": "adjusted_association_executor/statsmodels",
+            "exposure": requirement.exposure_source,
+            "outcome": requirement.outcome,
+            "adjustment_covariates": list(requirement.covariates or ()),
         },
     }
 

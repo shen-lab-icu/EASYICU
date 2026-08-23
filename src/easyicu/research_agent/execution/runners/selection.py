@@ -173,6 +173,12 @@ from .feasibility_protocol_executor import (
     feasibility_protocol_executor_code,
     feasibility_protocol_executor_owns_step,
 )
+from .scientific_reporting_executor import (
+    SCIENTIFIC_REPORTING_ANALYSIS_KIND,
+    scientific_reporting_consumed_input_keys,
+    scientific_reporting_executor_code,
+    scientific_reporting_executor_owns_step,
+)
 from .prediction_model_executor import (
     PREDICTION_MODEL_ANALYSIS_KIND,
     prediction_model_consumed_input_keys,
@@ -522,6 +528,21 @@ def select_standard_executor(
                     )
                 )
             _missed(SOURCE_FEASIBILITY_ANALYSIS_KIND)
+
+    if scientific_reporting_executor_owns_step(step):
+        if receipt_required:
+            _receipt_declined(SCIENTIFIC_REPORTING_ANALYSIS_KIND)
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind=SCIENTIFIC_REPORTING_ANALYSIS_KIND,
+                selection_reason="typed_evidence_bound_scientific_report",
+                progress_message="Indexing registered scientific results",
+                code=scientific_reporting_executor_code(step),
+                consumed_input_keys=scientific_reporting_consumed_input_keys(step),
+            )
+        )
+    _missed(SCIENTIFIC_REPORTING_ANALYSIS_KIND)
 
     if feasibility_protocol_executor_owns_step(step):
         if receipt_required:

@@ -129,7 +129,7 @@ _METHOD_BY_MODULE: Mapping[str, str] = {
     "adjusted_association": "adjusted_association_models",
     "robustness_replay": "robustness_sensitivity",
     "visualization": "visualization",
-    "report": "feasibility_protocol",
+    "report": "scientific_reporting",
 }
 _COHORT_FRAME_ONLY_MODULES = frozenset(
     {

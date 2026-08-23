@@ -376,9 +376,21 @@ def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(
     assert table.loc[0, "n_stays"] == len(frame)
     assert table.loc[1, "n_stays"] < len(frame)
     assert table.loc[2, "n_stays"] < len(frame)
+    assert set(table["exposure"]) == {"sep3_sofa2_max"}
+    assert table["is_reference"].sum() == 1
+    assert table.loc[table["is_reference"], "analysis_id"].item() == (
+        summary["scientific_runtime_receipt"]["reference_variant_id"]
+    )
+    assert set(table["outcome"]) == {"death"}
+    assert set(table["adjustment_covariates"]) == {"age;sex;charlson_max"}
+    assert table["fitted_covariates"].str.len().gt(0).all()
+    assert table["landmark_hours"].notna().any()
     assert summary["basis_receipts"]["flexible_age_charlson"]
     assert summary["scientific_runtime_receipt"]["adapter"] == (
         "adjusted_association_executor/statsmodels"
+    )
+    assert summary["scientific_runtime_receipt"]["adjustment_covariates"] == (
+        _COVARIATES
     )
     selection_record = {
         "deterministic_standard_analysis": "association_model_grid",

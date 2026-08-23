@@ -1599,6 +1599,7 @@ def _publish_and_audit_manuscript(
     manuscript_authors: Optional[Sequence[str]],
     manuscript_title: Optional[str],
     per_step_records: Sequence[Dict[str, Any]],
+    repro_envelope: Any,
     run_dir: Path,
     run_id: str,
     emit_progress: Callable[..., None],
@@ -1991,8 +1992,16 @@ def _publish_and_audit_manuscript(
     # bundle that the manuscript author / responsible clinician
     # uses to tighten the draft before submission.
     if pipeline._enable_reviewer_round:
+        _register_reproducibility_envelope_for_review(
+            repro_envelope=repro_envelope,
+            evidence=evidence,
+            run_dir=run_dir,
+        )
+        reviewer_evidence_records = evidence.current_verified_records(
+            per_step_records
+        )
         reviewer_report = run_reviewer_round(
-            evidence_records=current_verified_evidence_records,
+            evidence_records=reviewer_evidence_records,
             findings=findings,
             round_index=0,
         )
@@ -2047,6 +2056,39 @@ def _publish_and_audit_manuscript(
                 detail=summary,
             )
         )
+
+
+def _register_reproducibility_envelope_for_review(
+    *,
+    repro_envelope: Any,
+    evidence: Any,
+    run_dir: Path,
+) -> None:
+    """Publish the completed call envelope before the reviewer reads evidence.
+
+    Planning and manuscript generation are the stochastic stages.  By this
+    point both are complete; the remaining review and finalisation code is
+    deterministic.  Registering the envelope here prevents the reviewer from
+    reporting it missing merely because finalisation has not run yet.
+    """
+
+    if repro_envelope is None:
+        return
+    envelope_path = run_dir / "reproducibility_envelope.json"
+    repro_envelope.to_disk(envelope_path)
+    evidence.register_file(
+        kind="log",
+        description=(
+            "LLM reproducibility envelope (O20): per-call prompt/response "
+            "sha256, requested seed, temperature, provider/model, and a "
+            "PHI-safe environment snapshot."
+        ),
+        source_path=envelope_path,
+        evidence_id="reproducibility_envelope",
+        producer="pipeline",
+        generation_mode="system",
+        on_sha_change="new_id",
+    )
 
 
 def _write_reproducibility_artifacts(
@@ -2438,6 +2480,7 @@ def run_write_phase(
         manuscript_authors=manuscript_authors,
         manuscript_title=manuscript_title,
         per_step_records=per_step_records,
+        repro_envelope=plan_result.repro_envelope,
         run_dir=run_dir,
         run_id=run_id,
         emit_progress=emit_progress,
