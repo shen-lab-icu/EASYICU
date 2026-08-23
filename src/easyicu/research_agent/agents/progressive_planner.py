@@ -19,6 +19,10 @@ from ..planning.analysis_types import (
     list_analysis_types,
     validate_host_authorized_analysis_family,
 )
+from ..planning.design_selection import (
+    ResearchDesignSelectionError,
+    validate_research_design_selection,
+)
 from ..planning.literature_bindings import (
     method_layers_for_source_keys,
     missing_required_method_layers,
@@ -802,6 +806,16 @@ class ProgressivePlannerAgent:
             + json.dumps(list(action_rows), ensure_ascii=False, separators=(",", ":")),
             "Sealed literature citation keys:\n"
             + json.dumps(list(allowed_literature_citation_keys), ensure_ascii=False),
+            (
+                "Pre-result design selection contract:\nCompare 2-4 scientifically "
+                "distinct candidate designs for this exact question, mark exactly "
+                "one selected, and reject every alternative with a scientific "
+                "reason. Bind only retrieved variables and sealed citation keys. "
+                "Record the estimand, time zero, observation window, method, "
+                "assumptions, novelty positioning, figure role, what each design "
+                "supports, and what it cannot prove. Never select using observed "
+                "results, significance, AIC/BIC, or predictive performance."
+            ),
             "Candidate-specific host article role contracts:\n"
             + json.dumps(article_contracts, ensure_ascii=False, separators=(",", ":")),
             "Research question and sealed study anchors:\n"
@@ -989,6 +1003,7 @@ class ProgressivePlannerAgent:
         primary_exposure: str | None = None,
         target_outcome: str | None = None,
         context_required_method_layers: Sequence[str] | None = None,
+        require_design_selection: bool = False,
     ) -> None:
         if outline.analysis_type not in set(analysis_types):
             raise ProgressivePlanCompileError(
@@ -996,6 +1011,22 @@ class ProgressivePlannerAgent:
                 f"outline selected unavailable analysis type {outline.analysis_type!r}",
                 path="analysis_type",
             )
+        try:
+            validate_research_design_selection(
+                outline.design_selection,
+                selected_analysis_type=outline.analysis_type,
+                allowed_analysis_types=analysis_types,
+                allowed_variables=variable_names,
+                allowed_literature_citation_keys=(allowed_literature_citation_keys),
+                question_anchors=(primary_exposure or "", target_outcome or ""),
+                required=require_design_selection,
+            )
+        except ResearchDesignSelectionError as exc:
+            raise ProgressivePlanCompileError(
+                f"progressive_{exc.reason_code}",
+                str(exc),
+                path=exc.path,
+            ) from exc
         allowed_actions, _rows = _action_catalog((outline.analysis_type,))
         allowed = set(allowed_actions)
         available_variables = set(variable_names)
@@ -1959,6 +1990,7 @@ class ProgressivePlannerAgent:
                     context_required_method_layers=(
                         required_method_layers_for_context(context)
                     ),
+                    require_design_selection=True,
                 )
                 return parsed
 
@@ -1989,9 +2021,8 @@ class ProgressivePlannerAgent:
             closed_domain_variables=closed_domain_variables,
             primary_exposure=context.primary_exposure,
             target_outcome=context.target_outcome,
-            context_required_method_layers=required_method_layers_for_context(
-                context
-            ),
+            context_required_method_layers=required_method_layers_for_context(context),
+            require_design_selection=resume_checkpoint is None,
         )
         self.last_outline = outline
         self.last_foundation = None

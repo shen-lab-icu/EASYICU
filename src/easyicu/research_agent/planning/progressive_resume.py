@@ -276,6 +276,7 @@ def assemble_progressive_skeleton(
 
     return ProgressivePlanSkeleton(
         analysis_type=outline.analysis_type,
+        design_selection=outline.design_selection,
         cohort=foundation.cohort,
         display_labels=list(foundation.display_labels),
         robustness_intents=list(foundation.robustness_intents),

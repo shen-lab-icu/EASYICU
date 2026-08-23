@@ -302,16 +302,39 @@ def _bind_outline_authorities(
 ) -> None:
     properties = schema.get("properties")
     step = definitions.get("ProgressiveOutlineStep")
-    if not isinstance(properties, dict) or not isinstance(step, dict):
+    selection = definitions.get("ResearchDesignSelection")
+    candidate = definitions.get("ResearchDesignCandidate")
+    if not all(
+        isinstance(value, dict) for value in (properties, step, selection, candidate)
+    ):
         raise ProgressiveTransportSchemaError(
             "progressive outline properties are unavailable"
         )
     step_properties = step.get("properties")
-    if not isinstance(step_properties, dict):
+    selection_properties = selection.get("properties")
+    candidate_properties = candidate.get("properties")
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            step_properties,
+            selection_properties,
+            candidate_properties,
+        )
+    ):
         raise ProgressiveTransportSchemaError(
-            "progressive outline step properties are unavailable"
+            "progressive outline nested properties are unavailable"
         )
     properties["analysis_type"] = _string_enum(analysis_types)
+    properties["design_selection"] = {"$ref": "#/$defs/ResearchDesignSelection"}
+    selection_properties["candidates"]["minItems"] = 2
+    selection_properties["candidates"]["maxItems"] = 4
+    candidate_properties["analysis_type"] = _string_enum(analysis_types)
+    candidate_properties["required_variables"]["items"] = _string_enum(variable_names)
+    candidate_citations = candidate_properties["literature_citation_keys"]
+    if allowed_citation_keys:
+        candidate_citations["items"] = _string_enum(allowed_citation_keys)
+    else:
+        candidate_citations["maxItems"] = 0
     step_properties["module_id"] = _string_enum(
         progressive_module_ids_for_analysis_types(analysis_types)
     )
@@ -612,6 +635,13 @@ def _bind_initial_authorities(
         raise ProgressiveTransportSchemaError(
             "progressive plan root properties are unavailable"
         )
+    # The legacy one-shot skeleton request predates design comparison. Fresh
+    # Progressive Planner v2 captures that authority once in its outline, then
+    # carries it through host assembly; repeating it in the large fallback
+    # schema wastes transport budget and creates a second model-owned copy.
+    properties.pop("design_selection", None)
+    definitions.pop("ResearchDesignSelection", None)
+    definitions.pop("ResearchDesignCandidate", None)
     properties["analysis_type"] = _string_enum(analysis_types)
     robustness = definitions.get("ProgressiveRobustnessIntent")
     predicate = definitions.get("ProgressiveCohortPredicate")

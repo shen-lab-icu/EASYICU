@@ -158,6 +158,9 @@ def _study_dimensions(
     context: ResearchContext,
     plan: AnalysisPlan,
 ) -> dict[str, NoveltyComparisonDimension]:
+    selected_design = (
+        plan.design_selection.selected if plan.design_selection is not None else None
+    )
     exposure = context.variable(context.primary_exposure or "")
     outcome = context.variable(context.target_outcome or "")
     primary = next(
@@ -190,13 +193,18 @@ def _study_dimensions(
         )
         if value
     )
-    time_zero = "; ".join(
-        [
-            *[_text(item) for item in context.time_windows],
-            *[_text(item) for item in context.temporal_constraints],
-            _text(getattr(exposure, "analysis_window", None)),
-        ]
-    ) or "No complete time-zero/follow-up authority was declared."
+    time_zero = (
+        "; ".join(
+            [
+                _text(getattr(selected_design, "time_zero", None)),
+                _text(getattr(selected_design, "observation_window", None)),
+                *[_text(item) for item in context.time_windows],
+                *[_text(item) for item in context.temporal_constraints],
+                _text(getattr(exposure, "analysis_window", None)),
+            ]
+        )
+        or "No complete time-zero/follow-up authority was declared."
+    )
     exposure_text = "; ".join(
         value
         for value in (
@@ -210,6 +218,11 @@ def _study_dimensions(
         value
         for value in (
             f"name={context.target_outcome or 'not declared'}",
+            (
+                f"selected_estimand={_text(selected_design.estimand)}"
+                if selected_design is not None
+                else ""
+            ),
             _text(getattr(outcome, "description", None)),
             _text(getattr(outcome, "source_concept", None)),
             _text(context.endpoint),
@@ -220,6 +233,11 @@ def _study_dimensions(
         value
         for value in (
             f"analysis_type={plan.analysis_type or 'not declared'}",
+            (
+                f"selected_method={_text(selected_design.primary_method)}"
+                if selected_design is not None
+                else ""
+            ),
             f"method={_text(primary.method) if primary else 'no primary step'}",
             f"intent={_text(primary.intent) if primary else 'no primary step'}",
             "covariates=" + (", ".join(covariates) if covariates else "none"),
@@ -239,10 +257,32 @@ def _study_dimensions(
         )
         if value
     )
-    contribution = (
-        "No contribution claim is pre-authorized. The independent reviewer must "
-        "distinguish a clinically meaningful or methodological advance from a "
-        "new database/concept instantiation using retained source evidence."
+    contribution = "; ".join(
+        value
+        for value in (
+            (
+                f"planner_positioning={_text(selected_design.novelty_positioning)}"
+                if selected_design is not None
+                else ""
+            ),
+            (
+                f"supports={_text(selected_design.supports)}"
+                if selected_design is not None
+                else ""
+            ),
+            (
+                f"cannot_prove={_text(selected_design.cannot_prove)}"
+                if selected_design is not None
+                else ""
+            ),
+            (
+                "No contribution claim is pre-authorized. The independent "
+                "reviewer must distinguish a clinically meaningful or "
+                "methodological advance from a new database/concept "
+                "instantiation using retained source evidence."
+            ),
+        )
+        if value
     )
     return {
         "population_and_setting": NoveltyComparisonDimension(study=population),

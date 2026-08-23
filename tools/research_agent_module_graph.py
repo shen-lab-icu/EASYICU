@@ -136,6 +136,7 @@ SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.planning.capability_registry",
     "easyicu.research_agent.planning.analysis_method_suite",
     "easyicu.research_agent.planning.method_adapter_catalog",
+    "easyicu.research_agent.planning.design_selection",
     "easyicu.research_agent.planning.figure_strategy",
     "easyicu.research_agent.planning.analysis_types",
     "easyicu.research_agent.research_context.builder",

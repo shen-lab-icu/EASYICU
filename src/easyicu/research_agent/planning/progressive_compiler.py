@@ -2246,9 +2246,12 @@ def compile_progressive_plan(
                 {
                     "research_question": context.research_question,
                     "analysis_type": canonical_type,
-                    "steps": [
-                        step.model_dump(mode="json") for step in compiled_steps
-                    ],
+                    "design_selection": (
+                        skeleton.design_selection.model_dump(mode="json")
+                        if skeleton.design_selection is not None
+                        else None
+                    ),
+                    "steps": [step.model_dump(mode="json") for step in compiled_steps],
                     "cohort": cohort.to_dict(),
                     "endpoint": (
                         context.endpoint.model_dump(mode="json")

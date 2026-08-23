@@ -296,6 +296,7 @@ _ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "know_how_decisions",
         "evalue_conversion_spec",
         "subgroup_analysis_spec",
+        "design_selection",
     }
 )
 _ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS = frozenset({"steps"})
