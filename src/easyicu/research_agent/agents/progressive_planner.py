@@ -813,6 +813,19 @@ class ProgressivePlannerAgent:
             + json.dumps(list(action_rows), ensure_ascii=False, separators=(",", ":")),
             "Sealed literature citation keys:\n"
             + json.dumps(list(allowed_literature_citation_keys), ensure_ascii=False),
+            "Host-known method layers for sealed citation keys:\n"
+            + json.dumps(
+                [
+                    {
+                        "citation_key": key,
+                        "method_layers": list(method_layers_for_source_keys((key,))),
+                    }
+                    for key in allowed_literature_citation_keys
+                    if method_layers_for_source_keys((key,))
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
             (
                 "Pre-result design selection contract:\nCompare 2-4 scientifically "
                 "distinct candidate designs for this exact question, mark exactly "
@@ -1008,6 +1021,7 @@ class ProgressivePlannerAgent:
         required_visualization_step: bool = False,
         closed_domain_variables: Sequence[str] | None = None,
         ordered_domain_variables: Sequence[str] | None = None,
+        continuous_domain_variables: Sequence[str] | None = None,
         primary_exposure: str | None = None,
         target_outcome: str | None = None,
         context_required_method_layers: Sequence[str] | None = None,
@@ -1049,6 +1063,7 @@ class ProgressivePlannerAgent:
             if ordered_domain_variables is not None
             else None
         )
+        continuous_domains = set(continuous_domain_variables or ())
         allowed_modules = set(
             progressive_module_ids_for_analysis_types((outline.analysis_type,))
         )
@@ -1249,6 +1264,12 @@ class ProgressivePlannerAgent:
                 step.module_id == "adjusted_association" for step in outline.steps
             ):
                 required_method_layers.add("interpretation")
+                if any(
+                    set(step.variable_names) & continuous_domains
+                    for step in outline.steps
+                    if step.module_id == "adjusted_association"
+                ):
+                    required_method_layers.add("functional_form")
             selected_outline_citations = tuple(
                 citation
                 for step in outline.steps
@@ -1957,6 +1978,15 @@ class ProgressivePlannerAgent:
             )
             >= 3
         )
+        continuous_domain_variables = tuple(
+            variable.name
+            for variable in context.variables
+            if (variable.observed_domain or {}).get("is_binary") is False
+            and not observed_levels_for(
+                name=variable.name,
+                variables=context_variable_map,
+            )
+        )
         resolved_planning_contract_context = bind_literature_citation_authority(
             planning_contract_context,
             allowed_citations,
@@ -2114,6 +2144,7 @@ class ProgressivePlannerAgent:
                     required_visualization_step=required_visualization_step,
                     closed_domain_variables=closed_domain_variables,
                     ordered_domain_variables=ordered_domain_variables,
+                    continuous_domain_variables=continuous_domain_variables,
                     primary_exposure=context.primary_exposure,
                     target_outcome=context.target_outcome,
                     context_required_method_layers=(
@@ -2149,6 +2180,7 @@ class ProgressivePlannerAgent:
             required_visualization_step=required_visualization_step,
             closed_domain_variables=closed_domain_variables,
             ordered_domain_variables=ordered_domain_variables,
+            continuous_domain_variables=continuous_domain_variables,
             primary_exposure=context.primary_exposure,
             target_outcome=context.target_outcome,
             context_required_method_layers=required_method_layers_for_context(context),
