@@ -507,6 +507,10 @@ class PublicationFigureSkill:
 
         source_copy_ids: List[str] = []
         source_copy_names: List[str] = []
+        source_metadata = _source_fingerprint_metadata(
+            evidence,
+            rendered.source_evidence_ids,
+        )
         for name, frame in rendered.source_frames.items():
             try:
                 copy_path = out_dir / f"publication_figure_source_{name}.csv"
@@ -527,6 +531,7 @@ class PublicationFigureSkill:
                 producer=self.name,
                 generation_mode="deterministic_figure_skill",
                 prompt_pack_version=prompt_pack_version,
+                metadata=source_metadata,
                 on_sha_change="new_id",
             )
             source_copy_ids.append(record.evidence_id)
@@ -563,6 +568,7 @@ class PublicationFigureSkill:
             contract=contract,
             prompt_pack_version=prompt_pack_version,
             source_evidence_ids=[*rendered.source_evidence_ids, *source_copy_ids],
+            checkpoint_source_evidence_ids=rendered.source_evidence_ids,
         )
         contract_evidence_id = contract_record.evidence_id
         figure_ids = [record.evidence_id for record in figure_records]
@@ -1060,6 +1066,7 @@ class PublicationFigureSkill:
                 *upstream_source_ids,
                 *[record.evidence_id for record in source_copy_records],
             ],
+            checkpoint_source_evidence_ids=upstream_source_ids,
         )
         contract_evidence_id = contract_record.evidence_id
         figure_ids = [record.evidence_id for record in figure_records]
@@ -1485,6 +1492,7 @@ class PublicationFigureSkill:
             paths=paths,
             contract=contract,
             prompt_pack_version=prompt_pack_version,
+            source_evidence_ids=[source_record.evidence_id],
         )
         contract_evidence_id = contract_record.evidence_id
         figure_ids = [record.evidence_id for record in figure_records]
@@ -1617,6 +1625,7 @@ class PublicationFigureSkill:
             out_dir=out_dir,
         )
         promoted_source_records: List[EvidenceRecord] = []
+        source_metadata = _source_fingerprint_metadata(evidence, source_ids)
         for source_name in copied_source_names:
             promoted_source_records.append(
                 evidence.register_file(
@@ -1629,10 +1638,11 @@ class PublicationFigureSkill:
                     producer=self.name,
                     generation_mode="deterministic_figure_skill",
                     prompt_pack_version=prompt_pack_version,
+                    metadata=source_metadata,
                     on_sha_change="new_id",
                 )
             )
-        source_ids = list(
+        contract_source_ids = list(
             dict.fromkeys(
                 [
                     *source_ids,
@@ -1642,7 +1652,7 @@ class PublicationFigureSkill:
         )
         contract = contract_promoted_from_source(
             _verified_record_path(run_dir, contract_source),
-            source_ids=source_ids,
+            source_ids=contract_source_ids,
             source_data=copied_source_names or None,
         )
         contract_path = out_dir / "easyicu_publication_figure.figure_contract.json"
@@ -1672,6 +1682,8 @@ class PublicationFigureSkill:
             paths=paths,
             contract=contract,
             prompt_pack_version=prompt_pack_version,
+            source_evidence_ids=contract_source_ids,
+            checkpoint_source_evidence_ids=source_ids,
             contract_metadata=provenance_metadata,
             figure_metadata=provenance_metadata,
         )
@@ -2541,6 +2553,8 @@ def _aggregate_disclosure_audit(
 def _source_fingerprint_metadata(
     evidence: EvidenceStore,
     source_ids: Sequence[str],
+    *,
+    checkpoint_source_ids: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     ids = list(dict.fromkeys(str(eid) for eid in source_ids if str(eid)))
     fingerprints: Dict[str, str] = {}
@@ -2553,6 +2567,12 @@ def _source_fingerprint_metadata(
         "source_evidence_ids": ids,
         "source_evidence_sha256": fingerprints,
     }
+    if checkpoint_source_ids is not None:
+        metadata["checkpoint_source_evidence_ids"] = list(
+            dict.fromkeys(
+                str(eid) for eid in checkpoint_source_ids if str(eid).strip()
+            )
+        )
     if len(ids) == 1:
         metadata["source_evidence_id"] = ids[0]
     return metadata
@@ -2574,6 +2594,7 @@ def _register_publication_figure_bundle(
     contract: Any,
     prompt_pack_version: Optional[str],
     source_evidence_ids: Optional[Sequence[str]] = None,
+    checkpoint_source_evidence_ids: Optional[Sequence[str]] = None,
     contract_metadata: Optional[Dict[str, Any]] = None,
     figure_metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[EvidenceRecord, List[EvidenceRecord]]:
@@ -2587,7 +2608,11 @@ def _register_publication_figure_bundle(
     source_ids = list(
         dict.fromkeys(str(item) for item in raw_source_ids if str(item).strip())
     )
-    source_metadata = _source_fingerprint_metadata(evidence, source_ids)
+    source_metadata = _source_fingerprint_metadata(
+        evidence,
+        source_ids,
+        checkpoint_source_ids=checkpoint_source_evidence_ids,
+    )
     privacy_audit = _aggregate_disclosure_audit(
         contract, evidence=evidence, source_ids=source_ids
     )

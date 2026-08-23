@@ -658,7 +658,14 @@ def _publication_figure_bundle_ready(
         if not strict_checkpoint:
             return True
         metadata = record.metadata or {}
-        raw_ids = metadata.get("source_evidence_ids")
+        # Publication bundles may include host-derived source-data copies in
+        # their full provenance DAG.  Only the explicitly typed checkpoint
+        # roots must belong to the active step projection; otherwise a newly
+        # generated bundle incorrectly invalidates itself because its derived
+        # run-level records are not step outputs.
+        raw_ids = metadata.get("checkpoint_source_evidence_ids")
+        if raw_ids is None:
+            raw_ids = metadata.get("source_evidence_ids")
         if isinstance(raw_ids, list):
             source_ids = {str(value) for value in raw_ids if str(value).strip()}
         else:

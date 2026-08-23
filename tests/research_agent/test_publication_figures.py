@@ -575,6 +575,12 @@ def test_publication_figure_skill_promotes_deterministic_step_before_family_rend
             generation_mode="deterministic_standard",
             metadata=metadata if kind != "table" else {"step_id": metadata["step_id"]},
         )
+    active_step_evidence_ids = [
+        "figure_sensitivity_forest_svg",
+        "figure_sensitivity_forest_png",
+        "log_sensitivity_forest_contract",
+        "table_sensitivity_forest_source_data",
+    ]
 
     panel = RobustnessPanel.from_rows(
         [
@@ -653,6 +659,22 @@ def test_publication_figure_skill_promotes_deterministic_step_before_family_rend
     assert (
         run_dir / "publication_figures" / "sensitivity_forest_source_data.csv"
     ).is_file()
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+
+    readiness = _publication_figure_bundle_ready(
+        evidence=evidence,
+        run_dir=run_dir,
+        per_step_records=[
+            {
+                "step_id": "05_sensitivity_comparison_across_definitions_figure",
+                "status": "ok",
+                "evidence_ids": active_step_evidence_ids,
+            }
+        ],
+    )
+    assert readiness["publication_figure_contract_ready"] is True
+    assert readiness["publication_figure_source_data_ready"] is True
+    assert readiness["publication_figure_bundle_ready"] is True
 
 
 def test_publication_figure_skill_prefers_primary_bundle_over_sensitivity(
