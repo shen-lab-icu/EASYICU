@@ -225,6 +225,7 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
 def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     tmp_path: Path,
 ) -> None:
+    pytest.importorskip("lifelines")
     projection, authority = _authority("h1_ventilation_survival")
     assert isinstance(authority, LandmarkSurvivalRuntimeAuthority)
     bound, findings = ScientificRuntimeAuthorities(

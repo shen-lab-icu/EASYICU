@@ -168,7 +168,7 @@ def _load_inputs(
     }
 
 
-def _finite(frame: pd.DataFrame, column: str) -> pd.Series:
+def _prediction_finite_series(frame: pd.DataFrame, column: str) -> pd.Series:
     values = pd.to_numeric(frame[column], errors="coerce")
     if values.isna().any() or not np.isfinite(values.to_numpy(dtype=float)).all():
         raise RuntimeError(f"prediction figure source {column!r} is not finite")
@@ -202,7 +202,7 @@ def run_prediction_figure(
     scores = bound[PREDICTION_SCORES_PRODUCT].frame.copy()
     validation = scores.loc[scores["split"].astype(str).eq("validation")].copy()
     outcomes = pd.to_numeric(validation["outcome"], errors="coerce")
-    probabilities = _finite(validation, "probability")
+    probabilities = _prediction_finite_series(validation, "probability")
     if outcomes.isna().any() or not outcomes.isin((0, 1)).all() or outcomes.nunique() != 2:
         raise RuntimeError("prediction figure requires binary validation outcomes")
     performance = bound[PREDICTION_PERFORMANCE_PRODUCT].frame.copy()
@@ -251,8 +251,8 @@ def run_prediction_figure(
     bins = calibration.loc[calibration["row_role"].astype(str).eq("calibration_bin")]
     if bins.empty:
         raise RuntimeError("calibration assessment has no calibration bins")
-    predicted = _finite(bins, "mean_predicted_probability")
-    observed = _finite(bins, "observed_event_rate")
+    predicted = _prediction_finite_series(bins, "mean_predicted_probability")
+    observed = _prediction_finite_series(bins, "observed_event_rate")
     ax = axes[1, 0]
     ax.plot([0, 1], [0, 1], "--", color="#777777", linewidth=0.8)
     ax.plot(predicted, observed, "o-", color=palette["blue"], linewidth=1.3)
