@@ -82,7 +82,16 @@ jobs:
       - name: Run research_agent test suite
         run: |
           python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
-          pytest tests/test_arch_measure.py -q -m ""
+          # 2026-08-22: the module-graph baseline had no runner at all. Nothing
+          # in tests/ or .github/ referenced arch_baselines/
+          # research_agent_module_graph.json, so only the acyclicity assertion in
+          # tests/test_research_agent_module_graph.py was live and the canonical
+          # surface / module-count ratchet silently drifted 8 days and 54 modules
+          # (519 -> 573) before anyone ran --diff by hand. A gate nobody runs is
+          # not a gate; run it here, next to the arch_measure ratchet it belongs with.
+          python tools/research_agent_module_graph.py \
+            --diff tools/arch_baselines/research_agent_module_graph.json
+          pytest tests/test_arch_measure.py tests/test_research_agent_module_graph.py -q -m ""
           # Keep fail-closed runner policy tests in their default environment.
           pytest tests/research_agent/test_runner.py -q -m ""
           # 2026-08-17: this job used to re-run the whole 10,577-test

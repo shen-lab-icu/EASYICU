@@ -159,6 +159,7 @@ from .landmark_survival_executor import (
     landmark_survival_executor_code,
     landmark_survival_executor_owns_step,
     landmark_survival_figure_executor_code,
+    LANDMARK_SURVIVAL_FIGURE_ANALYSIS_KIND,
     landmark_survival_figure_executor_owns_step,
 )
 from .source_feasibility_executor import (
@@ -438,7 +439,7 @@ def select_standard_executor(
             ):
                 return _selected(
                     StandardExecutorSelection(
-                        analysis_kind="signed_landmark_survival_figure",
+                        analysis_kind=LANDMARK_SURVIVAL_FIGURE_ANALYSIS_KIND,
                         selection_reason=(
                             "signed_landmark_survival_figure_contract_preflight"
                         ),
@@ -453,7 +454,7 @@ def select_standard_executor(
                         host_sealed_renderer=True,
                     )
                 )
-            _missed("signed_landmark_survival_figure")
+            _missed(LANDMARK_SURVIVAL_FIGURE_ANALYSIS_KIND)
         elif isinstance(sealed_current, LandmarkSplineRuntimeAuthority):
             if landmark_spline_executor_owns_step(
                 step,

@@ -1,6 +1,6 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "d6a120b548221315b277521a62c184d0df06411d6ea5f334abac9d2f477453c4",
+  "tool_sha256": "23b9e5ce82474e845442bbefbfc58ed88f80adeabc52086193cb031069585bb0",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
@@ -22,8 +22,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 9006,
-      "sha256": "3c9bfc20561233011f3b66c0bd8673732faaf1c355dcfc882654b42d7a3976a7",
+      "loc": 8256,
+      "sha256": "35f2fae029b94ffb02d4d07eb687e674c9efdef66e09054c687ec8a92d13b7d2",
       "intra_package_import_edges": 122,
       "shim_bypass_violations": []
     },
@@ -136,8 +136,8 @@
       "shim_bypass_violations": []
     },
     "audits/figures.py": {
-      "loc": 5538,
-      "sha256": "087516f1ef4d4f3b45509a84dd503c23ca1b47ab39351fb6738cef3d2090ed39",
+      "loc": 5626,
+      "sha256": "3923d6101d8413e2eb4f1201ef219158f4ffc28f0c3fbb3c1324ee0d7fabcf4a",
       "intra_package_import_edges": 5,
       "shim_bypass_violations": []
     },
@@ -160,8 +160,8 @@
       "shim_bypass_violations": []
     },
     "plan_utils.py": {
-      "loc": 4928,
-      "sha256": "ebd9798507373d470989a19756687b03961eff380c96bafb39dd2437c4af1486",
+      "loc": 4958,
+      "sha256": "2c28ac3b8e919c2d57251de6cbb4c206f2d54635c167c7eee5f2712ee3ff33d2",
       "intra_package_import_edges": 17,
       "shim_bypass_violations": []
     },
@@ -290,6 +290,30 @@
       "sha256": "ea4c43fc445fba8008eb2af38a796a3180f32c5d79e558a5de3e25029f6d272d",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
+    },
+    "orchestration/resume_plan_migration.py": {
+      "loc": 882,
+      "sha256": "0332fb154e56f6729329552542a6b2adcb5c8a3f1ecda0f3518f2084dee67ed5",
+      "intra_package_import_edges": 11,
+      "shim_bypass_violations": []
+    },
+    "discovery/idea_mining.py": {
+      "loc": 3654,
+      "sha256": "d64a46a840d4b0b08e5f6b68fd6f6877ec5ab6b4cbd428e2f2d3e3070fa98bc4",
+      "intra_package_import_edges": 16,
+      "shim_bypass_violations": []
+    },
+    "execution/runner.py": {
+      "loc": 3329,
+      "sha256": "619f7fbdea766468ed94039f016c3cde7919a7a31cbbb104901c0a4d3807d75d",
+      "intra_package_import_edges": 9,
+      "shim_bypass_violations": []
+    },
+    "execution/runners/deterministic_robustness.py": {
+      "loc": 3323,
+      "sha256": "b668d7b9648f765e43137b9e20e927e889d4646f890d112b82d2787e06052aa2",
+      "intra_package_import_edges": 17,
+      "shim_bypass_violations": []
     }
   },
   "functions": {
@@ -336,8 +360,8 @@
       "callable_closure_captured_names": 0
     },
     "audits/figures.py::_compare_source_to_upstream": {
-      "lines": 866,
-      "line_start": 3815,
+      "lines": 873,
+      "line_start": 3897,
       "direct_nested_funcs": 12,
       "total_nested_funcs": 12,
       "own_bound_names": 128,
@@ -347,7 +371,7 @@
     },
     "pipeline.py::run": {
       "lines": 777,
-      "line_start": 4669,
+      "line_start": 3919,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 107,
@@ -356,18 +380,18 @@
       "callable_closure_captured_names": 43
     },
     "pipeline.py::_generate_or_resume_plan": {
-      "lines": 442,
-      "line_start": 2596,
+      "lines": 339,
+      "line_start": 1949,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
-      "own_bound_names": 48,
+      "own_bound_names": 43,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 0
     },
     "pipeline.py::_run_plan_phase": {
       "lines": 618,
-      "line_start": 3474,
+      "line_start": 2724,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 83,
@@ -376,11 +400,11 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "E2 deterministic landmark figure closure: accept the reviewed host-orchestration calls and ruff-only physical line expansion introduced by 2290f27. Scientific execution and rendering remain in their typed owner modules; pipeline.py gained no new private method implementation. This moves the exact-byte ratchet without claiming decomposition, and pipeline.py remains tracked architecture debt.",
+  "baseline_reason": "Repair the figure-source digest short-circuit added by 8767913. That commit put a file-digest fast path at the top of _compare_source_to_upstream, where it hashed source_path while the contract is to verify the caller's source_df; the production caller passes one panel group as source_df and the whole file as source_path, so a source file matching any upstream table skipped the per-group comparison, and a tampered frame audited clean. The fast path now runs last (only where no join key exists, its actual motivating case) and is guarded by _frame_is_whole_file, so the digest must describe the artifact being audited. _compare_source_to_upstream itself SHRANK 879->873; the accepted +76 LOC is the two new helper classmethods and the rationale docstrings moved out of that already-oversized function, plus this file keeps its other metrics flat.",
   "baseline_accepted_growth": {
-    "pipeline.py": {
-      "loc_was": 8752,
-      "loc_now": 9006
+    "audits/figures.py": {
+      "loc_was": 5550,
+      "loc_now": 5626
     }
   },
   "baseline_history": [
@@ -726,6 +750,28 @@
         "pipeline.py": {
           "loc_was": 8752,
           "loc_now": 9006
+        }
+      }
+    },
+    {
+      "reason": "Repair the red ratchet and close the unmeasured-file gap. acfd465 grew pipeline.py 9006->9017 and _generate_or_resume_plan 442->453 (past its 450-line decomposition gate) and stayed red for 4 commits because no CI ran on them. Fixed by decomposition, not by moving the gate: the legacy resume-plan migration family moved to orchestration/resume_plan_migration.py behind a facade import, and the 132-line resume-migration block became the module-level coordinator _apply_resume_plan_migrations. pipeline.py 9017->8256, _generate_or_resume_plan 453->339, own_bound_names 50->43. Also baselines four newly gated files: the new owner module plus discovery/idea_mining.py, execution/runner.py and execution/runners/deterministic_robustness.py, which were the standing '3 of the top-12 outside TARGET_FILES' NOTE.",
+      "accepted_growth": {
+        "audits/figures.py": {
+          "loc_was": 5538,
+          "loc_now": 5550
+        },
+        "plan_utils.py": {
+          "loc_was": 4928,
+          "loc_now": 4958
+        }
+      }
+    },
+    {
+      "reason": "Repair the figure-source digest short-circuit added by 8767913. That commit put a file-digest fast path at the top of _compare_source_to_upstream, where it hashed source_path while the contract is to verify the caller's source_df; the production caller passes one panel group as source_df and the whole file as source_path, so a source file matching any upstream table skipped the per-group comparison, and a tampered frame audited clean. The fast path now runs last (only where no join key exists, its actual motivating case) and is guarded by _frame_is_whole_file, so the digest must describe the artifact being audited. _compare_source_to_upstream itself SHRANK 879->873; the accepted +76 LOC is the two new helper classmethods and the rationale docstrings moved out of that already-oversized function, plus this file keeps its other metrics flat.",
+      "accepted_growth": {
+        "audits/figures.py": {
+          "loc_was": 5550,
+          "loc_now": 5626
         }
       }
     }

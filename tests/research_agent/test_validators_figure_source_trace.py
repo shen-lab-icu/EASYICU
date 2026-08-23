@@ -1755,6 +1755,71 @@ def test_byte_identical_numeric_only_source_is_digest_traceable(tmp_path: Path):
     assert result.get("join_mode") == "exact_file_digest"
 
 
+def test_a_digest_identical_file_does_not_authenticate_a_subset_frame(tmp_path: Path):
+    """The digest fast path must describe the frame being audited, not the file.
+
+    Added 2026-08-22. The production caller passes ONE panel group while
+    ``source_path`` names the whole file::
+
+        _compare_source_to_upstream(source_df=group_df, source_path=source_path, ...)
+
+    While the digest check sat at the top of the function it hashed the two
+    FILES, so a source file that happened to match an upstream table returned
+    ok for whatever ``group_df`` contained -- the per-group comparison was
+    skipped in the main figure-lineage audit. The fast path now also requires
+    that ``source_df`` really is the whole file.
+    """
+    upstream = tmp_path / "upstream_numeric.csv"
+    pd.DataFrame(
+        {
+            "exposure_group": [0, 0, 1, 1],
+            "time_days": [0.0, 1.0, 0.0, 1.0],
+            "survival_probability": [1.0, 0.95, 1.0, 0.90],
+        }
+    ).to_csv(upstream, index=False)
+    source = tmp_path / "figure_numeric.csv"
+    source.write_bytes(upstream.read_bytes())
+
+    # Byte-identical files, but the caller hands over one group's rows.
+    group_df = pd.read_csv(source)
+    group_df = group_df[group_df["exposure_group"] == 1].reset_index(drop=True)
+
+    result = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=group_df,
+        source_path=source,
+        upstream_path=upstream,
+    )
+
+    assert result.get("reason") != "exact_file_digest_match", result
+    assert result.get("ok") is not True, result
+
+
+def test_a_rewritten_frame_is_not_excused_by_its_untouched_file(tmp_path: Path):
+    """The same guard, stated as tampering rather than as subsetting."""
+    upstream = tmp_path / "upstream_numeric.csv"
+    pd.DataFrame(
+        {
+            "exposure_group": [0, 0, 1, 1],
+            "time_days": [0.0, 1.0, 0.0, 1.0],
+            "survival_probability": [1.0, 0.95, 1.0, 0.90],
+        }
+    ).to_csv(upstream, index=False)
+    source = tmp_path / "figure_numeric.csv"
+    source.write_bytes(upstream.read_bytes())
+
+    rewritten = pd.read_csv(source)
+    rewritten.loc[0, "survival_probability"] = 0.01
+
+    result = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=rewritten,
+        source_path=source,
+        upstream_path=upstream,
+    )
+
+    assert result.get("reason") != "exact_file_digest_match", result
+    assert result.get("ok") is not True, result
+
+
 def _write_authoritative_figure_trace_run(
     tmp_path: Path,
 ) -> tuple[Path, Path, list[dict]]:

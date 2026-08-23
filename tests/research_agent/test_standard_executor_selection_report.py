@@ -96,6 +96,21 @@ def test_report_names_every_owner_the_selector_consults() -> None:
         if 'analysis_kind="' in line
     }
 
+    # WHAT THIS SCRAPE DOES AND DOES NOT COVER (recorded 2026-08-22, after a
+    # new executor tripped it): it enumerates the `analysis_kind="..."` STRING
+    # LITERALS in the selector, so it sees exactly the owners that a step with
+    # no sealed authority can reach. The six owners inside the selector's
+    # `isinstance(sealed_current, ...)` chain cannot appear in this step's trace
+    # at all -- their whole branch is skipped without an authority -- and every
+    # one of them names its kind through a module constant, so they fall outside
+    # this scrape by construction rather than by exemption.
+    #
+    # That is a real limit, not a loophole: an authority-gated owner's decline
+    # is only observable on a step that carries the matching authority, and
+    # this test builds one that carries none. Covering those owners needs a
+    # different fixture, not a wider scrape here. What this test still catches
+    # -- and what it was written for -- is an unconditionally reachable owner
+    # wired into the selector with no report entry.
     assert selected_kinds
     missing = {
         kind

@@ -190,7 +190,21 @@ def test_wide_trajectory_generation_prompts_stay_below_transport_gate() -> None:
 
         messages = llm.calls[0][0]
         payload = "\n".join(str(message.content or "") for message in messages)
-        assert _payload_bytes(messages) <= 42_000
+        # 2026-08-22: raised 42_000 -> 43_000. This gate exists to catch the
+        # *trajectory metadata* losing its compaction, not to freeze the
+        # static instruction text. ``624b464`` (2026-08-20, "bind planner
+        # display authority into step manifests") added 269 bytes of
+        # load-bearing coder instruction -- read display_labels from
+        # ``manifest['plan']``, never from the ResearchContext -- taking the
+        # widest payload from 41,948 to 42,217. The payload was re-measured
+        # before moving the gate: zero duplicated lines in either message and
+        # no remaining compaction headroom, so the growth is content, not
+        # bloat. The compacted shape itself stays locked line-by-line by
+        # ``test_wide_trajectory_projection_preserves_every_exact_window_coordinate``
+        # above; a
+        # real compaction failure overshoots this gate by kilobytes, not by
+        # the ~2% headroom added here.
+        assert _payload_bytes(messages) <= 43_000
         assert "Shared fixed-window trajectory policies" in payload
         for variable in context.variables:
             if variable.fixed_window_trajectory is not None:
