@@ -276,10 +276,19 @@ def validate_progressive_foundation(
     *,
     context: ResearchContext,
     analysis_type: str,
+    robustness_replay_required: bool = False,
 ) -> None:
     """Fail before step generation when a sealed Foundation cannot compile."""
 
     _validate_progressive_cohort_intent(foundation.cohort, context=context)
+    if robustness_replay_required and not foundation.robustness_intents:
+        raise _fail(
+            "progressive_foundation_robustness_intent_missing",
+            "the validated outline declares a robustness_replay step, but the "
+            "foundation supplies no replayable robustness intent; add at least "
+            "one prespecified host-replayable intent or remove the outline step",
+            path="robustness_intents",
+        )
     if (
         str(analysis_type or "").strip().casefold() == "descriptive_epidemiology"
         and foundation.robustness_intents
@@ -2052,6 +2061,9 @@ def compile_progressive_plan(
         ),
         context=context,
         analysis_type=canonical_type,
+        robustness_replay_required=any(
+            step.module_id == "robustness_replay" for step in skeleton.steps
+        ),
     )
     allowed_modules = set(
         progressive_module_ids_for_analysis_types((canonical_type,))

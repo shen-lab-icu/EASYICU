@@ -3779,6 +3779,51 @@ def test_agent_rejects_invalid_foundation_before_any_step_provider_call() -> Non
     assert agent.last_foundation is None
 
 
+def test_agent_repairs_missing_robustness_intent_before_step_materialization() -> None:
+    source = _payload()
+    source["steps"][5].update(
+        {
+            "step_id": "06_robustness",
+            "module_id": "robustness_replay",
+            "objective": "Replay the locked robustness grid without changing it.",
+            "product_inputs": [
+                {
+                    "producer_step_id": "05_primary",
+                    "product_id": "table:adjusted_association_estimates",
+                }
+            ],
+            "outputs": [],
+            "scientific_action_id": None,
+            "custom_method": None,
+            "sensitivity_spec_ids": ["complete_case"],
+        }
+    )
+    invalid_foundation = _foundation_payload(source)
+    invalid_foundation["foundation"]["robustness_intents"] = []
+    responses = [
+        _outline_payload(source),
+        invalid_foundation,
+        _foundation_payload(source),
+        *_materialization_payloads(source),
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    checkpoints = []
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(_context(), checkpoint_callback=checkpoints.append)
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    assert [item.stage for item in checkpoints[:2]] == ["outline", "foundation"]
+    assert "progressive_foundation_robustness_intent_missing" in (
+        llm.calls[2][0][-1].content
+    )
+    assert llm.calls[2][1]["structured_output"].name == (
+        "easyicu_progressive_plan_foundation_v1"
+    )
+
+
 def test_agent_host_compiles_caller_bound_all_input_cohort() -> None:
     invalid_foundation = _foundation_payload()
     invalid_foundation["foundation"]["cohort"] = {
