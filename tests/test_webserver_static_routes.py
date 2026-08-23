@@ -2113,7 +2113,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260728-shared-echarts1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20260817-copilot-boundary1" in index_html
-    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-viz.js?v=20260823-native-preview1" in index_html
     assert "css/crossdb.css?v=20260728-one-click-raw1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -2161,7 +2161,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-viz.js?v=20260823-native-preview1" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2848,7 +2848,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-viz.js?v=20260823-native-preview1" in index_html
     assert "bounded browser review', '浏览器有界审阅" in viz_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
@@ -3052,7 +3052,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-viz.js?v=20260823-native-preview1" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
