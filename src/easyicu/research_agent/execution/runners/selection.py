@@ -78,8 +78,11 @@ from .robustness_figure_executor import (
 )
 from .adjusted_association_figure_executor import (
     ADJUSTED_ASSOCIATION_FIGURE_INPUT,
+    ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
     adjusted_association_figure_executor_code,
     adjusted_association_figure_executor_owns_step,
+    association_overview_figure_executor_code,
+    association_overview_figure_executor_owns_step,
 )
 from .audit_panel_executor import (
     audit_panel_executor_code,
@@ -713,6 +716,25 @@ def select_standard_executor(
             )
         )
     _missed("robustness_figure")
+    if association_overview_figure_executor_owns_step(
+        step, resolved_bindings=resolved_bindings
+    ):
+        if receipt_required:
+            _receipt_declined("association_overview_figure")
+            return None
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="association_overview_figure",
+                selection_reason="association_overview_figure_contract_preflight",
+                progress_message="Using source-bound association overview renderer",
+                code=association_overview_figure_executor_code(
+                    step, display_labels=plan.display_labels
+                ),
+                consumed_input_keys=ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
+                host_sealed_renderer=True,
+            )
+        )
+    _missed("association_overview_figure")
     if adjusted_association_figure_executor_owns_step(
         step, resolved_bindings=resolved_bindings
     ):
