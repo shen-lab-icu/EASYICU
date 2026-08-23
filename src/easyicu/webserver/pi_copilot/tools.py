@@ -360,6 +360,29 @@ def _artifact_resource(
     }
 
 
+def _extraction_workspace_resource(
+    study: Mapping[str, Any],
+    *,
+    state: str,
+    job_id: Any = None,
+) -> Dict[str, Any]:
+    """Project the native Extraction owner without exposing its host paths."""
+
+    resource: Dict[str, Any] = {
+        "kind": "native_workspace",
+        "route": "extraction",
+        "state": state,
+        "study_context_id": str(study.get("id") or "")[:160],
+        "study_revision": int(study.get("revision") or 0),
+        "label": "Data Extraction",
+        "media_type": "application/vnd.easyicu.native-workspace",
+    }
+    clean_job_id = str(job_id or "").strip()
+    if clean_job_id:
+        resource["job_id"] = clean_job_id[:160]
+    return resource
+
+
 def _document_resource(
     run_id: Any,
     document_name: Any,
@@ -3271,7 +3294,10 @@ def _start_extraction(
                     "present": True,
                     "path_digest": path_digest(source_path),
                     "source_id": str(registered_source.get("id") or "")[:80],
-                }
+                },
+                "resource": _extraction_workspace_resource(
+                    study, state="review"
+                ),
             },
         )
     database = str(source.get("database") or "").strip()
@@ -3292,7 +3318,12 @@ def _start_extraction(
             code="extraction_setup_incomplete",
             summary="The typed study setup does not yet contain a prepared source, database, and feature modules.",
             owner="easyicu.webserver.study_contexts",
-            details={"missing_fields": missing},
+            details={
+                "missing_fields": missing,
+                "resource": _extraction_workspace_resource(
+                    study, state="setup"
+                ),
+            },
         )
     export_format = str(study.get("export_format") or "parquet").strip().lower()
     if export_format not in {"csv", "parquet"}:
@@ -3352,6 +3383,13 @@ def _start_extraction(
                 "study_context_revision",
             )
             if submitted.get(key) is not None
+        }
+        | {
+            "resource": _extraction_workspace_resource(
+                study,
+                state="running",
+                job_id=submitted.get("job_id"),
+            )
         },
     )
     context.invalidate_authority("easyicu_extraction_submitted")
