@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.reporting.manuscript_sections import (
     MANUSCRIPT_SECTION_SPECS,
     render_manuscript_sections,
@@ -52,7 +54,23 @@ def test_manuscript_section_assembly_is_ordered_and_forwards_common_context() ->
     assert "requires author verification" in rendered
     assert "released alongside this manuscript" not in rendered
     assert "declare no conflicts" not in rendered
-    assert sorted(seen) == sorted((name, "sealed-context") for name in expected_names)
+    assert seen == [(name, "sealed-context") for name in expected_names]
+
+
+def test_manuscript_section_failure_stops_before_later_provider_calls() -> None:
+    seen: list[str] = []
+
+    def call_section(**kwargs: object) -> str:
+        section_name = str(kwargs["section_name"])
+        seen.append(section_name)
+        if section_name == "Methods":
+            raise RuntimeError("provider stop-loss")
+        return f"## {section_name}"
+
+    with pytest.raises(RuntimeError, match="provider stop-loss"):
+        render_manuscript_sections(call_section=call_section, common={})
+
+    assert seen == ["Title and Keywords", "Abstract", "Introduction", "Methods"]
 
 
 def test_section_specs_keep_literature_and_evidence_boundaries() -> None:
