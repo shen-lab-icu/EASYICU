@@ -3,7 +3,7 @@
 Date: 2026-08-23
 Branch: `codex/easyicu-desktop-app-v1`
 Base checkpoint: `d5a1c29`
-Status: implemented and locally verified; not merged or pushed
+Status: implemented, exact-head Apple Silicon App/DMG rebuilt and locally verified; not merged or pushed
 
 ## Outcome
 
@@ -68,8 +68,30 @@ Manifest evidence recorded `preset=all_icu`, `exclude_readmissions=false`, and s
 
 Browser evidence: `task_logs/browser_qa_20260823/copilot_native_extraction_complete.png`.
 
+## Exact-head Apple Silicon rebuild
+
+After source checkpoint `905d0b8`, the Apple Silicon package was rebuilt from a clean detached worktree rather than the concurrently dirty development worktree. The build created its own Python venv, installed the locked Pi runtime, froze the FastAPI backend with PyInstaller, bundled Node, compiled the Tauri shell, applied an ad-hoc signature, and created a new DMG.
+
+Package verification:
+
+- `codesign --verify --deep --strict`: valid on disk and satisfies its Designated Requirement.
+- `hdiutil verify`: checksum valid.
+- DMG: `EasyICU_1.0.0_aarch64.dmg`, 458,470,329 bytes.
+- DMG SHA-256: `914af370185d1358ede9061bf22a0ddadc39bd139bd4b39b67bd61484bb3e7b4`.
+- Frozen package inspection found `screens-extraction-embedded.js`, its `index.html` wiring, `EU_EXTRACTION_EMBEDDED_WORKSPACE`, and the Guided preview consumer inside `EasyICU.app`.
+- Clean-source desktop/Copilot regression: `19 passed`.
+- Rust/Tauri boundary tests: `3 passed`.
+
+Computer Use launched the rebuilt `.app`, observed the native loading page, reached the complete Home UI, navigated to the formal `#guided` EasyICU Copilot page, and quit with Cmd+Q. After exit, the app reported `isRunning=false`, the exact Tauri/backend process count was zero, the dynamic ports `56716` and `57257` were closed, and HTTP returned no connection. No provider credential or external model call was used during this package smoke.
+
+Stable local artifacts:
+
+- `output/releases/905d0b8/EasyICU.app`
+- `output/releases/905d0b8/EasyICU_1.0.0_aarch64.dmg`
+- `task_logs/browser_qa_20260823/easyicu_desktop_905d0b8_home.jpeg`
+
 ## Boundaries
 
 - No merge or push was performed.
-- The Apple Silicon App/DMG was not rebuilt at this checkpoint; Web source and the next exact-head desktop build will share this implementation.
+- The Apple Silicon App/DMG was rebuilt and verified at exact source checkpoint `905d0b8`; the local package is ad-hoc signed and not notarized or suitable for public distribution.
 - The full repository CI was intentionally not run during this Web iteration. Per project policy, exact-head full CI is reserved for the later freeze/merge/release checkpoint.
