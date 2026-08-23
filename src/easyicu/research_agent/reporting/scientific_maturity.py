@@ -36,6 +36,7 @@ from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
 )
 from ..schema import AnalysisPlan, ResearchContext
+from .display_suite import panel_has_absolute_risk_context
 from .novelty_positioning import novelty_authority_digests
 
 
@@ -414,11 +415,16 @@ def _primary_figure_facts(
     expected_label = "adjusted" if covariates else "unadjusted"
     labels: list[str] = []
     roles: list[str] = []
+    absolute_risk_panel_present = False
     for path in primary_contracts:
         raw = _read_json(path.parent, path.name)
         for panel in raw.get("panels") or []:
             if not isinstance(panel, Mapping):
                 continue
+            absolute_risk_panel_present = (
+                absolute_risk_panel_present
+                or panel_has_absolute_risk_context(panel)
+            )
             roles.append(str(panel.get("role") or "").strip().casefold())
             labels.append(
                 " ".join(
@@ -438,10 +444,7 @@ def _primary_figure_facts(
         "primary_contract_paths": [str(path.relative_to(run_dir)) for path in primary_contracts],
         "primary_panel_roles": roles,
         "adjustment_label_conflict": conflicting,
-        "absolute_risk_panel_present": any(
-            role in {"descriptive_result", "temporal_absolute_risk"}
-            for role in roles
-        ),
+        "absolute_risk_panel_present": absolute_risk_panel_present,
     }
 
 

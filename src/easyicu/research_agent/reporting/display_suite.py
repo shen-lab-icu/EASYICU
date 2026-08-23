@@ -233,7 +233,15 @@ def _display_categories_for_text(text: str) -> set[str]:
     return categories
 
 
-def _panel_has_absolute_risk_context(panel: Dict[str, Any]) -> bool:
+def panel_has_absolute_risk_context(panel: Mapping[str, Any]) -> bool:
+    """Return whether a panel visibly provides absolute-risk context.
+
+    This semantic belongs to the display-suite owner and is shared by the
+    article-maturity projection. A panel can simultaneously audit a
+    measurement process and show observed outcome risk, so a single role enum
+    is not sufficient authority on its own.
+    """
+
     role = str(panel.get("role") or "").strip().lower()
     if role in {"descriptive_result", "absolute_risk", "prevalence", "event_rate"}:
         return True
@@ -248,6 +256,11 @@ def _panel_has_absolute_risk_context(panel: Dict[str, Any]) -> bool:
         "prevalence",
     )
     return any(token in text for token in absolute_terms)
+
+
+# Compatibility for downstream callers that imported the historical private
+# helper before the semantic became a shared owner contract.
+_panel_has_absolute_risk_context = panel_has_absolute_risk_context
 
 
 def summarize_display_suite_status(
@@ -363,7 +376,7 @@ def summarize_display_suite_status(
                     primary_chart_types.add(chart_type)
                 elif tier == "supporting_step":
                     supporting_chart_types.add(chart_type)
-            if _panel_has_absolute_risk_context(panel):
+            if panel_has_absolute_risk_context(panel):
                 has_absolute_risk_visual = True
                 if tier == "primary_publication":
                     primary_has_absolute_risk_visual = True
