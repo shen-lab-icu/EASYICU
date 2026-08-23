@@ -87,6 +87,7 @@ from ..research_context.cohort_granularity import format_patient_count
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from ..plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
+from .reviewer import run_reviewer_round
 from .result_integrity import (
     primary_result_plausibility_errors,
     primary_survival_estimate_integrity_errors,
@@ -2292,22 +2293,7 @@ def write_readiness_artifacts(
     )
     artifact_paths["figure_gallery"] = str(figure_gallery_path.relative_to(run_dir))
 
-    run_status_payload["canonical_outputs"] = {
-        **artifact_paths,
-        **canonical_figure_paths,
-    }
-    run_status_path.write_text(
-        json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-
     registrations = [
-        (
-            "run_status",
-            "log",
-            "Fail-closed run readiness gate summary.",
-            run_status_path,
-        ),
         (
             "evidence_audit",
             "statistic",
@@ -2373,6 +2359,113 @@ def write_readiness_artifacts(
                 producer="pipeline",
                 generation_mode="system",
             )
+
+    # The write-phase reviewer necessarily runs before the final readiness and
+    # scientific-maturity gates exist.  Keep that report as drafting feedback,
+    # then emit a distinct post-readiness report that inherits the final gate
+    # verdict without feeding it back into maturity (which would be circular).
+    # Runs with the optional reviewer disabled do not gain a surprise reviewer
+    # artifact here.
+    if evidence.get("reviewer_report_json") is not None:
+        final_gate_finding = ValidationFinding(
+            validator="final_readiness",
+            severity=("info" if gates["paper_authorized"] else "error"),
+            message=(
+                "Final readiness and scientific-maturity gates authorize the "
+                "current run for paper use."
+                if gates["paper_authorized"]
+                else "Final readiness or scientific-maturity gates do not "
+                "authorize the current run for paper use."
+            ),
+            evidence_ids=["run_status", "scientific_maturity_audit"],
+            detail={
+                "analysis_validated": bool(gates["analysis_validated"]),
+                "paper_authorization_allowed": bool(gates["paper_authorized"]),
+                "scientific_maturity_article_grade": bool(
+                    gates["scientific_maturity_article_grade"]
+                ),
+                "scientific_maturity_status": gates["scientific_maturity_status"],
+                "scientific_maturity_score": gates["scientific_maturity_score"],
+            },
+        )
+        final_reviewer_report = run_reviewer_round(
+            evidence_records=evidence.current_verified_records(per_step_records),
+            findings=[*findings, final_gate_finding],
+            round_index=1,
+        )
+        final_reviewer_md = run_dir / "reviewer_report_post_readiness.md"
+        final_reviewer_json = run_dir / "reviewer_report_post_readiness.json"
+        final_reviewer_md.write_text(
+            final_reviewer_report.to_markdown(), encoding="utf-8"
+        )
+        final_reviewer_json.write_text(
+            json.dumps(
+                final_reviewer_report.to_json(),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+        final_md_record = evidence.register_file(
+            kind="log",
+            description=(
+                "Authoritative simulated reviewer report reconciled against "
+                "final readiness and scientific-maturity gates."
+            ),
+            source_path=final_reviewer_md,
+            evidence_id="reviewer_report_post_readiness",
+            aliases=["reviewer_report_post_readiness"],
+            producer="pipeline",
+            generation_mode="system",
+            on_sha_change="new_id",
+        )
+        final_json_record = evidence.register_file(
+            kind="log",
+            description=(
+                "Structured authoritative reviewer report reconciled against "
+                "final readiness and scientific-maturity gates."
+            ),
+            source_path=final_reviewer_json,
+            evidence_id="reviewer_report_post_readiness_json",
+            aliases=["reviewer_report_post_readiness_json"],
+            producer="pipeline",
+            generation_mode="system",
+            on_sha_change="new_id",
+        )
+        artifact_paths["reviewer_report_post_readiness"] = str(
+            final_reviewer_md.relative_to(run_dir)
+        )
+        artifact_paths["reviewer_report_post_readiness_json"] = str(
+            final_reviewer_json.relative_to(run_dir)
+        )
+        gates["post_readiness_reviewer_evidence_ids"] = [
+            final_md_record.evidence_id,
+            final_json_record.evidence_id,
+        ]
+        gates["post_readiness_reviewer_recommendation"] = (
+            final_reviewer_report.aggregated_recommendation()
+        )
+
+    run_status_payload["gates"] = gates
+    run_status_payload["canonical_outputs"] = {
+        **artifact_paths,
+        **canonical_figure_paths,
+    }
+    run_status_path.write_text(
+        json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    if evidence.get("run_status") is None:
+        evidence.register_file(
+            kind="log",
+            description="Fail-closed run readiness gate summary.",
+            source_path=run_status_path,
+            evidence_id="run_status",
+            aliases=["run_status"],
+            producer="pipeline",
+            generation_mode="system",
+        )
 
     return gates, artifact_paths
 

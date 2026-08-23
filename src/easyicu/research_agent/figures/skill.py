@@ -11,6 +11,7 @@ it consumes registered tables/statistics, creates a claim-first
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import sys
@@ -638,11 +639,31 @@ class PublicationFigureSkill:
         primary_requirements = list(
             getattr(primary_step, "model_requirements", ()) or ()
         )
-        adjusted = any(
-            bool(getattr(requirement, "covariates", ()) or ())
-            for requirement in primary_requirements
+        adjustment_state = (
+            False
+            if typed_distribution
+            else _association_adjustment_state(
+                frame,
+                primary_requirements=primary_requirements,
+            )
         )
-        estimate_label = "Adjusted" if adjusted else "Unadjusted"
+        estimate_label = {
+            True: "Adjusted",
+            False: "Unadjusted",
+            None: "Primary",
+        }[adjustment_state]
+        source_outcome = _sole_source_semantic(frame, "outcome")
+        context_outcome = str(context.target_outcome or "").strip()
+        if (
+            source_outcome
+            and context_outcome
+            and _match_token(source_outcome) != _match_token(context_outcome)
+        ):
+            raise ValueError(
+                "primary association outcome conflicts with the sealed context"
+            )
+        source_exposure = _sole_source_semantic(frame, "exposure")
+        source_landmark_hours = _sole_source_landmark_hours(frame)
 
         palette = apply_publication_style()
         out_dir = run_dir / "publication_figures"
@@ -856,8 +877,13 @@ class PublicationFigureSkill:
                 _draw_missingness_panel(side_ax, missingness_df, palette=palette)
             add_panel_label(side_ax, label, x=-0.12, y=1.04, fontsize=10.0)
 
-        predictor = str(plot_df["label"].iloc[0])
-        outcome = context.target_outcome or "the target outcome"
+        predictor = source_exposure or str(plot_df["label"].iloc[0])
+        outcome = source_outcome or context.target_outcome or "the target outcome"
+        landmark_phrase = (
+            f" at the {source_landmark_hours:g}-hour landmark"
+            if source_landmark_hours is not None
+            else ""
+        )
         core_claim = (
             (
                 f"The prespecified unadjusted risk difference for {predictor} "
@@ -867,7 +893,8 @@ class PublicationFigureSkill:
             if typed_distribution
             else (
                 f"The primary EasyICU association estimate for {predictor} and "
-                f"{outcome} is rendered from registered analysis evidence."
+                f"{outcome}{landmark_phrase} is rendered from registered "
+                "analysis evidence."
             )
         )
         panels = [
@@ -886,7 +913,7 @@ class PublicationFigureSkill:
                     else (
                         f"The {estimate_label.lower()} association estimate and "
                         "interval are drawn from the registered primary association "
-                        "table."
+                        f"table{landmark_phrase}."
                     )
                 ),
                 "evidence_ids": [source_record.evidence_id],
@@ -946,6 +973,12 @@ class PublicationFigureSkill:
                     "The panel is generated after analysis validation from an "
                     "EvidenceStore-registered source table; it is not drawn from "
                     "writer prose."
+                    + (
+                        f" The analytic time anchor is the "
+                        f"{source_landmark_hours:g}-hour landmark."
+                        if source_landmark_hours is not None
+                        else ""
+                    )
                 )
             ),
         )
@@ -2953,6 +2986,120 @@ def _normalise_association_frame(
         _association_axis_from_token(_effect_measure_token(frame, cols, estimate_col))
     )
     return result
+
+
+def _semantic_cell_tokens(value: Any) -> tuple[str, ...]:
+    """Return explicit adjustment terms from one result-table cell."""
+
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ()
+    if isinstance(value, (list, tuple, set)):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    text = str(value).strip()
+    if not text or text.casefold() in {"nan", "none", "null", "[]"}:
+        return ()
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            return tuple(
+                str(item).strip() for item in parsed if str(item).strip()
+            )
+    return tuple(item.strip() for item in re.split(r"[;,]", text) if item.strip())
+
+
+def _association_adjustment_state(
+    frame: pd.DataFrame,
+    *,
+    primary_requirements: Sequence[Any],
+) -> Optional[bool]:
+    """Resolve adjusted/unadjusted from executed bytes, then typed Plan."""
+
+    frame = _primary_semantic_frame(frame)
+    executed: Optional[bool] = None
+    for column in (
+        "adjustment_covariates",
+        "covariates",
+        "adjusted_for",
+        "fitted_covariates",
+    ):
+        if column not in frame.columns:
+            continue
+        states = {bool(_semantic_cell_tokens(value)) for value in frame[column]}
+        if len(states) != 1:
+            raise ValueError(
+                "primary association result rows disagree on adjustment status"
+            )
+        state = states.pop()
+        if executed is not None and executed != state:
+            raise ValueError(
+                "primary association adjustment fields contradict each other"
+            )
+        executed = state
+
+    declared_states = {
+        bool(requirement.covariates)
+        for requirement in primary_requirements
+        if getattr(requirement, "covariates", None) is not None
+    }
+    if len(declared_states) > 1:
+        raise ValueError("primary model requirements disagree on adjustment status")
+    declared = next(iter(declared_states), None)
+    if executed is not None and declared is not None and executed != declared:
+        raise ValueError(
+            "executed adjustment set conflicts with the typed primary Plan"
+        )
+    return executed if executed is not None else declared
+
+
+def _sole_source_semantic(frame: pd.DataFrame, column: str) -> Optional[str]:
+    frame = _primary_semantic_frame(frame)
+    if column not in frame.columns:
+        return None
+    values = {
+        str(value).strip()
+        for value in frame[column]
+        if str(value).strip() and str(value).strip().casefold() != "nan"
+    }
+    if len(values) > 1:
+        raise ValueError(
+            f"primary association result rows disagree on {column} authority"
+        )
+    return next(iter(values), None)
+
+
+def _sole_source_landmark_hours(frame: pd.DataFrame) -> Optional[float]:
+    frame = _primary_semantic_frame(frame)
+    if "landmark_hours" not in frame.columns:
+        return None
+    values = pd.to_numeric(frame["landmark_hours"], errors="coerce").dropna()
+    if values.empty:
+        return None
+    finite = {float(value) for value in values if math.isfinite(float(value))}
+    if len(finite) != len(set(values.astype(float))) or len(finite) > 1:
+        raise ValueError("primary association rows disagree on landmark authority")
+    value = next(iter(finite))
+    if value <= 0:
+        raise ValueError("primary association landmark must be positive hours")
+    return value
+
+
+def _primary_semantic_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Select the explicitly marked reference estimate for semantic labels."""
+
+    if "is_reference" not in frame.columns:
+        return frame
+    reference = frame["is_reference"].map(
+        lambda value: value is True
+        or str(value).strip().casefold() in {"true", "1", "yes"}
+    )
+    if int(reference.sum()) != 1:
+        raise ValueError(
+            "primary association result must declare exactly one reference row"
+        )
+    return frame.loc[reference].copy()
 
 
 def _effect_measure_token(

@@ -134,6 +134,82 @@ def test_explicit_development_lane_forces_diagnostic_only(tmp_path: Path):
     assert status["status"] == "diagnostic_only"
 
 
+def test_post_readiness_reviewer_inherits_final_paper_gate(tmp_path: Path):
+    context = ResearchContext(
+        research_question="Is a treatment exposure associated with mortality?",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+    )
+    manuscript = tmp_path / "manuscript.md"
+    manuscript.write_text("Development-only manuscript.\n", encoding="utf-8")
+    evidence = EvidenceStore(tmp_path)
+    evidence.register_text(
+        kind="log",
+        description="Pre-readiness simulated reviewer report.",
+        text=json.dumps(
+            {
+                "round": 0,
+                "summary": {
+                    "aggregated_recommendation": "accept",
+                    "counts": {},
+                },
+                "critiques": [],
+            }
+        ),
+        filename="reviewer_report.json",
+        evidence_id="reviewer_report_json",
+        aliases=["reviewer_report_json"],
+        producer="pipeline",
+        generation_mode="system",
+    )
+
+    gates, artifact_paths = write_readiness_artifacts(
+        context=context,
+        plan=_plan(),
+        findings=[],
+        per_step_records=[_feasibility_failure_record()],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=manuscript,
+        stop_after_analysis=True,
+        force_diagnostic_only=True,
+    )
+
+    final_report = json.loads(
+        (tmp_path / "reviewer_report_post_readiness.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    scientific_gate_comments = [
+        comment
+        for critique in final_report["critiques"]
+        for comment in critique["comments"]
+        if comment["topic"] == "scientific_gate"
+    ]
+    status = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
+
+    assert gates["post_readiness_reviewer_recommendation"] == "major_revision"
+    assert scientific_gate_comments
+    assert artifact_paths["reviewer_report_post_readiness_json"] == (
+        "reviewer_report_post_readiness.json"
+    )
+    assert status["canonical_outputs"]["reviewer_report_post_readiness_json"] == (
+        "reviewer_report_post_readiness.json"
+    )
+    assert evidence.get("run_status") is not None
+    assert "run_status" in {
+        record.evidence_id
+        for record in evidence.current_verified_records(
+            [_feasibility_failure_record()]
+        )
+    }
+
+
 def test_report_keeps_analysis_only_distinct_from_diagnostic_only(tmp_path: Path):
     context = ResearchContext(
         research_question="Is a treatment exposure associated with mortality?",

@@ -28,8 +28,8 @@ from easyicu.research_agent.execution.runners.exposure_outcome_distribution_exec
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_replay_spec_is_emittable,
 )
-from easyicu.research_agent.execution.runners.feasibility_protocol_executor import (
-    feasibility_protocol_executor_owns_step,
+from easyicu.research_agent.execution.runners.scientific_reporting_executor import (
+    scientific_reporting_executor_owns_step,
 )
 from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
@@ -1763,7 +1763,8 @@ def test_report_orders_after_figure_without_reading_raster_as_data() -> None:
     assert "age_years" not in compiled_report.inputs
     assert "table:adjusted_association_estimates" in compiled_report.inputs
     assert "artifact:analysis_cohort" in compiled_report.inputs
-    assert feasibility_protocol_executor_owns_step(compiled_report)
+    assert compiled_report.method == "scientific_reporting"
+    assert scientific_reporting_executor_owns_step(compiled_report)
 
 
 def test_progressive_visualization_rejects_raw_cohort_inputs() -> None:

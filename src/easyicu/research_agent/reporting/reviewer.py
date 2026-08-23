@@ -187,13 +187,36 @@ class ReviewerReport:
 # ---------------------------------------------------------------------------
 
 
-def _available_evidence_ids(evidence_records: Iterable[Any]) -> set:
+def _available_evidence_ids(evidence_records: Iterable[Any]) -> set[str]:
+    """Return searchable tokens from verified records, not only opaque ids."""
+
     aliases: set[str] = set()
     for record in evidence_records:
-        for attr in ("evidence_id", "produced_by_step", "description"):
-            value = getattr(record, attr, None)
+        for attr in (
+            "evidence_id",
+            "produced_by_step",
+            "description",
+            "relative_path",
+            "kind",
+        ):
+            value = (
+                record.get(attr)
+                if isinstance(record, dict)
+                else getattr(record, attr, None)
+            )
             if value:
                 aliases.add(str(value))
+        metadata = (
+            record.get("metadata")
+            if isinstance(record, dict)
+            else getattr(record, "metadata", None)
+        )
+        if isinstance(metadata, dict):
+            aliases.update(
+                str(value)
+                for value in metadata.values()
+                if isinstance(value, (str, int, float, bool))
+            )
     return aliases
 
 
@@ -264,15 +287,22 @@ def _build_statistician_comments(
             )
         )
     has_primary_effect = (
-        "primary_association" in aliases
-        or "model_performance" in aliases
-        or _has_evidence_token(
+        _has_evidence_token(
             aliases,
             "primary association",
             "primary_association",
+            "primary_effect",
             "association_model",
+            "association_estimate",
             "adjusted_odds_ratio",
             "odds_ratio",
+            "hazard_ratio",
+            "cox_summary",
+            "survival_summary",
+            "prediction_performance",
+            "model_performance",
+            "auroc",
+            "average_precision",
         )
     )
     if not has_primary_effect:
@@ -439,6 +469,61 @@ def _build_methodologist_comments(
                     "curated-plus-PubMed bundle is enough to ground the "
                     "Introduction and Discussion."
                 ),
+            )
+        )
+
+    blocking: List[Dict[str, Any]] = []
+    for finding in findings:
+        if isinstance(finding, dict):
+            severity = finding.get("severity")
+            validator = str(finding.get("validator") or "unknown")
+            message = str(finding.get("message") or "")
+            detail = finding.get("detail")
+            evidence_ids = list(finding.get("evidence_ids") or [])
+        else:
+            severity = getattr(finding, "severity", None)
+            validator = str(getattr(finding, "validator", None) or "unknown")
+            message = str(getattr(finding, "message", None) or "")
+            detail = getattr(finding, "detail", None)
+            evidence_ids = list(getattr(finding, "evidence_ids", None) or [])
+        explicit_block = isinstance(detail, dict) and any(
+            detail.get(field) is False
+            for field in (
+                "paper_authority",
+                "paper_authorization_allowed",
+                "reportability_allowed",
+                "analysis_validated",
+            )
+        )
+        if severity == "error" or explicit_block:
+            blocking.append(
+                {
+                    "validator": validator,
+                    "message": message,
+                    "evidence_ids": evidence_ids,
+                }
+            )
+    if blocking:
+        validators = sorted({item["validator"] for item in blocking})
+        evidence_ids = list(
+            dict.fromkeys(
+                evidence_id
+                for item in blocking
+                for evidence_id in item["evidence_ids"]
+            )
+        )
+        comments.append(
+            ReviewerComment(
+                reviewer="methodologist",
+                severity="major",
+                topic="scientific_gate",
+                message=(
+                    "The current run carries unresolved scientific or "
+                    "reportability blockers from: "
+                    + ", ".join(validators)
+                    + ". These must be closed before an accept recommendation."
+                ),
+                evidence_ids=evidence_ids,
             )
         )
     return comments

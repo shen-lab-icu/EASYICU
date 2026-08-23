@@ -1204,8 +1204,8 @@ def test_publication_figure_skill_uses_distribution_and_labels_unadjusted_model(
     evidence = ra.EvidenceStore(run_dir)
     primary_table = tmp_path / "adjusted_association_estimates.csv"
     primary_table.write_text(
-        "exposure,estimate,ci_low,ci_high,effect_scale\n"
-        "exposure,1.70,1.50,1.92,odds_ratio\n",
+        "exposure,outcome,covariates,estimate,ci_low,ci_high,effect_scale\n"
+        "exposure,death,,1.70,1.50,1.92,odds_ratio\n",
         encoding="utf-8",
     )
     distribution = tmp_path / "exposure_outcome_distribution.csv"
@@ -1288,6 +1288,44 @@ def test_publication_figure_skill_uses_distribution_and_labels_unadjusted_model(
     assert contract["panels"][1]["evidence_ids"] == [
         "exposure_outcome_distribution"
     ]
+
+
+def test_association_figure_semantics_come_from_executed_result_fields() -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.figures.skill import (
+        _association_adjustment_state,
+        _sole_source_landmark_hours,
+        _sole_source_semantic,
+    )
+
+    adjusted = pd.DataFrame(
+        {
+            "is_reference": [True, False],
+            "exposure": ["sofa", "sofa"],
+            "outcome": ["death", "death"],
+            "adjustment_covariates": ["age;sex", ""],
+            "landmark_hours": [24.0, 48.0],
+        }
+    )
+    assert _association_adjustment_state(
+        adjusted,
+        primary_requirements=[SimpleNamespace(covariates=["age", "sex"])],
+    ) is True
+    assert _sole_source_semantic(adjusted, "outcome") == "death"
+    assert _sole_source_landmark_hours(adjusted) == 24.0
+
+    with pytest.raises(ValueError, match="conflicts with the typed primary Plan"):
+        _association_adjustment_state(
+            adjusted,
+            primary_requirements=[SimpleNamespace(covariates=[])],
+        )
+
+    undeclared = pd.DataFrame({"estimate": [1.4]})
+    assert _association_adjustment_state(
+        undeclared,
+        primary_requirements=[],
+    ) is None
 
 
 def test_distribution_overall_audit_row_is_not_drawn_as_a_third_exposure_group():
