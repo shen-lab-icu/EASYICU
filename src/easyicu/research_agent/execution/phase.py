@@ -3057,6 +3057,7 @@ def _step_settle_initial_code(
         _sync_provider_budget=_sync_provider_budget,
         resume_controller=resume_controller,
         prior_step_record=prior_step_record,
+        prior_attempt_records=prior_attempt_records,
     )
     return None, _StepInitialCodeSettlement(
         code=code,
