@@ -49,7 +49,8 @@ def test_manuscript_section_assembly_is_ordered_and_forwards_common_context() ->
     expected_names = [spec.section_name for spec in MANUSCRIPT_SECTION_SPECS]
     rendered_sections = rendered.split("\n\n")
     assert rendered_sections[: len(expected_names)] == [
-        f"## {name}" for name in expected_names
+        "# Title and Keywords",
+        *[f"## {name}" for name in expected_names[1:]],
     ]
     assert "requires author verification" in rendered
     assert "released alongside this manuscript" not in rendered
@@ -71,6 +72,17 @@ def test_manuscript_section_failure_stops_before_later_provider_calls() -> None:
         render_manuscript_sections(call_section=call_section, common={})
 
     assert seen == ["Title and Keywords", "Abstract", "Introduction", "Methods"]
+
+
+def test_manuscript_section_assembly_restores_missing_mechanical_heading() -> None:
+    def call_section(**kwargs: object) -> str:
+        if kwargs["section_name"] == "Conclusion":
+            return "The evidence-bound conclusion sentence."
+        return f"## {kwargs['section_name']}"
+
+    rendered = render_manuscript_sections(call_section=call_section, common={})
+
+    assert "## Conclusion\n\nThe evidence-bound conclusion sentence." in rendered
 
 
 def test_section_specs_keep_literature_and_evidence_boundaries() -> None:

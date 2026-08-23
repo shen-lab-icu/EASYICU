@@ -211,6 +211,23 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
+def _ensure_section_heading(spec: ManuscriptSectionSpec, text: str) -> str:
+    """Restore only the mechanical heading owned by the section contract."""
+
+    stripped = str(text or "").strip()
+    if not stripped:
+        return stripped
+    if spec.key == "title":
+        if stripped.startswith("# "):
+            return stripped
+        first, *rest = stripped.splitlines()
+        return "\n".join([f"# {first.lstrip('# ').strip()}", *rest]).strip()
+    expected = f"## {spec.section_name}"
+    if any(line.strip() == expected for line in stripped.splitlines()):
+        return stripped
+    return f"{expected}\n\n{stripped}"
+
+
 def render_manuscript_sections(
     *,
     call_section: Callable[..., str],
@@ -228,11 +245,14 @@ def render_manuscript_sections(
     """
 
     sections = [
-        call_section(
-            section_name=spec.section_name,
-            instruction=spec.instruction,
-            max_tokens=spec.max_tokens,
-            **common,
+        _ensure_section_heading(
+            spec,
+            call_section(
+                section_name=spec.section_name,
+                instruction=spec.instruction,
+                max_tokens=spec.max_tokens,
+                **common,
+            ),
         )
         for spec in MANUSCRIPT_SECTION_SPECS
     ]
