@@ -402,6 +402,9 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         "feature_selection": _feature_selection_payload(
             feature_catalog, selected_feature_ids, requested_feature_ids
         ),
+        "selected_feature_distributions": _selected_feature_distributions(
+            entity_ids, selected_feature_profiles
+        ),
         "coverage": coverage,
         "quality": quality,
         "table_one": {
@@ -1008,6 +1011,80 @@ def _selected_feature_profile(frame: Any, feature: Dict[str, Any]) -> Dict[str, 
         "mapping": mapping,
         "reason": None,
     }
+
+
+def _selected_feature_distributions(
+    entity_ids: List[str], profiles: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Project selected features as bounded stay-level descriptive histograms."""
+
+    total = len(entity_ids)
+    out: List[Dict[str, Any]] = []
+    for profile in profiles[:_MAX_COMPARE_FEATURES]:
+        mapping = profile.get("mapping")
+        mapping = mapping if isinstance(mapping, dict) else {}
+        common = {
+            "id": profile.get("id"),
+            "module": profile.get("module"),
+            "column": profile.get("column"),
+            "label": profile.get("label"),
+            "kind": profile.get("kind"),
+            "aggregation": profile.get("aggregation"),
+            "denominator": total,
+            "observed": len(mapping),
+            "observed_pct": _pct(len(mapping), total),
+        }
+        if profile.get("kind") == "numeric":
+            values = sorted(
+                value
+                for value in (dataio._num(item) for item in mapping.values())
+                if value is not None
+            )
+            bins: List[Dict[str, Any]] = []
+            if values:
+                low, high = values[0], values[-1]
+                if low == high:
+                    bins = [{"low": low, "high": high, "count": len(values)}]
+                else:
+                    width = (high - low) / 8
+                    counts = [0] * 8
+                    for value in values:
+                        index = min(7, int((value - low) / width))
+                        counts[index] += 1
+                    bins = [
+                        {
+                            "low": round(low + index * width, 4),
+                            "high": round(low + (index + 1) * width, 4),
+                            "count": count,
+                        }
+                        for index, count in enumerate(counts)
+                    ]
+            out.append({**common, "summary": _numeric_summary(values), "bins": bins})
+        elif profile.get("kind") == "binary":
+            positive = sum(value is True for value in mapping.values())
+            negative = sum(value is False for value in mapping.values())
+            out.append(
+                {
+                    **common,
+                    "categories": [
+                        {"label": "Positive", "count": positive},
+                        {"label": "Negative", "count": negative},
+                        {"label": "Unknown", "count": max(0, total - positive - negative)},
+                    ],
+                }
+            )
+        else:
+            present = len(mapping)
+            out.append(
+                {
+                    **common,
+                    "categories": [
+                        {"label": "Observed", "count": present},
+                        {"label": "Missing", "count": max(0, total - present)},
+                    ],
+                }
+            )
+    return out
 
 
 def _infer_feature_kind(frame: Any, column: str) -> str:

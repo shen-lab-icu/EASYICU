@@ -150,6 +150,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "GET",
+        "/api/copilot/pi/projects/{project_id}/data-workbench-snapshot",
+        "get_pi_copilot_data_workbench_snapshot",
+    ),
+    (
+        "GET",
         "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}",
         "get_pi_copilot_research_document",
     ),

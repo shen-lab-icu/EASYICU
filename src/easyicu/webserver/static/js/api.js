@@ -501,6 +501,12 @@
       + '&review_sha256=' + encodeURIComponent(reviewSha256)
     );
   }
+  function loadPiCopilotDataWorkbenchSnapshot(projectId, snapshotSha256) {
+    return getJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/data-workbench-snapshot?snapshot_sha256=' + encodeURIComponent(snapshotSha256)
+    );
+  }
   function piCopilotResearchDocumentUrl(projectId, runId, documentName) {
     return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
       + '/runs/' + encodeURIComponent(runId)
@@ -688,6 +694,7 @@
   window.EU_API.piCopilotWorkspacePreviewUrl = piCopilotWorkspacePreviewUrl;
   window.EU_API.loadPiCopilotResearchArtifact = loadPiCopilotResearchArtifact;
   window.EU_API.loadPiCopilotDataPackageReview = loadPiCopilotDataPackageReview;
+  window.EU_API.loadPiCopilotDataWorkbenchSnapshot = loadPiCopilotDataWorkbenchSnapshot;
   window.EU_API.piCopilotResearchDocumentUrl = piCopilotResearchDocumentUrl;
   window.EU_API.createPageGuideSession = createPageGuideSession;
   window.EU_API.sendPageGuideMessage = sendPageGuideMessage;
