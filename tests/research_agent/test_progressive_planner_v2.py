@@ -1434,6 +1434,40 @@ def test_current_step_without_available_products_closes_product_inputs() -> None
     assert step["table_one_variables"]["maxItems"] == 0
 
 
+def test_visualization_schema_hides_products_outside_direct_dependencies() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="08_figure",
+        planned_analysis_role="auxiliary",
+        module_id="visualization",
+        objective="Render the directly declared result sources.",
+        depends_on=["05_primary"],
+        variable_names=["exposure_flag", "outcome_flag"],
+        literature_citation_keys=[],
+        scientific_action_id=None,
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variable_names=["exposure_flag", "outcome_flag"],
+        scientific_action_ids=[],
+        available_product_refs=[
+            ("01_cohort", "table:cohort_flow"),
+            ("05_primary", "table:adjusted_association_estimates"),
+        ],
+    )
+    product_refs = json.loads(request.schema_json)["$defs"][
+        "ProgressiveProductRef"
+    ]["anyOf"]
+
+    assert len(product_refs) == 1
+    assert product_refs[0]["properties"]["producer_step_id"]["const"] == (
+        "05_primary"
+    )
+    assert product_refs[0]["properties"]["product_id"]["const"] == (
+        "table:adjusted_association_estimates"
+    )
+
+
 def test_current_table_one_step_requires_its_module_fields_in_schema() -> None:
     outline_step = ProgressiveOutlineStep(
         step_id="02_table_one",

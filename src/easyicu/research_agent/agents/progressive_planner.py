@@ -89,6 +89,7 @@ from ..reporting.article_contract import (
 from ..research_context.outbound import format_outbound_safe_context
 from ..schema import AnalysisPlan, ResearchContext
 from .progressive_payload import (
+    product_refs_for_materialization_coordinate,
     progressive_foundation_structured_output_request,
     progressive_outline_structured_output_request,
     progressive_step_materialization_request,
@@ -1602,6 +1603,10 @@ class ProgressivePlannerAgent:
         foundation = foundation_materialization.foundation
         for step_index in range(len(prefix_state.steps), len(outline.steps)):
             outline_step = outline.steps[step_index]
+            visible_product_refs = product_refs_for_materialization_coordinate(
+                outline_step,
+                prefix_state.available_product_refs,
+            )
             step_variables = tuple(outline_step.variable_names)
             step_citations = tuple(outline_step.literature_citation_keys)
             outline_step_sha256 = canonical_sha256(
@@ -1621,7 +1626,7 @@ class ProgressivePlannerAgent:
                     ),
                     scientific_action_ids=scientific_action_ids,
                     allowed_literature_citation_keys=step_citations,
-                    available_product_refs=prefix_state.available_product_refs,
+                    available_product_refs=visible_product_refs,
                 )
             compiler_observation: Mapping[str, Any] | None = None
             self.last_compile_failure_attempts = []
@@ -1633,7 +1638,7 @@ class ProgressivePlannerAgent:
                     outline=outline,
                     outline_step=outline_step,
                     foundation=foundation,
-                    available_product_refs=prefix_state.available_product_refs,
+                    available_product_refs=visible_product_refs,
                 )
             )
             if host_materialization is not None:
@@ -1709,7 +1714,7 @@ class ProgressivePlannerAgent:
                     know_how_context="",
                     planning_contract_context=planning_contract_context,
                     prefix_summary=prefix_state.prompt_summary,
-                    available_product_refs=prefix_state.available_product_refs,
+                    available_product_refs=visible_product_refs,
                     compiler_observation=compiler_observation,
                 )
                 step_messages = [
