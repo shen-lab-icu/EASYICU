@@ -98,7 +98,12 @@ from .plan_payload import bind_literature_citation_authority
 
 
 _GUIDE = load_prompt_pack()["progressive_planner"]
-_MAX_INITIAL_PARSE_RETRIES = 2
+# The outline crosses independent family, module, required-output, and action
+# contracts.  A targeted repair can legitimately expose the next boundary only
+# after fixing the previous one.  Permit one fourth and final attempt so a run
+# can consume that accumulated feedback instead of discarding three paid,
+# structurally improving responses and restarting the whole Planner.
+_MAX_INITIAL_PARSE_RETRIES = 3
 # A compiler finding gets one targeted repair. Repeating the same expensive
 # current-step generation is less useful than persisting it for local replay.
 _MAX_COMPILE_REVISIONS = 1

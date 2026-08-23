@@ -3693,6 +3693,50 @@ def test_missing_visualization_outline_is_retried_before_foundation() -> None:
     )
 
 
+def test_outline_uses_fourth_attempt_after_three_distinct_contract_repairs() -> None:
+    missing_figure = _outline_payload()
+    missing_figure["steps"] = [
+        step
+        for step in missing_figure["steps"]
+        if step["module_id"] != "visualization"
+    ]
+    wrong_action = _outline_payload()
+    primary = next(
+        step for step in wrong_action["steps"] if step["step_id"] == "05_primary"
+    )
+    primary["scientific_action_id"] = "descriptive.missingness_audit"
+    invalid_schema = _outline_payload()
+    invalid_schema["steps"][0]["module_id"] = "not_a_registered_module"
+    responses = [
+        missing_figure,
+        wrong_action,
+        invalid_schema,
+        _outline_payload(),
+        _foundation_payload(),
+        *_materialization_payloads(),
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                must_have_outputs="Required outputs: one publication figure."
+            )
+        }
+    )
+
+    plan = ProgressivePlannerAgent(llm).run(context)
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 12
+    assert "progressive_outline_visualization_owner_missing" in (
+        llm.calls[1][0][-1].content
+    )
+    assert "progressive_outline_action_unavailable" in (
+        llm.calls[2][0][-1].content
+    )
+
+
 def test_agent_rejects_invalid_foundation_before_any_step_provider_call() -> None:
     invalid_foundation = _foundation_payload()
     invalid_foundation["foundation"]["cohort"] = {
