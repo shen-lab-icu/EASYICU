@@ -610,6 +610,7 @@ from .orchestration.resume_plan_migration import (  # noqa: F401 — owner modul
     _LegacyModelRosterStepPacket,
     _migrate_legacy_resume_figure_render_edges,
     _migrate_legacy_resume_model_requirements,
+    _migrate_resume_scientific_runtime_binding,
     _migrate_resume_trajectory_products,
     _next_analysis_plan_revision,
     _normalise_plan_contract_token,
@@ -758,6 +759,7 @@ def _apply_resume_plan_migrations(
     plan_generation_mode: str,
     migrated_plan_path: Optional[Path],
     findings: List[ValidationFinding],
+    scientific_runtime_authorities: Any,
 ) -> Tuple[AnalysisPlan, Optional[Path], str]:
     """Apply every resume-time migration a reused plan needs, in order.
 
@@ -902,6 +904,43 @@ def _apply_resume_plan_migrations(
                     "target_step_ids": list(figure_edge_step_ids),
                     "plan_path": str(
                         figure_edge_migration_path.relative_to(run_dir)
+                    ),
+                },
+            )
+        )
+    (
+        plan,
+        scientific_runtime_migration_path,
+        scientific_runtime_step_ids,
+        scientific_runtime_findings,
+    ) = _migrate_resume_scientific_runtime_binding(
+        plan=plan,
+        resume_state=resume_state,
+        resume_from_step_id=resume_from_step_id,
+        scientific_runtime_authorities=scientific_runtime_authorities,
+        run_dir=run_dir,
+        evidence=evidence,
+        prompt_version=prompt_version,
+        llm_signature=llm_signature,
+    )
+    findings.extend(scientific_runtime_findings)
+    if scientific_runtime_migration_path is not None:
+        migrated_plan_path = scientific_runtime_migration_path
+        if plan_generation_mode == "resumed":
+            plan_generation_mode = "resume_with_authority_restore"
+        findings.append(
+            ValidationFinding(
+                validator="scientific_runtime_plan_compiler",
+                severity="warning",
+                message=(
+                    "Resume recompiled the signed scientific runtime binding "
+                    "only on steps selected for replay."
+                ),
+                detail={
+                    "reason_code": "resume_scientific_runtime_binding_restored",
+                    "target_step_ids": list(scientific_runtime_step_ids),
+                    "plan_path": str(
+                        scientific_runtime_migration_path.relative_to(run_dir)
                     ),
                 },
             )
@@ -2023,6 +2062,9 @@ class ResearchAgentPipeline:
                     plan_generation_mode=plan_generation_mode,
                     migrated_plan_path=migrated_plan_path,
                     findings=findings,
+                    scientific_runtime_authorities=(
+                        self._scientific_runtime_authorities
+                    ),
                 )
             )
         elif development_authority_plan is not None:
