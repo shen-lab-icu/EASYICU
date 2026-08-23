@@ -732,13 +732,13 @@ def planner_scientific_action_guide(
             f"{tier}/{mode}:{','.join(action_ids)}"
             for (tier, mode), action_ids in grouped.items()
         )
-        adapters = [
-            f"{action.action_id}={action.method_adapter.adapter_id}"
+        typed_subcontracts = [
+            action.action_id
             for action in catalog.actions
-            if action.method_adapter is not None
+            if action.adapter_status == "typed_subcontract"
         ]
-        if adapters:
-            lines.append("typed_adapters:" + ",".join(adapters))
+        if typed_subcontracts:
+            lines.append("typed_subcontracts:" + ",".join(typed_subcontracts))
         support_only = [
             action.action_id
             for action in catalog.actions
@@ -755,13 +755,12 @@ def planner_scientific_action_guide(
         "family's ids: "
         + ", ".join(action.action_id for action in catalog.actions)
         + ".",
-        "Set scientific_action_id only when a result step actually selects one "
-        "of those actions. Cohort-definition, Table 1, raw distribution, and "
-        "figure-only support steps do not gain a cross-family action id merely "
-        "because they emit an artifact; leave it null unless the exact current-"
-        "family action above represents that analysis. unavailable=fail-closed; "
-        "alternatives need user confirmation; never substitute methods, import "
-        "another family prefix, or invent ids.",
+        "Set scientific_action_id only when a result step selects that exact "
+        "action. Cohort-definition, Table 1, raw distribution, and figure-only "
+        "support steps do not gain an action id merely because they emit an "
+        "artifact; otherwise leave it null. unavailable=fail-closed; alternatives "
+        "require user confirmation; never substitute methods, import another family "
+        "prefix, or invent ids.",
     ]
     if not catalog.primary_contract_registered:
         lines.append(
@@ -783,15 +782,11 @@ def planner_scientific_action_guide(
         lines.append(f"{tier}/{mode}: {','.join(action_ids)}")
     if detail in {"full", "without_guardrails"}:
         for action in catalog.actions:
-            entry = (
-                f"{action.action_id}: {action.name}; "
-                f"adapter_status={action.adapter_status}"
-            )
-            if action.method_adapter is not None:
-                entry += (
-                    f"; adapter={action.method_adapter.adapter_id}"
-                    f"[{action.method_adapter.scope}]"
-                )
+            entry = f"{action.action_id}: {action.name}"
+            if action.adapter_status == "typed_subcontract":
+                entry += "; host=partial"
+            elif action.adapter_status == "supporting_only":
+                entry += "; host=support"
             if detail == "full":
                 entry += f"; {action.purpose}"
                 resources = (*action.kernel_imports, *action.software_packages)
