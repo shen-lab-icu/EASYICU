@@ -168,7 +168,7 @@ def _canonical_frame_sha256(frame: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _finite_float(value: Any, *, label: str) -> float:
+def _landmark_finite_float(value: Any, *, label: str) -> float:
     number = float(value)
     if not math.isfinite(number):
         raise ValueError(f"landmark survival {label} is non-finite")
@@ -638,7 +638,7 @@ def run_landmark_survival_suite(
         raise ValueError("landmark survival Cox result lacks one exposure row")
     primary_row = primary_rows.iloc[0].to_dict()
     for name in ("hazard_ratio", "ci_low", "ci_high", "standard_error", "p_value"):
-        _finite_float(primary_row[name], label=name)
+        _landmark_finite_float(primary_row[name], label=name)
 
     ph_table = ph_test(
         model_frame,
@@ -653,8 +653,12 @@ def run_landmark_survival_suite(
     ]
     if len(global_rows) != 1 or len(exposure_rows) != 1:
         raise ValueError("landmark survival PH audit lacks global or exposure result")
-    global_p = _finite_float(global_rows["p_value"].iloc[0], label="global PH p")
-    exposure_p = _finite_float(exposure_rows["p_value"].iloc[0], label="exposure PH p")
+    global_p = _landmark_finite_float(
+        global_rows["p_value"].iloc[0], label="global PH p"
+    )
+    exposure_p = _landmark_finite_float(
+        exposure_rows["p_value"].iloc[0], label="exposure PH p"
+    )
     ph_violation = min(global_p, exposure_p) < sealed.proportional_hazards_alpha
     if ph_violation:
         ph_status = (
