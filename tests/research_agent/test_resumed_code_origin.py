@@ -5,6 +5,7 @@ import hashlib
 import pytest
 
 from easyicu.research_agent.authority.typed_binding import (
+    host_authored_generation_mode,
     host_owns_input_binding_receipts,
 )
 from easyicu.research_agent.execution.phase_support import (
@@ -44,6 +45,7 @@ def test_repeated_resume_recovers_digest_bound_host_origin(source_mode: str) -> 
     )
 
     assert recovered == source_mode
+    assert host_authored_generation_mode(recovered)
     assert host_owns_input_binding_receipts(
         deterministic_standard_executor_used=False,
         deterministic_fallback_used=False,
@@ -66,6 +68,7 @@ def test_digest_bound_generated_code_stays_generated() -> None:
     )
 
     assert recovered == "llm"
+    assert not host_authored_generation_mode(recovered)
     assert not host_owns_input_binding_receipts(
         deterministic_standard_executor_used=False,
         deterministic_fallback_used=False,
