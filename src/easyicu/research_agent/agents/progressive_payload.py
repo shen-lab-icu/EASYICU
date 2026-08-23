@@ -936,7 +936,10 @@ def progressive_step_materialization_request(
             "outline scientific action is outside the run-bound action roster"
         )
     normalized_products: list[tuple[str, str]] = []
-    for producer, product in available_product_refs:
+    for producer, product in product_refs_for_materialization_coordinate(
+        outline_step,
+        available_product_refs,
+    ):
         producer_id = str(producer or "").strip()
         product_id = str(product or "").strip()
         if not re.fullmatch(r"[a-z0-9][a-z0-9_]{0,79}", producer_id):
@@ -1000,6 +1003,26 @@ def progressive_step_materialization_request(
         name="easyicu_progressive_step_materialization_v1",
         schema=schema,
     )
+
+
+def product_refs_for_materialization_coordinate(
+    outline_step: ProgressiveOutlineStep,
+    available_product_refs: Sequence[tuple[str, str]],
+) -> tuple[tuple[str, str], ...]:
+    """Expose only product edges the frozen outline can legally consume.
+
+    Visualization products are strict result sources: their registered owner
+    must be a direct outline dependency.  Showing unrelated prefix products in
+    the current-step prompt/schema creates an impossible repair because the
+    same schema freezes ``depends_on``.  Other modules retain the complete
+    prefix registry and remain governed by the compiler's module contract.
+    """
+
+    refs = tuple(available_product_refs)
+    if outline_step.module_id != "visualization":
+        return refs
+    dependencies = set(outline_step.depends_on)
+    return tuple(ref for ref in refs if ref[0] in dependencies)
 
 
 @lru_cache(maxsize=64)
@@ -1107,6 +1130,7 @@ def progressive_structured_output_request(
 
 __all__ = [
     "ProgressiveTransportSchemaError",
+    "product_refs_for_materialization_coordinate",
     "progressive_foundation_structured_output_request",
     "progressive_outline_structured_output_request",
     "progressive_step_materialization_request",
