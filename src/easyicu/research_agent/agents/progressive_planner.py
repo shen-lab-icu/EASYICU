@@ -450,6 +450,9 @@ def _action_catalog(
                 {
                     "analysis_type": analysis_type,
                     "action_id": action.action_id,
+                    "name": action.name,
+                    "purpose": action.purpose,
+                    "notes": action.notes,
                     "execution_mode": action.execution_mode,
                     "produces": action.produces,
                     "required_inputs": list(action.required_inputs),
@@ -1003,6 +1006,7 @@ class ProgressivePlannerAgent:
         required_custom_products: Sequence[str] = (),
         required_visualization_step: bool = False,
         closed_domain_variables: Sequence[str] | None = None,
+        ordered_domain_variables: Sequence[str] | None = None,
         primary_exposure: str | None = None,
         target_outcome: str | None = None,
         context_required_method_layers: Sequence[str] | None = None,
@@ -1037,6 +1041,11 @@ class ProgressivePlannerAgent:
         closed_domains = (
             set(closed_domain_variables)
             if closed_domain_variables is not None
+            else None
+        )
+        ordered_domains = (
+            set(ordered_domain_variables)
+            if ordered_domain_variables is not None
             else None
         )
         allowed_modules = set(
@@ -1204,6 +1213,34 @@ class ProgressivePlannerAgent:
                     step_id=step.step_id,
                     step_index=index,
                     path="scientific_action_id",
+                )
+            if action == "association.ordinal_trend" and (
+                ordered_domains is not None
+                and (
+                    (
+                        primary_exposure is not None
+                        and primary_exposure not in ordered_domains
+                    )
+                    or (
+                        primary_exposure is None
+                        and not (set(step.variable_names) & ordered_domains)
+                    )
+                )
+            ):
+                raise ProgressivePlanCompileError(
+                    "progressive_outline_ordered_trend_domain_unsupported",
+                    "association.ordinal_trend requires a primary exposure with "
+                    "at least three observed ordered levels; retain binary "
+                    "absolute-risk context in a descriptive distribution step",
+                    step_id=step.step_id,
+                    step_index=index,
+                    path="scientific_action_id",
+                    findings=(
+                        {
+                            "primary_exposure": primary_exposure,
+                            "ordered_domain_variables": sorted(ordered_domains),
+                        },
+                    ),
                 )
         if context_required_method_layers is not None and available_citations:
             required_method_layers = set(context_required_method_layers)
@@ -1904,6 +1941,17 @@ class ProgressivePlannerAgent:
             )
             >= 2
         )
+        ordered_domain_variables = tuple(
+            variable.name
+            for variable in context.variables
+            if len(
+                observed_levels_for(
+                    name=variable.name,
+                    variables=context_variable_map,
+                )
+            )
+            >= 3
+        )
         resolved_planning_contract_context = bind_literature_citation_authority(
             planning_contract_context,
             allowed_citations,
@@ -2060,6 +2108,7 @@ class ProgressivePlannerAgent:
                     required_custom_products=required_custom_products,
                     required_visualization_step=required_visualization_step,
                     closed_domain_variables=closed_domain_variables,
+                    ordered_domain_variables=ordered_domain_variables,
                     primary_exposure=context.primary_exposure,
                     target_outcome=context.target_outcome,
                     context_required_method_layers=(
@@ -2094,6 +2143,7 @@ class ProgressivePlannerAgent:
             required_custom_products=required_custom_products,
             required_visualization_step=required_visualization_step,
             closed_domain_variables=closed_domain_variables,
+            ordered_domain_variables=ordered_domain_variables,
             primary_exposure=context.primary_exposure,
             target_outcome=context.target_outcome,
             context_required_method_layers=required_method_layers_for_context(context),
