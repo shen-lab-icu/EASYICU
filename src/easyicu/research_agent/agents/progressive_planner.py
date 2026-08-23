@@ -2299,6 +2299,10 @@ class ProgressivePlannerAgent:
                     parsed.foundation,
                     context=context,
                     analysis_type=outline.analysis_type,
+                    robustness_replay_required=any(
+                        step.module_id == "robustness_replay"
+                        for step in outline.steps
+                    ),
                 )
                 return parsed
 
@@ -2342,6 +2346,9 @@ class ProgressivePlannerAgent:
             foundation,
             context=context,
             analysis_type=outline.analysis_type,
+            robustness_replay_required=any(
+                step.module_id == "robustness_replay" for step in outline.steps
+            ),
         )
         self.last_foundation = foundation_materialization
         if not resume_foundation_reused:
