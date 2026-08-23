@@ -52,4 +52,4 @@ The follow-up fix removes that duplicate list. The pytest caller now consumes `C
 
 - the previously failing pytest file: `10 passed`;
 - JavaScript contracts through the canonical runner: `24/24` passed;
-- no new full-suite run was performed on the follow-up commit, so `14,698 passed` is the expected arithmetic closure, not an exact-head claim.
+- exact `045f461` full suite: `14,698 passed / 74 skipped / 0 failed`, `660 warnings`, in `2523.84s` (`42:03`).
