@@ -54,6 +54,9 @@ from ..planning.progressive_contract import (
     ProgressiveStepMaterialization,
     progressive_module_ids_for_analysis_types,
 )
+from ..planning.progressive_host_materialization import (
+    host_materialize_progressive_step,
+)
 from ..planning.progressive_artifacts import (
     ProgressiveCompileReplayAttempt,
     ProgressiveCompilerFinding,
@@ -1585,6 +1588,72 @@ class ProgressivePlannerAgent:
                 )
             compiler_observation: Mapping[str, Any] | None = None
             self.last_compile_failure_attempts = []
+            host_materialization = (
+                None
+                if llm_is_mockish(self.llm)
+                else host_materialize_progressive_step(
+                    context=context,
+                    outline=outline,
+                    outline_step=outline_step,
+                    foundation=foundation,
+                    available_product_refs=prefix_state.available_product_refs,
+                )
+            )
+            if host_materialization is not None:
+                try:
+                    candidate_state = compile_progressive_prefix(
+                        prefix_state,
+                        host_materialization,
+                        outline=outline,
+                        foundation=foundation,
+                        context=context,
+                        allowed_literature_citation_keys=(
+                            allowed_literature_citation_keys
+                        ),
+                        allowed_know_how_decisions=allowed_know_how_decisions,
+                        reporting_method_source_keys=reporting_method_source_keys,
+                    )
+                    if step_index == len(outline.steps) - 1:
+                        assert candidate_state.plan is not None
+                        missing_method_layers = missing_required_method_layers(
+                            candidate_state.plan,
+                            allowed_literature_citation_keys,
+                            context=context,
+                        )
+                        if missing_method_layers:
+                            raise ProgressivePlanCompileError(
+                                "progressive_final_method_layer_unbound",
+                                "host materialization left required method layers unbound",
+                                step_id=outline_step.step_id,
+                                step_index=step_index,
+                                path="literature_bindings",
+                            )
+                except ProgressivePlanCompileError:
+                    # The compiler is the authority.  A host projection that is
+                    # not uniquely valid falls back to this step's Planner call.
+                    pass
+                else:
+                    prefix_state = candidate_state
+                    self.last_materializations = list(prefix_state.materializations)
+                    self.last_prompt_metrics.setdefault(
+                        "host_step_materialization_count", 0
+                    )
+                    self.last_prompt_metrics["host_step_materialization_count"] += 1
+                    if resumed:
+                        self.last_prompt_metrics.setdefault(
+                            "current_run_host_step_materialization_count", 0
+                        )
+                        self.last_prompt_metrics[
+                            "current_run_host_step_materialization_count"
+                        ] += 1
+                    checkpoint_emitter.emit(
+                        stage="step",
+                        outline=outline,
+                        foundation=foundation_materialization,
+                        materializations=self.last_materializations,
+                        prompt_metrics=self.last_prompt_metrics,
+                    )
+                    continue
             for revision in range(_MAX_COMPILE_REVISIONS + 1):
                 materialization_prompt = self._materialization_prompt(
                     context=context,

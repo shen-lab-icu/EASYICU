@@ -60,6 +60,9 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePredicateValue,
     ProgressiveStepMaterialization,
 )
+from easyicu.research_agent.planning.progressive_host_materialization import (
+    host_materialize_progressive_step,
+)
 from easyicu.research_agent.planning.progressive_resume import (
     ProgressivePrefixState,
     compile_progressive_prefix,
@@ -833,6 +836,52 @@ def _foundation_payload(payload: dict | None = None) -> dict:
             "know_how_decisions": source.get("know_how_decisions", []),
         },
     }
+
+
+def test_host_materializes_only_mechanical_outline_coordinates() -> None:
+    outline = ProgressivePlanOutline.model_validate(_outline_payload())
+    foundation = ProgressiveFoundationMaterialization.model_validate(
+        _foundation_payload()
+    ).foundation
+    context = _context()
+
+    cohort = host_materialize_progressive_step(
+        context=context,
+        outline=outline,
+        outline_step=outline.steps[0],
+        foundation=foundation,
+        available_product_refs=(),
+    )
+    table_one = host_materialize_progressive_step(
+        context=context,
+        outline=outline,
+        outline_step=outline.steps[1],
+        foundation=foundation,
+        available_product_refs=(("01_cohort", "artifact:analysis_cohort"),),
+    )
+    distribution = host_materialize_progressive_step(
+        context=context,
+        outline=outline,
+        outline_step=outline.steps[2],
+        foundation=foundation,
+        available_product_refs=(("01_cohort", "artifact:analysis_cohort"),),
+    )
+    primary = host_materialize_progressive_step(
+        context=context,
+        outline=outline,
+        outline_step=outline.steps[4],
+        foundation=foundation,
+        available_product_refs=(),
+    )
+
+    assert cohort is not None and cohort.step.raw_inputs
+    assert table_one is not None
+    assert table_one.step.table_one_group_by == context.primary_exposure
+    assert distribution is not None
+    assert distribution.step.primary_exposure == context.primary_exposure
+    assert distribution.step.outcome == context.target_outcome
+    # The model still owns the primary model-term and estimand decisions.
+    assert primary is None
 
 
 def test_step_materialization_parser_collapses_normalized_raw_input_duplicates() -> None:
@@ -4326,6 +4375,74 @@ def test_progressive_orchestrator_resumes_and_imports_validated_chain(
     } == {
         f"progressive_planner_checkpoint_{index:03d}" for index in range(9)
     }
+
+
+def test_progressive_orchestrator_persists_validated_resume_on_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort_path.write_bytes(b"development cohort authority")
+    dependencies = {
+        "cohort_file_sha256": hashlib.sha256(cohort_path.read_bytes()).hexdigest(),
+        "llm_signature": "mock:test",
+        "prompt_version": "test-v1",
+    }
+    source_agent = ProgressivePlannerAgent(
+        ScriptedMockLLMClient(
+            [
+                json.dumps(_outline_payload()),
+                json.dumps(_foundation_payload()),
+                *[json.dumps(item) for item in _materialization_payloads()],
+            ]
+        )
+    )
+    checkpoints = []
+    source_agent.run(
+        _context(),
+        checkpoint_callback=checkpoints.append,
+        resume_dependency_context=dependencies,
+    )
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_evidence = _RecordingEvidence()
+    paths = [
+        persist_progressive_planner_checkpoint(
+            run_dir=source_dir,
+            evidence=source_evidence,
+            checkpoint=checkpoint,
+            prompt_pack_version="test-v1",
+        )
+        for checkpoint in checkpoints[:2]
+    ]
+    current_dir = tmp_path / "current"
+    current_dir.mkdir()
+    evidence = _RecordingEvidence()
+    planner = ProgressivePlannerAgent(ScriptedMockLLMClient([]))
+
+    def interrupted(*_args, **_kwargs):
+        planner.last_resume_validated = True
+        raise KeyboardInterrupt("operator stop")
+
+    monkeypatch.setattr(planner, "run", interrupted)
+    with pytest.raises(KeyboardInterrupt, match="operator stop"):
+        run_progressive_planner(
+            planner=planner,
+            context=_context(),
+            run_dir=current_dir,
+            evidence=evidence,
+            prompt_pack_version="test-v1",
+            resume_checkpoint_path=paths[-1],
+            resume_checkpoint_sha256=hashlib.sha256(paths[-1].read_bytes()).hexdigest(),
+            cohort_path=cohort_path,
+            llm_signature="mock:test",
+            planner_kwargs={},
+            know_how_binding=PlannerKnowHowBinding(),
+            planning_contract_context="",
+            finding_sink=lambda _finding: None,
+        )
+
+    assert (current_dir / "progressive_planner_checkpoint_001.json").exists()
 
 
 def test_progressive_checkpoint_rejects_mutated_predecessor(tmp_path: Path) -> None:

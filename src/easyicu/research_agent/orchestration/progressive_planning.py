@@ -108,7 +108,7 @@ def run_progressive_planner(
                 "prompt_version": prompt_pack_version,
             },
         )
-    except Exception:
+    except BaseException:
         planner.capture_efficiency_metrics()
         if source_chain and planner.last_resume_validated:
             receipt = recorder.persist_validated_resume()
