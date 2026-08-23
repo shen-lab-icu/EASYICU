@@ -225,3 +225,59 @@ None.
     incomplete.pop("scientific_maturity_findings")
     with pytest.raises(KeyError, match="scientific_maturity_findings"):
         scientific_maturity_audit_from_gates(incomplete)
+
+
+def test_primary_figure_absolute_risk_uses_shared_panel_semantics(tmp_path) -> None:
+    context = ResearchContext(
+        research_question="Is a measured exposure associated with mortality?",
+        cohort=CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association",
+        steps=[],
+    )
+    figure_dir = tmp_path / "publication_figures"
+    figure_dir.mkdir()
+    (figure_dir / "easyicu_publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "Measurement state and observed outcome risk.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Measurement state and observed outcome risk",
+                        "role": "data_quality",
+                        "claim": "Observed outcome risk is shown for each state.",
+                    }
+                ],
+                "source_data": ["risk.csv"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audit = build_scientific_maturity_audit(
+        context=context,
+        plan=plan,
+        run_dir=tmp_path,
+        display_suite={"display_suite_complete": True},
+        publication_bundle={
+            "publication_figure_contract_ready": True,
+            "publication_figure_source_data_ready": True,
+            "publication_figure_visual_qa_passed": True,
+        },
+    )
+
+    codes = {finding.code for finding in audit.findings}
+    assert "PRIMARY_FIGURE_ABSOLUTE_RISK_CONTEXT_MISSING" not in codes
+    assert audit.facts["primary_figure"]["absolute_risk_panel_present"] is True
