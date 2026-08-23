@@ -78,12 +78,20 @@ def test_adapter_contracts_project_into_the_planner_action_surface() -> None:
             assert action.execution_mode == "host_owned"
 
     prediction_guide = planner_scientific_action_guide("prediction_model")
-    assert "prediction_decision_curve_v1[full_action]" in prediction_guide
+    assert "standard_supporting/host_owned:" in prediction_guide
+    assert "prediction.decision_curve" in prediction_guide
     names_only = planner_scientific_action_guide(
         "prediction_model", detail="names_only"
     )
-    assert "typed_adapters:" in names_only
-    assert "prediction.decision_curve=prediction_decision_curve_v1" in names_only
+    assert "typed_subcontracts:" not in names_only
+    assert "standard_supporting/host_owned:" in names_only
+    assert "prediction.decision_curve" in names_only
+
+    survival_guide = planner_scientific_action_guide(
+        "survival", detail="names_only"
+    )
+    assert "typed_subcontracts:" in survival_guide
+    assert "time_to_event.ph_check" in survival_guide
 
     actions = _all_actions()
     support_only = {
