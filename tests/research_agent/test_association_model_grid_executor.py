@@ -346,6 +346,38 @@ def test_runtime_grid_rebinds_after_generic_measurement_input_closure() -> None:
     }
 
 
+def test_grid_compiles_every_nonlinear_source_into_the_linear_parent() -> None:
+    _, authority, bound, _ = _authority_and_plan()
+    parent = bound.steps[0]
+    requirement = parent.model_requirements[0]
+    reduced = requirement.model_copy(
+        update={
+            "covariates": [name for name in requirement.covariates if name != "charlson_max"],
+            "model_terms": [
+                term for term in requirement.model_terms if term.name != "charlson_max"
+            ],
+        }
+    )
+    draft = bound.model_copy(
+        update={
+            "steps": [
+                parent.model_copy(update={"model_requirements": [reduced]}),
+                bound.steps[1],
+            ]
+        }
+    )
+
+    rebound = authority.bind_plan(draft)
+    rebound_requirement = rebound.steps[0].model_requirements[0]
+
+    assert "charlson_max" in rebound_requirement.covariates
+    assert any(
+        term.name == "charlson_max" and term.coding == "continuous"
+        for term in rebound_requirement.model_terms
+    )
+    authority.validate_plan(rebound)
+
+
 def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(
     tmp_path: Path,
 ) -> None:

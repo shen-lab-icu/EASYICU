@@ -23,6 +23,7 @@ from ..contracts.association_execution import (
     sole_primary_model_requirement,
 )
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.model_terms import ModelTermSpec
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -306,6 +307,15 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             values.extend(item.source_column for item in variant.nonlinear_terms)
         return tuple(dict.fromkeys(str(value) for value in values if value))
 
+    def _nonlinear_sources(self) -> Tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                item.source_column
+                for variant in self.variants
+                for item in variant.nonlinear_terms
+            )
+        )
+
     def required_columns(self, plan: AnalysisPlan) -> Tuple[str, ...]:
         parent = self._parent(plan)
         requirement = sole_primary_model_requirement(parent)
@@ -327,6 +337,48 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             raise CurrentCaseScientificAuthorityError(
                 "association model-grid parent must precede its sensitivity child"
             )
+        requirement = sole_primary_model_requirement(parent)
+        assert requirement is not None
+        missing_linear_parents = [
+            name
+            for name in self._nonlinear_sources()
+            if name not in set(requirement.covariates or ())
+        ]
+        if missing_linear_parents:
+            # A functional-form sensitivity is defined only relative to a
+            # linear parent term.  The signed runtime authority already names
+            # the exact source columns; compile that prerequisite once rather
+            # than letting the executor discover the contradiction downstream.
+            requirement = requirement.model_copy(
+                update={
+                    "covariates": [
+                        *(requirement.covariates or ()),
+                        *missing_linear_parents,
+                    ],
+                    "model_terms": [
+                        *(requirement.model_terms or ()),
+                        *[
+                            ModelTermSpec(
+                                name=name,
+                                role="covariate",
+                                coding="continuous",
+                                transform="identity",
+                            )
+                            for name in missing_linear_parents
+                        ],
+                    ],
+                }
+            )
+            parent = parent.model_copy(update={"model_requirements": [requirement]})
+            plan = plan.model_copy(
+                update={
+                    "steps": [
+                        parent if index == parent_index else step
+                        for index, step in enumerate(plan.steps)
+                    ]
+                }
+            )
+            candidate = plan.steps[candidate_index]
         inputs = [
             *self.required_columns(plan),
             self.cohort_product,
@@ -354,7 +406,7 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
                 ],
             }
         )
-        steps = [bound if step is candidate else step for step in plan.steps]
+        steps = [bound if index == candidate_index else step for index, step in enumerate(plan.steps)]
         return plan.model_copy(update={"steps": steps})
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
@@ -363,6 +415,12 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         parent_index = next(index for index, item in enumerate(plan.steps) if item is parent)
         step_index = next(index for index, item in enumerate(plan.steps) if item is step)
         issues: list[str] = []
+        requirement = sole_primary_model_requirement(parent)
+        assert requirement is not None
+        if not set(self._nonlinear_sources()).issubset(
+            set(requirement.covariates or ())
+        ):
+            issues.append("nonlinear_parent_terms")
         if parent_index >= step_index:
             issues.append("parent_order")
         if step.planned_analysis_role != "sensitivity":
