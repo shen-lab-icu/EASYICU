@@ -144,9 +144,47 @@ def test_protocol_query_uses_primary_exposure_and_outcome_not_benchmark_instruct
     query = build_pubmed_protocol_query_for_context(ctx)
 
     assert '"lactate"[Title/Abstract]' in query
-    assert '"hospital mortality"[Title/Abstract]' in query
+    assert '"in hospital mortality"[Title/Abstract]' in query
     assert "twelve outputs" not in query
     assert "intensive care" in query.lower() or "icu" in query.lower()
+
+
+def test_protocol_query_uses_clinical_identity_not_materialized_column(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Estimate Sepsis-3 prevalence and mortality.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="sep3_sofa2_max",
+                description="sepsis-3 criterion based on SOFA-2",
+                role="other",
+                dtype="int64",
+                source_concept="sep3_sofa2",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="in hospital mortality",
+                role="outcome",
+                dtype="int64",
+                source_concept="death",
+            ),
+        ],
+        primary_exposure="sep3_sofa2_max",
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_query_for_context,
+    )
+
+    query = build_pubmed_protocol_query_for_context(ctx)
+
+    assert "sep3 sofa2" not in query.casefold()
+    assert '"Sepsis-3"[Title/Abstract]' in query
+    assert '"SOFA"[Title/Abstract]' in query
+    assert '"mortality"[Title/Abstract]' in query
 
 
 def test_prepare_preplan_literature_persists_and_registers_bundle(ra, tmp_path):
@@ -1006,7 +1044,9 @@ def test_focused_pubmed_return_does_not_auto_pass_direct_comparator_screen(ra):
 
     assert "irrelevant_return" in {row.key for row in bundle.citations}
     decision = next(
-        row for row in bundle.screening_decisions if row.citation_key == "irrelevant_return"
+        row
+        for row in bundle.screening_decisions
+        if row.citation_key == "irrelevant_return"
     )
     assert decision.disposition == "exclude"
     assert not decision.population_match
@@ -1310,10 +1350,14 @@ def test_adult_protocol_excludes_pediatric_direct_comparator(ra):
 
     from easyicu.research_agent.literature import LiteratureAgent
 
-    decision = LiteratureAgent(
-        enable_pubmed=True,
-        pubmed_client=_PubMed(),
-    ).run(ctx).screening_decisions[-1]
+    decision = (
+        LiteratureAgent(
+            enable_pubmed=True,
+            pubmed_client=_PubMed(),
+        )
+        .run(ctx)
+        .screening_decisions[-1]
+    )
 
     assert decision.population_match is False
     assert decision.exposure_match is True
