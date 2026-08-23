@@ -1,14 +1,13 @@
 """Deterministic section specification and assembly for manuscript writing.
 
 The writer agent owns one model call.  This module owns which manuscript
-sections are requested, their bounded instructions, concurrent dispatch, and
+sections are requested, their bounded instructions, budget-safe dispatch, and
 fixed-order assembly.  Keeping that contract outside the agent prevents the
 model-facing class from also becoming a manuscript workflow coordinator.
 """
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -218,20 +217,25 @@ def render_manuscript_sections(
     common: Mapping[str, Any],
     administrative_authority: ManuscriptAdministrativeAuthority | None = None,
 ) -> str:
-    """Dispatch scientific sections and append host-owned administrative facts."""
+    """Dispatch scientific sections and append host-owned administrative facts.
 
-    with ThreadPoolExecutor(max_workers=len(MANUSCRIPT_SECTION_SPECS)) as executor:
-        futures = [
-            executor.submit(
-                call_section,
-                section_name=spec.section_name,
-                instruction=spec.instruction,
-                max_tokens=spec.max_tokens,
-                **common,
-            )
-            for spec in MANUSCRIPT_SECTION_SPECS
-        ]
-        sections = [future.result() for future in futures]
+    Section calls are deliberately sequential.  A Provider transport whose
+    output cap is not enforceable must reserve its conservative worst-case
+    usage before every request.  Dispatching all sections concurrently makes
+    those reservations overlap and can exhaust a run stop-loss even when the
+    completed sections are inexpensive.  Fixed-order dispatch keeps at most
+    one reservation in flight and stops immediately on the first failure.
+    """
+
+    sections = [
+        call_section(
+            section_name=spec.section_name,
+            instruction=spec.instruction,
+            max_tokens=spec.max_tokens,
+            **common,
+        )
+        for spec in MANUSCRIPT_SECTION_SPECS
+    ]
     scientific = "\n\n".join(
         section.strip() for section in sections if section.strip()
     )
