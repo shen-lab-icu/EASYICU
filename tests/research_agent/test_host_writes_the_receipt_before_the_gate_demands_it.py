@@ -44,11 +44,12 @@ from easyicu.research_agent.authority.typed_binding import (
 )
 
 
-def _call(**overrides: bool) -> bool:
+def _call(**overrides: bool | str) -> bool:
     kwargs = {
         "deterministic_standard_executor_used": False,
         "deterministic_fallback_used": False,
         "sealed_renderer_repair": False,
+        "resumed_from_generation_mode": "",
     }
     kwargs.update(overrides)
     return host_owns_input_binding_receipts(**kwargs)
@@ -85,6 +86,17 @@ def test_generated_code_is_not_owed_a_receipt() -> None:
     """
 
     assert _call() is False
+
+
+@pytest.mark.parametrize("source_mode", ["fallback", "deterministic_standard"])
+def test_digest_verified_resumed_host_code_is_owed_a_receipt(
+    source_mode: str,
+) -> None:
+    assert _call(resumed_from_generation_mode=source_mode) is True
+
+
+def test_resumed_generated_code_is_not_reclassified_as_host_owned() -> None:
+    assert _call(resumed_from_generation_mode="llm") is False
 
 
 # --- the rule has exactly one owner ------------------------------------------

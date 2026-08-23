@@ -1945,6 +1945,7 @@ def host_owns_input_binding_receipts(
     deterministic_standard_executor_used: bool,
     deterministic_fallback_used: bool,
     sealed_renderer_repair: bool,
+    resumed_from_generation_mode: str | None = None,
 ) -> bool:
     """Whether the HOST, not the generated script, must write the receipts.
 
@@ -1971,6 +1972,8 @@ def host_owns_input_binding_receipts(
         deterministic_standard_executor_used
         or deterministic_fallback_used
         or sealed_renderer_repair
+        or str(resumed_from_generation_mode or "").strip()
+        in {"fallback", "deterministic_standard"}
     )
 
 
