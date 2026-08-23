@@ -91,6 +91,18 @@ def test_unrelated_eicu_ancestor_does_not_override_mimic_schema(tmp_path) -> Non
     assert _detect_database(prepared) == "miiv"
 
 
+def test_eicu_demo_accepts_the_prepared_eicu_table_root(tmp_path) -> None:
+    """Converted official demo data must be exportable without a fake subfolder."""
+
+    pd.DataFrame({"patientunitstayid": [1]}).to_parquet(
+        tmp_path / "patient.parquet"
+    )
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = False
+
+    assert loader._setup_data_path(tmp_path, "eicu_demo") == tmp_path
+
+
 def test_mimic_bucket_layout_does_not_override_the_stay_id_generation(
     tmp_path,
 ) -> None:

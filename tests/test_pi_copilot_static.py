@@ -393,13 +393,11 @@ def test_pi_composer_enter_sends_without_breaking_shift_enter_or_ime() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
-    owner = STATIC / "js" / "screens-guided-pi.js"
+    owner = STATIC / "js" / "composer-keyboard.js"
     script = r"""
-const fs = require('fs');
-const source = fs.readFileSync(process.argv[1], 'utf8');
-const match = source.match(/function composerEnterShouldSend\(event\) \{([\s\S]*?)\n  \}/);
-if (!match) throw new Error('composerEnterShouldSend helper not found');
-const shouldSend = new Function('event', match[1]);
+global.window = global;
+require(process.argv[1]);
+const shouldSend = global.EU_COMPOSER_KEYBOARD.enterShouldSend;
 const cases = {
   enter: shouldSend({key: 'Enter', shiftKey: false, isComposing: false, keyCode: 13}),
   shiftEnter: shouldSend({key: 'Enter', shiftKey: true, isComposing: false, keyCode: 13}),
@@ -424,6 +422,12 @@ process.stdout.write(JSON.stringify(cases));
         "legacyIme": False,
         "otherKey": False,
     }
+    index = _read("index.html")
+    pi_owner = _read("js/screens-guided-pi.js")
+    fallback_owner = _read("js/screens-guided.js")
+    assert index.index("js/composer-keyboard.js") < index.index("js/screens-guided-pi.js")
+    assert "EU_COMPOSER_KEYBOARD.enterShouldSend(event)" in pi_owner
+    assert "EU_COMPOSER_KEYBOARD.enterShouldSend(e)" in fallback_owner
 
 
 def test_agent_handoff_receipt_is_forwarded_to_project_initialization() -> None:

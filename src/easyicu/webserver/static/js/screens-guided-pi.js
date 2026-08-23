@@ -1579,12 +1579,6 @@
     const text = String((input && input.value) || state.draft || '').trim();
     await sendText(text);
   }
-  function composerEnterShouldSend(event) {
-    return event.key === 'Enter'
-      && !event.shiftKey
-      && !event.isComposing
-      && event.keyCode !== 229;
-  }
   async function confirmWorkflowAction() {
     const confirmation = workflowConfirmation();
     if (!confirmation) return;
@@ -1794,7 +1788,7 @@
       if (modelList) modelList.replaceChildren();
     });
     state.host.addEventListener('keydown', event => {
-      if (event.target.matches('[data-gpi-input]') && composerEnterShouldSend(event)) {
+      if (event.target.matches('[data-gpi-input]') && window.EU_COMPOSER_KEYBOARD.enterShouldSend(event)) {
         event.preventDefault(); sendMessage();
       }
     });

@@ -60,10 +60,10 @@
   }
 
   function prime(drill) {
-    if (drill && drill.demo) {
-      if (state.sourceKey) reset();
-    }
-    const sourceKey = String(drill && drill.source && drill.source.path_hash || '');
+    const rawSourceKey = String(drill && drill.source && drill.source.path_hash || '');
+    const sourceKey = drill && drill.demo
+      ? `demo:${String(drill.source && (drill.source.database || drill.source.source_id) || rawSourceKey || 'seeded')}`
+      : rawSourceKey;
     if (state.sourceKey && sourceKey && state.sourceKey !== sourceKey) reset();
     state.sourceKey = sourceKey;
     const tables = drill && drill.data_tables || {};
