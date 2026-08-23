@@ -50,6 +50,29 @@ def test_policy_accepts_only_a_complete_known_claim_token() -> None:
     assert result.unsupported_scientific_claim_sentences == result.filtered_sentences
 
 
+def test_policy_collapses_exact_host_prose_followed_by_duplicate_claim_token() -> None:
+    claim = _claim()
+    sentence = (
+        f"{claim.render_text()} {{evidence:{claim.evidence_id}}}. "
+        f"{{claim:{claim.claim_ref}}}"
+    )
+
+    result = filter_evidence_bound_scaffold(sentence, resolve_claim=_resolver)
+
+    assert result.scaffold == f"{{claim:{claim.claim_ref}}}\n"
+    assert result.filtered_sentences == ()
+
+
+def test_policy_does_not_canonicalize_paraphrase_plus_claim_token() -> None:
+    claim = _claim()
+    sentence = f"A different assertion. {{claim:{claim.claim_ref}}}"
+
+    result = filter_evidence_bound_scaffold(sentence, resolve_claim=_resolver)
+
+    assert result.scaffold == "\n"
+    assert result.unsupported_scientific_claim_sentences == (sentence,)
+
+
 def test_policy_preserves_metadata_but_filters_uncited_numeric_result() -> None:
     result = filter_evidence_bound_scaffold(
         "Data availability: generated scripts are available.\n"
