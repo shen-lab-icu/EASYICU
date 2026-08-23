@@ -1740,8 +1740,12 @@ def _resolve_export_cohort(
     filtered = pf.filter(
         age_min=normalized["age_min"] if normalized["age_min"] > 0 else None,
         age_max=normalized["age_max"] if normalized["age_max"] < 100 else None,
-        first_icu_stay=normalized["exclude_readmissions"]
-        or normalized["preset"] == "adult_first",
+        first_icu_stay=(
+            True
+            if normalized["exclude_readmissions"]
+            or normalized["preset"] == "adult_first"
+            else None
+        ),
         los_min=(
             normalized["min_icu_los_hours"]
             if normalized["min_icu_los_hours"] > 0

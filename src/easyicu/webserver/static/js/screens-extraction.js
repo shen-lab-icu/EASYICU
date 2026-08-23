@@ -435,7 +435,14 @@
     setModuleConceptSelection(m, conceptIdsForModule(m).filter(id => selected.has(id)));
     window.EU_STALE = true;
   }
-  function repaint() { if (window.__euRender) window.__euRender(); }
+  function repaint() {
+    const embedded = window.EU_EXTRACTION_EMBEDDED_WORKSPACE;
+    if (embedded && typeof embedded.isMounted === 'function' && embedded.isMounted()) {
+      embedded.repaint();
+      return;
+    }
+    if (window.__euRender) window.__euRender();
+  }
   // Background job events (SSE progress / continuity restore) must never
   // trigger a full-shell re-render while the user works on another route —
   // that wipes focus, IME composition, and uncommitted input there. Module
@@ -1103,21 +1110,31 @@
   }
 
   /* ---- the express recommended card ---- */
+  function recommendedUsesFirstStay() {
+    if (dataMode() === 'demo') return true;
+    const database = String(exScanResult && exScanResult.db_key || '').toLowerCase();
+    return !['miiv', 'miii', 'mimic', 'mimiciv', 'mimiciii'].includes(database);
+  }
+
   function expressCard() {
     // Demo runs a local mock and needs no destination — only real extraction does.
     const exportReady = dataMode() === 'demo' || !!currentExportDir();
+    const firstStay = recommendedUsesFirstStay();
+    const cohortLead = firstStay
+      ? t('first ICU stay', '首次 ICU 住院')
+      : t('adult ICU stays (first-stay status unavailable)', '成人 ICU 住院（首次住院状态不可用）');
     return `
     <div class="express">
       <div class="express-grid">
         <div>
           <div class="eyebrow">${icon('spark', 13)} ${t('Recommended', '推荐')}</div>
           <h2>${t('Recommended extraction', '推荐抽取')}</h2>
-          <p class="lead">${t('Sensible defaults that work for most ICU studies — first ICU stay, the full available ICU window with a 30-day cap, and the six core feature modules. One click gives you analysis-ready tables.', '适用于大多数 ICU 研究的合理默认 —— 首次 ICU 住院、全可用 ICU 时间窗（30 天上限）,以及六个核心特征模块。一键得到可直接分析的数据表。')}</p>
+          <p class="lead">${t('Sensible defaults for this database — ', '适用于当前数据库的合理默认 —— ')}${cohortLead}, ${t('the full available ICU window with a 30-day cap, and the six core feature modules. One click gives you analysis-ready tables.', '全可用 ICU 时间窗（30 天上限），以及六个核心特征模块。一键得到可直接分析的数据表。')}</p>
           <div class="express-chips">
             ${CORE.map((n, i) => `<span class="chip solid">${t(n, MODS.find(m => m[0] === n)[1])}</span>`).join('')}
           </div>
           <div class="express-meta">
-            <span>${t('Cohort', '队列')} · <b>${t('first ICU stay', '首次 ICU')} · ${t('full window', '全窗口')}</b></span>
+            <span>${t('Cohort', '队列')} · <b>${cohortLead} · ${t('full window', '全窗口')}</b></span>
             <span>${t('Modules', '模块')} · <b>${CORE.length}</b></span>
             <span>${t('Concepts', '概念')} · <b>~${coreConceptN()}</b></span>
             <span>${dataMode() === 'demo' ? t('Stays', '住院数') + ' · <b>10</b>' : t('Stays', '住院数') + ' · <b>' + escHtml(fmtSampleCap()) + '</b>'}</span>
@@ -1181,13 +1198,14 @@
     };
   }
   function recommendedCohortContract() {
+    const firstStay = recommendedUsesFirstStay();
     return {
-      preset: 'adult_first',
+      preset: firstStay ? 'adult_first' : 'all_icu',
       age_min: 18,
       age_max: 100,
       min_icu_los_hours: 0,
       observation_window_hours: DEFAULT_OBSERVATION_WINDOW_HOURS,
-      exclude_readmissions: true,
+      exclude_readmissions: firstStay,
       icd_enabled: false,
       sepsis_definition: sepsisDefinitionContract(),
     };
@@ -2055,6 +2073,17 @@
       // ICD disease-cohort filter (folded in from the former standalone screen)
       if (window.EUIcd && window.EUIcd.bind) window.EUIcd.bind(root);
       if (window.__euExtractFocusICD) window.__euExtractFocusICD = false;
+    },
+  };
+
+  window.EU_EXTRACTION_NATIVE_OWNER = {
+    render: () => S.extraction.render(),
+    bind: host => S.extraction.afterRender(host),
+    isReal: () => dataMode() === 'real',
+    isPreparedExport: () => dataMode() === 'real' && exSource === 'module' && exReal === 'ready',
+    useRealData() {
+      if (window.setDataMode) window.setDataMode('real', { force: true });
+      else window.EU_DATA = 'real';
     },
   };
 })();

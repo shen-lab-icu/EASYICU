@@ -116,6 +116,24 @@
         media_type: 'application/json',
       };
     }
+    if (value.kind === 'native_workspace') {
+      const route = String(value.route || '').trim();
+      const state = String(value.state || '').trim();
+      const studyContextId = String(value.study_context_id || '').trim();
+      const studyRevision = Number(value.study_revision);
+      const jobId = String(value.job_id || '').trim();
+      if (route !== 'extraction' || !['setup', 'running', 'review'].includes(state)) return null;
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(studyContextId)) return null;
+      if (!Number.isInteger(studyRevision) || studyRevision < 0) return null;
+      if (jobId && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(jobId)) return null;
+      return {
+        kind: 'native_workspace', route, state,
+        study_context_id: studyContextId, study_revision: studyRevision,
+        label: String(value.label || tr('Data Extraction', '数据提取')).slice(0, 160),
+        media_type: 'application/vnd.easyicu.native-workspace',
+        ...(jobId ? { job_id: jobId } : {}),
+      };
+    }
     const file = String(value.file || '').trim().replace(/\\/g, '/');
     if (!file || file.startsWith('/') || file.includes('\0')) return null;
     if (file.split('/').some(part => !part || part === '.' || part === '..')) return null;
@@ -141,6 +159,7 @@
   function isDemoArtifact() { return !!state.resource && state.resource.kind === 'demo_artifact'; }
   function isDataPackageReview() { return !!state.resource && state.resource.kind === 'data_package_review'; }
   function isDataWorkbenchSnapshot() { return !!state.resource && state.resource.kind === 'data_workbench_snapshot'; }
+  function isNativeWorkspace() { return !!state.resource && state.resource.kind === 'native_workspace'; }
   function isStructuredArtifact() { return isResearchArtifact() || isDemoArtifact() || isDataPackageReview() || isDataWorkbenchSnapshot(); }
   function isLiteratureSource() { return !!state.resource && state.resource.kind === 'literature_source'; }
   function isHtml() {
@@ -243,6 +262,8 @@
       body = url
         ? `<iframe class="gpi-preview-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
         : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The checked file digest is missing. Run the static check and prepare the preview again.', '文件检查摘要缺失。请重新执行静态检查并准备预览。')}</span></div>`;
+    } else if (state.mode === 'native' && isNativeWorkspace()) {
+      body = `<div data-gpi-native-workspace-mount></div>`;
     } else if (state.mode === 'workbench' && (isDataPackageReview() || isDataWorkbenchSnapshot())) {
       body = `<div data-gpi-workbench-mount></div>`;
     } else if (state.mode === 'structured' && isStructuredArtifact()) {
@@ -263,10 +284,12 @@
     const reference = isDataPackageReview()
       ? `${state.resource.study_context_id} · rev ${state.resource.study_revision}`
       : isDataWorkbenchSnapshot() ? `${state.resource.view} · ${state.resource.snapshot_sha256.slice(0, 12)}`
+      : isNativeWorkspace() ? `${state.resource.route} · rev ${state.resource.study_revision}`
       : isStructuredArtifact() || isDocument()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : isLiteratureSource() ? state.resource.url : state.resource.file;
-    const provenance = isDemoArtifact() ? demoProvenance() : isDemoDocument() ? demoDocumentProvenance() : isDataWorkbenchSnapshot() ? dataWorkbenchProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
+    const provenance = isDemoArtifact() ? demoProvenance() : isDemoDocument() ? demoDocumentProvenance() : isNativeWorkspace() ? `
+      <div class="gpi-preview-provenance is-research" role="note"><strong>${tr('Native EasyICU owner · Local execution', 'EasyICU 原生 owner · 本地执行')}</strong><span>${tr('Folder paths and patient rows stay in the host UI; the model receives only governed receipts.', '目录路径和患者行只保留在本机界面；模型仅接收受治理回执。')}</span></div>` : isDataWorkbenchSnapshot() ? dataWorkbenchProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
       <div class="gpi-preview-provenance is-research" role="note">
         <strong>${tr('Literature metadata · Search receipt', '文献元数据 · 检索回执')}</strong>
         <span>${tr('Design evidence, separate from patient/result evidence.', '设计依据；与患者/结果证据分开治理。')}</span>
@@ -290,6 +313,14 @@
         : window.EU_GUIDED_PI_WORKBENCH_PREVIEW;
       const mount = state.host.querySelector('[data-gpi-workbench-mount]');
       if (owner && typeof owner.mount === 'function') owner.mount(mount, state.payload || {}, state.resource.view);
+    }
+    if (state.mode === 'native' && isNativeWorkspace() && !state.loading && !state.error) {
+      const owner = window.EU_EXTRACTION_EMBEDDED_WORKSPACE;
+      const mount = state.host.querySelector('[data-gpi-native-workspace-mount]');
+      if (owner && typeof owner.mount === 'function') owner.mount(mount, {
+        jobId: state.resource.job_id || '', jobSnapshot: state.payload || null,
+        resource: state.resource,
+      });
     }
   }
   async function loadResource() {
@@ -325,13 +356,17 @@
         payload = await api.loadPiCopilotDataWorkbenchSnapshot(
           state.projectId, state.resource.snapshot_sha256,
         );
+      } else if (isNativeWorkspace()) {
+        payload = state.resource.job_id && api.loadJobSnapshot
+          ? await api.loadJobSnapshot(state.resource.job_id)
+          : null;
       } else {
         if (!api.loadPiCopilotWorkspaceFile) throw new Error(tr('The workspace file API is unavailable.', '工作区文件接口不可用。'));
         payload = await api.loadPiCopilotWorkspaceFile(state.projectId, state.resource.file);
       }
       if (ticket !== state.request) return;
       state.artifact = payload && payload.artifact ? payload.artifact : null;
-      state.payload = isStructuredArtifact() && payload ? (payload.payload || {}) : null;
+      state.payload = isNativeWorkspace() ? payload : (isStructuredArtifact() && payload ? (payload.payload || {}) : null);
       state.governance = isStructuredArtifact() && payload ? (payload.governance || null) : null;
     } catch (error) {
       if (ticket !== state.request) return;
@@ -350,7 +385,7 @@
     state.payload = null;
     state.governance = null;
     state.error = '';
-    state.mode = safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
+    state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
     render();
     if (state.mode !== 'web' && state.mode !== 'source' && state.mode !== 'document') loadResource();
   }
