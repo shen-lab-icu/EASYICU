@@ -296,6 +296,9 @@ def test_v2_with_evidence_reads_claim_registry(tmp_path: Path) -> None:
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
     assert "## secondary numbers" in out
     assert "cohort_male_fraction=0.86" in out
+    assert "## numeric citation authority" in out
+    assert "- 03_primary: {evidence:03_primary_summary}" in out
+    assert "cite={evidence:03_primary_summary}" in out
     # The primary-keys field MUST NOT appear in the secondary block.
     secondary = out.split("## secondary numbers", 1)[1]
     assert "primary_or=" not in secondary
@@ -636,6 +639,35 @@ def test_v2_output_strictly_contains_v1_output() -> None:
     # backwards-compat guarantee: turning on the flag never deletes
     # information the writer was seeing before.
     assert out_v2.startswith(out_v1)
+
+
+def test_preferred_writer_names_include_exact_numeric_evidence_owner(
+    tmp_path: Path,
+) -> None:
+    evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_distribution",
+        evidence_id="distribution_summary_exact",
+    )
+    evidence.register_numeric_claim(
+        value="64.01",
+        canonical=64.01,
+        evidence_id="distribution_summary_exact",
+        step_id="03_distribution",
+        source_field="prevalence_pct",
+    )
+    records = [
+        {
+            **_record("03_distribution", "ok", {"prevalence_pct": 64.01}),
+            "evidence_ids": ["distribution_summary_exact"],
+        }
+    ]
+
+    names = _preferred_writer_evidence_names(evidence, records)
+
+    assert "distribution_summary_exact" in names
 
 
 def test_writer_digest_preferred_keys_is_tuple_and_nonempty() -> None:
