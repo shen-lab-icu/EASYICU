@@ -777,6 +777,12 @@ def _apply_resume_plan_migrations(
     """
 
     from .orchestration.profiles import is_paper_facing_profile
+    from .orchestration.step_selector import resolve_resume_from_step_selector
+
+    resume_from_step_id = resolve_resume_from_step_selector(
+        plan,
+        resume_from_step_id,
+    )
 
     plan, migrated_plan_path, migrated_step_ids = (
         _migrate_legacy_resume_model_requirements(

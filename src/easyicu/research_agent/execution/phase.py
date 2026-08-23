@@ -409,6 +409,7 @@ from ..orchestration.resume import (
     upsert_step_record,
 )
 from ..orchestration.step_selector import (
+    resolve_resume_from_step_selector as _resolve_resume_from_step_selector,
     resolve_stop_after_step_selector as _resolve_stop_after_step_selector,
 )
 from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
@@ -1065,6 +1066,10 @@ def _prepare_execute_phase_authority(
             ).evidence_path
             plan_result.plan_path = plan_path
     stop_after_step_id = _resolve_stop_after_step_selector(plan, stop_after_step_id)
+    resume_from_step_id = _resolve_resume_from_step_selector(
+        plan,
+        resume_from_step_id,
+    )
     resume_controller = ResumeController(
         plan=plan,
         run_dir=run_dir,
