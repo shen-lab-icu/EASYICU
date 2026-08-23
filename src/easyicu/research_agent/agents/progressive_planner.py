@@ -2330,6 +2330,24 @@ class ProgressivePlannerAgent:
             outline_step_sha256: str,
             available_product_refs: Sequence[tuple[str, str]],
         ) -> str | None:
+            if not llm_is_mockish(self.llm):
+                host_materialization = host_materialize_progressive_step(
+                    context=context,
+                    outline=outline,
+                    outline_step=outline_step,
+                    foundation=foundation,
+                    available_product_refs=(
+                        product_refs_for_materialization_coordinate(
+                            outline_step,
+                            available_product_refs,
+                        )
+                    ),
+                )
+                if host_materialization is not None:
+                    # Host-materialized steps record a null Provider schema
+                    # authority because no model request occurred. Preserve
+                    # that same transport coordinate during checkpoint replay.
+                    return None
             if not llm_supports_strict_json_schema(self.llm):
                 return None
             request = progressive_step_materialization_request(
