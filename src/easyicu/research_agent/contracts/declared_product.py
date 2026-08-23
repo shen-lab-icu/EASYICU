@@ -1304,6 +1304,27 @@ def _closed_non_result_counter_subtree(key: str, value: Any) -> bool:
     )
 
 
+def _closed_source_evidence_ids_subtree(key: str, value: Any) -> bool:
+    """Recognise provenance ids without letting numeric results hide there."""
+
+    if key != "source_evidence_ids":
+        return False
+    if isinstance(value, Mapping):
+        return bool(value) and all(
+            isinstance(raw_key, str)
+            and bool(raw_key.strip())
+            and isinstance(evidence_id, str)
+            and bool(evidence_id.strip())
+            for raw_key, evidence_id in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return bool(value) and all(
+            isinstance(evidence_id, str) and bool(evidence_id.strip())
+            for evidence_id in value
+        )
+    return False
+
+
 def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
     """Return exact statistic/log keys backed by non-null scalar values."""
 
@@ -1317,6 +1338,8 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
             for raw_key, child in node.items():
                 key = _normalise(raw_key)
                 if _closed_non_result_counter_subtree(key, child):
+                    continue
+                if _closed_source_evidence_ids_subtree(key, child):
                     continue
                 if key in _HOST_RECEIPT_SUBTREES or key in _OUTPUT_CONTAINER_KEYS:
                     continue
@@ -1868,6 +1891,8 @@ def _effect_summary_paths(summary: Mapping[str, Any]) -> list[str]:
                 key = _normalise(raw_key)
                 path = f"{prefix}.{key}" if prefix else key
                 if _closed_non_result_counter_subtree(key, child):
+                    continue
+                if _closed_source_evidence_ids_subtree(key, child):
                     continue
                 if key in _HOST_RECEIPT_SUBTREES:
                     continue

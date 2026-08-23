@@ -1457,6 +1457,38 @@ def test_nonfinite_input_counts_are_closed_diagnostic_counters():
     assert "unauthorized_effect_product" not in _kinds(findings)
 
 
+def test_source_evidence_id_mapping_is_provenance_not_effect_output():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["figure:association_overview"]),
+        step_summary={
+            "output_files": {
+                "figure:association_overview": "association_overview.png"
+            },
+            "source_evidence_ids": {
+                "table:adjusted_association_estimates": "table_evidence_123",
+                "table:distribution": "table_evidence_456",
+            },
+        },
+        effect_method_authorized=False,
+        effect_figure_source_authorized=True,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+def test_source_evidence_ids_cannot_hide_a_numeric_effect():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:distribution"]),
+        step_summary={
+            "output_files": {"table:distribution": "distribution.csv"},
+            "source_evidence_ids": {"odds_ratio": 1.7},
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
 @pytest.mark.parametrize(
     "invalid_count",
     [True, -1, 1.5, "0", {"odds_ratio": 0}],
