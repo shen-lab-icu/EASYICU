@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.execution.runners.composite_descriptive_figure_executor import (
+    COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
@@ -150,6 +151,32 @@ def _association_summary_frames() -> dict[str, pd.DataFrame]:
             "non_independent_specs": [0, 0],
             "range_low": [1.1, 1.0],
             "range_high": [1.8, 1.7],
+        }
+    )
+    return frames
+
+
+def _association_measurement_frames() -> dict[str, pd.DataFrame]:
+    frames = _association_frames()
+    frames.pop("table:robustness_matrix")
+    frames.pop("table:measurement_missingness")
+    frames["table:missingness_measurement_audit"] = pd.DataFrame(
+        {
+            "variable": ["age", "lactate"],
+            "label": ["Age", "Lactate"],
+            "n_total": [100, 100],
+            "missing_n": [0, 20],
+            "missing_pct": [0.0, 20.0],
+        }
+    )
+    frames["table:exposure_component_completeness_audit"] = pd.DataFrame(
+        {
+            "concept": ["respiration", "respiration", "renal", "renal"],
+            "exposure_category": ["0", "1", "0", "1"],
+            "row_role": ["exposure_level"] * 4,
+            "n_stratum": [60, 40, 60, 40],
+            "measured_n": [54, 38, 48, 36],
+            "measured_pct": [90.0, 95.0, 80.0, 90.0],
         }
     )
     return frames
@@ -465,6 +492,97 @@ def test_association_matrix_and_summary_contract_has_two_robustness_panels(
     assert panels["D"]["metadata"]["source_products"] == [
         "table:robustness_summary"
     ]
+
+
+def test_association_measurement_contract_selects_and_renders_all_four_tables(
+    tmp_path: Path,
+) -> None:
+    frames = _association_measurement_frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep.model_validate(
+        {
+            **_step().model_dump(mode="json"),
+            "step_id": "publication_figure_suite",
+            "inputs": list(
+                COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS
+            ),
+            "expected_outputs": ["figure:publication_figure_suite"],
+            "input_consumption_contracts": [
+                {"input_key": key, "mode": "all_rows"}
+                for key in COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS
+            ],
+        }
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Estimate an association.", steps=[step]),
+        resolved_bindings=bindings,
+    )
+    assert selection is not None
+    assert selection.analysis_kind == "composite_descriptive_figure"
+    assert selection.host_sealed_renderer is True
+    assert selection.consumed_input_keys == (
+        COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS
+    )
+
+    out_dir = tmp_path / "outputs"
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="publication_figure_suite",
+        input_keys=COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
+    )
+    assert summary["status"] == "ok"
+    contract = json.loads(
+        (out_dir / "publication_figure_suite.figure_contract.json").read_text()
+    )
+    panels = {panel["panel_id"]: panel for panel in contract["panels"]}
+    assert panels["C"]["title"] == "Measurement missingness"
+    assert panels["C"]["metadata"]["source_products"] == [
+        "table:missingness_measurement_audit"
+    ]
+    assert panels["D"]["title"] == "Component completeness"
+    assert panels["D"]["metadata"]["source_products"] == [
+        "table:exposure_component_completeness_audit"
+    ]
+
+
+def test_association_measurement_contract_fails_closed_on_bad_component_schema(
+    tmp_path: Path,
+) -> None:
+    frames = _association_measurement_frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    bindings["table:exposure_component_completeness_audit"]["product_contract"] = {
+        "columns": ["concept", "measured_pct"],
+        "row_count": 4,
+    }
+    step = AnalysisStep.model_validate(
+        {
+            **_step().model_dump(mode="json"),
+            "inputs": list(
+                COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS
+            ),
+            "input_consumption_contracts": [
+                {"input_key": key, "mode": "all_rows"}
+                for key in COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS
+            ],
+        }
+    )
+
+    assert not composite_descriptive_figure_executor_owns_step(
+        step, resolved_bindings=bindings
+    )
 
 
 def test_source_aware_association_contract_uses_eligible_availability(

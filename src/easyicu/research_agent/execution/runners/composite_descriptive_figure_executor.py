@@ -52,6 +52,12 @@ COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS = (
     "table:robustness_summary",
     "table:measurement_missingness",
 )
+COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS = (
+    "table:exposure_outcome_distribution",
+    "table:adjusted_association_estimates",
+    "table:missingness_measurement_audit",
+    "table:exposure_component_completeness_audit",
+)
 COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS = (
     "table:exposure_outcome_distribution",
     "table:adjusted_association_estimates",
@@ -115,6 +121,16 @@ _REQUIRED_COLUMNS = {
     "table:measurement_missingness": frozenset(
         {"variable", "n_total", "missing_n", "missing_pct"}
     ),
+    "table:exposure_component_completeness_audit": frozenset(
+        {
+            "concept",
+            "exposure_category",
+            "row_role",
+            "n_stratum",
+            "measured_n",
+            "measured_pct",
+        }
+    ),
 }
 
 _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES = (
@@ -122,6 +138,7 @@ _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES = (
     COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+    COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
 )
@@ -343,6 +360,7 @@ def run_composite_descriptive_figure(
     if tuple(input_keys) in {
         COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
         COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+        COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
         COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
         COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
     }:
@@ -655,6 +673,7 @@ def run_composite_descriptive_figure(
 
 
 __all__ = [
+    "COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS",
     "COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS",
     "COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS",
     "COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS",

@@ -192,6 +192,113 @@ def _measurement_availability(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _measurement_missingness(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    result["n_total"] = _integers(result, "n_total")
+    result["missing_n"] = _integers(result, "missing_n")
+    result["missing_pct"] = _association_finite_series(result, "missing_pct")
+    if (result["n_total"] <= 0).any() or (
+        result["missing_n"] > result["n_total"]
+    ).any():
+        raise ValueError("missingness counts do not nest within positive denominators")
+    expected = 100.0 * result["missing_n"] / result["n_total"]
+    if not np.isclose(
+        result["missing_pct"], expected, rtol=0.0, atol=5e-6
+    ).all():
+        raise ValueError("missingness percentage does not reconcile to counts")
+    return result
+
+
+def _component_completeness(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    result["concept"] = result["concept"].astype(str)
+    result["exposure_category"] = result["exposure_category"].astype(str)
+    result["n_stratum"] = _integers(result, "n_stratum")
+    result["measured_n"] = _integers(result, "measured_n")
+    result["measured_pct"] = _association_finite_series(result, "measured_pct")
+    if (result["n_stratum"] <= 0).any() or (
+        result["measured_n"] > result["n_stratum"]
+    ).any():
+        raise ValueError(
+            "component-completeness counts do not nest within positive denominators"
+        )
+    expected = 100.0 * result["measured_n"] / result["n_stratum"]
+    if not np.isclose(
+        result["measured_pct"], expected, rtol=0.0, atol=5e-6
+    ).all():
+        raise ValueError(
+            "component-completeness percentage does not reconcile to counts"
+        )
+    keys = result[["concept", "exposure_category"]]
+    if keys.duplicated().any():
+        raise ValueError(
+            "component-completeness rows must be unique by concept and exposure category"
+        )
+    return result
+
+
+def _draw_missingness(ax: Any, frame: pd.DataFrame, *, color: str) -> None:
+    quality = frame.sort_values("missing_pct", ascending=True)
+    label_column = "label" if "label" in quality.columns else "variable"
+    positions = np.arange(len(quality))
+    ax.barh(positions, quality["missing_pct"], color=color)
+    ax.set_yticks(
+        positions,
+        [_label(value) for value in quality[label_column]],
+        fontsize=5.5,
+    )
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Missing (%)")
+    ax.set_title("Measurement missingness", loc="left", pad=12)
+
+
+def _draw_component_completeness(ax: Any, frame: pd.DataFrame) -> None:
+    concepts = list(dict.fromkeys(frame["concept"].astype(str)))
+    categories = list(dict.fromkeys(frame["exposure_category"].astype(str)))
+    matrix = frame.pivot(
+        index="concept",
+        columns="exposure_category",
+        values="measured_pct",
+    ).reindex(index=concepts, columns=categories)
+    if matrix.isna().any().any():
+        raise ValueError(
+            "component-completeness grid must contain every declared concept-category cell"
+        )
+    image = ax.imshow(
+        matrix.to_numpy(dtype=float),
+        vmin=0,
+        vmax=100,
+        cmap="Blues",
+        aspect="auto",
+    )
+    ax.set_xticks(
+        np.arange(len(categories)),
+        [_label(value) for value in categories],
+        rotation=25,
+        ha="right",
+        fontsize=5.5,
+    )
+    ax.set_yticks(
+        np.arange(len(concepts)),
+        [_label(value) for value in concepts],
+        fontsize=5.2,
+    )
+    for row_index in range(len(concepts)):
+        for column_index in range(len(categories)):
+            value = float(matrix.iloc[row_index, column_index])
+            ax.text(
+                column_index,
+                row_index,
+                f"{value:.0f}",
+                ha="center",
+                va="center",
+                fontsize=4.5,
+                color="white" if value >= 55 else "#202020",
+            )
+    ax.figure.colorbar(image, ax=ax, fraction=0.046, pad=0.04, label="Measured (%)")
+    ax.set_title("Component completeness", loc="left", pad=12)
+
+
 def render_association_publication_figure(
     *,
     bound: Mapping[str, BoundTypedInput],
@@ -223,20 +330,36 @@ def render_association_publication_figure(
         estimate_column="estimate",
         require_fitted=True,
     )
-    robustness_key = (
-        "table:robustness_matrix"
-        if "table:robustness_matrix" in bound
-        else "table:robustness_summary"
+    robustness_key = next(
+        (
+            key
+            for key in ("table:robustness_matrix", "table:robustness_summary")
+            if key in bound
+        ),
+        None,
     )
-    robustness = bound[robustness_key].frame.copy()
-    if robustness_key == "table:robustness_matrix":
+    robustness = (
+        bound[robustness_key].frame.copy() if robustness_key is not None else None
+    )
+    if robustness_key == "table:robustness_matrix" and robustness is not None:
         robustness = _validate_interval_table(
             robustness,
             estimate_column="point_estimate",
         )
+    missingness_key = next(
+        (
+            key
+            for key in (
+                "table:measurement_missingness",
+                "table:missingness_measurement_audit",
+            )
+            if key in bound
+        ),
+        None,
+    )
     missingness = (
-        bound["table:measurement_missingness"].frame.copy()
-        if "table:measurement_missingness" in bound
+        _measurement_missingness(bound[missingness_key].frame)
+        if missingness_key is not None
         else None
     )
     availability = (
@@ -249,6 +372,13 @@ def render_association_publication_figure(
         bound["table:robustness_summary"].frame.copy()
         if robustness_key == "table:robustness_matrix"
         and "table:robustness_summary" in bound
+        else None
+    )
+    completeness = (
+        _component_completeness(
+            bound["table:exposure_component_completeness_audit"].frame
+        )
+        if "table:exposure_component_completeness_audit" in bound
         else None
     )
 
@@ -306,25 +436,9 @@ def render_association_publication_figure(
         levels = absolute_context
         has_risk_ci = True
 
-    if missingness is not None:
-        for column in ("n_total", "missing_n"):
-            missingness[column] = _integers(missingness, column)
-        missingness["missing_pct"] = _association_finite_series(
-            missingness, "missing_pct"
-        )
-        if (missingness["n_total"] <= 0).any() or (
-            missingness["missing_n"] > missingness["n_total"]
-        ).any():
-            raise ValueError(
-                "missingness counts do not nest within positive denominators"
-            )
-        expected_missing = 100.0 * missingness["missing_n"] / missingness["n_total"]
-        if not np.isclose(
-            missingness["missing_pct"], expected_missing, rtol=0.0, atol=5e-6
-        ).all():
-            raise ValueError("missingness percentage does not reconcile to counts")
     if (
         robustness_key == "table:robustness_matrix"
+        and robustness is not None
         and not robustness["converged"].astype(bool).all()
     ):
         raise ValueError("robustness matrix contains non-converged rows")
@@ -432,7 +546,7 @@ def render_association_publication_figure(
     )
     add_panel_label(axes[0, 1], "B", x=-0.12, y=1.04)
 
-    if robustness_key == "table:robustness_matrix":
+    if robustness_key == "table:robustness_matrix" and robustness is not None:
         robustness_labels = "spec_id" if "spec_id" in robustness.columns else "axis"
         _forest(
             axes[1, 0],
@@ -442,59 +556,65 @@ def render_association_publication_figure(
             title="Robustness estimates",
             color=palette["blue_soft"],
         )
-        robustness_title = "Robustness estimates"
-    else:
+        panel_c = (
+            "Robustness estimates",
+            "robustness",
+            "table:robustness_matrix",
+        )
+    elif robustness_key == "table:robustness_summary" and robustness is not None:
         _robustness_ranges(axes[1, 0], robustness, color=palette["blue_soft"])
-        robustness_title = "Robustness ranges"
+        panel_c = (
+            "Robustness ranges",
+            "robustness",
+            "table:robustness_summary",
+        )
+    elif missingness is not None and missingness_key is not None:
+        _draw_missingness(axes[1, 0], missingness, color=palette["blue_soft"])
+        panel_c = ("Measurement missingness", "data_quality", missingness_key)
+    else:  # pragma: no cover - guarded by exact typed profiles
+        raise ValueError("association composite has no third-panel source")
     add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
 
-    if missingness is not None:
-        quality = missingness.sort_values("missing_pct", ascending=True)
-        quality_label = "label" if "label" in quality.columns else "variable"
-        quality_value = "missing_pct"
-        quality_xlabel = "Missing (%)"
-        quality_title = "Measurement missingness"
+    if completeness is not None:
+        _draw_component_completeness(axes[1, 1], completeness)
+        panel_d = (
+            "Component completeness",
+            "data_quality",
+            "table:exposure_component_completeness_audit",
+        )
+    elif missingness is not None and missingness_key is not None:
+        _draw_missingness(axes[1, 1], missingness, color=palette["orange"])
+        panel_d = ("Measurement missingness", "data_quality", missingness_key)
     elif availability is not None:
         quality = availability.sort_values("availability_pct", ascending=True)
-        quality_label = "concept" if "concept" in quality.columns else "variable"
-        quality_value = "availability_pct"
-        quality_xlabel = "Available among eligible (%)"
-        quality_title = "Measurement availability"
+        label_column = "concept" if "concept" in quality.columns else "variable"
+        positions = np.arange(len(quality))
+        axes[1, 1].barh(
+            positions, quality["availability_pct"], color=palette["orange"]
+        )
+        axes[1, 1].set_yticks(
+            positions,
+            [_label(value) for value in quality[label_column]],
+            fontsize=5.5,
+        )
+        axes[1, 1].set_xlim(0, 100)
+        axes[1, 1].set_xlabel("Available among eligible (%)")
+        axes[1, 1].set_title("Measurement availability", loc="left", pad=12)
+        panel_d = (
+            "Measurement availability",
+            "data_quality",
+            "table:measurement_process_audit",
+        )
     elif robustness_summary is not None:
         _robustness_ranges(
             axes[1, 1],
             robustness_summary,
             color=palette["orange"],
         )
-        quality_title = "Robustness ranges"
-        quality_label = None
-        quality_value = None
-        quality_xlabel = "Reported estimate range"
+        panel_d = ("Robustness ranges", "robustness", "table:robustness_summary")
     else:  # pragma: no cover - guarded by exact typed profiles
         raise ValueError("association composite has no fourth-panel source")
-    if robustness_summary is None:
-        positions = np.arange(len(quality))
-        axes[1, 1].barh(positions, quality[quality_value], color=palette["orange"])
-        axes[1, 1].set_yticks(
-            positions,
-            [_label(value) for value in quality[quality_label]],
-            fontsize=5.5,
-        )
-        axes[1, 1].set_xlim(0, 100)
-        axes[1, 1].set_xlabel(quality_xlabel)
-        axes[1, 1].set_title(quality_title, loc="left", pad=12)
     add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
-
-    fourth_source = (
-        "table:robustness_summary"
-        if robustness_summary is not None
-        else (
-            "table:measurement_missingness"
-            if missingness is not None
-            else "table:measurement_process_audit"
-        )
-    )
-    fourth_role = "robustness" if robustness_summary is not None else "data_quality"
 
     panel_specs = (
         (
@@ -513,13 +633,8 @@ def render_association_publication_figure(
             "primary_estimand",
             "table:adjusted_association_estimates",
         ),
-        ("C", robustness_title, "robustness", robustness_key),
-        (
-            "D",
-            quality_title,
-            fourth_role,
-            fourth_source,
-        ),
+        ("C", *panel_c),
+        ("D", *panel_d),
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
