@@ -1635,6 +1635,12 @@ class ProgressivePlannerAgent:
                 else:
                     prefix_state = candidate_state
                     self.last_materializations = list(prefix_state.materializations)
+                    self.last_prompt_metrics[
+                        "step_materialization_payload_bytes"
+                    ].append(0)
+                    self.last_prompt_metrics[
+                        "step_materialization_schema_sha256"
+                    ].append(None)
                     self.last_prompt_metrics.setdefault(
                         "host_step_materialization_count", 0
                     )
