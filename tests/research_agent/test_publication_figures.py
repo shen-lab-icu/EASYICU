@@ -675,6 +675,17 @@ def test_publication_figure_skill_promotes_deterministic_step_before_family_rend
     assert readiness["publication_figure_contract_ready"] is True
     assert readiness["publication_figure_source_data_ready"] is True
     assert readiness["publication_figure_bundle_ready"] is True
+    migrated_sources = [
+        record
+        for record in evidence.records()
+        if record.evidence_id.endswith("_checkpoint_v1")
+    ]
+    assert migrated_sources
+    assert all(
+        (record.metadata or {}).get("source_evidence_ids")
+        == active_step_evidence_ids
+        for record in migrated_sources
+    )
 
 
 def test_publication_figure_skill_prefers_primary_bundle_over_sensitivity(
