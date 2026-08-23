@@ -29,6 +29,7 @@ from easyicu.webserver.deployment_lease import (
     acquire_single_process_lease,
     release_single_process_lease,
 )
+from easyicu.webserver.desktop_session import install_desktop_session
 from easyicu.webserver.codex_account_sessions import shutdown_all as shutdown_codex_auth
 from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
@@ -108,6 +109,7 @@ def _package_version() -> str:
 
 app = FastAPI(title="EasyICU", version=_package_version())
 app.add_middleware(GZipMiddleware, minimum_size=500)
+install_desktop_session(app)
 
 
 @app.on_event("startup")
