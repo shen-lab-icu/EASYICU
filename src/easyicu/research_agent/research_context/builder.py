@@ -1045,7 +1045,7 @@ def _infer_outcome_semantics(
         }
     if outcome in {"death", "mortality"}:
         return {
-            "label": "all-cause mortality",
+            "label": "mortality without a specified setting or horizon",
             "description": "Binary mortality outcome flag; confirm whether this refers to ICU, hospital, or fixed-horizon mortality before interpretation.",
             "source_concept": "mortality_unspecified",
             "substitution_note": (
@@ -1185,13 +1185,23 @@ def _enrich_target_outcome_descriptor(
             or requested_semantic != "declared_primary_outcome"
         ):
             descriptor.source_concept = requested_semantic
-        if owner_metadata_present and owner_semantic != requested_semantic:
+        if (
+            owner_metadata_present
+            and requested_semantic != "mortality_unspecified"
+            and owner_semantic != requested_semantic
+        ):
             explicit_note = (
                 f"Endpoint-definition conflict: the research question requests "
                 f"{semantics['label']}, but the owner-issued concept metadata for "
                 f"'{target_outcome}' defines {descriptor.description!r}. Do not "
                 "reinterpret or execute this endpoint until the physical concept "
                 "and requested definition agree."
+            )
+        elif owner_metadata_present and requested_semantic == "mortality_unspecified":
+            explicit_note = (
+                f"The research question leaves mortality setting and horizon "
+                f"unspecified; '{target_outcome}' therefore retains its "
+                f"owner-issued clinical definition ({descriptor.description!r})."
             )
         elif owner_metadata_present:
             explicit_note = (
