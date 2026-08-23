@@ -884,6 +884,33 @@ def test_host_materializes_only_mechanical_outline_coordinates() -> None:
     assert primary is None
 
 
+def test_host_materialization_keeps_one_schema_ledger_entry_per_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materializations = _materialization_payloads()
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(_outline_payload()),
+            json.dumps(_foundation_payload()),
+            *[json.dumps(materializations[index]) for index in (3, 4, 5)],
+        ]
+    )
+    llm.supports_strict_json_schema = True
+    monkeypatch.setattr(
+        "easyicu.research_agent.agents.progressive_planner.llm_is_mockish",
+        lambda _llm: False,
+    )
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(_context())
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 5
+    assert agent.last_prompt_metrics["host_step_materialization_count"] == 4
+    assert agent.last_prompt_metrics["step_materialization_payload_bytes"].count(0) == 4
+    assert len(agent.last_prompt_metrics["step_materialization_schema_sha256"]) == 7
+
+
 def test_step_materialization_parser_collapses_normalized_raw_input_duplicates() -> None:
     payload = _materialization_payloads()[0]
     payload["step"]["raw_inputs"] = ["age_years", " age_years ", "sex_code"]

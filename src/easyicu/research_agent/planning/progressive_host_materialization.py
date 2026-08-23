@@ -72,6 +72,10 @@ def _output(product_id: str, role: str) -> ProgressiveOutputIntent:
     return ProgressiveOutputIntent(product_id=product_id, semantic_role=role)
 
 
+def _product_name(step_id: str) -> str:
+    return step_id if step_id[:1].isalpha() else f"step_{step_id}"
+
+
 def _refs(
     available: Sequence[tuple[str, str]],
     dependencies: Sequence[str],
@@ -208,7 +212,7 @@ def host_materialize_progressive_step(
             outline_step,
             raw_inputs=(),
             product_inputs=refs,
-            outputs=(_output(f"figure:{outline_step.step_id}", "figure"),),
+            outputs=(_output(f"figure:{_product_name(outline_step.step_id)}", "figure"),),
         )
     elif module == "report":
         refs = _refs(available_product_refs, outline_step.depends_on)
@@ -218,7 +222,7 @@ def host_materialize_progressive_step(
             outline_step,
             raw_inputs=(),
             product_inputs=refs,
-            outputs=(_output(f"report:{outline_step.step_id}", "report"),),
+            outputs=(_output(f"report:{_product_name(outline_step.step_id)}", "report"),),
         )
     else:
         return None
