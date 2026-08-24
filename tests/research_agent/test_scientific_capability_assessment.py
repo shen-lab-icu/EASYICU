@@ -155,6 +155,60 @@ def test_broad_descriptive_family_is_not_upgraded_without_the_exact_owner() -> N
     assert assessment.issue_code == "scientific_validator_unavailable"
 
 
+def test_exact_static_prediction_primary_has_registered_validation_owner() -> None:
+    plan = AnalysisPlan(
+        research_question="Predict mortality from prespecified baseline features.",
+        analysis_type="prediction_model",
+        steps=[
+            AnalysisStep(
+                step_id="01_prediction",
+                planned_analysis_role="primary",
+                intent="Fit the prespecified static prediction model.",
+                method="static prediction",
+                inputs=["exposure", "death", "artifact:analysis_cohort"],
+                expected_outputs=[
+                    "table:prediction_scores",
+                    "table:model_performance",
+                ],
+                scientific_action_id="prediction.discrimination_calibration",
+            )
+        ],
+    )
+    assessment = assess_scientific_capability(
+        analysis_type="prediction_model", context=_context(), plan=plan
+    )
+    assert assessment.capability_id == "prediction_risk_model_v1"
+    assert assessment.scientific_validator_available is True
+    assert assessment.claim_ceiling == "reportable"
+    assert assessment.issue_code is None
+
+
+def test_static_prediction_capability_fails_closed_on_ambiguous_model_roster() -> None:
+    plan = AnalysisPlan(
+        research_question="Predict mortality.",
+        analysis_type="prediction_model",
+        steps=[
+            AnalysisStep(
+                step_id="01_prediction",
+                planned_analysis_role="primary",
+                intent="Fit a prediction model.",
+                method="static prediction",
+                inputs=["artifact:analysis_cohort", "exposure", "death"],
+                expected_outputs=[
+                    "table:prediction_scores",
+                    "table:model_performance",
+                ],
+                scientific_action_id="prediction.discrimination_calibration",
+            )
+        ],
+    )
+    assessment = assess_scientific_capability(
+        analysis_type="prediction_model", context=_context(), plan=plan
+    )
+    assert assessment.scientific_validator_available is False
+    assert assessment.issue_code == "primary_owner_declaration_incomplete"
+
+
 def test_ordinary_survival_is_distinguished_from_a_competing_risk_endpoint() -> None:
     ordinary = assess_scientific_capability(
         analysis_type="survival",

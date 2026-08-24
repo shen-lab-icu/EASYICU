@@ -44,6 +44,10 @@ _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
         "execution.runners.exposure_outcome_distribution_executor",
         "exposure_outcome_distribution_executor_code",
     ),
+    "static_prediction_model": (
+        "execution.runners.prediction_model_executor",
+        "prediction_model_executor_code",
+    ),
 }
 
 
@@ -111,6 +115,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
         "survival_time_to_event_v1",
         "association_adjusted_v1",
         "descriptive_exposure_outcome_distribution_v1",
+        "prediction_risk_model_v1",
     }
     for capability in cr.CAPABILITY_REGISTRY:
         if capability.capability_id in reportable:
@@ -144,6 +149,7 @@ def test_partition_helpers_are_consistent():
     assert det == {
         "Association — exact single-model adjusted",
         "Descriptive — typed exposure/outcome absolute risks",
+        "Prediction / risk modelling",
         "Survival / time-to-event",
     }
     assert llm
@@ -156,6 +162,7 @@ def test_survival_and_exact_association_have_deterministic_primary_owners():
     assert fams == set(get_args(StudyDesignFamily)) - {
         "association",
         "descriptive",
+        "prediction",
         "time_to_event",
     }
 
