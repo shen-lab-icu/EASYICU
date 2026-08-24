@@ -57,7 +57,11 @@ def _selection() -> pd.DataFrame:
         {
             "n_clusters": [2, 3, 4],
             "bic": [300.0, 200.0, 100.0],
+            "aic": [280.0, 180.0, 80.0],
+            "final_log_likelihood": [-120.0, -70.0, -20.0],
+            "parameter_count": [20, 20, 20],
             "selected": [False, False, True],
+            "aic_minimum": [False, False, True],
             "upper_boundary": [False, False, True],
             "scientific_status": ["failed_closed"] * 3,
             "reason_code": ["NO_INTERIOR_OPTIMUM"] * 3,
@@ -151,6 +155,7 @@ def test_failed_closed_selection_renders_a_bound_diagnostic_without_labels(
         "data_quality",
     ]
     assert "no interior solution" in contract["panels"][0]["claim"].lower()
+    assert "aic" in contract["panels"][0]["claim"].lower()
     assert "candidate labels are not displayed" in contract["statistics_note"].lower()
 
 

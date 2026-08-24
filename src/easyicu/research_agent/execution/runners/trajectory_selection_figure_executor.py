@@ -36,7 +36,11 @@ TRAJECTORY_SELECTION_FIGURE_METHOD = "signed_trajectory_selection_diagnostic_fig
 _SELECTION_COLUMNS = (
     "n_clusters",
     "bic",
+    "aic",
+    "final_log_likelihood",
+    "parameter_count",
     "selected",
+    "aic_minimum",
     "upper_boundary",
     "scientific_status",
     "reason_code",
@@ -99,20 +103,30 @@ def _validated_selection(frame: pd.DataFrame) -> tuple[pd.DataFrame, bool, str]:
     selected = frame.copy()
     selected["n_clusters"] = pd.to_numeric(selected["n_clusters"], errors="coerce")
     selected["bic"] = pd.to_numeric(selected["bic"], errors="coerce")
+    for column in ("aic", "final_log_likelihood", "parameter_count"):
+        selected[column] = pd.to_numeric(selected[column], errors="coerce")
     if (
         selected.empty
         or selected[list(_SELECTION_COLUMNS)].isna().any().any()
         or not np.isfinite(selected["n_clusters"]).all()
         or not np.isfinite(selected["bic"]).all()
+        or not np.isfinite(
+            selected[["aic", "final_log_likelihood", "parameter_count"]]
+        ).all().all()
         or selected["n_clusters"].duplicated().any()
     ):
         raise ValueError("trajectory candidate-selection table is incomplete")
     selected["selected"] = _boolean_column(selected["selected"], label="selected")
+    selected["aic_minimum"] = _boolean_column(
+        selected["aic_minimum"], label="aic_minimum"
+    )
     selected["upper_boundary"] = _boolean_column(
         selected["upper_boundary"], label="upper_boundary"
     )
     if int(selected["selected"].sum()) != 1:
         raise ValueError("trajectory selection must identify exactly one candidate")
+    if int(selected["aic_minimum"].sum()) != 1:
+        raise ValueError("trajectory AIC diagnostic must identify exactly one minimum")
     winner = selected.loc[selected["selected"]].iloc[0]
     expected_k = int(
         selected.sort_values(["bic", "n_clusters"], ascending=[True, True]).iloc[0][
@@ -241,7 +255,18 @@ def run_trajectory_selection_figure(
         marker="o",
         linewidth=1.4,
         markersize=4.0,
+        label="BIC (selection)",
     )
+    if "aic" in selection.columns:
+        ax_bic.plot(
+            selection["n_clusters"],
+            selection["aic"],
+            color=palette["orange"],
+            marker="s",
+            linewidth=1.1,
+            markersize=3.2,
+            label="AIC (diagnostic)",
+        )
     winner = selection.loc[selection["selected"]].iloc[0]
     ax_bic.scatter(
         [winner["n_clusters"]],
@@ -254,10 +279,12 @@ def run_trajectory_selection_figure(
     )
     ax_bic.set_xticks(selection["n_clusters"])
     ax_bic.set_xlabel("Candidate number of classes (K)")
-    ax_bic.set_ylabel("Bayesian information criterion")
+    ax_bic.set_ylabel("Information criterion")
     ax_bic.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
     ax_bic.set_title("Prespecified candidate-grid assessment", loc="left", pad=5)
     ax_bic.grid(color=palette["neutral_light"], linewidth=0.55)
+    if "aic" in selection.columns:
+        ax_bic.legend(frameon=False, fontsize=5.8, loc="upper right")
     ax_bic.text(
         0.04,
         0.05,
@@ -330,7 +357,8 @@ def run_trajectory_selection_figure(
         )
         selection_claim = (
             "The minimum BIC occurred at the upper candidate boundary, so no "
-            "interior solution was established."
+            "interior solution was established; AIC is shown only as a "
+            "prespecified diagnostic and cannot rescue the selection."
         )
     else:
         core_claim = (
@@ -378,7 +406,9 @@ def run_trajectory_selection_figure(
         ],
         source_data=[selection_source.name, availability_source.name],
         statistics_note=(
-            "BIC values come from every model in the signed candidate grid. "
+            "BIC values come from every model in the signed candidate grid and "
+            "remain the only selection criterion. When present, AIC is a "
+            "secondary diagnostic computed from the same fits. "
             "Availability is re-derived from the exact producer counts. "
             "Candidate labels are not displayed as validated phenotypes."
         ),
