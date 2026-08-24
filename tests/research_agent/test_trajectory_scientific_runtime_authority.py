@@ -535,12 +535,19 @@ def test_signed_candidate_and_stability_share_one_scaling_and_selection_contract
     assert list(selection_table.columns) == [
         "n_clusters",
         "bic",
+        "aic",
+        "final_log_likelihood",
+        "parameter_count",
         "selected",
+        "aic_minimum",
         "upper_boundary",
         "scientific_status",
         "reason_code",
         "reportable_result",
     ]
+    assert np.isfinite(selection_table[["bic", "aic"]].to_numpy()).all()
+    assert selection_table["aic_minimum"].sum() == 1
+    assert candidate_summary["diagnostic_criteria"] == ["bic", "aic"]
     stability_inputs = {
         "inputs": {
             "artifact:trajectory_representation": _binding(
