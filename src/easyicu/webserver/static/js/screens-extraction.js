@@ -272,7 +272,7 @@
   let exportRunMode = 'custom';  // custom | recommended
   let exportRunModules = null;   // module keys used by the current/last run
   let exCustomOpen = false;
-  let exAdvCohort = false, exAdvExport = false, exShowAllMods = true, exIncludeDefinitions = true;
+  let exAdvCohort = true, exAdvExport = false, exShowAllMods = true, exIncludeDefinitions = true;
   let exFormat = 'parquet';     // parquet | csv | excel
   let exMerge = 'separate';
   let exExportDir = null;
@@ -288,9 +288,6 @@
   let exSource = null;      // 'prepared' | 'module' | 'raw' — what the user pointed at
   let exScanResult = null;  // live /api/data/scan payload for exPath (null until scanned)
   let exScanError = null;   // scan failure message, if any
-  let exFilterOptions = null;   // registered-source metadata from the compatibility API
-  let exFilterLoading = false;
-  let exFilterError = null;
   let exCohortPreset = 'all_icu';
   let exAgeMin = 0;
   let exAgeMax = 100;
@@ -1420,6 +1417,17 @@
     return chips.map(c => `<span class="chip solid">${escHtml(c)}</span>`).join('');
   }
 
+  function icdSourceContext() {
+    const result = exScanResult && typeof exScanResult === 'object' ? exScanResult : {};
+    const database = String(result.db_key || '').trim();
+    const databaseLabel = String(result.db || '').trim();
+    return {
+      database,
+      databaseLabel,
+      real: dataMode() === 'real',
+    };
+  }
+
   /* ---- cohort cfg ---- */
   function cohortCfg() {
     const preset = cohortPresetMeta();
@@ -1455,17 +1463,11 @@
             ${advRow(t('Exclude readmissions', '排除再入院'), switchEl(exExcludeReadmissions, 'readmissions'))}
           </div>
           <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
-            ${showICD && window.EUIcd ? window.EUIcd.block() : `
+            ${showICD && window.EUIcd ? window.EUIcd.block(icdSourceContext()) : `
               <div class="note info" style="padding:10px 12px;">
                 <div class="ico">${icon('shield', 14)}</div>
                 <div class="body"><div class="t" style="font-size:12px;">${t('ICD filter is off by default', 'ICD 默认关闭')}</div><div class="d" style="font-size:11px;margin:0;">${t('Choose “Diagnosis / ICD cohort” above to enter code prefixes or diagnosis terms. Nothing is prefilled.', '在上方选择“诊断 / ICD 队列”后再输入编码前缀或诊断关键词。不会预填任何编码。')}</div></div>
               </div>`}
-          </div>
-          <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
-            <div class="row" style="justify-content:space-between;gap:12px;align-items:flex-start;">
-              <div><div style="font-size:12.5px;font-weight:600;color:var(--ink-2);">${t('Registered source metadata', '已注册来源元数据')}</div><div style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('Shows the selected local source and available module row counts; it does not filter patients or modules.', '显示当前本地来源及可用模块行数；不会据此筛选患者或模块。')}</div></div>
-            </div>
-            <div class="ex-filter-card">${sourceMetadataBody()}</div>
           </div>
         </div>
       </div>
@@ -1475,65 +1477,6 @@
     return `<div class="adv-row"><span class="adv-label">${label}</span><span class="adv-control">${ctl}</span></div>`;
   }
   function switchEl(on, key) { return `<span class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" tabindex="0" ${key ? `data-ex-switch="${key}"` : ''}></span>`; }
-
-  function sourceMetadataBody() {
-    if (dataMode() !== 'real') {
-      return `
-        <div class="note info mt-16" style="padding:10px 12px;">
-          <div class="ico">${icon('shield', 14)}</div>
-          <div class="body"><div class="t" style="font-size:12px;">${t('Seeded demo metadata', '种子演示元数据')}</div><div class="d" style="font-size:11px;margin:0;">${t('This is seeded demo metadata, not a registered local export. Switch to Real and register an EasyICU export to inspect its available modules.', '这是种子演示元数据，不是已注册的本地导出。切换到真实模式并注册 EasyICU 导出后，可查看其中的可用模块。')}</div></div>
-        </div>`;
-    }
-    if (exFilterLoading) {
-      return `
-        <div class="note info mt-16" style="padding:10px 12px;">
-          <div class="ico"><span class="spin sm" style="width:14px;height:14px;"></span></div>
-          <div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Reading registered export metadata…', '正在读取已注册导出的元数据…')}</div></div>
-        </div>`;
-    }
-    if (exFilterError) {
-      return `
-        <div class="note mt-16" style="padding:10px 12px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
-          <div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 14)}</div>
-          <div class="body"><div class="t" style="font-size:12px;">${t('Source metadata unavailable', '来源元数据暂不可用')}</div><div class="d mono" style="font-size:11px;margin:0;">${escHtml(exFilterError)}</div></div>
-        </div>
-        <button class="btn sm ghost mt-12" data-ex-filter-load>${icon('refresh', 13)} ${t('Retry source metadata', '重试来源元数据')}</button>`;
-    }
-    if (!exFilterOptions) {
-      return `
-        <div class="note info mt-16" style="padding:10px 12px;">
-          <div class="ico">${icon('shield', 14)}</div>
-          <div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Source metadata is read from the active registered EasyICU export and is shown for reference only.', '来源元数据读取自当前已注册的 EasyICU 导出，仅供查看。')}</div></div>
-        </div>
-        <button class="btn sm mt-12" data-ex-filter-load>${icon('refresh', 13)} ${t('Load source metadata', '加载来源元数据')}</button>`;
-    }
-    const src = exFilterOptions.source || {};
-    const mods = ((exFilterOptions.options || {}).modules || []);
-    return `
-      <div class="note ok mt-16" style="padding:10px 12px;">
-        <div class="ico">${icon('check', 14, 2.6)}</div>
-        <div class="body">
-          <div class="t" style="font-size:12px;">${t('Registered source', '已注册来源')}</div>
-          <div class="d" style="font-size:11px;margin:0;">${escHtml(src.label || 'local')} · ${escHtml(src.database || 'unknown')} · <span class="mono">${escHtml(src.id || src.path_hash || '')}</span> · ${t('hash', '哈希')} <span class="mono">${escHtml(src.path_hash || '')}</span></div>
-        </div>
-      </div>
-      <div class="cols-2 mt-12" style="gap:8px;">
-        ${mods.slice(0, 6).map(m => `
-          <div class="ledger-row">
-            <span class="ledger-ico">${icon('layers', 14)}</span>
-            <div><div class="mono" style="font-weight:600;font-size:12px;">${escHtml(m.module)}</div><div style="font-size:11px;color:var(--ink-4);">${Number(m.row_count || 0).toLocaleString()} ${t('rows', '行')}</div></div>
-          </div>`).join('')}
-      </div>`;
-  }
-
-  function loadExtractionSourceMetadata() {
-    if (!(window.EU_API && window.EU_API.loadExtractionFilterOptions)) return;
-    exFilterLoading = true; exFilterError = null; repaint();
-    window.EU_API.loadExtractionFilterOptions({})
-      .then(r => { exFilterOptions = r; exFilterError = null; })
-      .catch(err => { exFilterError = String(err && err.message || err); exFilterOptions = null; })
-      .finally(() => { exFilterLoading = false; repaint(); });
-  }
 
   /* ---- modules cfg ---- */
   function sepsisDefinitionPanel() {
@@ -1961,10 +1904,6 @@
         exIncludeDefinitions = !exIncludeDefinitions;
         repaint();
       }));
-      root.querySelectorAll('[data-ex-filter-load]').forEach(b => b.addEventListener('click', loadExtractionSourceMetadata));
-      if (dataMode() === 'real' && exAdvCohort && !exFilterOptions && !exFilterLoading && !exFilterError) {
-        setTimeout(loadExtractionSourceMetadata, 0);
-      }
       if (window.EUExtractionSepsis && window.EUExtractionSepsis.bind) {
         window.EUExtractionSepsis.bind(root, {
           database: (exScanResult && exScanResult.db_key) || 'miiv',
@@ -2019,7 +1958,7 @@
       // Rule for this card: every control visible at configure/confirm time must
       // round-trip into the job payload — display-only switches were removed.
       // ICD disease-cohort filter (folded in from the former standalone screen)
-      if (window.EUIcd && window.EUIcd.bind) window.EUIcd.bind(root);
+      if (window.EUIcd && window.EUIcd.bind) window.EUIcd.bind(root, icdSourceContext());
       if (window.__euExtractFocusICD) window.__euExtractFocusICD = false;
     },
   };
