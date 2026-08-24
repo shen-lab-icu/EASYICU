@@ -59,6 +59,8 @@
   function paint() {
     const owner = window.EU_EXTRACTION_NATIVE_OWNER;
     if (!host || !host.isConnected || !owner) return;
+    const previousScroller = host.querySelector('[data-gpi-extraction-embed]');
+    const previousScrollTop = previousScroller ? previousScroller.scrollTop : 0;
     const sourceId = String(options.sourceId || '').trim();
     host.innerHTML = `<div class="gpi-extraction-embed" data-gpi-extraction-embed>
       <div class="gpi-extraction-toolbar">
@@ -75,6 +77,8 @@
     </div>`;
     projectCopilotSetup(host);
     owner.bind(host);
+    const scroller = host.querySelector('[data-gpi-extraction-embed]');
+    if (scroller && previousScrollTop > 0) scroller.scrollTop = previousScrollTop;
     host.querySelectorAll('[data-study-handoff]').forEach(control => { control.hidden = true; });
     if (owner.isPreparedExport()) {
       host.querySelectorAll('[data-ex-run]').forEach(control => {

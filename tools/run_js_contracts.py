@@ -34,6 +34,7 @@ CONTRACTS: dict[str, list[str]] = {
     "crossdb_results_owner.test.js": ["screens-viz-crossdb-results.js"],
     "crossdb_setup_owner.test.js": ["screens-viz-crossdb-setup.js"],
     "crossdb_source_choice.test.js": ["screens-viz-crossdb-source.js"],
+    "extraction_embedded_scroll.test.js": ["screens-extraction-embedded.js"],
     "extraction_job_continuity.test.js": ["screens-extraction-job-continuity.js"],
     "guided_gate_state.test.js": ["screens-guided.js"],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
