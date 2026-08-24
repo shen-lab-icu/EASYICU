@@ -182,7 +182,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
-    assert "js/screens-extraction.js?v=20260824-unrestricted-defaults1" in index_html
+    assert "js/screens-extraction.js?v=20260824-folder-choice1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
@@ -1266,8 +1266,14 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
 
     assert "css/extraction.css?v=20260630-gate-first-ia" in index_html
     assert "data-ex-analyze" in extraction_js
-    assert "Analyze folder" in extraction_js
-    assert "Let EasyICU identify the folder" in extraction_js
+    assert "Choose folder and identify" in extraction_js
+    assert "Select the ICU data folder" in extraction_js
+    assert "function pathNeedsFolderChoice(path)" in extraction_js
+    assert "if (pathNeedsFolderChoice(exPath))" in extraction_js
+    assert "const chooseDataFolder = () =>" in extraction_js
+    assert "startScan(null);" in extraction_js
+    assert "Let EasyICU identify the folder" not in extraction_js
+    assert "Analyze folder" not in extraction_js
     assert "data-ex-manual" in extraction_js
     assert "Advanced: choose manually" in extraction_js
     assert "Use this only if automatic detection is wrong" in extraction_js

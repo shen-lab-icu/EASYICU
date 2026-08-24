@@ -527,6 +527,12 @@
   function pathDisplay(path) {
     return path ? path : t('No folder selected', '尚未选择文件夹');
   }
+  function pathNeedsFolderChoice(path) {
+    const raw = String(path || '').trim();
+    if (!raw) return true;
+    const normalized = raw.replace(/\/+$/, '') || '/';
+    return normalized === '/' || normalized === '/Volumes';
+  }
 
   /* continuity hook for Copilot / resume */
   window.__euExtractApply = function (modules) {
@@ -676,11 +682,11 @@
             <div class="ex-connect-copy">
               <div class="ex-connect-copy-ico">${icon('shield', 15)}</div>
               <div>
-                <div class="ex-connect-copy-title">${t('Let EasyICU identify the folder', '让 EasyICU 自动识别文件夹')}</div>
-                <div class="ex-connect-copy-desc">${t('We inspect filenames, manifests, and table layout only. No patient rows are uploaded or returned.', '只检查文件名、manifest 和表结构。不上传,也不返回患者行。')}</div>
+                <div class="ex-connect-copy-title">${t('Select the ICU data folder', '选择 ICU 数据文件夹')}</div>
+                <div class="ex-connect-copy-desc">${t('Choose the MIMIC folder; EasyICU then identifies its layout automatically. No patient rows are uploaded or returned.', '选择 MIMIC 数据文件夹后，EasyICU 会自动判断目录结构。不上传，也不返回患者行。')}</div>
               </div>
             </div>
-            <button class="btn primary ex-connect-analyze" data-ex-analyze>${icon('search', 14)} ${t('Analyze folder', '识别数据目录')}</button>
+            <button class="btn primary ex-connect-analyze" data-ex-analyze>${icon('folder', 14)} ${t('Choose folder and identify', '选择文件夹并识别')}</button>
           </div>
           <div class="ex-connect-actions">
             <button class="ex-linkbtn" data-ex-manual>${icon('sliders', 13)} ${t('Advanced: choose manually', '高级:手动选择')} <span class="chev">${icon('chevdown', 13)}</span></button>
@@ -1847,9 +1853,25 @@
       // real-data connect / scan / convert
       const pathInput = root.querySelector('#exPathInput');
       if (pathInput) pathInput.addEventListener('input', () => { exPath = pathInput.value; });
+      const chooseDataFolder = () => {
+        if (window.EU_API && window.EU_API.listDir) {
+          openFolderPicker(exPath, picked => {
+            exPath = picked;
+            exReal = 'connect'; exScanError = null; exScanResult = null;
+            startScan(null);
+          }, t('Select the ICU data folder', '选择 ICU 数据文件夹'));
+        } else if (pathInput) {
+          pathInput.focus();
+          pathInput.select();
+        }
+      };
       const analyzeBtn = root.querySelector('[data-ex-analyze]');
       if (analyzeBtn) analyzeBtn.addEventListener('click', () => {
         if (pathInput) exPath = pathInput.value || exPath;
+        if (pathNeedsFolderChoice(exPath)) {
+          chooseDataFolder();
+          return;
+        }
         startScan(null);
       });
       const manualBtn = root.querySelector('[data-ex-manual]');
@@ -1857,15 +1879,7 @@
         exManualSourceOpen = !exManualSourceOpen;
         repaint();
       });
-      root.querySelectorAll('[data-ex-browse]').forEach(browseBtn => browseBtn.addEventListener('click', () => {
-        if (window.EU_API && window.EU_API.listDir) {
-          openFolderPicker(exPath, picked => {
-            exPath = picked;
-            exReal = 'connect'; exScanError = null; exScanResult = null;
-            repaint();
-          });
-        } else if (pathInput) { pathInput.focus(); pathInput.select(); }
-      }));
+      root.querySelectorAll('[data-ex-browse]').forEach(browseBtn => browseBtn.addEventListener('click', chooseDataFolder));
       const openExportDestinationPicker = () => {
         if (window.EU_API && window.EU_API.listDir) {
           openFolderPicker(currentExportDir(), picked => {
