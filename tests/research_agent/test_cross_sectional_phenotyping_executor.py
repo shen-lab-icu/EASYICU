@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from easyicu.research_agent.contracts.phenotyping_validation import (
+    phenotyping_runtime_bundle_errors,
+    phenotyping_runtime_receipt_valid,
+)
 from easyicu.research_agent.execution.runners.cross_sectional_phenotyping_executor import (
     CLUSTER_STABILITY_PRODUCT,
     PHENOTYPE_ASSIGNMENTS_PRODUCT,
@@ -178,6 +183,17 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
         primary_dir / "phenotype_assignments.csv",
         "stability",
     )
+    selection_dir = tmp_path / "selection"
+    selection_summary = run_phenotyping_diagnostic(
+        action_id="phenotyping.k_selection",
+        out_dir=selection_dir,
+        run_dir=tmp_path,
+        resolved_inputs={
+            "step_id": "selection",
+            "inputs": {PHENOTYPE_ASSIGNMENTS_PRODUCT: assignment_binding},
+        },
+        step_id="selection",
+    )
     stability_dir = tmp_path / "stability"
     stability_summary = run_phenotyping_diagnostic(
         action_id="phenotyping.cluster_stability",
@@ -187,6 +203,21 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
         step_id="stability",
     )
     assert stability_summary["output_files"].keys() == {CLUSTER_STABILITY_PRODUCT}
+    records = [
+        {"step_summary": summary},
+        {"step_summary": selection_summary},
+        {"step_summary": stability_summary},
+    ]
+    assert phenotyping_runtime_receipt_valid(summary)
+    assert phenotyping_runtime_bundle_errors(records) == []
+
+    tampered = copy.deepcopy(records)
+    tampered[2]["step_summary"]["cluster_stability"]["replicates"][0][
+        "adjusted_rand_index"
+    ] = 2.0
+    assert "invalid ARI values" in " ".join(
+        phenotyping_runtime_bundle_errors(tampered)
+    )
 
     product_paths = {
         PHENOTYPE_PROFILES_PRODUCT: primary_dir / "phenotype_profiles.csv",

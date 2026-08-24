@@ -33,6 +33,8 @@ from easyicu.research_agent.planning.study_design_playbook import StudyDesignFam
 from easyicu.research_agent.contracts.capability_ids import (
     LANDMARK_SPLINE_ANALYSIS_KIND,
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+    PHENOTYPING_ANALYSIS_KIND,
+    PHENOTYPING_CLUSTER_CAPABILITY_ID,
 )
 
 _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
@@ -55,6 +57,10 @@ _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     LANDMARK_SPLINE_ANALYSIS_KIND: (
         "execution.runners.landmark_spline_executor",
         "landmark_spline_executor_code",
+    ),
+    PHENOTYPING_ANALYSIS_KIND: (
+        "execution.runners.cross_sectional_phenotyping_executor",
+        "cross_sectional_phenotyping_executor_code",
     ),
 }
 
@@ -137,6 +143,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
         "survival_time_to_event_v1",
         "association_adjusted_v1",
         LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+        PHENOTYPING_CLUSTER_CAPABILITY_ID,
         "descriptive_exposure_outcome_distribution_v1",
         "prediction_risk_model_v1",
     }
@@ -175,6 +182,7 @@ def test_partition_helpers_are_consistent():
         "Descriptive — typed exposure/outcome absolute risks",
         "Prediction / risk modelling",
         "Survival / time-to-event",
+        "Phenotyping / clustering",
     }
     assert llm
     assert det.isdisjoint(llm)
@@ -187,6 +195,7 @@ def test_survival_and_exact_association_have_deterministic_primary_owners():
         "association",
         "descriptive",
         "prediction",
+        "phenotyping",
         "time_to_event",
     }
 

@@ -36,6 +36,8 @@ from ..contracts.capability_ids import (
     CAPABILITY_FAMILIES,
     LANDMARK_SPLINE_ANALYSIS_KIND,
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+    PHENOTYPING_ANALYSIS_KIND,
+    PHENOTYPING_CLUSTER_CAPABILITY_ID,
 )
 from ..contracts.association_execution import association_execution_verdict
 from ..contracts.descriptive_execution import (
@@ -470,10 +472,13 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ScientificCapability(
         family="phenotyping",
         label="Phenotyping / clustering",
-        primary_analysis="llm_coded",
-        primary_estimand="Agent-planned cluster solution; outcome-by-cluster kept descriptive (not causal)",
-        primary_runner=None,
-        primary_runner_module=None,
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Planner-selected feature roster passed to a deterministic exploratory "
+            "cluster solution; outcome-by-cluster remains descriptive, not causal"
+        ),
+        primary_runner=PHENOTYPING_ANALYSIS_KIND,
+        primary_runner_module="execution.runners.cross_sectional_phenotyping_executor",
         figure="deterministic",
         figure_renderer="phenotyping",
         data_contract=("feature matrix (e.g. first-24h trajectories)", "k selection"),
@@ -482,21 +487,26 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "an LLM failure fails closed to diagnostic_only."
         ),
         notes=(
-            "Cluster heatmap + stability + outcome-by-cluster figure is "
-            "deterministic from registered clustering products. The clustering "
-            "method, feature representation, and k-selection remain agent-owned; "
-            "a dedicated typed trajectory-stability step may use the supporting "
-            "calculator only after the planner has fixed every resampling, refit, "
-            "alignment, and decision parameter. "
-            "The former SOFA-specific KMeans script is not advertised or routed "
-            "as a general auxiliary capability."
+            "The Planner owns the eligible feature roster and exploratory question. "
+            "The host owner fixes outcome exclusion, median imputation, scaling, "
+            "candidate-k scoring, clustering and resampling, then validates their "
+            "cross-step consistency. The receipt never authorizes causal entities, "
+            "biological subtype names, external reproducibility or clinical use."
         ),
-        capability_id="phenotyping_cluster_v1",
-        result_contract="registered clustering, profile, and stability products",
+        capability_id=PHENOTYPING_CLUSTER_CAPABILITY_ID,
+        result_contract=(
+            "easyicu.cross_sectional_phenotyping_runtime_receipt/1 + deterministic "
+            "k-selection and stability replay"
+        ),
         required_diagnostics=(
             "representation",
             "cluster stability",
             "descriptive outcome use",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="contracts.phenotyping_validation",
+        scientific_validator_contract=(
+            "easyicu.cross_sectional_phenotyping_runtime_receipt/1"
         ),
     ),
     ScientificCapability(
