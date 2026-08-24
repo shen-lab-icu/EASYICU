@@ -13558,6 +13558,37 @@
   ],
   "class_name": "rec_cncpt"
  },
+ "septic_shock_sepsis3_2016": {
+  "concepts": [
+   "sep3",
+   "lact",
+   "norepi_rate",
+   "epi_rate",
+   "dopa_rate",
+   "adh_rate",
+   "phn_rate"
+  ],
+  "aggregate": [
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false
+  ],
+  "description": "evidence-limited Sepsis-3 septic shock database phenotype: Sepsis-3 plus vasopressor use within 24 h and lactate >2 mmol/L within +/-6 h; fluid-resuscitation adequacy remains unobserved",
+  "outcome_type": "binary_nullable",
+  "clinical_status": "source_bound_golden",
+  "canonical_definition": false,
+  "requires_explicit_opt_in": true,
+  "definition_source": "Sepsis-3 JAMA 2016",
+  "definition_version": "2016-operational-v1",
+  "clinical_contract_id": "septic_shock_sepsis3_2016_operational",
+  "category": "outcome",
+  "callback": "septic_shock_sepsis3_2016",
+  "class_name": "rec_cncpt"
+ },
  "sex": {
   "target": "id_tbl",
   "levels": [

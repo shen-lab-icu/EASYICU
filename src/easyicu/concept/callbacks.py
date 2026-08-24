@@ -55,6 +55,11 @@ from ..scores.sepsis import (
     susp_inf as susp_inf_detector,
 )
 from ..scores.sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
+from ..scores.septic_shock import (
+    EXPECTED_VASOPRESSOR_CONCEPTS,
+    PHENOTYPE_COLUMN as SEPTIC_SHOCK_COLUMN,
+    septic_shock_sepsis3_2016 as septic_shock_detector,
+)
 from ..table import ICUTable, WinTbl
 from ..utils import coalesce  # 🔧 统一的 patient_ids hash 函数
 
@@ -5688,6 +5693,76 @@ def _callback_sep3(
 
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3")
 
+
+def _callback_septic_shock_sepsis3_2016(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Execute the evidence-limited Sepsis-3 septic-shock phenotype."""
+
+    sepsis_table = tables.get("sep3")
+    if sepsis_table is None:
+        return _as_icutbl(
+            pd.DataFrame(columns=["stay_id", "charttime", SEPTIC_SHOCK_COLUMN]),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column=SEPTIC_SHOCK_COLUMN,
+        )
+
+    id_columns, index_column, converted_tables = _assert_shared_schema(
+        tables,
+        ctx=ctx,
+        convert_ids=True,
+    )
+    index_column = index_column or sepsis_table.index_column or "charttime"
+
+    def component_frame(name: str) -> pd.DataFrame:
+        table = converted_tables.get(name)
+        if table is None:
+            return pd.DataFrame(columns=[*id_columns, index_column, name])
+        frame = table.data.copy()
+        table_index = _get_index_column(table)
+        if table_index and table_index != index_column and table_index in frame.columns:
+            frame = frame.rename(columns={table_index: index_column})
+        for column in [*id_columns, index_column, name]:
+            if column not in frame.columns:
+                frame[column] = pd.Series(dtype="float64")
+        return frame
+
+    resolver = getattr(ctx, "resolver", None)
+    data_source = getattr(ctx, "data_source", None)
+    config = getattr(data_source, "config", None)
+
+    def structurally_supported(name: str) -> bool:
+        if resolver is None or config is None:
+            return name in converted_tables
+        definition = resolver.dictionary.get(name)
+        return bool(definition and definition.for_data_source(config))
+
+    vasopressors = {
+        name: component_frame(name)
+        for name in EXPECTED_VASOPRESSOR_CONCEPTS
+        if structurally_supported(name)
+    }
+    kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
+    result = septic_shock_detector(
+        component_frame("sep3"),
+        component_frame("lact"),
+        vasopressors,
+        id_cols=id_columns,
+        index_col=index_column,
+        shock_window=_callback_timedelta(kwargs.get("shock_window"), 24),
+        lactate_vasopressor_tolerance=_callback_timedelta(
+            kwargs.get("lactate_vasopressor_tolerance"), 6
+        ),
+    )
+    return _as_icutbl(
+        result,
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column=SEPTIC_SHOCK_COLUMN,
+    )
+
 def _callback_sep3_sofa2(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -8424,6 +8499,7 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "vaso_ind": _callback_vaso_ind,
     "vaso_ind_rate": _callback_vaso_ind_rate,
     "sep3": _callback_sep3,
+    "septic_shock_sepsis3_2016": _callback_septic_shock_sepsis3_2016,
     "sep3_sofa2": _callback_sep3_sofa2,
     "vaso60": _callback_vaso60,
     "susp_inf": _callback_susp_inf,

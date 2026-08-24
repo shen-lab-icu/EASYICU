@@ -292,6 +292,56 @@ class _FixtureDataSource:
 
 
 @pytest.mark.clinical_conformance
+def test_shipped_septic_shock_resolver_graph_preserves_fail_closed_receipts() -> None:
+    dictionary = copy.deepcopy(load_dictionary())
+    inputs = [
+        "sep3",
+        "lact",
+        "norepi_rate",
+        "epi_rate",
+        "dopa_rate",
+        "adh_rate",
+        "phn_rate",
+    ]
+    for input_name in inputs:
+        dictionary[input_name].sources["fixture"] = [
+            ConceptSource(
+                table="events",
+                value_var=input_name,
+                index_var="charttime",
+            )
+        ]
+    events = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "sep3": [True],
+            "lact": [2.1],
+            "norepi_rate": [0.05],
+            "epi_rate": [0.0],
+            "dopa_rate": [0.0],
+            "adh_rate": [0.0],
+            "phn_rate": [0.0],
+        }
+    )
+
+    loaded = ConceptResolver(dictionary).load_concepts(
+        ["septic_shock_sepsis3_2016"],
+        _FixtureDataSource(events),
+        merge=False,
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )["septic_shock_sepsis3_2016"].data
+
+    assert loaded["septic_shock_sepsis3_2016"].tolist() == [True]
+    assert loaded["reason_code"].tolist() == [
+        "criteria_met_fluid_adequacy_unobserved"
+    ]
+    assert loaded["clinical_definition_complete"].tolist() == [False]
+
+
+@pytest.mark.clinical_conformance
 def test_delirium_proxy_evidence_and_legacy_alias_resolve_from_dictionary() -> None:
     dictionary = copy.deepcopy(load_dictionary(include_sofa2=True))
     dictionary["delirium_tx_proxy"].sources["fixture"] = [

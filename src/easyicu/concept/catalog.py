@@ -199,6 +199,7 @@ CONCEPT_DICTIONARY = {
     # Sepsis 诊断
     'sep3_sofa1': ('Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'),
     'sep3_sofa2': ('Experimental Sepsis sensitivity (SOFA-2 based)', '实验性脓毒症敏感性定义（基于SOFA-2）', 'boolean'),
+    'septic_shock_sepsis3_2016': ('Septic shock (Sepsis-3 operational phenotype)', '脓毒性休克（Sepsis-3数据库操作化表型）', 'boolean/NA'),
     'susp_inf': ('Suspected Infection (ICD or Abx+Culture timing)', '疑似感染 (ICD诊断码或抗生素+培养时间窗)', 'boolean'),
     'infection_icd': ('ICD Infection Diagnosis (eICU only, Angus 2001)', 'ICD感染诊断 (仅eICU, Angus标准)', 'boolean'),
 
@@ -397,6 +398,7 @@ CONCEPT_DESCRIPTIONS = {
     # Sepsis
     'sep3_sofa2': ('Experimental sensitivity phenotype: suspected infection + SOFA-2 ≥2 point increase; not canonical Sepsis-3', '实验性敏感性定义：疑似感染 + SOFA-2较基线升高≥2分；并非标准Sepsis-3定义'),
     'sep3_sofa1': ('Sepsis-3 diagnosis: suspected infection + traditional SOFA ≥2 point increase', '基于传统SOFA的Sepsis-3诊断：疑似感染 + SOFA较基线升高≥2分'),
+    'septic_shock_sepsis3_2016': ('Evidence-limited database phenotype: Sepsis-3 plus vasopressor use within 24 h and lactate >2 mmol/L within ±6 h; the receipt does not claim adequate fluid resuscitation was observed', '证据受限的数据库表型：Sepsis-3事件后24小时内使用升压药，且前后6小时内乳酸>2 mmol/L；回执不声称已观察到充分液体复苏'),
     'susp_inf': ('Suspected infection: (1) ICD infection diagnosis codes (eICU only) OR (2) antibiotics started within 72h of culture OR culture within 24h of antibiotics. Combines infection_icd, abx, and samp concepts.', '疑似感染：(1) ICD感染诊断码（仅eICU可用）或 (2) 培养后72小时内开始抗生素 或 抗生素后24小时内进行培养。由infection_icd、abx和samp概念组合而成'),
     'infection_icd': ('Infection diagnosis based on Angus 2001 ICD criteria (explicit infection codes). ONLY available in eICU database.', '基于Angus 2001 ICD标准的感染诊断（显性感染编码）。仅eICU数据库可用'),
     'samp': ('Body fluid sampling (blood, urine, sputum, etc.) for culture-based infection workup. Used as a marker for suspected infection when combined with antibiotic timing.', '体液采样（血液、尿液、痰液等）用于培养检查。与抗生素时间窗结合作为疑似感染的标志'),
@@ -550,7 +552,7 @@ CONCEPT_GROUPS_INTERNAL = {
               # 衍生肾功能指数 (Tier 1, 2026-06-22)
               'bun_creatinine_ratio', 'egfr'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
-    'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
+    'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'septic_shock_sepsis3_2016', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
     'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'followup_days_28d', 'followup_days_90d', 'followup_days_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
@@ -808,7 +810,7 @@ QUALITY_DEMOGRAPHIC_STATIC = {
 }
 
 QUALITY_EVENT_TIME_SERIES = {
-    'circ_failure', 'circ_event',
+    'circ_failure', 'circ_event', 'septic_shock_sepsis3_2016',
     'sep3_sofa2', 'sep3_sofa1', 'sepsis_sofa2',
     'susp_inf', 'infection_icd', 'samp',
     'rrt', 'rrt_criteria',
