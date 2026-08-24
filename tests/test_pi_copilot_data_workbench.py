@@ -85,6 +85,46 @@ def _cohort_payload() -> dict:
     }
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("easyicu_review_cohort", {}),
+        ("easyicu_open_data_download", {}),
+        ("easyicu_preview_icd_cohort", {"include_codes": ["A41"]}),
+        ("easyicu_review_patient_timeline", {}),
+    ],
+)
+def test_single_source_workbench_tools_require_exact_source_id(
+    tool_name: str,
+    arguments: dict,
+) -> None:
+    with pytest.raises(PiCopilotError) as exc_info:
+        tool_owner.execute_tool(tool_name, arguments, _context())
+
+    assert exc_info.value.code == "pi_data_source_selection_required"
+
+
+def test_copilot_schema_and_prompt_forbid_implicit_source_fallback() -> None:
+    main = (
+        Path(__file__).parents[1]
+        / "src/easyicu/webserver/pi_copilot/node_app/src/main.mjs"
+    ).read_text(encoding="utf-8")
+
+    for tool_name in (
+        "easyicu_review_cohort",
+        "easyicu_open_data_download",
+        "easyicu_preview_icd_cohort",
+        "easyicu_review_patient_timeline",
+    ):
+        tool = main.split(f'name: "{tool_name}"', 1)[1].split("hostTool", 1)[0]
+        assert "source_id: Type.String" in tool
+        assert "source_id: Type.Optional" not in tool
+    assert "the first reply must say it is ambiguous between MIMIC-III 1.4 and MIMIC-IV 3.1" in main
+    assert "ask one source-mode question" in main
+    assert "Never treat a bound, active, demo, or sample source as implicit consent" in main
+    assert "ask one direct Extraction authorization question and stop without calling" in main
+
+
 def test_snapshot_store_is_project_scoped_digest_bound_and_path_free(tmp_path: Path) -> None:
     store = CopilotDataWorkbenchSnapshotStore(tmp_path / "snapshots")
     snapshot = build_snapshot(

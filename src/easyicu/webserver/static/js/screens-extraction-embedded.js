@@ -102,6 +102,10 @@
     mount(nextHost, nextOptions) {
       host = nextHost;
       options = Object.assign({}, nextOptions || {});
+      const owner = window.EU_EXTRACTION_NATIVE_OWNER;
+      if (options.resource && options.resource.state === 'setup' && owner && !owner.isReal()) {
+        owner.useRealData();
+      }
       paint();
     },
     unmount(nextHost) {

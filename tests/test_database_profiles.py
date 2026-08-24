@@ -72,25 +72,34 @@ def test_packaged_registry_has_six_typed_public_profiles_and_two_demo_profiles()
 
 
 @pytest.mark.parametrize(
-    ("key", "display_name", "display_order", "stay_table", "stay_id_col"),
+    (
+        "key",
+        "display_name",
+        "reference_release",
+        "display_order",
+        "stay_table",
+        "stay_id_col",
+    ),
     [
-        ("miiv", "MIMIC-IV", 10, "icustays", "stay_id"),
-        ("eicu", "eICU", 20, "patient", "patientunitstayid"),
-        ("aumc", "AmsterdamUMCdb", 30, "admissions", "admissionid"),
-        ("hirid", "HiRID", 40, "general", "patientid"),
-        ("mimic", "MIMIC-III", 50, "icustays", "icustay_id"),
-        ("sic", "SICdb", 60, "cases", "CaseID"),
+        ("miiv", "MIMIC-IV", "3.1", 10, "icustays", "stay_id"),
+        ("eicu", "eICU", "2.0", 20, "patient", "patientunitstayid"),
+        ("aumc", "AmsterdamUMCdb", None, 30, "admissions", "admissionid"),
+        ("hirid", "HiRID", "1.1.1", 40, "general", "patientid"),
+        ("mimic", "MIMIC-III", "1.4", 50, "icustays", "icustay_id"),
+        ("sic", "SICdb", "1.0.6", 60, "cases", "CaseID"),
     ],
 )
 def test_public_profile_metadata_and_icustay_contract(
     key: str,
     display_name: str,
+    reference_release: str | None,
     display_order: int,
     stay_table: str,
     stay_id_col: str,
 ) -> None:
     profile = get_database_profile(key)
     assert profile.display_name == display_name
+    assert profile.reference_release == reference_release
     assert profile.display_order == display_order
     assert profile.stay_table == stay_table
     assert profile.stay_id_col == stay_id_col

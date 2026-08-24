@@ -66,6 +66,57 @@ def test_incomplete_extraction_opens_path_free_native_workspace(
     assert "/private/" not in json.dumps(result).lower()
 
 
+def test_explicit_local_source_choice_does_not_reuse_bound_demo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda binding: {
+            "id": "study-extraction-workspace",
+            "revision": 3,
+            "data_source": {
+                "path": "/private/demo-export",
+                "database": "miiv",
+                "label": "MIMIC-IV Clinical Database Demo v2.2",
+            },
+            "modules": ["demographics", "blood_gas"],
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {
+            "active_path": "/private/demo-export",
+            "sources": [
+                {
+                    "id": "src_0123456789ab",
+                    "path": "/private/demo-export",
+                    "label": "MIMIC-IV Clinical Database Demo v2.2",
+                    "database": "miiv",
+                    "ok": True,
+                }
+            ],
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_start_extraction",
+        {"source_mode": "local", "database": "miiv"},
+        _context(),
+    )
+
+    assert result["code"] == "easyicu_local_source_workspace_ready"
+    assert result["details"]["database"] == {
+        "key": "miiv",
+        "label": "MIMIC-IV",
+        "reference_release": "3.1",
+    }
+    assert result["details"]["resource"]["state"] == "setup"
+    assert result["details"]["resource"]["label"] == "Connect local MIMIC-IV 3.1"
+    assert "/private/" not in json.dumps(result)
+
+
 def test_submitted_extraction_workspace_carries_only_job_coordinate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -212,6 +263,8 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
 
     assert "window.EU_EXTRACTION_NATIVE_OWNER" in extraction
     assert "window.EU_EXTRACTION_EMBEDDED_WORKSPACE" in embedded
+    assert "options.resource.state === 'setup'" in embedded
+    assert "owner.useRealData()" in embedded
     assert "Prepared export is ready — sync to Copilot" in embedded
     assert "data-gpi-extraction-download" in embedded
     assert "downloadRegisteredExport" in embedded
@@ -229,8 +282,18 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "'/api/workspaces/download'" in api
 
     index = (static_root / "index.html").read_text()
-    assert 'screens-extraction-embedded.js?v=20260823-extraction-workspace4' in index
+    assert 'screens-extraction-embedded.js?v=20260824-source-selection1' in index
     assert index.index("screens-extraction.js") < index.index("screens-extraction-embedded.js")
+
+    node_main = (
+        static_root.parent / "pi_copilot" / "node_app" / "src" / "main.mjs"
+    ).read_text(encoding="utf-8")
+    extraction_tool = node_main.split(
+        'name: "easyicu_start_extraction"', 1
+    )[1].split("hostTool", 1)[0]
+    assert 'source_mode: Type.Optional(Type.Literal("local"))' in extraction_tool
+    assert 'Type.Literal("miiv")' in extraction_tool
+    assert "even if a demo or older export is currently bound" in node_main
 
 
 def test_mimic_adult_recommendation_does_not_request_unavailable_first_stay(
