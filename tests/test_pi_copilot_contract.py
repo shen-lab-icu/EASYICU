@@ -2330,13 +2330,64 @@ def test_registered_data_source_choices_are_path_free(
     )
     context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-sources"))
 
-    result = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
+    catalog = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
+
+    assert catalog["code"] == "easyicu_data_sources_listed"
+    assert catalog["details"]["sources"] == []
+    assert catalog["details"]["source_count"] == 0
+    assert catalog["details"]["selected_database"] is None
+    assert catalog["details"]["source_modes"] == []
+    assert [row["database"] for row in catalog["details"]["supported_databases"]] == [
+        "miiv",
+        "eicu",
+        "aumc",
+        "hirid",
+        "mimic",
+        "sic",
+    ]
+
+    result = tool_module.execute_tool(
+        "easyicu_list_data_sources", {"database": "miiv"}, context
+    )
 
     assert result["code"] == "easyicu_data_sources_listed"
     assert result["details"]["source_count"] == 2
     assert result["details"]["sources"][0]["source_id"] == "src_demo"
+    assert result["details"]["sources"][0]["source_scope"] == "official_demo"
     assert result["details"]["sources"][0]["aggregate"]["stays"] == 140
+    assert result["details"]["sources"][1]["source_scope"] == "registered_export"
     assert result["details"]["sources"][1]["active"] is True
+    supported = {
+        row["database"]: row for row in result["details"]["supported_databases"]
+    }
+    assert supported["miiv"] == {
+        "database": "miiv",
+        "label": "MIMIC-IV",
+        "reference_release": "3.1",
+        "selection_required": True,
+    }
+    assert supported["mimic"]["label"] == "MIMIC-III"
+    assert supported["mimic"]["reference_release"] == "1.4"
+    assert supported["aumc"]["reference_release"] is None
+    demos = result["details"]["official_demos"]
+    assert [(row["source_id"], row["version"]) for row in demos] == [
+        ("mimic_iv_demo_v2_2", "2.2"),
+    ]
+    assert all(row["research_scope"] == "demo_only" for row in demos)
+    assert result["details"]["selected_database"] == {
+        "database": "miiv",
+        "label": "MIMIC-IV",
+        "reference_release": "3.1",
+    }
+    assert result["details"]["source_modes"] == [
+        "local_full_database",
+        "registered_export",
+        "official_demo",
+    ]
+    assert result["details"]["selection_policy"]["mimic_database_choices"] == [
+        "mimic",
+        "miiv",
+    ]
     assert "/private/" not in json.dumps(result)
 
 

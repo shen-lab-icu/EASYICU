@@ -31,6 +31,7 @@ _DENIAL_MARKERS = (
 
 _CONFIRMATION_MARKERS = (
     "确认并授权",
+    "确认授权",
     "确认，授权",
     "确认,授权",
     "我确认",
@@ -45,6 +46,9 @@ _CONFIRMATION_MARKERS = (
 
 _EXTRACTION_SCOPE_MARKERS = (
     "数据提取",
+    "本地数据选择",
+    "本地数据扫描",
+    "数据选择与扫描",
     "提取和质量审阅",
     "准备并注册",
     "准备与注册",

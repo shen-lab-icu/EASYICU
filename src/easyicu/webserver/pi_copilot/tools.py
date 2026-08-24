@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
 
+from easyicu.databases.profiles import get_database_profile, iter_database_profiles
 from easyicu.extensions import ExtensionRegistry, ExtensionRegistryError
 from easyicu.extensions.mcp_client import call_mcp_tool
 
@@ -546,10 +547,22 @@ def _registered_source_projection(
     modules = [
         str(item)[:120] for item in (source.get("modules") or []) if str(item).strip()
     ][:64]
+    official_demo_specs = (
+        demo_sources.get_source(source_id)
+        for source_id in demo_sources.allowed_source_ids()
+    )
+    official_demo_labels = {
+        f"{spec.title} v{spec.version}".casefold() for spec in official_demo_specs
+    }
     return {
         "source_id": str(source.get("id") or "")[:80],
         "label": label,
         "database": str(source.get("database") or "")[:80],
+        "source_scope": (
+            "official_demo"
+            if label.casefold() in official_demo_labels
+            else "registered_export"
+        ),
         "generated": str(source.get("generated") or "")[:80] or None,
         "active": bool(
             str(source.get("path") or "").strip()
@@ -568,25 +581,111 @@ def _registered_source_projection(
 def _list_data_sources(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """List validated registered exports without exposing their host paths."""
+    """List source families first, then exact exports for one selected family."""
 
-    _require_args(params, allowed=())
+    _require_args(params, allowed=("database",))
+    requested_database = str(params.get("database") or "").strip()
+    selected_profile = None
+    if requested_database:
+        try:
+            selected_profile = get_database_profile(requested_database)
+        except KeyError as exc:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Choose one exact database returned by easyicu_list_data_sources.",
+            ) from exc
+        if not selected_profile.is_public:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Choose a full-database family before selecting a source mode.",
+            )
     registry = sources.load_registry()
-    choices = [
-        _registered_source_projection(row, active_path=registry.get("active_path"))
-        for row in (registry.get("sources") or [])
-        if isinstance(row, Mapping) and row.get("ok") and row.get("id")
-    ][:40]
+    choices = []
+    if selected_profile is not None:
+        for row in (registry.get("sources") or []):
+            if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
+                continue
+            try:
+                row_profile = get_database_profile(str(row.get("database") or ""))
+            except KeyError:
+                continue
+            row_family = row_profile.parent_key or row_profile.key
+            if row_family != selected_profile.key:
+                continue
+            choices.append(
+                _registered_source_projection(
+                    row, active_path=registry.get("active_path")
+                )
+            )
+            if len(choices) >= 40:
+                break
+    supported_databases = [
+        {
+            "database": profile.key,
+            "label": profile.display_name,
+            "reference_release": profile.reference_release,
+            "selection_required": True,
+        }
+        for profile in iter_database_profiles(public_only=True)
+    ]
+    official_demos = []
+    for source_id in demo_sources.allowed_source_ids():
+        source = demo_sources.get_source(source_id)
+        profile = get_database_profile(source.database)
+        demo_projection = (
+            {
+                "source_id": source.id,
+                "label": source.title,
+                "database": profile.parent_key or profile.key,
+                "version": source.version,
+                "scope_summary": source.scope_summary,
+                "research_scope": "demo_only",
+            }
+        )
+        if selected_profile is None or demo_projection["database"] == selected_profile.key:
+            official_demos.append(demo_projection)
     return _result(
         context,
         status="ok",
         code="easyicu_data_sources_listed",
         summary=(
-            f"Listed {len(choices)} validated EasyICU export choices without "
-            "filesystem paths or patient rows."
+            f"Listed {len(supported_databases)} supported ICU database families "
+            "and their reference releases."
+            if selected_profile is None
+            else (
+                f"Listed {len(choices)} validated {selected_profile.display_name} "
+                "export choices without filesystem paths or patient rows."
+            )
         ),
         owner="easyicu.webserver.sources",
-        details={"sources": choices, "source_count": len(choices)},
+        details={
+            "sources": choices,
+            "source_count": len(choices),
+            "selected_database": (
+                {
+                    "database": selected_profile.key,
+                    "label": selected_profile.display_name,
+                    "reference_release": selected_profile.reference_release,
+                }
+                if selected_profile is not None
+                else None
+            ),
+            "supported_databases": supported_databases,
+            "official_demos": official_demos,
+            "source_modes": (
+                []
+                if selected_profile is None
+                else ["local_full_database", "registered_export", "official_demo"]
+            ),
+            "selection_policy": {
+                "database_family_selected_before_source_mode": True,
+                "mimic_database_choices": ["mimic", "miiv"],
+                "registered_sources_deferred_until_database_selected": True,
+                "exact_source_id_required_for_data_queries": True,
+                "local_folder_paths_stay_host_side": True,
+                "demo_never_implies_full_database": True,
+            },
+        },
     )
 
 
@@ -811,41 +910,22 @@ def _registered_source_choice(
 ) -> Dict[str, Any]:
     """Resolve an exact registered export while keeping its path host-side."""
 
+    requested = str(requested_source_id or "").strip()
+    if not requested:
+        raise PiCopilotError(
+            "pi_data_source_selection_required",
+            "Choose one exact registered source_id before running a data query. "
+            "A bound or globally active source is not implicit user consent.",
+        )
     registry = sources.load_registry()
     rows = [
         row
         for row in (registry.get("sources") or [])
         if isinstance(row, Mapping) and row.get("ok") and row.get("id")
     ]
-    requested = str(requested_source_id or "").strip()
-    if requested:
-        source = next(
-            (row for row in rows if str(row.get("id") or "") == requested), None
-        )
-    else:
-        study = _bound_context(context.session.binding) or {}
-        bound = study.get("data_source")
-        bound = bound if isinstance(bound, Mapping) else {}
-        bound_path = str(bound.get("path") or "").strip()
-        active_path = str(registry.get("active_path") or "").strip()
-        source = next(
-            (
-                row
-                for row in rows
-                if bound_path and str(row.get("path") or "").strip() == bound_path
-            ),
-            None,
-        )
-        if source is None:
-            source = next(
-                (
-                    row
-                    for row in rows
-                    if active_path
-                    and str(row.get("path") or "").strip() == active_path
-                ),
-                None,
-            )
+    source = next(
+        (row for row in rows if str(row.get("id") or "") == requested), None
+    )
     if source is None:
         return {}
     if not str(source.get("path") or "").strip():
@@ -3614,7 +3694,7 @@ def _accept_idea_handoff(
 def _start_extraction(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=())
+    _require_args(params, allowed=("source_mode", "database"))
     grant_block = _consume_action(context, "extract")
     if grant_block is not None:
         return grant_block
@@ -3626,6 +3706,58 @@ def _start_extraction(
             code="study_context_required",
             summary="Complete and bind the typed study setup before extraction.",
             owner="easyicu.webserver.study_contexts",
+        )
+    source_mode = str(params.get("source_mode") or "").strip()
+    requested_database = str(params.get("database") or "").strip()
+    if source_mode:
+        if source_mode != "local":
+            raise PiCopilotError(
+                "pi_data_source_mode_invalid",
+                "The explicit Data Extraction source mode must be 'local'.",
+            )
+        if not requested_database:
+            raise PiCopilotError(
+                "pi_database_selection_required",
+                "Choose one exact supported database before opening a local folder.",
+            )
+        try:
+            profile = get_database_profile(requested_database)
+        except KeyError as exc:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Choose one exact database returned by easyicu_list_data_sources.",
+            ) from exc
+        if not profile.is_public:
+            raise PiCopilotError(
+                "pi_database_not_supported",
+                "Official demos use easyicu_prepare_demo_source; local selection "
+                "requires a supported full-database family.",
+            )
+        release_label = (
+            f" {profile.reference_release}" if profile.reference_release else ""
+        )
+        resource = _extraction_workspace_resource(study, state="setup")
+        resource["label"] = (
+            f"Connect local {profile.display_name}{release_label}"
+        )[:160]
+        return _result(
+            context,
+            status="ok",
+            code="easyicu_local_source_workspace_ready",
+            summary=(
+                f"Opened the path-private local folder workflow for "
+                f"{profile.display_name}{release_label}. Folder identity and layout "
+                "must pass the Data Extraction scan before registration or query."
+            ),
+            owner="easyicu.webserver.dataio",
+            details={
+                "database": {
+                    "key": profile.key,
+                    "label": profile.display_name,
+                    "reference_release": profile.reference_release,
+                },
+                "resource": resource,
+            },
         )
     registry = sources.load_registry()
     source = study.get("data_source")
