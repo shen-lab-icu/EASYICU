@@ -448,6 +448,10 @@ def test_host_inserts_missing_grid_without_repurposing_existing_sensitivity() ->
     ]
     assert rebound.steps[2] == legacy_sensitivity
     assert rebound.steps[1].expected_outputs == [authority.output_product]
+    assert rebound.steps[1].literature_citation_keys == parent.literature_citation_keys
+    assert rebound.steps[1].literature_design_bindings == (
+        parent.literature_design_bindings
+    )
     authority.validate_plan(rebound)
 
     rebound_again = authority.bind_plan(rebound)
