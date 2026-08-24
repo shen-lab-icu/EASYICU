@@ -60,7 +60,9 @@ def test_materialization_plan_separates_scoring_concepts_from_sealed_columns():
     ):
         assert required in e1_protocol
     assert by_id["e2_lactate_mortality"].operational_exposure == "lact_max"
-    assert by_id["e3_kdigo_gradient"].operational_exposure == "aki_stage_max"
+    e3 = by_id["e3_kdigo_gradient"]
+    assert e3.operational_exposure == "aki_stage_max"
+    assert e3.task_protocol_version == "e3_kdigo_gradient/20260824-v1"
     assert by_id["m1_hepatobiliary_missingness"].operational_exposure == "bili_max"
     assert by_id["h1_ventilation_survival"].operational_exposure == "mech_vent_max"
     assert by_id["h2_vasopressor_causal"].operational_exposure == "vaso_ind_max"

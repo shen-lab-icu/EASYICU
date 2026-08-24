@@ -1,4 +1,4 @@
-"""Typed, digestable E2/H1/H2/H3 scientific protocols for Canonical9.
+"""Typed, digestable E2/E3/H1/H2/H3 scientific protocols for Canonical9.
 
 This benchmark-local module owns the case-specific clinical and methods
 coordinates that must not leak into shared Planner prompts or generic KnowHow
@@ -108,6 +108,53 @@ class E2ScientificProtocol(_StrictFrozenModel):
             raise ValueError("E2 must retain the measured/unmeasured denominator")
         if "ssc_adult_2026" not in {item.citation_id for item in self.citations}:
             raise ValueError("E2 must cite the current 2026 adult SSC guideline")
+        return self
+
+
+class E3ScientificProtocol(_StrictFrozenModel):
+    schema_version: Literal["easyicu.figure2_e3_scientific_protocol/1"]
+    task_id: Literal["e3_kdigo_gradient"]
+    protocol_version: str
+    review_status: Literal["ai_development_reviewed_human_attestation_pending"]
+    literature_search_cutoff: Literal["2026-08-24"]
+    time_zero: Literal["icu_admission"]
+    exposure_window_hours: tuple[Literal[0], Literal[24]]
+    landmark_hours: Literal[24]
+    primary_exposure_column: Literal["aki_stage_max"]
+    exposure_definition_sensitivities: tuple[
+        Literal["aki_stage_creat_max"],
+        Literal["aki_stage_uo_max"],
+    ]
+    stage_levels: tuple[Literal[0], Literal[1], Literal[2], Literal[3]]
+    reference_stage: Literal[0]
+    primary_contrast_stage: Literal[3]
+    outcome_column: Literal["death"]
+    event_time_column: Literal["death_time"]
+    observation_duration_column: Literal["los_icu"]
+    readmission_column: Literal["icu_readmission"]
+    adjustment_set: tuple[str, ...]
+    interpretation: Literal["descriptive_prognostic_association_not_causal"]
+    reportability_rule: str
+    forbidden_interpretations: tuple[str, ...]
+    citations: tuple[ProtocolCitation, ...]
+
+    @model_validator(mode="after")
+    def _closed_kdigo_coordinates(self) -> "E3ScientificProtocol":
+        expected_adjustment = (
+            "age",
+            "sex",
+            "sofa_cardio_max",
+            "sofa_cns_max",
+            "sofa_coag_max",
+            "sofa_liver_max",
+            "sofa_resp_max",
+        )
+        if self.adjustment_set != expected_adjustment:
+            raise ValueError("E3 adjustment_set drifted from the reviewed protocol")
+        if "kdigo_stage_outcomes_2019" not in {
+            item.citation_id for item in self.citations
+        }:
+            raise ValueError("E3 lacks the reviewed KDIGO outcome anchor")
         return self
 
 
@@ -352,6 +399,7 @@ class H3ScientificProtocol(_StrictFrozenModel):
 ScientificCaseProtocol = Annotated[
     Union[
         E2ScientificProtocol,
+        E3ScientificProtocol,
         H1ScientificProtocol,
         H2ScientificProtocol,
         H3ScientificProtocol,
@@ -374,6 +422,7 @@ class RuntimeScientificProjection(_StrictFrozenModel):
     task_id: Literal[
         "e1_sepsis3_prevalence_mortality",
         "e2_lactate_mortality",
+        "e3_kdigo_gradient",
         "h1_ventilation_survival",
         "h2_vasopressor_causal",
         "h3_trajectory_clustering",
@@ -407,6 +456,9 @@ class RuntimeScientificProjection(_StrictFrozenModel):
                 "easyicu.association_model_grid_runtime_authority/1"
             ),
             "e2_lactate_mortality": "easyicu.landmark_spline_runtime_authority/1",
+            "e3_kdigo_gradient": (
+                "easyicu.association_model_grid_runtime_authority/1"
+            ),
             "h1_ventilation_survival": (
                 "easyicu.landmark_survival_runtime_authority/1"
             ),
@@ -424,12 +476,14 @@ class RuntimeScientificProjection(_StrictFrozenModel):
 
 _PROTOCOL_FILENAMES = {
     "e2_lactate_mortality": "e2_lactate_mortality_20260809.json",
+    "e3_kdigo_gradient": "e3_kdigo_gradient_20260824.json",
     "h1_ventilation_survival": "h1_ventilation_survival_20260822.json",
     "h2_vasopressor_causal": "h2_vasopressor_causal_20260809.json",
     "h3_trajectory_clustering": "h3_trajectory_clustering_20260809.json",
 }
 _PROTOCOL_MODELS = {
     "e2_lactate_mortality": E2ScientificProtocol,
+    "e3_kdigo_gradient": E3ScientificProtocol,
     "h1_ventilation_survival": H1ScientificProtocol,
     "h2_vasopressor_causal": H2ScientificProtocol,
     "h3_trajectory_clustering": H3ScientificProtocol,
@@ -452,7 +506,7 @@ def load_case_scientific_protocol(
     path: Path,
     *,
     expected_task_id: str,
-) -> E2ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
+) -> E2ScientificProtocol | E3ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
     """Strict-load a case protocol and assign failures to this owner module."""
 
     try:
@@ -627,6 +681,127 @@ def _e2_deterministic_execution_contract(
     ).model_dump(mode="json")
 
 
+def _e3_deterministic_execution_contract(
+    protocol: E3ScientificProtocol,
+) -> dict[str, Any]:
+    landmark_filter = {
+        "filter_kind": "alive_at_landmark",
+        "outcome_column": protocol.outcome_column,
+        "event_time_column": protocol.event_time_column,
+        "landmark_hours": float(protocol.landmark_hours),
+        "exclude_negative_event_times": True,
+        "observation_duration_column": protocol.observation_duration_column,
+        "observation_duration_unit": "days",
+    }
+
+    def metadata(
+        *,
+        landmark: bool,
+        exposure_definition: str,
+        cohort_restriction: str,
+    ) -> dict[str, Any]:
+        return {
+            "landmark_hours": float(protocol.landmark_hours) if landmark else None,
+            "alive_at_landmark_required": landmark,
+            "under_observation_at_landmark_required": landmark,
+            "negative_event_times_excluded": landmark,
+            "exposure_definition": exposure_definition,
+            "cohort_restriction": cohort_restriction,
+        }
+
+    return build_current_case_scientific_runtime_authority(
+        {
+            "schema_version": "easyicu.association_model_grid_runtime_authority/1",
+            "authority_kind": "association_model_grid",
+            "protocol_content_sha256": case_protocol_content_sha256(protocol),
+            "plan_method": "verified_association_model_grid",
+            "plan_intent": (
+                "Execute the signed KDIGO timing, component-definition, and "
+                "repeat-stay sensitivity grid through the verified association adapter."
+            ),
+            "cohort_product": "artifact:analysis_cohort",
+            "parent_product": "table:adjusted_association_estimates",
+            "output_product": "table:e3_scientific_sensitivity",
+            "reference_variant_id": "primary_full_cohort",
+            "output_aliases": {},
+            "metadata_columns": [
+                "landmark_hours",
+                "alive_at_landmark_required",
+                "under_observation_at_landmark_required",
+                "negative_event_times_excluded",
+                "exposure_definition",
+                "cohort_restriction",
+            ],
+            "variants": [
+                {
+                    "analysis_id": "primary_full_cohort",
+                    "filters": [],
+                    "nonlinear_terms": [],
+                    "metadata": metadata(
+                        landmark=False,
+                        exposure_definition=protocol.primary_exposure_column,
+                        cohort_restriction="all_stays",
+                    ),
+                },
+                {
+                    "analysis_id": "landmark_combined_stage",
+                    "filters": [landmark_filter],
+                    "nonlinear_terms": [],
+                    "metadata": metadata(
+                        landmark=True,
+                        exposure_definition=protocol.primary_exposure_column,
+                        cohort_restriction="alive_and_observed_at_24h",
+                    ),
+                },
+                {
+                    "analysis_id": "landmark_creatinine_stage",
+                    "exposure_column": protocol.exposure_definition_sensitivities[0],
+                    "filters": [landmark_filter],
+                    "nonlinear_terms": [],
+                    "metadata": metadata(
+                        landmark=True,
+                        exposure_definition=(
+                            protocol.exposure_definition_sensitivities[0]
+                        ),
+                        cohort_restriction="alive_and_observed_at_24h",
+                    ),
+                },
+                {
+                    "analysis_id": "landmark_urine_output_stage",
+                    "exposure_column": protocol.exposure_definition_sensitivities[1],
+                    "filters": [landmark_filter],
+                    "nonlinear_terms": [],
+                    "metadata": metadata(
+                        landmark=True,
+                        exposure_definition=(
+                            protocol.exposure_definition_sensitivities[1]
+                        ),
+                        cohort_restriction="alive_and_observed_at_24h",
+                    ),
+                },
+                {
+                    "analysis_id": "landmark_non_readmission_stays",
+                    "filters": [
+                        landmark_filter,
+                        {
+                            "filter_kind": "level_in",
+                            "column": protocol.readmission_column,
+                            "declared_levels": ["0", "1"],
+                            "retained_levels": ["0"],
+                        },
+                    ],
+                    "nonlinear_terms": [],
+                    "metadata": metadata(
+                        landmark=True,
+                        exposure_definition=protocol.primary_exposure_column,
+                        cohort_restriction="alive_observed_non_readmission",
+                    ),
+                },
+            ],
+        }
+    ).model_dump(mode="json")
+
+
 def _h2_deterministic_execution_contract(
     protocol: H2ScientificProtocol,
 ) -> dict[str, Any]:
@@ -739,7 +914,7 @@ def _h1_deterministic_execution_contract(
 
 
 def _projection_agent_content(
-    protocol: E2ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+    protocol: E2ScientificProtocol | E3ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
     execution_contract: Mapping[str, Any],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Render only typed protocol fields; never maintain a second science source."""
@@ -762,6 +937,28 @@ def _projection_agent_content(
                 "report the variable-opportunity measured-subset analysis only as a secondary descriptive sensitivity.",
                 "The estimand is descriptive/prognostic and must never be described as causal.",
                 "The only primary owner must use method="
+                f"{execution_contract['plan_method']}, intent="
+                f"{execution_contract['plan_intent']!r}, and icu_rule_refs must "
+                f"contain {rule_ref}.",
+            ),
+        )
+    if isinstance(protocol, E3ScientificProtocol):
+        rule_ref = (
+            "scientific_runtime_contract:"
+            + str(execution_contract["execution_contract_sha256"])
+        )
+        return (
+            (str(execution_contract["output_product"]),),
+            (
+                "Keep KDIGO stage 0/1/2/3 categorical with stage 0 as reference; "
+                "do not replace the stage gradient with one unsupported linear slope.",
+                "Retain the all-stay parent as the operational reference, then report "
+                "the 24-hour alive-and-under-observation result as the timing sensitivity.",
+                "Compare combined, creatinine-only, and urine-output-only stage definitions "
+                "and retain the non-readmission landmark analysis.",
+                "Interpret every estimate as descriptive/prognostic, never causal; component "
+                "definitions with sparse support must be reported, not silently pooled.",
+                "The sensitivity owner must use method="
                 f"{execution_contract['plan_method']}, intent="
                 f"{execution_contract['plan_intent']!r}, and icu_rule_refs must "
                 f"contain {rule_ref}.",
@@ -844,7 +1041,7 @@ def _projection_agent_content(
 
 
 def build_runtime_scientific_projection(
-    protocol: E2ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+    protocol: E2ScientificProtocol | E3ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
 ) -> RuntimeScientificProjection:
     """Compile the signed protocol into its sole deterministic runtime projection."""
 
@@ -852,6 +1049,8 @@ def build_runtime_scientific_projection(
     canonical_protocol_json = _canonical_json_bytes(protocol_payload).decode("utf-8")
     if isinstance(protocol, E2ScientificProtocol):
         execution_contract = _e2_deterministic_execution_contract(protocol)
+    elif isinstance(protocol, E3ScientificProtocol):
+        execution_contract = _e3_deterministic_execution_contract(protocol)
     elif isinstance(protocol, H1ScientificProtocol):
         execution_contract = _h1_deterministic_execution_contract(protocol)
     elif isinstance(protocol, H2ScientificProtocol):
@@ -899,7 +1098,7 @@ def load_runtime_scientific_projection(
 
 def load_default_case_protocol(
     task_id: str,
-) -> E2ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
+) -> E2ScientificProtocol | E3ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
     return load_case_scientific_protocol(
         default_case_protocol_path(task_id),
         expected_task_id=task_id,
@@ -909,6 +1108,7 @@ def load_default_case_protocol(
 __all__ = [
     "RuntimeScientificProjection",
     "E2ScientificProtocol",
+    "E3ScientificProtocol",
     "H1ScientificProtocol",
     "H2ScientificProtocol",
     "H3ScientificProtocol",
