@@ -2075,6 +2075,60 @@ class ResearchAgentPipeline:
                 raise ValueError(
                     "development locked analysis plan research question mismatch"
                 )
+            primary_steps = [
+                step
+                for step in plan.steps
+                if step.planned_analysis_role == "primary"
+            ]
+            if len(primary_steps) == 1 and primary_steps[0].scientific_capability:
+                from .planning.analysis_types import (
+                    analysis_type_for_capability,
+                    get_analysis_type,
+                )
+                from .planning.capability_registry import get_capability_by_id
+
+                current_type = get_analysis_type(plan.analysis_type)
+                declared_capability = get_capability_by_id(
+                    primary_steps[0].scientific_capability
+                )
+                expected_capability = get_capability_by_id(
+                    current_type.capability_id
+                )
+                if (
+                    declared_capability is not None
+                    and expected_capability is not None
+                    and declared_capability.family == expected_capability.family
+                    and declared_capability.capability_id
+                    != expected_capability.capability_id
+                ):
+                    rebound_type = analysis_type_for_capability(
+                        declared_capability.capability_id
+                    )
+                    findings.append(
+                        ValidationFinding(
+                            validator="scientific_capability",
+                            severity="warning",
+                            message=(
+                                "Rebound a locked development plan's analysis "
+                                "subtype to the capability declared by its sole "
+                                "primary owner; no estimator or result changed."
+                            ),
+                            detail={
+                                "reason_code": (
+                                    "development_locked_plan_primary_capability_rebound"
+                                ),
+                                "source_analysis_type": plan.analysis_type,
+                                "rebound_analysis_type": rebound_type.key,
+                                "primary_step_id": primary_steps[0].step_id,
+                                "primary_capability_id": (
+                                    declared_capability.capability_id
+                                ),
+                            },
+                        )
+                    )
+                    plan = plan.model_copy(
+                        update={"analysis_type": rebound_type.key}
+                    )
             plan_generation_mode = "development_locked_analysis_plan"
             development_locked_plan_loaded = True
             findings.append(
