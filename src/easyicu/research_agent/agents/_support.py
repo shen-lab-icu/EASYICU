@@ -479,9 +479,31 @@ def _suggest_repairs_for(
     return repairs
 
 
-def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
+def _sentences_missing_evidence_tokens(
+    scaffold: str,
+    *,
+    available_evidence_ids: Sequence[str] = (),
+) -> List[str]:
     unsupported: List[str] = []
     text = re.sub(r"```.*?```", " ", scaffold, flags=re.S)
+    available_evidence = {
+        str(evidence_id).strip().lower()
+        for evidence_id in available_evidence_ids
+        if str(evidence_id).strip()
+    }
+    bound_claim_footnotes = {
+        match.group("claim_id").lower()
+        for raw_line in text.splitlines()
+        if (
+            match := re.match(
+                r"^\s*\[\^(?P<claim_id>claim_[^\]]+)\]:.*\bevidence=(?P<evidence>\S+)",
+                raw_line,
+                flags=re.I,
+            )
+        )
+        and match.group("evidence").strip().rstrip(";,. ").lower()
+        in available_evidence
+    }
     cleaned_lines: List[str] = []
     section_label_re = re.compile(
         r"^\*\*(?:background|methods?|results?|conclusions?|discussion|limitations?)\s*:\*\*\s*",
@@ -531,6 +553,14 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
             r"\]\(\s*evidence/[^)]+\)", sentence, flags=re.I
         ):
             continue
+        claim_refs = {
+            claim_ref.lower()
+            for claim_ref in re.findall(
+                r"\[\^(claim_[^\]]+)\]", sentence, flags=re.I
+            )
+        }
+        if claim_refs and claim_refs.issubset(bound_claim_footnotes):
+            continue
         if re.search(
             r"(?:\[evidence missing:\s*[^\]]+\]|<!--\s*evidence missing:\s*[^>]+-->)",
             sentence,
@@ -538,18 +568,22 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
         ):
             unsupported.append(sentence)
             continue
-        has_number = bool(re.search(r"\d", sentence))
+        # Citation keys commonly contain publication years.  Their digits are
+        # literature provenance, not quantitative manuscript results; citation
+        # validity is enforced independently by the literature audit.
+        prose_for_result_detection = re.sub(r"\[@[^\]]+\]", " ", sentence)
+        has_number = bool(re.search(r"\d", prose_for_result_detection))
         has_claimy_word = bool(
             re.search(
                 r"\b(cohort|stays|patients|mortality|death|auroc|auc|hazard|odds|risk|cluster|survival|ci|p=|calibration|brier|discrimination|performance|robust(?:ness)?|overfitting|miscalibration|missingness|generalisability|generalizability)\b",
-                sentence,
+                prose_for_result_detection,
                 flags=re.I,
             )
         )
         has_unquantified_result_claim = bool(
             re.search(
                 r"\b(performance|robust(?:ness)?|consistent|overfitting|miscalibration|missingness|generalisability|generalizability)\b",
-                sentence,
+                prose_for_result_detection,
                 flags=re.I,
             )
         )

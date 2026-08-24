@@ -388,7 +388,10 @@ class CriticAgent:
         concerns: List[str] = []
         if missing:
             concerns.append("Manuscript contains unresolved evidence placeholders.")
-        unsupported = _sentences_missing_evidence_tokens(scaffold)
+        unsupported = _sentences_missing_evidence_tokens(
+            scaffold,
+            available_evidence_ids=available_evidence_ids,
+        )
         if unsupported:
             concerns.append(
                 "Some result-like sentences were filtered or remain unsupported."
