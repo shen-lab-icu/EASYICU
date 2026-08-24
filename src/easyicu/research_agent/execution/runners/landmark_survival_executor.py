@@ -469,7 +469,7 @@ def _render_figure(
                 "panel_id": "D",
                 "title": "Proportional-hazards diagnostics",
                 "role": "diagnostics",
-                "chart_type": "diagnostic_pvalue_plot",
+                "chart_type": "schoenfeld_plot",
                 "claim": "Schoenfeld-residual tests disclose whether the fitted Cox proportional-hazards assumption is rejected.",
                 "evidence_ids": [],
                 "review_risk": "A diagnostic p value does not repair non-proportional hazards; the signed handling policy still governs reportability.",
@@ -829,7 +829,6 @@ def run_landmark_survival_suite(
         "n_landmark_population": int(len(analysis)),
         "n_complete_case": int(len(model_frame)),
         "n_events": int(model_frame[sealed.derived_event_column].sum()),
-        "primary_predictor": sealed.derived_exposure_column,
         "effect_measure": sealed.effect_measure,
         "contrast": (
             f"{sealed.exposed_group_label} versus {sealed.comparator_group_label}"

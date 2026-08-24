@@ -433,6 +433,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert summary["analysis_only"] is True
     assert summary["effect_measure"] == "hazard_ratio"
     assert " versus " in summary["contrast"]
+    assert "primary_predictor" not in summary
     assert summary["n_landmark_population"] < n
     assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
     assert not (tmp_path / "landmark_survival_suite.svg").exists()
@@ -478,6 +479,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     )
     assert contract["panels"][0]["title"].startswith("Unadjusted landmark")
     assert contract["panels"][3]["role"] == "diagnostics"
+    assert contract["panels"][3]["metadata"]["chart_type"] == "schoenfeld_plot"
     assert "direction can differ" in contract["statistics_note"]
 
     invalid_ph = pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv")
