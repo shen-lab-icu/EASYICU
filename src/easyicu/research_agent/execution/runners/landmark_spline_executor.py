@@ -19,6 +19,15 @@ from ...schema import AnalysisPlan, AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
 
+
+def _product_path(out_dir: Path, product: str) -> Path:
+    kind, separator, name = product.partition(":")
+    if separator != ":" or not name:
+        raise ValueError(f"invalid landmark spline product: {product!r}")
+    extension = ".csv" if kind == "table" else ".json"
+    return out_dir / f"{name}{extension}"
+
+
 def landmark_spline_executor_owns_step(
     step: AnalysisStep,
     *,
@@ -236,7 +245,7 @@ def run_landmark_spline_association(
         },
         return_type="dataframe",
     )
-    spline.columns = [f"lactate_rcs_{index + 1}" for index in range(spline.shape[1])]
+    spline.columns = [f"exposure_rcs_{index + 1}" for index in range(spline.shape[1])]
     spline.index = model_frame.index
     design = pd.concat(
         [spline, model_frame.drop(columns=["__exposure", "__outcome"])], axis=1
@@ -285,8 +294,8 @@ def run_landmark_spline_association(
         se = math.sqrt(variance)
         curve_rows.append(
             {
-                "lactate_mmol_l": _finite(x_value),
-                "reference_lactate_mmol_l": _finite(reference),
+                "exposure_value": _finite(x_value),
+                "reference_exposure_value": _finite(reference),
                 "adjusted_odds_ratio": _finite(math.exp(log_or)),
                 "ci_low": _finite(math.exp(log_or - 1.96 * se)),
                 "ci_high": _finite(math.exp(log_or + 1.96 * se)),
@@ -296,8 +305,8 @@ def run_landmark_spline_association(
     contrast_rows = [
         row
         for row in curve_rows
-        if math.isclose(row["lactate_mmol_l"], lower)
-        or math.isclose(row["lactate_mmol_l"], upper)
+        if math.isclose(row["exposure_value"], lower)
+        or math.isclose(row["exposure_value"], upper)
     ]
     linear_design = pd.concat(
         [
@@ -331,16 +340,91 @@ def run_landmark_spline_association(
         -2.0 * linear_fit.llf + len(linear_fit.params) * math.log(sample_size)
     )
 
+    definition_rows = [
+        {
+            "exposure_column": sealed.exposure_column,
+            "is_primary_definition": True,
+            "exposure_increment": sealed.linear_sensitivity_per_unit,
+            "adjusted_odds_ratio": _finite(math.exp(coefficient)),
+            "ci_low": _finite(math.exp(coefficient - 1.96 * standard_error)),
+            "ci_high": _finite(math.exp(coefficient + 1.96 * standard_error)),
+            "n": sample_size,
+            "events": int(model_frame["__outcome"].sum()),
+        }
+    ]
+    for exposure_column in sealed.alternative_exposure_columns:
+        definition_population = working.loc[
+            alive_at_landmark
+            & under_observation
+            & working[exposure_column].notna()
+        ].copy()
+        definition_adjustment = _adjustment_design(definition_population, sealed)
+        definition_frame = pd.concat(
+            [
+                definition_population[exposure_column].rename("__exposure"),
+                definition_population[sealed.outcome_column].rename("__outcome"),
+                definition_adjustment,
+            ],
+            axis=1,
+        ).dropna()
+        if len(definition_frame) < 30 or definition_frame["__outcome"].nunique() != 2:
+            raise ValueError(
+                f"alternative exposure definition {exposure_column!r} is not estimable"
+            )
+        definition_design = pd.concat(
+            [
+                definition_frame[["__exposure"]].rename(
+                    columns={"__exposure": exposure_column}
+                ),
+                definition_frame.drop(columns=["__exposure", "__outcome"]),
+            ],
+            axis=1,
+        ).astype(float)
+        definition_design = sm.add_constant(definition_design, has_constant="add")
+        if np.linalg.matrix_rank(definition_design.to_numpy()) != (
+            definition_design.shape[1]
+        ):
+            raise ValueError(
+                f"alternative exposure definition {exposure_column!r} is rank deficient"
+            )
+        definition_fit = sm.GLM(
+            definition_frame["__outcome"].astype(float),
+            definition_design,
+            family=sm.families.Binomial(),
+        ).fit(maxiter=200, disp=0)
+        if not bool(getattr(definition_fit, "converged", False)):
+            raise ValueError(
+                f"alternative exposure definition {exposure_column!r} did not converge"
+            )
+        definition_coefficient = _finite(definition_fit.params[exposure_column])
+        definition_standard_error = _finite(definition_fit.bse[exposure_column])
+        definition_rows.append(
+            {
+                "exposure_column": exposure_column,
+                "is_primary_definition": False,
+                "exposure_increment": sealed.linear_sensitivity_per_unit,
+                "adjusted_odds_ratio": _finite(math.exp(definition_coefficient)),
+                "ci_low": _finite(
+                    math.exp(definition_coefficient - 1.96 * definition_standard_error)
+                ),
+                "ci_high": _finite(
+                    math.exp(definition_coefficient + 1.96 * definition_standard_error)
+                ),
+                "n": int(len(definition_frame)),
+                "events": int(definition_frame["__outcome"].sum()),
+            }
+        )
+
     out_dir.mkdir(parents=True, exist_ok=True)
-    curve_path = out_dir / "e2_landmark_rcs_curve.csv"
+    curve_path = _product_path(out_dir, sealed.curve_product)
     pd.DataFrame(curve_rows).to_csv(curve_path, index=False)
-    contrasts_path = out_dir / "e2_landmark_rcs_contrasts.csv"
+    contrasts_path = _product_path(out_dir, sealed.downstream_parent_product)
     pd.DataFrame(contrast_rows).to_csv(contrasts_path, index=False)
-    sensitivity_path = out_dir / "e2_linear_sensitivity.csv"
+    sensitivity_path = _product_path(out_dir, sealed.linear_sensitivity_product)
     pd.DataFrame(
         [
             {
-                "per_mmol_l": sealed.linear_sensitivity_per_unit,
+                "exposure_increment": sealed.linear_sensitivity_per_unit,
                 "adjusted_odds_ratio": _finite(math.exp(coefficient)),
                 "ci_low": _finite(math.exp(coefficient - 1.96 * standard_error)),
                 "ci_high": _finite(math.exp(coefficient + 1.96 * standard_error)),
@@ -356,6 +440,12 @@ def run_landmark_spline_association(
             }
         ]
     ).to_csv(sensitivity_path, index=False)
+    definition_path = None
+    if sealed.exposure_definition_sensitivity_product is not None:
+        definition_path = _product_path(
+            out_dir, sealed.exposure_definition_sensitivity_product
+        )
+        pd.DataFrame(definition_rows).to_csv(definition_path, index=False)
     receipt = {
         "schema_version": "easyicu.landmark_spline_runtime_receipt/1",
         "protocol_content_sha256": sealed.protocol_content_sha256,
@@ -381,11 +471,24 @@ def run_landmark_spline_association(
         },
         "interpretation": sealed.interpretation,
     }
-    receipt_path = out_dir / "e2_scientific_runtime_receipt.json"
+    receipt_path = _product_path(out_dir, sealed.receipt_product)
     receipt_path.write_text(
         json.dumps(receipt, indent=2, sort_keys=True, allow_nan=False),
         encoding="utf-8",
     )
+    output_files = {
+        sealed.curve_product: curve_path.name,
+        sealed.downstream_parent_product: contrasts_path.name,
+        sealed.linear_sensitivity_product: sensitivity_path.name,
+        sealed.receipt_product: receipt_path.name,
+    }
+    if (
+        definition_path is not None
+        and sealed.exposure_definition_sensitivity_product is not None
+    ):
+        output_files[sealed.exposure_definition_sensitivity_product] = (
+            definition_path.name
+        )
     return {
         "status": "ok",
         "analysis_family": "association",
@@ -398,12 +501,7 @@ def run_landmark_spline_association(
         "n_primary_population": int(primary_mask.sum()),
         "n_complete_case": int(len(model_frame)),
         "n_events": int(model_frame["__outcome"].sum()),
-        "output_files": {
-            "table:e2_landmark_rcs_curve": curve_path.name,
-            "table:e2_landmark_rcs_contrasts": contrasts_path.name,
-            "table:e2_linear_sensitivity": sensitivity_path.name,
-            "log:e2_scientific_runtime_receipt": receipt_path.name,
-        },
+        "output_files": output_files,
     }
 
 

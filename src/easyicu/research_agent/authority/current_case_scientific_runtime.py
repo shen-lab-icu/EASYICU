@@ -506,6 +506,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     landmark_hours: Literal[24]
     required_adjustment_columns: tuple[str, ...]
     categorical_adjustment_columns: tuple[str, ...]
+    alternative_exposure_columns: tuple[str, ...] = ()
     spline_knot_quantiles: tuple[float, float, float]
     spline_reference: Literal["median_in_primary_population"]
     curve_quantile_range: tuple[float, float]
@@ -529,6 +530,12 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             raise ValueError(
                 "categorical adjustments must be members of the adjustment set"
             )
+        if (
+            len(self.alternative_exposure_columns)
+            != len(set(self.alternative_exposure_columns))
+            or self.exposure_column in self.alternative_exposure_columns
+        ):
+            raise ValueError("landmark alternative exposure columns must be unique")
         contrast_products = [
             value
             for value in self.plan_outputs
@@ -544,6 +551,22 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         if len(self._table_products_containing("linear", "sensitivity")) != 1:
             raise ValueError(
                 "landmark spline authority requires one typed linear-sensitivity table"
+            )
+        receipt_products = [
+            value for value in self.plan_outputs if value.startswith("log:")
+        ]
+        if len(receipt_products) != 1:
+            raise ValueError("landmark spline authority requires one typed receipt log")
+        definition_products = self._table_products_containing(
+            "exposure", "definition", "sensitivity"
+        )
+        if bool(self.alternative_exposure_columns) != bool(definition_products):
+            raise ValueError(
+                "landmark alternative exposures require one definition-sensitivity table"
+            )
+        if len(definition_products) > 1:
+            raise ValueError(
+                "landmark spline authority permits one definition-sensitivity table"
             )
         self._verify_digest()
         return self
@@ -566,6 +589,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     self.outcome_time_column,
                     self.observation_duration_column,
                     *self.required_adjustment_columns,
+                    *self.alternative_exposure_columns,
                 )
             )
         )
@@ -600,6 +624,17 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     @property
     def linear_sensitivity_product(self) -> str:
         return self._table_products_containing("linear", "sensitivity")[0]
+
+    @property
+    def receipt_product(self) -> str:
+        return next(value for value in self.plan_outputs if value.startswith("log:"))
+
+    @property
+    def exposure_definition_sensitivity_product(self) -> str | None:
+        products = self._table_products_containing(
+            "exposure", "definition", "sensitivity"
+        )
+        return products[0] if products else None
 
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the signed deterministic primary into one draft plan.

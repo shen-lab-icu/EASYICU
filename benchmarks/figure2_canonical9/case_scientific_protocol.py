@@ -158,6 +158,48 @@ class E3ScientificProtocol(_StrictFrozenModel):
         return self
 
 
+class M1ScientificProtocol(_StrictFrozenModel):
+    schema_version: Literal["easyicu.figure2_m1_scientific_protocol/1"]
+    task_id: Literal["m1_hepatobiliary_missingness"]
+    protocol_version: str
+    review_status: Literal["ai_development_reviewed_human_attestation_pending"]
+    literature_search_cutoff: Literal["2026-08-24"]
+    time_zero: Literal["icu_admission"]
+    exposure_window_hours: tuple[Literal[0], Literal[24]]
+    landmark_hours: Literal[24]
+    primary_exposure_column: Literal["bili_max"]
+    alternative_exposure_column: Literal["bili_first"]
+    exposure_units: Literal["mg/dL"]
+    outcome_column: Literal["death"]
+    outcome_time_column: Literal["death_time"]
+    observation_duration_column: Literal["los_icu"]
+    adjustment_set: tuple[str, ...]
+    measurement_audit: tuple[str, ...]
+    interpretation: Literal["descriptive_prognostic_association_not_causal"]
+    reportability_rule: str
+    forbidden_interpretations: tuple[str, ...]
+    citations: tuple[ProtocolCitation, ...]
+
+    @model_validator(mode="after")
+    def _closed_hepatobiliary_coordinates(self) -> "M1ScientificProtocol":
+        expected_adjustment = (
+            "age",
+            "sex",
+            "sofa2_resp_max",
+            "sofa2_coag_max",
+            "sofa2_cardio_max",
+            "sofa2_cns_max",
+            "sofa2_renal_max",
+        )
+        if self.adjustment_set != expected_adjustment:
+            raise ValueError("M1 adjustment_set drifted from the reviewed protocol")
+        if not {"measured_fraction", "measurement_timing", "measurement_count"}.issubset(
+            self.measurement_audit
+        ):
+            raise ValueError("M1 must retain measurement-selection auditing")
+        return self
+
+
 class H1ScientificProtocol(_StrictFrozenModel):
     schema_version: Literal["easyicu.figure2_h1_scientific_protocol/1"]
     task_id: Literal["h1_ventilation_survival"]
@@ -400,6 +442,7 @@ ScientificCaseProtocol = Annotated[
     Union[
         E2ScientificProtocol,
         E3ScientificProtocol,
+        M1ScientificProtocol,
         H1ScientificProtocol,
         H2ScientificProtocol,
         H3ScientificProtocol,
@@ -423,6 +466,7 @@ class RuntimeScientificProjection(_StrictFrozenModel):
         "e1_sepsis3_prevalence_mortality",
         "e2_lactate_mortality",
         "e3_kdigo_gradient",
+        "m1_hepatobiliary_missingness",
         "h1_ventilation_survival",
         "h2_vasopressor_causal",
         "h3_trajectory_clustering",
@@ -459,6 +503,9 @@ class RuntimeScientificProjection(_StrictFrozenModel):
             "e3_kdigo_gradient": (
                 "easyicu.association_model_grid_runtime_authority/1"
             ),
+            "m1_hepatobiliary_missingness": (
+                "easyicu.landmark_spline_runtime_authority/1"
+            ),
             "h1_ventilation_survival": (
                 "easyicu.landmark_survival_runtime_authority/1"
             ),
@@ -477,6 +524,7 @@ class RuntimeScientificProjection(_StrictFrozenModel):
 _PROTOCOL_FILENAMES = {
     "e2_lactate_mortality": "e2_lactate_mortality_20260809.json",
     "e3_kdigo_gradient": "e3_kdigo_gradient_20260824.json",
+    "m1_hepatobiliary_missingness": "m1_hepatobiliary_missingness_20260824.json",
     "h1_ventilation_survival": "h1_ventilation_survival_20260822.json",
     "h2_vasopressor_causal": "h2_vasopressor_causal_20260809.json",
     "h3_trajectory_clustering": "h3_trajectory_clustering_20260809.json",
@@ -484,6 +532,7 @@ _PROTOCOL_FILENAMES = {
 _PROTOCOL_MODELS = {
     "e2_lactate_mortality": E2ScientificProtocol,
     "e3_kdigo_gradient": E3ScientificProtocol,
+    "m1_hepatobiliary_missingness": M1ScientificProtocol,
     "h1_ventilation_survival": H1ScientificProtocol,
     "h2_vasopressor_causal": H2ScientificProtocol,
     "h3_trajectory_clustering": H3ScientificProtocol,
@@ -506,7 +555,7 @@ def load_case_scientific_protocol(
     path: Path,
     *,
     expected_task_id: str,
-) -> E2ScientificProtocol | E3ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
+) -> E2ScientificProtocol | E3ScientificProtocol | M1ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
     """Strict-load a case protocol and assign failures to this owner module."""
 
     try:
@@ -668,6 +717,7 @@ def _e2_deterministic_execution_contract(
             "landmark_hours": protocol.primary_landmark.landmark_hours,
             "required_adjustment_columns": ["age", "sex", "charlson_first"],
             "categorical_adjustment_columns": ["sex"],
+            "alternative_exposure_columns": [],
             "spline_knot_quantiles": list(model.knot_quantiles),
             "spline_reference": "median_in_primary_population",
             "curve_quantile_range": [
@@ -802,6 +852,47 @@ def _e3_deterministic_execution_contract(
     ).model_dump(mode="json")
 
 
+def _m1_deterministic_execution_contract(
+    protocol: M1ScientificProtocol,
+) -> dict[str, Any]:
+    return build_current_case_scientific_runtime_authority(
+        {
+            "schema_version": "easyicu.landmark_spline_runtime_authority/1",
+            "authority_kind": "landmark_spline_association",
+            "protocol_content_sha256": case_protocol_content_sha256(protocol),
+            "plan_method": "signed_landmark_restricted_cubic_spline",
+            "plan_intent": (
+                "Execute the signed bilirubin landmark spline and its frozen "
+                "first-versus-maximum exposure-definition sensitivity."
+            ),
+            "plan_outputs": [
+                "table:m1_landmark_bilirubin_curve",
+                "table:m1_landmark_bilirubin_contrasts",
+                "table:m1_linear_sensitivity",
+                "table:m1_exposure_definition_sensitivity",
+                "log:m1_scientific_runtime_receipt",
+            ],
+            "exposure_column": protocol.primary_exposure_column,
+            "outcome_column": protocol.outcome_column,
+            "outcome_time_column": protocol.outcome_time_column,
+            "observation_duration_column": protocol.observation_duration_column,
+            "observation_duration_unit": "days",
+            "landmark_hours": protocol.landmark_hours,
+            "required_adjustment_columns": list(protocol.adjustment_set),
+            "categorical_adjustment_columns": ["sex"],
+            "alternative_exposure_columns": [
+                protocol.alternative_exposure_column
+            ],
+            "spline_knot_quantiles": [0.10, 0.50, 0.90],
+            "spline_reference": "median_in_primary_population",
+            "curve_quantile_range": [0.10, 0.90],
+            "curve_points": 41,
+            "linear_sensitivity_per_unit": 1.0,
+            "interpretation": protocol.interpretation,
+        }
+    ).model_dump(mode="json")
+
+
 def _h2_deterministic_execution_contract(
     protocol: H2ScientificProtocol,
 ) -> dict[str, Any]:
@@ -914,7 +1005,7 @@ def _h1_deterministic_execution_contract(
 
 
 def _projection_agent_content(
-    protocol: E2ScientificProtocol | E3ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+    protocol: E2ScientificProtocol | E3ScientificProtocol | M1ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
     execution_contract: Mapping[str, Any],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Render only typed protocol fields; never maintain a second science source."""
@@ -959,6 +1050,28 @@ def _projection_agent_content(
                 "Interpret every estimate as descriptive/prognostic, never causal; component "
                 "definitions with sparse support must be reported, not silently pooled.",
                 "The sensitivity owner must use method="
+                f"{execution_contract['plan_method']}, intent="
+                f"{execution_contract['plan_intent']!r}, and icu_rule_refs must "
+                f"contain {rule_ref}.",
+            ),
+        )
+    if isinstance(protocol, M1ScientificProtocol):
+        rule_ref = (
+            "scientific_runtime_contract:"
+            + str(execution_contract["execution_contract_sha256"])
+        )
+        return (
+            tuple(execution_contract["plan_outputs"]),
+            (
+                "Use only stays alive and still under ICU observation at 24 hours "
+                "with a valid typed bilirubin measurement in the 0-24-hour window.",
+                "Fit the prespecified nonlinear maximum-bilirubin curve and retain "
+                "first-versus-maximum bilirubin as an exposure-definition sensitivity.",
+                "Report the full eligible denominator, measured and unmeasured fractions, "
+                "measurement count, and measurement timing; missing bilirubin is not normal.",
+                "Adjust only for the frozen age, sex, and non-liver SOFA-component set; "
+                "interpret the result as descriptive/prognostic and selection-limited.",
+                "The primary owner must use method="
                 f"{execution_contract['plan_method']}, intent="
                 f"{execution_contract['plan_intent']!r}, and icu_rule_refs must "
                 f"contain {rule_ref}.",
@@ -1041,7 +1154,7 @@ def _projection_agent_content(
 
 
 def build_runtime_scientific_projection(
-    protocol: E2ScientificProtocol | E3ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
+    protocol: E2ScientificProtocol | E3ScientificProtocol | M1ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol,
 ) -> RuntimeScientificProjection:
     """Compile the signed protocol into its sole deterministic runtime projection."""
 
@@ -1051,6 +1164,8 @@ def build_runtime_scientific_projection(
         execution_contract = _e2_deterministic_execution_contract(protocol)
     elif isinstance(protocol, E3ScientificProtocol):
         execution_contract = _e3_deterministic_execution_contract(protocol)
+    elif isinstance(protocol, M1ScientificProtocol):
+        execution_contract = _m1_deterministic_execution_contract(protocol)
     elif isinstance(protocol, H1ScientificProtocol):
         execution_contract = _h1_deterministic_execution_contract(protocol)
     elif isinstance(protocol, H2ScientificProtocol):
@@ -1098,7 +1213,7 @@ def load_runtime_scientific_projection(
 
 def load_default_case_protocol(
     task_id: str,
-) -> E2ScientificProtocol | E3ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
+) -> E2ScientificProtocol | E3ScientificProtocol | M1ScientificProtocol | H1ScientificProtocol | H2ScientificProtocol | H3ScientificProtocol:
     return load_case_scientific_protocol(
         default_case_protocol_path(task_id),
         expected_task_id=task_id,
@@ -1109,6 +1224,7 @@ __all__ = [
     "RuntimeScientificProjection",
     "E2ScientificProtocol",
     "E3ScientificProtocol",
+    "M1ScientificProtocol",
     "H1ScientificProtocol",
     "H2ScientificProtocol",
     "H3ScientificProtocol",

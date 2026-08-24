@@ -15,9 +15,10 @@ from benchmarks.figure2_canonical9.case_scientific_protocol import (
 )
 
 
-def test_e2_e3_h1_h2_h3_protocols_are_strict_and_content_digestable() -> None:
+def test_governed_case_protocols_are_strict_and_content_digestable() -> None:
     e2 = load_default_case_protocol("e2_lactate_mortality")
     e3 = load_default_case_protocol("e3_kdigo_gradient")
+    m1 = load_default_case_protocol("m1_hepatobiliary_missingness")
     h1 = load_default_case_protocol("h1_ventilation_survival")
     h2 = load_default_case_protocol("h2_vasopressor_causal")
     h3 = load_default_case_protocol("h3_trajectory_clustering")
@@ -46,6 +47,15 @@ def test_e2_e3_h1_h2_h3_protocols_are_strict_and_content_digestable() -> None:
     landmark = e3_execution["variants"][1]["filters"][0]
     assert landmark["observation_duration_column"] == "los_icu"
     assert landmark["observation_duration_unit"] == "days"
+    assert m1.primary_exposure_column == "bili_max"
+    assert m1.alternative_exposure_column == "bili_first"
+    m1_projection = build_runtime_scientific_projection(m1)
+    m1_execution = m1_projection.deterministic_execution_contract
+    assert m1_execution is not None
+    assert m1_execution["alternative_exposure_columns"] == ["bili_first"]
+    assert "table:m1_exposure_definition_sensitivity" in (
+        m1_execution["plan_outputs"]
+    )
     assert h1.landmark_hours == 24
     assert h1.proportional_hazards_policy == "block_paper_authorization"
     assert h1.review_status == "ai_development_reviewed_human_attestation_pending"
@@ -76,7 +86,7 @@ def test_e2_e3_h1_h2_h3_protocols_are_strict_and_content_digestable() -> None:
         h3_execution["upper_boundary_action"]
         == "fail_closed_if_selected_at_upper_boundary"
     )
-    for protocol in (e2, e3, h1, h2, h3):
+    for protocol in (e2, e3, m1, h1, h2, h3):
         assert len(case_protocol_content_sha256(protocol)) == 64
         projection = build_runtime_scientific_projection(protocol)
         assert projection.protocol_content_sha256 == case_protocol_content_sha256(
