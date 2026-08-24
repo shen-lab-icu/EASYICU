@@ -8,6 +8,9 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.reporting.write_phase import (
     _verified_resume_writer_scaffold,
 )
+from easyicu.research_agent.reporting.manuscript_post import (
+    _remove_unregistered_evidence_placeholders,
+)
 
 
 def _step_records(*, attempt_id: str = "run:model:1") -> list[dict[str, object]]:
@@ -85,3 +88,32 @@ def test_resume_does_not_reuse_tampered_writer_scaffold(tmp_path: Path) -> None:
     )
 
     assert reused is None
+
+
+def test_unregistered_placeholder_is_removed_but_registered_citation_remains() -> None:
+    text = (
+        "Calibration slope was 0.98 {evidence:stale} "
+        "{evidence:registered}."
+    )
+
+    repaired, removed = _remove_unregistered_evidence_placeholders(
+        text,
+        allowed_evidence_ids=["registered"],
+    )
+
+    assert removed == ["stale"]
+    assert "{evidence:stale}" not in repaired
+    assert repaired.count("{evidence:registered}") == 1
+
+
+def test_unregistered_only_placeholder_does_not_gain_replacement_authority() -> None:
+    text = "Unsupported result was 1.23 {evidence:stale}."
+
+    repaired, removed = _remove_unregistered_evidence_placeholders(
+        text,
+        allowed_evidence_ids=["registered"],
+    )
+
+    assert removed == ["stale"]
+    assert repaired == "Unsupported result was 1.23."
+    assert "{evidence:" not in repaired
