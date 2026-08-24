@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import re
 from typing import Any, Optional
 
 from .concept_availability import normalize_concept_name
@@ -42,6 +43,14 @@ _SEPSIS3_IDENTITY = LiteratureConceptIdentity(
     retrieval_alternatives=(("Sepsis-3",),),
     screening_role_term="Sepsis-3",
     screening_required_terms=("Sepsis-3",),
+)
+
+_KDIGO_STAGE_IDENTITY = LiteratureConceptIdentity(
+    concept_id="kdigo_stage",
+    canonical_phrase="KDIGO acute kidney injury",
+    retrieval_alternatives=(("KDIGO", "acute kidney injury"), ("AKI",)),
+    screening_role_term="acute kidney injury",
+    screening_required_terms=(),
 )
 
 _IDENTITIES = {
@@ -94,13 +103,8 @@ _IDENTITIES = {
         screening_role_term="acute kidney injury",
         screening_required_terms=(),
     ),
-    "kdigo_stage": LiteratureConceptIdentity(
-        concept_id="kdigo_stage",
-        canonical_phrase="KDIGO acute kidney injury",
-        retrieval_alternatives=(("KDIGO", "acute kidney injury"), ("AKI",)),
-        screening_role_term="acute kidney injury",
-        screening_required_terms=(),
-    ),
+    "kdigo_stage": _KDIGO_STAGE_IDENTITY,
+    "aki_stage": _KDIGO_STAGE_IDENTITY,
 }
 
 _PHRASE_ALIASES = {
@@ -138,6 +142,11 @@ def _catalog_identity(value: Any) -> Optional[LiteratureConceptIdentity]:
     catalog = _shared_concept_catalog()
     aliases = catalog.concept_aliases.get(canonical_id) or []
     phrase = " ".join(str(aliases[0] if aliases else "").split())[:180]
+    phrase = re.sub(
+        r"(?i)\s+(?:window|windows|measurement|measurements|variable|variables)$",
+        "",
+        phrase,
+    ).strip()
     if not phrase:
         return None
     return LiteratureConceptIdentity(
