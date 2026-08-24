@@ -272,6 +272,8 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "custom.hidden = false" in embedded
     assert "layout.prepend(moduleCard)" in embedded
     assert "projectCopilotSetup(host)" in embedded
+    assert "const previousScrollTop" in embedded
+    assert "scroller.scrollTop = previousScrollTop" in embedded
     assert ".gpi-extraction-compact{" in preview_css
     assert ".gpi-preview-body>[data-gpi-native-workspace-mount]{" in preview_css
     assert (
@@ -283,10 +285,17 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "Prepared export is ready — sync to Copilot" in embedded
     assert "data-gpi-extraction-download" in embedded
     assert "downloadRegisteredExport" in embedded
-    assert "recommendedUsesFirstStay" in extraction
-    assert "['miiv', 'miii', 'mimic', 'mimiciv', 'mimiciii']" in extraction
-    assert "preset: firstStay ? 'adult_first' : 'all_icu'" in extraction
-    assert "exclude_readmissions: firstStay" in extraction
+    assert "let exMaxPatients = 0;" in extraction
+    assert "let exCohortPreset = 'all_icu';" in extraction
+    assert "let exAgeMin = 0;" in extraction
+    assert "let exExcludeReadmissions = false;" in extraction
+    assert "preset: 'all_icu'" in extraction
+    assert "age_min: 0" in extraction
+    assert "exclude_readmissions: false" in extraction
+    assert "recommendedUsesFirstStay" not in extraction
+    assert "Minimum module coverage" not in extraction
+    assert "Quality status" not in extraction
+    assert "previewExtractionFilters" not in extraction
     assert "window.EU_EXTRACTION_EMBEDDED_WORKSPACE" in preview
     assert "typeof owner.mount === 'function'" in preview
     assert "native_workspace" in resources
@@ -297,7 +306,7 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "'/api/workspaces/download'" in api
 
     index = (static_root / "index.html").read_text()
-    assert 'screens-extraction-embedded.js?v=20260824-copilot-compact1' in index
+    assert 'screens-extraction-embedded.js?v=20260824-copilot-stable-scroll1' in index
     assert index.index("screens-extraction.js") < index.index("screens-extraction-embedded.js")
 
     node_main = (

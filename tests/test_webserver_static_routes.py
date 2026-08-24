@@ -182,7 +182,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
-    assert "js/screens-extraction.js?v=20260823-extraction-workspace4" in index_html
+    assert "js/screens-extraction.js?v=20260824-unrestricted-defaults1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
@@ -1239,7 +1239,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "All controls are demo-interactive" not in settings_js
 
 
-def test_native_extraction_advanced_filters_are_backend_wired() -> None:
+def test_native_extraction_shows_source_metadata_without_quality_filters() -> None:
     api_js = _static_js("api.js")
     extraction_js = _static_js("screens-extraction.js")
 
@@ -1249,9 +1249,13 @@ def test_native_extraction_advanced_filters_are_backend_wired() -> None:
     assert "/api/extraction/filter-options" in api_js
     assert "/api/extraction/filter-preview" in api_js
     assert "loadExtractionFilterOptions" in extraction_js
-    assert "previewExtractionFilters" in extraction_js
-    assert "Real-source filter audit" in extraction_js
-    assert "Unsupported filters stay blocked" in extraction_js
+    assert "Registered source metadata" in extraction_js
+    assert "previewExtractionFilters" not in extraction_js
+    assert "Minimum module coverage" not in extraction_js
+    assert "Quality status" not in extraction_js
+    assert "data-ex-filter-coverage" not in extraction_js
+    assert "data-ex-filter-quality" not in extraction_js
+    assert "Use matched modules" not in extraction_js
 
 
 def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
@@ -1793,6 +1797,13 @@ def test_native_extraction_exposes_real_cohort_gate_and_recommended_contract() -
     assert "full available · 30d cap" in extraction_js
     assert "first 24 hours" not in extraction_js
     assert "first 24h" not in extraction_js
+    assert "let exMaxPatients = 0;" in extraction_js
+    assert "let exCohortPreset = 'all_icu';" in extraction_js
+    assert "let exAgeMin = 0;" in extraction_js
+    assert "let exExcludeReadmissions = false;" in extraction_js
+    assert "preset: 'all_icu'" in extraction_js
+    assert "age_min: 0" in extraction_js
+    assert "exclude_readmissions: false" in extraction_js
     assert (
         "const REAL_EXPORT_COHORT_PRESETS = new Set(['all_icu', 'adult_first', "
         "'adult_all', 'sepsis3', 'aki', 'ventilation', 'vasopressor', 'respiratory', 'icd']);"
