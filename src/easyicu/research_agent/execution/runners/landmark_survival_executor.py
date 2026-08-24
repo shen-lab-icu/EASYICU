@@ -255,6 +255,7 @@ def _render_figure(
     km_table: Any,
     cox_row: Mapping[str, Any],
     risk_flow: Any,
+    ph_table: Any,
     sealed: LandmarkSurvivalRuntimeAuthority,
     out_dir: Path,
 ) -> dict[str, Path]:
@@ -273,22 +274,23 @@ def _render_figure(
     )
 
     palette = apply_publication_style()
-    fig = plt.figure(figsize=(183 / 25.4, 118 / 25.4), constrained_layout=False)
+    fig = plt.figure(figsize=(183 / 25.4, 142 / 25.4), constrained_layout=False)
     grid = fig.add_gridspec(
-        2,
+        3,
         2,
         width_ratios=(1.5, 1.0),
-        height_ratios=(1.0, 0.9),
+        height_ratios=(1.0, 1.0, 1.0),
         left=0.09,
         right=0.975,
         top=0.93,
         bottom=0.12,
         wspace=0.42,
-        hspace=0.52,
+        hspace=0.62,
     )
     ax_km = fig.add_subplot(grid[:, 0])
     ax_hr = fig.add_subplot(grid[0, 1])
     ax_flow = fig.add_subplot(grid[1, 1])
+    ax_ph = fig.add_subplot(grid[2, 1])
     labels = {
         0: sealed.comparator_group_label,
         1: sealed.exposed_group_label,
@@ -385,6 +387,50 @@ def _render_figure(
     ax_flow.set_title("Risk-set accounting", loc="left")
     add_panel_label(ax_flow, "C", x=-0.16, y=1.05)
 
+    ph_display = ph_table.copy()
+    required_ph_columns = {"covariate", "p_value", "declared_alpha"}
+    if not required_ph_columns.issubset(ph_display.columns):
+        missing = sorted(required_ph_columns - set(ph_display.columns))
+        raise ValueError(
+            "landmark survival PH diagnostics lack columns: " + ", ".join(missing)
+        )
+    ph_values = np.asarray(ph_display["p_value"], dtype=float)
+    alpha_values = np.asarray(ph_display["declared_alpha"], dtype=float)
+    if (
+        len(ph_values) == 0
+        or not np.isfinite(ph_values).all()
+        or np.any(ph_values <= 0)
+        or np.any(ph_values > 1)
+        or not np.isfinite(alpha_values).all()
+        or np.any(alpha_values <= 0)
+        or np.any(alpha_values >= 1)
+        or not np.allclose(alpha_values, alpha_values[0])
+    ):
+        raise ValueError(
+            "landmark survival PH diagnostics require finite p values and one "
+            "declared alpha in (0, 1)"
+        )
+    ph_display["p_value"] = np.maximum(ph_values, np.finfo(float).tiny)
+    ph_display["neg_log10_p"] = -np.log10(ph_display["p_value"])
+    ph_display = ph_display.sort_values("neg_log10_p", ascending=True)
+    ph_labels = [
+        "Global" if value == "global" else str(value).replace("_", " ")
+        for value in ph_display["covariate"]
+    ]
+    y_ph = np.arange(len(ph_display))
+    alpha = float(alpha_values[0])
+    ax_ph.barh(y_ph, ph_display["neg_log10_p"], color=palette["orange"])
+    ax_ph.axvline(
+        -np.log10(alpha),
+        color=palette["neutral"],
+        linestyle="--",
+        linewidth=0.8,
+    )
+    ax_ph.set_yticks(y_ph, ph_labels, fontsize=5.3)
+    ax_ph.set_xlabel(r"Schoenfeld test $-\log_{10}(p)$")
+    ax_ph.set_title("Proportional-hazards diagnostics", loc="left")
+    add_panel_label(ax_ph, "D", x=-0.16, y=1.05)
+
     contract = make_figure_contract(
         figure_id="landmark_survival_suite",
         core_claim=(
@@ -419,12 +465,22 @@ def _render_figure(
                 "evidence_ids": [],
                 "review_risk": "Excluded prevalent or timing-unknown exposure rows define the supported estimand boundary.",
             },
+            {
+                "panel_id": "D",
+                "title": "Proportional-hazards diagnostics",
+                "role": "diagnostics",
+                "chart_type": "diagnostic_pvalue_plot",
+                "claim": "Schoenfeld-residual tests disclose whether the fitted Cox proportional-hazards assumption is rejected.",
+                "evidence_ids": [],
+                "review_risk": "A diagnostic p value does not repair non-proportional hazards; the signed handling policy still governs reportability.",
+            },
         ],
         export_formats=("svg", "pdf", "png"),
         source_data=(
             "landmark_km_curve.csv",
             "landmark_cox_summary.csv",
             "landmark_risk_set_flow.csv",
+            "landmark_ph_diagnostics.csv",
         ),
         statistics_note=(
             "Kaplan-Meier estimates are unadjusted and use the post-landmark clock; "
@@ -730,6 +786,10 @@ def run_landmark_survival_suite(
         "n_landmark_population": int(len(analysis)),
         "n_complete_case": int(len(model_frame)),
         "n_events": int(model_frame[sealed.derived_event_column].sum()),
+        "effect_measure": sealed.effect_measure,
+        "contrast": (
+            f"{sealed.exposed_group_label} versus {sealed.comparator_group_label}"
+        ),
         "hazard_ratio": float(primary_row["hazard_ratio"]),
         "ci_low": float(primary_row["ci_low"]),
         "ci_high": float(primary_row["ci_high"]),
@@ -769,6 +829,11 @@ def run_landmark_survival_suite(
         "n_landmark_population": int(len(analysis)),
         "n_complete_case": int(len(model_frame)),
         "n_events": int(model_frame[sealed.derived_event_column].sum()),
+        "primary_predictor": sealed.derived_exposure_column,
+        "effect_measure": sealed.effect_measure,
+        "contrast": (
+            f"{sealed.exposed_group_label} versus {sealed.comparator_group_label}"
+        ),
         "hazard_ratio": float(primary_row["hazard_ratio"]),
         "hazard_ratio_ci_low": float(primary_row["ci_low"]),
         "hazard_ratio_ci_high": float(primary_row["ci_high"]),
@@ -787,11 +852,12 @@ def run_landmark_survival_figure(
     km_table: Any,
     cox_table: Any,
     risk_flow: Any,
+    ph_table: Any,
     source_paths: Mapping[str, Path],
     authority: LandmarkSurvivalRuntimeAuthority | Mapping[str, Any],
     out_dir: Path,
 ) -> dict[str, Any]:
-    """Render only from the three digest-bound result tables it declares."""
+    """Render only from the four digest-bound result tables it declares."""
 
     import pandas as pd
 
@@ -808,6 +874,7 @@ def run_landmark_survival_figure(
         sealed.km_product: "landmark_km_curve.csv",
         sealed.cox_product: "landmark_cox_summary.csv",
         sealed.risk_set_product: "landmark_risk_set_flow.csv",
+        sealed.ph_product: "landmark_ph_diagnostics.csv",
     }
     copied_sources: list[str] = []
     for product in sealed.figure_input_products:
@@ -824,6 +891,7 @@ def run_landmark_survival_figure(
         km_table=pd.DataFrame(km_table),
         cox_row=primary.iloc[0].to_dict(),
         risk_flow=pd.DataFrame(risk_flow),
+        ph_table=pd.DataFrame(ph_table),
         sealed=sealed,
         out_dir=out_dir,
     )
@@ -881,6 +949,7 @@ def landmark_survival_figure_executor_code(
             km_table=bindings[{sealed.km_product!r}].frame,
             cox_table=bindings[{sealed.cox_product!r}].frame,
             risk_flow=bindings[{sealed.risk_set_product!r}].frame,
+            ph_table=bindings[{sealed.ph_product!r}].frame,
             source_paths={{key: value.path for key, value in bindings.items()}},
             authority=authority,
             out_dir=Path(os.environ["STEP_OUT_DIR"]),

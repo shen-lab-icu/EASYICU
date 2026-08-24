@@ -321,6 +321,36 @@ def test_panel_ignores_old_success_after_newer_step_failure() -> None:
     assert panel.rows[0].point_estimate is None
 
 
+def test_panel_preserves_survival_effect_identity() -> None:
+    from easyicu.research_agent.robustness.panel import (
+        build_robustness_panel_from_records,
+    )
+
+    step_id = "01_survival"
+    panel = build_robustness_panel_from_records(
+        specs=[],
+        per_step_records=[
+            {
+                "step_id": step_id,
+                "status": "ok",
+                **_host_role_fields(step_id),
+                "step_summary_evidence_id": "stat_survival_primary",
+                "step_summary": {
+                    "primary_predictor": "incident_exposure",
+                    "hazard_ratio": 0.72,
+                    "hazard_ratio_ci_low": 0.61,
+                    "hazard_ratio_ci_high": 0.85,
+                    "n_complete_case": 800,
+                },
+            }
+        ],
+    )
+
+    assert panel.rows[0].notes == (
+        "Primary analysis estimate (HR for incident_exposure) from step_summary."
+    )
+
+
 def test_panel_excludes_variant_outside_plan_time_lock() -> None:
     from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,

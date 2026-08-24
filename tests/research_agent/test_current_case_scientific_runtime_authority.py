@@ -431,6 +431,8 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     )
     assert summary["status"] == "ok"
     assert summary["analysis_only"] is True
+    assert summary["effect_measure"] == "hazard_ratio"
+    assert " versus " in summary["contrast"]
     assert summary["n_landmark_population"] < n
     assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
     assert not (tmp_path / "landmark_survival_suite.svg").exists()
@@ -448,6 +450,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         (authority.km_product, "landmark_km_curve.csv"),
         (authority.cox_product, "landmark_cox_summary.csv"),
         (authority.risk_set_product, "landmark_risk_set_flow.csv"),
+        (authority.ph_product, "landmark_ph_diagnostics.csv"),
     ):
         evidence_path = evidence_dir / f"table_step_artifact_deadbeef__{source_name}"
         evidence_path.write_bytes((tmp_path / source_name).read_bytes())
@@ -457,6 +460,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
         cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
         risk_flow=risk,
+        ph_table=pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv"),
         source_paths=figure_sources,
         authority=authority,
         out_dir=figure_dir,
@@ -467,12 +471,27 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         "landmark_km_curve.csv",
         "landmark_cox_summary.csv",
         "landmark_risk_set_flow.csv",
+        "landmark_ph_diagnostics.csv",
     }
     contract = json.loads(
         (figure_dir / "landmark_survival_suite.figure_contract.json").read_text()
     )
     assert contract["panels"][0]["title"].startswith("Unadjusted landmark")
+    assert contract["panels"][3]["role"] == "diagnostics"
     assert "direction can differ" in contract["statistics_note"]
+
+    invalid_ph = pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv")
+    invalid_ph.loc[0, "p_value"] = float("nan")
+    with pytest.raises(ValueError, match="finite p values"):
+        run_landmark_survival_figure(
+            km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
+            cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
+            risk_flow=risk,
+            ph_table=invalid_ph,
+            source_paths=figure_sources,
+            authority=authority,
+            out_dir=tmp_path / "invalid_figure",
+        )
 
 
 def test_host_bound_cohort_root_publishes_exact_input_bytes(
