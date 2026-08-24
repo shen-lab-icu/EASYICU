@@ -370,6 +370,19 @@ _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT = {
 }
 
 
+def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
+    """Keep a nested p-value attached to the named hypothesis it tested."""
+
+    if key == "p_value":
+        value = summary.get(key)
+        return (
+            value
+            if value is not None and not isinstance(value, (dict, list))
+            else None
+        )
+    return _first_present_scalar(summary, (key,))
+
+
 def _render_writer_evidence_digest(
     per_step_records: Sequence[Dict[str, Any]] | None = None,
     *,
@@ -512,7 +525,7 @@ def _render_writer_evidence_digest(
                 and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT
             ):
                 continue
-            scalar = _first_present_scalar(summary, (key,))
+            scalar = _preferred_writer_scalar(summary, key)
             if scalar is not None:
                 digest_row[key] = scalar
         if "primary_predictor" in summary:
@@ -737,7 +750,7 @@ def _render_writer_evidence_digest_v2(
         if not isinstance(summary, dict):
             continue
         for key in WRITER_DIGEST_PREFERRED_KEYS:
-            if _first_present_scalar(summary, (key,)) is not None:
+            if _preferred_writer_scalar(summary, key) is not None:
                 primary_step_field_keys.add((step_id, key))
 
     secondary_lines: List[str] = []
@@ -1258,6 +1271,9 @@ def _render_robustness_panel_block(
         Path(run_dir), records if evidence is not None else None
     ):
         return []
+    executed = _render_executed_robustness_authority(records)
+    if executed:
+        return executed
     panel = _load_writer_robustness_panel(run_dir=run_dir, evidence=evidence)
     if panel is None:
         return []
@@ -1313,6 +1329,78 @@ def _render_robustness_panel_block(
             f"worst on {axis} axis: "
             f"spec_id={row.spec_id}, point={_fmt_panel_number(row.point_estimate)}"
         )
+    return lines
+
+
+def _render_executed_robustness_authority(
+    records: Sequence[Mapping[str, Any]] | None,
+) -> List[str]:
+    """Prefer one executed typed robustness result over a stale panel."""
+
+    candidates: list[Mapping[str, Any]] = []
+    for record in records or ():
+        if str(record.get("status") or "").strip().lower() != "ok":
+            continue
+        summary = record.get("step_summary")
+        if not isinstance(summary, Mapping):
+            continue
+        rows = summary.get("robustness_rows")
+        converged = summary.get("n_converged_variants")
+        if (
+            summary.get("analysis_family") == "robustness_sensitivity"
+            and isinstance(rows, list)
+            and rows
+            and isinstance(converged, (int, float))
+            and converged > 0
+        ):
+            candidates.append(record)
+    if len(candidates) != 1:
+        return []
+    record = candidates[0]
+    summary = record["step_summary"]
+    rows = [
+        row for row in summary["robustness_rows"] if isinstance(row, Mapping)
+    ]
+    primary_rows = [row for row in rows if str(row.get("axis") or "") == "primary"]
+    if len(primary_rows) != 1:
+        return []
+    primary = primary_rows[0]
+    primary_evidence = primary.get("evidence_id") or record.get(
+        "step_summary_evidence_id"
+    )
+    summary_evidence = record.get("step_summary_evidence_id") or primary_evidence
+    if not str(primary_evidence or "").strip() or not str(
+        summary_evidence or ""
+    ).strip():
+        return []
+    independent = [
+        row
+        for row in rows
+        if row.get("converged") is True and row.get("independent_variant") is True
+    ]
+    lines = [
+        "EXECUTED ROBUSTNESS AUTHORITY: this typed executed result supersedes "
+        "any empty or stale pipeline robustness panel for manuscript claims.",
+        "primary display anchor: "
+        f"label={summary.get('primary_effect_label')}, "
+        f"scale={summary.get('primary_effect_scale')}, "
+        f"point={_fmt_panel_number(primary.get('point_estimate'))}, "
+        f"CI=[{_fmt_panel_number(primary.get('ci_low'))}, "
+        f"{_fmt_panel_number(primary.get('ci_high'))}], "
+        f"cite={{evidence:{primary_evidence}}}",
+        "executed variants: "
+        f"n_converged={int(summary['n_converged_variants'])}, "
+        f"n_independent={len(independent)}, "
+        f"cite={{evidence:{summary_evidence}}}",
+    ]
+    if summary.get("primary_effect_is_nonlinear_curve_summary") is False:
+        lines.append(
+            "interpretation boundary: the scalar is a display anchor, not a "
+            "summary of the entire nonlinear curve."
+        )
+    for limitation in summary.get("limitations") or ():
+        if str(limitation or "").strip():
+            lines.append(f"limitation: {str(limitation).strip()}")
     return lines
 
 
