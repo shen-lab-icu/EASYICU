@@ -19,6 +19,7 @@ from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from ..contracts.association_execution import (
+    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
     association_execution_verdict,
     sole_primary_model_requirement,
 )
@@ -600,6 +601,11 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             if step is candidate:
                 steps.append(bound)
                 continue
+            inherited_binary_sensitivity = (
+                step.scientific_capability
+                == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                and generic_parent in step.inputs
+            )
             inputs = [
                 replacement if value == generic_parent else value
                 for value in step.inputs
@@ -631,6 +637,16 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     update={
                         "inputs": list(dict.fromkeys(inputs)),
                         "input_consumption_contracts": contracts,
+                        # The binary-sensitivity capability is closed over the
+                        # generic adjusted-association parent.  Rebinding that
+                        # edge to the signed landmark products invalidates the
+                        # inherited declaration; execution authority now comes
+                        # from this signed runtime owner instead.
+                        "scientific_capability": (
+                            None
+                            if inherited_binary_sensitivity
+                            else step.scientific_capability
+                        ),
                     }
                 )
             )
