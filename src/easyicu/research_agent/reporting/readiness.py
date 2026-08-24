@@ -1014,6 +1014,21 @@ _GATE_STATE_SUPERSESSION_PATTERNS = (
         "manuscript_bound_clean",
     ),
     (
+        "evidence_bound_writer",
+        "bound manuscript is empty or non-substantive",
+        "manuscript_bound_clean",
+    ),
+    (
+        "writer_agent",
+        "failed before producing a manuscript scaffold",
+        "manuscript_bound_clean",
+    ),
+    (
+        "manuscript_literature",
+        "manuscript literature authority is incomplete",
+        "manuscript_literature_complete",
+    ),
+    (
         "manuscript_numeric_auditor",
         "strict evidence enforcement blocked manuscript generation",
         "manuscript_numeric_bound_clean",
@@ -1765,6 +1780,7 @@ def _compute_readiness_gates(
             and not writer_probe_mode
         ),
         "manuscript_critique_passed": False,
+        "manuscript_literature_complete": False,
     }
     critique_path = run_dir / "manuscript_critique.json"
     if critique_path.exists():
@@ -1775,6 +1791,18 @@ def _compute_readiness_gates(
         current_gate_state["manuscript_critique_passed"] = (
             isinstance(critique_payload, dict)
             and critique_payload.get("status") == "pass"
+        )
+    literature_audit_path = run_dir / "manuscript_literature_audit.json"
+    if literature_audit_path.exists():
+        try:
+            literature_audit_payload = json.loads(
+                literature_audit_path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            literature_audit_payload = {}
+        current_gate_state["manuscript_literature_complete"] = (
+            isinstance(literature_audit_payload, dict)
+            and literature_audit_payload.get("status") == "pass"
         )
     latest_publication_audit = _latest_publication_figure_audit_status(
         run_dir,
