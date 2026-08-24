@@ -43,6 +43,8 @@ from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_result_receipt_valid,
 )
 from ..contracts.runtime import ValidationFinding
+from ..contracts.prediction_execution import PREDICTION_MODEL_ANALYSIS_KIND
+from ..contracts.prediction_validation import PredictionValidationReceipt
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..gates.contract import _step_deterministic_contract_findings
@@ -64,6 +66,7 @@ from .figure_plan_binding import validate_step_planned_figure_contract_binding
 _PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+    PREDICTION_MODEL_ANALYSIS_KIND,
     SURVIVAL_PRIMARY_ANALYSIS_KIND,
 }
 
@@ -113,6 +116,14 @@ def _primary_runner_core_estimate_present(
             and isinstance(contracts, list)
             and len(contracts) == 1
         )
+    if kind == PREDICTION_MODEL_ANALYSIS_KIND:
+        try:
+            PredictionValidationReceipt.model_validate(
+                step_summary.get("prediction_validation_receipt")
+            )
+        except Exception:
+            return False
+        return bool(step_summary.get("paper_authorization_allowed") is False)
     if kind == EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND:
         return exposure_outcome_distribution_result_receipt_valid(step_summary)
     if kind in ("causal_primary_iptw", "ordinal_dose_response"):

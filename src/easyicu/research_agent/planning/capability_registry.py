@@ -43,6 +43,7 @@ from ..contracts.model_tokens import (
     ADJUSTED_ASSOCIATION_OUTPUT,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
 )
+from ..contracts.prediction_execution import static_prediction_execution_verdict
 from .study_design_playbook import StudyDesignFamily
 
 if TYPE_CHECKING:
@@ -342,21 +343,41 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ScientificCapability(
         family="prediction",
         label="Prediction / risk modelling",
-        primary_analysis="llm_coded",
-        primary_estimand="LLM-coded discrimination + calibration (AUROC, calibration); value-provenance verified",
-        primary_runner=None,
-        primary_runner_module=None,
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-fitted static binary risk model with a Planner-owned predictor "
+            "roster, patient-group split, held-out discrimination and calibration"
+        ),
+        primary_runner="static_prediction_model",
+        primary_runner_module="execution.runners.prediction_model_executor",
         figure="deterministic",
         figure_renderer="prediction",
         data_contract=("predictors", "binary outcome", "train/validation split"),
         fail_closed=(
-            "LLM code failure -> repair -> fail-closed. manuscript_numeric_auditor "
-            "catches rounded/hallucinated metrics (caught AUROC 0.766->0.7 in a pilot)."
+            "The owner declines a missing typed outcome/group authority, an ambiguous "
+            "predictor prefix, patient leakage, a single-class split, invalid scores, "
+            "or unsupported model/sensitivity coordinates; it never infers predictors "
+            "from supporting audit inputs."
         ),
-        notes="ROC + calibration figure is deterministic; the model FIT is LLM-coded.",
+        notes=(
+            "The exact static L2-logistic fit and validation are deterministic and "
+            "analysis-only. Dynamic prediction and alternative model families remain "
+            "separate agent-coded capabilities."
+        ),
         capability_id="prediction_risk_model_v1",
-        result_contract="registered discrimination and calibration products",
-        required_diagnostics=("split/leakage", "discrimination", "calibration"),
+        result_contract=(
+            "typed model-column prefix + digest-bound PredictionValidationReceipt + "
+            "registered discrimination/calibration products"
+        ),
+        required_diagnostics=(
+            "patient split/leakage",
+            "development-only preprocessing",
+            "discrimination with interval",
+            "calibration and Brier score",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="prediction_validation_owner",
+        scientific_validator_contract="PredictionValidationReceipt",
     ),
     ScientificCapability(
         family="prediction",
@@ -919,6 +940,49 @@ def resolve_primary_capability(
                     f"{declared_capability.family!r}, not {capability.family!r}."
                 ),
             )
+
+    if capability.capability_id == "prediction_risk_model_v1":
+        if declared and declared != capability.capability_id:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                failure_reason="scientific_capability_step_incompatible",
+                detail=(
+                    f"scientific_capability {declared!r} is not compatible with "
+                    "the static prediction primary capability."
+                ),
+            )
+        prediction_verdict = static_prediction_execution_verdict(primary)
+        if prediction_verdict.claimed:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=True,
+                owner_reason=prediction_verdict.reason,
+            )
+        if prediction_verdict.missing_declarations:
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                owner_reason=prediction_verdict.reason,
+                failure_reason="primary_owner_declaration_incomplete",
+                detail=(
+                    "The static prediction primary has not declared: "
+                    + ", ".join(prediction_verdict.missing_declarations)
+                ),
+            )
+        return _verdict_for(
+            capability,
+            analysis_family=canonical,
+            owner_claimed=False,
+            owner_reason=prediction_verdict.reason,
+            failure_reason="primary_capability_owner_mismatch",
+            detail=(
+                "The prediction primary does not match the deterministic static "
+                f"prediction owner: {prediction_verdict.reason}"
+            ),
+        )
 
     if capability.capability_id != "association_adjusted_v1":
         if declared and declared != capability.capability_id:

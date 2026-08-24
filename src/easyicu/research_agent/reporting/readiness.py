@@ -74,6 +74,7 @@ from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_result_receipt_valid,
 )
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
+from ..contracts.prediction_execution import PREDICTION_MODEL_ANALYSIS_KIND
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..gates.visual import _is_cosmetic_visual_finding
@@ -1446,6 +1447,7 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
     {
         ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
         EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+        PREDICTION_MODEL_ANALYSIS_KIND,
         SURVIVAL_PRIMARY_ANALYSIS_KIND,
     }
 )
@@ -1453,6 +1455,24 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
 
 def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
     """Require a complete primary effect emitted by a currently registered owner."""
+
+    from ..contracts.prediction_validation import PredictionValidationReceipt
+
+    for record in per_step_records or []:
+        if not isinstance(record, dict) or record.get(
+            "deterministic_standard_analysis"
+        ) != PREDICTION_MODEL_ANALYSIS_KIND:
+            continue
+        summary = record.get("step_summary")
+        if not isinstance(summary, Mapping) or summary.get("status") != "ok":
+            continue
+        try:
+            PredictionValidationReceipt.model_validate(
+                summary.get("prediction_validation_receipt")
+            )
+        except Exception:
+            continue
+        return True
 
     for record in per_step_records or []:
         if not isinstance(record, dict):
