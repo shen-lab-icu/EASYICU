@@ -522,23 +522,53 @@ def test_every_profile_either_omits_or_pins_memory_off_never_on() -> None:
         assert opts.get("enable_deterministic_planner_fallback", False) is False, ref
 
 
-def test_dev9_ai_review_profile_allows_curated_cards_without_paper_authority() -> None:
+def test_dev9_ai_review_profile_additively_enables_live_pubmed_without_paper_authority() -> None:
     from easyicu.research_agent.orchestration.profiles import (
         CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF,
         DEV9_AI_REVIEWED_DEMO_2026_08_22,
+        DEV9_AI_REVIEWED_DEMO_2026_08_24,
         is_paper_facing_profile,
     )
 
-    profile = DEV9_AI_REVIEWED_DEMO_2026_08_22
+    archived = DEV9_AI_REVIEWED_DEMO_2026_08_22
+    profile = DEV9_AI_REVIEWED_DEMO_2026_08_24
 
-    assert profile.ref == "npj_dm_dev9_demo_dev/20260822"
+    assert archived.ref == "npj_dm_dev9_demo_dev/20260822"
+    assert "enable_pubmed" not in archived.as_pipeline_options()
+    assert "enable_pubmed" not in archived.to_dict()
+    assert profile.ref == "npj_dm_dev9_demo_dev/20260824"
     assert CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF == profile.ref
     assert profile.enable_know_how is True
     assert profile.allow_curated_mvp_know_how is True
+    assert profile.enable_pubmed is True
     assert profile.planner_only is False
     assert profile.planner_strategy == "progressive_v2"
     assert profile.as_pipeline_options()["allow_curated_mvp_know_how"] is True
+    assert profile.as_pipeline_options()["enable_pubmed"] is True
     assert is_paper_facing_profile(profile.name) is False
+
+
+def test_profile_owned_pubmed_setting_rejects_ad_hoc_historical_override(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.profiles import (
+        DEV9_AI_REVIEWED_DEMO_2026_08_22,
+        DEV9_AI_REVIEWED_DEMO_2026_08_24,
+    )
+
+    with pytest.raises(ValueError, match="Live PubMed retrieval"):
+        PipelineConfig(
+            workdir=tmp_path / "archived",
+            **DEV9_AI_REVIEWED_DEMO_2026_08_22.pipeline_options(),
+            enable_pubmed=True,
+        )
+
+    config = PipelineConfig(
+        workdir=tmp_path / "current",
+        **DEV9_AI_REVIEWED_DEMO_2026_08_24.pipeline_options(),
+    )
+    assert config.enable_pubmed is True
 
 
 def test_curated_card_access_is_profile_owned_and_formal_profiles_pin_it_off() -> None:
