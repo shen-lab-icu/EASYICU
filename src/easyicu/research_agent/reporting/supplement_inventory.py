@@ -99,6 +99,7 @@ _FAMILY_DEVELOPMENT_REQUIRED: dict[str, tuple[str, ...]] = {
 
 _FAMILY_TOP_JOURNAL_EXTENSION: dict[str, tuple[str, ...]] = {
     "association_study": ("external_reproducibility",),
+    "survival": ("external_reproducibility",),
     "prediction": ("external_validation",),
     "phenotyping": ("external_reproducibility",),
     "trajectory_clustering": ("external_reproducibility",),
