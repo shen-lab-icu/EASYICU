@@ -319,6 +319,7 @@ class ToolExecutionContext:
         self,
         *,
         session: PiSessionRecord,
+        user_message: str = "",
         allowed_actions: Iterable[str] = (),
         grant: Optional[HostTurnGrant] = None,
         authority_validator: Optional[AuthorityValidator] = None,
@@ -327,6 +328,10 @@ class ToolExecutionContext:
         extension_registry: Optional["ExtensionRegistry"] = None,
     ) -> None:
         self.session = session
+        # Host-captured text from the current user turn.  Tools may use this
+        # bounded, PHI-screened value as user-intent authority; the model
+        # cannot supply or rewrite it through tool arguments.
+        self.user_message = str(user_message or "")
         self.grant = grant or HostTurnGrant.from_actions(allowed_actions)
         self.authority_validator = authority_validator
         self.workspace_root = (

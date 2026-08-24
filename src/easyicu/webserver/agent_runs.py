@@ -1522,6 +1522,11 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         }
     )
     updated = max((run_dir / str(a.get("name"))).stat().st_mtime for a in artifacts)
+    gate_checks = {
+        str(item.get("id") or "").strip(): bool(item.get("passed"))
+        for item in (gate.get("checks") or [])
+        if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+    }
     return {
         "run_id": review.get("run_id") or run_dir.name,
         "run_label": str(review.get("run_id") or run_dir.name).replace("_", " "),
@@ -1534,6 +1539,8 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         "run_type": review.get("run_type"),
         "project_dir": review.get("project_dir"),
         "gate_status": gate.get("status"),
+        "gate_reason": gate.get("reason"),
+        "gate_checks": gate_checks,
         "run_status": source_manifest.get("status"),
         "pending_review_reason_codes": pending_reason_codes,
         "plan_approval_allowed": source_manifest.get("plan_approval_allowed"),

@@ -634,6 +634,53 @@ def test_pipeline_design_gate_accepts_counts_only_repeat_stays() -> None:
     }
 
 
+def test_counts_only_design_does_not_request_unneeded_longitudinal_trajectory() -> None:
+    study = {
+        **_complete_study(),
+        "analysis_design": {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+    }
+
+    assert agent_pipeline_runs._analysis_requires_longitudinal_trajectory(
+        study,
+        validated_design={
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+    ) is False
+
+
+def test_landmark_sensitivity_keeps_trajectory_for_counts_only_design() -> None:
+    study = {
+        **_complete_study(),
+        "analysis_design": {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+        "sensitivity_specs": [
+            {
+                "spec_id": "landmark_24h",
+                "axis": "timing",
+                "strategy": "landmark",
+                "landmark_hours": 24,
+                "require_alive_at_landmark": True,
+            }
+        ],
+    }
+
+    assert agent_pipeline_runs._analysis_requires_longitudinal_trajectory(
+        study,
+        validated_design={
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        },
+    ) is True
+
+
 def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
     study = _complete_study()
     snapshot = build_research_workflow_snapshot(
@@ -863,6 +910,47 @@ def test_terminal_failed_pipeline_returns_to_fresh_plan_confirmation() -> None:
     assert by_id["analysis"].reason_code == "failed_pipeline_requires_fresh_plan"
 
 
+def test_validated_analysis_advances_even_when_publication_gate_stays_closed() -> None:
+    snapshot = build_research_workflow_snapshot(
+        study=_complete_study(),
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_id": "run-analysis-only-withheld-paper",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "gate_reason": "research_agent_pipeline_failed_closed",
+            "gate_checks": {
+                "execution_complete": True,
+                "analysis_validated": True,
+                "evidence_complete": False,
+                "numeric_verified": True,
+                "manuscript_ready": False,
+                "publication_ready": False,
+            },
+            "run_status": "blocked",
+            "artifact_names": [
+                "agent_plan.json",
+                "evidence_ledger.json",
+                "result_tables.json",
+                "figure_gallery.json",
+                "manuscript_draft.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert snapshot.current_stage == "interpretation"
+    assert snapshot.next_action_code == "evidence_bound_interpretation_ready"
+    assert by_id["plan"].status == "complete"
+    assert by_id["analysis"].status == "complete"
+    assert by_id["analysis"].reason_code == "validated_analysis_ready"
+    assert by_id["interpretation"].status == "review_required"
+    assert by_id["manuscript"].status == "review_required"
+
+
 def test_completed_preflight_advances_to_provider_plan_confirmation() -> None:
     snapshot = build_research_workflow_snapshot(
         study=_complete_study(),
@@ -881,10 +969,10 @@ def test_completed_preflight_advances_to_provider_plan_confirmation() -> None:
     )
 
     assert snapshot.current_stage == "plan"
-    assert snapshot.next_action_code == "provider_plan_ready"
+    assert snapshot.next_action_code == "provider_ready_to_generate_plan"
     plan = next(row for row in snapshot.stages if row.id == "plan")
     assert plan.status == "ready"
-    assert plan.reason_code == "provider_plan_ready"
+    assert plan.reason_code == "provider_ready_to_generate_plan"
 
 
 def test_active_export_must_belong_to_the_bound_study() -> None:
@@ -1098,6 +1186,80 @@ def test_interpretation_and_manuscript_tools_bound_large_agent_drafts(
     assert "markdown_preview" not in draft["details"]["manuscript"]
     assert len(json.dumps(interpretation).encode("utf-8")) < 32_768
     assert len(json.dumps(draft).encode("utf-8")) < 32_768
+
+
+def test_validation_projects_analysis_status_and_owner_operational_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="pi-validation-mapping")
+    )
+    review = {
+        "gate": {
+            "status": "blocked",
+            "reason": "publication_requirements_incomplete",
+            "reportable": False,
+            "draft_unlocked": False,
+            "checks": [
+                {"id": "analysis_validated", "passed": True},
+                {"id": "numeric_verified", "passed": True},
+                {"id": "publication_ready", "passed": False},
+            ],
+        },
+        "readiness": {"status": "blocked", "reportable": False},
+        "artifact_payloads": {
+            "scientific_readiness.json": {
+                "status": "analysis_only",
+                "claim_ceiling": "analysis_only",
+                "publication_ready": False,
+                "facts": {"analysis": {"analysis_validated": True}},
+            },
+            "result_tables.json": {
+                "table_count": 1,
+                "tables": [
+                    {
+                        "headers": [
+                            "concept",
+                            "indicator_semantics",
+                            "value_column",
+                        ],
+                        "rows": [
+                            [
+                                "sep3_sofa2",
+                                "binary_event_presence",
+                                "sep3_sofa2_max",
+                            ]
+                        ],
+                    }
+                ],
+            },
+        },
+        "signed": False,
+        "signoff_stale": False,
+    }
+    monkeypatch.setattr(
+        tool_module,
+        "_select_run",
+        lambda _context, _requested_run_id=None: {"run_id": "run-mapping"},
+    )
+    monkeypatch.setattr(tool_module, "_run_review", lambda _row: review)
+
+    result = tool_module.execute_tool(
+        "easyicu_inspect_validation", {"run_id": "run-mapping"}, context
+    )
+
+    execution = result["details"]["analysis_execution"]
+    assert execution["analysis_validated"] is True
+    assert execution["numeric_verified"] is True
+    assert execution["publication_gate_separate"] is True
+    assert execution["operational_mappings"] == [
+        {
+            "semantic_concept": "sep3_sofa2",
+            "operational_value_column": "sep3_sofa2_max",
+            "authority": "validated_result_measurement_audit",
+            "indicator_semantics": "binary_event_presence",
+        }
+    ]
 
 
 def test_idea_tool_never_accepts_a_host_path_from_the_model() -> None:
@@ -3001,6 +3163,18 @@ def test_recoverable_review_resume_failure_keeps_pending_run_and_pauses_budget(
     assert task_row["status"] == "paused"
     assert hard_stop.ledger.snapshot()["terminal"] is False
 
+    diagnostic = json.loads(
+        (entry.wrapper_dir / exc.value.details["diagnostic"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert diagnostic["exception_type"] == "builtins.ValueError"
+    assert diagnostic["review_resumable"] is True
+    assert diagnostic["raw_exception_recorded"] is False
+    assert "review decision evidence could not be persisted" not in json.dumps(
+        diagnostic
+    )
+
 
 def test_review_resume_claim_is_exclusive_before_touching_provider_budget(
     tmp_path: Path,
@@ -3764,6 +3938,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].writer_digest_widened is True
     assert calls["config"].enable_reproducibility_envelope is True
     assert calls["config"].require_human_plan_review is True
+    assert calls["config"].enable_replanning is False
     assert calls["config"].require_reportable_scientific_capability is True
     assert calls["config"].required_primary_cohort_selection_mode == "all_input_rows"
     assert calls["config"].enable_pubmed is False
@@ -4310,7 +4485,7 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     monkeypatch.setattr(agent_route.context_store, "get_context", lambda _id: study)
     monkeypatch.setattr(
         agent_route,
-        "_research_pipeline_workspace",
+        "research_pipeline_workspace",
         lambda: workspace,
     )
     monkeypatch.setattr(
@@ -4416,7 +4591,7 @@ def test_monitor_history_merges_default_and_copilot_pipeline_roots(
             ]
         return {"ok": True, "project_root": project_root or "default", "runs": rows, "count": len(rows)}
 
-    monkeypatch.setattr(agent_route, "_research_pipeline_workspace", lambda: Workspace())
+    monkeypatch.setattr(agent_route, "research_pipeline_workspace", lambda: Workspace())
     monkeypatch.setattr(agent_route.agent_runs, "list_run_history", history)
     result = agent_route.post_agent_run_history(
         {"study_id": "study-workflow", "limit": 50}
@@ -5333,6 +5508,35 @@ def test_pipeline_factory_rejects_generic_sepsis_sofa2_before_job_creation(
     assert exc.value.code == "concept_explicit_selection_required"
     assert exc.value.details["canonical_alternative"] == "sep3_sofa1"
     assert foundation_called is False
+
+
+def test_pipeline_factory_accepts_owner_confirmed_explicit_sepsis_concept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = {
+        **_complete_study(),
+        "question": "What is standard Sepsis-3 prevalence and mortality?",
+        "primary_exposure": "Sepsis-3 using SOFA-2",
+        "modules": ["outcome", "sepsis3_sofa2"],
+        "execution_concepts": {
+            "outcome": "death",
+            "primary_exposure": "sep3_sofa2",
+            "covariates": [],
+        },
+        "confirmations": {
+            "concept_selection_sep3_sofa2_authorized": True,
+        },
+    }
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_validate_analysis_design",
+        lambda _study: {},
+    )
+
+    agent_pipeline_runs._validate_primary_concept_selection(
+        study,
+        "sep3_sofa2",
+    )
 
 
 def test_pipeline_factory_rejects_unimplemented_cluster_variance_before_job(
