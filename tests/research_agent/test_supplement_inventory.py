@@ -8,6 +8,9 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.reporting.supplement_inventory import (
     write_supplement_inventory,
 )
+from easyicu.research_agent.reporting.supplement_package import (
+    write_supplement_package,
+)
 
 
 def _register(store: EvidenceStore, evidence_id: str, filename: str) -> None:
@@ -20,6 +23,36 @@ def _register(store: EvidenceStore, evidence_id: str, filename: str) -> None:
         producer="pipeline",
         generation_mode="system",
     )
+
+
+def test_supplement_package_binds_registered_files_and_keeps_missing_explicit(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    _register(store, "cohort_accounting", "cohort_accounting.csv")
+    inventory, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="association_study"),
+        evidence=store,
+        per_step_records=[],
+        run_dir=tmp_path,
+    )
+
+    payload = write_supplement_package(
+        inventory=inventory,
+        evidence=store,
+        run_dir=tmp_path,
+    )
+
+    cohort = payload["sections"]["cohort_accounting"]
+    assert cohort["all_files_digest_verified"] is True
+    assert cohort["artifact_bindings"][0]["evidence_id"] == "cohort_accounting"
+    missing = payload["sections"]["primary_results"]
+    assert missing["present"] is False
+    assert missing["artifact_bindings"] == []
+    markdown = (tmp_path / "supplement_package.md").read_text(encoding="utf-8")
+    assert "no placeholder result was inserted" in markdown
+    assert "not causal or external claims" in markdown
+    assert (tmp_path / "supplement_evidence_manifest.json").is_file()
 
 
 def test_prediction_supplement_inventory_names_missing_scientific_sections(
