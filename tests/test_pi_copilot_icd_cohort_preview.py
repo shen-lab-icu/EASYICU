@@ -88,6 +88,102 @@ def test_dataio_icd_preview_reuses_extraction_filter_without_returning_ids(
     assert "id_col" not in preview
 
 
+def test_registered_export_icd_preview_resolves_manifest_source_without_returning_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_path = tmp_path / "raw"
+    raw_path.mkdir()
+    export_path = tmp_path / "export"
+    export_path.mkdir()
+    (export_path / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu_native_export_v2",
+                "database": "miiv",
+                "data_path": str(raw_path),
+                "cohort_contract": {
+                    "preset": "all_icu",
+                    "age_min": 18,
+                    "exclude_readmissions": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def preview(path: str, database: str, cohort: dict) -> dict:
+        captured.update(path=path, database=database, cohort=cohort)
+        return {
+            "schema_version": "easyicu_export_cohort_preview_v1",
+            "database": database,
+            "cohort_size": 10,
+            "cohort_contract": cohort,
+            "cohort_report": {"source_total": 140, "selected": 10},
+            "privacy": {
+                "patient_ids_returned": False,
+                "raw_rows_returned": False,
+                "host_path_returned": False,
+            },
+        }
+
+    monkeypatch.setattr(dataio, "preview_export_cohort", preview)
+
+    result = dataio.preview_registered_export_icd_cohort(
+        str(export_path),
+        "miiv",
+        {},
+        include_codes=["A41"],
+        exclude_codes=[],
+    )
+
+    assert captured == {
+        "path": str(raw_path.resolve()),
+        "database": "miiv",
+        "cohort": {
+            "preset": "all_icu",
+            "age_min": 18,
+            "exclude_readmissions": False,
+            "icd_enabled": True,
+            "icd_include": ["A41"],
+            "icd_exclude": [],
+        },
+    }
+    encoded = json.dumps(result)
+    assert str(raw_path) not in encoded
+    assert str(export_path) not in encoded
+
+
+def test_registered_export_icd_preview_fails_closed_when_source_path_is_missing(
+    tmp_path: Path,
+) -> None:
+    export_path = tmp_path / "export"
+    export_path.mkdir()
+    (export_path / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu_native_export_v2",
+                "database": "miiv",
+                "data_path": str(tmp_path / "missing"),
+                "cohort_contract": {"preset": "all_icu"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(dataio.ExportCohortError) as exc_info:
+        dataio.preview_registered_export_icd_cohort(
+            str(export_path),
+            "miiv",
+            {},
+            include_codes=["A41"],
+            exclude_codes=[],
+        )
+
+    assert exc_info.value.error == "icd_preview_source_path_unavailable"
+    assert str(tmp_path) not in json.dumps(exc_info.value.detail)
+
+
 def test_copilot_icd_tool_preserves_bound_filters_and_returns_snapshot_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -120,8 +216,21 @@ def test_copilot_icd_tool_preserves_bound_filters_and_returns_snapshot_only(
         },
     )
 
-    def preview(path: str, database: str, cohort: dict) -> dict:
-        captured.update(path=path, database=database, cohort=cohort)
+    def preview(
+        path: str,
+        database: str,
+        cohort: dict,
+        *,
+        include_codes: list[str],
+        exclude_codes: list[str],
+    ) -> dict:
+        captured.update(
+            path=path,
+            database=database,
+            cohort=cohort,
+            include_codes=include_codes,
+            exclude_codes=exclude_codes,
+        )
         return {
             "schema_version": "easyicu_export_cohort_preview_v1",
             "database": "miiv",
@@ -147,7 +256,9 @@ def test_copilot_icd_tool_preserves_bound_filters_and_returns_snapshot_only(
             },
         }
 
-    monkeypatch.setattr(tool_owner.dataio, "preview_export_cohort", preview)
+    monkeypatch.setattr(
+        tool_owner.dataio, "preview_registered_export_icd_cohort", preview
+    )
     monkeypatch.setattr(tool_owner, "CopilotDataWorkbenchSnapshotStore", lambda: store)
 
     result = tool_owner.execute_tool(
@@ -169,10 +280,9 @@ def test_copilot_icd_tool_preserves_bound_filters_and_returns_snapshot_only(
         "age_min": 40,
         "age_max": 85,
         "exclude_readmissions": True,
-        "icd_enabled": True,
-        "icd_include": ["A41"],
-        "icd_exclude": ["R65"],
     }
+    assert captured["include_codes"] == ["A41"]
+    assert captured["exclude_codes"] == ["R65"]
     assert str(source_path) not in json.dumps(result)
     resource = result["details"]["resource"]
     assert resource["kind"] == "data_workbench_snapshot"
