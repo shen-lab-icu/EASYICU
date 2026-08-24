@@ -377,19 +377,26 @@ def _apply_writer_evidence_repair_decisions(
     *,
     missing_sentences: Sequence[str],
     decisions: Sequence[Mapping[str, object]],
+    allowed_evidence_ids: Sequence[str] = (),
     allowed_claim_refs: Sequence[str] = (),
 ) -> tuple[str, List[Dict[str, object]]]:
     """Apply a validated writer citation/drop/claim decision without rewriting.
 
     The LLM chooses only among registered citations, one exact registered host
     claim, and deletion. This host function preserves every cited sentence
-    byte-for-byte apart from appending the selected evidence placeholders. A
-    claim decision replaces the whole sentence with one exact host-issued
-    token; no model-authored direction, population, number, or interpretation
-    survives that replacement.
+    byte-for-byte apart from removing unregistered evidence placeholders and
+    appending the selected registered placeholders. Existing registered
+    citations are preserved. A claim decision replaces the whole sentence
+    with one exact host-issued token; no model-authored direction, population,
+    number, or interpretation survives that replacement.
     """
 
     sentences = [str(sentence).strip() for sentence in missing_sentences]
+    allowed_evidence = {
+        str(evidence_id).strip()
+        for evidence_id in allowed_evidence_ids
+        if str(evidence_id).strip()
+    }
     allowed_claims = {
         str(claim_ref).strip()
         for claim_ref in allowed_claim_refs
@@ -430,9 +437,28 @@ def _apply_writer_evidence_repair_decisions(
         if action == "cite":
             if not evidence_ids:
                 raise ValueError("cite decision requires at least one evidence id")
+            if allowed_evidence and any(
+                evidence_id not in allowed_evidence for evidence_id in evidence_ids
+            ):
+                raise ValueError(
+                    "cite decision requires registered allowed evidence ids"
+                )
             replacement = matched_target
+            if allowed_evidence:
+                replacement = re.sub(
+                    r"[ \t]*\{evidence:(?P<id>[^{}]+)\}",
+                    lambda match: (
+                        match.group(0)
+                        if match.group("id").strip() in allowed_evidence
+                        else ""
+                    ),
+                    replacement,
+                )
+                replacement = replacement.lstrip(" \t")
             for evidence_id in evidence_ids:
-                replacement = _append_evidence_citation(replacement, evidence_id)
+                token = "{evidence:" + evidence_id + "}"
+                if token not in replacement:
+                    replacement = _append_evidence_citation(replacement, evidence_id)
         elif action == "claim":
             if evidence_ids:
                 raise ValueError("claim decision cannot include evidence ids")

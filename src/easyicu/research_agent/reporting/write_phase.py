@@ -142,6 +142,7 @@ def _repair_rejected_writer_sentences(
             original_scaffold,
             missing_sentences=rejected_sentences,
             decisions=repair_decisions,
+            allowed_evidence_ids=evidence_ids,
             allowed_claim_refs=allowed_claim_refs,
         )
     except (StructuredResponseFailure, ValueError) as exc:
@@ -153,6 +154,7 @@ def _repair_rejected_writer_sentences(
             original_scaffold,
             missing_sentences=rejected_sentences,
             decisions=drop_decisions,
+            allowed_evidence_ids=evidence_ids,
             allowed_claim_refs=allowed_claim_refs,
         )
         raw_attempts = getattr(exc, "easyicu_structured_attempt_metadata", [])
