@@ -182,7 +182,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
-    assert "js/screens-extraction.js?v=20260824-folder-choice1" in index_html
+    assert "js/screens-extraction.js?v=20260824-icd-source1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
@@ -1239,7 +1239,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "All controls are demo-interactive" not in settings_js
 
 
-def test_native_extraction_shows_source_metadata_without_quality_filters() -> None:
+def test_native_extraction_omits_unbound_registered_source_metadata() -> None:
     api_js = _static_js("api.js")
     extraction_js = _static_js("screens-extraction.js")
 
@@ -1248,8 +1248,9 @@ def test_native_extraction_shows_source_metadata_without_quality_filters() -> No
     assert "window.EU_API.createDir = createDir" in api_js
     assert "/api/extraction/filter-options" in api_js
     assert "/api/extraction/filter-preview" in api_js
-    assert "loadExtractionFilterOptions" in extraction_js
-    assert "Registered source metadata" in extraction_js
+    assert "loadExtractionFilterOptions" not in extraction_js
+    assert "Registered source metadata" not in extraction_js
+    assert "sourceMetadataBody" not in extraction_js
     assert "previewExtractionFilters" not in extraction_js
     assert "Minimum module coverage" not in extraction_js
     assert "Quality status" not in extraction_js
@@ -1293,7 +1294,7 @@ def test_native_extraction_custom_modules_default_to_all_with_bulk_actions() -> 
     index_html = _static_html("index.html")
 
     assert (
-        "let exAdvCohort = false, exAdvExport = false, exShowAllMods = true, exIncludeDefinitions = true;"
+        "let exAdvCohort = true, exAdvExport = false, exShowAllMods = true, exIncludeDefinitions = true;"
         in extraction_js
     )
     assert "let exCustomOpen = false;" in extraction_js
@@ -1791,6 +1792,12 @@ def test_native_extraction_cohort_controls_are_continuous_and_icd_is_empty() -> 
     assert "icd_include" in _static_js("screens-icd.js")
     assert "let icdInclude = '';" in icd_js
     assert "let icdInclude = 'A41, R65'" not in icd_js
+    assert "ICD_TOTAL" not in icd_js
+    assert "tokenFraction" not in icd_js
+    assert "Top matching ICD codes" not in icd_js
+    assert "MIMIC-IV · MIMIC-III · eICU" not in icd_js
+    assert "No estimated patient count or synthetic code frequency is shown" in icd_js
+    assert "window.EUIcd.block(icdSourceContext())" in extraction_js
 
 
 def test_native_extraction_exposes_real_cohort_gate_and_recommended_contract() -> None:
