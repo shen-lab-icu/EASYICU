@@ -107,6 +107,12 @@ def test_failed_closed_selection_renders_a_bound_diagnostic_without_labels(
     assert summary["status"] == "ok"
     assert summary["scientific_status"] == "failed_closed"
     assert summary["reason_code"] == "NO_INTERIOR_OPTIMUM"
+    availability_source = pd.read_csv(
+        tmp_path
+        / "figure"
+        / "trajectory_selection_availability_source_data.csv"
+    )
+    assert list(availability_source.columns) == list(_availability().columns)
     for suffix in ("png", "svg", "pdf", "tiff"):
         assert (
             tmp_path / "figure" / f"trajectory_selection_diagnostics.{suffix}"
