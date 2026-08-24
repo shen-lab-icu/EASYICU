@@ -857,12 +857,17 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
     proportional_hazards_policy: Literal[
         "report_only", "block_paper_authorization"
     ]
+    non_ph_alternative: Literal["unadjusted_rmst_difference"] | None = None
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
     table_one_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     risk_set_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     km_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     cox_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     ph_product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
+    rmst_product: str | None = Field(
+        default=None,
+        pattern=r"^table:[a-z][a-z0-9_]{0,79}$",
+    )
     receipt_product: str = Field(pattern=r"^log:[a-z][a-z0-9_]{0,79}$")
     figure_product: str = Field(pattern=r"^figure:[a-z][a-z0-9_]{0,79}$")
 
@@ -921,6 +926,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             self.km_product,
             self.cox_product,
             self.ph_product,
+            *((self.rmst_product,) if self.rmst_product is not None else ()),
             self.receipt_product,
             self.figure_product,
         )
@@ -928,7 +934,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             raise ValueError("landmark survival output products must be unique")
         if self.plan_outputs != products:
             raise ValueError(
-                "landmark survival plan outputs must equal the seven owned products"
+                "landmark survival plan outputs must equal the owned products"
             )
         self._verify_digest()
         return self
@@ -1021,6 +1027,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             self.cox_product,
             self.risk_set_product,
             self.ph_product,
+            *((self.rmst_product,) if self.rmst_product is not None else ()),
         )
 
     def development_execution_only_plan(

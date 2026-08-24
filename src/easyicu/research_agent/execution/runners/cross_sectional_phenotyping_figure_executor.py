@@ -46,8 +46,10 @@ _REQUIRED_COLUMNS = {
 
 def _figure_product(value: Any) -> str | None:
     kind, separator, product = str(value or "").strip().partition(":")
-    if kind != "figure" or not separator or not re.fullmatch(
-        r"[a-z][a-z0-9_]{0,127}", product
+    if (
+        kind != "figure"
+        or not separator
+        or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", product)
     ):
         return None
     return product
@@ -86,7 +88,9 @@ def cross_sectional_phenotyping_figure_executor_owns_step(
 
 
 def cross_sectional_phenotyping_figure_executor_code(step: AnalysisStep) -> str:
-    product = _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    product = (
+        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    )
     if product is None:
         raise ValueError("phenotyping figure has no safe figure product")
     return textwrap.dedent(
@@ -192,13 +196,11 @@ def run_cross_sectional_phenotyping_figure(
         rotation=45,
         ha="right",
     )
-    axes[0].set_title("Standardised phenotype profiles", loc="left", pad=10)
+    axes[0].set_title("Standardised candidate-cluster profiles", loc="left", pad=10)
     fig.colorbar(image, ax=axes[0], fraction=0.046, pad=0.03)
     add_panel_label(axes[0], "A", x=-0.16, y=1.05)
 
-    axes[1].bar(
-        range(len(sizes)), sizes.to_numpy(), color=palette["blue"], width=0.65
-    )
+    axes[1].bar(range(len(sizes)), sizes.to_numpy(), color=palette["blue"], width=0.65)
     axes[1].set_xticks(range(len(sizes)), [f"C{x}" for x in sizes.index])
     axes[1].set_ylabel("Stays, n")
     axes[1].set_title("Cluster size", loc="left", pad=10)
@@ -207,7 +209,9 @@ def run_cross_sectional_phenotyping_figure(
     axes[2].bar(
         stability["replicate"].astype(str), stability_values, color=palette["orange"]
     )
-    axes[2].axhline(float(stability_values.mean()), color="#333333", linestyle="--", linewidth=0.9)
+    axes[2].axhline(
+        float(stability_values.mean()), color="#333333", linestyle="--", linewidth=0.9
+    )
     axes[2].set_ylim(-0.05, 1.0)
     axes[2].set_xlabel("Resample")
     axes[2].set_ylabel("Adjusted Rand index")
@@ -216,15 +220,21 @@ def run_cross_sectional_phenotyping_figure(
 
     evidence = {key: item.evidence_id for key, item in bound.items()}
     panel_specs = (
-        ("A", "Phenotype profiles", "phenotype_structure", (PHENOTYPE_PROFILES_PRODUCT,)),
+        (
+            "A",
+            "Candidate-cluster profiles",
+            "phenotype_structure",
+            (PHENOTYPE_PROFILES_PRODUCT,),
+        ),
         ("B", "Cluster size", "phenotype_profile", (PHENOTYPE_ASSIGNMENTS_PRODUCT,)),
         ("C", "Resampling stability", "stability", (CLUSTER_STABILITY_PRODUCT,)),
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
-            "The analysis-only clustering solution is displayed with exact "
-            "standardised profiles, cluster sizes and resampling agreement."
+            "The analysis-only candidate clustering solution is displayed with "
+            "exact standardised profiles, cluster sizes and resampling agreement; "
+            "no phenotype name or biological entity is authorized."
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -238,7 +248,10 @@ def run_cross_sectional_phenotyping_figure(
                 "evidence_ids": [evidence[source] for source in sources],
                 "metadata": {
                     "source_products": list(sources),
-                    "source_data": [f"{source.partition(':')[2]}_source_data.csv" for source in sources],
+                    "source_data": [
+                        f"{source.partition(':')[2]}_source_data.csv"
+                        for source in sources
+                    ],
                 },
             }
             for panel_id, title, role, sources in panel_specs
@@ -270,14 +283,25 @@ def run_cross_sectional_phenotyping_figure(
         "deterministic_standard_analysis": PHENOTYPING_FIGURE_ANALYSIS_KIND,
         "authority_scope": "analysis_only",
         "paper_authorization_allowed": False,
+        "phenotype_naming_authorized": False,
+        "outcome_claim_authorized": False,
+        "solution_label": "candidate_clusters_only",
         "rendering_only": True,
         "source_inputs": list(PHENOTYPING_FIGURE_INPUTS),
         "input_bindings": [
-            {"input_key": key, "evidence_id": item.evidence_id, "sha256": item.sha256, "loaded": True, "row_count": item.row_count}
+            {
+                "input_key": key,
+                "evidence_id": item.evidence_id,
+                "sha256": item.sha256,
+                "loaded": True,
+                "row_count": item.row_count,
+            }
             for key, item in bound.items()
         ],
         "source_data_files": source_files,
-        "figure_files": [path.name for key, path in outputs.items() if key != "contract"],
+        "figure_files": [
+            path.name for key, path in outputs.items() if key != "contract"
+        ],
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
         "contract_files": [f"{figure_product}.figure_contract.json"],

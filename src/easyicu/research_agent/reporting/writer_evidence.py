@@ -1407,6 +1407,18 @@ def _primary_effect_interpretation_lines(
             "describe the estimate's units or contrast."
         ]
 
+    ph_status = str(summary.get("proportional_hazards_status") or "").strip()
+    if ph_status.startswith("violation_"):
+        return [
+            "primary interpretation: HEADLINE EFFECT UNAUTHORIZED -- the signed "
+            "proportional-hazards policy rejected a constant Cox effect. Do not "
+            "report the Cox point estimate or confidence interval in the Abstract, "
+            "Primary association, Discussion, Conclusion, title, or figure headline. "
+            "State that the PH assumption was rejected and that the Cox coefficient "
+            "is retained only as a diagnostic artifact; use an authorized non-PH or "
+            "absolute-time estimand if one exists."
+        ]
+
     scale = summary.get("effect_scale") or summary.get("primary_estimate_label")
     if not scale:
         return [
