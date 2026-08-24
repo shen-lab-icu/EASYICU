@@ -236,14 +236,17 @@ def _eligibility_mask(
                     raise AssociationModelGridError(
                         "landmark observation duration is non-numeric"
                     )
-                if bool(duration.isna().any()) or bool((duration < 0.0).any()):
+                if bool((duration < 0.0).any()):
                     raise AssociationModelGridError(
-                        "landmark observation duration is missing or negative"
+                        "landmark observation duration is negative"
                     )
                 threshold = float(rule.landmark_hours)
                 if rule.observation_duration_unit == "days":
                     threshold /= 24.0
-                under_observation = duration.ge(threshold)
+                # Missing duration cannot establish landmark eligibility.  It
+                # is therefore excluded from this variant, while remaining in
+                # any separately declared full-cohort analysis.
+                under_observation = duration.notna() & duration.ge(threshold)
             mask &= nonnegative_event_time & alive & under_observation
             continue
         if not isinstance(rule, AssociationModelGridLevelFilter):

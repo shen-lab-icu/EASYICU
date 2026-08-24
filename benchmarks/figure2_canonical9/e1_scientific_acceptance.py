@@ -941,7 +941,6 @@ def _validate_sensitivity(
         outcome.isna().any()
         or not outcome.isin([0, 1]).all()
         or ((outcome.eq(1)) & event_time.isna()).any()
-        or observation_duration.isna().any()
         or (observation_duration < 0).any()
         or readmission.isna().any()
         or not readmission.isin([0, 1]).all()
