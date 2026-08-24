@@ -112,6 +112,19 @@ from .result_integrity import (
     primary_result_plausibility_errors,
     primary_survival_estimate_integrity_errors,
 )
+
+
+_MANUSCRIPT_ERROR_VALIDATORS = frozenset(
+    {
+        "critic_agent",
+        "evidence_bound_writer",
+        "manuscript_gate",
+        "manuscript_language_guard",
+        "manuscript_literature",
+        "manuscript_result_sufficiency",
+        "writer_agent",
+    }
+)
 from .scientific_maturity import (
     SCIENTIFIC_MATURITY_AUDIT_REGISTRATION,
     build_scientific_maturity_audit,
@@ -1884,7 +1897,7 @@ def _compute_readiness_gates(
         f.message
         for f in active_findings
         if f.severity == "error"
-        and f.validator in {"evidence_bound_writer", "critic_agent"}
+        and f.validator in _MANUSCRIPT_ERROR_VALIDATORS
     ]
     non_manuscript_errors = [
         f.message
@@ -1894,8 +1907,7 @@ def _compute_readiness_gates(
         and f.validator
         not in {
             "manuscript_numeric_auditor",
-            "evidence_bound_writer",
-            "critic_agent",
+            *_MANUSCRIPT_ERROR_VALIDATORS,
             # Run-level replan-budget latch: collected separately (from the
             # full findings list, not active_findings) so a step-id-shaped
             # replan trigger can never let supersession drop it.
