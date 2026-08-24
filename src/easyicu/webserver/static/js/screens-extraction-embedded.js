@@ -19,6 +19,43 @@
     </div>`;
   }
 
+  function projectCopilotSetup(root) {
+    const express = root.querySelector('.express');
+    const custom = root.querySelector('.ex2-custom');
+    if (!express || !custom) return;
+
+    const meta = Array.from(express.querySelectorAll('.express-meta > span'))
+      .slice(0, 3)
+      .map(row => `<span>${row.innerHTML}</span>`)
+      .join('');
+    const run = express.querySelector('[data-ex-run="recommended"]');
+    const compact = document.createElement('div');
+    compact.className = 'gpi-extraction-compact';
+    compact.setAttribute('aria-label', t('Current extraction setup', '当前抽取设置'));
+    compact.innerHTML = `<div class="gpi-extraction-compact-main">
+      <strong>${t('Current extraction setup', '当前抽取设置')}</strong>
+      <div class="gpi-extraction-compact-meta">${meta}</div>
+    </div>
+    <button class="btn primary" data-ex-run="recommended" ${run && run.disabled ? 'disabled' : ''}>${icon('play', 14)} ${t('Start extraction', '开始抽取')}</button>`;
+    express.replaceWith(compact);
+
+    const divider = root.querySelector('.ex2-divider');
+    if (divider) divider.remove();
+    custom.hidden = false;
+
+    const layout = custom.querySelector('.ex2-layout > div');
+    const moduleCard = layout && layout.querySelector('#exModGrid')
+      ? layout.querySelector('#exModGrid').closest('.cfg')
+      : null;
+    if (layout && moduleCard) layout.prepend(moduleCard);
+
+    const lead = root.querySelector('.page-head .lead');
+    if (lead) lead.textContent = t(
+      'Review feature modules and cohort criteria, then start extraction.',
+      '确认特征模块与队列条件后开始抽取。'
+    );
+  }
+
   function paint() {
     const owner = window.EU_EXTRACTION_NATIVE_OWNER;
     if (!host || !host.isConnected || !owner) return;
@@ -36,6 +73,7 @@
       ${jobSummary(options.jobSnapshot)}
       <div class="gpi-extraction-native">${owner.render()}</div>
     </div>`;
+    projectCopilotSetup(host);
     owner.bind(host);
     host.querySelectorAll('[data-study-handoff]').forEach(control => { control.hidden = true; });
     if (owner.isPreparedExport()) {
