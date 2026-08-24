@@ -36,6 +36,10 @@ from ..authority.evidence_store import (
     EvidenceEnforcementMode,
     sha256_of_file,
 )
+from ..authority.manuscript_claim_policy import (
+    missing_scientific_claims_in_results,
+    place_scientific_claim_tokens_in_results,
+)
 from ..authority.runtime_artifacts import current_step_records
 from ..figures.skill import PublicationFigureSkill
 from ..publication_skills import compile_publication_skill_activation
@@ -1220,6 +1224,44 @@ def _draft_manuscript(
                     },
                 )
             )
+    authoritative_claims = evidence.authoritative_scientific_claims(
+        per_step_records
+    )
+    claim_placement = place_scientific_claim_tokens_in_results(
+        scaffold,
+        claims=authoritative_claims,
+    )
+    scaffold = claim_placement.scaffold
+    if claim_placement.inserted_claim_refs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="warning",
+                message=(
+                    "Inserted host-authorized scientific claim token(s) omitted "
+                    "from the Results section by the Writer."
+                ),
+                detail={
+                    "inserted_claim_refs": list(
+                        claim_placement.inserted_claim_refs
+                    )
+                },
+            )
+        )
+    if claim_placement.missing_claim_refs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="error",
+                message=(
+                    "The manuscript has no Results section in which to place "
+                    "host-authorized scientific claims."
+                ),
+                detail={
+                    "missing_claim_refs": list(claim_placement.missing_claim_refs)
+                },
+            )
+        )
     scaffold_path = run_dir / "manuscript_scaffold.md"
     scaffold_path.write_text(scaffold, encoding="utf-8")
     if evidence.get("manuscript_scaffold_raw") is None:
@@ -1380,6 +1422,25 @@ def _bind_and_review_manuscript(
                 ),
                 evidence_ids=["manuscript_scaffold_numeric_filtered"],
                 detail={"removed_sentences": removed_numeric_sentences},
+            )
+        )
+    authoritative_claims = evidence.authoritative_scientific_claims(
+        per_step_records
+    )
+    missing_result_claims = missing_scientific_claims_in_results(
+        bound,
+        claims=authoritative_claims,
+    )
+    if missing_result_claims:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="error",
+                message=(
+                    "Final evidence/numeric filtering removed or failed to bind "
+                    "host-authorized scientific claim(s) from the Results section."
+                ),
+                detail={"missing_claim_refs": list(missing_result_claims)},
             )
         )
     side_findings = collect_side_findings(per_step_records)
