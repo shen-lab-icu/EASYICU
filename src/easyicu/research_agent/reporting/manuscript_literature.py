@@ -93,6 +93,44 @@ def _section_citations(manuscript: str) -> Dict[str, list[str]]:
     return output
 
 
+def remove_sentences_with_unknown_literature_keys(
+    manuscript: str,
+    literature: Optional[LiteratureBundle],
+) -> tuple[str, list[str], int]:
+    """Delete unsupported citation sentences without substituting a source.
+
+    Task prose can contain citation-like keys that are intentionally absent
+    from the run-bound literature bundle. If a Writer copies one, replacing it
+    with a convenient allowed paper would manufacture support. Removing the
+    complete sentence is the narrow fail-closed repair; the original raw draft
+    remains registered separately for audit.
+    """
+
+    if literature is None:
+        return manuscript, [], 0
+    allowed = {record.key for record in literature.citations}
+    unknown = sorted(set(_citation_keys(manuscript or "")) - allowed)
+    if not unknown:
+        return manuscript, [], 0
+    unknown_set = set(unknown)
+    parts = re.split(r"(\n{2,})", manuscript or "")
+    cleaned: list[str] = []
+    removed = 0
+    for part in parts:
+        if not part or part.startswith("\n") or part.lstrip().startswith("#"):
+            cleaned.append(part)
+            continue
+        sentences = re.split(r"(?<=[.!?])(?=\s+[A-Z0-9])", part)
+        kept: list[str] = []
+        for sentence in sentences:
+            if set(_citation_keys(sentence)) & unknown_set:
+                removed += 1
+            else:
+                kept.append(sentence)
+        cleaned.append("".join(kept))
+    return "".join(cleaned), unknown, removed
+
+
 def repair_evidence_ids_mistyped_as_literature(
     manuscript: str,
     literature: Optional[LiteratureBundle],
@@ -481,6 +519,7 @@ def audit_manuscript_literature(
 __all__ = [
     "ManuscriptLiteratureAudit",
     "audit_manuscript_literature",
+    "remove_sentences_with_unknown_literature_keys",
     "repair_missing_context_section_citations",
     "repair_missing_methods_method_citation",
     "render_writer_literature_digest",

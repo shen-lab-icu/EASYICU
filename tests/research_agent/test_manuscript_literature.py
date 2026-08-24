@@ -5,6 +5,7 @@ from easyicu.research_agent.literature import (
 )
 from easyicu.research_agent.reporting.manuscript_literature import (
     audit_manuscript_literature,
+    remove_sentences_with_unknown_literature_keys,
     repair_evidence_ids_mistyped_as_literature,
     repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
@@ -85,6 +86,26 @@ def test_writer_digest_exposes_exact_key_and_relevance() -> None:
     assert "Run-bound typed methodology applications" in digest
     assert "step=01_primary_description" in digest
     assert "design_elements=reporting" in digest
+
+
+def test_unknown_literature_sentence_is_deleted_without_source_substitution() -> None:
+    manuscript = (
+        "## Discussion\n\n"
+        "The supported comparison remained cautious [@paper_2024]. "
+        "An unsupported mechanism was asserted [@invented_2025]. "
+        "The reporting boundary followed guidance [@strobe_2007]."
+    )
+
+    cleaned, keys, count = remove_sentences_with_unknown_literature_keys(
+        manuscript, _bundle()
+    )
+
+    assert keys == ["invented_2025"]
+    assert count == 1
+    assert "unsupported mechanism" not in cleaned
+    assert "[@paper_2024]" in cleaned
+    assert "[@strobe_2007]" in cleaned
+    assert "invented_2025" not in cleaned
 
 
 def test_manuscript_literature_audit_rejects_aggregate_only_or_unknown() -> None:

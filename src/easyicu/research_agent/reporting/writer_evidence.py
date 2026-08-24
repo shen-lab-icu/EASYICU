@@ -1361,17 +1361,8 @@ def _render_executed_robustness_authority(
     rows = [
         row for row in summary["robustness_rows"] if isinstance(row, Mapping)
     ]
-    primary_rows = [row for row in rows if str(row.get("axis") or "") == "primary"]
-    if len(primary_rows) != 1:
-        return []
-    primary = primary_rows[0]
-    primary_evidence = primary.get("evidence_id") or record.get(
-        "step_summary_evidence_id"
-    )
-    summary_evidence = record.get("step_summary_evidence_id") or primary_evidence
-    if not str(primary_evidence or "").strip() or not str(
-        summary_evidence or ""
-    ).strip():
+    summary_evidence = record.get("step_summary_evidence_id")
+    if not str(summary_evidence or "").strip():
         return []
     independent = [
         row
@@ -1384,10 +1375,10 @@ def _render_executed_robustness_authority(
         "primary display anchor: "
         f"label={summary.get('primary_effect_label')}, "
         f"scale={summary.get('primary_effect_scale')}, "
-        f"point={_fmt_panel_number(primary.get('point_estimate'))}, "
-        f"CI=[{_fmt_panel_number(primary.get('ci_low'))}, "
-        f"{_fmt_panel_number(primary.get('ci_high'))}], "
-        f"cite={{evidence:{primary_evidence}}}",
+        f"point={_fmt_panel_number(summary.get('primary_estimate'))}, "
+        f"CI=[{_fmt_panel_number(summary.get('primary_ci_low'))}, "
+        f"{_fmt_panel_number(summary.get('primary_ci_high'))}], "
+        f"cite={{evidence:{summary_evidence}}}",
         "executed variants: "
         f"n_converged={int(summary['n_converged_variants'])}, "
         f"n_independent={len(independent)}, "

@@ -46,6 +46,7 @@ from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_literature import (
     audit_manuscript_literature,
+    remove_sentences_with_unknown_literature_keys,
     repair_evidence_ids_mistyped_as_literature,
     repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
@@ -1316,6 +1317,24 @@ def _bind_and_review_manuscript(
                     + ", ".join(mistyped_literature_repairs)
                 ),
                 detail={"evidence_ids": mistyped_literature_repairs},
+            )
+        )
+    scaffold, removed_unknown_keys, removed_unknown_sentences = (
+        remove_sentences_with_unknown_literature_keys(scaffold, literature)
+    )
+    if removed_unknown_keys:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="warning",
+                message=(
+                    "Deleted sentence(s) that cited keys outside the exact "
+                    "run-bound literature bundle; no replacement source was inferred."
+                ),
+                detail={
+                    "unknown_keys": removed_unknown_keys,
+                    "removed_sentence_count": removed_unknown_sentences,
+                },
             )
         )
     manuscript_literature_audit = audit_manuscript_literature(scaffold, literature)

@@ -190,6 +190,21 @@ def run_landmark_spline_robustness(
     coordinate_value = coerce_finite_float(
         upper[coordinate], label="upper contrast coordinate"
     )
+    reference_columns = [
+        column
+        for column in contrasts.columns
+        if "reference" in str(column).casefold()
+    ]
+    if len(reference_columns) != 1:
+        raise ValueError("signed landmark contrasts require one reference coordinate")
+    reference_column = reference_columns[0]
+    reference_value = coerce_finite_float(
+        upper[reference_column], label="reference contrast coordinate"
+    )
+    primary_effect_label = (
+        f"upper signed curve-boundary contrast at {coordinate}={coordinate_value:g} "
+        f"vs {reference_column}={reference_value:g}"
+    )
 
     matrix_columns = [
         "spec_id",
@@ -323,7 +338,7 @@ def run_landmark_spline_robustness(
                 "ci_low": primary_low,
                 "ci_high": primary_high,
                 "effect_scale": "OR",
-                "estimand_label": "upper signed curve-boundary contrast vs reference",
+                "estimand_label": primary_effect_label,
                 "not_a_scalar_summary_of_nonlinearity": True,
             },
             indent=2,
@@ -360,7 +375,7 @@ def run_landmark_spline_robustness(
         "primary_ci_low": primary_low,
         "primary_ci_high": primary_high,
         "primary_effect_scale": "OR",
-        "primary_effect_label": "upper signed curve-boundary contrast vs reference",
+        "primary_effect_label": primary_effect_label,
         "primary_effect_is_nonlinear_curve_summary": False,
         "complete_case_n": complete_case_n,
         "n_converged_variants": int(matrix["converged"].sum()),
