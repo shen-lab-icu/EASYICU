@@ -12,6 +12,9 @@ SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID: Final = (
     "source_feasibility_non_use_v1"
 )
 SOURCE_FEASIBILITY_ANALYSIS_KIND: Final = "signed_source_feasibility_fail_closed"
+SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID: Final = (
+    "trajectory_signed_phenotyping_v1"
+)
 
 CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "survival_time_to_event_v1": "time_to_event",
@@ -24,6 +27,7 @@ CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "prediction_risk_model_v1": "prediction",
     "dynamic_prediction_landmark_v1": "prediction",
     PHENOTYPING_CLUSTER_CAPABILITY_ID: "phenotyping",
+    SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID: "phenotyping",
     "descriptive_measurement_v1": "descriptive",
     "descriptive_exposure_outcome_distribution_v1": "descriptive",
 }
@@ -43,5 +47,6 @@ __all__ = [
     "PHENOTYPING_ANALYSIS_KIND",
     "SOURCE_FEASIBILITY_ANALYSIS_KIND",
     "SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID",
+    "SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID",
     "capability_family",
 ]

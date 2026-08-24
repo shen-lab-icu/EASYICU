@@ -39,10 +39,15 @@ from ..contracts.capability_ids import (
     PHENOTYPING_ANALYSIS_KIND,
     PHENOTYPING_CLUSTER_CAPABILITY_ID,
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+    SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
 )
 from ..contracts.source_feasibility_validation import (
     source_feasibility_plan_claimed,
     source_feasibility_plan_contract_errors,
+)
+from ..trajectory.runtime_validation import (
+    signed_trajectory_plan_claimed,
+    signed_trajectory_plan_contract_errors,
 )
 from ..contracts.association_execution import association_execution_verdict
 from ..contracts.descriptive_execution import (
@@ -551,6 +556,49 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         ),
     ),
     ScientificCapability(
+        family="phenotyping",
+        label="Phenotyping — signed fixed-window trajectories",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed fixed-window trajectory candidate decision with a "
+            "digest-bound stability design or an explicit non-solution"
+        ),
+        primary_runner=None,
+        primary_runner_module=(
+            "execution.runners.trajectory_scientific_candidate_executor"
+        ),
+        figure="deterministic",
+        figure_renderer="phenotyping",
+        data_contract=(
+            "signed fixed-window representation",
+            "closed candidate-k grid and BIC rule",
+            "signed stability design",
+        ),
+        fail_closed=(
+            "Authority, artifact-digest, candidate-selection or stability drift "
+            "blocks validation; a boundary optimum is reported as no solution "
+            "and never forced into a phenotype."
+        ),
+        notes=(
+            "The receipt authorizes only the signed exploratory trajectory "
+            "decision. It does not establish biological entities, external "
+            "reproducibility, causal effects or clinical use."
+        ),
+        capability_id=SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
+        result_contract=(
+            "signed trajectory representation + candidate selection + stability "
+            "and diagnostic figure receipts"
+        ),
+        required_diagnostics=(
+            "fixed-window representation and missingness",
+            "closed candidate-grid BIC decision",
+            "resampling stability or explicit failed-closed non-solution",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="trajectory.runtime_validation",
+        scientific_validator_contract="signed_trajectory_runtime_bundle_errors",
+    ),
+    ScientificCapability(
         family="descriptive",
         label="Descriptive / measurement audit",
         primary_analysis="llm_coded",
@@ -1023,6 +1071,39 @@ def resolve_primary_capability(
             ),
         )
 
+    if signed_trajectory_plan_claimed(plan):
+        trajectory_capability = get_capability_by_id(
+            SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID
+        )
+        if canonical != "trajectory_clustering":
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="signed_trajectory_family_mismatch",
+                detail=(
+                    "The signed trajectory runtime may only own a trajectory-"
+                    "clustering plan."
+                ),
+            )
+        contract_errors = signed_trajectory_plan_contract_errors(plan)
+        if contract_errors:
+            return _verdict_for(
+                trajectory_capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="signed_trajectory_contract_invalid",
+                detail="; ".join(contract_errors),
+            )
+        return _verdict_for(
+            trajectory_capability,
+            analysis_family=canonical,
+            owner_claimed=True,
+            owner_reason=(
+                "the plan declares the four digest-bound trajectory runtime owners"
+            ),
+        )
+
     primary_steps = [
         step
         for step in tuple(getattr(plan, "steps", ()) or ())
@@ -1373,6 +1454,8 @@ def assess_scientific_capability(
     # requiring those association coordinates would silently misclassify it.
     if capability.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID:
         input_contract_resolved = not source_feasibility_plan_contract_errors(plan)
+    elif capability.capability_id == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID:
+        input_contract_resolved = not signed_trajectory_plan_contract_errors(plan)
     elif capability.family in {"association", "causal_emulation"}:
         input_contract_resolved = bool(exposure and outcome)
     elif capability.family == "prediction":
