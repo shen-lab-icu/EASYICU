@@ -273,7 +273,13 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "layout.prepend(moduleCard)" in embedded
     assert "projectCopilotSetup(host)" in embedded
     assert ".gpi-extraction-compact{" in preview_css
+    assert ".gpi-preview-body>[data-gpi-native-workspace-mount]{" in preview_css
+    assert (
+        ".gpi-preview-body>[data-gpi-native-workspace-mount]>.gpi-extraction-embed{"
+        in preview_css
+    )
     assert ".gpi-extraction-compact{" not in extraction_css
+    assert "data-gpi-native-workspace-mount" not in extraction_css
     assert "Prepared export is ready — sync to Copilot" in embedded
     assert "data-gpi-extraction-download" in embedded
     assert "downloadRegisteredExport" in embedded
