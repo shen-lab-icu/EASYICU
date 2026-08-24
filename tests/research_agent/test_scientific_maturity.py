@@ -10,6 +10,7 @@ from easyicu.research_agent.literature import (
     LiteratureSearchProvenance,
 )
 from easyicu.research_agent.reporting.scientific_maturity import (
+    _primary_figure_facts,
     _robustness_facts,
     build_scientific_maturity_audit,
     scientific_maturity_audit_from_gates,
@@ -20,9 +21,121 @@ from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,
     ConceptDescriptor,
+    PlannedModelRequirement,
     ResearchContext,
     UserPreferences,
 )
+
+
+def test_promoted_unadjusted_rmst_overrides_hidden_adjusted_cox_label(
+    tmp_path,
+) -> None:
+    plan = AnalysisPlan(
+        research_question="Compare landmark survival groups.",
+        analysis_type="survival",
+        steps=[
+            AnalysisStep(
+                step_id="survival_model",
+                planned_analysis_role="primary",
+                intent="Fit the adjusted diagnostic Cox model.",
+                inputs=["exposure", "death", "age", "sex"],
+                expected_outputs=["table:adjusted_association_estimates"],
+                method="adjusted_association_models",
+                model_requirements=[
+                    PlannedModelRequirement(
+                        requirement_id="adjusted_cox_diagnostic",
+                        outcome="death",
+                        outcome_type="binary",
+                        method_family="statsmodels_logit_mle",
+                        exposure_source="exposure",
+                        analysis_role="primary",
+                        analysis_set="source_aware",
+                        covariates=["age", "sex"],
+                    )
+                ],
+            )
+        ],
+    )
+    figure_dir = tmp_path / "publication_figures"
+    figure_dir.mkdir()
+    (figure_dir / "easyicu_publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "PH-free descriptive survival contrast.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Unadjusted RMST difference",
+                        "role": "survival_effect",
+                        "claim": "Unadjusted PH-free descriptive contrast.",
+                        "evidence_ids": ["figure_effect"],
+                    }
+                ],
+                "source_data": ["rmst.csv"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    receipt_path = evidence_dir / "log_survival_figure_runtime_receipt.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.survival_figure_runtime_receipt/1",
+                "adjustment_columns": ["age", "sex"],
+                "promoted_adjustment_columns": [],
+                "promoted_effect_measure": (
+                    "restricted_mean_survival_time_difference"
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (evidence_dir / "evidence_authority.json").write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "evidence_id": "figure_effect",
+                        "kind": "figure",
+                        "producer": "runner",
+                        "produced_by_step": "figure_step",
+                        "relative_path": "evidence/effect.png",
+                        "sha256": "not_needed_for_lineage",
+                        "inputs": ["table_effect"],
+                    },
+                    {
+                        "evidence_id": "table_effect",
+                        "kind": "table",
+                        "producer": "runner",
+                        "produced_by_step": "survival_model",
+                        "relative_path": "evidence/rmst.csv",
+                        "sha256": "not_needed_for_lineage",
+                    },
+                    {
+                        "evidence_id": "figure_receipt",
+                        "kind": "log",
+                        "producer": "runner",
+                        "produced_by_step": "figure_step",
+                        "relative_path": (
+                            "evidence/log_survival_figure_runtime_receipt.json"
+                        ),
+                        "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    facts = _primary_figure_facts(tmp_path, plan)
+
+    assert facts["expected_adjustment_label"] == "unadjusted"
+    assert facts["adjustment_covariates"] == []
+    assert facts["adjustment_authority"] == "promoted_runtime_receipt"
+    assert facts["adjustment_label_conflict"] is False
 
 
 def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None:

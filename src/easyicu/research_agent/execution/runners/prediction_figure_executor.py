@@ -245,7 +245,19 @@ def run_prediction_figure(
     source_files = []
     for key, item in bound.items():
         filename = f"{key.partition(':')[2]}_source_data.csv"
-        item.frame.to_csv(out_dir / filename, index=False)
+        source_frame = item.frame.copy()
+        relative_path = str(item.binding.get("relative_path") or "").strip()
+        source_table = Path(relative_path).name
+        if "__" in source_table:
+            source_table = source_table.split("__", 1)[1]
+        source_step_id = str(item.binding.get("produced_by_step") or "").strip()
+        if not source_table or not source_step_id:
+            raise RuntimeError(
+                f"prediction figure input lacks exact parent lineage: {key}"
+            )
+        source_frame.insert(0, "source_step_id", source_step_id)
+        source_frame.insert(0, "source_table", source_table)
+        source_frame.to_csv(out_dir / filename, index=False)
         source_files.append(filename)
 
     palette = apply_publication_style(font_size=7.0)

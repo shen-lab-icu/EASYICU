@@ -48,12 +48,20 @@ def test_prediction_supplement_inventory_names_missing_scientific_sections(
     )
 
     assert payload["supplement_complete"] is False
-    assert payload["missing_required_sections"] == ["clinical_utility"]
+    assert payload["missing_required_sections"] == [
+        "clinical_utility",
+        "resampling_validation",
+        "external_validation",
+    ]
     assert findings[0].validator == "supplement_inventory"
     assert (tmp_path / "supplement_inventory.json").is_file()
     assert (tmp_path / "supplement_inventory.md").is_file()
     on_disk = json.loads((tmp_path / "supplement_inventory.json").read_text())
-    assert on_disk["missing_required_sections"] == ["clinical_utility"]
+    assert on_disk["missing_required_sections"] == [
+        "clinical_utility",
+        "resampling_validation",
+        "external_validation",
+    ]
 
 
 def test_typed_output_can_close_the_clinical_utility_section(tmp_path: Path) -> None:
@@ -69,6 +77,8 @@ def test_typed_output_can_close_the_clinical_utility_section(tmp_path: Path) -> 
         ("calibration", "calibration.csv"),
         ("performance", "performance.csv"),
         ("validation", "validation.csv"),
+        ("resampling", "bootstrap_validation.csv"),
+        ("external_validation", "external_validation_cohort.csv"),
     ):
         _register(store, evidence_id, filename)
     records = [
@@ -90,3 +100,24 @@ def test_typed_output_can_close_the_clinical_utility_section(tmp_path: Path) -> 
 
     assert payload["supplement_complete"] is True
     assert findings == []
+
+
+def test_external_provider_privacy_audit_is_not_external_reproducibility(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    _register(
+        store,
+        "privacy_audit",
+        "external_provider_privacy_audit.json",
+    )
+
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="trajectory_clustering"),
+        evidence=store,
+        per_step_records=[],
+        run_dir=tmp_path,
+    )
+
+    assert payload["sections"]["external_reproducibility"]["present"] is False
+    assert "external_reproducibility" in payload["missing_required_sections"]
