@@ -48,6 +48,7 @@ from ..methods.sensitivity import compute_e_value
 from ..replication.report import _literature_provenance_note
 from ..reporting.readiness import render_report, write_readiness_artifacts
 from ..reporting.supplement_inventory import write_supplement_inventory
+from ..reporting.supplement_package import write_supplement_package
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from ..authority.runtime_artifacts import (
     AuditLogger,
@@ -1134,13 +1135,18 @@ def finalise_success(
         if robustness_panel_path.exists()
         else None
     )
-    _supplement_inventory, supplement_findings = write_supplement_inventory(
+    supplement_inventory, supplement_findings = write_supplement_inventory(
         plan=plan,
         evidence=evidence,
         per_step_records=per_step_records,
         run_dir=run_dir,
     )
     findings.extend(supplement_findings)
+    write_supplement_package(
+        inventory=supplement_inventory,
+        evidence=evidence,
+        run_dir=run_dir,
+    )
     side_findings = collect_side_findings(per_step_records)
     side_findings_path, side_findings_sha = write_side_findings(
         run_dir=run_dir,
