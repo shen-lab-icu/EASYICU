@@ -258,6 +258,8 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     )
     extraction = (static_root / "js" / "screens-extraction.js").read_text()
     embedded = (static_root / "js" / "screens-extraction-embedded.js").read_text()
+    preview_css = (static_root / "css" / "guided-pi-preview.css").read_text()
+    extraction_css = (static_root / "css" / "extraction.css").read_text()
     preview = (static_root / "js" / "screens-guided-pi-preview.js").read_text()
     resources = (static_root / "js" / "screens-guided-pi-resources.js").read_text()
 
@@ -265,6 +267,13 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "window.EU_EXTRACTION_EMBEDDED_WORKSPACE" in embedded
     assert "options.resource.state === 'setup'" in embedded
     assert "owner.useRealData()" in embedded
+    assert "function projectCopilotSetup" in embedded
+    assert "express.replaceWith(compact)" in embedded
+    assert "custom.hidden = false" in embedded
+    assert "layout.prepend(moduleCard)" in embedded
+    assert "projectCopilotSetup(host)" in embedded
+    assert ".gpi-extraction-compact{" in preview_css
+    assert ".gpi-extraction-compact{" not in extraction_css
     assert "Prepared export is ready — sync to Copilot" in embedded
     assert "data-gpi-extraction-download" in embedded
     assert "downloadRegisteredExport" in embedded
@@ -282,7 +291,7 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "'/api/workspaces/download'" in api
 
     index = (static_root / "index.html").read_text()
-    assert 'screens-extraction-embedded.js?v=20260824-source-selection1' in index
+    assert 'screens-extraction-embedded.js?v=20260824-copilot-compact1' in index
     assert index.index("screens-extraction.js") < index.index("screens-extraction-embedded.js")
 
     node_main = (
