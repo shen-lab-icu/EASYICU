@@ -13,6 +13,7 @@
   function routeOf(view) {
     if (view === 'patient_timeline') return 'patient';
     if (view === 'crossdb_comparison') return 'crossdb';
+    if (view === 'icd_cohort_preview') return 'extraction';
     return 'cohort';
   }
   function metaOf(view) {
@@ -26,6 +27,11 @@
       eyebrow: tr('Native Cross-DB workspace', '原生跨库工作台'),
       title: tr('Cross-database comparison', '跨数据库比较'),
       open: tr('Open full Cross-DB workspace', '打开完整跨库工作台'),
+    };
+    if (route === 'extraction') return {
+      eyebrow: tr('Native Data Extraction', '原生数据提取'),
+      title: tr('ICD cohort preview', 'ICD 队列预览'),
+      open: tr('Open full Data Extraction', '打开完整数据提取'),
     };
     return {
       eyebrow: tr('Native Cohort Statistics', '原生队列统计'),
@@ -95,12 +101,40 @@
     const config = context.crossdbResultsConfig ? context.crossdbResultsConfig(repaint) : { repaint };
     return owner && typeof owner.render === 'function' ? `<div data-gpi-native-body data-gpi-native-crossdb>${owner.render(payload, config)}</div>` : '';
   }
+  function icdCohortBody(payload) {
+    const summary = payload && payload.summary || {};
+    const report = payload && payload.cohort_report || {};
+    const icd = report.icd || {};
+    const sourceTotal = Number(summary.source_total != null ? summary.source_total : report.source_total);
+    const beforeIcd = Number(summary.selected_before_icd != null ? summary.selected_before_icd : report.selected_before_icd);
+    const selected = Number(summary.cohort_size != null ? summary.cohort_size : report.selected);
+    const steps = [
+      { label: tr('Source ICU stays', '数据源 ICU 住院'), count: sourceTotal },
+      { label: tr('After demographic/stay filters', '人口学与住院筛选后'), count: beforeIcd },
+      { label: tr('Final ICD cohort', '最终 ICD 队列'), count: selected },
+    ].filter(item => Number.isFinite(item.count));
+    const max = Math.max(1, ...steps.map(item => item.count));
+    const tokens = (label, values, tone) => `<div class="gpi-icd-token-row"><b>${esc(label)}</b><div>${(Array.isArray(values) && values.length ? values : [tr('None', '无')]).map(value => `<span class="pill ${tone || ''}">${esc(value)}</span>`).join('')}</div></div>`;
+    return `<div data-gpi-native-body data-gpi-icd-flow>
+      <div class="gpi-icd-kpis">
+        <section><span>${esc(tr('Final cohort', '最终队列'))}</span><strong>${fmt(selected, 0)}</strong><small>${esc(tr('ICU stays', 'ICU 住院'))}</small></section>
+        <section><span>${esc(tr('Include matches', '纳入匹配'))}</span><strong>${fmt(icd.include_matches, 0)}</strong><small>${esc(tr('before exclusions', '排除前'))}</small></section>
+        <section><span>${esc(tr('Exclude matches', '排除匹配'))}</span><strong>${fmt(icd.exclude_matches, 0)}</strong><small>${esc(tr('source-wide matches', '全数据源匹配'))}</small></section>
+      </div>
+      <section class="card pad gpi-icd-flow"><div class="panel-head"><div><div class="eyebrow">${esc(tr('Owner-computed filter funnel', 'Owner 计算的筛选漏斗'))}</div><div class="panel-title">${esc(tr('How the ICD cohort was resolved', 'ICD 队列如何得到'))}</div></div><span class="pill ok">${esc(tr('Read-only', '只读'))}</span></div>
+        <div class="gpi-icd-flow-bars">${steps.map((item, index) => `<div><span>${esc(item.label)}</span><i><u style="width:${(item.count / max * 100).toFixed(2)}%"></u></i><b>${fmt(item.count, 0)}</b>${index ? `<em>${fmt(steps[index - 1].count > 0 ? item.count / steps[index - 1].count * 100 : 0, 1)}%</em>` : '<em>100%</em>'}</div>`).join('')}</div>
+      </section>
+      <section class="card pad gpi-icd-codes"><div class="panel-title">${esc(tr('ICD prefix rules', 'ICD 前缀规则'))}</div>${tokens(tr('Include', '纳入'), icd.include_tokens, 'ok')}${tokens(tr('Exclude', '排除'), icd.exclude_tokens, 'warn')}</section>
+      <div class="viz-cap"><b>${esc(tr('Scope', '范围'))}</b><span>${esc(tr('Counts are ICU stays from the Data Extraction cohort owner. No extraction job was started, and no identifiers or raw rows entered the conversation.', '计数单位为 Data Extraction 队列 owner 计算的 ICU 住院。本次未启动提取任务，患者标识和原始数据行也未进入对话。'))}</span></div>
+    </div>`;
+  }
   function render(payload, view, state) {
     const cleanView = String(view || 'cohort_summary');
     const local = state || {};
     const route = routeOf(cleanView);
     const body = route === 'patient' ? patientBody(payload || {}, local)
       : route === 'crossdb' ? crossdbBody(payload || {}, local.repaint)
+      : route === 'extraction' ? icdCohortBody(payload || {})
       : cohortBody(payload || {}, cleanView, local);
     return `<div class="gpi-viz-embed" data-gpi-viz-embed data-gpi-viz-route="${route}">${shellHead(payload || {}, cleanView)}<div class="gpi-viz-embed-body">${body}</div><footer><strong>${esc(tr('Native renderer · Read-only snapshot', '原生渲染器 · 只读快照'))}</strong><span>${esc(tr('Use the conversation to change requirements, or explicitly open the full workspace to continue there.', '如需改变需求请继续对话，或明确打开完整工作台继续操作。'))}</span></footer></div>`;
   }

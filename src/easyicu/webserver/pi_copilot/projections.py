@@ -447,6 +447,7 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             not in {
                 "cohort_summary",
                 "feature_distribution",
+                "icd_cohort_preview",
                 "patient_timeline",
                 "crossdb_comparison",
             }

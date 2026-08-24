@@ -73,6 +73,7 @@ READ_TOOLS = frozenset(
         "easyicu_list_source_concepts",
         "easyicu_inspect_data_package",
         "easyicu_review_cohort",
+        "easyicu_preview_icd_cohort",
         "easyicu_review_patient_timeline",
         "easyicu_compare_data_sources",
         "easyicu_inspect_workflow",
@@ -1026,6 +1027,156 @@ def _review_cohort(
             "source_id": str(source.get("id") or "")[:80],
             "cohort_size": cohort_size,
             "selected_features": feature_ids,
+            "resource": resource,
+        },
+    )
+
+
+def _bounded_icd_codes(value: Any, *, field: str, required: bool) -> list[str]:
+    if value in (None, []):
+        if required:
+            raise PiCopilotError(
+                "pi_icd_include_codes_required",
+                "At least one ICD include code is required for a cohort preview.",
+                details={"field": field},
+            )
+        return []
+    if not isinstance(value, list):
+        raise PiCopilotError(
+            "pi_icd_codes_invalid",
+            "ICD codes must be supplied as a bounded list.",
+            details={"field": field},
+        )
+    if len(value) > 16:
+        raise PiCopilotError(
+            "pi_icd_codes_too_many",
+            "Use at most sixteen ICD code prefixes in one cohort preview.",
+            details={"field": field},
+        )
+    codes: list[str] = []
+    for raw in value:
+        code = re.sub(r"\s+", "", str(raw or "")).strip().upper()
+        if not code or len(code) > 32:
+            raise PiCopilotError(
+                "pi_icd_code_invalid",
+                "Each ICD code prefix must contain 1 to 32 non-space characters.",
+                details={"field": field},
+            )
+        if code not in codes:
+            codes.append(code)
+    if required and not codes:
+        raise PiCopilotError(
+            "pi_icd_include_codes_required",
+            "At least one ICD include code is required for a cohort preview.",
+            details={"field": field},
+        )
+    return codes
+
+
+def _preview_icd_cohort(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Preview an ICD-filtered extraction cohort without exposing its ids."""
+
+    _require_args(
+        params,
+        allowed=("source_id", "include_codes", "exclude_codes"),
+        required=("include_codes",),
+    )
+    include_codes = _bounded_icd_codes(
+        params.get("include_codes"), field="include_codes", required=True
+    )
+    exclude_codes = _bounded_icd_codes(
+        params.get("exclude_codes"), field="exclude_codes", required=False
+    )
+    source = _registered_source_choice(context, params.get("source_id"))
+    if not source:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_not_registered",
+            summary="Choose a validated registered EasyICU source before previewing an ICD cohort.",
+            owner="easyicu.webserver.sources",
+        )
+    study = _bound_context(context.session.binding) or {}
+    study_source = study.get("data_source")
+    study_source = study_source if isinstance(study_source, Mapping) else {}
+    database = str(source.get("database") or study_source.get("database") or "").strip()
+    if not database:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_database_missing",
+            summary="The registered source has no database identity for ICD matching.",
+            owner="easyicu.webserver.sources",
+        )
+    base_cohort = study.get("cohort")
+    preview_cohort = dict(base_cohort) if isinstance(base_cohort, Mapping) else {}
+    preview_cohort.update(
+        {
+            "icd_enabled": True,
+            "icd_include": include_codes,
+            "icd_exclude": exclude_codes,
+        }
+    )
+    try:
+        preview = dataio.preview_export_cohort(
+            str(source.get("path") or ""), database, preview_cohort
+        )
+    except dataio.ExportCohortError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=exc.error,
+            summary="The Data Extraction owner could not resolve this ICD cohort honestly.",
+            owner="easyicu.webserver.dataio",
+            details={"reason_code": exc.error},
+        )
+    report = preview.get("cohort_report")
+    report = report if isinstance(report, Mapping) else {}
+    cohort_size = int(preview.get("cohort_size") or 0)
+    source_total = report.get("source_total")
+    before_icd = report.get("selected_before_icd")
+    resource = _persist_workbench_snapshot(
+        context,
+        view="icd_cohort_preview",
+        title="ICD cohort preview",
+        payload={
+            "source": {
+                "id": str(source.get("id") or "")[:80],
+                "label": str(source.get("label") or database)[:160],
+                "database": str(preview.get("database") or database)[:40],
+            },
+            "summary": {
+                "cohort_size": cohort_size,
+                "source_total": source_total,
+                "selected_before_icd": before_icd,
+                "count_unit": "icu_stays",
+            },
+            "cohort_contract": preview.get("cohort_contract"),
+            "cohort_report": report,
+            "provenance": {
+                "owner": "easyicu.webserver.dataio",
+                "operation": "preview_export_cohort",
+                "execution_started": False,
+            },
+        },
+        privacy=(
+            preview.get("privacy")
+            if isinstance(preview.get("privacy"), Mapping)
+            else {}
+        ),
+    )
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_icd_cohort_preview_ready",
+        summary=f"The requested ICD filter selects {cohort_size} ICU stays in the current source.",
+        owner="easyicu.webserver.dataio",
+        details={
+            "source_id": str(source.get("id") or "")[:80],
+            "database": str(preview.get("database") or database)[:40],
+            "cohort_size": cohort_size,
             "resource": resource,
         },
     )
@@ -4316,6 +4467,7 @@ _DISPATCH = {
     "easyicu_list_source_concepts": _list_source_concepts,
     "easyicu_inspect_data_package": _inspect_data_package,
     "easyicu_review_cohort": _review_cohort,
+    "easyicu_preview_icd_cohort": _preview_icd_cohort,
     "easyicu_review_patient_timeline": _review_patient_timeline,
     "easyicu_compare_data_sources": _compare_data_sources,
     "easyicu_inspect_workflow": _inspect_workflow,
