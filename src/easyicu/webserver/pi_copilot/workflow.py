@@ -348,6 +348,15 @@ def build_research_workflow_snapshot(
     pipeline_receipt = "source_run_manifest.json" in artifact_names
     gate_status = str(run_row.get("gate_status") or "")
     run_blocked = gate_status == "blocked"
+    raw_gate_checks = run_row.get("gate_checks")
+    gate_checks = (
+        dict(raw_gate_checks) if isinstance(raw_gate_checks, Mapping) else {}
+    )
+    executed_analysis_validated = bool(
+        gate_checks.get("execution_complete") is True
+        and gate_checks.get("analysis_validated") is True
+        and gate_checks.get("numeric_verified") is True
+    )
     preflight_complete = bool(
         run_type == "preflight"
         and has_evidence
@@ -504,10 +513,14 @@ def build_research_workflow_snapshot(
         and has_plan
         and has_evidence
         and has_outputs
-        and gate_status == "analysis_only"
+        and (gate_status == "analysis_only" or executed_analysis_validated)
     )
     pipeline_attempt_blocked = bool(
-        full_run and pipeline_run and pipeline_receipt and run_blocked
+        full_run
+        and pipeline_run
+        and pipeline_receipt
+        and run_blocked
+        and not analysis_complete
     )
     # A terminal fail-closed run is historical evidence, not a completed
     # analysis stage.  The ordinary Copilot journey must return to a fresh Plan
@@ -624,7 +637,7 @@ def build_research_workflow_snapshot(
                 if plan_regeneration_required
                 else "agent_plan_ready"
                 if has_plan
-                else "provider_plan_ready"
+                else "provider_ready_to_generate_plan"
                 if preflight_complete
                 else "plan_ready"
                 if active_export_present and setup_ready
@@ -642,7 +655,7 @@ def build_research_workflow_snapshot(
                 else "running"
                 if analysis_running
                 else "complete"
-                if analysis_complete and not run_blocked
+                if analysis_complete
                 else "review_required"
                 if pipeline_attempt_blocked
                 else "ready"
@@ -662,7 +675,7 @@ def build_research_workflow_snapshot(
                 else "analysis_running"
                 if analysis_running
                 else "validated_analysis_ready"
-                if analysis_complete and not run_blocked
+                if analysis_complete
                 else "analysis_gate_blocked"
                 if pipeline_attempt_blocked
                 else "research_pipeline_required"

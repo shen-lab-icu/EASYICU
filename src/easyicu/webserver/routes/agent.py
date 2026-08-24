@@ -26,7 +26,7 @@ from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
-from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
+from easyicu.webserver.pi_copilot.run_authority import research_pipeline_workspace
 from easyicu.webserver.routes.jobs import submit_job
 from easyicu.webserver.routes.request_parsing import body_bool, body_int
 
@@ -54,12 +54,6 @@ def _server_research_pipeline_budget_mode() -> str:
         status_code=500,
         detail={"error": "research_pipeline_development_mode_invalid"},
     )
-
-
-def _research_pipeline_workspace() -> ProjectWorkspace:
-    """Return the server-owned Pi workspace used for scientific run artifacts."""
-
-    return ProjectWorkspace(state_paths.state_root() / "pi-agent" / "workspace")
 
 
 def _provider_environment_for_agent_run(
@@ -271,7 +265,7 @@ def submit_agent_run(
                 request_question=body.get("question"),
             )
         if engine == "research_agent_pipeline":
-            workspace = _research_pipeline_workspace()
+            workspace = research_pipeline_workspace()
             project_root = str(
                 workspace.project_root(str((study_context or {}).get("id") or ""))
             )
@@ -970,7 +964,7 @@ def post_agent_run_history(body: Dict[str, Any]) -> dict:
         agent_runs.list_run_history(study_id=study_id, limit=200),
     ]
     if study_id:
-        pipeline_root = _research_pipeline_workspace().existing_project_root(study_id)
+        pipeline_root = research_pipeline_workspace().existing_project_root(study_id)
         if pipeline_root is not None:
             histories.append(
                 agent_runs.list_run_history(

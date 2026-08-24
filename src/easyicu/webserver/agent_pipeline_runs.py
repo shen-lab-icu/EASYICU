@@ -838,6 +838,49 @@ def _write_pipeline_failure_projection(
     return True
 
 
+def _write_review_resume_failure_diagnostic(
+    *,
+    wrapper_dir: Path,
+    exc: BaseException,
+    review_resumable: bool,
+) -> Optional[str]:
+    """Persist a private, bounded diagnostic for one failed review resume."""
+
+    module = type(exc).__module__
+    name = type(exc).__name__
+    exception_type = (
+        f"{module}.{name}"
+        if module == "builtins"
+        or module == "pydantic_core"
+        or module.startswith("easyicu.")
+        else "unclassified"
+    )
+    payload = {
+        "schema_version": "easyicu.web-research-review-resume-failure/1",
+        "status": "failed",
+        "code": "research_pipeline_review_resume_failed",
+        "failure_type": _pipeline_failure_category(exc),
+        "exception_type": exception_type,
+        "typed_failure": _safe_pipeline_typed_failure(exc),
+        "review_resumable": bool(review_resumable),
+        "message_sha256": hashlib.sha256(
+            f"{type(exc).__name__}: {exc}".encode("utf-8")
+        ).hexdigest(),
+        "raw_exception_recorded": False,
+        "provider_output_recorded": False,
+        "patient_rows_recorded": False,
+        "secrets_recorded": False,
+    }
+    relative = "diagnostics/research_pipeline_review_resume_failure.json"
+    try:
+        target = wrapper_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(target, payload)
+    except OSError:
+        return None
+    return relative
+
+
 def _safe_relative(root: Path, raw: Any) -> Optional[Path]:
     text = str(raw or "").strip().replace("\\", "/")
     if not text or text.startswith("/") or "\0" in text:
@@ -1123,6 +1166,19 @@ def validate_analysis_design_for_execution(
     return _validate_analysis_design(study)
 
 
+def _analysis_requires_longitudinal_trajectory(
+    study: Mapping[str, Any],
+    *,
+    validated_design: Mapping[str, str],
+) -> bool:
+    """Return whether the approved estimand needs row-level time trajectories."""
+
+    for spec in _configured_sensitivity_specs(study):
+        if spec.strategy == "landmark":
+            return True
+    return validated_design.get("variance_estimator") != "none_counts_only"
+
+
 def _validate_primary_concept_selection(
     study: Mapping[str, Any],
     primary_exposure: Optional[str],
@@ -1131,13 +1187,25 @@ def _validate_primary_concept_selection(
 
     if not primary_exposure:
         return
-    from easyicu.concept.selection_policy import evaluate_concept_selection
+    from easyicu.concept.selection_policy import (
+        concept_selection_confirmation_key,
+        evaluate_concept_selection,
+    )
 
     # Only the persisted scientific question can authorize an explicit-only
     # variant. Exposure labels and analysis prose are model-produced fields;
     # accepting them here would let a plan authorize its own semantic drift.
     intent = str(study.get("question") or "")
-    decision = evaluate_concept_selection(primary_exposure, user_intent=intent)
+    confirmations = study.get("confirmations")
+    confirmation_key = concept_selection_confirmation_key(primary_exposure)
+    owner_confirmed = bool(
+        isinstance(confirmations, Mapping) and confirmations.get(confirmation_key)
+    )
+    decision = evaluate_concept_selection(
+        primary_exposure,
+        user_intent=intent,
+        owner_confirmed=owner_confirmed,
+    )
     if decision.allowed:
         return
     raise ResearchPipelineRunError(
@@ -3541,7 +3609,13 @@ def make_research_pipeline_run_runner(
                 # refuses to attach a private mapping to a longitudinal table;
                 # this fixed stay-level design therefore requests no unused
                 # trajectory instead of silently publishing an ungrouped one.
-                emit_trajectory=patient_grouping is None,
+                emit_trajectory=(
+                    patient_grouping is None
+                    and _analysis_requires_longitudinal_trajectory(
+                        study,
+                        validated_design=validated_analysis_design,
+                    )
+                ),
                 patient_grouping=patient_grouping,
             )
             if acquisition.blocked or acquisition.universe_path is None:
@@ -3609,6 +3683,10 @@ def make_research_pipeline_run_runner(
                     "enable_experience_bank": False,
                     "enable_reviewed_memory": False,
                     "reviewed_memory_namespaces": (),
+                    # Copilot presents one complete digest-bound plan for the
+                    # operator to approve. Runtime replanning would replace
+                    # that approved plan without a second durable review.
+                    "enable_replanning": False,
                 }
             )
             if development_resume_binding is not None:
@@ -4100,6 +4178,11 @@ def resume_research_pipeline(
         remains_resumable = bool(
             getattr(entry.pipeline, "has_resumable_human_review", False)
         )
+        diagnostic = _write_review_resume_failure_diagnostic(
+            wrapper_dir=entry.wrapper_dir,
+            exc=exc,
+            review_resumable=remains_resumable,
+        )
         if remains_resumable:
             _register_pending(entry)
         if not remains_resumable:
@@ -4115,6 +4198,7 @@ def resume_research_pipeline(
             details={
                 "failure_type": _pipeline_failure_category(exc),
                 "review_resumable": remains_resumable,
+                "diagnostic": diagnostic,
             },
         ) from exc
     if isinstance(outcome, HumanReviewPending):

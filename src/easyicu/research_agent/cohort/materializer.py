@@ -146,6 +146,19 @@ def _strict_event_status_series(values: pd.Series, *, concept: str) -> pd.Series
     return out
 
 
+def validate_typed_event_status_domain(
+    values: pd.Series, *, concept: str
+) -> None:
+    """Public intake contract for validating a sealed event-status column.
+
+    Callers that only need an availability receipt must use the same strict
+    binary-domain policy as materialization without depending on its private
+    decoder or receiving row-level values back.
+    """
+
+    _strict_event_status_series(values, concept=concept)
+
+
 def _require_finite_numeric(
     values: pd.Series,
     *,

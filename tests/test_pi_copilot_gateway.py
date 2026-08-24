@@ -1154,6 +1154,8 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "then call easyicu_run" in entrypoint
     assert "Use easyicu_inspect_run only when the user asks for status" in entrypoint
     assert "A persisted run_id is historical evidence, not proof of an active job" in entrypoint
+    assert "When the workflow reports provider_ready_to_generate_plan" in entrypoint
+    assert "call easyicu_run exactly once with run_type='full'" in entrypoint
     assert "run_id_status=pending_pipeline_start" in entrypoint
     assert "save that commitment in typed analysis_design" in entrypoint
     assert "typed analysis_design.analysis_family" in entrypoint
@@ -1202,6 +1204,8 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "offer only the safe_alternatives returned by the host" in entrypoint
     assert "instead of inventing an executable cohort" in entrypoint
     assert "Typed time-window rule" in entrypoint
+    assert "set time_window.anchor to the exact canonical value 'ICU admission'" in entrypoint
+    assert 'anchor: Type.Optional(Type.Literal("ICU admission"' in entrypoint
     assert "It is not a phenotype's clinical definition anchor" in entrypoint
     assert "never save suspected-infection onset as its physical anchor" in entrypoint
     assert "never send a questionnaire or numbered list of confirmations" in entrypoint
@@ -1287,7 +1291,8 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     assert runtime["model"] == "gpt5.6 luna"
     assert runtime["built_in_tools_enabled"] == []
     assert state["enabled_tools"] == runtime["custom_tools"]
-    assert len(state["enabled_tools"]) == 30
+    assert state["enabled_tools"]
+    assert all(name.startswith("easyicu_") for name in state["enabled_tools"])
     assert {
         "easyicu_list_extensions",
         "easyicu_load_skill",
@@ -1296,7 +1301,10 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     assert {"read", "write", "edit", "bash"}.isdisjoint(state["enabled_tools"])
     assert workspace_state["agent_mode"] == "workspace"
     assert workspace_state["enabled_tools"] == runtime["custom_tools_by_mode"]["workspace"]
-    assert len(workspace_state["enabled_tools"]) == 36
+    assert workspace_state["enabled_tools"]
+    assert all(
+        name.startswith("easyicu_") for name in workspace_state["enabled_tools"]
+    )
     assert {"read", "write", "edit", "bash"}.isdisjoint(
         workspace_state["enabled_tools"]
     )

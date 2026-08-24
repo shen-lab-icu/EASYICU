@@ -11,7 +11,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-from easyicu.webserver import agent_runs
+from easyicu.webserver import agent_runs, state_paths
+
+from .workspace import ProjectWorkspace
+
+
+def research_pipeline_workspace() -> ProjectWorkspace:
+    """Return the single host-owned workspace for pipeline run projections."""
+
+    return ProjectWorkspace(state_paths.state_root() / "pi-agent" / "workspace")
+
+
+def research_pipeline_project_root(study_context_id: Optional[str]) -> Path:
+    """Resolve the pipeline run root from the scientific project identity."""
+
+    return research_pipeline_workspace().project_root(
+        str(study_context_id or "unbound-study")
+    )
 
 
 def list_bound_run_history(
@@ -82,4 +98,9 @@ def _updated_epoch(row: Dict[str, Any]) -> float:
         return 0.0
 
 
-__all__ = ["latest_bound_run_id", "list_bound_run_history"]
+__all__ = [
+    "latest_bound_run_id",
+    "list_bound_run_history",
+    "research_pipeline_project_root",
+    "research_pipeline_workspace",
+]

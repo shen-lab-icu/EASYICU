@@ -16,6 +16,14 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from easyicu.research_agent.acquisition.catalog import build_available_catalog
+from easyicu.research_agent.cohort.materializer import (
+    MaterializedMetadataError,
+    validate_typed_event_status_domain,
+)
+from easyicu.research_agent.intake.export_package import (
+    ExportPackageError,
+    read_exported_concept,
+)
 from easyicu.webserver import state_paths
 from easyicu.webserver import cohort_review, sources
 from easyicu.webserver.data_package_execution_readiness import (
@@ -295,6 +303,7 @@ def _review_concept(
     catalog_by_id: Mapping[str, Any],
     coverage_by_module: Mapping[str, Mapping[str, Any]],
     denominator: int,
+    typed_event_receipt: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     concept = catalog_by_id.get(concept_id)
     if concept is None:
@@ -345,6 +354,23 @@ def _review_concept(
             ),
         }
 
+    if role_name == "event_status" and covered != denominator and typed_event_receipt:
+        return {
+            **base,
+            "availability_status": "ready",
+            "reason_code": "typed_event_availability_verified",
+            "evaluable_count": denominator,
+            "missing_count": 0,
+            "absence_semantics": "no_recorded_event",
+            "physical_coverage_pct": None,
+            "physical_coverage_withheld": True,
+            "availability_receipt": dict(typed_event_receipt),
+            "interpretation": (
+                "The sealed event-status owner verified the binary domain; "
+                "entities without a recorded positive event are the negative level."
+            ),
+        }
+
     if role_name == "event_status" and covered != denominator:
         # Typed sparse status columns require their owner-issued availability
         # receipts. A module-level row count alone cannot prove evaluability.
@@ -388,6 +414,37 @@ def _review_concept(
             "Observed entity coverage; any missingness must be handled in the "
             "reviewed analysis plan."
         ),
+    }
+
+
+def _typed_event_availability_receipt(
+    *, source_path: str, concept: Any, denominator: int
+) -> Optional[Dict[str, Any]]:
+    """Issue a result-blind receipt from sealed event-status authority."""
+
+    if not concept.typed_metadata or str(concept.column_role) != "event_status":
+        return None
+    concept_id = str(concept.concept_id)
+    try:
+        frame = read_exported_concept(Path(source_path), concept_id)
+        if "stay_id" not in frame.columns or concept_id not in frame.columns:
+            return None
+        if frame["stay_id"].isna().any():
+            return None
+        if int(frame["stay_id"].nunique()) > denominator:
+            return None
+        validate_typed_event_status_domain(frame[concept_id], concept=concept_id)
+    except (ExportPackageError, MaterializedMetadataError, OSError, KeyError, ValueError):
+        return None
+    return {
+        "schema_version": "easyicu.typed-event-availability/1",
+        "concept_id": concept_id,
+        "column_role": "event_status",
+        "value_domain": "binary_0_1",
+        "absence_semantics": "no_recorded_event",
+        "denominator_count": denominator,
+        "event_count_withheld": True,
+        "source_authority": "sealed_native_export_metadata",
     }
 
 
@@ -469,16 +526,28 @@ def build_registered_data_package_review(
     }
     catalog_by_id = {str(item.concept_id): item for item in catalog.concepts}
     requested = _execution_concepts(study)
-    concepts = [
-        _review_concept(
-            role=role,
-            concept_id=concept_id,
-            catalog_by_id=catalog_by_id,
-            coverage_by_module=coverage_by_module,
-            denominator=denominator,
+    concepts = []
+    for role, concept_id in requested:
+        catalog_concept = catalog_by_id.get(concept_id)
+        receipt = (
+            _typed_event_availability_receipt(
+                source_path=source_path,
+                concept=catalog_concept,
+                denominator=denominator,
+            )
+            if catalog_concept is not None
+            else None
         )
-        for role, concept_id in requested
-    ]
+        concepts.append(
+            _review_concept(
+                role=role,
+                concept_id=concept_id,
+                catalog_by_id=catalog_by_id,
+                coverage_by_module=coverage_by_module,
+                denominator=denominator,
+                typed_event_receipt=receipt,
+            )
+        )
     blocking = [
         row
         for row in concepts

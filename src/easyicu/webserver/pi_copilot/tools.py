@@ -59,7 +59,10 @@ from .projections import (
     reject_sensitive_message,
     stable_code,
 )
-from .run_authority import list_bound_run_history
+from .run_authority import (
+    list_bound_run_history,
+    research_pipeline_project_root,
+)
 from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
@@ -285,10 +288,8 @@ def _bound_context(binding: AuthorityBinding) -> Optional[Dict[str, Any]]:
 
 
 def _run_rows(context: ToolExecutionContext) -> Sequence[Dict[str, Any]]:
-    project_root = (
-        context.workspace.project_root(context.session.project_id)
-        if context.session.project_id and context.workspace is not None
-        else None
+    project_root = research_pipeline_project_root(
+        context.session.binding.study_context_id
     )
     return list_bound_run_history(
         study_context_id=context.session.binding.study_context_id,
@@ -1742,6 +1743,64 @@ def _inspect_step(
     )
 
 
+def _validated_operational_mappings(
+    payloads: Mapping[str, Any],
+) -> list[Dict[str, str]]:
+    """Project owner-recorded semantic-to-physical bindings from result audits."""
+
+    result_tables = payloads.get("result_tables.json")
+    if not isinstance(result_tables, Mapping):
+        return []
+    tables = result_tables.get("tables")
+    if not isinstance(tables, list):
+        return []
+    mappings: list[Dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for table in tables[:40]:
+        if not isinstance(table, Mapping):
+            continue
+        headers = table.get("headers")
+        rows = table.get("rows")
+        if not isinstance(headers, list) or not isinstance(rows, list):
+            continue
+        header_names = [str(value or "").strip() for value in headers]
+        if "concept" not in header_names or "value_column" not in header_names:
+            continue
+        concept_index = header_names.index("concept")
+        value_column_index = header_names.index("value_column")
+        semantics_index = (
+            header_names.index("indicator_semantics")
+            if "indicator_semantics" in header_names
+            else None
+        )
+        for row in rows[:50]:
+            if not isinstance(row, list):
+                continue
+            if max(concept_index, value_column_index) >= len(row):
+                continue
+            concept = _bounded_model_text(row[concept_index], 80)
+            value_column = _bounded_model_text(row[value_column_index], 80)
+            if not concept or not value_column:
+                continue
+            identity = (concept, value_column)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            mapping = {
+                "semantic_concept": concept,
+                "operational_value_column": value_column,
+                "authority": "validated_result_measurement_audit",
+            }
+            if semantics_index is not None and semantics_index < len(row):
+                semantics = _bounded_model_text(row[semantics_index], 80)
+                if semantics:
+                    mapping["indicator_semantics"] = semantics
+            mappings.append(mapping)
+            if len(mappings) >= 20:
+                return mappings
+    return mappings
+
+
 def _inspect_validation(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -1809,6 +1868,13 @@ def _inspect_validation(
     scientific_facts = scientific_facts if isinstance(scientific_facts, Mapping) else {}
     analysis_facts = scientific_facts.get("analysis")
     analysis_facts = analysis_facts if isinstance(analysis_facts, Mapping) else {}
+    gate_checks = {
+        str(check.get("id") or "").strip(): bool(check.get("passed"))
+        for check in checks
+        if isinstance(check, Mapping) and str(check.get("id") or "").strip()
+    }
+    result_tables = payloads.get("result_tables.json")
+    result_tables = result_tables if isinstance(result_tables, Mapping) else {}
     details = bounded_json_projection(
         {
             "run_id": row.get("run_id"),
@@ -1858,6 +1924,13 @@ def _inspect_validation(
                 "resource": _artifact_resource(
                     row.get("run_id"), "scientific_readiness.json"
                 ),
+            },
+            "analysis_execution": {
+                "analysis_validated": bool(analysis_facts.get("analysis_validated")),
+                "numeric_verified": bool(gate_checks.get("numeric_verified")),
+                "result_table_count": int(result_tables.get("table_count") or 0),
+                "operational_mappings": _validated_operational_mappings(payloads),
+                "publication_gate_separate": True,
             },
             "signed": bool(review.get("signed")),
             "signoff_stale": bool(review.get("signoff_stale")),
@@ -2439,19 +2512,32 @@ def _update_study_context(
             )
         primary_concept = normalized_execution.get("primary_exposure")
         if primary_concept:
-            from easyicu.concept.selection_policy import evaluate_concept_selection
+            from easyicu.concept.selection_policy import (
+                concept_selection_confirmation_key,
+                evaluate_concept_selection,
+            )
 
             # The model must not self-authorize an experimental concept by
             # putting its name in a generated exposure label or analysis goal.
             # The persisted scientific question is the user-intent authority.
-            effective_intent = str(
-                patch.get("question")
-                if "question" in patch
-                else (current or {}).get("question") or ""
+            # The current user message is the strongest authority.  Do not
+            # combine it with a model-authored replacement question: phrases
+            # such as "do not filter the cohort by Sepsis" can otherwise be
+            # misread as negating the separately explicit SOFA-2 selection.
+            # For older already-persisted contexts, the prior scientific
+            # question remains a compatibility fallback.
+            authority_intent = str(
+                context.user_message or (current or {}).get("question") or ""
+            )
+            confirmation_key = concept_selection_confirmation_key(primary_concept)
+            confirmations = dict(patch.get("confirmations") or {})
+            previously_confirmed = bool(
+                ((current or {}).get("confirmations") or {}).get(confirmation_key)
             )
             decision = evaluate_concept_selection(
                 primary_concept,
-                user_intent=effective_intent,
+                user_intent=authority_intent,
+                owner_confirmed=previously_confirmed,
             )
             if not decision.allowed:
                 return _result(
@@ -2465,6 +2551,11 @@ def _update_study_context(
                     owner="easyicu.concept.selection_policy",
                     details=decision.to_dict(),
                 )
+            # Persist only the host-verified decision.  A model-proposed
+            # confirmation cannot authorize itself because it is ignored
+            # above; the current user turn or a prior owner receipt must pass.
+            confirmations[confirmation_key] = True
+            patch["confirmations"] = confirmations
         patch["execution_concepts"] = normalized_execution
     if "analysis_design" in patch:
         try:

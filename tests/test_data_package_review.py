@@ -190,6 +190,80 @@ def test_typed_sparse_event_without_receipt_blocks_plan(
     assert payload["concepts"][0]["evaluable_count"] is None
 
 
+def test_typed_sparse_event_with_sealed_binary_receipt_is_ready(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = str(tmp_path / "typed")
+    registry = {
+        "sources": [{
+            "id": "src_typed", "path": source_path, "database": "miiv",
+            "ok": True, "modules": ["outcome", "sepsis3_sofa2"],
+        }]
+    }
+    monkeypatch.setattr(
+        review_owner.cohort_review,
+        "cohort_review_summary",
+        lambda body: _aggregate(source_path),
+    )
+    monkeypatch.setattr(
+        review_owner,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source=source_path,
+            concepts=[
+                CatalogConcept(
+                    "sep3_sofa2", file_name="sepsis3_sofa2.parquet",
+                    n_rows=40, column_role="event_status", typed_metadata=True,
+                ),
+                CatalogConcept(
+                    "death", file_name="outcome.parquet", n_rows=100,
+                    column_role="event_status", typed_metadata=True,
+                ),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        review_owner,
+        "read_exported_concept",
+        lambda _path, concept: pd.DataFrame(
+            {
+                "stay_id": range(40 if concept == "sep3_sofa2" else 100),
+                concept: [True] * (40 if concept == "sep3_sofa2" else 100),
+            }
+        ),
+    )
+
+    payload = review_owner.build_registered_data_package_review(
+        _study(source_path), registry=registry
+    )
+
+    assert payload["status"] == "ready_for_plan"
+    exposure = payload["concepts"][0]
+    assert exposure["reason_code"] == "typed_event_availability_verified"
+    assert exposure["evaluable_count"] == 100
+    assert exposure["availability_receipt"]["event_count_withheld"] is True
+
+
+def test_typed_event_receipt_rejects_nonbinary_physical_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    concept = CatalogConcept(
+        "sep3_sofa2", file_name="sepsis3_sofa2.parquet",
+        column_role="event_status", typed_metadata=True,
+    )
+    monkeypatch.setattr(
+        review_owner,
+        "read_exported_concept",
+        lambda _path, _concept: pd.DataFrame(
+            {"stay_id": [1], "sep3_sofa2": [2]}
+        ),
+    )
+
+    assert review_owner._typed_event_availability_receipt(
+        source_path="/sealed/export", concept=concept, denominator=100
+    ) is None
+
+
 def test_review_digest_changes_with_study_revision(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -55,7 +55,11 @@ from .project_authority import (
 from .provider_config import PiProviderConfigStore
 from .projections import project_job, project_pi_replay_event, reject_sensitive_message
 from .replay_store import PiConversationReplayStore
-from .run_authority import latest_bound_run_id
+from .run_authority import (
+    latest_bound_run_id,
+    list_bound_run_history,
+    research_pipeline_project_root,
+)
 from .workspace import ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
@@ -569,9 +573,7 @@ class PiCopilotService:
         *,
         project_id: Optional[str] = None,
     ) -> Optional[str]:
-        project_root = (
-            self.workspace.project_root(project_id) if project_id else None
-        )
+        project_root = research_pipeline_project_root(study_context_id)
         return latest_bound_run_id(
             study_context_id=study_context_id,
             project_root=project_root,
@@ -1257,6 +1259,7 @@ class PiCopilotService:
         self._ensure_open(record)
         tool_context = ToolExecutionContext(
             session=record.model_copy(deep=True),
+            user_message=text,
             allowed_actions=requested_actions,
             authority_validator=lambda binding: self._binding_stale_details(
                 binding,
@@ -1674,11 +1677,11 @@ class PiCopilotService:
         if study and study.get("active_job_id"):
             job = jobs.MANAGER.get(str(study["active_job_id"]))
             active_job = job.snapshot() if job else None
-        history = agent_runs.list_run_history(
-            study_id=study_context_id,
+        rows = list_bound_run_history(
+            study_context_id=study_context_id,
+            project_root=research_pipeline_project_root(study_context_id),
             limit=1,
         )
-        rows = [row for row in (history.get("runs") or []) if isinstance(row, Mapping)]
         latest_run = rows[0] if rows else None
         plan_review_authority = (
             agent_pipeline_runs.pending_review(latest_run.get("run_id"))
@@ -1904,14 +1907,15 @@ class PiCopilotService:
         study_context_id = self.project_store.resolve(clean_project)
         clean_run = str(run_id or "").strip()
         clean_artifact = str(artifact_name or "").strip()
-        history = agent_runs.list_run_history(
-            study_id=study_context_id,
+        rows = list_bound_run_history(
+            study_context_id=study_context_id,
+            project_root=research_pipeline_project_root(study_context_id),
             limit=200,
         )
         row = next(
             (
                 item
-                for item in (history.get("runs") or [])
+                for item in rows
                 if isinstance(item, Mapping) and item.get("run_id") == clean_run
             ),
             None,
@@ -2010,11 +2014,15 @@ class PiCopilotService:
         study_context_id = self.project_store.resolve(clean_project)
         clean_run = str(run_id or "").strip()
         clean_name = str(document_name or "").strip()
-        history = agent_runs.list_run_history(study_id=study_context_id, limit=200)
+        rows = list_bound_run_history(
+            study_context_id=study_context_id,
+            project_root=research_pipeline_project_root(study_context_id),
+            limit=200,
+        )
         row = next(
             (
                 item
-                for item in (history.get("runs") or [])
+                for item in rows
                 if isinstance(item, Mapping) and item.get("run_id") == clean_run
             ),
             None,

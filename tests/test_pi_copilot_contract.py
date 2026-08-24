@@ -349,6 +349,70 @@ def test_project_workflow_projects_active_job_for_session_timeline(
     assert study == baseline
 
 
+def test_project_workflow_prefers_newer_project_pipeline_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-a", "study-a")
+    study = {
+        "id": "study-a",
+        "revision": 4,
+        "question": "Describe the sealed adult ICU cohort.",
+        "data_source": {"path": "/private/export", "database": "mimiciv"},
+        "cohort": {"preset": "adult_icu"},
+        "modules": ["vitals", "outcome"],
+        "outcome": "In-hospital mortality",
+        "time_window": {"hours": 24, "anchor": "ICU admission"},
+        "export_format": "parquet",
+        "analysis_goal": "Descriptive epidemiology",
+        "confirmations": {"study_design_reviewed": True},
+    }
+    monkeypatch.setattr(service_module.study_contexts, "get_context", lambda _: study)
+    monkeypatch.setattr(
+        service_module.sources,
+        "load_registry",
+        lambda: {"active_path": None},
+    )
+
+    def history(**kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("project_root"):
+            return {
+                "runs": [
+                    {
+                        "run_id": "run-pipeline-plan",
+                        "updated_at_epoch": 20.0,
+                        "artifact_names": ["agent_plan.json"],
+                    }
+                ]
+            }
+        return {
+            "runs": [
+                {
+                    "run_id": "run-old-preflight",
+                    "updated_at_epoch": 10.0,
+                    "artifact_names": ["evidence_ledger.json"],
+                }
+            ]
+        }
+
+    selected: list[str] = []
+    monkeypatch.setattr(service_module.agent_runs, "list_run_history", history)
+    monkeypatch.setattr(
+        service_module.agent_pipeline_runs,
+        "pending_review",
+        lambda run_id: selected.append(str(run_id)) or None,
+    )
+
+    payload = service.get_project_workflow(project_id="project-a")
+
+    assert payload["ok"] is True
+    assert selected == ["run-pipeline-plan"]
+
+
 @pytest.fixture
 def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     current = {
@@ -2588,6 +2652,78 @@ def test_conversational_setup_rejects_generic_sepsis_sofa2_drift(
     assert result["code"] == "concept_explicit_selection_required"
     assert result["details"]["canonical_alternative"] == "sep3_sofa1"
     assert writes == []
+
+
+def test_conversational_setup_persists_host_verified_explicit_concept_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
+
+    current = {
+        "id": "study-explicit-sepsis",
+        "revision": 2,
+        "question": "What is Sepsis-3 prevalence and mortality?",
+        "active_job_id": None,
+        "data_source": {"path": "/private/full-export", "database": "miiv"},
+        "modules": ["outcome", "sepsis3_sofa2"],
+        "confirmations": {},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(concept_id="death", file_name="outcome.parquet"),
+                CatalogConcept(
+                    concept_id="sep3_sofa2",
+                    file_name="sepsis3_sofa2.parquet",
+                ),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 3},
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-explicit-sepsis",
+            binding=AuthorityBinding(
+                study_context_id=current["id"],
+                study_revision=current["revision"],
+            ),
+        ),
+        user_message=(
+            "I explicitly authorize the experimental sep3_sofa2 variant for this study."
+        ),
+        allowed_actions={"configure"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "question": (
+                "Do not filter the cohort using Sepsis-3; compare the "
+                "sep3_sofa2 groups descriptively."
+            ),
+            "execution_concepts": {
+                "outcome": "death",
+                "primary_exposure": "sep3_sofa2",
+                "covariates": [],
+            },
+        },
+        context,
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["confirmations"] == {
+        "concept_selection_sep3_sofa2_authorized": True,
+    }
 
 
 def test_conversational_setup_binds_exact_registered_source_id(
