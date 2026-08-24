@@ -1317,27 +1317,31 @@ def _coerce_int(
 def _split_icd_tokens(raw: Any) -> List[str]:
     import re
 
-    text = str(raw or "").upper().replace("，", ",").replace("；", ";")
     tokens: List[str] = []
-    for part in re.split(r"[\s,;]+", text):
-        token = part.strip().replace(".", "")
-        if not token:
-            continue
-        if "-" in token:
-            start, end = [p.strip() for p in token.split("-", 1)]
-            if (
-                len(start) == len(end)
-                and len(start) >= 2
-                and start[:-2] == end[:-2]
-                and start[-2:].isdigit()
-                and end[-2:].isdigit()
-            ):
-                prefix = start[:-2]
-                lo, hi = int(start[-2:]), int(end[-2:])
-                if 0 <= hi - lo <= 50:
-                    tokens.extend(f"{prefix}{i:02d}" for i in range(lo, hi + 1))
-                    continue
-        tokens.append(token)
+    values = raw if isinstance(raw, (list, tuple, set)) else [raw]
+    for value in values:
+        text = str(value or "").upper().replace("，", ",").replace("；", ";")
+        for part in re.split(r"[\s,;]+", text):
+            token = part.strip().replace(".", "")
+            if not token:
+                continue
+            if "-" in token:
+                start, end = [p.strip() for p in token.split("-", 1)]
+                if (
+                    len(start) == len(end)
+                    and len(start) >= 2
+                    and start[:-2] == end[:-2]
+                    and start[-2:].isdigit()
+                    and end[-2:].isdigit()
+                ):
+                    prefix = start[:-2]
+                    lo, hi = int(start[-2:]), int(end[-2:])
+                    if 0 <= hi - lo <= 50:
+                        tokens.extend(
+                            f"{prefix}{i:02d}" for i in range(lo, hi + 1)
+                        )
+                        continue
+            tokens.append(token)
     seen: Set[str] = set()
     out: List[str] = []
     for token in tokens:
@@ -1454,7 +1458,7 @@ def _read_table_columns(path: Path, columns: List[str]) -> Any:
     import pandas as pd
 
     present = set(_read_columns(path))
-    wanted = [c for c in columns if c in present]
+    wanted = list(dict.fromkeys(c for c in columns if c in present))
     if path.suffix == ".parquet":
         return pd.read_parquet(path, columns=wanted or None)
     if wanted:
@@ -1858,6 +1862,41 @@ def _resolve_export_cohort(
         },
         "load_kwargs": {"win_length": f"{normalized['observation_window_hours']}h"},
         "sepsis_load_kwargs": sepsis_load_kwargs,
+    }
+
+
+def preview_export_cohort(
+    data_path: str,
+    database: str,
+    cohort: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve an extraction cohort and return aggregate, path-free metadata.
+
+    The extraction owner remains the single authority for cohort semantics.
+    This adapter intentionally discards the resolved identifier vector, id
+    column, loader kwargs, and host path before returning to Copilot.
+    """
+
+    import easyicu.api as api
+
+    resolved = _resolve_export_cohort(
+        str(data_path),
+        database,
+        cohort,
+        None,
+        api,
+    )
+    return {
+        "schema_version": "easyicu_export_cohort_preview_v1",
+        "database": normalize_database_key(database),
+        "cohort_size": int(resolved.get("cohort_size") or 0),
+        "cohort_contract": dict(resolved.get("cohort_contract") or {}),
+        "cohort_report": dict(resolved.get("cohort_report") or {}),
+        "privacy": {
+            "patient_ids_returned": False,
+            "raw_rows_returned": False,
+            "host_path_returned": False,
+        },
     }
 
 

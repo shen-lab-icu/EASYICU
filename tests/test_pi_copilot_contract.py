@@ -2145,6 +2145,7 @@ def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
         "easyicu_list_source_concepts",
         "easyicu_inspect_data_package",
         "easyicu_review_cohort",
+        "easyicu_preview_icd_cohort",
         "easyicu_review_patient_timeline",
         "easyicu_compare_data_sources",
         "easyicu_inspect_workflow",
