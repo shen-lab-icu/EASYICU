@@ -324,6 +324,7 @@ EXPECTED_JOB_SUBMISSION_ROUTES = [
 EXPECTED_JOB_LIFECYCLE_ROUTES = [
     ("GET", "/api/jobs/{job_id}", "jobs_get"),
     ("POST", "/api/jobs/{job_id}/cancel", "jobs_cancel"),
+    ("POST", "/api/jobs/{job_id}/open-output", "jobs_open_output"),
     ("GET", "/api/jobs/{job_id}/events", "jobs_events"),
 ]
 

@@ -14,7 +14,7 @@
       <div class="ico">${icon(status === 'done' ? 'check' : (tone === 'bad' ? 'alert' : 'activity'), 14)}</div>
       <div class="body"><div class="t">${escHtml(status === 'done' ? t('Extraction completed', '数据提取已完成') : status === 'running' ? t('Extraction is running', '数据提取正在运行') : t('Extraction task stopped', '数据提取任务已停止'))}</div>
       <div class="d">${escHtml((latest && (latest.message || latest.step)) || t('The live details also remain in the Copilot activity timeline.', '实时详情也会保留在 Copilot 活动时间线中。'))}</div>
-      ${status === 'done' ? `<div class="gpi-extraction-job-metrics"><span>${t('Rows', '行数')} <b>${escHtml(result.total_rows == null ? '—' : result.total_rows)}</b></span><span>${t('Files', '文件')} <b>${escHtml(result.files_written == null ? '—' : result.files_written)}</b></span></div>` : ''}
+      ${status === 'done' ? `<div class="gpi-extraction-job-metrics"><span>${t('Rows', '行数')} <b>${escHtml(result.total_rows == null ? '—' : result.total_rows)}</b></span><span>${t('Data files', '数据文件')} <b>${escHtml(result.file_count == null ? (result.files_written == null ? '—' : result.files_written) : result.file_count)}</b></span></div>` : ''}
       </div><button class="btn sm ghost" type="button" data-gpi-extraction-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
     </div>`;
   }
@@ -68,9 +68,11 @@
         <div class="row gap-8">
           ${owner.isReal() ? '' : `<button class="btn sm" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real local data', '使用本地真实数据')}</button>`}
           ${sourceId ? `<button class="btn sm" type="button" data-gpi-extraction-download>${icon('download', 12)} ${t('Download data package', '下载数据包')}</button>` : ''}
-          <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon('agent', 12)} ${t('Sync back to Copilot', '同步回 Copilot')}</button>
+          <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon(options.syncReceipt ? 'check' : 'agent', 12)} ${options.syncReceipt ? t('Synced to Copilot', '已同步到 Copilot') : t('Sync back to Copilot', '同步回 Copilot')}</button>
         </div>
       </div>
+      ${options.syncReceipt ? `<div class="note ok gpi-extraction-sync-receipt" role="status"><div class="ico">${icon('check', 13)}</div><div class="body"><div class="t">${t('Synced to Copilot', '已同步到 Copilot')}</div><div class="d">${t('The updated extraction state is bound to this project, and a visible local workflow receipt was added to the conversation. The local folder path is not sent as model text.', '更新后的抽取状态已绑定到当前项目，并已在对话中加入可见的本地工作流回执；本机文件夹路径不会作为模型消息发送。')}</div></div></div>` : ''}
+      ${options.syncError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Copilot sync failed', 'Copilot 同步失败')}</div><div class="d">${escHtml(options.syncError)}</div></div></div>` : ''}
       ${options.downloadError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Download blocked', '下载已阻止')}</div><div class="d">${escHtml(options.downloadError)}</div></div></div>` : ''}
       ${jobSummary(options.jobSnapshot)}
       <div class="gpi-extraction-native">${owner.render()}</div>
@@ -114,15 +116,21 @@
 
   function syncToCopilot(event) {
     const button = event.currentTarget;
-    const store = window.EU_STUDY_CONTEXT;
-    if (!store || typeof store.handoff !== 'function') return;
+    const owner = window.EU_EXTRACTION_NATIVE_OWNER;
+    if (!owner || typeof owner.syncToCopilot !== 'function') return;
     button.disabled = true;
     button.textContent = t('Syncing…', '正在同步…');
-    const handoff = store.handoff({ sourceRoute: 'extraction', targetRoute: 'guided' });
-    Promise.resolve(handoff && handoff.persisted).then(() => {
+    options.syncError = '';
+    return Promise.resolve(owner.syncToCopilot()).then(receipt => {
       const copilot = window.EU_GUIDED_PI;
-      return copilot && typeof copilot.rebind === 'function' ? copilot.rebind() : null;
-    }).then(paint).catch(error => {
+      const rebound = copilot && typeof copilot.rebind === 'function' ? copilot.rebind() : null;
+      return Promise.resolve(rebound).then(() => {
+        if (copilot && typeof copilot.notifyExtractionHandoff === 'function') copilot.notifyExtractionHandoff(receipt);
+        options.syncReceipt = receipt;
+        paint();
+        return receipt;
+      });
+    }).catch(error => {
       options.syncError = String(error && error.message || error);
       paint();
     });

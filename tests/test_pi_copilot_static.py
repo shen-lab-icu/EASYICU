@@ -28,7 +28,7 @@ _ESCAPE_OWNER = _read("js/html-escape.js")
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260817-visible-activity1" in index
+    assert "css/guided-pi.css?v=20260824-extraction-receipt1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260824-native-scroll1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
@@ -45,12 +45,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         in index
     )
     assert "js/screens-guided-pi-project.js?v=20260823-project-owner1" in index
-    assert "js/screens-guided-pi.js?v=20260824-single-copilot1" in index
+    assert "js/screens-guided-pi.js?v=20260824-extraction-receipt1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260816-copilot-provider-owner1" in index
+    assert "js/api.js?v=20260824-local-open1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -218,7 +218,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'id="gdLegacyShell"' in guided
     assert "window.EU_GUIDED_PI.mount" in guided
     assert (
-        "window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive, rebind }"
+        "window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive, rebind, notifyExtractionHandoff }"
         in pi_owner
     )
     assert "new EventSource('/api/jobs/'" in pi_owner

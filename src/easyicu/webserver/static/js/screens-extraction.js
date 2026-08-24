@@ -269,6 +269,10 @@
   let exportCancelled = null;   // terminal user-requested cancel (partial result payload)
   let exportCohortReport = null; // cohort report from the job's start event (selected / before-cap)
   let exportCancelRequested = false;
+  let exOutputNotice = '';
+  let exOutputError = '';
+  let exSyncNotice = '';
+  let exSyncError = '';
   let exportRunMode = 'custom';  // custom | recommended
   let exportRunModules = null;   // module keys used by the current/last run
   let exCustomOpen = false;
@@ -585,6 +589,7 @@
     exportRunMode = runMode;
     exportRunModules = modules;
     exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false;
+    exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = '';
     exView = 'running'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
     const conceptSelection = selectedConceptPayload(modules);
@@ -1649,6 +1654,90 @@
     }
     return sel ? t(`${sel.toLocaleString()} stays · full matched cohort`, `${sel.toLocaleString()} 条住院 · 完整匹配队列`) : '';
   }
+  function extractionSupportFiles(result) {
+    if (!result || typeof result !== 'object') return [];
+    const rows = [];
+    if (result.manifest) rows.push({ file: result.manifest, manifest: true });
+    if (Array.isArray(result.definition_files)) rows.push(...result.definition_files);
+    if (result.column_metadata) rows.push({ file: result.column_metadata, metadata: true });
+    if (result.readme) rows.push({ file: result.readme, readme: true });
+    return rows.filter((row, index, all) => row.file && all.findIndex(item => item.file === row.file) === index);
+  }
+  function extractionHandoffReceipt() {
+    const result = exportResult && typeof exportResult === 'object' ? exportResult : {};
+    const snapshot = window.EU_EXTRACTION_CONTEXT && window.EU_EXTRACTION_CONTEXT.snapshot
+      ? window.EU_EXTRACTION_CONTEXT.snapshot() : {};
+    const source = snapshot.data_source || {};
+    const databaseKey = String(source.database || '').toLowerCase();
+    const databaseLabel = {
+      miiv: 'MIMIC-IV', mimiciv: 'MIMIC-IV', mimic_iv: 'MIMIC-IV',
+      miii: 'MIMIC-III', mimiciii: 'MIMIC-III', mimic_iii: 'MIMIC-III',
+      eicu: 'eICU', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sicdb: 'SICdb',
+    }[databaseKey] || String(source.database || source.label || '');
+    return {
+      id: 'extraction-' + String(exportJobId || Date.now()),
+      job_id: String(exportJobId || ''),
+      database: databaseLabel,
+      source_label: String(source.label || ''),
+      output_dir: String(result.out_dir || ''),
+      data_file_count: Number(result.file_count || (Array.isArray(result.files) ? result.files.length : 0)),
+      support_file_count: extractionSupportFiles(result).length,
+      total_rows: result.total_rows == null ? null : Number(result.total_rows),
+      cohort_summary: cohortScaleNote(),
+      modules: Array.isArray(snapshot.modules) ? snapshot.modules.slice(0, 30) : [],
+      export_format: String(snapshot.export_format || ''),
+    };
+  }
+  function syncExtractionToCopilot() {
+    const store = window.EU_STUDY_CONTEXT;
+    if (!store || typeof store.handoff !== 'function') {
+      return Promise.reject(new Error(t('StudyContext sync is unavailable.', '研究配置同步暂不可用。')));
+    }
+    const handoff = store.handoff({ sourceRoute: 'extraction', targetRoute: 'guided' });
+    return Promise.resolve(handoff && handoff.persisted).then(() => extractionHandoffReceipt());
+  }
+  function notifyCopilotOfExtraction(receipt) {
+    const copilot = window.EU_GUIDED_PI;
+    const rebound = copilot && typeof copilot.rebind === 'function' ? copilot.rebind() : null;
+    return Promise.resolve(rebound).then(() => {
+      if (copilot && typeof copilot.notifyExtractionHandoff === 'function') {
+        copilot.notifyExtractionHandoff(receipt);
+      }
+      return receipt;
+    });
+  }
+  function continueInGuidedCopilot(button) {
+    if (button) { button.disabled = true; button.textContent = t('Syncing…', '正在同步…'); }
+    exSyncError = '';
+    syncExtractionToCopilot()
+      .then(notifyCopilotOfExtraction)
+      .then(() => {
+        exSyncNotice = t('Synced to Copilot and added a conversation receipt.', '已同步到 Copilot，并写入对话回执。');
+        location.hash = '#guided';
+      })
+      .catch(error => {
+        exSyncError = String(error && error.message || error);
+        repaint();
+      });
+  }
+  function openExtractionOutput(file, button) {
+    const api = window.EU_API;
+    if (!exportJobId || !api || typeof api.openExtractionOutput !== 'function') return;
+    if (button) button.disabled = true;
+    exOutputNotice = '';
+    exOutputError = '';
+    api.openExtractionOutput(exportJobId, file || '').then(result => {
+      exOutputNotice = result && result.target === 'file'
+        ? (result.method === 'finder'
+          ? t(`Located ${result.name} in Finder because no default app could open it.`, `本机没有可直接打开该文件的默认应用，已在 Finder 中定位 ${result.name}。`)
+          : t(`Opened ${result.name} with the default local app.`, `已使用本机默认应用打开 ${result.name}。`))
+        : t('Opened the export folder in Finder.', '已在 Finder 中打开导出文件夹。');
+      repaint();
+    }).catch(error => {
+      exOutputError = String(error && error.message || error);
+      repaint();
+    });
+  }
   function cancelledState() {
     // Neutral terminal state for a user-requested cancel: not red, and honest
     // about the partial module files the cooperative cancel left on disk.
@@ -1701,26 +1790,31 @@
       : (exportRunModules || modKeys()).map(k => ({ file: k + '.' + EX_EXT[exFormat], module: k, rows: null }));
     const outDir = (r && r.out_dir) || t('timestamped export folder', '带时间戳导出文件夹');
     const totalRows = r ? r.total_rows : null;
-    const fileList = files
-      .concat([{ file: '_manifest.json', manifest: true }])
-      .concat((r && r.definition_files) ? r.definition_files : [])
-      .concat((r && r.readme) ? [{ file: r.readme, readme: true }] : []);
+    const supportFiles = extractionSupportFiles(r);
+    const fileList = files.concat(supportFiles);
+    const canOpen = Boolean(r && exportJobId);
+    const dataFileCount = r ? Number(r.file_count || files.length) : files.length;
+    const supportFileCount = supportFiles.length;
     return `
       <div class="state-hero success solid" style="max-width:720px;margin:0 auto;">
         <div class="glyph">${icon('check', 26, 2.6)}</div>
         <div class="st-t">${t('Extraction complete', '抽取完成')}</div>
         <div class="st-d">${r
-          ? `${r.file_count} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${escHtml(outDir)}</span>. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
+          ? `${dataFileCount} ${t('data files', '个数据文件')} + ${supportFileCount} ${t('supporting files', '个配套文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''}. ${t('Written to', '写入')} ${canOpen ? `<button type="button" class="ex-output-path" data-ex-open-output title="${t('Open this folder in Finder', '在 Finder 中打开此文件夹')}"><span class="mono">${escHtml(outDir)}</span>${icon('folder', 12)}</button>` : `<span class="mono">${escHtml(outDir)}</span>`}. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
           : t('Seeded demo preview — no files were written to disk. The ledger below shows what a real run would produce; switch to Real to write an actual export.', '演示种子预览 —— 没有向磁盘写入任何文件。下方清单展示真实运行会产出什么；切换到真实模式才会写出实际导出。')}</div>
+        ${exOutputNotice ? `<div class="ex-output-feedback ok" role="status">${icon('check', 13)} ${escHtml(exOutputNotice)}</div>` : ''}
+        ${exOutputError ? `<div class="ex-output-feedback bad" role="alert">${icon('alert', 13)} ${escHtml(exOutputError)}</div>` : ''}
+        ${exSyncNotice ? `<div class="ex-output-feedback ok" role="status">${icon('check', 13)} ${escHtml(exSyncNotice)}</div>` : ''}
+        ${exSyncError ? `<div class="ex-output-feedback bad" role="alert">${icon('alert', 13)} ${escHtml(exSyncError)}</div>` : ''}
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
-          <button class="btn" data-study-handoff data-study-source="extraction" data-study-target="guided">${icon('agent', 14)} ${t('Continue in Guided Copilot', '在研究引导中继续')}</button>
+          <button class="btn" data-ex-sync-guided>${icon('agent', 14)} ${t('Continue in Guided Copilot', '在研究引导中继续')}</button>
           <button class="btn ghost" data-ex-reset>${icon('refresh', 14)} ${t('Extract again', '重新抽取')}</button>
         </div>
       </div>
       <div class="cols-2 mt-20" style="max-width:720px;margin-left:auto;margin-right:auto;">
         ${fileList.map(f => `
-          <div class="ledger-row"><span class="ledger-ico">${icon(f.manifest ? 'shield' : (String(f.kind || '').startsWith('feature_definitions') ? 'file' : 'file'), 14)}</span><div><div class="mono" style="font-weight:600;font-size:12px;">${f.file}</div><div style="font-size:11px;color:var(--ink-4);">${f.manifest ? t('reproducibility manifest', '可复现清单') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || ''))))}</div></div></div>`).join('')}
+          <${canOpen ? 'button type="button"' : 'div'} class="ledger-row ex-output-file" ${canOpen ? `data-ex-open-output="${escHtml(f.file)}" title="${t('Open this file', '打开此文件')}"` : ''}><span class="ledger-ico">${icon(f.manifest || f.metadata ? 'shield' : 'file', 14)}</span><span class="ex-output-file-copy"><span class="mono ex-output-file-name">${escHtml(f.file)}</span><span class="ex-output-file-detail">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.metadata ? t('digest-bound column metadata', '摘要绑定列元数据') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || '')))))}</span></span>${canOpen ? `<span class="ex-output-open-icon">${icon('arrow', 12)}</span>` : ''}</${canOpen ? 'button' : 'div'}>`).join('')}
       </div>`;
   }
 
@@ -1855,7 +1949,9 @@
         setTimeout(() => { const el = document.querySelector('.ex-export-destination'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 60);
       }));
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; repaint(); }));
+      root.querySelectorAll('[data-ex-open-output]').forEach(b => b.addEventListener('click', () => openExtractionOutput(b.dataset.exOpenOutput || '', b)));
+      root.querySelectorAll('[data-ex-sync-guided]').forEach(b => b.addEventListener('click', () => continueInGuidedCopilot(b)));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
       // custom disclosure
       const cust = root.querySelector('[data-ex-custom]');
       if (cust) cust.addEventListener('click', () => { exCustomOpen = !exCustomOpen; repaint(); setTimeout(() => { const el = root.querySelector('.ex2-custom'); if (el && exCustomOpen) el.scrollIntoView ? null : null; }, 0); });
@@ -1968,6 +2064,8 @@
     bind: host => S.extraction.afterRender(host),
     isReal: () => dataMode() === 'real',
     isPreparedExport: () => dataMode() === 'real' && exSource === 'module' && exReal === 'ready',
+    syncToCopilot: syncExtractionToCopilot,
+    handoffReceipt: extractionHandoffReceipt,
     useRealData() {
       if (window.setDataMode) window.setDataMode('real', { force: true });
       else window.EU_DATA = 'real';

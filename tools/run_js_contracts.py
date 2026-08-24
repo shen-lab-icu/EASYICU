@@ -35,6 +35,7 @@ CONTRACTS: dict[str, list[str]] = {
     "crossdb_setup_owner.test.js": ["screens-viz-crossdb-setup.js"],
     "crossdb_source_choice.test.js": ["screens-viz-crossdb-source.js"],
     "extraction_embedded_scroll.test.js": ["screens-extraction-embedded.js"],
+    "extraction_embedded_handoff.test.js": ["screens-extraction-embedded.js"],
     "extraction_icd_source_binding.test.js": ["screens-icd.js"],
     "extraction_job_continuity.test.js": ["screens-extraction-job-continuity.js"],
     "guided_gate_state.test.js": ["screens-guided.js"],
