@@ -326,6 +326,7 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         self,
         *,
         plan: AnalysisPlan,
+        parent: AnalysisStep,
         parent_index: int,
     ) -> tuple[AnalysisPlan, AnalysisStep]:
         """Add one host-owned grid child without repurposing Planner steps."""
@@ -348,6 +349,8 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             scientific_capability="association_adjusted_v1",
             icu_rule_refs=[self.plan_rule_ref],
             sensitivity_spec_ids=list(self.sensitivity_ids),
+            literature_citation_keys=list(parent.literature_citation_keys),
+            literature_design_bindings=list(parent.literature_design_bindings),
         )
         steps = list(plan.steps)
         steps.insert(parent_index + 1, candidate)
@@ -402,6 +405,7 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         if candidate is None:
             plan, candidate = self._insert_candidate(
                 plan=plan,
+                parent=parent,
                 parent_index=parent_index,
             )
         candidate_index = next(
