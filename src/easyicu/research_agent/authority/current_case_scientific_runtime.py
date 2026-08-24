@@ -606,15 +606,22 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
                 and generic_parent in step.inputs
             )
+            signed_robustness_projection = (
+                step.planned_analysis_role == "sensitivity"
+                and step.robustness_replay_spec is not None
+            )
+            signed_result_projection = (
+                inherited_binary_sensitivity or signed_robustness_projection
+            )
             inputs = [
                 replacement if value == generic_parent else value
                 for value in step.inputs
             ]
-            if inherited_binary_sensitivity:
+            if signed_result_projection:
                 # The signed primary already performed the nested spline and
-                # linear fits.  This child is now a result projection, so raw
-                # cohort columns would falsely imply a second model fit and
-                # trigger unrelated plausibility/provenance obligations.
+                # linear fits. These children project its functional-form or
+                # robustness results, so raw cohort columns would falsely
+                # imply a second model fit and trigger unrelated obligations.
                 inputs = [replacement, self.linear_sensitivity_product]
             if (
                 step.planned_analysis_role == "sensitivity"
@@ -628,7 +635,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 else item
                 for item in step.input_consumption_contracts
             ]
-            if inherited_binary_sensitivity:
+            if signed_result_projection:
                 contracts = []
             if step.planned_analysis_role == "sensitivity" and replacement in inputs:
                 contracted = {item.input_key for item in contracts}
@@ -652,7 +659,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                         # from this signed runtime owner instead.
                         "scientific_capability": (
                             None
-                            if inherited_binary_sensitivity
+                            if signed_result_projection
                             else step.scientific_capability
                         ),
                     }

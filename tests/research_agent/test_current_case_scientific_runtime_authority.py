@@ -535,7 +535,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
                     "intent": "Summarize signed robustness results.",
                     "inputs": [
                         "dataset:analysis_cohort",
-                        "table:adjusted_association_estimates",
+                        "unrelated_raw_covariate",
                     ],
                     "expected_outputs": [
                         "statistic:primary_or",
@@ -574,6 +574,10 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     step = bound.steps[1]
     assert authority.downstream_parent_product in step.inputs
     assert authority.linear_sensitivity_product in step.inputs
+    assert step.inputs == [
+        authority.downstream_parent_product,
+        authority.linear_sensitivity_product,
+    ]
     assert {item.input_key for item in step.input_consumption_contracts} == {
         authority.downstream_parent_product,
         authority.linear_sensitivity_product,
