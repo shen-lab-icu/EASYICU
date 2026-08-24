@@ -172,7 +172,7 @@ def run_landmark_spline_functional_form(
     result.to_csv(output_path, index=False)
     summary = {
         "step": step.step_id,
-        "status": "completed",
+        "status": "ok",
         "analysis_family": "association",
         "analysis_kind": LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
         "interpretation_class": "descriptive_prognostic_association",
@@ -181,6 +181,10 @@ def run_landmark_spline_functional_form(
         "input_bindings": input_bindings or [],
         "output_files": {output_product: output_path.name},
     }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
     print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
     return summary
 

@@ -266,8 +266,10 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
 
     rebound = bound.steps[1]
     assert rebound.scientific_capability is None
-    assert authority.downstream_parent_product in rebound.inputs
-    assert authority.linear_sensitivity_product in rebound.inputs
+    assert rebound.inputs == [
+        authority.downstream_parent_product,
+        authority.linear_sensitivity_product,
+    ]
     AnalysisPlan.model_validate(bound.model_dump(mode="json"))
     selected = select_standard_executor(
         rebound,

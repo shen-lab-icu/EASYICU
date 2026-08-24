@@ -610,6 +610,12 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 replacement if value == generic_parent else value
                 for value in step.inputs
             ]
+            if inherited_binary_sensitivity:
+                # The signed primary already performed the nested spline and
+                # linear fits.  This child is now a result projection, so raw
+                # cohort columns would falsely imply a second model fit and
+                # trigger unrelated plausibility/provenance obligations.
+                inputs = [replacement, self.linear_sensitivity_product]
             if (
                 step.planned_analysis_role == "sensitivity"
                 and replacement in inputs
@@ -622,6 +628,8 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 else item
                 for item in step.input_consumption_contracts
             ]
+            if inherited_binary_sensitivity:
+                contracts = []
             if step.planned_analysis_role == "sensitivity" and replacement in inputs:
                 contracted = {item.input_key for item in contracts}
                 contracts.extend(
