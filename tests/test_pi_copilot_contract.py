@@ -1599,6 +1599,34 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     assert unrelated_abort.value.code == "pi_message_job_mismatch"
 
 
+def test_current_user_explicit_extraction_confirmation_is_host_granted(
+    tmp_path: Path,
+) -> None:
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    session_id = service.create_session(
+        project_id="project-explicit-extract", external_llm_opt_in=True
+    )["session"]["session_id"]
+
+    submitted = service.send_message(
+        session_id,
+        project_id="project-explicit-extract",
+        message="确认，授权你在本轮准备并注册官方演示数据。",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    assert gateway.tool_contexts[-1].allowed_actions == frozenset({"extract"})
+    record = service._get_record(session_id)
+    assert record.last_turn_allowed_actions == ["extract"]
+
+
 def test_provider_error_marks_message_job_failed_without_raw_network_detail(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
