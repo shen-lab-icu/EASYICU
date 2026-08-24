@@ -17,9 +17,15 @@ from easyicu.research_agent.agents.progressive_payload import (
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
     _bind_runtime_action_dependencies,
+    _bound_method_layers,
     _complete_case_variable_roster,
+    _foundation_shape_contract,
+    _outline_method_layer_deadlines,
     _parse_foundation_materialization,
     _parse_step_materialization,
+    _preserve_literature_roster_across_targeted_repair,
+    _sealed_cohort_predicate_binding_rows,
+    _step_materialization_shape_contract,
     candidate_analysis_types,
 )
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
@@ -34,6 +40,7 @@ from easyicu.research_agent.execution.runners.feasibility_protocol_executor impo
 from easyicu.research_agent.planning.progressive_compiler import (
     assert_immutable_prefix,
     compile_progressive_plan,
+    progressive_output_roles_for_module,
 )
 from easyicu.research_agent.planning.dependence_authority import (
     bind_context_dependence_authority,
@@ -797,6 +804,140 @@ def test_step_materialization_parser_collapses_normalized_raw_input_duplicates()
     assert parsed.step.raw_inputs == ["age_years", "sex_code"]
 
 
+def test_targeted_repair_preserves_untouched_sealed_literature_bindings() -> None:
+    source = _payload()
+    step = source["steps"][2]
+    keys = ["strobe_2007", "record_2015", "suissa_2008", "anderson_1983"]
+    step["literature_bindings"] = [
+        {
+            "citation_key": key,
+            "design_elements": ["reporting"],
+            "application": f"Apply the sealed {key} design guidance to this step.",
+            "divergence": None,
+        }
+        for key in keys
+    ]
+    outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
+    previous = ProgressiveStepMaterialization.model_validate(
+        _materialization_payloads(source)[2]
+    )
+    current_payload = _materialization_payloads(source)[2]
+    current_payload["step"]["literature_bindings"] = [
+        {
+            **binding,
+            "design_elements": (
+                ["reporting", "dependence"]
+                if binding["citation_key"] == "strobe_2007"
+                else binding["design_elements"]
+            ),
+        }
+        for binding in step["literature_bindings"][:-1]
+    ]
+    current = ProgressiveStepMaterialization.model_validate(current_payload)
+
+    merged = _preserve_literature_roster_across_targeted_repair(
+        current=current,
+        previous=previous,
+        outline_step=outline.steps[2],
+    )
+
+    assert [item.citation_key for item in merged.step.literature_bindings] == keys
+    assert merged.step.literature_bindings[0].design_elements == [
+        "reporting",
+        "dependence",
+    ]
+    assert merged.step.literature_bindings[-1] == previous.step.literature_bindings[-1]
+
+
+def test_required_method_layer_is_repaired_at_last_capable_sealed_step() -> None:
+    source = _payload()
+    source["steps"][1]["literature_bindings"] = [
+        {
+            "citation_key": "strobe_2007",
+            "design_elements": ["reporting"],
+            "application": "Report the descriptive cohort table.",
+            "divergence": None,
+        }
+    ]
+    source["steps"][2]["literature_bindings"] = [
+        {
+            "citation_key": "strobe_2007",
+            "design_elements": ["reporting", "dependence"],
+            "application": (
+                "Report the outcome distribution and state that repeated-stay "
+                "dependence cannot be assessed without patient identity."
+            ),
+            "divergence": None,
+        }
+    ]
+    outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
+    materializations = [
+        ProgressiveStepMaterialization.model_validate(item)
+        for item in _materialization_payloads(source)[:3]
+    ]
+
+    deadlines = _outline_method_layer_deadlines(
+        outline,
+        ("reporting_standard", "dependence"),
+    )
+
+    assert deadlines["dependence"] == 2
+    assert "dependence" not in _bound_method_layers(materializations[:2])
+    assert "dependence" in _bound_method_layers(materializations)
+
+
+def test_step_parser_removes_only_product_already_bound_as_product_input() -> None:
+    payload = _materialization_payloads()[1]
+    payload["step"]["raw_inputs"] = [
+        "artifact:analysis_cohort",
+        "table:unbound_context",
+        "age_years",
+    ]
+    payload["step"]["product_inputs"] = [
+        {
+            "producer_step_id": "01_cohort",
+            "product_id": "artifact:analysis_cohort",
+        }
+    ]
+
+    parsed = _parse_step_materialization(json.dumps(payload))
+
+    assert parsed.step.raw_inputs == ["table:unbound_context", "age_years"]
+    assert parsed.step.product_inputs[0].product_id == "artifact:analysis_cohort"
+
+
+def test_step_materialization_parser_never_rebinds_host_owned_coordinates() -> None:
+    outline_step = ProgressivePlanOutline.model_validate(_outline_payload()).steps[0]
+    payload = _materialization_payloads()[0]
+    payload["outline_step_sha256"] = "f" * 64
+    payload["step"].update(
+        {
+            "step_id": "wrong",
+            "planned_analysis_role": "primary",
+            "module_id": outline_step.module_id,
+            "objective": "A different model-written objective.",
+            "depends_on": ["wrong"],
+            "scientific_action_id": "descriptive.table_one",
+            "raw_inputs": ["age_years"],
+        }
+    )
+
+    parsed = _parse_step_materialization(
+        json.dumps(payload),
+        outline_step=outline_step,
+        outline_step_sha256="a" * 64,
+    )
+
+    assert parsed.outline_step_sha256 == "f" * 64
+    assert parsed.foundation is None
+    assert parsed.step.step_id == "wrong"
+    assert parsed.step.module_id == outline_step.module_id
+    assert parsed.step.objective == "A different model-written objective."
+    assert parsed.step.depends_on == ["wrong"]
+    assert parsed.step.scientific_action_id == "descriptive.table_one"
+    assert parsed.step.raw_inputs == ["age_years"]
+
+
 @pytest.mark.parametrize(
     ("field", "values"),
     [
@@ -1406,6 +1547,46 @@ def test_current_distribution_step_requires_non_null_contract_fields() -> None:
         "confidence_level",
     }
     assert all("anyOf" not in step[field] for field in required_non_null)
+
+
+def test_distribution_prompt_projects_exact_policy_literals_and_null_fields() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="03_distribution",
+        planned_analysis_role="primary",
+        module_id="exposure_outcome_distribution",
+        objective="Estimate prevalence and absolute outcome risk by exposure.",
+        depends_on=[],
+        variable_names=["exposure_flag", "outcome_flag"],
+        literature_citation_keys=[],
+        scientific_action_id="descriptive.descriptive_summary",
+    )
+    outline = ProgressivePlanOutline(
+        analysis_type="descriptive_epidemiology",
+        cohort_objective="Describe the sealed cohort.",
+        steps=[outline_step],
+        rationale="Use the registered descriptive distribution module.",
+    )
+
+    prompt = ProgressivePlannerAgent._materialization_prompt(
+        context=_context(),
+        outline=outline,
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variables=["exposure_flag", "outcome_flag"],
+        action_rows=[],
+        allowed_literature_citation_keys=[],
+        know_how_context="",
+        planning_contract_context="",
+        prefix_summary=[],
+        available_product_refs=[("01_cohort", "artifact:analysis_cohort")],
+    )
+
+    assert "denominator_policy is exactly all_declared_rows" in prompt
+    assert "observed_outcome_rows" in prompt
+    assert "missing_exposure_policy is exactly fail_closed" in prompt
+    assert "structural_absence_is_non_event" in prompt
+    assert "Set custom_method=null" in prompt
+    assert "do not use an empty string where null is required" in prompt
 
 
 def test_current_adjusted_step_requires_model_contract_fields() -> None:
@@ -2273,6 +2454,121 @@ def test_outline_prompt_exposes_host_compiled_singleton_ownership() -> None:
     assert '"table:robustness_matrix"' in prompt
     assert "Each listed module may appear at most once" in prompt
     assert "all replayable robustness intents in one robustness_replay step" in prompt
+
+
+def test_descriptive_outline_prompt_separates_article_and_executable_ids() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                inferred_analysis_family="descriptive_epidemiology",
+            )
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[1].content
+
+    assert "Allowed ProgressiveOutlineStep.module_id values" in prompt
+    assert (
+        '"descriptive_epidemiology":["cohort_definition","table_one",'
+        '"exposure_outcome_distribution","measurement_audit"]'
+    ) in prompt
+    assert '"article_requirement_id":"cohort_denominator"' in prompt
+    assert '"module_id":"cohort_denominator"' not in prompt
+    assert "article_requirement_id values are article obligations" in prompt
+
+
+def test_outline_prompt_projects_exact_case_neutral_json_shape() -> None:
+    prompt = ProgressivePlannerAgent.request_messages(_context())[1].content
+
+    assert "Exact ProgressivePlanOutline JSON shape" in prompt
+    assert '"schema_version":"easyicu.progressive_plan_outline/1"' in prompt
+    assert '"analysis_type":"<copy one exact candidate analysis family>"' in prompt
+    assert '"step_id":"<unique lowercase id>"' in prompt
+    assert (
+        '"planned_analysis_role":"<primary|secondary|sensitivity|auxiliary>"'
+        in prompt
+    )
+    assert '"depends_on":[]' in prompt
+    assert '"literature_citation_keys":[]' in prompt
+    assert '"scientific_action_id":null' in prompt
+    assert "preserve every key; add no other keys" in prompt
+    assert "exposure_flag" not in prompt.split(
+        "Exact ProgressivePlanOutline JSON shape", maxsplit=1
+    )[1].split("Candidate analysis_type values", maxsplit=1)[0]
+
+
+def test_predicate_filtered_foundation_contract_projects_nested_item_shapes() -> None:
+    contract = _foundation_shape_contract(
+        outline_sha256="a" * 64,
+        host_cohort=None,
+        required_cohort_selection_mode="predicate_filtered",
+        required_cohort_name="sealed cohort",
+    )
+
+    assert '"selection_mode":"predicate_filtered"' in contract
+    assert '"concept_id":"<copy an allowed cohort concept id>"' in contract
+    assert '"start_offset_hours":"<number>"' in contract
+    assert '"value":{"mode":' in contract
+    assert "value object must preserve all six displayed keys" in contract
+    assert 'each item has exactly {"key":' in contract
+    assert '"card_sha256":"<authorized 64-char digest>"' in contract
+
+
+def test_foundation_projects_exact_sealed_predicate_binding_rows() -> None:
+    context = _context()
+    variable = next(item for item in context.variables if item.name == "exposure_flag")
+    bound_variable = variable.model_copy(
+        update={
+            "name": "exposure_flag_max",
+            "source_concept": "exposure_flag",
+            "analysis_window": "icu_admission[0,24]h",
+        }
+    )
+    context = context.model_copy(update={"variables": [bound_variable]})
+    context = context.model_copy(update={"primary_exposure": "exposure_flag_max"})
+
+    rows = _sealed_cohort_predicate_binding_rows(context, ["exposure_flag_max"])
+
+    assert rows == (
+        {
+            "concept_id": "exposure_flag",
+            "physical_column": "exposure_flag_max",
+            "aggregation": "max",
+            "anchor": "icu_admission",
+            "start_offset_hours": 0.0,
+            "end_offset_hours": 24.0,
+            "matches_primary_exposure": True,
+        },
+    )
+
+
+def test_step_materialization_contract_projects_closed_envelope() -> None:
+    outline_step = ProgressivePlanOutline.model_validate(_outline_payload()).steps[0]
+    contract = _step_materialization_shape_contract(
+        outline_step=outline_step,
+        outline_step_sha256="b" * 64,
+    )
+
+    assert '"schema_version":"easyicu.progressive_step_materialization/1"' in contract
+    assert '"outline_step_sha256":"' + "b" * 64 + '"' in contract
+    assert '"foundation":null,"step":{' in contract
+    assert '"step_id":"01_cohort"' in contract
+    assert '"raw_inputs":[]' in contract
+    assert '"literature_bindings":[]' in contract
+    assert "Never return variable_names" in contract
+    assert "flatten step fields into the root" not in contract
+
+
+def test_compiler_projects_measurement_output_role_vocabulary() -> None:
+    assert progressive_output_roles_for_module("measurement_audit") == (
+        "analytic_denominators",
+        "component_completeness",
+        "event_timing",
+        "measurement_missingness",
+        "measurement_process",
+        "measurement_source",
+        "missingness_profile",
+    )
 
 
 def test_outline_binds_unique_runtime_product_owner_without_model_bookkeeping() -> None:
@@ -3304,6 +3600,13 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     foundation_prompt = llm.calls[1][0][-1].content
     assert "PROGRESSIVE PLAN-FOUNDATION AUTHORITY" in foundation_prompt
     assert "Do not return executable step fields" in foundation_prompt
+    assert "Exact ProgressiveFoundationMaterialization JSON shape" in foundation_prompt
+    assert '"schema_version":"easyicu.progressive_plan_foundation/1"' in foundation_prompt
+    assert '"foundation":{"cohort":' in foundation_prompt
+    assert '"display_labels":[]' in foundation_prompt
+    assert '"robustness_intents":[]' in foundation_prompt
+    assert '"know_how_decisions":[]' in foundation_prompt
+    assert "never flatten foundation fields" not in foundation_prompt
     first_step_prompt = llm.calls[2][0][-1].content
     assert "Current outline step and host digest" in first_step_prompt
     assert "Do not return or rewrite any prefix or future step" in first_step_prompt

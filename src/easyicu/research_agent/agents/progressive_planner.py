@@ -25,6 +25,7 @@ from ..planning.literature_bindings import (
     validate_literature_citation_bindings,
 )
 from ..planning.method_literature import (
+    method_binding_support,
     reporting_method_source_keys_for_guidelines,
 )
 from ..planning.planner_output_contract import (
@@ -35,6 +36,7 @@ from ..planning.primary_result_contract import validate_required_primary_result
 from ..planning.progressive_compiler import (
     compile_progressive_plan,
     progressive_cohort_concept_ids,
+    progressive_output_roles_for_module,
     validate_progressive_foundation,
 )
 from ..planning.progressive_contract import (
@@ -110,6 +112,371 @@ _TYPED_PRODUCT_TOKEN = re.compile(
 )
 _SEPARATE_ANALYSIS_STEP = re.compile(r"\bseparate\s+analysis\s+step\b", re.I)
 _EXPLICIT_FIGURE_OUTPUT = re.compile(r"\bfigures?\b", re.I)
+
+
+def _sealed_cohort_predicate_binding_rows(
+    context: ResearchContext,
+    variable_names: Sequence[str],
+) -> tuple[dict[str, Any], ...]:
+    """Project exact wide-column coordinates for cohort predicates."""
+
+    selected = set(variable_names)
+    rows: list[dict[str, Any]] = []
+    for variable in context.variables:
+        name = str(variable.name or "").strip()
+        source_concept = str(variable.source_concept or "").strip()
+        analysis_window = str(variable.analysis_window or "").strip()
+        if not name or name not in selected or not source_concept or not analysis_window:
+            continue
+        aggregation = next(
+            (
+                candidate
+                for candidate in (
+                    "max",
+                    "min",
+                    "mean",
+                    "median",
+                    "last",
+                    "first",
+                    "sum",
+                    "count",
+                )
+                if name.endswith("_" + ("n" if candidate == "count" else candidate))
+            ),
+            None,
+        )
+        match = re.fullmatch(
+            r"([a-z][a-z0-9_]*)\[(-?[0-9]+(?:\.[0-9]+)?),"
+            r"(-?[0-9]+(?:\.[0-9]+)?)\]h",
+            analysis_window,
+        )
+        if aggregation is None or match is None:
+            continue
+        rows.append(
+            {
+                "concept_id": source_concept,
+                "physical_column": name,
+                "aggregation": aggregation,
+                "anchor": match.group(1),
+                "start_offset_hours": float(match.group(2)),
+                "end_offset_hours": float(match.group(3)),
+                "matches_primary_exposure": name == context.primary_exposure,
+            }
+        )
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                not bool(row["matches_primary_exposure"]),
+                str(row["concept_id"]),
+                str(row["physical_column"]),
+            ),
+        )
+    )
+
+
+def _preserve_literature_roster_across_targeted_repair(
+    *,
+    current: ProgressiveStepMaterialization,
+    previous: ProgressiveStepMaterialization | None,
+    outline_step: ProgressiveOutlineStep,
+) -> ProgressiveStepMaterialization:
+    """Carry forward valid bindings omitted by a focused compiler repair.
+
+    A compiler-directed retry may need to expand one binding (for example,
+    adding a dependence design element) without revisiting the other sealed
+    sources.  Schema-imperfect providers sometimes return only the bindings
+    they changed.  When the previous attempt already covered the exact
+    outline-owned roster, retain its untouched model-authored applications and
+    overlay the current replacements.  Extras, duplicates, or an incomplete
+    previous roster still fail closed in the compiler.
+    """
+
+    if previous is None or previous.step.step_id != current.step.step_id:
+        return current
+    expected = tuple(outline_step.literature_citation_keys)
+    previous_bindings = list(previous.step.literature_bindings)
+    current_bindings = list(current.step.literature_bindings)
+    previous_keys = tuple(item.citation_key for item in previous_bindings)
+    current_keys = tuple(item.citation_key for item in current_bindings)
+    if (
+        not expected
+        or len(previous_keys) != len(set(previous_keys))
+        or set(previous_keys) != set(expected)
+        or len(current_keys) != len(set(current_keys))
+        or not set(current_keys).issubset(set(expected))
+        or set(current_keys) == set(expected)
+    ):
+        return current
+    previous_by_key = {item.citation_key: item for item in previous_bindings}
+    current_by_key = {item.citation_key: item for item in current_bindings}
+    merged = [
+        current_by_key.get(key, previous_by_key[key])
+        for key in expected
+    ]
+    return current.model_copy(
+        update={
+            "step": current.step.model_copy(
+                update={"literature_bindings": merged}
+            )
+        }
+    )
+
+
+def _outline_method_layer_deadlines(
+    outline: ProgressivePlanOutline,
+    required_layers: Sequence[str],
+) -> dict[str, int]:
+    """Return the last sealed step capable of binding each required layer.
+
+    Outline validation proves source-key availability, while step
+    materialization binds exact design elements and an application.  The last
+    capable step is therefore the local repair boundary: once it is compiled,
+    a missing layer could only be repaired by mutating an immutable prefix.
+    """
+
+    deadlines: dict[str, int] = {}
+    for layer in required_layers:
+        capable = [
+            index
+            for index, step in enumerate(outline.steps)
+            if layer
+            in set(method_layers_for_source_keys(step.literature_citation_keys))
+        ]
+        if capable:
+            deadlines[str(layer)] = max(capable)
+    return deadlines
+
+
+def _bound_method_layers(
+    materializations: Sequence[ProgressiveStepMaterialization],
+) -> set[str]:
+    """Project exact method-card layers bound by materialized design elements."""
+
+    layers: set[str] = set()
+    for materialization in materializations:
+        for binding in materialization.step.literature_bindings:
+            layers.update(
+                method_binding_support(
+                    binding.citation_key,
+                    binding.design_elements,
+                )["matched_layers"]
+            )
+    return layers
+
+
+def _outline_shape_contract(
+    *,
+    analysis_types: Sequence[str],
+    module_ids_by_analysis_type: Mapping[str, Sequence[str]],
+) -> str:
+    """Render the exact small outline shape for schema-imperfect transports.
+
+    Strict JSON Schema remains the transport authority.  Some otherwise usable
+    OpenAI-compatible endpoints accept ``response_format`` but do not reliably
+    constrain every generated key.  Keep a case-neutral textual projection of
+    the same public contract in the prompt and every retry so those endpoints
+    can recover without weakening host validation.
+    """
+
+    template = {
+        "schema_version": "easyicu.progressive_plan_outline/1",
+        "analysis_type": "<copy one exact candidate analysis family>",
+        "cohort_objective": "<8-600 characters>",
+        "steps": [
+            {
+                "step_id": "<unique lowercase id>",
+                "planned_analysis_role": "<primary|secondary|sensitivity|auxiliary>",
+                "module_id": "<copy one exact allowed module id>",
+                "objective": "<8-600 characters>",
+                "depends_on": [],
+                "variable_names": ["<copy a sealed variable name>"],
+                "literature_citation_keys": [],
+                "scientific_action_id": None,
+            }
+        ],
+        "rationale": "<8-1200 characters>",
+    }
+    return (
+        "Exact ProgressivePlanOutline JSON shape (replace every angle-bracket "
+        "placeholder; preserve every key; add no other keys):\n"
+        + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
+        + "\nCandidate analysis_type values: "
+        + json.dumps(list(analysis_types), ensure_ascii=False, separators=(",", ":"))
+        + "\nAllowed module_id values by analysis_type: "
+        + json.dumps(
+            {
+                analysis_type: list(module_ids_by_analysis_type[analysis_type])
+                for analysis_type in analysis_types
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\nplanned_analysis_role must be exactly one of: primary, secondary, "
+        "sensitivity, auxiliary. depends_on, variable_names, and "
+        "literature_citation_keys must always be JSON arrays. "
+        "scientific_action_id must be a retrieved action id or null."
+    )
+
+
+def _foundation_shape_contract(
+    *,
+    outline_sha256: str,
+    host_cohort: ProgressiveCohortIntent | None,
+    required_cohort_selection_mode: str | None = None,
+    required_cohort_name: str | None = None,
+) -> str:
+    """Project the exact foundation envelope without adding case science."""
+
+    cohort: Mapping[str, Any]
+    if host_cohort is not None:
+        cohort = host_cohort.model_dump(mode="json")
+    elif required_cohort_selection_mode == "predicate_filtered":
+        cohort = {
+            "name": required_cohort_name or "<1-128 characters>",
+            "selection_mode": "predicate_filtered",
+            "inclusion": [
+                {
+                    "concept_id": "<copy an allowed cohort concept id>",
+                    "anchor": "<copy an allowed anchor>",
+                    "start_offset_hours": "<number>",
+                    "end_offset_hours": "<greater number>",
+                    "aggregation": "<max|min|mean|median|last|first|any|all|count|sum>",
+                    "op": "<==|!=|<|<=|>|>=|in|not_in|missing|not_missing>",
+                    "value": {
+                        "mode": "<none|string|number|boolean|string_list|number_list>",
+                        "string_value": None,
+                        "number_value": None,
+                        "boolean_value": None,
+                        "string_list": [],
+                        "number_list": [],
+                    },
+                }
+            ],
+            "exclusion": [],
+        }
+    else:
+        cohort = {
+            "name": required_cohort_name or "<1-128 characters>",
+            "selection_mode": "<all_input_rows|predicate_filtered>",
+            "inclusion": [],
+            "exclusion": [],
+        }
+    template = {
+        "schema_version": "easyicu.progressive_plan_foundation/1",
+        "outline_sha256": outline_sha256,
+        "foundation": {
+            "cohort": cohort,
+            "display_labels": [],
+            "robustness_intents": [],
+            "know_how_decisions": [],
+        },
+    }
+    cohort_instruction = (
+        "The cohort object shown above is caller-bound; copy it exactly."
+        if host_cohort is not None
+        else (
+            "Replace the cohort placeholders and use predicate_filtered only "
+            "with at least one valid inclusion or exclusion predicate."
+        )
+    )
+    return (
+        "Exact ProgressiveFoundationMaterialization JSON shape (preserve the "
+        "root foundation wrapper and every displayed key; add no other keys):\n"
+        + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
+        + "\nCopy schema_version and outline_sha256 exactly. "
+        + cohort_instruction
+        + " display_labels, robustness_intents, and know_how_decisions must "
+        "always be JSON arrays, including when empty.\n"
+        "If display_labels is nonempty, each item has exactly "
+        '{"key":"<1-256 characters>","value":"<1-256 characters>"}. '
+        "If robustness_intents is nonempty, each item has exactly "
+        '{"spec_id":"<lowercase id>","axis":"<cohort|missing|outcome>",'
+        '"description":"<8-600 characters>",'
+        '"missing_strategy":"<none|complete_case>",'
+        '"complete_case_variables":[]}. '
+        "If know_how_decisions is nonempty, each item has exactly "
+        '{"card_id":"<authorized id>","card_version":"<authorized version>",'
+        '"card_sha256":"<authorized 64-char digest>",'
+        '"claim_id":"<authorized id>",'
+        '"disposition":"<adopted|rejected|unresolved|requires_confirmation>",'
+        '"reason_code":"<lowercase id>","rationale":"<1-500 characters>",'
+        '"citation_ids":["<authorized id>"]}. '
+        "For every cohort predicate preserve exactly concept_id, anchor, "
+        "start_offset_hours, end_offset_hours, aggregation, op, and value. "
+        "Its value object must preserve all six displayed keys; populate only "
+        "the field selected by mode and leave the others null or empty."
+    )
+
+
+def _step_materialization_shape_contract(
+    *,
+    outline_step: ProgressiveOutlineStep,
+    outline_step_sha256: str,
+) -> str:
+    """Project the exact current-step envelope and closed step key roster."""
+
+    step = {
+        "step_id": outline_step.step_id,
+        "planned_analysis_role": outline_step.planned_analysis_role,
+        "module_id": outline_step.module_id,
+        "objective": outline_step.objective,
+        "depends_on": list(outline_step.depends_on),
+        "raw_inputs": [],
+        "product_inputs": [],
+        "outputs": [],
+        "scientific_action_id": outline_step.scientific_action_id,
+        "custom_method": None,
+        "table_one_group_by": None,
+        "table_one_mode": None,
+        "table_one_variables": [],
+        "primary_exposure": None,
+        "outcome": None,
+        "outcome_type": None,
+        "model_terms": [],
+        "event_level_index": None,
+        "reference_exposure_level_index": None,
+        "comparison_exposure_level_index": None,
+        "primary_contrast_level_index": None,
+        "denominator_policy": None,
+        "missing_exposure_policy": None,
+        "missing_outcome_policy": None,
+        "confidence_level": None,
+        "sensitivity_spec_ids": [],
+        "literature_bindings": [],
+    }
+    template = {
+        "schema_version": "easyicu.progressive_step_materialization/1",
+        "outline_step_sha256": outline_step_sha256,
+        "foundation": None,
+        "step": step,
+    }
+    return (
+        "Exact ProgressiveStepMaterialization JSON shape (preserve this root "
+        "wrapper and every step key; add no other keys):\n"
+        + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
+        + "\nCopy schema_version, outline_step_sha256, foundation=null, and "
+        "the six outline-owned step coordinates exactly. Replace only the "
+        "module-specific executable null/empty defaults required by the "
+        "current method card. Never return variable_names, "
+        "literature_citation_keys, literature_design_bindings, cohort, or "
+        "expected_outputs inside step. raw_inputs may contain only sealed "
+        "variable names, never kind:product tokens; governed products belong "
+        "only in product_inputs.\n"
+        "Nested item shapes, when used: product_inputs items are exactly "
+        '{"producer_step_id":"<preceding step id>",'
+        '"product_id":"<kind:product>"}; outputs items are exactly '
+        '{"product_id":"<kind:product>","semantic_role":"<allowed role>"}; '
+        "table_one_variables items are exactly "
+        '{"name":"<sealed variable>",'
+        '"summary":"<mean_sd|median_iqr|both|count_percent>"}; '
+        "model_terms items are exactly "
+        '{"name":"<sealed variable>","role":"<exposure|covariate>",'
+        '"coding":"<continuous|binary|categorical|ordinal_linear>",'
+        '"reference_level_index":null}; literature_bindings items are exactly '
+        '{"citation_key":"<sealed key>","design_elements":["<allowed element>"],'
+        '"application":"<8-1200 characters>","divergence":null}.'
+    )
 
 
 def _required_separate_analysis_products(
@@ -476,10 +843,21 @@ def _parse_model(raw: str, model: type[Any]) -> Any:
     return model.model_validate(payload)
 
 
-def _parse_step_materialization(raw: str) -> ProgressiveStepMaterialization:
+def _parse_step_materialization(
+    raw: str,
+    *,
+    outline_step: ProgressiveOutlineStep | None = None,
+    outline_step_sha256: str | None = None,
+) -> ProgressiveStepMaterialization:
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
         raise ValueError("progressive Planner response root must be an object")
+    if outline_step is not None and not outline_step_sha256:
+        raise ValueError("host outline step digest is required")
+    # Host coordinates remain fail-closed input. They are intentionally not
+    # rewritten here: the coordinate validator below the parser must observe
+    # and reject any model drift in the digest, step id, role, module,
+    # objective, dependencies, or scientific action.
     step = payload.get("step")
     raw_inputs = step.get("raw_inputs") if isinstance(step, dict) else None
     if isinstance(raw_inputs, list) and all(
@@ -492,7 +870,30 @@ def _parse_step_materialization(raw: str) -> ProgressiveStepMaterialization:
             # artifact. Preserve first-seen order and leave every other roster
             # strict so dependency and sensitivity conflicts still fail closed.
             canonical_step = dict(step)
-            canonical_step["raw_inputs"] = list(dict.fromkeys(normalized))
+            product_inputs = canonical_step.get("product_inputs")
+            bound_products = (
+                {
+                    str(item.get("product_id") or "").strip()
+                    for item in product_inputs
+                    if isinstance(item, Mapping)
+                }
+                if isinstance(product_inputs, list)
+                else set()
+            )
+            # A typed product is not a cohort column.  When the same exact
+            # product already has its governed producer/product edge, remove
+            # only that redundant raw-input spelling.  An unbound product token
+            # or any other unknown name still reaches the compiler and fails.
+            canonical_step["raw_inputs"] = list(
+                dict.fromkeys(
+                    value
+                    for value in normalized
+                    if not (
+                        _TYPED_PRODUCT_TOKEN.fullmatch(value)
+                        and value in bound_products
+                    )
+                )
+            )
             payload = dict(payload)
             payload["step"] = canonical_step
     return ProgressiveStepMaterialization.model_validate(payload)
@@ -767,6 +1168,12 @@ class ProgressivePlannerAgent:
         planning_contract_context: str = "",
     ) -> str:
         contract_context = article_context or context
+        module_ids_by_analysis_type = {
+            analysis_type: list(
+                progressive_module_ids_for_analysis_types((analysis_type,))
+            )
+            for analysis_type in analysis_types
+        }
         article_contracts = []
         for analysis_type in analysis_types:
             contract = build_article_analysis_contract(
@@ -786,7 +1193,13 @@ class ProgressivePlannerAgent:
                     ),
                     "requirements": [
                         {
-                            "module_id": item.module_id,
+                            # Article-role requirements and executable outline
+                            # modules are different vocabularies.  Calling both
+                            # coordinates ``module_id`` led schema-imperfect
+                            # OpenAI-compatible providers to copy requirement
+                            # ids into ProgressiveOutlineStep.module_id, where
+                            # they can never validate.
+                            "article_requirement_id": item.module_id,
                             "role": item.role,
                             "required": item.required,
                         }
@@ -798,6 +1211,17 @@ class ProgressivePlannerAgent:
             "PROGRESSIVE PLANNER RUN AUTHORITY",
             "Candidate analysis families (choose exactly one):\n"
             + json.dumps(list(analysis_types), ensure_ascii=False),
+            "Allowed ProgressiveOutlineStep.module_id values by candidate "
+            "analysis family (use only these exact strings):\n"
+            + json.dumps(
+                module_ids_by_analysis_type,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            _outline_shape_contract(
+                analysis_types=analysis_types,
+                module_ids_by_analysis_type=module_ids_by_analysis_type,
+            ),
             "Retrieved scientific actions (only these may be selected):\n"
             + json.dumps(list(action_rows), ensure_ascii=False, separators=(",", ":")),
             "Sealed literature citation keys:\n"
@@ -900,6 +1324,10 @@ class ProgressivePlannerAgent:
             "names and sealed literature keys that its later materialization "
             "needs. The host requests and validates executable details only "
             "when it materializes the current step."
+            " Every steps[].module_id must be copied exactly from the allowed "
+            "ProgressiveOutlineStep.module_id list for the chosen family; "
+            "article_requirement_id values are article obligations, not "
+            "executable module ids."
         )
         return "\n\n".join(blocks)
 
@@ -1212,6 +1640,8 @@ class ProgressivePlannerAgent:
         know_how_context: str,
         planning_contract_context: str,
         host_cohort: ProgressiveCohortIntent | None,
+        required_cohort_selection_mode: str | None = None,
+        required_cohort_name: str | None = None,
     ) -> str:
         blocks = [
             "PROGRESSIVE PLAN-FOUNDATION AUTHORITY",
@@ -1226,7 +1656,31 @@ class ProgressivePlannerAgent:
             ),
             "Outbound-safe data authority for plan-wide choices:\n"
             + format_outbound_safe_context(context, variable_names=variables),
+            _foundation_shape_contract(
+                outline_sha256=outline_sha256,
+                host_cohort=host_cohort,
+                required_cohort_selection_mode=required_cohort_selection_mode,
+                required_cohort_name=required_cohort_name,
+            ),
         ]
+        predicate_bindings = _sealed_cohort_predicate_binding_rows(
+            context,
+            variables,
+        )
+        if predicate_bindings:
+            blocks.append(
+                "Sealed executable cohort-predicate bindings. When a cohort "
+                "predicate uses one of these source concepts and windows, copy "
+                "the exact aggregation and coordinates from a matching row; "
+                "do not substitute a descriptor aggregation_default. If the "
+                "predicate operationalizes the configured primary exposure, "
+                "use the row with matches_primary_exposure=true:\n"
+                + json.dumps(
+                    list(predicate_bindings),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         if planning_contract_context:
             blocks.append(
                 "Run-specific article/task contract (binding):\n"
@@ -1325,6 +1779,17 @@ class ProgressivePlannerAgent:
             ),
             "Outbound-safe data authority for this current step:\n"
             + format_outbound_safe_context(context, variable_names=variables),
+            _step_materialization_shape_contract(
+                outline_step=outline_step,
+                outline_step_sha256=outline_step_sha256,
+            ),
+            "Compiler-owned semantic_role values for this module (use only "
+            "these exact strings when outputs is nonempty):\n"
+            + json.dumps(
+                list(progressive_output_roles_for_module(outline_step.module_id)),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
         ]
         if planning_contract_context:
             blocks.append(
@@ -1434,6 +1899,51 @@ class ProgressivePlannerAgent:
                         separators=(",", ":"),
                     )
                 )
+        if outline_step.module_id == "cohort_definition":
+            blocks.append(
+                "Cohort-definition detail contract: keep raw_inputs=[], "
+                "product_inputs=[], outputs=[], and every module-specific "
+                "field null or empty. The host owns canonical cohort products."
+            )
+        if outline_step.module_id == "measurement_audit":
+            blocks.append(
+                "Measurement-audit detail contract: outputs must contain at "
+                "least one table: product, and each semantic_role must be one "
+                "exact compiler-owned value listed above. Use a unique role per "
+                "output. Keep Table 1, association, contrast, denominator, and "
+                "sensitivity-only fields null or empty."
+            )
+        if outline_step.module_id == "table_one":
+            blocks.append(
+                "Table 1 detail contract: set table_one_group_by to one selected "
+                "closed-domain variable; set table_one_mode to exactly "
+                "independent_inference or descriptive_smd_only; provide at "
+                "least one table_one_variables item using the exact nested "
+                "shape above; include the group and summarized variables in "
+                "raw_inputs. Keep outputs=[] because the host owns the canonical "
+                "Table 1 product."
+            )
+        if outline_step.module_id == "exposure_outcome_distribution":
+            blocks.append(
+                "Distribution detail contract: set primary_exposure, outcome, "
+                "event_level_index, reference_exposure_level_index, "
+                "comparison_exposure_level_index, denominator_policy, "
+                "missing_exposure_policy, missing_outcome_policy, and a "
+                "confidence_level between 0 and 1. Use only host-published "
+                "zero-based opaque level indices. Include both variables in "
+                "raw_inputs and keep outputs=[] because the host owns the "
+                "canonical distribution product. Copy policy values as exact "
+                "closed literals: denominator_policy is exactly "
+                "all_declared_rows or observed_outcome_rows; "
+                "missing_exposure_policy is exactly fail_closed or "
+                "exclude_from_denominator; missing_outcome_policy is exactly "
+                "fail_closed, exclude_from_denominator, or "
+                "structural_absence_is_non_event. Set custom_method=null, "
+                "Table 1 fields null/empty, model_terms=[], "
+                "primary_contrast_level_index=null, and "
+                "sensitivity_spec_ids=[]. Do not paraphrase a literal and do "
+                "not use an empty string where null is required."
+            )
         if outline_step.module_id == "custom_analysis":
             current_action = next(
                 (
@@ -1529,6 +2039,11 @@ class ProgressivePlannerAgent:
         """Materialize and locally repair only the uncompiled suffix."""
 
         foundation = foundation_materialization.foundation
+        required_outline_layers = set(required_method_layers_for_context(context))
+        method_layer_deadlines = _outline_method_layer_deadlines(
+            outline,
+            sorted(required_outline_layers),
+        )
         for step_index in range(len(prefix_state.steps), len(outline.steps)):
             outline_step = outline.steps[step_index]
             step_variables = tuple(outline_step.variable_names)
@@ -1603,7 +2118,11 @@ class ProgressivePlannerAgent:
                 materialization = call_llm_with_structured_retry(
                     self.llm,
                     step_messages,
-                    parser=_parse_step_materialization,
+                    parser=lambda raw: _parse_step_materialization(
+                        raw,
+                        outline_step=outline_step,
+                        outline_step_sha256=outline_step_sha256,
+                    ),
                     role="progressive_planner_step_materialization",
                     max_retries=1,
                     max_tokens=_MAX_STEP_OUTPUT_TOKENS,
@@ -1611,12 +2130,26 @@ class ProgressivePlannerAgent:
                     include_failed_response_on_retry=False,
                     progress_callback=progress_callback,
                     structured_output=step_schema,
-                    format_reminder=(
-                        "Return exactly one ProgressiveStepMaterialization for "
-                        "the current outline coordinate. Never return other steps."
-                    ),
+                    format_reminder=_step_materialization_shape_contract(
+                        outline_step=outline_step,
+                        outline_step_sha256=outline_step_sha256,
+                    )
+                    + "\nReturn exactly one current-step materialization; never "
+                    "return other steps or flatten step fields into the root.",
                 )
                 self.capture_efficiency_metrics()
+                prior_materialization = (
+                    self.last_compile_failure_attempts[-1].materialization
+                    if self.last_compile_failure_attempts
+                    else None
+                )
+                materialization = (
+                    _preserve_literature_roster_across_targeted_repair(
+                        current=materialization,
+                        previous=prior_materialization,
+                        outline_step=outline_step,
+                    )
+                )
                 try:
                     validate_progressive_materialization_coordinate(
                         materialization,
@@ -1636,6 +2169,32 @@ class ProgressivePlannerAgent:
                         allowed_know_how_decisions=allowed_know_how_decisions,
                         reporting_method_source_keys=reporting_method_source_keys,
                     )
+                    deadline_layers = sorted(
+                        layer
+                        for layer, deadline in method_layer_deadlines.items()
+                        if deadline == step_index
+                    )
+                    missing_deadline_layers = sorted(
+                        set(deadline_layers)
+                        - _bound_method_layers(candidate_state.materializations)
+                    )
+                    if missing_deadline_layers:
+                        raise ProgressivePlanCompileError(
+                            "progressive_step_required_method_layer_unbound",
+                            "the current step is the last outline-sealed owner "
+                            "capable of binding required method layer(s): "
+                            + ", ".join(missing_deadline_layers),
+                            step_id=outline_step.step_id,
+                            step_index=step_index,
+                            path="literature_bindings",
+                            findings=[
+                                {
+                                    "missing_method_layers": missing_deadline_layers,
+                                    "repair_scope": "current_step_only",
+                                    "sealed_citation_keys": list(step_citations),
+                                }
+                            ],
+                        )
                     if step_index == len(outline.steps) - 1:
                         assert candidate_state.plan is not None
                         missing_method_layers = missing_required_method_layers(
@@ -1973,10 +2532,18 @@ class ProgressivePlannerAgent:
                 include_failed_response_on_retry=False,
                 progress_callback=progress_callback,
                 structured_output=outline_schema,
-                format_reminder=(
-                    "Return one concise ProgressivePlanOutline only. Do not include "
-                    "any executable step-detail fields."
-                ),
+                format_reminder=_outline_shape_contract(
+                    analysis_types=analysis_types,
+                    module_ids_by_analysis_type={
+                        analysis_type: progressive_module_ids_for_analysis_types(
+                            (analysis_type,)
+                        )
+                        for analysis_type in analysis_types
+                    },
+                )
+                + "\nReturn one concise ProgressivePlanOutline only. Do not "
+                "include executable step-detail fields. Never use "
+                "article_requirement_id as module_id.",
             )
             self.capture_efficiency_metrics()
         self._validate_outline_authority(
@@ -2044,6 +2611,12 @@ class ProgressivePlannerAgent:
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
             host_cohort=host_cohort,
+            required_cohort_selection_mode=required_primary_cohort_selection_mode,
+            required_cohort_name=(
+                context.cohort.cohort_name
+                if required_primary_cohort_selection_mode is not None
+                else None
+            ),
         )
         foundation_messages = [
             LLMMessage(role="system", content=_GUIDE),
@@ -2115,10 +2688,20 @@ class ProgressivePlannerAgent:
                 include_failed_response_on_retry=False,
                 progress_callback=progress_callback,
                 structured_output=foundation_schema,
-                format_reminder=(
-                    "Return exactly one ProgressiveFoundationMaterialization bound "
-                    "to the supplied outline digest."
-                ),
+                format_reminder=_foundation_shape_contract(
+                    outline_sha256=outline_sha256,
+                    host_cohort=host_cohort,
+                    required_cohort_selection_mode=(
+                        required_primary_cohort_selection_mode
+                    ),
+                    required_cohort_name=(
+                        context.cohort.cohort_name
+                        if required_primary_cohort_selection_mode is not None
+                        else None
+                    ),
+                )
+                + "\nReturn exactly one ProgressiveFoundationMaterialization; "
+                "never flatten foundation fields into the response root.",
             )
             self.capture_efficiency_metrics()
         assert foundation_materialization is not None

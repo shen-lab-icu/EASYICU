@@ -131,6 +131,14 @@ _METHOD_BY_MODULE: Mapping[str, str] = {
     "visualization": "visualization",
     "report": "feasibility_protocol",
 }
+
+
+def progressive_output_roles_for_module(module_id: str) -> tuple[str, ...]:
+    """Return the compiler-owned semantic output-role vocabulary for a module."""
+
+    return tuple(sorted(_MODULE_OUTPUT_ROLES.get(str(module_id or ""), ())))
+
+
 _COHORT_FRAME_ONLY_MODULES = frozenset(
     {
         "cohort_definition",
