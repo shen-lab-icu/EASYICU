@@ -320,30 +320,35 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             raise TrajectoryScientificAuthorityError(
                 "trajectory stability design drifted from signed execution contract"
             )
-        figures = [
+        figure_candidates = [
             step
             for step in plan.steps
             if step.step_id == "03_authority_compiled_trajectory_selection_figure"
+            or step.method == "signed_trajectory_selection_diagnostic_figure"
+            or "figure:trajectory_selection_diagnostics" in step.expected_outputs
         ]
-        if len(figures) != 1:
+        if len(figure_candidates) > 1:
             raise TrajectoryScientificAuthorityError(
-                "signed trajectory authority requires one selection-figure owner"
+                "signed trajectory authority permits at most one selection-figure owner"
             )
-        figure = figures[0]
-        if (
-            figure.method != "signed_trajectory_selection_diagnostic_figure"
-            or tuple(figure.inputs)
-            != (
-                "table:trajectory_candidate_selection",
-                "table:feature_availability",
-            )
-            or tuple(figure.expected_outputs)
-            != ("figure:trajectory_selection_diagnostics",)
-            or order[figure.step_id] <= order[stability.step_id]
-        ):
-            raise TrajectoryScientificAuthorityError(
-                "trajectory selection-figure plan drifted from signed authority"
-            )
+        if figure_candidates:
+            figure = figure_candidates[0]
+            if (
+                figure.step_id
+                != "03_authority_compiled_trajectory_selection_figure"
+                or figure.method != "signed_trajectory_selection_diagnostic_figure"
+                or tuple(figure.inputs)
+                != (
+                    "table:trajectory_candidate_selection",
+                    "table:feature_availability",
+                )
+                or tuple(figure.expected_outputs)
+                != ("figure:trajectory_selection_diagnostics",)
+                or order[figure.step_id] <= order[stability.step_id]
+            ):
+                raise TrajectoryScientificAuthorityError(
+                    "trajectory selection-figure plan drifted from signed authority"
+                )
 
     def validate_representation_schema(self, schema: Mapping[str, Any]) -> None:
         issues: list[str] = []

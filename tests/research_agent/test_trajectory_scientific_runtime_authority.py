@@ -204,9 +204,7 @@ def _signed_plan(authority) -> AnalysisPlan:
 
 def test_signed_plan_rejects_representation_inputs_and_intent_drift() -> None:
     authority = _authority()
-    plan = authority.development_execution_only_plan(
-        research_question="Assess fixed-window trajectory phenotypes."
-    )
+    plan = _signed_plan(authority)
     authority.validate_plan(plan)
 
     representation = plan.steps[0].model_copy(
