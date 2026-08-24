@@ -102,6 +102,22 @@ def test_typed_output_can_close_the_clinical_utility_section(tmp_path: Path) -> 
     assert findings == []
 
 
+def test_prediction_model_alias_uses_prediction_supplement_contract(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="prediction_model"),
+        evidence=store,
+        per_step_records=[],
+        run_dir=tmp_path,
+    )
+
+    assert payload["analysis_family"] == "prediction"
+    assert "external_validation" in payload["required_sections"]
+    assert "resampling_validation" in payload["required_sections"]
+
+
 def test_external_provider_privacy_audit_is_not_external_reproducibility(
     tmp_path: Path,
 ) -> None:

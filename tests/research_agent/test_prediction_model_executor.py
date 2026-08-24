@@ -327,6 +327,7 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     assert list(decision_curve.columns) == [
         "source_table",
         "source_step_id",
+        "source_row_index",
         "threshold",
         "n",
         "net_benefit_model",
@@ -335,6 +336,9 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     ]
     assert decision_curve["source_table"].eq("clinical_utility.csv").all()
     assert decision_curve["source_step_id"].eq("source_clinical_utility").all()
+    assert decision_curve["source_row_index"].tolist() == list(
+        range(len(decision_curve))
+    )
     assert decision_curve["threshold"].between(0.01, 0.50).all()
     assert "calibration" in contract["statistics_note"].lower()
     assert "clinical benefit" in contract["statistics_note"].lower()
