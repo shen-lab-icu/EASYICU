@@ -580,6 +580,17 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert " versus " in summary["contrast"]
     assert "primary_predictor" not in summary
     assert summary["n_landmark_population"] < n
+    assert summary["missingness_measurement_audit"]["source_n"] == n
+    assert set(
+        summary["missingness_measurement_audit"][
+            "source_missing_n_by_column"
+        ]
+    ) == set(authority.required_columns)
+    assert set(
+        summary["missingness_measurement_audit"][
+            "landmark_missing_n_by_model_column"
+        ]
+    ) == set(authority.adjustment_columns)
     assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
     assert authority.rmst_product is not None
     assert (tmp_path / "landmark_rmst_summary.csv").is_file()

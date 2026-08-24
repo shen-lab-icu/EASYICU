@@ -20,7 +20,14 @@ _SECTION_TOKENS: dict[str, tuple[str, ...]] = {
     "cohort_accounting": ("cohort", "attrition", "risk_set", "flow"),
     "baseline_characteristics": ("table_one", "baseline", "characteristic"),
     "missingness_measurement": ("missing", "measurement", "completeness"),
-    "primary_results": ("primary", "effect", "model", "association", "estimate"),
+    "primary_results": (
+        "primary",
+        "effect",
+        "model",
+        "association",
+        "estimate",
+        "feasibility",
+    ),
     "robustness_sensitivity": ("robust", "sensitivity", "alternative", "complete_case"),
     "figure_source_provenance": ("figure", "source_data", "plot", "contract"),
     "reproducibility": ("receipt", "provenance", "environment", "code", "lock"),
@@ -51,6 +58,11 @@ _SECTION_TOKENS: dict[str, tuple[str, ...]] = {
     "non_ph_alternative": ("rmst", "time_varying", "extended_cox", "non_ph"),
     "trajectory_window_missingness": ("trajectory", "window", "missing"),
     "alternative_algorithm": ("alternative_algorithm", "algorithm_agreement", "gbtm"),
+    "identified_comparator": (
+        "verified_comparator",
+        "positivity_supported",
+        "identified_causal_contrast",
+    ),
 }
 
 _COMMON_REQUIRED = (
@@ -86,9 +98,33 @@ _FAMILY_DEVELOPMENT_REQUIRED: dict[str, tuple[str, ...]] = {
 }
 
 _FAMILY_TOP_JOURNAL_EXTENSION: dict[str, tuple[str, ...]] = {
+    "association_study": ("external_reproducibility",),
     "prediction": ("external_validation",),
     "phenotyping": ("external_reproducibility",),
     "trajectory_clustering": ("external_reproducibility",),
+}
+
+_TERMINAL_DEVELOPMENT_REQUIRED: dict[str, tuple[str, ...]] = {
+    "source_feasibility_fail_closed": (
+        "primary_results",
+        "reproducibility",
+    ),
+    "prespecified_selection_no_solution": (
+        "cohort_accounting",
+        "missingness_measurement",
+        "cluster_selection",
+        "figure_source_provenance",
+        "reproducibility",
+    ),
+}
+
+_TERMINAL_TOP_JOURNAL_EXTENSION: dict[str, tuple[str, ...]] = {
+    "source_feasibility_fail_closed": ("identified_comparator",),
+    "prespecified_selection_no_solution": (
+        "baseline_characteristics",
+        "alternative_algorithm",
+        "external_reproducibility",
+    ),
 }
 
 _FAMILY_ALIASES = {
@@ -145,7 +181,57 @@ def _step_artifacts(
                     ),
                 }
             )
+        if isinstance(summary.get("missingness_measurement_audit"), Mapping):
+            receipt_files = [
+                filename
+                for product, filename in output_files.items()
+                if str(product).startswith("log:")
+                and "receipt" in str(product).casefold()
+            ]
+            if len(receipt_files) == 1:
+                artifacts.append(
+                    {
+                        "source": "typed_step_metadata",
+                        "step_id": step_id,
+                        "product": "audit:missingness_measurement",
+                        "path": f"steps/{step_id}/outputs/{receipt_files[0]}",
+                        "method": str(summary.get("method") or ""),
+                        "analysis_kind": str(
+                            summary.get("deterministic_standard_analysis") or ""
+                        ),
+                    }
+                )
     return artifacts
+
+
+def _terminal_disposition(
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> str | None:
+    summaries = [
+        record.get("step_summary")
+        for record in per_step_records
+        if isinstance(record.get("step_summary"), Mapping)
+    ]
+    if any(
+        summary.get("analysis_family") == "causal_feasibility"
+        and summary.get("scientific_decision") == "blocked_by_source_authority"
+        and summary.get("causal_contrast_authorized") is False
+        and summary.get("effect_estimate") is None
+        for summary in summaries
+    ):
+        return "source_feasibility_fail_closed"
+    if any(
+        summary.get("scientific_status") == "failed_closed"
+        and summary.get("reportable_result")
+        in {
+            "no_interior_solution_in_prespecified_candidate_range",
+            "no_stable_phenotype_solution",
+        }
+        and bool(summary.get("reason_code"))
+        for summary in summaries
+    ):
+        return "prespecified_selection_no_solution"
+    return None
 
 
 def write_supplement_inventory(
@@ -158,10 +244,22 @@ def write_supplement_inventory(
     """Write and register one nonauthoritative supplement coverage inventory."""
 
     family = _analysis_family(plan)
-    development_required = list(_COMMON_REQUIRED)
-    development_required.extend(_FAMILY_DEVELOPMENT_REQUIRED.get(family, ()))
+    terminal_disposition = _terminal_disposition(per_step_records)
+    development_required = list(
+        _TERMINAL_DEVELOPMENT_REQUIRED.get(
+            terminal_disposition or "",
+            _COMMON_REQUIRED,
+        )
+    )
+    if terminal_disposition is None:
+        development_required.extend(_FAMILY_DEVELOPMENT_REQUIRED.get(family, ()))
     top_journal_required = list(development_required)
-    top_journal_required.extend(_FAMILY_TOP_JOURNAL_EXTENSION.get(family, ()))
+    top_journal_required.extend(
+        _TERMINAL_TOP_JOURNAL_EXTENSION.get(
+            terminal_disposition or "",
+            _FAMILY_TOP_JOURNAL_EXTENSION.get(family, ()),
+        )
+    )
     artifacts = [
         {
             "source": "evidence_store",
@@ -202,6 +300,7 @@ def write_supplement_inventory(
         "schema_version": "easyicu.supplement_inventory/1",
         "authority": "analysis_only_inventory",
         "analysis_family": family,
+        "terminal_disposition": terminal_disposition,
         # Backward-compatible strict axis. Existing consumers that read these
         # fields continue to require the top-journal extension.
         "required_sections": top_journal_required,

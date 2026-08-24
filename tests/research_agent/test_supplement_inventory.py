@@ -272,3 +272,110 @@ def test_algorithm_agreement_output_closes_only_alternative_algorithm(
 
     assert payload["sections"]["alternative_algorithm"]["present"] is True
     assert payload["sections"]["external_reproducibility"]["present"] is False
+
+
+def test_association_dev_coverage_does_not_claim_top_journal_replication(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    for evidence_id, filename in (
+        ("cohort", "cohort_flow.csv"),
+        ("baseline", "table_one.csv"),
+        ("missing", "missingness.csv"),
+        ("primary", "association_estimate.csv"),
+        ("sensitivity", "sensitivity.csv"),
+        ("figure", "figure_contract.json"),
+        ("provenance", "runner_provenance.json"),
+    ):
+        _register(store, evidence_id, filename)
+
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="association_study"),
+        evidence=store,
+        per_step_records=[],
+        run_dir=tmp_path,
+    )
+
+    assert payload["development_supplement_complete"] is True
+    assert payload["top_journal_supplement_complete"] is False
+    assert payload["missing_top_journal_required_sections"] == [
+        "external_reproducibility"
+    ]
+
+
+def test_source_feasibility_has_a_terminal_dev_supplement_contract(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    records = [
+        {
+            "step_id": "source_feasibility",
+            "step_summary": {
+                "analysis_family": "causal_feasibility",
+                "scientific_decision": "blocked_by_source_authority",
+                "causal_contrast_authorized": False,
+                "effect_estimate": None,
+                "output_files": {
+                    "table:source_feasibility": "source_feasibility.csv",
+                    "log:source_feasibility_receipt": "source_feasibility_receipt.json",
+                },
+            },
+        }
+    ]
+
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="causal_inference"),
+        evidence=store,
+        per_step_records=records,
+        run_dir=tmp_path,
+    )
+
+    assert payload["terminal_disposition"] == "source_feasibility_fail_closed"
+    assert payload["development_supplement_complete"] is True
+    assert payload["top_journal_supplement_complete"] is False
+    assert payload["missing_top_journal_required_sections"] == [
+        "identified_comparator"
+    ]
+
+
+def test_no_interior_trajectory_solution_uses_a_terminal_dev_contract(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    records = [
+        {
+            "step_id": "trajectory_candidates",
+            "step_summary": {
+                "scientific_status": "failed_closed",
+                "reason_code": "NO_INTERIOR_OPTIMUM",
+                "reportable_result": (
+                    "no_interior_solution_in_prespecified_candidate_range"
+                ),
+                "output_files": {
+                    "table:cohort_flow": "cohort_flow.csv",
+                    "table:feature_missingness": "feature_missingness.csv",
+                    "table:cluster_selection": "cluster_selection.csv",
+                    "figure:selection": "selection.figure_contract.json",
+                    "log:runtime_receipt": "runtime_receipt.json",
+                },
+            },
+        }
+    ]
+
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="trajectory_clustering"),
+        evidence=store,
+        per_step_records=records,
+        run_dir=tmp_path,
+    )
+
+    assert payload["terminal_disposition"] == (
+        "prespecified_selection_no_solution"
+    )
+    assert payload["development_supplement_complete"] is True
+    assert payload["top_journal_supplement_complete"] is False
+    assert payload["missing_top_journal_required_sections"] == [
+        "baseline_characteristics",
+        "alternative_algorithm",
+        "external_reproducibility",
+    ]

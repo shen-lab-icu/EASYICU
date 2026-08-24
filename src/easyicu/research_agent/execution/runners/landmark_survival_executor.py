@@ -664,6 +664,19 @@ def run_landmark_survival_suite(
     if int(analysis[sealed.derived_event_column].sum()) < 10:
         raise ValueError("landmark survival risk set has insufficient event support")
 
+    missingness_measurement_audit = {
+        "source_n": int(len(working)),
+        "landmark_population_n": int(len(analysis)),
+        "source_missing_n_by_column": {
+            column: int(working[column].isna().sum())
+            for column in sealed.required_columns
+        },
+        "landmark_missing_n_by_model_column": {
+            column: int(analysis[column].isna().sum())
+            for column in sealed.adjustment_columns
+        },
+    }
+
     risk_rows = [
         ("source_rows", len(working)),
         ("valid_fixed_horizon_endpoint", int(endpoint_valid.sum())),
@@ -910,6 +923,7 @@ def run_landmark_survival_suite(
         "n_source": int(len(working)),
         "n_landmark_population": int(len(analysis)),
         "n_complete_case": int(len(model_frame)),
+        "missingness_measurement_audit": missingness_measurement_audit,
         "n_events": int(model_frame[sealed.derived_event_column].sum()),
         "effect_measure": sealed.effect_measure,
         "contrast": (
@@ -961,6 +975,7 @@ def run_landmark_survival_suite(
         "n_source": int(len(working)),
         "n_landmark_population": int(len(analysis)),
         "n_complete_case": int(len(model_frame)),
+        "missingness_measurement_audit": missingness_measurement_audit,
         "n_events": int(model_frame[sealed.derived_event_column].sum()),
         "effect_measure": sealed.effect_measure,
         "contrast": (
