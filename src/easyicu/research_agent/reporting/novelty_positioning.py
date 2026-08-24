@@ -40,6 +40,7 @@ class NoveltyComparatorRecord(BaseModel):
     year: Optional[str] = None
     venue: Optional[str] = None
     source_excerpt: Optional[str] = None
+    evidence_role: Literal["direct_comparator", "design_analogue"] = "direct_comparator"
     population_match: bool
     exposure_match: bool
     outcome_match: bool
@@ -49,12 +50,10 @@ class NoveltyComparatorRecord(BaseModel):
 class NoveltyPositioningPacket(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.novelty_positioning/2"] = (
-        "easyicu.novelty_positioning/2"
-    )
-    status: Literal[
-        "not_established", "review_required", "supported", "not_supported"
-    ]
+    schema_version: Literal[
+        "easyicu.novelty_positioning/2", "easyicu.novelty_positioning/3"
+    ] = "easyicu.novelty_positioning/3"
+    status: Literal["not_established", "review_required", "supported", "not_supported"]
     review_disposition: Literal[
         "not_available",
         "independent_pre_review_pass",
@@ -67,6 +66,7 @@ class NoveltyPositioningPacket(BaseModel):
     plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     literature_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     direct_comparator_keys: list[str] = Field(default_factory=list)
+    design_analogue_keys: list[str] = Field(default_factory=list)
     comparators: list[NoveltyComparatorRecord] = Field(default_factory=list)
     comparison_dimensions: dict[str, NoveltyComparisonDimension]
     reviewer_questions: list[str]
@@ -96,8 +96,10 @@ class NoveltyPositioningPacket(BaseModel):
                     "supported novelty requires an accepted external review "
                     "disposition and reviewer_owner"
                 )
-            if not self.direct_comparator_keys:
-                raise ValueError("supported novelty requires a direct comparator")
+            if not (self.direct_comparator_keys or self.design_analogue_keys):
+                raise ValueError(
+                    "supported novelty requires a direct comparator or design analogue"
+                )
             incomplete = [
                 name
                 for name, dimension in self.comparison_dimensions.items()
@@ -290,9 +292,7 @@ def _study_dimensions(
             study="; ".join((exposure_text, time_zero))
         ),
         "outcome_and_estimand": NoveltyComparisonDimension(study=endpoint_text),
-        "analysis_and_robustness_route": NoveltyComparisonDimension(
-            study=analysis
-        ),
+        "analysis_and_robustness_route": NoveltyComparisonDimension(study=analysis),
         "data_source_and_transportability": NoveltyComparisonDimension(
             study=transportability
         ),
@@ -315,7 +315,7 @@ def build_unsigned_novelty_positioning_packet(
         decision
         for decision in (literature.screening_decisions if literature else ())
         if decision.disposition == "include"
-        and decision.evidence_role == "direct_comparator"
+        and decision.evidence_role in {"direct_comparator", "design_analogue"}
         and decision.publication_type_eligible
         and decision.citation_key in records_by_key
     ]
@@ -329,6 +329,7 @@ def build_unsigned_novelty_positioning_packet(
                 year=record.year,
                 venue=record.venue,
                 source_excerpt=_text(record.relevance) or None,
+                evidence_role=decision.evidence_role,
                 population_match=decision.population_match,
                 exposure_match=decision.exposure_match,
                 outcome_match=decision.outcome_match,
@@ -336,6 +337,16 @@ def build_unsigned_novelty_positioning_packet(
             )
         )
     keys = [row.citation_key for row in comparators]
+    direct_keys = [
+        row.citation_key
+        for row in comparators
+        if row.evidence_role == "direct_comparator"
+    ]
+    analogue_keys = [
+        row.citation_key
+        for row in comparators
+        if row.evidence_role == "design_analogue"
+    ]
     return NoveltyPositioningPacket(
         status="review_required" if keys else "not_established",
         **novelty_authority_digests(
@@ -349,7 +360,8 @@ def build_unsigned_novelty_positioning_packet(
                 )
             ),
         ),
-        direct_comparator_keys=keys,
+        direct_comparator_keys=direct_keys,
+        design_analogue_keys=analogue_keys,
         comparators=comparators,
         comparison_dimensions=_study_dimensions(context, plan),
         reviewer_questions=[

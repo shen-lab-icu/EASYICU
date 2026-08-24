@@ -307,6 +307,27 @@ def test_protocol_query_skips_instruction_verbs_for_causal_topic(ra):
     assert any("propensity[Title/Abstract]" in query for query in queries)
 
 
+def test_trajectory_intent_takes_precedence_over_generic_clustering(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Cluster longitudinal organ-dysfunction trajectories into latent classes."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[],
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    assert any("trajector*" in query for query in queries)
+    assert all("phenotyp*" not in query for query in queries)
+
+
 def test_prepare_preplan_literature_persists_and_registers_bundle(ra, tmp_path):
     schema = ra.schema
     ctx = schema.ResearchContext(
@@ -1247,6 +1268,119 @@ def test_focused_pubmed_return_does_not_auto_pass_direct_comparator_screen(ra):
     assert not decision.population_match
     assert not decision.exposure_match
     assert not decision.outcome_match
+
+
+def test_no_exposure_context_can_include_design_analogue_without_direct_authority(
+    ra,
+):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Identify candidate sepsis subphenotypes by unsupervised clustering."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64")
+        ],
+        target_outcome="death",
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            return [
+                CitationRecord(
+                    key="sepsis_phenotype",
+                    title="Classification of sepsis subphenotypes in adult ICU patients",
+                    year="2025",
+                    relevance=(
+                        "Study-design excerpt: An observational adult ICU cohort "
+                        "used clustering to classify sepsis subphenotypes."
+                    ),
+                    publication_types=["Observational Study"],
+                    pmid="101",
+                )
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    bundle = LiteratureAgent(enable_pubmed=True, pubmed_client=_PubMed()).run(context)
+    decision = next(
+        row
+        for row in bundle.screening_decisions
+        if row.citation_key == "sepsis_phenotype"
+    )
+
+    assert decision.disposition == "include"
+    assert decision.evidence_role == "design_analogue"
+    assert decision.population_match is True
+    assert decision.exposure_match is False
+    assert "not a direct exposure/outcome comparator" in decision.rationale
+    from easyicu.research_agent.literature import (
+        HypothesisBlueprintAgent,
+        render_hypothesis_blueprint_for_prompt,
+    )
+
+    blueprint = HypothesisBlueprintAgent().run(
+        context=context,
+        literature=bundle,
+    )
+    prompt = render_hypothesis_blueprint_for_prompt(
+        blueprint,
+        literature=bundle,
+    )
+    assert "role=design_analogue" in prompt
+
+
+def test_prediction_design_analogue_rejects_single_predictor_association(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Build an in-hospital mortality prediction model.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[],
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            excerpt = "Study-design excerpt: An observational adult ICU cohort."
+            return [
+                CitationRecord(
+                    key="single_predictor",
+                    title="A biomarker predicts in-hospital mortality in ICU",
+                    year="2025",
+                    relevance=excerpt,
+                    publication_types=["Observational Study"],
+                    pmid="201",
+                ),
+                CitationRecord(
+                    key="prediction_model",
+                    title="Prediction model for in-hospital mortality in ICU",
+                    year="2025",
+                    relevance=excerpt,
+                    publication_types=["Observational Study"],
+                    pmid="202",
+                ),
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    decisions = {
+        row.citation_key: row
+        for row in LiteratureAgent(enable_pubmed=True, pubmed_client=_PubMed())
+        .run(context)
+        .screening_decisions
+    }
+
+    assert decisions["single_predictor"].disposition == "exclude"
+    assert decisions["prediction_model"].disposition == "include"
+    assert decisions["prediction_model"].evidence_role == "design_analogue"
 
 
 def test_composite_sepsis_sofa2_identity_requires_both_terms_for_comparator(ra):
