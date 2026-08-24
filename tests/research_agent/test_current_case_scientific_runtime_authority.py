@@ -291,6 +291,54 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     assert sensitivity.loc[0, "likelihood_ratio_statistic"] >= 0.0
 
 
+def test_m1_reuses_generic_landmark_spline_with_definition_sensitivity(
+    tmp_path: Path,
+) -> None:
+    projection, authority = _authority("m1_hepatobiliary_missingness")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    rng = np.random.default_rng(20260824)
+    n = 420
+    bilirubin_first = rng.lognormal(mean=-0.1, sigma=0.6, size=n)
+    bilirubin_max = bilirubin_first + rng.gamma(shape=1.2, scale=0.35, size=n)
+    age = rng.normal(64.0, 13.0, size=n)
+    sex = rng.choice(["F", "M"], size=n)
+    components = {
+        column: rng.integers(0, 4, size=n).astype(float)
+        for column in authority.required_adjustment_columns
+        if column not in {"age", "sex"}
+    }
+    logit = -4.0 + 0.35 * bilirubin_max + 0.018 * (age - 60.0)
+    death = rng.binomial(1, 1.0 / (1.0 + np.exp(-logit)), size=n)
+    frame = pd.DataFrame(
+        {
+            "bili_max": bilirubin_max,
+            "bili_first": bilirubin_first,
+            "death": death,
+            "death_time": np.where(
+                death == 1, rng.uniform(30.0, 180.0, size=n), np.nan
+            ),
+            "los_icu": rng.uniform(1.2, 8.0, size=n),
+            "age": age,
+            "sex": sex,
+            **components,
+        }
+    )
+
+    summary = run_landmark_spline_association(
+        frame=frame,
+        authority=authority,
+        runtime_projection_sha256=projection.runtime_projection_sha256,
+        out_dir=tmp_path,
+    )
+
+    assert set(summary["output_files"]) == set(authority.plan_outputs)
+    definitions = pd.read_csv(tmp_path / "m1_exposure_definition_sensitivity.csv")
+    assert definitions["exposure_column"].tolist() == ["bili_max", "bili_first"]
+    assert definitions["is_primary_definition"].tolist() == [True, False]
+    curve = pd.read_csv(tmp_path / "m1_landmark_bilirubin_curve.csv")
+    assert {"exposure_value", "reference_exposure_value"}.issubset(curve.columns)
+
+
 def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     _projection, authority = _authority("e2_lactate_mortality")
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
