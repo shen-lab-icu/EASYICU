@@ -48,6 +48,8 @@ def test_prediction_supplement_inventory_names_missing_scientific_sections(
     )
 
     assert payload["supplement_complete"] is False
+    assert payload["development_supplement_complete"] is False
+    assert payload["top_journal_supplement_complete"] is False
     assert payload["missing_required_sections"] == [
         "clinical_utility",
         "resampling_validation",
@@ -99,6 +101,8 @@ def test_typed_output_can_close_the_clinical_utility_section(tmp_path: Path) -> 
     )
 
     assert payload["supplement_complete"] is True
+    assert payload["development_supplement_complete"] is True
+    assert payload["top_journal_supplement_complete"] is True
     assert findings == []
 
 
@@ -116,6 +120,8 @@ def test_prediction_model_alias_uses_prediction_supplement_contract(
     assert payload["analysis_family"] == "prediction"
     assert "external_validation" in payload["required_sections"]
     assert "resampling_validation" in payload["required_sections"]
+    assert "external_validation" not in payload["development_required_sections"]
+    assert "external_validation" in payload["top_journal_required_sections"]
 
 
 def test_registered_repeated_split_model_output_closes_only_internal_resampling(
@@ -147,6 +153,42 @@ def test_registered_repeated_split_model_output_closes_only_internal_resampling(
     assert payload["sections"]["resampling_validation"]["present"] is True
     assert payload["sections"]["external_validation"]["present"] is False
     assert "external_validation" in payload["missing_required_sections"]
+    assert payload["development_supplement_complete"] is False
+
+
+def test_external_validation_is_not_a_dev9_supplement_prerequisite(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    for evidence_id, filename in (
+        ("cohort", "cohort.csv"),
+        ("baseline", "baseline.csv"),
+        ("missing", "missing.csv"),
+        ("primary", "primary.csv"),
+        ("sensitivity", "sensitivity.csv"),
+        ("figure", "figure_contract.json"),
+        ("provenance", "runner_provenance.json"),
+        ("calibration", "calibration.csv"),
+        ("performance", "performance.csv"),
+        ("validation", "heldout_validation.csv"),
+        ("clinical_utility", "decision_curve.csv"),
+        ("resampling", "repeated_split_validation.csv"),
+    ):
+        _register(store, evidence_id, filename)
+
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="prediction"),
+        evidence=store,
+        per_step_records=[],
+        run_dir=tmp_path,
+    )
+
+    assert payload["development_supplement_complete"] is True
+    assert payload["top_journal_supplement_complete"] is False
+    assert payload["missing_development_required_sections"] == []
+    assert payload["missing_top_journal_required_sections"] == [
+        "external_validation"
+    ]
 
 
 def test_external_provider_privacy_audit_is_not_external_reproducibility(
