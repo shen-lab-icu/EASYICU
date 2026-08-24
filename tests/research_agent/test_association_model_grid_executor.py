@@ -167,6 +167,28 @@ def _cohort(n: int = 800) -> pd.DataFrame:
     )
 
 
+def test_landmark_missing_observation_duration_is_excluded_not_imputed() -> None:
+    _projection, authority, plan, _findings = _authority_and_plan()
+    landmark = next(
+        item
+        for item in authority.variants
+        if item.analysis_id == "landmark_alive_at_24h"
+    )
+    frame = _cohort(80)
+    frame.loc[0, "los_icu"] = float("nan")
+    from easyicu.research_agent.execution.runners.association_model_grid_executor import (
+        _eligibility_mask,
+    )
+
+    mask = _eligibility_mask(
+        frame,
+        variant=landmark,
+        outcome_column=plan.steps[0].model_requirements[0].outcome,
+    )
+
+    assert bool(mask.loc[0]) is False
+
+
 def _saved_plan_missing_one_nonlinear_parent():
     _projection, authority, plan, _findings = _authority_and_plan()
     parent = plan.steps[0]
