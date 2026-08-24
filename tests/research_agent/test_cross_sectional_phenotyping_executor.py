@@ -218,6 +218,13 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
     assert "invalid ARI values" in " ".join(
         phenotyping_runtime_bundle_errors(tampered)
     )
+    tampered_grid = copy.deepcopy(records)
+    tampered_grid[1]["step_summary"]["cluster_selection"]["candidates"][0][
+        "silhouette"
+    ] += 0.01
+    assert "candidate grid was not replayed" in " ".join(
+        phenotyping_runtime_bundle_errors(tampered_grid)
+    )
 
     product_paths = {
         PHENOTYPE_PROFILES_PRODUCT: primary_dir / "phenotype_profiles.csv",
