@@ -983,7 +983,7 @@ def test_e2_runtime_authority_rejects_missing_referenced_complete_case_spec() ->
                     "inputs": ["dataset:analysis_cohort"],
                     "expected_outputs": ["table:robustness_summary"],
                     "method": "robustness_sensitivity",
-                    "sensitivity_spec_ids": ["missing_complete_case"],
+                    "sensitivity_spec_ids": ["unrelated_robustness_axis"],
                     "robustness_replay_spec": {
                         "products": [
                             {
@@ -1002,6 +1002,62 @@ def test_e2_runtime_authority_rejects_missing_referenced_complete_case_spec() ->
         match="exactly one referenced complete-case specification",
     ):
         authority.bind_plan(plan)
+
+
+def test_landmark_authority_migrates_one_legacy_missingness_axis() -> None:
+    _projection, authority = _authority("m1_hepatobiliary_missingness")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Project the signed legacy sensitivity.",
+            "analysis_type": "association_study",
+            "robustness_specs": [
+                {
+                    "spec_id": "primary_complete_case_replay",
+                    "axis": "missing",
+                    "description": "Complete cases for the primary model.",
+                    "missing_override": {
+                        "strategy": "complete_case",
+                        "variables": ["draft_variable"],
+                    },
+                }
+            ],
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_legacy_robustness",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Retain the legacy missingness axis.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:robustness_summary"],
+                    "method": "robustness_sensitivity",
+                    "sensitivity_spec_ids": [
+                        "informative_measurement_missingness"
+                    ],
+                    "robustness_replay_spec": {
+                        "products": [
+                            {
+                                "product_id": "robustness_summary",
+                                "output": "robustness_summary",
+                            }
+                        ]
+                    },
+                },
+            ],
+        }
+    )
+
+    bound = authority.bind_plan(plan)
+
+    assert bound.steps[1].sensitivity_spec_ids == [
+        "informative_measurement_missingness",
+        "primary_complete_case_replay",
+    ]
+    assert bound.robustness_specs[0].missing_override == {
+        "strategy": "complete_case",
+        "variables": list(authority.model_complete_case_columns),
+    }
 
 
 def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(

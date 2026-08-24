@@ -757,14 +757,70 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         composite_step_id = (
             composite_candidates[0].step_id if len(composite_candidates) == 1 else None
         )
-        signed_robustness_spec_ids = {
-            spec_id
+        robustness_steps = [
+            step
             for step in plan.steps
             if step.planned_analysis_role == "sensitivity"
             and step.robustness_replay_spec is not None
+        ]
+        signed_robustness_spec_ids = {
+            spec_id
+            for step in robustness_steps
             for spec_id in step.sensitivity_spec_ids
         }
         robustness_specs = list(plan.robustness_specs)
+        all_complete_case_specs = [
+            spec
+            for spec in robustness_specs
+            if spec.axis == "missing"
+            and str((spec.missing_override or {}).get("strategy") or "")
+            .strip()
+            .lower()
+            == "complete_case"
+        ]
+        referenced_complete_case_specs = [
+            spec
+            for spec in all_complete_case_specs
+            if spec.spec_id in signed_robustness_spec_ids
+        ]
+        if not referenced_complete_case_specs:
+            legacy_missingness_steps = [
+                step
+                for step in robustness_steps
+                if any(
+                    token in _normalise(spec_id)
+                    for spec_id in step.sensitivity_spec_ids
+                    for token in ("missing", "complete_case")
+                )
+            ]
+            if (
+                len(all_complete_case_specs) == 1
+                and len(robustness_steps) == 1
+                and legacy_missingness_steps == robustness_steps
+            ):
+                exact_spec_id = all_complete_case_specs[0].spec_id
+                migrated = robustness_steps[0].model_copy(
+                    update={
+                        "sensitivity_spec_ids": list(
+                            dict.fromkeys(
+                                [
+                                    *robustness_steps[0].sensitivity_spec_ids,
+                                    exact_spec_id,
+                                ]
+                            )
+                        )
+                    }
+                )
+                plan = plan.model_copy(
+                    update={
+                        "steps": [
+                            migrated if step is robustness_steps[0] else step
+                            for step in plan.steps
+                        ]
+                    }
+                )
+                robustness_steps = [migrated]
+                signed_robustness_spec_ids.add(exact_spec_id)
         if signed_robustness_spec_ids:
             complete_case_specs = [
                 spec
