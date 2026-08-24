@@ -660,26 +660,60 @@ def render_association_publication_figure(
         raise ValueError("association composite has no fourth-panel source")
     add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
 
-    panel_specs = (
-        (
-            "A",
-            absolute_title,
-            "descriptive_result",
+    if scientific_sensitivity is not None:
+        panel_specs = (
             (
-                "table:exposure_outcome_distribution"
-                if distribution is not None
-                else "table:absolute_risk_context"
+                "absolute_risk_context",
+                absolute_title,
+                "descriptive_result",
+                "grouped_absolute_risk",
+                "table:exposure_outcome_distribution",
             ),
-        ),
-        (
-            "B",
-            "Primary adjusted association",
-            "primary_estimand",
-            "table:adjusted_association_estimates",
-        ),
-        ("C", *panel_c),
-        ("D", *panel_d),
-    )
+            (
+                "primary_adjusted_association",
+                "Primary adjusted association",
+                "primary_estimand",
+                "forest_plot",
+                "table:adjusted_association_estimates",
+            ),
+            (
+                "scientific_sensitivity",
+                "Scientific sensitivity analyses",
+                "robustness",
+                "sensitivity_forest_plot",
+                scientific_sensitivity_key,
+            ),
+            (
+                "component_completeness",
+                "Component completeness",
+                "data_quality",
+                "availability_heatmap",
+                "table:exposure_component_completeness_audit",
+            ),
+        )
+    else:
+        panel_specs = (
+            (
+                "A",
+                absolute_title,
+                "descriptive_result",
+                "grouped_absolute_risk",
+                (
+                    "table:exposure_outcome_distribution"
+                    if distribution is not None
+                    else "table:absolute_risk_context"
+                ),
+            ),
+            (
+                "B",
+                "Primary adjusted association",
+                "primary_estimand",
+                "forest_plot",
+                "table:adjusted_association_estimates",
+            ),
+            ("C", panel_c[0], panel_c[1], "forest_plot", panel_c[2]),
+            ("D", panel_d[0], panel_d[1], "availability_panel", panel_d[2]),
+        )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
@@ -695,6 +729,8 @@ def render_association_publication_figure(
                 "panel_id": panel_id,
                 "title": title,
                 "role": role,
+                "article_role": role,
+                "chart_type": chart_type,
                 "claim": f"This panel visualizes values from {source} without refitting.",
                 "evidence_ids": [evidence[source]],
                 "metadata": {
@@ -702,7 +738,7 @@ def render_association_publication_figure(
                     "source_data": [f"{source.partition(':')[2]}_source_data.csv"],
                 },
             }
-            for panel_id, title, role, source in panel_specs
+            for panel_id, title, role, chart_type, source in panel_specs
         ],
         source_data=source_files,
         statistics_note=(
