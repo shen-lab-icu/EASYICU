@@ -24,6 +24,7 @@ from ..contracts.association_execution import (
     sole_primary_model_requirement,
 )
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.figure_plan import landmark_association_composite_panels
 from ..contracts.model_terms import ModelTermSpec
 from ..schema import (
     AnalysisPlan,
@@ -596,10 +597,68 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         )
         generic_parent = "table:adjusted_association_estimates"
         replacement = self.downstream_parent_product
+        declared_products = {
+            product for step in plan.steps for product in step.expected_outputs
+        } | set(self.plan_outputs)
+        measurement_products = [
+            product
+            for product in declared_products
+            if product.partition(":")[0] == "table"
+            and product.partition(":")[2]
+            in {"measurement_process", "measurement_process_audit"}
+        ]
+        composite_inputs: tuple[str, ...] | None = None
+        if (
+            "table:absolute_risk_context" in declared_products
+            and "table:robustness_summary" in declared_products
+            and len(measurement_products) == 1
+        ):
+            composite_inputs = (
+                self.curve_product,
+                "table:absolute_risk_context",
+                "table:robustness_summary",
+                measurement_products[0],
+            )
+        composite_candidates = [
+            step
+            for step in plan.steps
+            if composite_inputs is not None
+            and step.planned_analysis_role == "auxiliary"
+            and str(step.method or "").strip().lower() == "visualization"
+            and "table:robustness_summary" in step.inputs
+            and len(step.expected_outputs) == 1
+            and step.expected_outputs[0].startswith("figure:")
+        ]
+        composite_step_id = (
+            composite_candidates[0].step_id if len(composite_candidates) == 1 else None
+        )
         steps: list[AnalysisStep] = []
         for step in plan.steps:
             if step is candidate:
                 steps.append(bound)
+                continue
+            if composite_step_id is not None and step.step_id == composite_step_id:
+                assert composite_inputs is not None
+                figure_output = step.expected_outputs[0]
+                steps.append(
+                    step.model_copy(
+                        update={
+                            "inputs": list(composite_inputs),
+                            "input_consumption_contracts": [
+                                ArtifactConsumptionContract(
+                                    input_key=input_key, mode="all_rows"
+                                )
+                                for input_key in composite_inputs
+                            ],
+                            "figure_panels": [
+                                panel.bind(figure_output=figure_output)
+                                for panel in landmark_association_composite_panels(
+                                    composite_inputs
+                                )
+                            ],
+                        }
+                    )
+                )
                 continue
             inherited_binary_sensitivity = (
                 step.scientific_capability

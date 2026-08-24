@@ -604,7 +604,12 @@ def close_empty_deterministic_figure_contracts(
             and len(input_set) == 4
             and any(
                 value.startswith("table:")
-                and value.partition(":")[2].endswith("landmark_rcs_contrasts")
+                and value.partition(":")[2].endswith("landmark_rcs_curve")
+                for value in input_set
+            )
+            and any(
+                value.partition(":")[2]
+                in {"measurement_process", "measurement_process_audit"}
                 for value in input_set
             )
         ):

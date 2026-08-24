@@ -567,6 +567,39 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
                         ]
                     },
                 },
+                {
+                    "step_id": "03_absolute_risk",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Describe absolute-risk context.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:absolute_risk_context"],
+                    "method": "descriptive_statistics",
+                },
+                {
+                    "step_id": "04_measurement_audit",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Audit the measurement process.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:measurement_process"],
+                    "method": "missing_data",
+                },
+                {
+                    "step_id": "05_robustness_figure",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the registered evidence.",
+                    "inputs": [
+                        "statistic:primary_or",
+                        "table:robustness_summary",
+                    ],
+                    "expected_outputs": ["figure:robustness_plot"],
+                    "method": "visualization",
+                    "input_consumption_contracts": [
+                        {
+                            "input_key": "table:robustness_summary",
+                            "mode": "all_rows",
+                        }
+                    ],
+                },
             ],
         }
     )
@@ -582,6 +615,22 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         authority.downstream_parent_product,
         authority.linear_sensitivity_product,
     }
+    figure = bound.steps[4]
+    assert figure.inputs == [
+        authority.curve_product,
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+        "table:measurement_process",
+    ]
+    assert {item.input_key for item in figure.input_consumption_contracts} == set(
+        figure.inputs
+    )
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "data_quality",
+    ]
 
     selected = select_standard_executor(
         step,

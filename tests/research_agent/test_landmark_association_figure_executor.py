@@ -17,10 +17,10 @@ from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
 INPUTS = (
-    "table:generic_landmark_rcs_contrasts",
+    "table:generic_landmark_rcs_curve",
     "table:absolute_risk_context",
     "table:robustness_summary",
-    "table:measurement_process_audit",
+    "table:measurement_process",
 )
 
 
@@ -28,11 +28,11 @@ def _frames() -> dict[str, pd.DataFrame]:
     return {
         INPUTS[0]: pd.DataFrame(
             {
-                "lactate_mmol_l": [1.0, 5.0],
-                "reference_lactate_mmol_l": [2.1, 2.1],
-                "adjusted_odds_ratio": [0.76, 1.96],
-                "ci_low": [0.72, 1.89],
-                "ci_high": [0.81, 2.03],
+                "biomarker_mg_dl": [1.0, 3.0, 5.0],
+                "reference_biomarker_mg_dl": [2.1, 2.1, 2.1],
+                "adjusted_odds_ratio": [0.76, 1.10, 1.96],
+                "ci_low": [0.72, 1.00, 1.89],
+                "ci_high": [0.81, 1.21, 2.03],
             }
         ),
         INPUTS[1]: pd.DataFrame(
@@ -131,16 +131,22 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     assert summary["status"] == "ok"
     assert len(summary["source_data_files"]) == 4
     source = pd.read_csv(tmp_path / "outputs" / summary["source_data_files"][0])
-    assert source["source_row_index"].tolist() == [0, 1]
+    assert source["source_row_index"].tolist() == [0, 1, 2]
     assert source["source_table"].nunique() == 1
     assert (tmp_path / "outputs" / "display_suite.figure_contract.json").is_file()
     svg = (tmp_path / "outputs" / "display_suite.svg").read_text(encoding="utf-8")
-    assert "Lactate (mmol/L; reference 2.1)" in svg
+    assert "Biomarker (mg/dL; reference 2.1)" in svg
     assert "Cohort share" in svg
     assert "Observed outcome risk" in svg
     contract = pd.read_json(
         tmp_path / "outputs" / "display_suite.figure_contract.json", typ="series"
     )
     assert contract["panels"][0]["metadata"]["estimate_geometry"] == (
-        "discrete_contrasts_with_95ci"
+        "continuous_fitted_curve_with_95ci"
     )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "data_quality",
+    ]

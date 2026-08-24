@@ -99,9 +99,28 @@ LANDMARK_ASSOCIATION_COMPOSITE_INPUTS = frozenset(
     {
         "table:absolute_risk_context",
         "table:robustness_summary",
-        "table:measurement_process_audit",
     }
 )
+
+
+def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
+    matches = [
+        value
+        for value in source_products
+        if value.startswith("table:")
+        and value.partition(":")[2].endswith("landmark_rcs_curve")
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _measurement_process_product(source_products: Sequence[str]) -> str | None:
+    matches = [
+        value
+        for value in source_products
+        if value.startswith("table:")
+        and value.partition(":")[2] in {"measurement_process", "measurement_process_audit"}
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def landmark_association_composite_panels(
@@ -110,14 +129,11 @@ def landmark_association_composite_panels(
     """Bind a four-panel landmark-association display to typed parents."""
 
     cleaned = tuple(str(value or "").strip() for value in source_products)
-    contrast = [
-        value
-        for value in cleaned
-        if value.startswith("table:")
-        and value.partition(":")[2].endswith("landmark_rcs_contrasts")
-    ]
+    curve = _landmark_curve_product(cleaned)
+    measurement = _measurement_process_product(cleaned)
     if (
-        len(contrast) != 1
+        curve is None
+        or measurement is None
         or len(cleaned) != 4
         or len(cleaned) != len(set(cleaned))
         or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(cleaned)
@@ -125,14 +141,14 @@ def landmark_association_composite_panels(
         raise ValueError("landmark composite requires its four exact typed tables")
     return (
         DeterministicFigurePanelTemplate(
-            panel_id="association_contrasts",
-            article_role="relationship",
-            chart_type="contrast_forest",
-            source_products=(contrast[0],),
+            panel_id="association_curve",
+            article_role="primary_estimand",
+            chart_type="continuous_effect_curve",
+            source_products=(curve,),
         ),
         DeterministicFigurePanelTemplate(
             panel_id="absolute_risk_context",
-            article_role="context",
+            article_role="descriptive_result",
             chart_type="absolute_risk",
             source_products=("table:absolute_risk_context",),
         ),
@@ -146,7 +162,7 @@ def landmark_association_composite_panels(
             panel_id="measurement_process",
             article_role="data_quality",
             chart_type="availability_panel",
-            source_products=("table:measurement_process_audit",),
+            source_products=(measurement,),
         ),
     )
 
