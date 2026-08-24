@@ -9318,6 +9318,22 @@ def test_critic_does_not_treat_literature_key_year_as_result_number(ra):
     assert critique.unsupported_claims == []
 
 
+def test_critic_accepts_cited_prior_study_performance_framing(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "Prior studies evaluated prognostic performance across ICU populations "
+        "[@paper_2024; @paper_2025]."
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=[],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+
 def test_critic_rejects_numeric_claim_ref_without_bound_footnote_provenance(ra):
     critic = ra.CriticAgent()
     scaffold = (

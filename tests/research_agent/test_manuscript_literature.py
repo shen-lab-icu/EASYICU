@@ -134,6 +134,66 @@ The result is compared with the retained ICU study [@paper_2024].
     assert audit.section_cited_keys["methods"] == ["strobe_2007"]
 
 
+def test_manuscript_literature_audit_accepts_grouped_pandoc_citations() -> None:
+    manuscript = """## Introduction
+Prior work defines the comparator [@paper_2024; @strobe_2007].
+
+## Methods
+The reporting contract followed RECORD and STROBE [@record_2015; @strobe_2007].
+
+## Discussion
+The result is compared with prior ICU work [@paper_2024; @strobe_2007].
+"""
+    bundle = _bundle().model_copy(
+        update={
+            "citations": [
+                *_bundle().citations,
+                CitationRecord(
+                    key="record_2015",
+                    title="The RECORD statement",
+                    year="2015",
+                    relevance="Methodology: routinely collected data reporting.",
+                ),
+            ]
+        }
+    )
+
+    audit = audit_manuscript_literature(manuscript, bundle)
+
+    assert audit.status == "pass"
+    assert audit.section_cited_keys["methods"] == ["record_2015", "strobe_2007"]
+
+
+def test_manuscript_literature_audit_rejects_unknown_key_in_grouped_citation() -> None:
+    manuscript = """## Introduction
+Prior work [@paper_2024; @invented_2026].
+
+## Methods
+Reporting followed STROBE [@strobe_2007].
+
+## Discussion
+Comparison used the retained study [@paper_2024].
+"""
+
+    audit = audit_manuscript_literature(manuscript, _bundle())
+
+    assert audit.status == "blocked"
+    assert audit.unknown_keys == ["invented_2026"]
+
+
+def test_evidence_id_is_removed_from_grouped_literature_citation() -> None:
+    manuscript = "Clinical context [@paper_2024; @research_context]."
+
+    repaired, repairs = repair_evidence_ids_mistyped_as_literature(
+        manuscript,
+        _bundle(),
+        evidence_ids=("research_context",),
+    )
+
+    assert repairs == ["research_context"]
+    assert repaired == "Clinical context [@paper_2024]."
+
+
 def test_manuscript_literature_audit_rejects_one_token_citation_theatre() -> None:
     manuscript = """## Introduction
 Prior work [@paper_2024].
