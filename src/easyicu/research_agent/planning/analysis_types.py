@@ -693,6 +693,22 @@ def get_analysis_type(key: str) -> AnalysisTypeSpec:
     return _REGISTRY[key]
 
 
+def analysis_type_for_capability(capability_id: str) -> AnalysisTypeSpec:
+    """Return the unique analysis type owned by one registered capability."""
+
+    matches = [
+        spec
+        for spec in _REGISTRY.values()
+        if spec.capability_id == str(capability_id).strip()
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "scientific capability must map to exactly one analysis type: "
+            f"{capability_id!r}"
+        )
+    return matches[0]
+
+
 def required_endpoint_kind_for_family(value: Optional[str]) -> Optional[str]:
     """The ``EndpointSpec.kind`` a plan in this family must declare.
 
@@ -1588,6 +1604,7 @@ __all__ = [
     "is_concept_set_family",
     "list_analysis_types",
     "get_analysis_type",
+    "analysis_type_for_capability",
     "required_endpoint_kind_for_family",
     "infer_analysis_type",
     "strong_trajectory_clustering_framing",

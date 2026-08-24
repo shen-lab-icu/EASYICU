@@ -9,9 +9,18 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.planning.analysis_types import (
+    analysis_type_for_capability,
     is_concept_set_family,
     normalize_analysis_family,
 )
+
+
+def test_registered_capability_maps_to_one_analysis_type() -> None:
+    assert analysis_type_for_capability("association_adjusted_v1").key == (
+        "association_study"
+    )
+    with pytest.raises(ValueError, match="exactly one analysis type"):
+        analysis_type_for_capability("not_registered")
 
 
 def test_infer_analysis_type_quality_audit(ra):
