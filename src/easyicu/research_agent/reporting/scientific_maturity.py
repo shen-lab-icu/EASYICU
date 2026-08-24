@@ -324,12 +324,17 @@ def _robustness_facts(run_dir: Path, plan: Optional[AnalysisPlan]) -> dict[str, 
     primary_id = str(panel.get("primary_spec_id") or "primary")
     primary = next((row for row in rows if str(row.get("spec_id")) == primary_id), None)
     variants = [row for row in rows if str(row.get("spec_id")) != primary_id]
+    declared_axes = {
+        str(spec.axis)
+        for spec in (plan.robustness_specs if plan is not None else ())
+        if str(spec.axis)
+    }
+    model_grid = _registered_association_model_grid_facts(run_dir)
+    family_robustness = _registered_family_robustness_facts(run_dir)
     axes = sorted(
-        {
-            str(spec.axis)
-            for spec in (plan.robustness_specs if plan is not None else ())
-            if str(spec.axis)
-        }
+        declared_axes
+        | set(model_grid["axes"])
+        | set(family_robustness["axes"])
     )
 
     def same_estimate(row: Mapping[str, Any]) -> bool:
@@ -351,9 +356,201 @@ def _robustness_facts(run_dir: Path, plan: Optional[AnalysisPlan]) -> dict[str, 
 
     return {
         "declared_axes": axes,
-        "variant_count": len(variants),
-        "all_variants_duplicate_primary": bool(variants)
-        and all(same_estimate(row) for row in variants),
+        "variant_count": (
+            len(variants)
+            + int(model_grid["variant_count"])
+            + int(family_robustness["variant_count"])
+        ),
+        "all_variants_duplicate_primary": bool(
+            variants
+            or model_grid["variant_count"]
+            or family_robustness["variant_count"]
+        )
+        and all(same_estimate(row) for row in variants)
+        and (
+            not model_grid["variant_count"]
+            or bool(model_grid["all_variants_duplicate_primary"])
+        )
+        and (
+            not family_robustness["variant_count"]
+            or bool(family_robustness["all_variants_duplicate_primary"])
+        ),
+        "registered_robustness_evidence_refs": sorted(
+            {
+                *model_grid["evidence_refs"],
+                *family_robustness["evidence_refs"],
+            }
+        ),
+    }
+
+
+def _registered_runner_step_summaries(
+    run_dir: Path,
+) -> list[tuple[str, Mapping[str, Any]]]:
+    authority = _read_json(run_dir / "evidence", "evidence_authority.json")
+    records = [
+        record
+        for record in authority.get("records") or []
+        if isinstance(record, Mapping)
+        and record.get("kind") == "statistic"
+        and record.get("producer") == "runner"
+    ]
+    root = run_dir.resolve()
+    summaries: list[tuple[str, Mapping[str, Any]]] = []
+    for record in records:
+        relative_path = str(record.get("relative_path") or "").strip()
+        if not relative_path.endswith("__step_summary.json"):
+            continue
+        try:
+            path = (run_dir / relative_path).resolve()
+            path.relative_to(root)
+            raw = path.read_bytes()
+        except (OSError, ValueError):
+            continue
+        if hashlib.sha256(raw).hexdigest() != str(record.get("sha256") or ""):
+            continue
+        try:
+            summary = json.loads(raw)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(summary, Mapping):
+            continue
+        summaries.append((relative_path, summary))
+    return summaries
+
+
+def _registered_association_model_grid_facts(run_dir: Path) -> dict[str, Any]:
+    """Project typed model-grid evidence into article robustness axes.
+
+    Some study families execute their prespecified sensitivities through a
+    host-owned model-grid step rather than the generic robustness replay.  The
+    result is still valid robustness evidence when its registered step summary
+    is digest-bound and carries the exact model-grid runtime receipt.  Reading
+    only ``robustness_panel.json`` would otherwise discard those completed
+    timing, cohort, and functional-form stress tests.
+    """
+
+    axes: set[str] = set()
+    variant_count = 0
+    duplicate_flags: list[bool] = []
+    evidence_refs: list[str] = []
+    for relative_path, summary in _registered_runner_step_summaries(run_dir):
+        receipt = summary.get("scientific_runtime_receipt")
+        if not isinstance(receipt, Mapping) or receipt.get("schema_version") != (
+            "easyicu.association_model_grid_runtime_receipt/1"
+        ):
+            continue
+        rows = summary.get("analysis_rows")
+        reference_id = str(receipt.get("reference_variant_id") or "").strip()
+        variant_ids = [
+            str(value).strip()
+            for value in receipt.get("variant_ids") or []
+            if str(value).strip()
+        ]
+        if (
+            not isinstance(rows, list)
+            or not reference_id
+            or len(variant_ids) < 2
+            or len(variant_ids) != len(set(variant_ids))
+        ):
+            continue
+        by_id = {
+            str(row.get("analysis_id") or "").strip(): row
+            for row in rows
+            if isinstance(row, Mapping)
+            and str(row.get("analysis_id") or "").strip()
+        }
+        if set(by_id) != set(variant_ids) or reference_id not in by_id:
+            continue
+        reference = by_id[reference_id]
+        basis_receipts = summary.get("basis_receipts")
+        basis_receipts = basis_receipts if isinstance(basis_receipts, Mapping) else {}
+        for analysis_id in variant_ids:
+            if analysis_id == reference_id:
+                continue
+            row = by_id[analysis_id]
+            variant_count += 1
+            row_axes: set[str] = set()
+            if any(
+                row.get(field) != reference.get(field)
+                for field in (
+                    "landmark_hours",
+                    "alive_at_landmark_required",
+                    "negative_event_times_excluded",
+                )
+            ):
+                row_axes.add("timing")
+            if (
+                row.get("fitted_covariates") != reference.get("fitted_covariates")
+                or bool(basis_receipts.get(analysis_id))
+            ):
+                row_axes.add("model")
+            if (
+                "timing" not in row_axes
+                and "model" not in row_axes
+                and (
+                    row.get("readmission_restriction")
+                    != reference.get("readmission_restriction")
+                    or row.get("n_stays") != reference.get("n_stays")
+                )
+            ):
+                row_axes.add("cohort")
+            axes.update(row_axes)
+            duplicate_flags.append(
+                not row_axes
+                and all(
+                    row.get(field) == reference.get(field)
+                    for field in ("n_stays", "estimate", "ci_low", "ci_high")
+                )
+            )
+        evidence_refs.append(relative_path)
+    return {
+        "axes": sorted(axes),
+        "variant_count": variant_count,
+        "all_variants_duplicate_primary": bool(duplicate_flags)
+        and all(duplicate_flags),
+        "evidence_refs": sorted(set(evidence_refs)),
+    }
+
+
+def _registered_family_robustness_facts(run_dir: Path) -> dict[str, Any]:
+    """Accept independent variants from a digest-bound family robustness receipt."""
+
+    axes: set[str] = set()
+    variant_count = 0
+    duplicate_flags: list[bool] = []
+    evidence_refs: list[str] = []
+    for relative_path, summary in _registered_runner_step_summaries(run_dir):
+        if summary.get("analysis_family") != (
+            "robustness_sensitivity"
+        ):
+            continue
+        rows = summary.get("robustness_rows")
+        if not isinstance(rows, list):
+            continue
+        accepted = [
+            row
+            for row in rows
+            if isinstance(row, Mapping)
+            and row.get("converged") is True
+            and row.get("independent_variant") is True
+            and str(row.get("axis") or "").strip() not in {"", "primary"}
+            and str(row.get("spec_id") or "").strip()
+            and str(row.get("evidence_id") or "").strip()
+        ]
+        if not accepted:
+            continue
+        for row in accepted:
+            axes.add(str(row["axis"]).strip())
+            variant_count += 1
+            duplicate_flags.append(False)
+        evidence_refs.append(relative_path)
+    return {
+        "axes": sorted(axes),
+        "variant_count": variant_count,
+        "all_variants_duplicate_primary": bool(duplicate_flags)
+        and all(duplicate_flags),
+        "evidence_refs": sorted(set(evidence_refs)),
     }
 
 

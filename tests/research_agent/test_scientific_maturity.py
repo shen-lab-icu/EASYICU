@@ -10,6 +10,7 @@ from easyicu.research_agent.literature import (
     LiteratureSearchProvenance,
 )
 from easyicu.research_agent.reporting.scientific_maturity import (
+    _robustness_facts,
     build_scientific_maturity_audit,
     scientific_maturity_audit_from_gates,
     scientific_maturity_readiness_gates,
@@ -22,6 +23,156 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     UserPreferences,
 )
+
+
+def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    summary_path = evidence_dir / "statistic_grid__step_summary.json"
+    summary = {
+        "analysis_rows": [
+            {
+                "analysis_id": "primary",
+                "n_stays": 100,
+                "estimate": 1.5,
+                "ci_low": 1.2,
+                "ci_high": 1.8,
+                "landmark_hours": None,
+                "alive_at_landmark_required": False,
+                "negative_event_times_excluded": False,
+                "readmission_restriction": "all_stays",
+                "fitted_covariates": "age;score",
+            },
+            {
+                "analysis_id": "landmark",
+                "n_stays": 90,
+                "estimate": 1.6,
+                "ci_low": 1.3,
+                "ci_high": 1.9,
+                "landmark_hours": 24.0,
+                "alive_at_landmark_required": True,
+                "negative_event_times_excluded": True,
+                "readmission_restriction": "all_stays",
+                "fitted_covariates": "age;score",
+            },
+            {
+                "analysis_id": "first_stay",
+                "n_stays": 85,
+                "estimate": 1.55,
+                "ci_low": 1.25,
+                "ci_high": 1.85,
+                "landmark_hours": None,
+                "alive_at_landmark_required": False,
+                "negative_event_times_excluded": False,
+                "readmission_restriction": "non_readmission_only",
+                "fitted_covariates": "age;score",
+            },
+            {
+                "analysis_id": "flexible",
+                "n_stays": 100,
+                "estimate": 1.48,
+                "ci_low": 1.18,
+                "ci_high": 1.79,
+                "landmark_hours": None,
+                "alive_at_landmark_required": False,
+                "negative_event_times_excluded": False,
+                "readmission_restriction": "all_stays",
+                "fitted_covariates": "age_spline_1;age_spline_2;score",
+            },
+        ],
+        "basis_receipts": {"flexible": [{"basis": "natural_cubic_spline"}]},
+        "scientific_runtime_receipt": {
+            "schema_version": "easyicu.association_model_grid_runtime_receipt/1",
+            "variant_ids": ["primary", "landmark", "first_stay", "flexible"],
+            "reference_variant_id": "primary",
+        },
+    }
+    raw = json.dumps(summary).encode("utf-8")
+    summary_path.write_bytes(raw)
+    (evidence_dir / "evidence_authority.json").write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "evidence_id": "statistic_grid",
+                        "kind": "statistic",
+                        "producer": "runner",
+                        "relative_path": "evidence/statistic_grid__step_summary.json",
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    facts = _robustness_facts(tmp_path, None)
+
+    assert facts["declared_axes"] == ["cohort", "model", "timing"]
+    assert facts["variant_count"] == 3
+    assert facts["all_variants_duplicate_primary"] is False
+    assert facts["registered_robustness_evidence_refs"] == [
+        "evidence/statistic_grid__step_summary.json"
+    ]
+
+
+def test_registered_family_robustness_counts_only_independent_variants(
+    tmp_path,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    summary_path = evidence_dir / "statistic_family__step_summary.json"
+    summary = {
+        "analysis_family": "robustness_sensitivity",
+        "authority_kind": "signed_landmark_spline_robustness",
+        "robustness_rows": [
+            {
+                "spec_id": "primary",
+                "axis": "primary",
+                "converged": True,
+                "independent_variant": True,
+                "evidence_id": "primary_table",
+            },
+            {
+                "spec_id": "linear_form",
+                "axis": "functional_form",
+                "converged": True,
+                "independent_variant": True,
+                "evidence_id": "linear_table",
+            },
+            {
+                "spec_id": "complete_case_note",
+                "axis": "missing",
+                "converged": True,
+                "independent_variant": False,
+                "evidence_id": "primary_table",
+            },
+        ],
+    }
+    raw = json.dumps(summary).encode("utf-8")
+    summary_path.write_bytes(raw)
+    (evidence_dir / "evidence_authority.json").write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "evidence_id": "statistic_family",
+                        "kind": "statistic",
+                        "producer": "runner",
+                        "relative_path": "evidence/statistic_family__step_summary.json",
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    facts = _robustness_facts(tmp_path, None)
+
+    assert facts["declared_axes"] == ["functional_form"]
+    assert facts["variant_count"] == 1
+    assert facts["all_variants_duplicate_primary"] is False
 
 
 def test_article_maturity_separates_valid_user_scope_from_publishable_upgrade(
