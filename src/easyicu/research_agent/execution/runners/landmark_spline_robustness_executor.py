@@ -149,11 +149,7 @@ def _matching_complete_case_spec_id(
 ) -> str:
     """Bind the documentation row to one scientifically equivalent lock entry."""
 
-    model_variables = {
-        authority.exposure_column,
-        authority.outcome_column,
-        *authority.required_adjustment_columns,
-    }
+    model_variables = set(authority.model_complete_case_columns)
     matches = [
         spec.spec_id
         for spec in specs

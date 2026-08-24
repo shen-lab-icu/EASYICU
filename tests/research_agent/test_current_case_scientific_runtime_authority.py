@@ -640,6 +640,21 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         {
             "research_question": "Project signed sensitivity results.",
             "analysis_type": "association_study",
+            "robustness_specs": [
+                {
+                    "spec_id": "primary_complete_case",
+                    "axis": "missing",
+                    "description": "Complete cases for the draft primary model.",
+                    "missing_override": {
+                        "strategy": "complete_case",
+                        "variables": [
+                            authority.exposure_column,
+                            authority.outcome_column,
+                            "draft_adjustment",
+                        ],
+                    },
+                }
+            ],
             "steps": [
                 primary.model_dump(mode="json"),
                 {
@@ -658,6 +673,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
                         "table:robustness_matrix",
                     ],
                     "method": "robustness_sensitivity",
+                    "sensitivity_spec_ids": ["primary_complete_case"],
                     "robustness_replay_spec": {
                         "products": [
                             {"product_id": "primary_or", "output": "primary_effect"},
@@ -727,6 +743,10 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     assert {item.input_key for item in step.input_consumption_contracts} == {
         authority.downstream_parent_product,
         authority.linear_sensitivity_product,
+    }
+    assert bound.robustness_specs[0].missing_override == {
+        "strategy": "complete_case",
+        "variables": list(authority.model_complete_case_columns),
     }
     figure = bound.steps[4]
     assert figure.inputs == [
@@ -817,6 +837,57 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         False,
         0,
     )
+
+
+def test_e2_runtime_authority_rejects_missing_referenced_complete_case_spec() -> (
+    None
+):
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Project signed sensitivity results.",
+            "analysis_type": "association_study",
+            "robustness_specs": [
+                {
+                    "spec_id": "unreferenced_complete_case",
+                    "axis": "missing",
+                    "description": "A complete-case spec not selected by the step.",
+                    "missing_override": {
+                        "strategy": "complete_case",
+                        "variables": list(authority.model_complete_case_columns),
+                    },
+                }
+            ],
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_robustness",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Summarize signed robustness results.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:robustness_summary"],
+                    "method": "robustness_sensitivity",
+                    "sensitivity_spec_ids": ["missing_complete_case"],
+                    "robustness_replay_spec": {
+                        "products": [
+                            {
+                                "product_id": "robustness_summary",
+                                "output": "robustness_summary",
+                            }
+                        ]
+                    },
+                },
+            ],
+        }
+    )
+
+    with pytest.raises(
+        CurrentCaseScientificAuthorityError,
+        match="exactly one referenced complete-case specification",
+    ):
+        authority.bind_plan(plan)
 
 
 def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
