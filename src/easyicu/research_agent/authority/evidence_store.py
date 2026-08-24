@@ -952,6 +952,56 @@ def _walk_numeric_leaves_with_effect_scale(
     return out
 
 
+_HEADLINE_NUMERIC_ROOT_PRIORITY: Tuple[str, ...] = (
+    "primary_estimate",
+    "adjusted_effect",
+    "primary_effect",
+    "primary_or",
+    "primary_hr",
+    "primary_ci_low",
+    "primary_ci_high",
+    "primary_estimate_interval",
+    "primary_or_ci",
+    "primary_hr_ci",
+    "primary_effect_ci",
+    "estimate",
+    "ci_low",
+    "ci_high",
+    "p_value",
+    "sample_size",
+    "n_total",
+    "n_events",
+    "complete_case_n",
+)
+
+
+def _prioritize_headline_numeric_leaves(
+    leaves: Sequence[Tuple[str, str, float, Any]],
+) -> List[Tuple[str, str, float, Any]]:
+    """Put manuscript-facing summary numerics ahead of nested diagnostics.
+
+    The per-step registry cap is a safety boundary, not a scientific priority
+    rule.  Large nested model diagnostics can otherwise consume the cap before
+    top-level effect, interval, and cohort-size fields are reached.  Preserve
+    original traversal order within every priority class and for all remaining
+    leaves so producer ordering remains deterministic.
+    """
+
+    priority = {
+        root: index for index, root in enumerate(_HEADLINE_NUMERIC_ROOT_PRIORITY)
+    }
+
+    def _sort_key(
+        indexed_leaf: Tuple[int, Tuple[str, str, float, Any]],
+    ) -> Tuple[int, int]:
+        original_index, leaf = indexed_leaf
+        path = leaf[0]
+        root = path.split(".", 1)[0].split("[", 1)[0]
+        return priority.get(root, len(priority)), original_index
+
+    return [leaf for _, leaf in sorted(enumerate(leaves), key=_sort_key)]
+
+
 def sha256_of_file(path: Path, chunk: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -2383,12 +2433,11 @@ class EvidenceStore:
         ``max_leaves`` caps the number of claims registered per call to
         prevent a single step that dumps a full interaction matrix into
         ``step_summary`` from drowning the registry. When the cap is
-        exceeded the **first** ``max_leaves`` leaves (typically the most
-        salient summary-level fields like ``primary_or``) are kept and
-        the remainder is silently skipped; a single info-level marker
-        claim records that truncation happened. ``None`` (the default
-        when called directly) disables the cap. Pipelines pass the
-        ``PipelineConfig.max_numeric_claims_per_step`` value.
+        exceeded, headline top-level effect, interval, and cohort-size fields
+        are registered first; remaining leaves retain producer traversal order.
+        A single info-level marker claim records that truncation happened.
+        ``None`` (the default when called directly) disables the cap. Pipelines
+        pass the ``PipelineConfig.max_numeric_claims_per_step`` value.
         """
         # Qualitative scientific authority is validated before any numeric
         # mutation.  The phase-level success transaction then publishes both
@@ -2419,6 +2468,7 @@ class EvidenceStore:
         truncated = False
         if max_leaves is not None and max_leaves > 0 and len(leaves) > max_leaves:
             truncated_count = len(leaves) - max_leaves
+            leaves = _prioritize_headline_numeric_leaves(leaves)
             leaves = leaves[:max_leaves]
             truncated = True
         else:
