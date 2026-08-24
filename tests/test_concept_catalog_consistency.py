@@ -154,7 +154,7 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # sensitivity and clause-specific/legacy ascertainment outputs. 288 -> 293.
     # 2026-08-12: +six nullable severe-AKI endpoint/receipt outputs. 293 -> 299.
     # 2026-08-22: +three fixed-horizon event/censoring-time companions. 304 -> 307.
-    assert len(CONCEPT_DICTIONARY) == 307
+    assert len(CONCEPT_DICTIONARY) == 308
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
