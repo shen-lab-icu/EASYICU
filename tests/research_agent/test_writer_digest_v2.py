@@ -491,6 +491,53 @@ def test_v2_secondary_cap_counts_only_uncovered_claims(tmp_path: Path) -> None:
     assert "3 more leaves omitted" in out
 
 
+def test_v2_reserves_cap_for_typed_reportable_results(tmp_path: Path) -> None:
+    evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="04_descriptive",
+        evidence_id="04_descriptive_summary",
+    )
+    evidence.register_numeric_claim(
+        value="999",
+        canonical=999.0,
+        evidence_id="04_descriptive_summary",
+        step_id="04_descriptive",
+        source_field="diagnostic_first",
+    )
+    for source_field, value in (
+        ("reportable_descriptive_results.groups[0].risk_pct", "14.7"),
+        ("reportable_descriptive_results.groups[1].risk_pct", "6.3"),
+        ("reportable_descriptive_results.overall_outcome.risk_pct", "10.0"),
+    ):
+        evidence.register_numeric_claim(
+            value=value,
+            canonical=float(value),
+            evidence_id="04_descriptive_summary",
+            step_id="04_descriptive",
+            source_field=source_field,
+        )
+    records = [
+        {
+            **_record("04_descriptive", "ok", {}),
+            "evidence_ids": ["04_descriptive_summary"],
+        }
+    ]
+
+    out = _render_writer_evidence_digest_v2(
+        records,
+        evidence=evidence,
+        secondary_cap_per_step=1,
+    )
+
+    assert "groups[0].risk_pct=14.7" in out
+    assert "groups[1].risk_pct=6.3" in out
+    assert "overall_outcome.risk_pct=10.0" in out
+    assert "diagnostic_first=999" not in out
+    assert "1 more leaves omitted" in out
+
+
 def test_v2_shows_derived_numbers_in_separate_block(tmp_path: Path) -> None:
     evidence = EvidenceStore(root=tmp_path)
     _register_step_evidence(

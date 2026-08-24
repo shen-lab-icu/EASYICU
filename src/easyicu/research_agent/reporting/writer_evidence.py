@@ -369,6 +369,12 @@ _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT = {
     "p_value",
 }
 
+_REPORTABLE_NUMERIC_PREFIXES = (
+    "reportable_descriptive_results.",
+    "reportable_secondary_results.",
+)
+_REPORTABLE_NUMERIC_CAP_PER_STEP = 50
+
 
 def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
     """Keep a nested p-value attached to the named hypothesis it tested."""
@@ -1004,9 +1010,30 @@ def _render_writer_evidence_digest_v2(
             truncated = False
             cap = max(0, int(secondary_cap_per_step))
             secondary_total = len(secondary_claims)
-            if cap and secondary_total > cap:
-                secondary_claims = secondary_claims[:cap]
+            # Typed reportable payloads are deliberately compact Writer
+            # contracts, unlike arbitrary diagnostic leaves. Give those
+            # values priority and a bounded 50-leaf reservation so a default
+            # cap cannot expose only the first group while silently hiding an
+            # overall result or a later source state.
+            reportable_claims = [
+                claim
+                for claim in secondary_claims
+                if claim.source_field.startswith(_REPORTABLE_NUMERIC_PREFIXES)
+            ][:_REPORTABLE_NUMERIC_CAP_PER_STEP]
+            ordinary_claims = [
+                claim
+                for claim in secondary_claims
+                if not claim.source_field.startswith(_REPORTABLE_NUMERIC_PREFIXES)
+            ]
+            effective_cap = (
+                max(cap, len(reportable_claims)) if cap else secondary_total
+            )
+            selected_claims = reportable_claims + ordinary_claims[
+                : max(0, effective_cap - len(reportable_claims))
+            ]
+            if len(selected_claims) < secondary_total:
                 truncated = True
+            secondary_claims = selected_claims
             secondary_lines.append(f"- {step_id}")
             for c in secondary_claims:
                 secondary_lines.append(
@@ -1020,7 +1047,7 @@ def _render_writer_evidence_digest_v2(
                 )
             if truncated:
                 secondary_lines.append(
-                    f"  ... ({secondary_total - cap} more leaves omitted; raise writer_digest_secondary_cap_per_step to see)"
+                    f"  ... ({secondary_total - len(secondary_claims)} more leaves omitted; raise writer_digest_secondary_cap_per_step to see)"
                 )
     else:
         # Fallback path: walk step_summary directly. Cheaper than the
