@@ -222,6 +222,43 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
 
 
+def test_e2_runtime_clears_rebound_binary_sensitivity_capability() -> None:
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    exact = _e2_plan(authority)
+    draft_step = exact.steps[0].model_copy(
+        update={
+            "method": "adjusted_association_models",
+            "intent": "Estimate a generic adjusted association.",
+            "expected_outputs": ["table:adjusted_association_estimates"],
+            "scientific_capability": "association_adjusted_v1",
+            "icu_rule_refs": [],
+        }
+    )
+    sensitivity = exact.steps[0].model_copy(
+        update={
+            "step_id": "02_sensitivity",
+            "planned_analysis_role": "sensitivity",
+            "method": "prespecified_functional_form_check",
+            "intent": "Check the declared functional form.",
+            "inputs": ["table:adjusted_association_estimates"],
+            "expected_outputs": ["table:functional_form_check"],
+            "scientific_capability": "association_freeform_v1",
+            "sensitivity_spec_ids": ["functional_form_check"],
+            "icu_rule_refs": [],
+        }
+    )
+    draft = exact.model_copy(update={"steps": [draft_step, sensitivity]})
+
+    bound = authority.bind_plan(draft)
+
+    rebound = bound.steps[1]
+    assert rebound.scientific_capability is None
+    assert authority.downstream_parent_product in rebound.inputs
+    assert authority.linear_sensitivity_product in rebound.inputs
+    AnalysisPlan.model_validate(bound.model_dump(mode="json"))
+
+
 def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     tmp_path: Path,
 ) -> None:
