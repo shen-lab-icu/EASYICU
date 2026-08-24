@@ -36,6 +36,7 @@ from easyicu.research_agent.contracts.capability_ids import (
     PHENOTYPING_ANALYSIS_KIND,
     PHENOTYPING_CLUSTER_CAPABILITY_ID,
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+    SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
 )
 
 _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
@@ -148,6 +149,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
         "descriptive_exposure_outcome_distribution_v1",
         "prediction_risk_model_v1",
         SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+        SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
     }
     for capability in cr.CAPABILITY_REGISTRY:
         if capability.capability_id in reportable:
@@ -186,6 +188,7 @@ def test_partition_helpers_are_consistent():
         "Survival / time-to-event",
         "Phenotyping / clustering",
         "Causal feasibility — verified non-use unavailable",
+        "Phenotyping — signed fixed-window trajectories",
     }
     assert llm
     assert det.isdisjoint(llm)
