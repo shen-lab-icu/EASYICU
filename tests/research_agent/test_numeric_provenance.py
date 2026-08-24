@@ -611,6 +611,152 @@ def test_transformed_ratio_fields_never_become_published_ratio_claims(
     assert claim.effect_scale is None
 
 
+@pytest.mark.parametrize(
+    ("source_field", "expected_estimand"),
+    (
+        ("primary_estimate_interval[0]", "confidence_interval_lower"),
+        ("primary_estimate_interval[1]", "confidence_interval_upper"),
+        ("primary_or_ci[0]", "confidence_interval_lower"),
+        ("primary_or_ci[1]", "confidence_interval_upper"),
+    ),
+)
+def test_array_interval_endpoints_keep_typed_estimand_identity(
+    source_field: str,
+    expected_estimand: str,
+) -> None:
+    from easyicu.research_agent.authority.numeric_claim_identity import (
+        NumericEffectScale,
+        NumericEstimand,
+        infer_numeric_claim_identity,
+    )
+
+    scale, estimand = infer_numeric_claim_identity(
+        source_field,
+        declared_effect_scale="odds_ratio",
+    )
+    assert scale is NumericEffectScale.ODDS_RATIO
+    assert estimand is NumericEstimand(expected_estimand)
+
+
+def test_registered_array_interval_binds_without_numeric_sentence_drop(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import (
+        bind_numeric_values,
+        drop_untraceable_numeric_sentences,
+    )
+
+    store = ra.EvidenceStore(tmp_path, enforcement_mode="strict")
+    store.register_text(
+        kind="statistic",
+        description="Typed adjusted association summary.",
+        text="registered association summary",
+        filename="association.txt",
+        evidence_id="assoc_result",
+    )
+    claims = store.register_step_summary_numerics(
+        step_id="association",
+        evidence_id="assoc_result",
+        summary={
+            "effect_scale": "odds_ratio",
+            "primary_or": 1.42,
+            "primary_or_ci": [1.18, 1.71],
+        },
+    )
+    claim_by_field = {claim.source_field: claim for claim in claims}
+    assert claim_by_field["primary_or_ci[0]"].estimand.value == (
+        "confidence_interval_lower"
+    )
+    assert claim_by_field["primary_or_ci[1]"].estimand.value == (
+        "confidence_interval_upper"
+    )
+    rendered = store.bind_manuscript(
+        "The adjusted odds ratio was 1.42 (95% CI, 1.18 to 1.71) "
+        "{evidence:assoc_result}."
+    )
+
+    filtered, removed = drop_untraceable_numeric_sentences(
+        rendered,
+        evidence=store,
+    )
+    assert removed == []
+    _bound, binding_map, untraced = bind_numeric_values(filtered, evidence=store)
+    assert untraced == []
+    assert {claim.estimand.value for claim in binding_map.values()} == {
+        "point_estimate",
+        "confidence_interval_lower",
+        "confidence_interval_upper",
+    }
+
+
+def test_strict_numeric_sentence_filter_drops_wrong_owner_not_valid_prose(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import (
+        bind_numeric_values,
+        drop_untraceable_numeric_sentences,
+    )
+
+    store = ra.EvidenceStore(tmp_path, enforcement_mode="strict")
+    store.register_text(
+        kind="log",
+        description="Registered association result.",
+        text="result",
+        filename="result.txt",
+        evidence_id="assoc_result",
+    )
+    store.register_text(
+        kind="log",
+        description="Study context without numeric authority for missing counts.",
+        text="context",
+        filename="context.txt",
+        evidence_id="research_context",
+    )
+    store.register_text(
+        kind="log",
+        description="Data-quality result that owns an unrelated count.",
+        text="quality",
+        filename="quality.txt",
+        evidence_id="data_quality",
+    )
+    store.register_numeric_claim(
+        value="1.42",
+        canonical=1.42,
+        evidence_id="assoc_result",
+        step_id="association",
+        source_field="primary_or",
+    )
+    store.register_numeric_claim(
+        value="14",
+        canonical=14.0,
+        evidence_id="data_quality",
+        step_id="data_quality",
+        source_field="n_concepts_audited",
+    )
+    scaffold = (
+        "The adjusted odds ratio was 1.42 {evidence:assoc_result}. "
+        "ICU length of stay was unavailable for 14 stays "
+        "{evidence:research_context}. The qualitative limitation remains."
+    )
+    rendered = store.bind_manuscript(scaffold)
+
+    filtered, removed = drop_untraceable_numeric_sentences(
+        rendered,
+        evidence=store,
+    )
+
+    assert "adjusted odds ratio was 1.42" in filtered
+    assert "unavailable for 14 stays" not in filtered
+    assert "qualitative limitation remains" in filtered
+    assert len(removed) == 1
+    assert removed[0]["untraced"] == ["14"]
+    assert removed[0]["miscited"][0]["cited"] == ["research_context"]
+    bound, _binding_map, untraced = bind_numeric_values(filtered, evidence=store)
+    assert untraced == []
+
+
 def test_conflicting_declared_and_source_effect_scales_fail_closed() -> None:
     from easyicu.research_agent.authority.numeric_claim_identity import NumericClaim
 
