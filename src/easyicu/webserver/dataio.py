@@ -1905,6 +1905,71 @@ def preview_export_cohort(
     }
 
 
+def normalize_export_cohort_contract(
+    cohort: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Compile one public, path-free Data Extraction cohort contract."""
+
+    return _normalize_export_cohort(dict(cohort) if isinstance(cohort, Mapping) else None)
+
+
+def resolve_registered_export_binding(
+    export_path: str,
+    database: str,
+) -> Dict[str, Any]:
+    """Resolve a registered module export to its sealed raw-source binding.
+
+    The returned paths are host-internal inputs for other WebApp owner modules
+    and must never be projected to the browser or model.
+    """
+
+    try:
+        requested_database = normalize_database_key(database)
+    except KeyError as exc:
+        raise ExportCohortError(
+            "registered_export_database_unknown",
+            {"database": str(database or "")[:40]},
+        ) from exc
+    try:
+        registered_path = Path(export_path).expanduser().resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("registered_export_path_unavailable") from exc
+    if not registered_path.is_dir():
+        raise ExportCohortError("registered_export_path_unavailable")
+
+    manifest = _read_export_manifest(registered_path)
+    if not manifest:
+        raise ExportCohortError("registered_export_manifest_required")
+    try:
+        manifest_database = normalize_database_key(manifest.get("database"))
+    except KeyError as exc:
+        raise ExportCohortError("registered_export_manifest_database_unknown") from exc
+    if manifest_database != requested_database:
+        raise ExportCohortError(
+            "registered_export_database_mismatch",
+            {
+                "requested_database": requested_database,
+                "manifest_database": manifest_database,
+            },
+        )
+
+    raw_source = str(manifest.get("data_path") or "").strip()
+    if not raw_source:
+        raise ExportCohortError("registered_export_source_path_required")
+    try:
+        raw_path = Path(raw_source).expanduser().resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("registered_export_source_path_unavailable") from exc
+    if not raw_path.is_dir():
+        raise ExportCohortError("registered_export_source_path_unavailable")
+    return {
+        "database": requested_database,
+        "export_path": str(registered_path),
+        "source_data_path": str(raw_path),
+        "manifest": manifest,
+    }
+
+
 def preview_registered_export_icd_cohort(
     export_path: str,
     database: str,
@@ -1922,44 +1987,28 @@ def preview_registered_export_icd_cohort(
     """
 
     try:
-        requested_database = normalize_database_key(database)
-    except KeyError as exc:
+        binding = resolve_registered_export_binding(export_path, database)
+    except ExportCohortError as exc:
+        code_map = {
+            "registered_export_database_unknown": "icd_preview_database_unknown",
+            "registered_export_path_unavailable": "icd_preview_export_path_unavailable",
+            "registered_export_manifest_required": "icd_preview_export_manifest_required",
+            "registered_export_manifest_database_unknown": "icd_preview_manifest_database_unknown",
+            "registered_export_database_mismatch": "icd_preview_database_mismatch",
+            "registered_export_source_path_required": "icd_preview_source_path_required",
+            "registered_export_source_path_unavailable": "icd_preview_source_path_unavailable",
+        }
         raise ExportCohortError(
-            "icd_preview_database_unknown", {"database": str(database or "")[:40]}
-        ) from exc
-
-    try:
-        registered_path = Path(export_path).expanduser().resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        raise ExportCohortError("icd_preview_export_path_unavailable") from exc
-    if not registered_path.is_dir():
-        raise ExportCohortError("icd_preview_export_path_unavailable")
-
-    manifest = _read_export_manifest(registered_path)
-    if not manifest:
-        raise ExportCohortError("icd_preview_export_manifest_required")
-    try:
-        manifest_database = normalize_database_key(manifest.get("database"))
-    except KeyError as exc:
-        raise ExportCohortError("icd_preview_manifest_database_unknown") from exc
-    if manifest_database != requested_database:
-        raise ExportCohortError(
-            "icd_preview_database_mismatch",
+            code_map.get(exc.error, exc.error),
             {
-                "requested_database": requested_database,
-                "manifest_database": manifest_database,
+                key: value
+                for key, value in exc.detail.items()
+                if key != "error"
             },
-        )
-
-    raw_source = str(manifest.get("data_path") or "").strip()
-    if not raw_source:
-        raise ExportCohortError("icd_preview_source_path_required")
-    try:
-        raw_path = Path(raw_source).expanduser().resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        raise ExportCohortError("icd_preview_source_path_unavailable") from exc
-    if not raw_path.is_dir():
-        raise ExportCohortError("icd_preview_source_path_unavailable")
+        ) from exc
+    manifest = binding["manifest"]
+    requested_database = str(binding["database"])
+    raw_path = str(binding["source_data_path"])
 
     manifest_cohort = manifest.get("cohort_contract")
     base_cohort = (
@@ -1980,7 +2029,7 @@ def preview_registered_export_icd_cohort(
     )
     try:
         return preview_export_cohort(
-            str(raw_path), requested_database, base_cohort
+            raw_path, requested_database, base_cohort
         )
     except ExportCohortError:
         raise
