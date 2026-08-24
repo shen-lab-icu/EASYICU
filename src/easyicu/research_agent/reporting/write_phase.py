@@ -600,13 +600,11 @@ class _BindingStageResult:
     manuscript_critique: CritiqueReport
 
 
-def _activate_publication_inputs(
+def _activate_publication_figure(
     pipeline: Any,
     *,
-    plan_result: _PlanPhaseResult,
     execute_result: _ExecutePhaseResult,
     context: Any,
-    agent_context: Any,
     evidence: Any,
     findings: List[ValidationFinding],
     role_resolver: Callable[[str], Any],
@@ -614,9 +612,14 @@ def _activate_publication_inputs(
     run_dir: Path,
     run_id: str,
     emit_progress: Callable[..., None],
-) -> Optional[LiteratureBundle]:
-    """Activate publication skills and produce the run-bound literature bundle."""
-    literature: Optional[LiteratureBundle] = plan_result.preplan_literature
+) -> None:
+    """Build the deterministic publication figure after successful execution.
+
+    Figure promotion is an analysis-output suffix, not manuscript drafting. It
+    must therefore run before a requested ``stop_after_analysis`` pause. This
+    keeps the pause provider-free while still closing the source-backed article
+    display bundle from already registered evidence.
+    """
     publication_skill_activation = compile_publication_skill_activation(
         nature_figure_enabled=pipeline._enable_publication_figure_skill,
         nature_writing_enabled=pipeline._enable_nature_writing_skill,
@@ -722,9 +725,29 @@ def _activate_publication_inputs(
                 ValidationFinding(
                     validator="publication_figure_skill",
                     severity="warning",
-                    message=f"Publication figure skill failed; writer will use existing evidence only: {exc}",
+                    message=(
+                        "Publication figure skill failed; downstream reporting "
+                        f"will use existing evidence only: {exc}"
+                    ),
                 )
             )
+
+
+def _activate_publication_inputs(
+    pipeline: Any,
+    *,
+    plan_result: _PlanPhaseResult,
+    agent_context: Any,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    role_resolver: Callable[[str], Any],
+    prompt_version: str,
+    run_dir: Path,
+    run_id: str,
+    emit_progress: Callable[..., None],
+) -> Optional[LiteratureBundle]:
+    """Produce the run-bound literature bundle for manuscript drafting."""
+    literature: Optional[LiteratureBundle] = plan_result.preplan_literature
 
     if pipeline._enable_literature and literature is None:
         try:
@@ -2648,6 +2671,19 @@ def run_write_phase(
                 "gate did not pass.",
             )
 
+    _activate_publication_figure(
+        pipeline,
+        execute_result=execute_result,
+        context=context,
+        evidence=evidence,
+        findings=findings,
+        role_resolver=role_resolver,
+        prompt_version=prompt_version,
+        run_dir=run_dir,
+        run_id=run_id,
+        emit_progress=emit_progress,
+    )
+
     if stop_after_analysis:
         emit_progress(
             "pause",
@@ -2673,8 +2709,6 @@ def run_write_phase(
     literature = _activate_publication_inputs(
         pipeline,
         plan_result=plan_result,
-        execute_result=execute_result,
-        context=context,
         agent_context=agent_context,
         evidence=evidence,
         findings=findings,
