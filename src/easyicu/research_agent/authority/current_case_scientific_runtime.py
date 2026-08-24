@@ -92,7 +92,7 @@ class _AuthorityBase(BaseModel):
 
 
 class AssociationModelGridLandmarkFilter(BaseModel):
-    """Retain rows alive at one declared landmark."""
+    """Retain rows alive and, when declared, observed at one landmark."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -101,6 +101,20 @@ class AssociationModelGridLandmarkFilter(BaseModel):
     event_time_column: str = Field(min_length=1)
     landmark_hours: float = Field(gt=0)
     exclude_negative_event_times: Literal[True]
+    observation_duration_column: str | None = Field(default=None, min_length=1)
+    observation_duration_unit: Literal["hours", "days"] | None = None
+
+    @model_validator(mode="after")
+    def _closed_observation_duration(self) -> "AssociationModelGridLandmarkFilter":
+        supplied = (
+            self.observation_duration_column is not None,
+            self.observation_duration_unit is not None,
+        )
+        if supplied[0] != supplied[1]:
+            raise ValueError(
+                "landmark observation duration column and unit must be declared together"
+            )
+        return self
 
 
 class AssociationModelGridLevelFilter(BaseModel):
@@ -314,6 +328,8 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             for item in variant.filters:
                 if isinstance(item, AssociationModelGridLandmarkFilter):
                     values.extend((item.outcome_column, item.event_time_column))
+                    if item.observation_duration_column is not None:
+                        values.append(item.observation_duration_column)
                 else:
                     values.append(item.column)
             if variant.exposure_column is not None:
