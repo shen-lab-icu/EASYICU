@@ -164,7 +164,7 @@ def run_trajectory_scientific_candidate_selection(
         bic = -2.0 * final_log_likelihood + parameter_count * math.log(n_rows)
         # AIC is an explicitly diagnostic second criterion.  The signed
         # protocol continues to select by BIC; reporting AIC cannot change K
-        # or rescue a boundary solution after looking at the result.
+        # or alter a boundary solution after looking at the result.
         aic = -2.0 * final_log_likelihood + 2.0 * parameter_count
         labels_by_k[k] = labels
         candidate_rows.append(
