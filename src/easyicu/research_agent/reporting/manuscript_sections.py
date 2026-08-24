@@ -1,7 +1,8 @@
 """Deterministic section specification and assembly for manuscript writing.
 
-The writer agent owns one model call.  This module owns which manuscript
-sections are requested, their bounded instructions, budget-safe dispatch, and
+The writer agent owns one model call per section.  This module owns which
+manuscript sections are requested, their bounded instructions, budget-safe
+dispatch, required-subsection validation, one targeted structural retry, and
 fixed-order assembly.  Keeping that contract outside the agent prevents the
 model-facing class from also becoming a manuscript workflow coordinator.
 """
@@ -25,6 +26,19 @@ class ManuscriptSectionSpec:
     section_name: str
     instruction: str
     max_tokens: int
+    required_subsections: tuple[str, ...] = ()
+
+
+class ManuscriptSectionContractError(RuntimeError):
+    """A writer section remained structurally incomplete after one retry."""
+
+    def __init__(self, *, section_name: str, missing_subsections: tuple[str, ...]):
+        self.section_name = section_name
+        self.missing_subsections = missing_subsections
+        super().__init__(
+            f"Writer section {section_name!r} has missing or empty required "
+            f"subsections after one targeted retry: {', '.join(missing_subsections)}"
+        )
 
 
 MANUSCRIPT_SECTION_SPECS = (
@@ -114,6 +128,12 @@ MANUSCRIPT_SECTION_SPECS = (
             "definition paper as statistical-method authority."
         ),
         max_tokens=2048,
+        required_subsections=(
+            "Study design and cohort",
+            "Variables",
+            "Statistical analysis",
+            "Software and reproducibility",
+        ),
     ),
     ManuscriptSectionSpec(
         key="results",
@@ -143,6 +163,12 @@ MANUSCRIPT_SECTION_SPECS = (
             "{evidence:id} citation."
         ),
         max_tokens=2048,
+        required_subsections=(
+            "Cohort characteristics",
+            "Primary outcome",
+            "Primary association",
+            "Sensitivity and subgroup analyses",
+        ),
     ),
     ManuscriptSectionSpec(
         key="discussion",
@@ -228,6 +254,44 @@ def _ensure_section_heading(spec: ManuscriptSectionSpec, text: str) -> str:
     return f"{expected}\n\n{stripped}"
 
 
+def _missing_required_subsections(
+    spec: ManuscriptSectionSpec,
+    text: str,
+) -> tuple[str, ...]:
+    """Return required level-three headings that are absent or have no prose."""
+
+    if not spec.required_subsections:
+        return ()
+    lines = str(text or "").splitlines()
+    missing: list[str] = []
+    for subsection in spec.required_subsections:
+        expected = f"### {subsection}".casefold()
+        heading_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.strip().casefold() == expected
+            ),
+            None,
+        )
+        if heading_index is None:
+            missing.append(subsection)
+            continue
+        next_heading_index = next(
+            (
+                index
+                for index in range(heading_index + 1, len(lines))
+                if lines[index].lstrip().startswith("#")
+            ),
+            len(lines),
+        )
+        if not any(
+            line.strip() for line in lines[heading_index + 1 : next_heading_index]
+        ):
+            missing.append(subsection)
+    return tuple(missing)
+
+
 def render_manuscript_sections(
     *,
     call_section: Callable[..., str],
@@ -244,8 +308,9 @@ def render_manuscript_sections(
     one reservation in flight and stops immediately on the first failure.
     """
 
-    sections = [
-        _ensure_section_heading(
+    sections: list[str] = []
+    for spec in MANUSCRIPT_SECTION_SPECS:
+        section = _ensure_section_heading(
             spec,
             call_section(
                 section_name=spec.section_name,
@@ -254,8 +319,36 @@ def render_manuscript_sections(
                 **common,
             ),
         )
-        for spec in MANUSCRIPT_SECTION_SPECS
-    ]
+        missing_subsections = _missing_required_subsections(spec, section)
+        if missing_subsections:
+            retry_instruction = (
+                spec.instruction
+                + "\n\nSTRUCTURAL CONTRACT REPAIR:\n"
+                + "The previous draft omitted or left empty these required "
+                + "subsections: "
+                + ", ".join(
+                    f"`### {subsection}`" for subsection in missing_subsections
+                )
+                + ". Regenerate the complete section. Every listed subsection "
+                + "must contain evidence-bound manuscript prose. Do not mention "
+                + "the repair or the previous draft."
+            )
+            section = _ensure_section_heading(
+                spec,
+                call_section(
+                    section_name=spec.section_name,
+                    instruction=retry_instruction,
+                    max_tokens=spec.max_tokens,
+                    **common,
+                ),
+            )
+            missing_subsections = _missing_required_subsections(spec, section)
+        if missing_subsections:
+            raise ManuscriptSectionContractError(
+                section_name=spec.section_name,
+                missing_subsections=missing_subsections,
+            )
+        sections.append(section)
     scientific = "\n\n".join(
         section.strip() for section in sections if section.strip()
     )
@@ -267,6 +360,7 @@ def render_manuscript_sections(
 
 __all__ = [
     "MANUSCRIPT_SECTION_SPECS",
+    "ManuscriptSectionContractError",
     "ManuscriptSectionSpec",
     "render_manuscript_sections",
 ]
