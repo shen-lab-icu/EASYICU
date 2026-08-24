@@ -298,7 +298,7 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             )
         return parent
 
-    def _candidate(self, plan: AnalysisPlan) -> AnalysisStep:
+    def _candidate_or_none(self, plan: AnalysisPlan) -> AnalysisStep | None:
         by_output = [
             step for step in plan.steps if self.output_product in step.expected_outputs
         ]
@@ -308,11 +308,50 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             if step.planned_analysis_role == "sensitivity"
             and tuple(step.sensitivity_spec_ids) == self.sensitivity_ids
         ]
-        if len(candidates) != 1:
+        if len(candidates) > 1:
             raise CurrentCaseScientificAuthorityError(
                 "association model-grid requires one exact sensitivity step"
             )
-        return candidates[0]
+        return candidates[0] if candidates else None
+
+    def _candidate(self, plan: AnalysisPlan) -> AnalysisStep:
+        candidate = self._candidate_or_none(plan)
+        if candidate is None:
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid requires one exact sensitivity step"
+            )
+        return candidate
+
+    def _insert_candidate(
+        self,
+        *,
+        plan: AnalysisPlan,
+        parent_index: int,
+    ) -> tuple[AnalysisPlan, AnalysisStep]:
+        """Add one host-owned grid child without repurposing Planner steps."""
+
+        step_id = (
+            "host_association_model_grid_"
+            f"{self.execution_contract_sha256[:12]}"
+        )
+        if any(step.step_id == step_id for step in plan.steps):
+            raise CurrentCaseScientificAuthorityError(
+                "association model-grid host step id collides with an existing step"
+            )
+        candidate = AnalysisStep(
+            step_id=step_id,
+            planned_analysis_role="sensitivity",
+            intent=self.plan_intent,
+            inputs=[],
+            expected_outputs=[self.output_product],
+            method=self.plan_method,
+            scientific_capability="association_adjusted_v1",
+            icu_rule_refs=[self.plan_rule_ref],
+            sensitivity_spec_ids=list(self.sensitivity_ids),
+        )
+        steps = list(plan.steps)
+        steps.insert(parent_index + 1, candidate)
+        return plan.model_copy(update={"steps": steps}), candidate
 
     def required_columns_from_requirement(self, requirement: Any) -> Tuple[str, ...]:
         """Return exact cohort columns for one already-validated parent model."""
@@ -356,10 +395,15 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         """Compile host-owned products and exact inputs into the draft plan."""
 
         parent = self._parent(plan)
-        candidate = self._candidate(plan)
         parent_index = next(
             index for index, step in enumerate(plan.steps) if step is parent
         )
+        candidate = self._candidate_or_none(plan)
+        if candidate is None:
+            plan, candidate = self._insert_candidate(
+                plan=plan,
+                parent_index=parent_index,
+            )
         candidate_index = next(
             index for index, step in enumerate(plan.steps) if step is candidate
         )

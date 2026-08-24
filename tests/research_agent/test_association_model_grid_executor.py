@@ -422,6 +422,40 @@ def test_host_compiles_the_exact_grid_and_the_real_router_claims_it() -> None:
         authority.validate_plan(drifted)
 
 
+def test_host_inserts_missing_grid_without_repurposing_existing_sensitivity() -> None:
+    _, authority, bound, _ = _authority_and_plan()
+    parent = bound.steps[0]
+    legacy_sensitivity = bound.steps[1].model_copy(
+        update={
+            "step_id": "legacy_robustness",
+            "intent": "Retain the pre-existing robustness analysis.",
+            "expected_outputs": ["table:legacy_robustness"],
+            "method": "legacy_robustness",
+            "scientific_capability": None,
+            "icu_rule_refs": [],
+            "sensitivity_spec_ids": ["legacy_complete_case"],
+            "input_consumption_contracts": [],
+        }
+    )
+    draft = bound.model_copy(update={"steps": [parent, legacy_sensitivity]})
+
+    rebound = authority.bind_plan(draft)
+
+    assert [step.step_id for step in rebound.steps] == [
+        parent.step_id,
+        f"host_association_model_grid_{authority.execution_contract_sha256[:12]}",
+        legacy_sensitivity.step_id,
+    ]
+    assert rebound.steps[2] == legacy_sensitivity
+    assert rebound.steps[1].expected_outputs == [authority.output_product]
+    authority.validate_plan(rebound)
+
+    rebound_again = authority.bind_plan(rebound)
+    assert [step.step_id for step in rebound_again.steps] == [
+        step.step_id for step in rebound.steps
+    ]
+
+
 def test_runtime_grid_rebinds_after_generic_measurement_input_closure() -> None:
     _, authority, bound, _ = _authority_and_plan()
     context = ResearchContext(
