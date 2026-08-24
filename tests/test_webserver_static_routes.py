@@ -182,9 +182,23 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260817-project-monitor1" in index_html
     assert "js/copilot-dock.js?v=20260817-copilot-boundary1" in index_html
-    assert "js/screens-extraction.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-extraction.js?v=20260823-extraction-workspace4" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
+
+
+def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
+    index_html = _static_html("index.html")
+    monitor_js = _static_js("screens-agent.js")
+    history_js = _static_js("screens-agent-run-history.js")
+
+    owner_asset = "js/screens-agent-run-history.js?v=20260823-run-history-owner1"
+    monitor_asset = "js/screens-agent.js?v=20260823-run-history-authority1"
+    assert owner_asset in index_html
+    assert index_html.index(owner_asset) < index_html.index(monitor_asset)
+    assert "window.EU_AGENT_RUN_HISTORY_VIEW" in history_js
+    assert "const RUN_HISTORY_VIEW = window.EU_AGENT_RUN_HISTORY_VIEW" in monitor_js
+    assert "function historyRunForStudy" not in monitor_js
 
 
 def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
@@ -806,11 +820,12 @@ def test_project_monitor_renders_one_load_state_and_fits_the_pipeline() -> None:
 
 def test_project_monitor_loads_persisted_run_history_before_claiming_zero() -> None:
     agent_js = _static_js("screens-agent.js")
+    history_js = _static_js("screens-agent-run-history.js")
 
-    assert "function historyRowsForStudy(s)" in agent_js
-    assert "function monitorRunCount(s)" in agent_js
+    assert "function rows(history, study)" in history_js
+    assert "function count(history, study, realMode)" in history_js
     assert "return live || historyRunForStudy(selected)" in agent_js
-    assert "persisted && persisted.project_dir" in agent_js
+    assert "persisted && persisted.project_dir" in history_js
     assert "requestRunHistory();\n      if (window.__euRender)" in agent_js
     assert "const noRun = monitorRunCount(s) === 0;" in agent_js
     assert "Checking run history" in agent_js

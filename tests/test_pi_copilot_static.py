@@ -30,14 +30,14 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260817-visible-activity1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
-    assert "css/guided-pi-preview.css?v=20260811-research-docs1" in index
+    assert "css/guided-pi-preview.css?v=20260823-extraction-workspace1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
     assert "css/guided-pi-literature.css?v=20260812-literature3" in index
     assert "js/screens-guided-pi-literature.js?v=20260812-literature3" in index
     assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260815-real-render2" in index
+    assert "js/screens-guided-pi-preview.js?v=20260823-extraction-workspace1" in index
     assert "js/screens-guided-pi-replay.js?v=20260815-mode-resume1" in index
     assert "js/screens-guided-pi-activity.js?v=20260817-visible-activity2" in index
     assert (
@@ -45,7 +45,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         in index
     )
     assert "js/screens-guided-pi-project.js?v=20260823-project-owner1" in index
-    assert "js/screens-guided-pi.js?v=20260817-visible-activity2" in index
+    assert "js/screens-guided-pi.js?v=20260823-provider-extraction2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
@@ -218,7 +218,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'id="gdLegacyShell"' in guided
     assert "window.EU_GUIDED_PI.mount" in guided
     assert (
-        "window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive }"
+        "window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive, rebind }"
         in pi_owner
     )
     assert "new EventSource('/api/jobs/'" in pi_owner
