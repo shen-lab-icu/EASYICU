@@ -246,3 +246,41 @@ numbers are wrong. Published effects were not used as expected values.
 This closes H3's multi-selection-metric inventory item only. It does not turn
 the boundary non-solution into a phenotype result and does not alter the
 overall `0/9` paper-package disposition.
+
+## E1 deterministic scientific-sensitivity main-figure replay
+
+The association figure owner now enriches an existing primary figure only
+when the plan has one unique signed association-model-grid table and one
+unique exposure-component-completeness table. It binds all rows from those
+parents alongside the already declared exposure/outcome distribution and
+adjusted estimate. It performs no model fitting, row selection, or run-file
+search. The same owner also projects the exact planned semantic panel ids,
+article roles, chart types, and source products into the runtime
+FigureContract.
+
+- Exact code/image: `4a8e5ff134228eb6a62ac2a5ab58ffebaa4f8b2c` /
+  `sha256:f4bc914a97e7bbbae0af5739b9c9762762e40447e93c7684f435d6ab5525cdde`.
+- Focused run:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_e1_4a8e5ff_scientific_figure_replay_20260824/e1_sepsis3_prevalence_mortality/aware/run_20260824T180052_5fc981`.
+- The run intentionally stopped after `primary_figure_suite`: 9/12 completed,
+  remaining `article_report`, cohort-flow figure, and data-quality figure;
+  failed steps `[]`. This is an affected-owner replay, not a complete E1 run.
+- Provider calls/tokens/cost: `0/0/$0.00`.
+- The main figure now contains observed prevalence/risk, the primary adjusted
+  association, all four signed scientific sensitivity rows (primary,
+  24-hour landmark, non-readmission, flexible age/Charlson), and component
+  completeness.
+- Every panel is bound to its exact EvidenceStore table and copied source-data
+  CSV. PNG SHA-256:
+  `798d080d334f61d2038b309c3d141bd5bdd36fe1b4fedba41656c51c532429da`;
+  FigureContract SHA-256:
+  `30678260298ccaa08d13bfebca751501d1b17199539937014db6166dc009f21b`.
+- Original-resolution review found no clipping or overflow. The scientific
+  sensitivity forest replaces the prior two-panel omission; no published
+  effect value was used as an expected answer.
+
+This closes E1's main-figure scientific-sensitivity omission at the adapter
+level. E1 remains unaccepted because timing/estimand choice, external or
+cross-centre validation, fuller supplement content, and complete manuscript
+binding remain unresolved. A later complete affected-plan replay is still
+required before any 12/12 claim.
