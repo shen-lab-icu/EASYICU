@@ -153,6 +153,7 @@ class AssociationModelGridVariant(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     analysis_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    exposure_column: str | None = Field(default=None, min_length=1)
     filters: Tuple[AssociationModelGridFilter, ...] = ()
     nonlinear_terms: Tuple[AssociationModelGridNonlinearTerm, ...] = ()
     metadata: Dict[str, ModelGridMetadataValue]
@@ -207,6 +208,13 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
             raise ValueError("association model-grid analysis ids must be unique")
         if self.reference_variant_id not in ids:
             raise ValueError("model-grid reference variant must be declared")
+        reference = next(
+            item for item in self.variants if item.analysis_id == self.reference_variant_id
+        )
+        if reference.exposure_column is not None:
+            raise ValueError(
+                "model-grid reference variant must retain the parent exposure"
+            )
         if len(self.metadata_columns) != len(set(self.metadata_columns)):
             raise ValueError("model-grid metadata columns must be unique")
         if any(
@@ -308,6 +316,8 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
                     values.extend((item.outcome_column, item.event_time_column))
                 else:
                     values.append(item.column)
+            if variant.exposure_column is not None:
+                values.append(variant.exposure_column)
             values.extend(item.source_column for item in variant.nonlinear_terms)
         return tuple(dict.fromkeys(str(value) for value in values if value))
 
@@ -1306,6 +1316,16 @@ def build_current_case_scientific_runtime_authority(
     body = dict(value)
     if "execution_contract_sha256" in body:
         raise ValueError("execution contract digest is host-generated")
+    if body.get("authority_kind") == "association_model_grid":
+        variants = body.get("variants")
+        if not isinstance(variants, (list, tuple)):
+            raise ValueError("association model-grid variants must be a sequence")
+        body["variants"] = [
+            AssociationModelGridVariant.model_validate_json(
+                json.dumps(_plain(item), sort_keys=True), strict=True
+            ).model_dump(mode="json")
+            for item in variants
+        ]
     body["execution_contract_sha256"] = hashlib.sha256(
         _canonical_bytes(body)
     ).hexdigest()
