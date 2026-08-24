@@ -183,6 +183,46 @@ def test_run_level_robustness_finding_is_never_inferred_as_step_owned() -> None:
     assert superseded == []
 
 
+def test_prior_blank_robustness_panel_finding_retires_after_current_panel_closes() -> None:
+    finding = ValidationFinding(
+        validator="robustness_panel",
+        severity="error",
+        message=(
+            "The run locked robustness specifications that no step estimated, "
+            "so the panel carries them as blank rows: complete_case_features."
+        ),
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids=set(),
+        gate_state={"robustness_panel_complete": True},
+    )
+
+    assert active == []
+    assert superseded == [finding]
+
+
+def test_current_blank_robustness_panel_finding_stays_active() -> None:
+    finding = ValidationFinding(
+        validator="robustness_panel",
+        severity="error",
+        message=(
+            "The run locked robustness specifications that no step estimated, "
+            "so the panel carries them as blank rows: complete_case_features."
+        ),
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids=set(),
+        gate_state={"robustness_panel_complete": False},
+    )
+
+    assert active == [finding]
+    assert superseded == []
+
+
 def test_current_attempt_error_cannot_be_hidden_by_inconsistent_ok_record() -> None:
     finding = ValidationFinding(
         validator="statistical_sanity",

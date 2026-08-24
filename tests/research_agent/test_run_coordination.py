@@ -329,6 +329,13 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
     )
 
 
+def test_step_checkpoint_is_also_a_write_phase_boundary() -> None:
+    from easyicu.research_agent.pipeline import ResearchAgentPipeline
+
+    source = inspect.getsource(ResearchAgentPipeline.run)
+    assert "stop_after_analysis = bool(stop_after_analysis or stop_after_step_id)" in source
+
+
 def test_execute_transition_reads_the_live_replanned_plan() -> None:
     from easyicu.research_agent.execution.phase import _step_resolve_run_transition
 
