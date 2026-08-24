@@ -29,10 +29,16 @@ Converted-source hashes and the complete per-task matrix are in:
 
 - `0/9` current runs meet a complete paper-level analysis-package bar.
 - H2 is accepted only as a correct source-feasibility fail-closed non-solution.
-- H3 correctly refuses a boundary K, but the current search lacks multi-metric and alternative-algorithm diagnostics.
+- H3 correctly refuses a boundary K. A later exact replay adds AIC as a
+  diagnostic criterion and confirms agreement with BIC, while alternative
+  algorithms, window/missingness variants, and external reproduction remain
+  absent.
 - M2 is nearest to Dev9 acceptance; it still has a PR-axis labeling defect, incomplete calibration reporting, no decision curve in the main figure, and no repeated internal-split uncertainty.
 - H1 is the highest-priority scientific blocker: proportional hazards are rejected, yet a single Cox point estimate remains prominent in the manuscript and figure.
-- E1/E2/E3/M1 require generic post-baseline time alignment and independent, nonduplicate sensitivity axes.
+- E1/E3/M1 require generic post-baseline time alignment and independent,
+  nonduplicate sensitivity axes. Later receipt review confirms E2 already uses
+  a real 24-hour landmark; its unresolved issue is measurement selection, not
+  time-zero construction.
 - M3 has low resampling stability and must not name biological subtypes or bind outcome claims without stronger selection/stability evidence.
 - Main figures often use engineering-audit panels where a mature paper would use scientific result or sensitivity panels.
 - Current manuscript section completeness does not establish manuscript quality; method-result-figure consistency is still insufficient.
@@ -86,14 +92,14 @@ performance value.
 | Task | Current paper-package disposition | Missing or insufficient relative to the anchor package |
 |---|---|---|
 | E1 Sepsis-3 | not accepted | Post-baseline timing and repeated-stay handling; explicit operational-definition sensitivity axes; a main scientific prevalence/mortality figure rather than a thin or mislabeled audit display; fuller epidemiology supplement tables. |
-| E2 lactate | not accepted | Lactate sampling time and measurement-by-indication audit; exact adjusted-model authority; nonlinear exposure plus absolute-risk display; at least one independent nonduplicate sensitivity axis. |
+| E2 lactate | not accepted | The primary runtime receipt proves a 24-hour alive-and-observed landmark and the figure includes nonlinear association and absolute-risk displays. About 46% remain lactate-unmeasured, so measurement-by-indication and an independent missingness/measurement sensitivity remain unresolved; engineering audit panels also displace scientific sensitivity content. |
 | E3 KDIGO | not accepted | Temporal KDIGO construction and baseline renal-function authority; stage-definition sensitivity; an appropriate LOS model; bootstrap uncertainty; scientific result panels. |
 | M1 hepatic component | not accepted | Exact bilirubin timing and adjustment authority; first-versus-maximum measurement sensitivity; linear-versus-spline functional-form sensitivity; nonduplicate missingness/measurement analyses. |
 | M2 prediction | near acceptance, not accepted | Repeated patient-level splits or bootstrap uncertainty; externally transported validation remains absent. The main figure now reports AUROC, average precision, calibration intercept/slope, Brier score and registered decision-curve net benefit. |
 | M3 static phenotyping | not accepted | Mean resampling ARI is low; no alternative algorithm, alternate feature/window analysis, or external reproduction. Cluster naming and outcome claims must remain unauthorized. |
 | H1 survival | not accepted | The rejected PH assumption is now handled with a promoted RMST difference, but measurement/missingness and a second independent sensitivity axis remain absent; literature and manuscript binding are incomplete. |
 | H2 causal | accepted only as correct fail-closed | No authoritative non-exposed comparator or positivity support exists. No causal contrast, effect estimate, PSM/IPTW figure, or manuscript claim may be generated. |
-| H3 trajectories | not accepted | Refusal of the upper-boundary K is correct, but the search still lacks multiple selection metrics, alternate algorithm/model limits, alternate trajectory window/missingness analysis, and external reproduction. |
+| H3 trajectories | not accepted | Refusal of the upper-boundary K is correct, and AIC now agrees with the prespecified BIC decision. Alternate algorithm/model limits, alternate trajectory window/missingness analysis, and external reproduction remain absent. |
 
 Result: `0/9` complete paper packages. H2 is a correct non-solution, not a
 completed causal paper. M2 is the nearest development-quality package. No task
@@ -183,3 +189,60 @@ These additions close one internal-validation inventory item in M2 and one
 alternative-algorithm inventory item in M3. They do not change the overall
 paper-package result: `0/9` accepted; no Dev9 result is authorized for formal
 promotion, Qualification12, or Held-out27.
+
+## Receipt correction and primary-figure visual audit
+
+The full-text matrix originally grouped E2 with post-baseline time-zero gaps.
+That was too broad. The exact E2 primary receipt records a 24-hour landmark,
+requires patients to be alive and under observation at that landmark, and
+reports 44,111 eligible patients (44,095 complete cases; 5,480 events). The
+time-zero item is therefore closed. The remaining E2 threat is measurement by
+indication: roughly 46% of the cohort has no landmark-window lactate, and the
+current measured-versus-unmeasured display is not an independent correction
+for that selection process.
+
+Original-resolution review of the current association-family main figures
+found the following paper-package gaps:
+
+- E1 displays absolute prevalence/outcome risk and the adjusted odds ratio,
+  but omits the already executed landmark, non-readmission, and flexible-model
+  sensitivity results from the main scientific figure.
+- E2 displays the landmark nonlinear curve and measured/unmeasured absolute
+  risk. Its remaining panels are engineering convergence/measurement audits,
+  rather than an independent scientific missingness or sampling sensitivity.
+- E3 uses a primary-versus-missing robustness panel that is effectively
+  duplicated and leaves substantial unused space; no stage-definition, LOS,
+  or bootstrap-uncertainty panel is present.
+- M1 similarly duplicates a primary-versus-missing estimate with large unused
+  space; it omits first-versus-maximum bilirubin and linear-versus-spline
+  sensitivities expected from the anchor package.
+
+These are figure-suite/content deficiencies, not evidence that the displayed
+numbers are wrong. Published effects were not used as expected values.
+
+## H3 multi-criterion exact replay and readiness-axis correction
+
+- Exact code/image: `ac6b281ebd51085851d04c8ac3af88bdbd7f375c` /
+  `sha256:99068d410f9f201445a7e81acfc824a0f3963d560a41c5627166efb0f20ad4ad`.
+- Run:
+  `/Volumes/外置硬盘/easyicu_data/figure2_dev9_h3_ac6b281_readiness_fresh_20260824/h3_trajectory_clustering/aware/run_20260824T174017_647004`.
+- Locked/final plan SHA-256 remained
+  `486a12676f24f65cb87b10889e33ddcca6f06403339dfb030bcdb59134384ef7`.
+- Required/completed: `4/4`; missing/failed: `[]/[]`; Provider calls/tokens/cost:
+  `0/0/$0.00`.
+- BIC and diagnostic AIC both reach their minimum at the prespecified upper
+  boundary `K=6`; `H3_NO_INTERIOR_BIC_OPTIMUM` remains in force, stability
+  authorization remains false, and no outcome binding or phenotype naming is
+  permitted.
+- The readiness owner now keeps manuscript-stage failures on the manuscript
+  axis. The exact replay is `analysis_validated=true` with empty
+  `analysis_errors`, while Writer/literature/critic failures still make
+  `evidence_complete=false`, `manuscript_ready=false`, and
+  `paper_authorized=false`.
+- Original-resolution inspection found no clipping or overflow. The BIC and
+  AIC curves nearly overlap, as expected from their agreement; the boundary
+  point is explicitly labelled as unauthorized.
+
+This closes H3's multi-selection-metric inventory item only. It does not turn
+the boundary non-solution into a phenotype result and does not alter the
+overall `0/9` paper-package disposition.
