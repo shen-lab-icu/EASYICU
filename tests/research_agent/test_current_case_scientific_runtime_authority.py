@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import inspect
 import json
 from pathlib import Path
@@ -20,18 +21,25 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
 from easyicu.research_agent.contracts.capability_ids import (
     LANDMARK_SPLINE_ANALYSIS_KIND,
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+    SOURCE_FEASIBILITY_ANALYSIS_KIND,
+    SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
 )
 from easyicu.research_agent.contracts.landmark_spline_validation import (
     landmark_spline_runtime_receipt_valid,
+)
+from easyicu.research_agent.contracts.source_feasibility_validation import (
+    source_feasibility_runtime_bundle_errors,
 )
 from easyicu.research_agent.execution.final_validation import (
     _primary_runner_core_estimate_present,
 )
 from easyicu.research_agent.reporting.readiness import (
+    _compute_readiness_gates,
     _deterministic_primary_estimate_bound,
 )
 from easyicu.research_agent.execution.runners.landmark_spline_executor import (
@@ -63,7 +71,11 @@ from easyicu.research_agent.plan_utils import (
     _typed_plan_dag_findings,
     effect_output_authorized,
 )
-from easyicu.research_agent.schema import AnalysisPlan
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    CohortDescriptor,
+    ResearchContext,
+)
 from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
 from easyicu.research_agent.planning.capability_registry import (
     assess_scientific_capability,
@@ -954,18 +966,93 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
             plan.model_copy(update={"steps": [plan.steps[0], forbidden]})
         )
 
+    source_out_dir = tmp_path / "steps" / plan.steps[0].step_id / "outputs"
     summary = run_source_feasibility_fail_closed(
         authority=authority,
         runtime_projection_sha256=projection.runtime_projection_sha256,
-        out_dir=tmp_path,
+        out_dir=source_out_dir,
     )
     assert summary["status"] == "ok"
     assert summary["scientific_decision"] == "blocked_by_source_authority"
     assert summary["reason_code"] == "H2_VERIFIED_NON_USE_UNAVAILABLE"
     assert summary["effect_estimate"] is None
-    table = pd.read_csv(tmp_path / "h2_source_feasibility.csv")
+    table = pd.read_csv(source_out_dir / "h2_source_feasibility.csv")
     assert table.loc[0, "causal_contrast_authorized"] in (False, 0)
     assert pd.isna(table.loc[0, "effect_estimate"])
+
+    record = {
+        "step_id": plan.steps[0].step_id,
+        "status": "ok",
+        "generation_mode": "deterministic_standard",
+        "deterministic_standard_analysis": SOURCE_FEASIBILITY_ANALYSIS_KIND,
+        "step_summary": summary,
+    }
+    assert source_feasibility_runtime_bundle_errors(
+        plan=plan,
+        records=[record],
+        run_dir=tmp_path,
+    ) == []
+    verdict = resolve_primary_capability(
+        analysis_type=plan.analysis_type,
+        plan=plan,
+    )
+    assert verdict.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
+    assert verdict.execution_owner == "host_deterministic"
+    wrong_family = plan.model_copy(update={"analysis_type": "association_study"})
+    wrong_verdict = resolve_primary_capability(
+        analysis_type=wrong_family.analysis_type,
+        plan=wrong_family,
+    )
+    assert wrong_verdict.failure_reason == "source_feasibility_family_mismatch"
+    assessment = assess_scientific_capability(
+        analysis_type=plan.analysis_type,
+        context=ResearchContext(
+            research_question=plan.research_question,
+            variables=[],
+            cohort=CohortDescriptor(
+                cohort_name="source_audit",
+                database="synthetic",
+                n_patients=1,
+                n_stays=1,
+            ),
+        ),
+        plan=plan,
+    )
+    assert assessment.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
+    assert assessment.claim_ceiling == "reportable"
+
+    tampered = deepcopy(record)
+    tampered["step_summary"]["scientific_runtime_receipt"][
+        "effect_estimate"
+    ] = 1.0
+    assert "runtime receipt is invalid" in source_feasibility_runtime_bundle_errors(
+        plan=plan,
+        records=[tampered],
+        run_dir=tmp_path,
+    )[0]
+
+    gates = _compute_readiness_gates(
+        context=ResearchContext(
+            research_question=plan.research_question,
+            variables=[],
+            cohort=CohortDescriptor(
+                cohort_name="source_audit",
+                database="synthetic",
+                n_patients=1,
+                n_stays=1,
+            ),
+        ),
+        plan=plan,
+        per_step_records=[record],
+        findings=[],
+        evidence=EvidenceStore(tmp_path),
+        run_dir=tmp_path,
+        manuscript_path=tmp_path / "manuscript.md",
+        stop_after_analysis=True,
+    )
+    assert gates["execution_complete"] is True
+    assert gates["analysis_validated"] is True
+    assert gates["paper_authorized"] is False
 
 
 def test_signed_current_case_contracts_are_selected_by_the_real_execution_router() -> (

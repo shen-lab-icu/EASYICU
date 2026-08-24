@@ -38,6 +38,11 @@ from ..contracts.capability_ids import (
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
     PHENOTYPING_ANALYSIS_KIND,
     PHENOTYPING_CLUSTER_CAPABILITY_ID,
+    SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+)
+from ..contracts.source_feasibility_validation import (
+    source_feasibility_plan_claimed,
+    source_feasibility_plan_contract_errors,
 )
 from ..contracts.association_execution import association_execution_verdict
 from ..contracts.descriptive_execution import (
@@ -259,6 +264,42 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "positivity and balance",
         ),
         scientific_validation="analysis_only",
+    ),
+    ScientificCapability(
+        family="causal_emulation",
+        label="Causal feasibility — verified non-use unavailable",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-validated source-feasibility refusal with no treatment contrast "
+            "or effect estimate"
+        ),
+        primary_runner=None,
+        primary_runner_module="execution.runners.source_feasibility_executor",
+        figure="none",
+        figure_renderer=None,
+        data_contract=(
+            "signed source-capture authority",
+            "explicit non-use/control-arm authorization status",
+        ),
+        fail_closed=(
+            "Any plan, authority digest, receipt or table mismatch remains "
+            "diagnostic; the capability never authorizes a causal contrast."
+        ),
+        notes=(
+            "This capability validates a scientific refusal, not a treatment "
+            "effect. It may report that the requested contrast is not identified "
+            "under the current source contract."
+        ),
+        capability_id=SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+        result_contract="easyicu.source_feasibility_runtime_receipt/1 + refusal table",
+        required_diagnostics=(
+            "source-capture boundary",
+            "verified non-use availability",
+            "control-arm and causal-contrast prohibition",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="contracts.source_feasibility_validation",
+        scientific_validator_contract="easyicu.source_feasibility_runtime_receipt/1",
     ),
     ScientificCapability(
         family="association",
@@ -948,6 +989,40 @@ def resolve_primary_capability(
     if capability is None or plan is None:
         return _verdict_for(capability, analysis_family=canonical)
 
+    if source_feasibility_plan_claimed(plan):
+        source_capability = get_capability_by_id(
+            SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
+        )
+        if canonical != "causal_inference":
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="source_feasibility_family_mismatch",
+                detail=(
+                    "A signed causal source-feasibility refusal may only own a "
+                    "causal-inference plan."
+                ),
+            )
+        contract_errors = source_feasibility_plan_contract_errors(plan)
+        if contract_errors:
+            return _verdict_for(
+                source_capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="source_feasibility_contract_invalid",
+                detail="; ".join(contract_errors),
+            )
+        return _verdict_for(
+            source_capability,
+            analysis_family=canonical,
+            owner_claimed=True,
+            owner_reason=(
+                "the sole auxiliary step declares the signed fail-closed source "
+                "feasibility owner and no effect analysis"
+            ),
+        )
+
     primary_steps = [
         step
         for step in tuple(getattr(plan, "steps", ()) or ())
@@ -1296,7 +1371,9 @@ def assess_scientific_capability(
     # Input readiness follows the capability's own declared contract. A
     # phenotyping run has a feature matrix and no exposure/outcome by design;
     # requiring those association coordinates would silently misclassify it.
-    if capability.family in {"association", "causal_emulation"}:
+    if capability.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID:
+        input_contract_resolved = not source_feasibility_plan_contract_errors(plan)
+    elif capability.family in {"association", "causal_emulation"}:
         input_contract_resolved = bool(exposure and outcome)
     elif capability.family == "prediction":
         input_contract_resolved = bool(outcome and variables)

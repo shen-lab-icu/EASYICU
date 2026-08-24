@@ -45,6 +45,7 @@ from ..contracts.capability_ids import (
     LANDMARK_SPLINE_ANALYSIS_KIND,
     PHENOTYPING_ANALYSIS_KIND,
     PHENOTYPING_CLUSTER_CAPABILITY_ID,
+    SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
 )
 from ..contracts.landmark_spline_validation import (
     landmark_spline_runtime_receipt_valid,
@@ -52,6 +53,9 @@ from ..contracts.landmark_spline_validation import (
 from ..contracts.phenotyping_validation import (
     phenotyping_runtime_bundle_errors,
     phenotyping_runtime_receipt_valid,
+)
+from ..contracts.source_feasibility_validation import (
+    source_feasibility_runtime_bundle_errors,
 )
 
 from .article_contract import (
@@ -1975,6 +1979,17 @@ def _compute_readiness_gates(
         == PHENOTYPING_CLUSTER_CAPABILITY_ID
         else []
     )
+    source_feasibility_validation_errors = (
+        source_feasibility_runtime_bundle_errors(
+            plan=plan,
+            records=per_step_records or [],
+            run_dir=run_dir,
+        )
+        if plan is not None
+        and capability_assessment.capability_id
+        == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
+        else []
+    )
     base_analysis_errors = (
         non_manuscript_errors
         + blocked_outcome_errors
@@ -1982,6 +1997,7 @@ def _compute_readiness_gates(
         + survival_integrity_errors
         + scientific_capability_errors
         + phenotyping_validation_errors
+        + source_feasibility_validation_errors
     )
     selected_capability = get_capability_by_id(capability_assessment.capability_id)
     _no_det_primary_expected = bool(
