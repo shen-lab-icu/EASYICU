@@ -30,7 +30,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260817-visible-activity1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
-    assert "css/guided-pi-preview.css?v=20260823-extraction-workspace1" in index
+    assert "css/guided-pi-preview.css?v=20260824-native-scroll1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
     assert "css/guided-pi-literature.css?v=20260812-literature3" in index
     assert "js/screens-guided-pi-literature.js?v=20260812-literature3" in index
