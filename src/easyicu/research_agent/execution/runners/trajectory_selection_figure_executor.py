@@ -202,7 +202,12 @@ def run_trajectory_selection_figure(
     selection_source = out_dir / "trajectory_selection_bic_source_data.csv"
     availability_source = out_dir / "trajectory_selection_availability_source_data.csv"
     selection.to_csv(selection_source, index=False)
-    availability.to_csv(availability_source, index=False)
+    # Keep the registered source-data bytes as a row/value projection of the
+    # exact parent table. ``available_pct`` is a renderer-local derivation from
+    # the two count columns and must not masquerade as an upstream value.
+    availability.loc[:, list(_AVAILABILITY_COLUMNS)].to_csv(
+        availability_source, index=False
+    )
 
     import matplotlib
 
