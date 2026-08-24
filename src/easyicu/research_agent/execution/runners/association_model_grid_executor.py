@@ -221,8 +221,30 @@ def _eligibility_mask(
                 raise AssociationModelGridError(
                     "landmark eligibility cannot time every outcome event"
                 )
+            nonnegative_event_time = outcome.eq(0.0) | event_time.ge(0.0)
             alive = outcome.eq(0.0) | event_time.gt(rule.landmark_hours)
-            mask &= alive
+            under_observation = pd.Series(True, index=frame.index)
+            if rule.observation_duration_column is not None:
+                duration_column = rule.observation_duration_column
+                if duration_column not in frame.columns:
+                    raise AssociationModelGridError(
+                        f"observation-duration column {duration_column!r} is absent"
+                    )
+                duration_source = frame[duration_column]
+                duration = pd.to_numeric(duration_source, errors="coerce")
+                if bool((duration_source.notna() & duration.isna()).any()):
+                    raise AssociationModelGridError(
+                        "landmark observation duration is non-numeric"
+                    )
+                if bool(duration.isna().any()) or bool((duration < 0.0).any()):
+                    raise AssociationModelGridError(
+                        "landmark observation duration is missing or negative"
+                    )
+                threshold = float(rule.landmark_hours)
+                if rule.observation_duration_unit == "days":
+                    threshold /= 24.0
+                under_observation = duration.ge(threshold)
+            mask &= nonnegative_event_time & alive & under_observation
             continue
         if not isinstance(rule, AssociationModelGridLevelFilter):
             raise AssociationModelGridError("unsupported model-grid filter")

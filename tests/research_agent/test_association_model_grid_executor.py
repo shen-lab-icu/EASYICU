@@ -161,6 +161,7 @@ def _cohort(n: int = 800) -> pd.DataFrame:
             "charlson_max": charlson,
             "death": death,
             "death_time": death_time,
+            "los_icu": rng.uniform(0.25, 8.0, n),
             "icu_readmission": readmission,
         }
     )
