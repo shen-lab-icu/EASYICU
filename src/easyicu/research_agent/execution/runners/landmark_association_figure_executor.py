@@ -27,10 +27,8 @@ from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
 
 
 _REQUIRED_COLUMNS = {
-    "contrast": frozenset(
+    "curve": frozenset(
         {
-            "lactate_mmol_l",
-            "reference_lactate_mmol_l",
             "adjusted_odds_ratio",
             "ci_low",
             "ci_high",
@@ -42,7 +40,7 @@ _REQUIRED_COLUMNS = {
     "table:robustness_summary": frozenset(
         {"axis", "total_specs", "converged_specs", "range_low", "range_high"}
     ),
-    "table:measurement_process_audit": frozenset(
+    "measurement_process": frozenset(
         {"concept", "n_total", "measured_one_n"}
     ),
 }
@@ -59,23 +57,47 @@ def _figure_product(value: Any) -> str | None:
     return product
 
 
-def _contrast_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+def _curve_input(inputs: list[str] | tuple[str, ...]) -> str | None:
     matches = [
         value
         for value in inputs
         if value.startswith("table:")
-        and value.partition(":")[2].endswith("landmark_rcs_contrasts")
+        and value.partition(":")[2].endswith("landmark_rcs_curve")
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def _measurement_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+    matches = [
+        value
+        for value in inputs
+        if value.startswith("table:")
+        and value.partition(":")[2] in {"measurement_process", "measurement_process_audit"}
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _exposure_columns(frame: pd.DataFrame) -> tuple[str, str]:
+    pairs = [
+        (column.removeprefix("reference_"), column)
+        for column in frame.columns
+        if column.startswith("reference_")
+        and column.removeprefix("reference_") in frame.columns
+    ]
+    if len(pairs) != 1:
+        raise ValueError("curve table requires one exposure/reference column pair")
+    return pairs[0]
 
 
 def landmark_association_figure_input_profile(
     inputs: list[str] | tuple[str, ...],
 ) -> tuple[str, ...] | None:
     values = tuple(str(value or "").strip() for value in inputs)
-    contrast = _contrast_input(values)
+    curve = _curve_input(values)
+    measurement = _measurement_input(values)
     if (
-        contrast is None
+        curve is None
+        or measurement is None
         or len(values) != 4
         or len(values) != len(set(values))
         or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(values)
@@ -114,12 +136,15 @@ def landmark_association_figure_executor_owns_step(
         or set(resolved_bindings) != set(profile)
     ):
         return False
-    contrast = _contrast_input(profile)
-    assert contrast is not None
+    curve = _curve_input(profile)
+    measurement = _measurement_input(profile)
+    assert curve is not None and measurement is not None
     return all(
         _binding_has_columns(
             resolved_bindings.get(key),
-            _REQUIRED_COLUMNS["contrast" if key == contrast else key],
+            _REQUIRED_COLUMNS[
+                "curve" if key == curve else "measurement_process" if key == measurement else key
+            ],
         )
         for key in profile
     )
@@ -235,24 +260,29 @@ def run_landmark_association_figure(
         step_id=step_id,
         input_keys=profile,
     )
-    contrast_key = _contrast_input(profile)
-    assert contrast_key is not None
-    contrast = bound[contrast_key].frame.copy()
+    curve_key = _curve_input(profile)
+    measurement_key = _measurement_input(profile)
+    assert curve_key is not None and measurement_key is not None
+    curve = bound[curve_key].frame.copy()
     risk = bound["table:absolute_risk_context"].frame.copy()
     robustness = bound["table:robustness_summary"].frame.copy()
-    process = bound["table:measurement_process_audit"].frame.copy()
+    process = bound[measurement_key].frame.copy()
     for key, frame in (
-        (contrast_key, contrast),
+        (curve_key, curve),
         ("table:absolute_risk_context", risk),
         ("table:robustness_summary", robustness),
-        ("table:measurement_process_audit", process),
+        (measurement_key, process),
     ):
-        required = _REQUIRED_COLUMNS["contrast" if key == contrast_key else key]
+        required = _REQUIRED_COLUMNS[
+            "curve" if key == curve_key else "measurement_process" if key == measurement_key else key
+        ]
         missing = required - set(frame.columns)
         if missing:
             raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
+    exposure_column, reference_column = _exposure_columns(curve)
     _require_finite_columns(
-        contrast, ("lactate_mmol_l", "adjusted_odds_ratio", "ci_low", "ci_high")
+        curve,
+        (exposure_column, reference_column, "adjusted_odds_ratio", "ci_low", "ci_high"),
     )
     shown_risk = risk.loc[
         risk["estimate_type"].astype(str).isin(["outcome_risk", "prevalence"])
@@ -281,20 +311,18 @@ def run_landmark_association_figure(
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
 
     ax = axes[0, 0]
-    x = pd.to_numeric(contrast["lactate_mmol_l"])
-    y = pd.to_numeric(contrast["adjusted_odds_ratio"])
-    low = pd.to_numeric(contrast["ci_low"])
-    high = pd.to_numeric(contrast["ci_high"])
-    # These are prespecified contrasts, not samples from a continuous fitted
-    # curve. Connecting them would imply unsupported interpolation.
-    ax.errorbar(
-        x, y, yerr=[y - low, high - y], fmt="o", color=palette["blue"], capsize=3
-    )
+    display_curve = curve.sort_values(exposure_column, kind="stable")
+    x = pd.to_numeric(display_curve[exposure_column]).to_numpy(dtype=float)
+    y = pd.to_numeric(display_curve["adjusted_odds_ratio"]).to_numpy(dtype=float)
+    low = pd.to_numeric(display_curve["ci_low"]).to_numpy(dtype=float)
+    high = pd.to_numeric(display_curve["ci_high"]).to_numpy(dtype=float)
+    ax.fill_between(x, low, high, color=palette["blue_soft"], alpha=0.45, linewidth=0)
+    ax.plot(x, y, color=palette["blue"], linewidth=1.5)
     ax.axhline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
     references = pd.to_numeric(
-        contrast["reference_lactate_mmol_l"], errors="coerce"
+        display_curve[reference_column], errors="coerce"
     ).dropna()
-    exposure_label = _continuous_exposure_label("lactate_mmol_l")
+    exposure_label = _continuous_exposure_label(exposure_column)
     if references.nunique() == 1:
         reference = float(references.iloc[0])
         exposure_label = (
@@ -304,7 +332,7 @@ def run_landmark_association_figure(
         )
     ax.set_xlabel(exposure_label)
     ax.set_ylabel("Adjusted odds ratio")
-    ax.set_title("Landmark association contrasts", loc="left", pad=12)
+    ax.set_title("Landmark association curve", loc="left", pad=12)
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
     ax = axes[0, 1]
@@ -377,22 +405,46 @@ def run_landmark_association_figure(
     add_panel_label(ax, "B", x=-0.12, y=1.04)
 
     ax = axes[1, 0]
-    centres = (
-        pd.to_numeric(robustness["range_low"]) + pd.to_numeric(robustness["range_high"])
-    ) / 2.0
-    errors = np.vstack(
-        [
-            centres - pd.to_numeric(robustness["range_low"]),
-            pd.to_numeric(robustness["range_high"]) - centres,
-        ]
+    total_specs = pd.to_numeric(robustness["total_specs"]).to_numpy(dtype=float)
+    converged_specs = pd.to_numeric(robustness["converged_specs"]).to_numpy(
+        dtype=float
     )
+    if (
+        (total_specs <= 0).any()
+        or (converged_specs < 0).any()
+        or (converged_specs > total_specs).any()
+    ):
+        raise ValueError("robustness specification counts do not nest")
+    convergence_pct = 100.0 * converged_specs / total_specs
     positions = np.arange(len(robustness))
-    ax.errorbar(
-        centres, positions, xerr=errors, fmt="o", color=palette["blue"], capsize=3
-    )
+    ax.barh(positions, convergence_pct, color=palette["blue_soft"])
+    for position, pct, low_value, high_value in zip(
+        positions,
+        convergence_pct,
+        pd.to_numeric(robustness["range_low"]),
+        pd.to_numeric(robustness["range_high"]),
+        strict=True,
+    ):
+        ax.text(
+            min(float(pct) + 2.0, 98.0),
+            position,
+            f"range {low_value:.2f}–{high_value:.2f}",
+            va="center",
+            ha="right" if pct > 80 else "left",
+            fontsize=5.7,
+        )
     ax.set_yticks(positions, [_label(value) for value in robustness["axis"]])
-    ax.set_xlabel("Estimate range")
-    ax.set_title("Robustness summary", loc="left", pad=12)
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Converged specifications (%)")
+    ax.set_title("Sensitivity execution audit", loc="left", pad=12)
+    ax.text(
+        0.0,
+        -0.18,
+        "Estimate ranges are within-axis; estimands may differ.",
+        transform=ax.transAxes,
+        fontsize=5.4,
+        color=palette["neutral"],
+    )
     add_panel_label(ax, "C", x=-0.12, y=1.04)
 
     ax = axes[1, 1]
@@ -435,8 +487,8 @@ def run_landmark_association_figure(
                 "metadata": {
                     "source_products": list(panel.source_products),
                     "estimate_geometry": (
-                        "discrete_contrasts_with_95ci"
-                        if panel.panel_id == "association_contrasts"
+                        "continuous_fitted_curve_with_95ci"
+                        if panel.panel_id == "association_curve"
                         else "direct_table_projection"
                     ),
                     "source_data": [
