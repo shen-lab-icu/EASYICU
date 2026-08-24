@@ -63,19 +63,18 @@ _COMMON_REQUIRED = (
     "reproducibility",
 )
 
-_FAMILY_REQUIRED: dict[str, tuple[str, ...]] = {
+_FAMILY_DEVELOPMENT_REQUIRED: dict[str, tuple[str, ...]] = {
     "prediction": (
         "calibration",
         "discrimination",
         "validation",
         "clinical_utility",
         "resampling_validation",
-        "external_validation",
     ),
     "phenotyping": (
         "cluster_selection",
         "cluster_stability",
-        "external_reproducibility",
+        "alternative_algorithm",
     ),
     "survival": ("ph_diagnostics", "non_ph_alternative"),
     "trajectory_clustering": (
@@ -83,8 +82,13 @@ _FAMILY_REQUIRED: dict[str, tuple[str, ...]] = {
         "cluster_stability",
         "trajectory_window_missingness",
         "alternative_algorithm",
-        "external_reproducibility",
     ),
+}
+
+_FAMILY_TOP_JOURNAL_EXTENSION: dict[str, tuple[str, ...]] = {
+    "prediction": ("external_validation",),
+    "phenotyping": ("external_reproducibility",),
+    "trajectory_clustering": ("external_reproducibility",),
 }
 
 _FAMILY_ALIASES = {
@@ -93,6 +97,7 @@ _FAMILY_ALIASES = {
     "risk_prediction": "prediction",
     "subphenotyping": "phenotyping",
     "phenotype_clustering": "phenotyping",
+    "sepsis_subphenotype": "phenotyping",
     "time_to_event": "survival",
 }
 
@@ -153,8 +158,10 @@ def write_supplement_inventory(
     """Write and register one nonauthoritative supplement coverage inventory."""
 
     family = _analysis_family(plan)
-    required = list(_COMMON_REQUIRED)
-    required.extend(_FAMILY_REQUIRED.get(family, ()))
+    development_required = list(_COMMON_REQUIRED)
+    development_required.extend(_FAMILY_DEVELOPMENT_REQUIRED.get(family, ()))
+    top_journal_required = list(development_required)
+    top_journal_required.extend(_FAMILY_TOP_JOURNAL_EXTENSION.get(family, ()))
     artifacts = [
         {
             "source": "evidence_store",
@@ -174,21 +181,38 @@ def write_supplement_inventory(
             by_section[section].append(artifact)
     sections = {
         section: {
-            "required": section in required,
+            "required": section in top_journal_required,
             "present": bool(by_section.get(section)),
             "artifact_count": len(by_section.get(section, [])),
             "artifacts": by_section.get(section, []),
         }
-        for section in sorted(set(_SECTION_TOKENS) | set(required))
+        for section in sorted(set(_SECTION_TOKENS) | set(top_journal_required))
     }
-    missing = [section for section in required if not sections[section]["present"]]
+    missing_development = [
+        section
+        for section in development_required
+        if not sections[section]["present"]
+    ]
+    missing_top_journal = [
+        section
+        for section in top_journal_required
+        if not sections[section]["present"]
+    ]
     payload = {
         "schema_version": "easyicu.supplement_inventory/1",
         "authority": "analysis_only_inventory",
         "analysis_family": family,
-        "required_sections": required,
-        "missing_required_sections": missing,
-        "supplement_complete": not missing,
+        # Backward-compatible strict axis. Existing consumers that read these
+        # fields continue to require the top-journal extension.
+        "required_sections": top_journal_required,
+        "missing_required_sections": missing_top_journal,
+        "supplement_complete": not missing_top_journal,
+        "development_required_sections": development_required,
+        "missing_development_required_sections": missing_development,
+        "development_supplement_complete": not missing_development,
+        "top_journal_required_sections": top_journal_required,
+        "missing_top_journal_required_sections": missing_top_journal,
+        "top_journal_supplement_complete": not missing_top_journal,
         "claim_boundary": (
             "Coverage records presence, not scientific adequacy, external validity, "
             "human review, release status, or publication readiness."
@@ -199,7 +223,10 @@ def write_supplement_inventory(
         "# Supplement analysis inventory",
         "",
         f"- Analysis family: `{family or 'unresolved'}`",
-        f"- Coverage status: `{'complete' if not missing else 'incomplete'}`",
+        "- Dev9 coverage status: "
+        f"`{'complete' if not missing_development else 'incomplete'}`",
+        "- Top-journal extension status: "
+        f"`{'complete' if not missing_top_journal else 'incomplete'}`",
         "- Authority: `analysis_only_inventory`",
         "",
         "This inventory records registered coverage only. It does not certify "
@@ -213,8 +240,24 @@ def write_supplement_inventory(
         f"{'yes' if value['present'] else 'no'} | {value['artifact_count']} |"
         for section, value in sections.items()
     )
-    if missing:
-        lines.extend(["", "Missing required sections: " + ", ".join(missing) + "."])
+    if missing_development:
+        lines.extend(
+            [
+                "",
+                "Missing Dev9-required sections: "
+                + ", ".join(missing_development)
+                + ".",
+            ]
+        )
+    if missing_top_journal:
+        lines.extend(
+            [
+                "",
+                "Missing top-journal sections: "
+                + ", ".join(missing_top_journal)
+                + ".",
+            ]
+        )
 
     json_record = evidence.register_json(
         kind="log",
@@ -246,19 +289,20 @@ def write_supplement_inventory(
         destination.write_bytes(source.read_bytes())
 
     findings: list[ValidationFinding] = []
-    if missing:
+    if missing_top_journal:
         findings.append(
             ValidationFinding(
                 validator="supplement_inventory",
                 severity="warning",
                 message=(
                     "The study-family supplementary analysis inventory is "
-                    "incomplete: " + ", ".join(missing) + "."
+                    "incomplete: " + ", ".join(missing_top_journal) + "."
                 ),
                 evidence_ids=[json_record.evidence_id, md_record.evidence_id],
                 detail={
                     "analysis_family": family,
-                    "missing_required_sections": missing,
+                    "missing_development_required_sections": missing_development,
+                    "missing_top_journal_required_sections": missing_top_journal,
                     "owner": "reporting.supplement_inventory",
                 },
             )
