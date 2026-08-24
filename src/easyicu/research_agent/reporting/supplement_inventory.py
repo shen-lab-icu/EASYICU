@@ -87,9 +87,19 @@ _FAMILY_REQUIRED: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_FAMILY_ALIASES = {
+    "prediction_model": "prediction",
+    "mortality_prediction": "prediction",
+    "risk_prediction": "prediction",
+    "subphenotyping": "phenotyping",
+    "phenotype_clustering": "phenotyping",
+    "time_to_event": "survival",
+}
+
 
 def _analysis_family(plan: object) -> str:
-    return str(getattr(plan, "analysis_type", "") or "").strip().casefold()
+    raw = str(getattr(plan, "analysis_type", "") or "").strip().casefold()
+    return _FAMILY_ALIASES.get(raw, raw)
 
 
 def _artifact_text(item: Mapping[str, Any]) -> str:

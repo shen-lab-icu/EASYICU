@@ -255,6 +255,7 @@ def run_prediction_figure(
             raise RuntimeError(
                 f"prediction figure input lacks exact parent lineage: {key}"
             )
+        source_frame.insert(0, "source_row_index", range(len(source_frame)))
         source_frame.insert(0, "source_step_id", source_step_id)
         source_frame.insert(0, "source_table", source_table)
         source_frame.to_csv(out_dir / filename, index=False)
