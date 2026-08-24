@@ -144,3 +144,42 @@ is authorized for Qualification12, Held-out27, or paper-result promotion.
 
 These replays validate the repaired generic owners and figure lineage only.
 They do not change the overall `0/9` paper-package disposition.
+
+## Follow-up exact replays: resampling and algorithm agreement
+
+### M2 repeated patient-level split validation
+
+- Exact replay commit/image: `d2f47d57711e833c1375e8fc9d84d28304271e31` / `sha256:638aef26268679ea5ee71d29b8983afe6aa453025996accc506f76b5b896375d`.
+- Required/completed: `11/11`; missing/failed steps: `[]/[]`.
+- One Writer call: 28,410 prompt + 206 completion = 28,616 tokens; `$0.29028`.
+- The locked input plan was reused. The host-shaped final plan is byte-identical
+  to the prior M2 replay (`ce2b6c606719340caba92b7f94c736dd7f91030565012f6ed71a9593ab873c06`).
+- Ten deterministic patient-group splits independently refit preprocessing and
+  the model, with zero patient overlap in every split. AUROC mean/SD was
+  0.76689/0.00420, average precision mean/SD 0.41115/0.01497, and Brier
+  mean/SD 0.07362/0.00121.
+- This closes the internal resampling gap only. External validation remains
+  absent, Writer/literature binding still prevents a complete manuscript, and
+  the run remains `analysis_only`.
+- Run: `/Volumes/外置硬盘/easyicu_data/figure2_dev9_d2f47d5_quality_replay_20260824/m2_retry3/m2_mortality_prediction/aware/run_20260824T170120_66a5dc`.
+
+### M3 alternative-algorithm agreement
+
+- Exact replay commit/image: `a5925cb98ed91595767ebb5abda39f560a3f7c82` / `sha256:c738d45f53a3cdfdbd9e429a7357160022e036ac85926f0014436eacc69f4215`.
+- Required/completed: `10/10`; missing/failed steps: `[]/[]`.
+- One Writer call: 28,323 prompt + 175 completion = 28,498 tokens; `$0.28848`.
+- The locked and final plan SHA stayed unchanged
+  (`b7b9ebdbc15dbc67c498e77a02930daccc41f57927ada2a8efb651a9e2e77c0a`).
+- The deterministic diagonal-covariance Gaussian mixture converged at the same
+  candidate `K=2`, but agreement with MiniBatchKMeans was only ARI 0.09216;
+  mean resampling ARI remained 0.28891. This materially strengthens the reason
+  to reject stable phenotype naming and outcome claims.
+- The revised main figure was visually checked at original resolution: the
+  agreement line, axes, legend and panel labels are present without clipping.
+  External reproduction remains absent and the run remains `analysis_only`.
+- Run: `/Volumes/外置硬盘/easyicu_data/figure2_dev9_a5925cb_quality_replay_20260824/m3/m3_sepsis_subphenotype/aware/run_20260824T170718_e82e67`.
+
+These additions close one internal-validation inventory item in M2 and one
+alternative-algorithm inventory item in M3. They do not change the overall
+paper-package result: `0/9` accepted; no Dev9 result is authorized for formal
+promotion, Qualification12, or Held-out27.
