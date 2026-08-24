@@ -2027,6 +2027,7 @@ class ResearchAgentPipeline:
         migrated_plan_path: Optional[Path] = None
         proposed_plan: Optional[AnalysisPlan] = None
         development_authority_plan = None
+        development_locked_plan_loaded = False
         if resume_state is not None:
             (
                 plan,
@@ -2043,6 +2044,54 @@ class ResearchAgentPipeline:
                 know_how_binding=know_how_binding,
                 enable_know_how=self._enable_know_how,
                 findings=findings,
+            )
+        elif self._config.development_locked_analysis_plan_path is not None:
+            locked_plan_path = Path(
+                self._config.development_locked_analysis_plan_path
+            ).expanduser()
+            expected_digest = str(
+                self._config.development_locked_analysis_plan_sha256 or ""
+            )
+            if not locked_plan_path.is_file():
+                raise ValueError(
+                    "development locked analysis plan is not a regular file: "
+                    f"{locked_plan_path}"
+                )
+            observed_digest = sha256_of_file(locked_plan_path)
+            if observed_digest != expected_digest:
+                raise ValueError(
+                    "development locked analysis plan SHA-256 mismatch: "
+                    f"expected={expected_digest} observed={observed_digest}"
+                )
+            try:
+                plan = AnalysisPlan.model_validate_json(
+                    locked_plan_path.read_text(encoding="utf-8")
+                )
+            except Exception as exc:
+                raise ValueError(
+                    "development locked analysis plan is invalid"
+                ) from exc
+            if plan.research_question != agent_context.research_question:
+                raise ValueError(
+                    "development locked analysis plan research question mismatch"
+                )
+            plan_generation_mode = "development_locked_analysis_plan"
+            development_locked_plan_loaded = True
+            findings.append(
+                ValidationFinding(
+                    validator="planner",
+                    severity="warning",
+                    message=(
+                        "Used an exact-digest locked development AnalysisPlan "
+                        "without another Planner call; the current host still "
+                        "validates and shapes every execution contract."
+                    ),
+                    detail={
+                        "reason_code": "development_locked_analysis_plan_loaded",
+                        "analysis_only": True,
+                        "source_plan_sha256": observed_digest,
+                    },
+                )
             )
         elif self._development_diagnostic:
             development_authority_plan = (
@@ -2073,6 +2122,8 @@ class ResearchAgentPipeline:
                     ),
                 )
             )
+        elif development_locked_plan_loaded:
+            pass
         elif development_authority_plan is not None:
             plan, development_authority_finding = development_authority_plan
             findings.append(development_authority_finding)
@@ -5536,6 +5587,9 @@ class ResearchAgentPipeline:
             "planner_strategy": self._planner_strategy,
             "development_progressive_resume_checkpoint_sha256": (
                 self._config.development_progressive_resume_checkpoint_sha256
+            ),
+            "development_locked_analysis_plan_sha256": (
+                self._config.development_locked_analysis_plan_sha256
             ),
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair
