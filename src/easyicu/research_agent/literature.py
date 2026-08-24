@@ -173,6 +173,7 @@ class LiteratureScreeningDecision(BaseModel):
     disposition: Literal["include", "exclude"]
     evidence_role: Literal[
         "direct_comparator",
+        "design_analogue",
         "definition",
         "method",
         "database",
@@ -348,16 +349,16 @@ def render_hypothesis_blueprint_for_prompt(
             "- prior_literature_keys: " + ", ".join(blueprint.prior_literature_keys[:8])
         )
     if literature is not None:
-        direct_keys = {
-            decision.citation_key
+        comparison_roles = {
+            decision.citation_key: decision.evidence_role
             for decision in literature.screening_decisions
             if decision.disposition == "include"
-            and decision.evidence_role == "direct_comparator"
+            and decision.evidence_role in {"direct_comparator", "design_analogue"}
         }
         protocol_records = [
             record
             for record in literature.citations
-            if record.key in direct_keys
+            if record.key in comparison_roles
             and str(record.relevance or "").startswith(
                 ("Study-design excerpt:", "Source excerpt:")
             )
@@ -371,7 +372,10 @@ def render_hypothesis_blueprint_for_prompt(
             for record in protocol_records:
                 title = " ".join(record.title.split())[:180]
                 relevance = " ".join(str(record.relevance or "").split())[:420]
-                lines.append(f"  - [{record.key}] {record.year}: {title}; {relevance}")
+                lines.append(
+                    f"  - [{record.key}] role={comparison_roles[record.key]} "
+                    f"{record.year}: {title}; {relevance}"
+                )
             lines.append(
                 "- literature_eligibility_rule: Similar-study eligibility is a "
                 "candidate, not automatic authority. Apply it only when it matches "
@@ -714,6 +718,7 @@ class PubMedLiteratureClient:
             excerpt_terms=(
                 _protocol_search_term(context, context.primary_exposure),
                 _protocol_search_term(context, context.target_outcome),
+                _question_topic_term(context.research_question),
                 *_study_intent_focus_terms(context.research_question),
                 "intensive care",
                 "critical care",
@@ -971,6 +976,14 @@ def _screening_decision_for_record(
 ) -> LiteratureScreeningDecision:
     """Classify a retrieved record without granting it methodological authority."""
 
+    if not context.primary_exposure:
+        return _screen_source_backed_design_analogue(
+            context=context,
+            record=record,
+            source=source,
+            query=query,
+        )
+
     exposure = _protocol_search_term(context, context.primary_exposure)
     outcome = _protocol_search_term(context, context.target_outcome)
     exposure_variable = context.variable(context.primary_exposure)
@@ -997,6 +1010,104 @@ def _screening_decision_for_record(
             if exposure_identity is not None
             else ()
         ),
+    )
+
+
+def _screen_source_backed_design_analogue(
+    *,
+    context: ResearchContext,
+    record: CitationRecord,
+    source: str,
+    query: Optional[str],
+) -> LiteratureScreeningDecision:
+    """Screen a non-P/E/O study against topic and analysis-design intent.
+
+    This route is available only when the sealed context has no primary
+    exposure.  It identifies an external design analogue for prediction,
+    phenotyping, trajectory, or causal-feasibility review; it never upgrades
+    that source to a direct exposure/outcome comparator.
+    """
+
+    source_excerpt = str(record.relevance or "")
+    blob = _normalise_clinical_text(" ".join((record.title, source_excerpt)))
+    padded_blob = f" {blob} "
+    topic_terms = tuple(
+        _normalise_clinical_text(value)
+        for value in _question_topic_terms(context.research_question)
+        if _normalise_clinical_text(value)
+    )
+    intent_terms = tuple(
+        _normalise_clinical_text(value)
+        for value in _study_intent_focus_terms(context.research_question)
+        if _normalise_clinical_text(value)
+    )
+    title_blob = _normalise_clinical_text(record.title)
+    topic_match = any(f" {term} " in padded_blob for term in topic_terms)
+    intent_match = any(term in title_blob for term in intent_terms)
+    question = context.research_question.casefold()
+    if any(marker in question for marker in ("predict", "prognos", "validation")):
+        intent_match = bool(
+            any(marker in title_blob for marker in ("predict", "prognos"))
+            and any(
+                marker in title_blob
+                for marker in ("model", "validation", "machine learning", "nomogram")
+            )
+        )
+    if any(
+        marker in question
+        for marker in ("causal", "propensity", "psm", "iptw", "treatment effect")
+    ):
+        topic_match = any(term in title_blob for term in topic_terms)
+    icu_match = any(
+        token in padded_blob
+        for token in (" intensive care ", " critical care ", " icu ")
+    )
+    adult_required = _adult_population_required(context)
+    adult_match = (not adult_required) or any(
+        token in padded_blob for token in (" adult ", " adults ")
+    )
+    population_match = icu_match and adult_match
+    design_excerpt = source_excerpt.startswith(
+        ("Study-design excerpt:", "Source excerpt:")
+    )
+    publication_type_eligible = _publication_type_comparator_eligible(record)
+    included = bool(
+        topic_match
+        and intent_match
+        and population_match
+        and design_excerpt
+        and publication_type_eligible
+    )
+    outcome = _protocol_search_term(context, context.target_outcome)
+    outcome_match = bool(
+        outcome and _clinical_axis_matches(outcome, blob, axis="outcome")
+    )
+    return LiteratureScreeningDecision(
+        citation_key=record.key,
+        source=source,
+        disposition="include" if included else "exclude",
+        evidence_role="design_analogue" if included else "related_context",
+        rationale=(
+            "Included as a source-backed design analogue because the retained "
+            "title/design excerpt matches the declared ICU population, clinical "
+            "topic, and analysis intent. It is not a direct exposure/outcome "
+            "comparator; independent review must still compare eligibility, time "
+            "zero, estimand, variables, and validation route."
+            if included
+            else (
+                "Excluded from design-analogue authority because the retained "
+                "title/source excerpt does not establish the declared ICU "
+                "population, clinical topic, analysis intent, source-backed study "
+                "design, or an eligible observational publication type. Query "
+                "membership alone is not design authority."
+            )
+        ),
+        query=query,
+        population_match=population_match,
+        exposure_match=False,
+        outcome_match=outcome_match,
+        design_excerpt_available=design_excerpt,
+        publication_type_eligible=publication_type_eligible,
     )
 
 
@@ -1307,6 +1418,10 @@ def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> st
     if identity is None:
         value = _protocol_search_term(context, name).replace('"', "")
         return f'"{value}"[Title/Abstract]' if value else ""
+    return _pubmed_identity_alternatives_clause(identity)
+
+
+def _pubmed_identity_alternatives_clause(identity: Any) -> str:
     alternatives: List[str] = []
     for alternative in identity.retrieval_alternatives:
         atoms = [
@@ -1337,6 +1452,7 @@ _QUESTION_TOPIC_STOPWORDS = {
     "characterize",
     "cohort",
     "compare",
+    "build",
     "develop",
     "determine",
     "does",
@@ -1377,6 +1493,7 @@ def _question_topic_term(question: str) -> str:
                 "predict",
                 "preval",
                 "trajectory",
+                "longitudinal",
                 "survival",
             )
         ):
@@ -1389,7 +1506,29 @@ def _question_topic_clause(question: str) -> str:
     """Extract one bounded clinical topic token when no exposure is declared."""
 
     topic = _question_topic_term(question)
-    return f'"{topic}"[Title/Abstract]' if topic else ""
+    if not topic:
+        return ""
+    identity = literature_concept_identity(topic)
+    if identity is not None:
+        return _pubmed_identity_alternatives_clause(identity)
+    return f'"{topic}"[Title/Abstract]'
+
+
+def _question_topic_terms(question: str) -> tuple[str, ...]:
+    topic = _question_topic_term(question)
+    if not topic:
+        return ()
+    identity = literature_concept_identity(topic)
+    if identity is None:
+        return (topic,)
+    return tuple(
+        dict.fromkeys(
+            value
+            for alternative in identity.retrieval_alternatives
+            for value in alternative
+            if str(value).strip()
+        )
+    )
 
 
 def _study_intent_clause(question: str) -> str:
@@ -1402,13 +1541,13 @@ def _study_intent_clause(question: str) -> str:
             "(causal[Title/Abstract] OR propensity[Title/Abstract] OR "
             '"inverse probability"[Title/Abstract] OR "treatment effect"[Title/Abstract])'
         )
+    if "trajectory" in text or "longitudinal" in text:
+        return "(trajector*[Title/Abstract] OR longitudinal[Title/Abstract])"
     if any(marker in text for marker in ("phenotyp", "cluster", "subtype")):
         return (
             "(phenotyp*[Title/Abstract] OR cluster*[Title/Abstract] OR "
             "subphenotyp*[Title/Abstract] OR subtype*[Title/Abstract])"
         )
-    if "trajectory" in text or "longitudinal" in text:
-        return "(trajector*[Title/Abstract] OR longitudinal[Title/Abstract])"
     if any(marker in text for marker in ("predict", "prognos", "validation")):
         return (
             "(predict*[Title/Abstract] OR prognos*[Title/Abstract] OR "
@@ -1432,6 +1571,10 @@ def _study_intent_focus_terms(question: str) -> tuple[str, ...]:
             ("causal", "propensity", "inverse probability", "treatment effect"),
         ),
         (
+            ("trajectory", "longitudinal"),
+            ("trajectory", "longitudinal"),
+        ),
+        (
             ("phenotyp", "cluster", "subtype"),
             (
                 "phenotype",
@@ -1442,10 +1585,9 @@ def _study_intent_focus_terms(question: str) -> tuple[str, ...]:
                 "endotype",
             ),
         ),
-        (("trajectory", "longitudinal"), ("trajectory", "longitudinal")),
         (
             ("predict", "prognos", "validation"),
-            ("prediction", "prognosis", "validation"),
+            ("predict", "model", "validation", "machine learning"),
         ),
         (
             ("prevalence", "incidence", "epidemiolog"),

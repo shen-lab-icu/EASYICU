@@ -327,7 +327,7 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
                         "role": "survival_effect",
                         "claim": "Adjusted estimate from the executed model.",
                         "evidence_ids": ["figure_primary_effect"],
-                    }
+                    },
                 ],
                 "source_data": ["effect.csv"],
             }
@@ -423,3 +423,92 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
         finding.code == "PRIMARY_FIGURE_ADJUSTMENT_LABEL_CONFLICT"
         for finding in tampered.findings
     )
+
+
+def test_design_analogue_satisfies_non_exposure_comparison_source_gate(
+    tmp_path,
+) -> None:
+    context = ResearchContext(
+        research_question="Identify sepsis subphenotypes by clustering.",
+        cohort=CohortDescriptor(
+            cohort_name="adult ICU",
+            database="miiv",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="death",
+                role="outcome",
+                dtype="int64",
+                description="hospital mortality",
+                source_concept="hospital_mortality",
+            )
+        ],
+        target_outcome="death",
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="phenotyping",
+        steps=[
+            AnalysisStep(
+                step_id="primary",
+                planned_analysis_role="primary",
+                intent="Identify stable sepsis subphenotypes.",
+                method="unsupervised clustering",
+                expected_outputs=["table:cluster_profiles"],
+                literature_citation_keys=["analogue_2025"],
+            )
+        ],
+    )
+    literature = LiteratureBundle(
+        research_question=context.research_question,
+        citations=[
+            CitationRecord(
+                key="analogue_2025",
+                title="Sepsis subphenotypes in adult ICU patients",
+                year="2025",
+                relevance="Study-design excerpt: Adult ICU clustering cohort.",
+            )
+        ],
+        search_provenance=LiteratureSearchProvenance(
+            curated_seed_count=0,
+            sources_enabled=["pubmed"],
+            sources_returning=["pubmed"],
+            search_queries={"pubmed": ["sepsis AND clustering AND ICU"]},
+            record_queries={"analogue_2025": ["sepsis AND clustering AND ICU"]},
+            search_conducted=True,
+            searched_at="2026-08-24T00:00:00+00:00",
+        ),
+        screening_decisions=[
+            LiteratureScreeningDecision(
+                citation_key="analogue_2025",
+                source="pubmed",
+                disposition="include",
+                evidence_role="design_analogue",
+                rationale="Topic and analysis-design intent matched.",
+                population_match=True,
+                exposure_match=False,
+                outcome_match=False,
+                design_excerpt_available=True,
+            )
+        ],
+    )
+    (tmp_path / "preplan_literature_bundle.json").write_text(
+        literature.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    audit = build_scientific_maturity_audit(
+        context=context,
+        plan=plan,
+        run_dir=tmp_path,
+    )
+
+    codes = {finding.code for finding in audit.findings}
+    assert "DIRECT_COMPARATOR_SCREENING_NOT_ESTABLISHED" not in codes
+    assert "DESIGN_ANALOGUE_SCREENING_NOT_ESTABLISHED" not in codes
+    assert "DESIGN_ANALOGUE_NOT_BOUND_TO_PRIMARY_PLAN" not in codes
+    assert "NOVELTY_POSITIONING_NOT_ESTABLISHED" in codes
+    assert audit.facts["direct_comparator_keys"] == []
+    assert audit.facts["design_analogue_keys"] == ["analogue_2025"]
+    assert audit.facts["comparison_source_keys"] == ["analogue_2025"]

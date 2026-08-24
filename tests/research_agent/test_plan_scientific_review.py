@@ -549,9 +549,7 @@ def test_typed_descriptive_ceiling_avoids_temporal_inference_claim() -> None:
 def test_registered_descriptive_capability_preserves_typed_claim_ceiling() -> None:
     step = _absolute_risk_distribution_step().model_copy(
         update={
-            "scientific_capability": (
-                "descriptive_exposure_outcome_distribution_v1"
-            )
+            "scientific_capability": ("descriptive_exposure_outcome_distribution_v1")
         }
     )
     plan = AnalysisPlan(
@@ -568,9 +566,7 @@ def test_registered_descriptive_capability_preserves_typed_claim_ceiling() -> No
     )
 
     assert review.facts["temporal_inference_required"] is False
-    assert review.facts["descriptive_only_step_ids"] == [
-        "absolute_risk_distribution"
-    ]
+    assert review.facts["descriptive_only_step_ids"] == ["absolute_risk_distribution"]
 
 
 def test_non_descriptive_capability_cannot_borrow_typed_claim_ceiling() -> None:
@@ -1030,12 +1026,10 @@ def test_counts_only_authority_removes_all_uncertainty_before_review() -> None:
     assert distribution_spec is not None
     distribution_step = distribution_step.model_copy(
         update={
-            "scientific_capability": (
-                "descriptive_exposure_outcome_distribution_v1"
-            ),
+            "scientific_capability": ("descriptive_exposure_outcome_distribution_v1"),
             "exposure_outcome_distribution_spec": distribution_spec.model_copy(
                 update={"risk_difference_contrast": None}
-            )
+            ),
         }
     )
     plan = AnalysisPlan(
@@ -1085,8 +1079,7 @@ def test_counts_only_article_contract_does_not_require_forbidden_table_one() -> 
     assert "baseline_context" not in contract.required_roles
     assert all(item.role != "baseline_context" for item in contract.requirements)
     assert all(
-        item.module_id != "distribution_prevalence"
-        for item in contract.requirements
+        item.module_id != "distribution_prevalence" for item in contract.requirements
     )
     expected_roles = {
         item.role
@@ -2027,3 +2020,67 @@ def test_automated_clinical_definition_does_not_impersonate_clinician_review() -
     assert "CLINICAL_DEFINITION_DATABASE_CONFORMANCE_NOT_ESTABLISHED" not in (
         render_agent_plan_revision_contract(review)
     )
+
+
+def test_non_exposure_plan_uses_design_analogue_without_direct_comparator_claim() -> (
+    None
+):
+    context = _context().model_copy(
+        update={
+            "research_question": "Identify sepsis subphenotypes by clustering.",
+            "primary_exposure": None,
+        }
+    )
+    primary = (
+        _plan()
+        .steps[0]
+        .model_copy(update={"literature_citation_keys": ["analogue_2025"]})
+    )
+    plan = _plan().model_copy(update={"steps": [primary, *_plan().steps[1:]]})
+    literature = LiteratureBundle(
+        research_question=context.research_question,
+        citations=[
+            CitationRecord(
+                key="analogue_2025",
+                title="Sepsis subphenotype clustering in adult ICU patients",
+                year="2025",
+                relevance="Study-design excerpt: Adult ICU clustering cohort.",
+            )
+        ],
+        search_provenance=LiteratureSearchProvenance(
+            curated_seed_count=0,
+            sources_enabled=["pubmed"],
+            sources_returning=["pubmed"],
+            search_queries={"pubmed": ["sepsis clustering ICU"]},
+            record_queries={"analogue_2025": ["sepsis clustering ICU"]},
+            search_conducted=True,
+            searched_at="2026-08-24T00:00:00+00:00",
+        ),
+        screening_decisions=[
+            LiteratureScreeningDecision(
+                citation_key="analogue_2025",
+                source="pubmed",
+                disposition="include",
+                evidence_role="design_analogue",
+                rationale="Topic and analysis-design intent matched.",
+                population_match=True,
+                exposure_match=False,
+                outcome_match=False,
+                design_excerpt_available=True,
+            )
+        ],
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=plan,
+        literature=literature,
+    )
+
+    codes = {finding.code for finding in review.findings}
+    assert "DIRECT_COMPARATOR_NOT_ESTABLISHED" not in codes
+    assert "DESIGN_ANALOGUE_NOT_ESTABLISHED" not in codes
+    assert "DESIGN_ANALOGUE_NOT_BOUND_TO_PRIMARY_PLAN" not in codes
+    assert review.facts["literature"]["direct_comparator_keys"] == []
+    assert review.facts["literature"]["design_analogue_keys"] == ["analogue_2025"]
+    assert review.facts["literature"]["comparison_source_keys"] == ["analogue_2025"]

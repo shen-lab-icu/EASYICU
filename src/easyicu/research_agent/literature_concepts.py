@@ -105,6 +105,13 @@ _IDENTITIES = {
     ),
     "kdigo_stage": _KDIGO_STAGE_IDENTITY,
     "aki_stage": _KDIGO_STAGE_IDENTITY,
+    "vasopressor": LiteratureConceptIdentity(
+        concept_id="vasopressor",
+        canonical_phrase="vasopressor",
+        retrieval_alternatives=(("vasopressor",), ("norepinephrine",)),
+        screening_role_term="vasopressor",
+        screening_required_terms=(),
+    ),
 }
 
 _PHRASE_ALIASES = {

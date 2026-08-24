@@ -246,7 +246,7 @@ def _repeat_units_possible(context: ResearchContext) -> bool:
 def _novelty_facts(
     run_dir: Path,
     *,
-    direct_comparator_keys: list[str],
+    comparison_source_keys: list[str],
     expected_authority_digests: Mapping[str, str],
 ) -> dict[str, Any]:
     """Read an optional independent novelty-positioning receipt.
@@ -260,11 +260,20 @@ def _novelty_facts(
 
     audit = _read_json(run_dir, "novelty_positioning_audit.json")
     status = str(audit.get("status") or "not_established").strip().casefold()
+    direct_keys = {
+        str(value).strip()
+        for value in audit.get("direct_comparator_keys") or []
+        if str(value).strip()
+    }
+    analogue_keys = {
+        str(value).strip()
+        for value in audit.get("design_analogue_keys") or []
+        if str(value).strip()
+    }
     comparator_keys = sorted(
         {
-            str(value).strip()
-            for value in audit.get("direct_comparator_keys") or []
-            if str(value).strip()
+            *direct_keys,
+            *analogue_keys,
         }
     )
     dimensions = audit.get("comparison_dimensions")
@@ -290,7 +299,7 @@ def _novelty_facts(
         status == "supported"
         and digest_bound
         and comparator_keys
-        and set(comparator_keys) <= set(direct_comparator_keys)
+        and set(comparator_keys) <= set(comparison_source_keys)
         and complete_dimensions == required
         and str(audit.get("review_disposition") or "").strip().casefold()
         in {"independent_pre_review_pass", "human_review_pass"}
@@ -298,7 +307,9 @@ def _novelty_facts(
     return {
         "status": status,
         "supported": supported,
-        "direct_comparator_keys": comparator_keys,
+        "direct_comparator_keys": sorted(direct_keys),
+        "design_analogue_keys": sorted(analogue_keys),
+        "comparison_source_keys": comparator_keys,
         "complete_dimensions": sorted(complete_dimensions),
         "required_dimensions": sorted(required),
         "review_disposition": str(audit.get("review_disposition") or "not_available"),
@@ -610,6 +621,21 @@ def build_scientific_maturity_audit(
             and str(decision.get("citation_key") or "").strip()
         }
     )
+    design_analogue_keys = sorted(
+        {
+            str(decision.get("citation_key"))
+            for decision in screening_decisions
+            if decision.get("disposition") == "include"
+            and decision.get("evidence_role") == "design_analogue"
+            and decision.get("publication_type_eligible", True) is not False
+            and str(decision.get("citation_key") or "").strip()
+        }
+    )
+    comparison_source_keys = sorted(
+        set(direct_comparator_keys)
+        | (set(design_analogue_keys) if not context.primary_exposure else set())
+    )
+    direct_required = bool(context.primary_exposure)
     citation_by_key = {
         str(record.get("key") or record.get("citation_key")): record
         for record in literature.get("citations") or []
@@ -624,6 +650,14 @@ def build_scientific_maturity_audit(
             and str(citation_by_key[key].get("year") or "").strip().isdigit()
         }
     )
+    comparison_source_years = sorted(
+        {
+            int(str(citation_by_key[key].get("year") or "").strip())
+            for key in comparison_source_keys
+            if key in citation_by_key
+            and str(citation_by_key[key].get("year") or "").strip().isdigit()
+        }
+    )
     search_year = datetime.now(timezone.utc).year
     searched_at = str(provenance.get("searched_at") or "")
     searched_year_match = re.search(r"\b(20\d{2})\b", searched_at)
@@ -631,6 +665,9 @@ def build_scientific_maturity_audit(
         search_year = int(searched_year_match.group(1))
     newest_direct_comparator_year = (
         direct_comparator_years[-1] if direct_comparator_years else None
+    )
+    newest_comparison_source_year = (
+        comparison_source_years[-1] if comparison_source_years else None
     )
     scientific_steps = _scientific_steps(plan)
     unbound = [
@@ -670,7 +707,7 @@ def build_scientific_maturity_audit(
     missing_method_layers = list(method_facts["missing_method_layers"])
     novelty = _novelty_facts(
         run_dir,
-        direct_comparator_keys=direct_comparator_keys,
+        comparison_source_keys=comparison_source_keys,
         expected_authority_digests=(
             novelty_authority_digests(
                 context=context,
@@ -737,36 +774,53 @@ def build_scientific_maturity_audit(
                 ),
             )
         )
-    if searched and not direct_comparator_keys:
+    if searched and not comparison_source_keys:
         findings.append(
             ScientificMaturityFinding(
-                code="DIRECT_COMPARATOR_SCREENING_NOT_ESTABLISHED",
+                code=(
+                    "DIRECT_COMPARATOR_SCREENING_NOT_ESTABLISHED"
+                    if direct_required
+                    else "DESIGN_ANALOGUE_SCREENING_NOT_ESTABLISHED"
+                ),
                 severity="blocker",
                 dimension="literature",
                 message=(
-                    "Retrieved records have no inspectable, included direct-comparator "
-                    "screening decision for this exact ICU question."
+                    "Retrieved records have no inspectable, included "
+                    + ("direct-comparator" if direct_required else "design-analogue")
+                    + " screening decision for this exact ICU question."
                 ),
                 evidence_refs=["preplan_literature_bundle.json.screening_decisions"],
                 remediation=(
                     "Screen each retrieved record against the declared population, "
-                    "exposure, outcome, and estimand; retain a record-level decision."
+                    + (
+                        "exposure, outcome, and estimand"
+                        if direct_required
+                        else "clinical topic and analysis-design intent"
+                    )
+                    + "; retain a record-level decision without conflating design "
+                    "analogy with a direct effect comparator."
                 ),
             )
         )
     if (
         searched
-        and newest_direct_comparator_year is not None
-        and search_year - newest_direct_comparator_year > 5
+        and newest_comparison_source_year is not None
+        and search_year - newest_comparison_source_year > 5
     ):
         findings.append(
             ScientificMaturityFinding(
-                code="RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED",
+                code=(
+                    "RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED"
+                    if direct_required
+                    else "RECENT_DESIGN_ANALOGUE_NOT_ESTABLISHED"
+                ),
                 severity="major",
                 dimension="literature",
                 message=(
-                    "The newest retained direct comparator predates the search "
-                    f"year by {search_year - newest_direct_comparator_year} years. "
+                    "The newest retained "
+                    + ("direct comparator" if direct_required else "design analogue")
+                    + " predates the search "
+                    f"year by {search_year - newest_comparison_source_year} years. "
                     "Older canonical sources may remain valid, but current similar "
                     "work has not been established for a timeliness/novelty claim."
                 ),
@@ -787,16 +841,20 @@ def build_scientific_maturity_audit(
         if step.planned_analysis_role == "primary"
         for key in step.literature_citation_keys
     }
-    if direct_comparator_keys and set(direct_comparator_keys).isdisjoint(
+    if comparison_source_keys and set(comparison_source_keys).isdisjoint(
         primary_citation_keys
     ):
         findings.append(
             ScientificMaturityFinding(
-                code="DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN",
+                code=(
+                    "DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN"
+                    if direct_required
+                    else "DESIGN_ANALOGUE_NOT_BOUND_TO_PRIMARY_PLAN"
+                ),
                 severity="blocker",
                 dimension="literature_to_plan",
                 message=(
-                    "A direct comparator survived screening, but no primary "
+                    "A screened comparison source survived, but no primary "
                     "analysis step binds it as design/comparison context."
                 ),
                 evidence_refs=[
@@ -804,7 +862,8 @@ def build_scientific_maturity_audit(
                     "manifest.json.current_plan_authority",
                 ],
                 remediation=(
-                    "Bind a screened comparator to the primary step alongside the "
+                    "Bind a screened comparator or design analogue to the primary "
+                    "step alongside the "
                     "relevant method source; never infer borrowing from bundle presence."
                 ),
             )
@@ -820,7 +879,7 @@ def build_scientific_maturity_audit(
                     "how its population/setting, exposure/time zero, outcome/"
                     "estimand, analysis/robustness, data-source transportability, "
                     "and clinical or methodological contribution differ from "
-                    "retained direct comparators."
+                    "retained comparison sources."
                 ),
                 evidence_refs=[
                     "preplan_literature_bundle.json.screening_decisions",
@@ -1403,8 +1462,12 @@ def build_scientific_maturity_audit(
                 for source, values in search_queries.items()
             },
             "direct_comparator_keys": direct_comparator_keys,
+            "design_analogue_keys": design_analogue_keys,
+            "comparison_source_keys": comparison_source_keys,
             "direct_comparator_years": direct_comparator_years,
+            "comparison_source_years": comparison_source_years,
             "newest_direct_comparator_year": newest_direct_comparator_year,
+            "newest_comparison_source_year": newest_comparison_source_year,
             "literature_search_year": search_year,
             "primary_plan_citation_keys": sorted(primary_citation_keys),
             "endpoint_semantics": endpoint,
