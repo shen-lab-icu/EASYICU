@@ -65,6 +65,34 @@ def test_invalid_repair_application_falls_back_to_deterministic_drop(
     assert fallback["exception_type"] == "ValueError"
 
 
+def test_deterministic_drop_locates_policy_normalized_sentence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scaffold = "## Results\n\nThis unsupported   interpretation must not survive.\n"
+    monkeypatch.setattr(
+        write_phase,
+        "decide_writer_evidence_repairs",
+        lambda *args, **kwargs: [{"index": 9, "action": "drop", "evidence_ids": []}],
+    )
+
+    repaired, applied, fallback = write_phase._repair_rejected_writer_sentences(
+        scaffold,
+        llm=object(),
+        evidence_ids=["registered_result"],
+        evidence_digest="registered_result: observed counts",
+        rejected_sentences=[_REJECTED],
+        scientific_claims={},
+        claim_required_sentences=[],
+        allowed_claim_refs=[],
+        language="en",
+    )
+
+    assert "unsupported" not in repaired
+    assert applied[0]["action"] == "drop"
+    assert fallback is not None
+    assert fallback["reason_code"] == "writer_evidence_repair_deterministic_drop"
+
+
 def test_provider_failure_is_not_hidden_by_writer_drop_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

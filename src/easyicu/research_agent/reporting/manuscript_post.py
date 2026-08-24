@@ -359,6 +359,19 @@ def _append_evidence_citation(sentence: str, evidence_id: str) -> str:
     return sentence.rstrip() + citation
 
 
+def _writer_repair_target_span(scaffold: str, target: str) -> Optional[Tuple[int, int]]:
+    """Locate a policy-normalized rejected sentence in the original draft."""
+
+    exact_start = scaffold.find(target)
+    if exact_start >= 0:
+        return exact_start, exact_start + len(target)
+    tokens = [token for token in re.split(r"\s+", target.strip()) if token]
+    if not tokens:
+        return None
+    match = re.search(r"\s+".join(re.escape(token) for token in tokens), scaffold)
+    return (match.start(), match.end()) if match is not None else None
+
+
 def _apply_writer_evidence_repair_decisions(
     scaffold: str,
     *,
@@ -398,10 +411,13 @@ def _apply_writer_evidence_repair_decisions(
         ):
             raise ValueError("writer evidence repair index is invalid or duplicated")
         target = sentences[index]
-        if target not in rewritten:
+        target_span = _writer_repair_target_span(rewritten, target)
+        if target_span is None:
             raise ValueError(
                 "writer evidence repair target is absent from the current scaffold"
             )
+        target_start, target_end = target_span
+        matched_target = rewritten[target_start:target_end]
         action = str(decision.get("action") or "").strip().lower()
         raw_ids = decision.get("evidence_ids", [])
         if not isinstance(raw_ids, (list, tuple)):
@@ -414,7 +430,7 @@ def _apply_writer_evidence_repair_decisions(
         if action == "cite":
             if not evidence_ids:
                 raise ValueError("cite decision requires at least one evidence id")
-            replacement = target
+            replacement = matched_target
             for evidence_id in evidence_ids:
                 replacement = _append_evidence_citation(replacement, evidence_id)
         elif action == "claim":
@@ -424,9 +440,8 @@ def _apply_writer_evidence_repair_decisions(
             if claim_ref not in allowed_claims:
                 raise ValueError("claim decision requires an allowed claim_ref")
             token = "{claim:" + claim_ref + "}"
-            target_offset = rewritten.find(target)
-            line_start = rewritten.rfind("\n", 0, target_offset) + 1
-            before_target = rewritten[line_start:target_offset]
+            line_start = rewritten.rfind("\n", 0, target_start) + 1
+            before_target = rewritten[line_start:target_start]
             if before_target.lstrip().startswith("#"):
                 # Scientific findings do not belong in a manuscript title or
                 # heading.  A model-selected claim is safely dropped here; the
@@ -449,7 +464,7 @@ def _apply_writer_evidence_repair_decisions(
             replacement = ""
         else:
             raise ValueError("writer evidence repair action must be cite, claim, or drop")
-        rewritten = rewritten.replace(target, replacement, 1)
+        rewritten = rewritten[:target_start] + replacement + rewritten[target_end:]
         seen.add(index)
         applied.append(
             {
