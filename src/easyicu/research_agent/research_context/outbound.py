@@ -69,6 +69,14 @@ _OUTCOME_SOURCE_LABELS = {
     "readmission": "a readmission outcome",
 }
 _SAFE_CONCEPT_REFERENCE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
+_SAFE_MATERIALIZED_REPRESENTATIONS = frozenset(
+    {
+        "window_numeric_first",
+        "window_numeric_max",
+        "window_numeric_mean",
+        "window_numeric_min",
+    }
+)
 
 
 def _safe_derived_concept_references(
@@ -178,6 +186,12 @@ def outbound_safe_context_payload(
                     "aggregation_default": (
                         variable.aggregation_default.value
                         if variable.aggregation_default is not None
+                        else None
+                    ),
+                    "materialized_representation": (
+                        variable.unit_normalization
+                        if variable.unit_normalization
+                        in _SAFE_MATERIALIZED_REPRESENTATIONS
                         else None
                     ),
                     "aggregation_hint": _aggregation_hint(variable),

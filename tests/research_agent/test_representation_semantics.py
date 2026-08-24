@@ -87,7 +87,7 @@ def test_mean_of_ordinal_source_is_explicit_derived_continuous_summary() -> None
     )
 
 
-def test_nonordinal_mean_representation_is_not_reclassified() -> None:
+def test_nonordinal_mean_representation_keeps_role_but_not_source_default() -> None:
     descriptor = ConceptDescriptor(
         name="heart_rate_mean",
         dtype="float64",
@@ -96,4 +96,29 @@ def test_nonordinal_mean_representation_is_not_reclassified() -> None:
         is_ordinal=False,
     )
 
-    assert compile_wide_representation_semantics([descriptor])[0] == descriptor
+    compiled = compile_wide_representation_semantics([descriptor])[0]
+
+    assert compiled.role == VariableRole.VITAL
+    assert compiled.allowed_aggregations == [AggregationRule.NONE]
+    assert compiled.aggregation_default == AggregationRule.NONE
+    assert any("precomputed arithmetic mean" in item for item in compiled.clinical_caveats)
+
+
+def test_precomputed_max_publishes_physical_representation_not_median_policy() -> None:
+    descriptor = ConceptDescriptor(
+        name="marker_max",
+        dtype="float64",
+        role=VariableRole.LAB,
+        unit="mg/dL",
+        unit_normalization="window_numeric_max",
+        allowed_aggregations=[AggregationRule.MEDIAN_ONLY],
+        aggregation_default=AggregationRule.MEDIAN_ONLY,
+        is_ordinal=False,
+    )
+
+    compiled = compile_wide_representation_semantics([descriptor])[0]
+
+    assert compiled.role == VariableRole.LAB
+    assert compiled.allowed_aggregations == [AggregationRule.NONE]
+    assert compiled.aggregation_default == AggregationRule.NONE
+    assert any("precomputed maximum value" in item for item in compiled.clinical_caveats)
