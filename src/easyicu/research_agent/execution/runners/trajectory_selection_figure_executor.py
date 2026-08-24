@@ -210,6 +210,7 @@ def run_trajectory_selection_figure(
     if not selection_parent_step or not availability_parent_step:
         raise ValueError("trajectory figure parents lack producer-step lineage")
     selection_projection = selection.copy()
+    selection_projection["source_row_index"] = range(len(selection_projection))
     selection_projection["source_table"] = selection_bound.path.name
     selection_projection["source_step_id"] = selection_parent_step
     selection_projection.to_csv(selection_source, index=False)

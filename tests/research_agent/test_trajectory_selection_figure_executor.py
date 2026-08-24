@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.audits.figures import FigureSourceDataValidator
 from easyicu.research_agent.execution.runners.trajectory_selection_figure_executor import (
     run_trajectory_selection_figure,
 )
@@ -108,6 +109,18 @@ def test_failed_closed_selection_renders_a_bound_diagnostic_without_labels(
     assert summary["status"] == "ok"
     assert summary["scientific_status"] == "failed_closed"
     assert summary["reason_code"] == "NO_INTERIOR_OPTIMUM"
+    selection_source = pd.read_csv(
+        tmp_path / "figure" / "trajectory_selection_bic_source_data.csv"
+    )
+    assert selection_source["source_row_index"].tolist() == [0, 1, 2]
+    trace = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=selection_source,
+        source_path=(
+            tmp_path / "figure" / "trajectory_selection_bic_source_data.csv"
+        ),
+        upstream_path=tmp_path / "trajectory_candidate_selection.csv",
+    )
+    assert trace["ok"], trace
     availability_source = pd.read_csv(
         tmp_path
         / "figure"
