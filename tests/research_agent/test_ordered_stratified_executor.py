@@ -23,6 +23,9 @@ from easyicu.research_agent.execution.runners.ordered_stratified_executor import
     run_ordered_stratified_from_env,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.reporting.writer_evidence import (
+    _render_writer_evidence_digest,
+)
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -170,6 +173,31 @@ def test_typed_owner_executes_and_replays_without_coder(monkeypatch, tmp_path: P
         step_id=step.step_id,
         out_dir=out_dir,
     )
+    reporting = summary["reportable_secondary_results"]
+    assert reporting["ordered_exposure"] == "severity"
+    assert reporting["continuous_outcome"] == "duration"
+    assert reporting["interpretation_ceiling"] == (
+        "secondary_unadjusted_not_causal"
+    )
+    assert reporting["continuous_level_summaries"] == [
+        {"level": 0, "n": 2, "median": 1.5, "q25": 1.25, "q75": 1.75},
+        {"level": 1, "n": 2, "median": 3.0, "q25": 2.5, "q75": 3.5},
+        {"level": 2, "n": 2, "median": 6.5, "q25": 5.75, "q75": 7.25},
+    ]
+    assert reporting["continuous_trend"]["test_id"] == (
+        "jonckheere_terpstra"
+    )
+    digest = _render_writer_evidence_digest(
+        [
+            {
+                "step_id": step.step_id,
+                "status": "ok",
+                "step_summary": summary,
+            }
+        ]
+    )
+    assert '"reportable_secondary_results"' in digest
+    assert '"continuous_outcome": "duration"' in digest
 
 
 def test_typed_owner_fails_closed_on_undeclared_exposure_level(

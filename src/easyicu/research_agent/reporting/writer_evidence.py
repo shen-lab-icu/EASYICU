@@ -544,6 +544,23 @@ def _render_writer_evidence_digest(
                 digest_row.setdefault("primary_ci_low", ci_values[0])
                 digest_row.setdefault("primary_ci_high", ci_values[1])
         digest_row.update(_summarise_table_one_rows(summary.get("table_one_rows")))
+        reportable_secondary = summary.get("reportable_secondary_results")
+        ordered_contract = summary.get("ordered_stratified_contract")
+        if (
+            summary.get("interpretation_class") == "ordered_stratified_secondary"
+            and isinstance(ordered_contract, Mapping)
+            and ordered_contract.get("execution_owner")
+            == "ordered_stratified_executor_v1"
+            and isinstance(reportable_secondary, Mapping)
+            and reportable_secondary.get("schema_version")
+            == "easyicu.ordered_stratified_reporting/1"
+        ):
+            # This is a compact, host-issued view of a validated secondary
+            # result table. Keep it intact in the primary digest so a nested
+            # diagnostic cap cannot hide the planned continuous outcome.
+            digest_row["reportable_secondary_results"] = dict(
+                reportable_secondary
+            )
         artifact_bindings = record.get("writer_artifact_bindings")
         primary_candidate = summary.get("primary_association_path")
         declared_primary_candidate = bool(primary_candidate)
