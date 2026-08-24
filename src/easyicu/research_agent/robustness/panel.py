@@ -660,6 +660,18 @@ def _primary_row_from_records(
         return None
     assert isinstance(payload, dict)
     sample_size = payload.get("sample_size")
+    measure = str(payload.get("effect_measure") or "").strip()
+    predictor = str(payload.get("predictor") or "").strip()
+    identity = " ".join(
+        value
+        for value in (measure, f"for {predictor}" if predictor else "")
+        if value
+    )
+    notes = (
+        f"Primary analysis estimate ({identity}) from step_summary."
+        if identity
+        else "Primary analysis estimate from step_summary."
+    )
     return RobustnessPanelRow(
         spec_id=PRIMARY_SPEC_ID,
         axis="primary",
@@ -670,7 +682,7 @@ def _primary_row_from_records(
         se=None,
         evidence_id=str(payload.get("evidence_id") or ""),
         converged=True,
-        notes="Primary analysis estimate from step_summary.",
+        notes=notes,
     )
 
 

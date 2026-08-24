@@ -965,7 +965,12 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
 
     @property
     def figure_input_products(self) -> tuple[str, ...]:
-        return (self.km_product, self.cox_product, self.risk_set_product)
+        return (
+            self.km_product,
+            self.cox_product,
+            self.risk_set_product,
+            self.ph_product,
+        )
 
     def development_execution_only_plan(
         self,
