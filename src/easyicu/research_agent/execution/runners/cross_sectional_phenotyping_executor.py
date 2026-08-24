@@ -19,6 +19,7 @@ import pandas as pd
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import adjusted_rand_score, silhouette_score
+from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
 from ...contracts.capability_ids import PHENOTYPING_ANALYSIS_KIND
@@ -534,18 +535,46 @@ def run_phenotyping_diagnostic(
         }
     elif action_id == "phenotyping.cluster_stability":
         selected_k = int(pd.Series(reference).nunique())
+        alternative = GaussianMixture(
+            n_components=selected_k,
+            covariance_type="diag",
+            random_state=_SEED,
+            n_init=5,
+            max_iter=500,
+            reg_covar=1e-6,
+        )
+        alternative_labels = alternative.fit_predict(matrix)
+        if not alternative.converged_:
+            raise RuntimeError("alternative diagonal GMM did not converge")
+        algorithm_agreement_ari = float(
+            adjusted_rand_score(reference, alternative_labels)
+        )
         rows = []
         for replicate in range(5):
             rng = np.random.default_rng(_SEED + replicate + 1)
             indices = np.sort(rng.choice(len(matrix), size=max(20, int(0.8 * len(matrix))), replace=False))
             labels = MiniBatchKMeans(n_clusters=selected_k, random_state=_SEED + replicate + 1, n_init=10, batch_size=min(2048, len(indices))).fit_predict(matrix[indices])
-            rows.append({"replicate": replicate + 1, "n": len(indices), "adjusted_rand_index": float(adjusted_rand_score(reference[indices], labels))})
+            rows.append(
+                {
+                    "replicate": replicate + 1,
+                    "n": len(indices),
+                    "adjusted_rand_index": float(
+                        adjusted_rand_score(reference[indices], labels)
+                    ),
+                    "primary_algorithm": "minibatch_kmeans",
+                    "alternative_algorithm": "diagonal_gaussian_mixture",
+                    "algorithm_agreement_metric": "adjusted_rand_index",
+                    "algorithm_agreement_ari": algorithm_agreement_ari,
+                    "alternative_algorithm_converged": True,
+                    "alternative_algorithm_seed": _SEED,
+                }
+            )
         mean_ari = float(np.mean([row["adjusted_rand_index"] for row in rows]))
         for row in rows:
             row["selected_n_clusters"] = selected_k
             row["mean_adjusted_rand_index"] = mean_ari
         result = pd.DataFrame(rows)
-        filename = "cluster_stability.csv"
+        filename = "cluster_stability_with_algorithm_agreement.csv"
         product = CLUSTER_STABILITY_PRODUCT
         result.to_csv(out_dir / filename, index=False)
         details = {
@@ -554,7 +583,20 @@ def run_phenotyping_diagnostic(
                 "n_resamples": len(rows),
                 "mean_adjusted_rand_index": mean_ari,
                 "replicates": rows,
-            }
+            },
+            "algorithm_agreement": {
+                "primary_algorithm": "minibatch_kmeans",
+                "alternative_algorithm": "diagonal_gaussian_mixture",
+                "selected_n_clusters": selected_k,
+                "n": len(matrix),
+                "metric": "adjusted_rand_index",
+                "adjusted_rand_index": algorithm_agreement_ari,
+                "alternative_algorithm_converged": True,
+                "random_seed": _SEED,
+                "outcome_used_for_fit": False,
+                "authority_scope": "analysis_only",
+                "external_reproducibility_established": False,
+            },
         }
     else:
         raise RuntimeError("unsupported cross-sectional phenotyping action")

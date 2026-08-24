@@ -372,6 +372,29 @@ def phenotyping_runtime_bundle_errors(
             abs_tol=1e-12,
         ):
             errors.append("phenotyping stability mean does not match its resamples")
+    agreement = stabilities[0].get("algorithm_agreement")
+    try:
+        agreement_ari = float(agreement["adjusted_rand_index"])
+        agreement_valid = (
+            agreement["primary_algorithm"] == "minibatch_kmeans"
+            and agreement["alternative_algorithm"]
+            == "diagonal_gaussian_mixture"
+            and int(agreement["selected_n_clusters"])
+            == receipt.selected_n_clusters
+            and int(agreement["n"]) == receipt.n_rows
+            and agreement["metric"] == "adjusted_rand_index"
+            and bool(agreement["alternative_algorithm_converged"])
+            and int(agreement["random_seed"]) == 1729
+            and agreement["outcome_used_for_fit"] is False
+            and agreement["authority_scope"] == "analysis_only"
+            and agreement["external_reproducibility_established"] is False
+            and math.isfinite(agreement_ari)
+            and -1 <= agreement_ari <= 1
+        )
+    except (KeyError, TypeError, ValueError):
+        agreement_valid = False
+    if not agreement_valid:
+        errors.append("phenotyping alternative-algorithm agreement is invalid")
     return errors
 
 
