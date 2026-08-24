@@ -1900,6 +1900,98 @@ def preview_export_cohort(
     }
 
 
+def preview_registered_export_icd_cohort(
+    export_path: str,
+    database: str,
+    cohort: Optional[Mapping[str, Any]],
+    *,
+    include_codes: Sequence[str],
+    exclude_codes: Sequence[str],
+) -> Dict[str, Any]:
+    """Preview an ICD cohort from a registered EasyICU export.
+
+    Registered sources point at the module export used by the review surfaces,
+    while cohort filtering is owned by the raw-table extraction path recorded
+    in that export's manifest. Resolve that binding host-side and return only
+    the aggregate, path-free preview contract.
+    """
+
+    try:
+        requested_database = normalize_database_key(database)
+    except KeyError as exc:
+        raise ExportCohortError(
+            "icd_preview_database_unknown", {"database": str(database or "")[:40]}
+        ) from exc
+
+    try:
+        registered_path = Path(export_path).expanduser().resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("icd_preview_export_path_unavailable") from exc
+    if not registered_path.is_dir():
+        raise ExportCohortError("icd_preview_export_path_unavailable")
+
+    manifest = _read_export_manifest(registered_path)
+    if not manifest:
+        raise ExportCohortError("icd_preview_export_manifest_required")
+    try:
+        manifest_database = normalize_database_key(manifest.get("database"))
+    except KeyError as exc:
+        raise ExportCohortError("icd_preview_manifest_database_unknown") from exc
+    if manifest_database != requested_database:
+        raise ExportCohortError(
+            "icd_preview_database_mismatch",
+            {
+                "requested_database": requested_database,
+                "manifest_database": manifest_database,
+            },
+        )
+
+    raw_source = str(manifest.get("data_path") or "").strip()
+    if not raw_source:
+        raise ExportCohortError("icd_preview_source_path_required")
+    try:
+        raw_path = Path(raw_source).expanduser().resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("icd_preview_source_path_unavailable") from exc
+    if not raw_path.is_dir():
+        raise ExportCohortError("icd_preview_source_path_unavailable")
+
+    manifest_cohort = manifest.get("cohort_contract")
+    base_cohort = (
+        dict(cohort)
+        if isinstance(cohort, Mapping) and cohort
+        else (
+            dict(manifest_cohort)
+            if isinstance(manifest_cohort, Mapping)
+            else {}
+        )
+    )
+    base_cohort.update(
+        {
+            "icd_enabled": True,
+            "icd_include": list(include_codes),
+            "icd_exclude": list(exclude_codes),
+        }
+    )
+    try:
+        return preview_export_cohort(
+            str(raw_path), requested_database, base_cohort
+        )
+    except ExportCohortError:
+        raise
+    except (FileNotFoundError, OSError) as exc:
+        raise ExportCohortError("icd_preview_source_tables_unavailable") from exc
+    except Exception as exc:
+        from easyicu.patient_filter import PatientFilterCriterionError
+
+        if isinstance(exc, PatientFilterCriterionError):
+            raise ExportCohortError(
+                str(exc.code or "patient_filter_criterion_unavailable"),
+                {"criterion": str(exc.criterion or "")[:80]},
+            ) from exc
+        raise
+
+
 def _module_uses_sepsis_kwargs(concepts: List[str]) -> bool:
     sepsis_concepts = {"susp_inf", "sep3", "sep3_sofa2"}
     return any(str(concept) in sepsis_concepts for concept in concepts)

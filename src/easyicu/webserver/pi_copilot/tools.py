@@ -1112,17 +1112,13 @@ def _preview_icd_cohort(
             owner="easyicu.webserver.sources",
         )
     base_cohort = study.get("cohort")
-    preview_cohort = dict(base_cohort) if isinstance(base_cohort, Mapping) else {}
-    preview_cohort.update(
-        {
-            "icd_enabled": True,
-            "icd_include": include_codes,
-            "icd_exclude": exclude_codes,
-        }
-    )
     try:
-        preview = dataio.preview_export_cohort(
-            str(source.get("path") or ""), database, preview_cohort
+        preview = dataio.preview_registered_export_icd_cohort(
+            str(source.get("path") or ""),
+            database,
+            base_cohort if isinstance(base_cohort, Mapping) else {},
+            include_codes=include_codes,
+            exclude_codes=exclude_codes,
         )
     except dataio.ExportCohortError as exc:
         return _result(
