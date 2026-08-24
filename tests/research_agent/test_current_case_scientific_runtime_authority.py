@@ -533,6 +533,13 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert "primary_predictor" not in summary
     assert summary["n_landmark_population"] < n
     assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
+    assert authority.rmst_product is not None
+    assert (tmp_path / "landmark_rmst_summary.csv").is_file()
+    rmst = pd.read_csv(tmp_path / "landmark_rmst_summary.csv")
+    assert len(rmst) == 1
+    assert rmst.loc[0, "tau_days_from_landmark"] == pytest.approx(27.0)
+    assert rmst.loc[0, "ci_low"] <= rmst.loc[0, "rmst_difference_days"]
+    assert rmst.loc[0, "rmst_difference_days"] <= rmst.loc[0, "ci_high"]
     assert not (tmp_path / "landmark_survival_suite.svg").exists()
     risk = pd.read_csv(tmp_path / "landmark_risk_set_flow.csv")
     final_count = risk.loc[
@@ -549,6 +556,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         (authority.cox_product, "landmark_cox_summary.csv"),
         (authority.risk_set_product, "landmark_risk_set_flow.csv"),
         (authority.ph_product, "landmark_ph_diagnostics.csv"),
+        (authority.rmst_product, "landmark_rmst_summary.csv"),
     ):
         evidence_path = evidence_dir / f"table_step_artifact_deadbeef__{source_name}"
         evidence_path.write_bytes((tmp_path / source_name).read_bytes())
@@ -557,6 +565,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     figure_summary = run_landmark_survival_figure(
         km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
         cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
+        rmst_table=rmst,
         risk_flow=risk,
         ph_table=pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv"),
         source_paths=figure_sources,
@@ -577,14 +586,50 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         "landmark_cox_summary.csv",
         "landmark_risk_set_flow.csv",
         "landmark_ph_diagnostics.csv",
+        "landmark_rmst_summary.csv",
     }
     contract = json.loads(
         (figure_dir / "landmark_survival_suite.figure_contract.json").read_text()
     )
     assert contract["panels"][0]["title"].startswith("Unadjusted landmark")
+    if summary["proportional_hazards_status"].startswith("violation_"):
+        assert contract["panels"][1]["title"] == "PH-free survival contrast"
+        assert contract["panels"][1]["role"] == "survival_effect"
+        assert contract["panels"][1]["metadata"]["chart_type"] == (
+            "rmst_difference_forest"
+        )
+        assert "withheld" in contract["core_claim"]
+    else:
+        assert contract["panels"][1]["role"] == "survival_effect"
     assert contract["panels"][3]["role"] == "diagnostics"
     assert contract["panels"][3]["metadata"]["chart_type"] == "schoenfeld_plot"
     assert "direction can differ" in contract["statistics_note"]
+
+    violation_ph = pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv")
+    violation_ph["ph_status"] = "violation_block_paper_authorization"
+    violation_ph["paper_authorization_allowed"] = False
+    violation_ph.loc[0, "p_value"] = 0.001
+    violation_dir = tmp_path / "violation_figure"
+    run_landmark_survival_figure(
+        km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
+        cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
+        rmst_table=rmst,
+        risk_flow=risk,
+        ph_table=violation_ph,
+        source_paths=figure_sources,
+        authority=authority,
+        out_dir=violation_dir,
+    )
+    violation_contract = json.loads(
+        (violation_dir / "landmark_survival_suite.figure_contract.json").read_text()
+    )
+    assert violation_contract["panels"][1]["title"] == (
+        "PH-free survival contrast"
+    )
+    assert violation_contract["panels"][1]["metadata"]["chart_type"] == (
+        "rmst_difference_forest"
+    )
+    assert "landmark_rmst_summary.csv" in violation_contract["source_data"]
 
     invalid_ph = pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv")
     invalid_ph.loc[0, "p_value"] = float("nan")
@@ -592,6 +637,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         run_landmark_survival_figure(
             km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
             cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
+            rmst_table=rmst,
             risk_flow=risk,
             ph_table=invalid_ph,
             source_paths=figure_sources,
@@ -851,9 +897,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     )
 
 
-def test_e2_runtime_authority_rejects_missing_referenced_complete_case_spec() -> (
-    None
-):
+def test_e2_runtime_authority_rejects_missing_referenced_complete_case_spec() -> None:
     _projection, authority = _authority("e2_lactate_mortality")
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
     primary = _e2_plan(authority).steps[0]
@@ -987,11 +1031,14 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
         "deterministic_standard_analysis": SOURCE_FEASIBILITY_ANALYSIS_KIND,
         "step_summary": summary,
     }
-    assert source_feasibility_runtime_bundle_errors(
-        plan=plan,
-        records=[record],
-        run_dir=tmp_path,
-    ) == []
+    assert (
+        source_feasibility_runtime_bundle_errors(
+            plan=plan,
+            records=[record],
+            run_dir=tmp_path,
+        )
+        == []
+    )
     verdict = resolve_primary_capability(
         analysis_type=plan.analysis_type,
         plan=plan,
@@ -1022,14 +1069,15 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
     assert assessment.claim_ceiling == "reportable"
 
     tampered = deepcopy(record)
-    tampered["step_summary"]["scientific_runtime_receipt"][
-        "effect_estimate"
-    ] = 1.0
-    assert "runtime receipt is invalid" in source_feasibility_runtime_bundle_errors(
-        plan=plan,
-        records=[tampered],
-        run_dir=tmp_path,
-    )[0]
+    tampered["step_summary"]["scientific_runtime_receipt"]["effect_estimate"] = 1.0
+    assert (
+        "runtime receipt is invalid"
+        in source_feasibility_runtime_bundle_errors(
+            plan=plan,
+            records=[tampered],
+            run_dir=tmp_path,
+        )[0]
+    )
 
     gates = _compute_readiness_gates(
         context=ResearchContext(

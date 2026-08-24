@@ -65,7 +65,9 @@ def _context(n: int) -> ResearchContext:
         variables=[
             ConceptDescriptor(name="stay_id", role=VariableRole.ID, dtype="str"),
             ConceptDescriptor(name="marker_a", role=VariableRole.LAB, dtype="float64"),
-            ConceptDescriptor(name="marker_b", role=VariableRole.VITAL, dtype="float64"),
+            ConceptDescriptor(
+                name="marker_b", role=VariableRole.VITAL, dtype="float64"
+            ),
             ConceptDescriptor(name="death", role=VariableRole.OUTCOME, dtype="int64"),
         ],
         target_outcome="death",
@@ -86,7 +88,9 @@ def _frame() -> pd.DataFrame:
     )
 
 
-def _binding(key: str, frame: pd.DataFrame, path: Path, step_id: str) -> dict[str, object]:
+def _binding(
+    key: str, frame: pd.DataFrame, path: Path, step_id: str
+) -> dict[str, object]:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     product = key.partition(":")[2]
     return {
@@ -98,7 +102,11 @@ def _binding(key: str, frame: pd.DataFrame, path: Path, step_id: str) -> dict[st
         "evidence_id": f"evidence_{product}",
         "produced_by_step": f"producer_{product}",
         "product_contract": {"columns": list(frame.columns), "row_count": len(frame)},
-        "consumption_contract": {"input_key": key, "mode": "all_rows", "artifact_sha256": digest},
+        "consumption_contract": {
+            "input_key": key,
+            "mode": "all_rows",
+            "artifact_sha256": digest,
+        },
         "identity_row": {
             "input_key": key,
             "declared_kind": "table",
@@ -144,16 +152,18 @@ def _write_robustness_lock(tmp_path: Path, variables: list[str]) -> RobustnessSp
 def test_phenotyping_actions_publish_one_exact_host_profile() -> None:
     actions = {
         action.action_id: action
-        for action in scientific_actions_for_analysis_type("trajectory_clustering").actions
+        for action in scientific_actions_for_analysis_type(
+            "trajectory_clustering"
+        ).actions
     }
     assert actions["phenotyping.cluster_solution"].execution_mode == "host_owned"
     assert actions["phenotyping.cluster_solution"].runtime_contract.outputs == (
         (PHENOTYPE_PROFILES_PRODUCT, "custom"),
         (PHENOTYPE_ASSIGNMENTS_PRODUCT, "custom"),
     )
-    assert actions["phenotyping.cluster_stability"].runtime_contract.required_product_inputs == (
-        PHENOTYPE_ASSIGNMENTS_PRODUCT,
-    )
+    assert actions[
+        "phenotyping.cluster_stability"
+    ].runtime_contract.required_product_inputs == (PHENOTYPE_ASSIGNMENTS_PRODUCT,)
 
 
 def test_phenotyping_owner_selects_only_the_exact_action_contract() -> None:
@@ -165,7 +175,9 @@ def test_phenotyping_owner_selects_only_the_exact_action_contract() -> None:
     )
     assert selection is not None
     assert selection.analysis_kind == PHENOTYPING_ANALYSIS_KIND
-    widened = step.model_copy(update={"expected_outputs": [*step.expected_outputs, "table:extra"]})
+    widened = step.model_copy(
+        update={"expected_outputs": [*step.expected_outputs, "table:extra"]}
+    )
     assert not cross_sectional_phenotyping_executor_owns_step(widened)
 
 
@@ -183,7 +195,9 @@ def test_exact_runtime_action_products_cover_their_published_article_roles() -> 
     assert {"phenotype_structure", "phenotype_profile"} <= covered
 
 
-def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path: Path) -> None:
+def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
+    tmp_path: Path,
+) -> None:
     frame = _frame()
     (tmp_path / "research_context.json").write_text(
         _context(len(frame)).model_dump_json(indent=2), encoding="utf-8"
@@ -226,7 +240,10 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
         action_id="phenotyping.cluster_stability",
         out_dir=stability_dir,
         run_dir=tmp_path,
-        resolved_inputs={"step_id": "stability", "inputs": {PHENOTYPE_ASSIGNMENTS_PRODUCT: assignment_binding}},
+        resolved_inputs={
+            "step_id": "stability",
+            "inputs": {PHENOTYPE_ASSIGNMENTS_PRODUCT: assignment_binding},
+        },
         step_id="stability",
     )
     assert stability_summary["output_files"].keys() == {CLUSTER_STABILITY_PRODUCT}
@@ -242,9 +259,7 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
     tampered[2]["step_summary"]["cluster_stability"]["replicates"][0][
         "adjusted_rand_index"
     ] = 2.0
-    assert "invalid ARI values" in " ".join(
-        phenotyping_runtime_bundle_errors(tampered)
-    )
+    assert "invalid ARI values" in " ".join(phenotyping_runtime_bundle_errors(tampered))
     tampered_grid = copy.deepcopy(records)
     tampered_grid[1]["step_summary"]["cluster_selection"]["candidates"][0][
         "silhouette"
@@ -277,7 +292,9 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
     )
     selected = select_standard_executor(
         figure_step,
-        plan=AnalysisPlan(research_question="Discover phenotypes.", steps=[figure_step]),
+        plan=AnalysisPlan(
+            research_question="Discover phenotypes.", steps=[figure_step]
+        ),
         resolved_bindings=bindings,
     )
     assert selected is not None
@@ -291,8 +308,16 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
         figure_product="phenotype_figure",
     )
     assert rendered["rendering_only"] is True
+    assert rendered["phenotype_naming_authorized"] is False
+    assert rendered["outcome_claim_authorized"] is False
+    assert rendered["solution_label"] == "candidate_clusters_only"
     assert (figure_dir / "phenotype_figure.figure_contract.json").is_file()
     assert (figure_dir / "phenotype_figure.svg").is_file()
+    contract = json.loads(
+        (figure_dir / "phenotype_figure.figure_contract.json").read_text("utf-8")
+    )
+    assert "candidate" in contract["panels"][0]["title"].lower()
+    assert "no phenotype name" in contract["core_claim"].lower()
     for key, parent_path in product_paths.items():
         product = key.partition(":")[2]
         source = pd.read_csv(figure_dir / f"{product}_source_data.csv")
@@ -326,9 +351,7 @@ def test_phenotyping_owner_executes_locked_complete_case_sensitivity(
 
     expected_n = int(frame[["marker_a", "marker_b"]].notna().all(axis=1).sum())
     row = summary["robustness_rows"][0]
-    receipt = summary["scientific_runtime_receipt"][
-        "complete_case_sensitivities"
-    ][0]
+    receipt = summary["scientific_runtime_receipt"]["complete_case_sensitivities"][0]
     assert row["spec_id"] == spec.spec_id
     assert row["n"] == expected_n
     assert row["converged"] is True

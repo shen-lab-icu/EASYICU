@@ -142,6 +142,45 @@ def test_every_declared_fact_reaches_the_writer(tmp_path: pathlib.Path) -> None:
     assert any("State the scale and the contrast" in line for line in lines)
 
 
+def test_a_ph_violation_withholds_the_constant_cox_headline(
+    tmp_path: pathlib.Path,
+) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "ev1__step_summary.json").write_text(
+        json.dumps(
+            {
+                "effect_measure": "hazard_ratio",
+                "proportional_hazards_status": ("violation_block_paper_authorization"),
+                "paper_authorization_allowed": False,
+                "hazard_ratio": 0.52,
+            }
+        ),
+        encoding="utf-8",
+    )
+    lines = _primary_effect_interpretation_lines(run_dir=tmp_path, evidence_id="ev1")
+    assert len(lines) == 1
+    assert "HEADLINE EFFECT UNAUTHORIZED" in lines[0]
+    assert "Do not report the Cox point estimate" in lines[0]
+
+    (evidence / "ev2__step_summary.json").write_text(
+        json.dumps(
+            {
+                "effect_measure": "hazard_ratio",
+                "proportional_hazards_status": "not_rejected",
+                "paper_authorization_allowed": False,
+                "hazard_ratio": 0.52,
+            }
+        ),
+        encoding="utf-8",
+    )
+    nonviolation_lines = _primary_effect_interpretation_lines(
+        run_dir=tmp_path,
+        evidence_id="ev2",
+    )
+    assert all("PH policy rejected" not in line for line in nonviolation_lines)
+
+
 # --------------------------------------------------------------------------
 # Against the real run whose manuscript carried the bare number
 # --------------------------------------------------------------------------

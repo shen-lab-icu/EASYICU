@@ -1,10 +1,14 @@
-# Dev9 一次性科学决策签字包
+# Dev9 科学决策包（已撤回，禁止签字或执行）
+
+状态：`withdrawn_pending_fulltext_and_supplement_review`
+
+本包在九题尚未完成“锚点主文 + 补充材料”逐题核对时生成，因此不是当前权威决策，也不再要求作者签字。后续以 `/Volumes/外置硬盘/easyicu_data/figure2_dev9_anchor_fulltext_supplement_review_e271409_20260824/README.md` 的缺口矩阵为审阅基线；修复后需重新生成决策候选。
 
 决策编号：`DEV9-SCI-20260824-V1`
 
-机器可读决策包：`dev9_scientific_decision_packet_20260824.json`，SHA-256 `82d6df250b5a5bfdf3254205cc6497164976c63657a82a660200f0eadedea769`。
+撤回前机器可读草案的历史 SHA-256 为 `82d6df250b5a5bfdf3254205cc6497164976c63657a82a660200f0eadedea769`；当前 JSON 已加入撤回状态，因此该摘要不再是现文件摘要。
 
-这份签字只授权 Dev9 的 `analysis_only` 开发方案，不授权论文结论、临床应用、部署、Qualification12 或 Held-out27。已发表文章只用于核对研究设计、统计方法与呈现完整性，不作为数值标准答案。
+这份草案目前不授予任何权限。已发表文章只用于核对研究设计、统计方法与呈现完整性，不作为数值标准答案。
 
 ## 建议一次批准的方案
 
@@ -23,13 +27,9 @@ E2 不需要新科学方案：已执行的 RCS 与线性模型本来就是独立
 
 H1 也不需要 IPCW：当前固定 28 天结局在 94,458 个 source stays 中有 94,452 个具备支持，非事件主要是第 28 天行政删失，不是一个已识别的失访机制。
 
-## 签字方式
+## 签字状态
 
-请在当前对话回复下面这一句即可：
-
-> 我批准 DEV9-SCI-20260824-V1 作为 Dev9 analysis_only 开发方案；不授予论文、临床或部署权威。
-
-收到后会把该回复绑定到本决策包摘要，并继续：通用 typed owner 修复 → 受影响题的零 Provider deterministic replay → 九题重新 shadow review → 一个 exact-HEAD image → 一次 full exact-HEAD CI。不会提前运行 Qualification12 或 Held-out27。
+禁止签字。本包只保留为一次已撤回的历史草案，不得触发实现或 replay。
 
 ## 方法对照来源
 

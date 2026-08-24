@@ -254,6 +254,7 @@ def _render_figure(
     *,
     km_table: Any,
     cox_row: Mapping[str, Any],
+    rmst_table: Any | None,
     risk_flow: Any,
     ph_table: Any,
     sealed: LandmarkSurvivalRuntimeAuthority,
@@ -315,40 +316,88 @@ def _render_figure(
     ax_km.grid(axis="y", color=palette["neutral_light"], linewidth=0.55)
     add_panel_label(ax_km, "A", x=-0.09)
 
+    ph_statuses = {
+        str(value).strip()
+        for value in ph_table.get("ph_status", [])
+        if str(value).strip()
+    }
+    authorization_values = {
+        bool(value) for value in ph_table.get("paper_authorization_allowed", [])
+    }
+    ph_violation = any(value.startswith("violation_") for value in ph_statuses)
+    headline_hr_authorized = not ph_violation and authorization_values != {False}
+
     hazard_ratio = float(cox_row["hazard_ratio"])
     ci_low = float(cox_row["ci_low"])
     ci_high = float(cox_row["ci_high"])
-    ax_hr.errorbar(
-        hazard_ratio,
-        0,
-        xerr=np.array([[hazard_ratio - ci_low], [ci_high - hazard_ratio]]),
-        fmt="o",
-        color=palette["blue"],
-        capsize=3,
-        linewidth=1.2,
-    )
-    ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-    ax_hr.set_xscale("log")
-    lower_limit = min(ci_low * 0.9, 0.9)
-    upper_limit = max(ci_high * 1.1, 1.1)
-    ax_hr.set_xlim(lower_limit, upper_limit)
-    tick_candidates = (0.25, 0.5, 1.0, 2.0, 4.0)
-    ticks = [tick for tick in tick_candidates if lower_limit <= tick <= upper_limit]
-    ax_hr.set_xticks(ticks, [f"{tick:g}" for tick in ticks])
-    ax_hr.xaxis.set_minor_locator(NullLocator())
-    ax_hr.xaxis.set_minor_formatter(NullFormatter())
-    ax_hr.set_yticks([0], [sealed.exposed_group_label])
-    ax_hr.set_xlabel("Adjusted hazard ratio (95% CI)")
-    ax_hr.set_title("Adjusted Cox association", loc="left")
-    ax_hr.text(
-        0.03,
-        0.08,
-        f"HR {hazard_ratio:.2f} ({ci_low:.2f}–{ci_high:.2f})",
-        transform=ax_hr.transAxes,
-        fontsize=6.4,
-        ha="left",
-        va="bottom",
-    )
+    if headline_hr_authorized:
+        ax_hr.errorbar(
+            hazard_ratio,
+            0,
+            xerr=np.array([[hazard_ratio - ci_low], [ci_high - hazard_ratio]]),
+            fmt="o",
+            color=palette["blue"],
+            capsize=3,
+            linewidth=1.2,
+        )
+        ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+        ax_hr.set_xscale("log")
+        lower_limit = min(ci_low * 0.9, 0.9)
+        upper_limit = max(ci_high * 1.1, 1.1)
+        ax_hr.set_xlim(lower_limit, upper_limit)
+        tick_candidates = (0.25, 0.5, 1.0, 2.0, 4.0)
+        ticks = [tick for tick in tick_candidates if lower_limit <= tick <= upper_limit]
+        ax_hr.set_xticks(ticks, [f"{tick:g}" for tick in ticks])
+        ax_hr.xaxis.set_minor_locator(NullLocator())
+        ax_hr.xaxis.set_minor_formatter(NullFormatter())
+        ax_hr.set_yticks([0], [sealed.exposed_group_label])
+        ax_hr.set_xlabel("Adjusted hazard ratio (95% CI)")
+        ax_hr.set_title("Adjusted Cox association", loc="left")
+        ax_hr.text(
+            0.03,
+            0.08,
+            f"HR {hazard_ratio:.2f} ({ci_low:.2f}–{ci_high:.2f})",
+            transform=ax_hr.transAxes,
+            fontsize=6.4,
+            ha="left",
+            va="bottom",
+        )
+    else:
+        if rmst_table is None or len(rmst_table) != 1:
+            raise ValueError(
+                "landmark survival requires one RMST contrast when PH is rejected"
+            )
+        rmst_row = rmst_table.iloc[0]
+        difference = float(rmst_row["rmst_difference_days"])
+        difference_low = float(rmst_row["ci_low"])
+        difference_high = float(rmst_row["ci_high"])
+        ax_hr.errorbar(
+            difference,
+            0,
+            xerr=np.array(
+                [[difference - difference_low], [difference_high - difference]]
+            ),
+            fmt="o",
+            color=palette["blue"],
+            capsize=3,
+            linewidth=1.2,
+        )
+        ax_hr.axvline(0.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+        span = max(abs(difference_low), abs(difference_high), 0.25)
+        ax_hr.set_xlim(-1.15 * span, 1.15 * span)
+        ax_hr.set_yticks([0], [sealed.exposed_group_label])
+        ax_hr.set_xlabel("RMST difference, days (95% CI)")
+        ax_hr.set_title("PH-free survival contrast", loc="left")
+        ax_hr.text(
+            0.03,
+            0.08,
+            f"RMST difference {difference:.2f} d "
+            f"({difference_low:.2f} to {difference_high:.2f})",
+            transform=ax_hr.transAxes,
+            fontsize=6.2,
+            ha="left",
+            va="bottom",
+        )
     add_panel_label(ax_hr, "B", x=-0.16, y=1.05)
 
     display = risk_flow.tail(4).copy()
@@ -434,8 +483,13 @@ def _render_figure(
     contract = make_figure_contract(
         figure_id="landmark_survival_suite",
         core_claim=(
-            "Post-landmark survival and the adjusted hazard-ratio association "
-            "are shown only after explicit exposure-timing and risk-set exclusions."
+            "Post-landmark survival and risk-set accounting are shown with the "
+            "signed proportional-hazards decision; a constant Cox effect is "
+            + (
+                "shown only because the assumption was not rejected."
+                if headline_hr_authorized
+                else "withheld because the assumption was rejected."
+            )
         ),
         panels=[
             {
@@ -449,12 +503,30 @@ def _render_figure(
             },
             {
                 "panel_id": "B",
-                "title": "Adjusted Cox association",
-                "role": "survival_effect",
-                "chart_type": "hazard_ratio_forest",
-                "claim": "The adjusted hazard ratio quantifies the prespecified descriptive prognostic association.",
+                "title": (
+                    "Adjusted Cox association"
+                    if headline_hr_authorized
+                    else "PH-free survival contrast"
+                ),
+                "role": (
+                    "survival_effect"
+                ),
+                "chart_type": (
+                    "hazard_ratio_forest"
+                    if headline_hr_authorized
+                    else "rmst_difference_forest"
+                ),
+                "claim": (
+                    "The adjusted hazard ratio quantifies the prespecified descriptive prognostic association."
+                    if headline_hr_authorized
+                    else "The unadjusted restricted-mean survival-time difference gives a PH-free descriptive group contrast over the post-landmark horizon."
+                ),
                 "evidence_ids": [],
-                "review_risk": "Interpretation depends on proportional-hazards diagnostics and residual confounding remains possible.",
+                "review_risk": (
+                    "Interpretation depends on proportional-hazards diagnostics and residual confounding remains possible."
+                    if headline_hr_authorized
+                    else "The RMST contrast is unadjusted and observational; do not recover or quote the source-table hazard ratio as a constant headline effect."
+                ),
             },
             {
                 "panel_id": "C",
@@ -481,12 +553,15 @@ def _render_figure(
             "landmark_cox_summary.csv",
             "landmark_risk_set_flow.csv",
             "landmark_ph_diagnostics.csv",
+            *(("landmark_rmst_summary.csv",) if rmst_table is not None else ()),
         ),
         statistics_note=(
             "Kaplan-Meier estimates are unadjusted and use the post-landmark clock; "
             "their direction can differ from the covariate-adjusted Cox estimate. "
             "The Cox model reports a Wald 95% confidence interval and a Schoenfeld "
-            "residual audit."
+            "residual audit. The constant hazard-ratio estimate is replaced by "
+            "an unadjusted restricted-mean survival-time difference whenever "
+            "the signed PH policy rejects reportability."
         ),
         image_integrity_note="All plotted values are rendered from digest-bound upstream result tables.",
     )
@@ -519,6 +594,7 @@ def run_landmark_survival_suite(
 
     from ...figures.base import km_estimate
     from ...methods.ph_schoenfeld import ph_test
+    from ...methods.rmst import rmst, rmst_difference
 
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSurvivalRuntimeAuthority):
@@ -756,18 +832,67 @@ def run_landmark_survival_suite(
     ph_table["ph_status"] = ph_status
     ph_table["paper_authorization_allowed"] = not ph_violation
 
+    rmst_table = None
+    if sealed.rmst_product is not None:
+        tau = float(sealed.endpoint_horizon_days) - landmark_days
+        comparator = analysis.loc[analysis[sealed.derived_exposure_column].eq(0)]
+        exposed_group = analysis.loc[analysis[sealed.derived_exposure_column].eq(1)]
+        comparator_rmst = rmst(
+            comparator[sealed.derived_time_column],
+            comparator[sealed.derived_event_column],
+            tau,
+        )
+        exposed_rmst = rmst(
+            exposed_group[sealed.derived_time_column],
+            exposed_group[sealed.derived_event_column],
+            tau,
+        )
+        contrast = rmst_difference(
+            analysis[sealed.derived_time_column],
+            analysis[sealed.derived_event_column],
+            analysis[sealed.derived_exposure_column],
+            tau,
+        )
+        contrast_ci_low, contrast_ci_high = contrast["ci"]
+        rmst_table = pd.DataFrame(
+            [
+                {
+                    "contrast": (
+                        f"{sealed.exposed_group_label} versus "
+                        f"{sealed.comparator_group_label}"
+                    ),
+                    "tau_days_from_landmark": tau,
+                    "exposed_rmst_days": exposed_rmst.rmst,
+                    "exposed_rmst_ci_low": exposed_rmst.ci_low,
+                    "exposed_rmst_ci_high": exposed_rmst.ci_high,
+                    "comparator_rmst_days": comparator_rmst.rmst,
+                    "comparator_rmst_ci_low": comparator_rmst.ci_low,
+                    "comparator_rmst_ci_high": comparator_rmst.ci_high,
+                    "rmst_difference_days": -float(contrast["diff"]),
+                    "standard_error": float(contrast["se_diff"]),
+                    "ci_low": -float(contrast_ci_high),
+                    "ci_high": -float(contrast_ci_low),
+                    "p_value": float(contrast["p_value"]),
+                    "adjustment": "unadjusted_kaplan_meier_plugin",
+                }
+            ]
+        )
+
     out_dir.mkdir(parents=True, exist_ok=True)
     table_one_path = out_dir / "landmark_table_one.csv"
     risk_path = out_dir / "landmark_risk_set_flow.csv"
     km_path = out_dir / "landmark_km_curve.csv"
     cox_path = out_dir / "landmark_cox_summary.csv"
     ph_path = out_dir / "landmark_ph_diagnostics.csv"
+    rmst_path = out_dir / "landmark_rmst_summary.csv"
     analysis_path = out_dir / "landmark_analysis_cohort.parquet"
     table_one.to_csv(table_one_path, index=False)
     risk_flow.to_csv(risk_path, index=False)
     km_table.to_csv(km_path, index=False)
     cox_table.to_csv(cox_path, index=False)
     ph_table.to_csv(ph_path, index=False)
+    if rmst_table is not None:
+        rmst_table.to_csv(rmst_path, index=False)
     analysis.to_parquet(analysis_path, index=False)
     receipt = {
         "schema_version": "easyicu.landmark_survival_runtime_receipt/1",
@@ -796,6 +921,12 @@ def run_landmark_survival_suite(
         "ph_global_p_value": global_p,
         "ph_exposure_p_value": exposure_p,
         "ph_status": ph_status,
+        "non_ph_alternative": sealed.non_ph_alternative,
+        "rmst_difference_days": (
+            None
+            if rmst_table is None
+            else float(rmst_table.loc[0, "rmst_difference_days"])
+        ),
         "paper_authorization_allowed": not ph_violation,
         "interpretation": sealed.interpretation,
         "analysis_only": True,
@@ -816,6 +947,8 @@ def run_landmark_survival_suite(
         sealed.ph_product: ph_path.name,
         sealed.receipt_product: receipt_path.name,
     }
+    if sealed.rmst_product is not None:
+        output_files[sealed.rmst_product] = rmst_path.name
     return {
         "status": "ok",
         "analysis_family": "survival",
@@ -837,6 +970,12 @@ def run_landmark_survival_suite(
         "hazard_ratio_ci_low": float(primary_row["ci_low"]),
         "hazard_ratio_ci_high": float(primary_row["ci_high"]),
         "proportional_hazards_status": ph_status,
+        "non_ph_alternative": sealed.non_ph_alternative,
+        "rmst_difference_days": (
+            None
+            if rmst_table is None
+            else float(rmst_table.loc[0, "rmst_difference_days"])
+        ),
         "paper_authorization_allowed": False,
         "analysis_only": True,
         "human_attestation_required": True,
@@ -850,13 +989,14 @@ def run_landmark_survival_figure(
     *,
     km_table: Any,
     cox_table: Any,
+    rmst_table: Any | None,
     risk_flow: Any,
     ph_table: Any,
     source_paths: Mapping[str, Path],
     authority: LandmarkSurvivalRuntimeAuthority | Mapping[str, Any],
     out_dir: Path,
 ) -> dict[str, Any]:
-    """Render only from the four digest-bound result tables it declares."""
+    """Render only from the digest-bound result tables the authority declares."""
 
     import pandas as pd
 
@@ -875,6 +1015,8 @@ def run_landmark_survival_figure(
         sealed.risk_set_product: "landmark_risk_set_flow.csv",
         sealed.ph_product: "landmark_ph_diagnostics.csv",
     }
+    if sealed.rmst_product is not None:
+        source_filename_by_product[sealed.rmst_product] = "landmark_rmst_summary.csv"
     copied_sources: list[str] = []
     for product in sealed.figure_input_products:
         source = Path(source_paths[product]).resolve()
@@ -889,6 +1031,7 @@ def run_landmark_survival_figure(
     outputs = _render_figure(
         km_table=pd.DataFrame(km_table),
         cox_row=primary.iloc[0].to_dict(),
+        rmst_table=None if rmst_table is None else pd.DataFrame(rmst_table),
         risk_flow=pd.DataFrame(risk_flow),
         ph_table=pd.DataFrame(ph_table),
         sealed=sealed,
@@ -970,6 +1113,7 @@ def landmark_survival_figure_executor_code(
         summary = run_landmark_survival_figure(
             km_table=bindings[{sealed.km_product!r}].frame,
             cox_table=bindings[{sealed.cox_product!r}].frame,
+            rmst_table={f"bindings[{sealed.rmst_product!r}].frame" if sealed.rmst_product is not None else "None"},
             risk_flow=bindings[{sealed.risk_set_product!r}].frame,
             ph_table=bindings[{sealed.ph_product!r}].frame,
             source_paths={{key: value.path for key, value in bindings.items()}},

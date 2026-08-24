@@ -144,6 +144,7 @@ class H1ScientificProtocol(_StrictFrozenModel):
     proportional_hazards_diagnostic: Literal["schoenfeld_residual_test"]
     proportional_hazards_alpha: Literal[0.05]
     proportional_hazards_policy: Literal["block_paper_authorization"]
+    non_ph_alternative: Literal["unadjusted_rmst_difference"]
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
     reportability_rule: str
     forbidden_interpretations: tuple[str, ...]
@@ -674,6 +675,7 @@ def _h1_deterministic_execution_contract(
         "table:h1_landmark_km_curve",
         "table:h1_landmark_cox_summary",
         "table:h1_landmark_ph_diagnostics",
+        "table:h1_landmark_rmst_summary",
         "log:h1_landmark_survival_receipt",
         "figure:h1_landmark_survival_suite",
     ]
@@ -722,14 +724,16 @@ def _h1_deterministic_execution_contract(
             ),
             "proportional_hazards_alpha": protocol.proportional_hazards_alpha,
             "proportional_hazards_policy": protocol.proportional_hazards_policy,
+            "non_ph_alternative": protocol.non_ph_alternative,
             "interpretation": protocol.interpretation,
             "table_one_product": outputs[0],
             "risk_set_product": outputs[1],
             "km_product": outputs[2],
             "cox_product": outputs[3],
             "ph_product": outputs[4],
-            "receipt_product": outputs[5],
-            "figure_product": outputs[6],
+            "rmst_product": outputs[5],
+            "receipt_product": outputs[6],
+            "figure_product": outputs[7],
         }
     ).model_dump(mode="json")
 

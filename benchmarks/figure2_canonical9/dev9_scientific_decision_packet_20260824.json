@@ -1,7 +1,9 @@
 {
   "schema_version": "easyicu.dev9_scientific_decision_packet/1",
   "decision_id": "DEV9-SCI-20260824-V1",
-  "status": "author_review_pending",
+  "status": "withdrawn_pending_fulltext_and_supplement_review",
+  "withdrawal_reason": "The packet was produced before the nine current runs were compared against the anchor main texts and supplementary materials. It is nonauthoritative and must not be signed or executed.",
+  "superseding_review": "/Volumes/外置硬盘/easyicu_data/figure2_dev9_anchor_fulltext_supplement_review_e271409_20260824/README.md",
   "scope": "Dev9 development analyses only; all outputs remain analysis_only and have no publication, clinical, deployment, Qualification12, or Held-out27 authority.",
   "code_baseline": "4a6bf92",
   "principles": [
@@ -67,5 +69,5 @@
     "When Dev9 has no unassigned actionable gap, build one exact-HEAD image and run one exact-HEAD full CI.",
     "Keep Qualification12 and Held-out27 at zero until the exact-HEAD freeze is verified."
   ],
-  "signature_text": "我批准 DEV9-SCI-20260824-V1 作为 Dev9 analysis_only 开发方案；不授予论文、临床或部署权威。"
+  "signature_text": null
 }

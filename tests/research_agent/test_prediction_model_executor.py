@@ -29,6 +29,9 @@ from easyicu.research_agent.execution.final_validation import (
     _primary_runner_core_estimate_present,
 )
 from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
+from easyicu.research_agent.planning.figure_plan_shaping import (
+    bind_deterministic_figure_panels,
+)
 from easyicu.research_agent.reporting.readiness import (
     _deterministic_primary_estimate_bound,
 )
@@ -211,7 +214,9 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     assert primary["predictor_roster"] == ["age", "sex", "marker"]
     assert primary["scientific_validation_contract"] == "PredictionValidationReceipt"
     assert primary["prediction_validation_receipt"]["paper_authorization"] is False
-    assert _primary_runner_core_estimate_present(PREDICTION_MODEL_ANALYSIS_KIND, primary)
+    assert _primary_runner_core_estimate_present(
+        PREDICTION_MODEL_ANALYSIS_KIND, primary
+    )
     assert _deterministic_primary_estimate_bound(
         [
             {
@@ -253,7 +258,10 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
             action_id=action,
             out_dir=out_dir,
             run_dir=tmp_path,
-            resolved_inputs={"step_id": folder, "inputs": {PREDICTION_SCORES_PRODUCT: score_binding}},
+            resolved_inputs={
+                "step_id": folder,
+                "inputs": {PREDICTION_SCORES_PRODUCT: score_binding},
+            },
             step_id=folder,
         )
         assert summary["output_files"].keys() == {product}
@@ -272,6 +280,7 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
             "table:model_performance",
             "table:calibration",
             "table:validation",
+            "table:clinical_utility",
         ],
         expected_outputs=["figure:prediction_figure"],
         method="visualization",
@@ -310,8 +319,64 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
         "model_performance",
         "model_performance",
         "calibration",
-        "validation",
+        "clinical_utility",
     ]
+    decision_curve = pd.read_csv(figure_dir / "clinical_utility_source_data.csv")
+    assert list(decision_curve.columns) == [
+        "threshold",
+        "n",
+        "net_benefit_model",
+        "net_benefit_all",
+        "net_benefit_none",
+    ]
+    assert decision_curve["threshold"].between(0.01, 0.50).all()
+    assert "calibration" in contract["statistics_note"].lower()
+    assert "clinical benefit" in contract["statistics_note"].lower()
+
+
+def test_prediction_figure_shape_binds_registered_clinical_utility() -> None:
+    core_inputs = [
+        "table:prediction_scores",
+        "table:model_performance",
+        "table:calibration",
+        "table:validation",
+    ]
+    utility = AnalysisStep(
+        step_id="clinical_utility",
+        planned_analysis_role="auxiliary",
+        intent="Estimate net benefit over prespecified thresholds.",
+        inputs=["table:prediction_scores"],
+        expected_outputs=["table:clinical_utility"],
+        scientific_action_id="prediction.decision_curve",
+        method="decision_curve",
+    )
+    figure = AnalysisStep(
+        step_id="prediction_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render the complete validation evidence suite.",
+        inputs=core_inputs,
+        expected_outputs=["figure:prediction_figure"],
+        method="visualization",
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"} for key in core_inputs
+        ],
+    )
+    shaped, findings = bind_deterministic_figure_panels(
+        plan=AnalysisPlan(
+            research_question="Predict mortality.",
+            steps=[utility, figure],
+        )
+    )
+
+    shaped_figure = shaped.steps[1]
+    assert shaped_figure.inputs == [*core_inputs, "table:clinical_utility"]
+    assert [item.input_key for item in shaped_figure.input_consumption_contracts] == [
+        *core_inputs,
+        "table:clinical_utility",
+    ]
+    assert findings[0].detail["reason"] == (
+        "prediction_figure_clinical_utility_bound"
+    )
 
 
 def test_prediction_owner_executes_exact_complete_case_robustness_spec(

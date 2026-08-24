@@ -59,6 +59,16 @@ _PRIMARY_RESULT_FIGURE_TEMPLATES = {
     ),
 }
 
+_PREDICTION_FIGURE_CORE_INPUTS = frozenset(
+    {
+        "table:prediction_scores",
+        "table:model_performance",
+        "table:calibration",
+        "table:validation",
+    }
+)
+_PREDICTION_CLINICAL_UTILITY_INPUT = "table:clinical_utility"
+
 
 def _method_head(method: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", str(method or "").strip().lower()).strip(
@@ -448,6 +458,12 @@ def bind_deterministic_figure_panels(
     changed = False
     findings: list[ValidationFinding] = []
     steps: list[AnalysisStep] = []
+    clinical_utility_owners = [
+        candidate.step_id
+        for candidate in plan.steps
+        if _PREDICTION_CLINICAL_UTILITY_INPUT
+        in {str(value) for value in candidate.expected_outputs}
+    ]
     for step in plan.steps:
         figure_outputs = [
             str(output)
@@ -455,6 +471,46 @@ def bind_deterministic_figure_panels(
             if str(output).startswith("figure:")
         ]
         input_set = frozenset(str(value) for value in step.inputs)
+        if (
+            _method_head(str(step.method or "")) == "visualization"
+            and step.planned_analysis_role == "auxiliary"
+            and input_set == _PREDICTION_FIGURE_CORE_INPUTS
+            and len(figure_outputs) == 1
+            and len(clinical_utility_owners) == 1
+        ):
+            changed = True
+            step = step.model_copy(
+                update={
+                    "inputs": [
+                        *step.inputs,
+                        _PREDICTION_CLINICAL_UTILITY_INPUT,
+                    ],
+                    "input_consumption_contracts": [
+                        *step.input_consumption_contracts,
+                        ArtifactConsumptionContract(
+                            input_key=_PREDICTION_CLINICAL_UTILITY_INPUT,
+                            mode="all_rows",
+                        ),
+                    ],
+                }
+            )
+            input_set = frozenset(str(value) for value in step.inputs)
+            findings.append(
+                ValidationFinding(
+                    validator="deterministic_figure_plan_binding",
+                    severity="warning",
+                    message=(
+                        "Bound the registered clinical-utility table to the "
+                        f"prediction figure step {step.step_id!r}."
+                    ),
+                    detail={
+                        "reason": "prediction_figure_clinical_utility_bound",
+                        "step_id": step.step_id,
+                        "source_step_id": clinical_utility_owners[0],
+                        "input": _PREDICTION_CLINICAL_UTILITY_INPUT,
+                    },
+                )
+            )
         templates = templates_by_inputs.get(input_set)
         if (
             ROBUSTNESS_FIGURE_INPUT in input_set

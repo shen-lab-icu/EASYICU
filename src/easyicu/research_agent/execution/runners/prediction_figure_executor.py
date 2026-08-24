@@ -22,6 +22,7 @@ from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .prediction_model_executor import (
     PREDICTION_CALIBRATION_PRODUCT,
+    PREDICTION_CLINICAL_UTILITY_PRODUCT,
     PREDICTION_INTERNAL_VALIDATION_PRODUCT,
     PREDICTION_PERFORMANCE_PRODUCT,
     PREDICTION_SCORES_PRODUCT,
@@ -33,10 +34,13 @@ PREDICTION_COMPOSITE_FIGURE_INPUTS = (
     PREDICTION_PERFORMANCE_PRODUCT,
     PREDICTION_INTERNAL_VALIDATION_PRODUCT,
     PREDICTION_CALIBRATION_PRODUCT,
+    PREDICTION_CLINICAL_UTILITY_PRODUCT,
 )
 PREDICTION_FIGURE_ANALYSIS_KIND = "static_prediction_composite_figure"
 
-_CAPABILITY = TypedInputCapability(required=frozenset(PREDICTION_COMPOSITE_FIGURE_INPUTS))
+_CAPABILITY = TypedInputCapability(
+    required=frozenset(PREDICTION_COMPOSITE_FIGURE_INPUTS)
+)
 _REQUIRED_COLUMNS = {
     PREDICTION_SCORES_PRODUCT: frozenset(
         {"unit_id", "subject_id", "split", "outcome", "probability"}
@@ -75,13 +79,24 @@ _REQUIRED_COLUMNS = {
             "calibration_slope",
         }
     ),
+    PREDICTION_CLINICAL_UTILITY_PRODUCT: frozenset(
+        {
+            "threshold",
+            "n",
+            "net_benefit_model",
+            "net_benefit_all",
+            "net_benefit_none",
+        }
+    ),
 }
 
 
 def _figure_product(value: Any) -> str | None:
     kind, separator, product = str(value or "").strip().partition(":")
-    if kind != "figure" or not separator or not re.fullmatch(
-        r"[a-z][a-z0-9_]{0,127}", product
+    if (
+        kind != "figure"
+        or not separator
+        or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", product)
     ):
         return None
     return product
@@ -124,7 +139,9 @@ def prediction_figure_executor_owns_step(
 
 
 def prediction_figure_executor_code(step: AnalysisStep) -> str:
-    product = _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    product = (
+        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    )
     if product is None:
         raise ValueError("prediction figure has no safe figure product")
     return textwrap.dedent(
@@ -203,16 +220,24 @@ def run_prediction_figure(
     validation = scores.loc[scores["split"].astype(str).eq("validation")].copy()
     outcomes = pd.to_numeric(validation["outcome"], errors="coerce")
     probabilities = _prediction_finite_series(validation, "probability")
-    if outcomes.isna().any() or not outcomes.isin((0, 1)).all() or outcomes.nunique() != 2:
+    if (
+        outcomes.isna().any()
+        or not outcomes.isin((0, 1)).all()
+        or outcomes.nunique() != 2
+    ):
         raise RuntimeError("prediction figure requires binary validation outcomes")
     performance = bound[PREDICTION_PERFORMANCE_PRODUCT].frame.copy()
     internal = bound[PREDICTION_INTERNAL_VALIDATION_PRODUCT].frame.copy()
     calibration = bound[PREDICTION_CALIBRATION_PRODUCT].frame.copy()
+    decision_curve = bound[PREDICTION_CLINICAL_UTILITY_PRODUCT].frame.copy()
     if len(performance) != 1 or len(internal) != 1:
-        raise RuntimeError("prediction performance and validation tables require one row")
-    if int(performance.iloc[0]["patient_overlap_n"]) != 0 or int(
-        internal.iloc[0]["patient_overlap_n"]
-    ) != 0:
+        raise RuntimeError(
+            "prediction performance and validation tables require one row"
+        )
+    if (
+        int(performance.iloc[0]["patient_overlap_n"]) != 0
+        or int(internal.iloc[0]["patient_overlap_n"]) != 0
+    ):
         raise RuntimeError("prediction source reports patient split leakage")
 
     out_dir = Path(out_dir)
@@ -231,7 +256,11 @@ def run_prediction_figure(
     ax.plot(fpr, tpr, color=palette["blue"], linewidth=1.6)
     ax.plot([0, 1], [0, 1], "--", color="#777777", linewidth=0.8)
     ax.set(xlabel="False-positive rate", ylabel="True-positive rate")
-    ax.set_title(f"Discrimination (AUROC {float(performance.iloc[0]['auroc']):.3f})", loc="left", pad=12)
+    ax.set_title(
+        f"Discrimination (AUROC {float(performance.iloc[0]['auroc']):.3f})",
+        loc="left",
+        pad=12,
+    )
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
     precision, recall, _ = precision_recall_curve(
@@ -257,36 +286,90 @@ def run_prediction_figure(
     ax.plot([0, 1], [0, 1], "--", color="#777777", linewidth=0.8)
     ax.plot(predicted, observed, "o-", color=palette["blue"], linewidth=1.3)
     ax.set(xlim=(0, 1), ylim=(0, 1), xlabel="Predicted risk", ylabel="Observed risk")
-    ax.set_title("Calibration in validation data", loc="left", pad=12)
-    add_panel_label(ax, "C", x=-0.12, y=1.04)
-
-    metric_names = ("AUROC", "Average precision", "1 − Brier")
-    metric_values = (
-        float(performance.iloc[0]["auroc"]),
-        float(performance.iloc[0]["average_precision"]),
-        1.0 - float(performance.iloc[0]["brier_score"]),
-    )
-    if not np.isfinite(metric_values).all():
-        raise RuntimeError("prediction performance metrics are not finite")
-    ax = axes[1, 1]
-    positions = np.arange(len(metric_names))
-    ax.barh(positions, metric_values, color=(palette["blue"], palette["orange"], palette["blue_soft"]))
-    ax.set_yticks(positions, metric_names)
-    ax.set_xlim(0, 1)
-    ax.set_xlabel("Metric value")
+    calibration_summary = calibration.loc[
+        calibration["row_role"].astype(str).eq("summary")
+    ]
+    if len(calibration_summary) != 1:
+        raise RuntimeError("calibration assessment requires one summary row")
+    calibration_intercept = float(calibration_summary.iloc[0]["calibration_intercept"])
+    calibration_slope = float(calibration_summary.iloc[0]["calibration_slope"])
+    brier_score = float(calibration_summary.iloc[0]["brier_score"])
+    if not np.isfinite((calibration_intercept, calibration_slope, brier_score)).all():
+        raise RuntimeError("calibration summary metrics are not finite")
     ax.set_title(
-        f"Validation n={int(internal.iloc[0]['evaluation_n'])}; overlap=0",
+        "Calibration in validation data\n"
+        f"Intercept {calibration_intercept:.2f}; slope {calibration_slope:.2f}; "
+        f"Brier {brier_score:.3f}",
         loc="left",
         pad=12,
     )
+    add_panel_label(ax, "C", x=-0.12, y=1.04)
+
+    for column in (
+        "threshold",
+        "net_benefit_model",
+        "net_benefit_all",
+        "net_benefit_none",
+    ):
+        decision_curve[column] = _prediction_finite_series(decision_curve, column)
+    if (
+        decision_curve["threshold"].duplicated().any()
+        or not decision_curve["threshold"].is_monotonic_increasing
+    ):
+        raise RuntimeError(
+            "prediction clinical-utility thresholds must be unique and increasing"
+        )
+    ax = axes[1, 1]
+    ax.plot(
+        decision_curve["threshold"],
+        decision_curve["net_benefit_model"],
+        color=palette["blue"],
+        linewidth=1.5,
+        label="Model",
+    )
+    ax.plot(
+        decision_curve["threshold"],
+        decision_curve["net_benefit_all"],
+        color=palette["orange"],
+        linewidth=1.0,
+        label="Treat all",
+    )
+    ax.plot(
+        decision_curve["threshold"],
+        decision_curve["net_benefit_none"],
+        color="#777777",
+        linestyle="--",
+        linewidth=0.9,
+        label="Treat none",
+    )
+    ax.set_xlim(0.01, 0.50)
+    ax.set_xlabel("Threshold probability")
+    ax.set_ylabel("Net benefit")
+    ax.set_title("Decision-curve analysis", loc="left", pad=12)
+    ax.legend(fontsize=6.0, frameon=False)
     add_panel_label(ax, "D", x=-0.12, y=1.04)
 
     evidence = {key: item.evidence_id for key, item in bound.items()}
     panel_specs = (
-        ("A", "Discrimination", "model_performance", (PREDICTION_SCORES_PRODUCT, PREDICTION_PERFORMANCE_PRODUCT)),
-        ("B", "Precision-recall", "model_performance", (PREDICTION_SCORES_PRODUCT, PREDICTION_PERFORMANCE_PRODUCT)),
+        (
+            "A",
+            "Discrimination",
+            "model_performance",
+            (PREDICTION_SCORES_PRODUCT, PREDICTION_PERFORMANCE_PRODUCT),
+        ),
+        (
+            "B",
+            "Precision-recall",
+            "model_performance",
+            (PREDICTION_SCORES_PRODUCT, PREDICTION_PERFORMANCE_PRODUCT),
+        ),
         ("C", "Calibration", "calibration", (PREDICTION_CALIBRATION_PRODUCT,)),
-        ("D", "Validation context", "validation", (PREDICTION_PERFORMANCE_PRODUCT, PREDICTION_INTERNAL_VALIDATION_PRODUCT)),
+        (
+            "D",
+            "Decision-curve analysis",
+            "clinical_utility",
+            (PREDICTION_CLINICAL_UTILITY_PRODUCT,),
+        ),
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
@@ -319,10 +402,12 @@ def run_prediction_figure(
         ],
         source_data=source_files,
         statistics_note=(
-            "ROC and precision-recall coordinates are deterministic projections "
-            "of the sealed validation scores. Calibration bins and split counts "
-            "come from their independently registered tables. Results remain "
-            "analysis_only and do not demonstrate transportability."
+            "ROC, precision-recall and decision-curve coordinates are deterministic "
+            "projections of the sealed validation scores. Calibration bins, "
+            "intercept, slope, Brier score and split counts come from independently "
+            "registered tables. Net benefit is exploratory because no clinical "
+            "threshold was externally authorized. Results remain analysis_only and "
+            "do not demonstrate transportability or clinical benefit."
         ),
     )
     outputs = save_publication_figure(
