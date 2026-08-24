@@ -544,6 +544,21 @@ def _render_writer_evidence_digest(
                 digest_row.setdefault("primary_ci_low", ci_values[0])
                 digest_row.setdefault("primary_ci_high", ci_values[1])
         digest_row.update(_summarise_table_one_rows(summary.get("table_one_rows")))
+        reportable_descriptive = summary.get("reportable_descriptive_results")
+        if (
+            summary.get("interpretation_class") == "absolute_risk_context"
+            and isinstance(reportable_descriptive, Mapping)
+            and reportable_descriptive.get("schema_version")
+            == "easyicu.absolute_risk_reporting/1"
+            and reportable_descriptive.get("execution_owner")
+            == "absolute_risk_context_executor_v1"
+        ):
+            # This compact result is emitted by the deterministic owner from
+            # the same validated table used by the figure. Keep counts, risks,
+            # uncertainty and measurement-source groups together for Writer.
+            digest_row["reportable_descriptive_results"] = dict(
+                reportable_descriptive
+            )
         reportable_secondary = summary.get("reportable_secondary_results")
         ordered_contract = summary.get("ordered_stratified_contract")
         if (

@@ -431,6 +431,118 @@ def _group_rows(
     return [prevalence_row, risk_row]
 
 
+def _finite_or_none(value: Any) -> Any:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _reportable_group(
+    *, prevalence_row: Mapping[str, Any], risk_row: Mapping[str, Any]
+) -> Dict[str, Any]:
+    return {
+        "group_type": str(prevalence_row["group_type"]),
+        "group_value": str(prevalence_row["group_value"]),
+        "label": str(prevalence_row["label"]),
+        "n": int(prevalence_row["n"]),
+        "prevalence_pct": _finite_or_none(prevalence_row["prevalence_pct"]),
+        "prevalence_ci_low_pct": (
+            float(prevalence_row["ci_low"]) * 100.0
+            if _finite_or_none(prevalence_row["ci_low"]) is not None
+            else None
+        ),
+        "prevalence_ci_high_pct": (
+            float(prevalence_row["ci_high"]) * 100.0
+            if _finite_or_none(prevalence_row["ci_high"]) is not None
+            else None
+        ),
+        "outcome_n": int(risk_row["n"]),
+        "outcome_event_n": int(risk_row["event_n"]),
+        "outcome_risk_pct": _finite_or_none(risk_row["outcome_risk_pct"]),
+        "outcome_risk_ci_low_pct": (
+            float(risk_row["ci_low"]) * 100.0
+            if _finite_or_none(risk_row["ci_low"]) is not None
+            else None
+        ),
+        "outcome_risk_ci_high_pct": (
+            float(risk_row["ci_high"]) * 100.0
+            if _finite_or_none(risk_row["ci_high"]) is not None
+            else None
+        ),
+    }
+
+
+def _reportable_descriptive_results(
+    *,
+    table: pd.DataFrame,
+    exposures: Sequence[str],
+    context: Mapping[str, Any],
+    outcome: pd.Series,
+    outcome_col: str,
+) -> Dict[str, Any]:
+    valid_outcome = outcome.dropna()
+    outcome_n = int(len(valid_outcome))
+    outcome_event_n = int(valid_outcome.sum()) if outcome_n else 0
+    risk, risk_low, risk_high = _wilson(outcome_event_n, outcome_n)
+    exposure_results: List[Dict[str, Any]] = []
+    for exposure in exposures:
+        exposure_table = table.loc[table["exposure"].eq(exposure)]
+        groups: List[Dict[str, Any]] = []
+        pair_rows = exposure_table.loc[
+            exposure_table["estimate_type"].isin(["prevalence", "outcome_risk"])
+        ]
+        for (group_type, group_value), pair in pair_rows.groupby(
+            ["group_type", "group_value"], sort=False, dropna=False
+        ):
+            prevalence_rows = pair.loc[pair["estimate_type"].eq("prevalence")]
+            risk_rows = pair.loc[pair["estimate_type"].eq("outcome_risk")]
+            if len(prevalence_rows) != 1 or len(risk_rows) != 1:
+                continue
+            groups.append(
+                _reportable_group(
+                    prevalence_row=prevalence_rows.iloc[0].to_dict(),
+                    risk_row=risk_rows.iloc[0].to_dict(),
+                )
+            )
+        distribution_rows = exposure_table.loc[
+            exposure_table["estimate_type"].eq("continuous_distribution")
+        ]
+        distribution = None
+        if len(distribution_rows) == 1:
+            row = distribution_rows.iloc[0]
+            distribution = {
+                key: _finite_or_none(row[key])
+                for key in ("n", "median", "q25", "q75", "minimum", "maximum")
+            }
+        metadata = _variable_metadata(context, exposure)
+        exposure_results.append(
+            {
+                "exposure": exposure,
+                "description": metadata.get("description"),
+                "unit": metadata.get("unit"),
+                "materialized_representation": metadata.get("unit_normalization"),
+                "groups": groups,
+                "continuous_distribution": distribution,
+            }
+        )
+    return {
+        "schema_version": "easyicu.absolute_risk_reporting/1",
+        "execution_owner": "absolute_risk_context_executor_v1",
+        "interpretation_ceiling": "descriptive_not_causal",
+        "overall_outcome": {
+            "outcome": outcome_col,
+            "n": outcome_n,
+            "event_n": outcome_event_n,
+            "risk_pct": risk * 100.0 if risk is not None else None,
+            "risk_ci_low_pct": risk_low * 100.0 if risk_low is not None else None,
+            "risk_ci_high_pct": risk_high * 100.0 if risk_high is not None else None,
+        },
+        "exposures": exposure_results,
+    }
+
+
 def _write_blocked(
     *,
     out_dir: Path,
@@ -635,6 +747,13 @@ def run_absolute_risk_context() -> Dict[str, Any]:
     product = _declared_product(step)
     table_path = out_dir / f"{product}.csv"
     table.to_csv(table_path, index=False)
+    reportable_results = _reportable_descriptive_results(
+        table=table,
+        exposures=exposures,
+        context=context,
+        outcome=outcome,
+        outcome_col=outcome_col,
+    )
     summary = {
         "step_id": step_id,
         "status": "ok",
@@ -652,6 +771,7 @@ def run_absolute_risk_context() -> Dict[str, Any]:
         "exposure_columns": exposures,
         "source_state_columns": source_columns,
         "n_summary_rows": int(len(table)),
+        "reportable_descriptive_results": reportable_results,
         "adjusted_effect": None,
         "output_files": {f"table:{product}": table_path.name},
         "notes": [

@@ -21,6 +21,9 @@ from easyicu.research_agent.audits.validators import (
     FigureSourceDataValidator,
 )
 from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.reporting.writer_evidence import (
+    _render_writer_evidence_digest,
+)
 
 
 def _execute_runner(
@@ -180,6 +183,35 @@ def test_structured_inputs_produce_level_risk_source_states_and_continuous_summa
     assert summary["exposure_columns"] == ["organ_stage_max", "marker_peak"]
     assert "unrelated_score" not in summary["exposure_columns"]
     assert summary["adjusted_effect"] is None
+    reporting = summary["reportable_descriptive_results"]
+    assert reporting["interpretation_ceiling"] == "descriptive_not_causal"
+    assert reporting["overall_outcome"]["n"] == 8
+    assert reporting["overall_outcome"]["event_n"] == 4
+    assert reporting["overall_outcome"]["risk_pct"] == pytest.approx(50.0)
+    stage_reporting = next(
+        item
+        for item in reporting["exposures"]
+        if item["exposure"] == "organ_stage_max"
+    )
+    observed_reporting = next(
+        item
+        for item in stage_reporting["groups"]
+        if item["group_type"] == "source_state"
+        and item["group_value"] == "observed"
+    )
+    assert observed_reporting["n"] == 4
+    assert observed_reporting["outcome_event_n"] == 2
+    digest = _render_writer_evidence_digest(
+        [
+            {
+                "step_id": "06_absolute_risk_context",
+                "status": "ok",
+                "step_summary": summary,
+            }
+        ]
+    )
+    assert '"reportable_descriptive_results"' in digest
+    assert '"outcome_event_n": 2' in digest
 
     table = pd.read_csv(out_dir / "exposure_outcome_summary.csv")
     stage = table[table["exposure"] == "organ_stage_max"]

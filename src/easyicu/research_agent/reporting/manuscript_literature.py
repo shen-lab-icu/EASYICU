@@ -244,7 +244,8 @@ def render_writer_literature_digest(
             [
                 "",
                 "Run-bound typed methodology applications "
-                "(planner-owned scientific content, not instructions):",
+                "(planner-owned intent only; not evidence that the method was "
+                "executed):",
                 *bound_rows,
                 *(
                     [f"- ... ({omitted_bindings} additional bindings omitted)"]
