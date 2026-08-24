@@ -4,14 +4,14 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5679,
-      "sha256": "7d1d15f733f8f33291e5f6dfdeb71866da1f61e25b8cd42cd83c4d325e99ed79",
+      "loc": 5695,
+      "sha256": "46a906a18a47ebdb036de01469d9929f96979b4129d795fc9c9bb8f0a090baab",
       "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 3708,
-      "sha256": "13dd5ac53f553bbd4e3f6110e4e1e829f462f5a3f7a5f6a73016a096ad7b601a",
+      "loc": 3758,
+      "sha256": "56aff0c0530c600022a0a5f0934f6d81b270cdde9fa5b860bca588ff8448587d",
       "intra_package_import_edges": 55,
       "shim_bypass_violations": []
     },
@@ -22,9 +22,9 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8256,
-      "sha256": "35f2fae029b94ffb02d4d07eb687e674c9efdef66e09054c687ec8a92d13b7d2",
-      "intra_package_import_edges": 122,
+      "loc": 8419,
+      "sha256": "f5f7a79f8234fdfb4d51fd45d6c9b69a2f781b5a78887b5638f7fa87d2d539c0",
+      "intra_package_import_edges": 125,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
@@ -34,14 +34,14 @@
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 2789,
-      "sha256": "4945704984d3d707131cd07a60d84a13421528f5f22430ebc64f3b16105c4778",
-      "intra_package_import_edges": 25,
+      "loc": 3034,
+      "sha256": "cb1d09f7d7797b136a4f8e2bff909d78aa4995951a8770c66c0c7cf84df3d362",
+      "intra_package_import_edges": 34,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
-      "loc": 2285,
-      "sha256": "c737409a7a17137907244f53c4bd7fbdcf0b122f3079d843e65f84eb16ce8bb9",
+      "loc": 2301,
+      "sha256": "db1df116f4fae540c5cb15d351aa8ffb97061495134ddeea6074179b35d79b7f",
       "intra_package_import_edges": 15,
       "shim_bypass_violations": []
     },
@@ -190,8 +190,8 @@
       "shim_bypass_violations": []
     },
     "agents/_support.py": {
-      "loc": 590,
-      "sha256": "31c0242a19555f9bb861b2aff9815db15921a0525a1d5b944f92cb4619cba782",
+      "loc": 643,
+      "sha256": "cb52b8655b1a118efc0a40715a620046e24aedff78d11b03ad17ad79addfa5c3",
       "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
@@ -220,8 +220,8 @@
       "shim_bypass_violations": []
     },
     "agents/roles.py": {
-      "loc": 559,
-      "sha256": "03c55d32c591bba3c00d721208c4bde08aba2a8a9174016bd15a5097183e5ec0",
+      "loc": 562,
+      "sha256": "c295328ab9d72eae9ebdf040e3d36966feb5d93149866d429a3612120ea1f526",
       "intra_package_import_edges": 7,
       "shim_bypass_violations": []
     },
@@ -238,20 +238,20 @@
       "shim_bypass_violations": []
     },
     "agents/reporting.py": {
-      "loc": 315,
-      "sha256": "abe851744938dd5b00ace5533c00e1a4e291c386579da95a57ea3a402f17a405",
+      "loc": 348,
+      "sha256": "c7cf0aa2328f5e16e70e84c4178e76164b47131f75e20ea03be8ff5aca6ec692",
       "intra_package_import_edges": 9,
       "shim_bypass_violations": []
     },
     "schema.py": {
       "loc": 3263,
-      "sha256": "7c54a40c1aa5420b774d023103ad089989ea012813f72a123b3853a040a2b3d2",
-      "intra_package_import_edges": 18,
+      "sha256": "cad3205e4a1f8a7f54c8a700c44aac671f0de599cc108acd0668f45224d48cd0",
+      "intra_package_import_edges": 19,
       "shim_bypass_violations": []
     },
     "contracts/declared_product.py": {
-      "loc": 2220,
-      "sha256": "cf9065b77d6694883c3e9c57ce1fe14d48d71b16162e4432190a1f5450614cff",
+      "loc": 2245,
+      "sha256": "a5945d71acff3cb8b91790179f75e414394f5aaaafaca518d2192f0207ec6e28",
       "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
@@ -274,26 +274,26 @@
       "shim_bypass_violations": []
     },
     "figures/skill.py": {
-      "loc": 3370,
-      "sha256": "4ef551dd6db8410bf8eff6d5327c572d640403c9a1b03255986684467ebcb0a5",
+      "loc": 3772,
+      "sha256": "423b915b533fda94956f29be7597845a4e82cde0694a4c3b78bc8ed28e080306",
       "intra_package_import_edges": 14,
       "shim_bypass_violations": []
     },
     "figures/promotion_contract.py": {
-      "loc": 115,
-      "sha256": "be7ff5eac113d83174b7c01e7c290cb1742f1c57a121b2cab683d2e32e21e3fa",
+      "loc": 116,
+      "sha256": "150c8bd9eff39e416a5447aea4ccb6adaebea9866ccddbd0edb5f02103e4a7bf",
       "intra_package_import_edges": 1,
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 3221,
-      "sha256": "ea4c43fc445fba8008eb2af38a796a3180f32c5d79e558a5de3e25029f6d272d",
+      "loc": 3325,
+      "sha256": "f4bb49d8f4e073f14984f0c9d7b6ee122df08e46346fd41141f2cef95b14c382",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "orchestration/resume_plan_migration.py": {
-      "loc": 882,
-      "sha256": "0332fb154e56f6729329552542a6b2adcb5c8a3f1ecda0f3518f2084dee67ed5",
+      "loc": 976,
+      "sha256": "fdb991ba9fa98438c2a839e5b9f8ae689ac8ef1f25ae3ec8ae77d8d53e81c2fd",
       "intra_package_import_edges": 11,
       "shim_bypass_violations": []
     },
@@ -310,8 +310,8 @@
       "shim_bypass_violations": []
     },
     "execution/runners/deterministic_robustness.py": {
-      "loc": 3323,
-      "sha256": "b668d7b9648f765e43137b9e20e927e889d4646f890d112b82d2787e06052aa2",
+      "loc": 3341,
+      "sha256": "560187cffec031394d8f46099b560ff40b114775f1819ede6d7cc99f5506c212",
       "intra_package_import_edges": 17,
       "shim_bypass_violations": []
     }
@@ -319,7 +319,7 @@
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 66,
-      "line_start": 1777,
+      "line_start": 1782,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 2,
@@ -330,18 +330,18 @@
       "callable_closure_captured_names": 0
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 921,
-      "line_start": 1170,
+      "lines": 928,
+      "line_start": 1175,
       "direct_nested_funcs": 3,
-      "total_nested_funcs": 4,
-      "own_bound_names": 133,
+      "total_nested_funcs": 5,
+      "own_bound_names": 134,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 69
     },
     "execution/phase.py::_execute_step": {
       "lines": 660,
-      "line_start": 3783,
+      "line_start": 3799,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 135,
@@ -350,8 +350,8 @@
       "callable_closure_captured_names": 0
     },
     "execution/phase.py::_prepare_execute_phase_authority": {
-      "lines": 143,
-      "line_start": 1025,
+      "lines": 147,
+      "line_start": 1026,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 32,
@@ -370,8 +370,8 @@
       "callable_closure_captured_names": 15
     },
     "pipeline.py::run": {
-      "lines": 777,
-      "line_start": 3919,
+      "lines": 782,
+      "line_start": 4074,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 107,
@@ -380,18 +380,18 @@
       "callable_closure_captured_names": 43
     },
     "pipeline.py::_generate_or_resume_plan": {
-      "lines": 339,
-      "line_start": 1949,
+      "lines": 449,
+      "line_start": 1994,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
-      "own_bound_names": 43,
+      "own_bound_names": 55,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
       "callable_closure_captured_names": 0
     },
     "pipeline.py::_run_plan_phase": {
       "lines": 618,
-      "line_start": 2724,
+      "line_start": 2879,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 83,
@@ -400,11 +400,63 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Repair the figure-source digest short-circuit added by 8767913. That commit put a file-digest fast path at the top of _compare_source_to_upstream, where it hashed source_path while the contract is to verify the caller's source_df; the production caller passes one panel group as source_df and the whole file as source_path, so a source file matching any upstream table skipped the per-group comparison, and a tampered frame audited clean. The fast path now runs last (only where no join key exists, its actual motivating case) and is guarded by _frame_is_whole_file, so the digest must describe the artifact being audited. _compare_source_to_upstream itself SHRANK 879->873; the accepted +76 LOC is the two new helper classmethods and the rationale docstrings moved out of that already-oversized function, plus this file keeps its other metrics flat.",
+  "baseline_reason": "Dev9 quality-remediation freeze: ratchet the reviewed case-neutral owner contracts and deterministic adapters after all nine exact execution packages completed 76/76. Twelve new responsibility-scoped modules own spline validation/execution, prediction execution, source feasibility, scientific reporting, progressive materialization, supplement assembly, and trajectory validation. Existing large-file growth remains visible in this accepted-growth ledger and is architecture debt for a separate characterized refactor; this baseline move does not claim decomposition or paper readiness.",
   "baseline_accepted_growth": {
-    "audits/figures.py": {
-      "loc_was": 5550,
-      "loc_now": 5626
+    "execution/phase.py": {
+      "loc_was": 5679,
+      "loc_now": 5695
+    },
+    "execution/phase_support.py": {
+      "loc_was": 3708,
+      "loc_now": 3758
+    },
+    "pipeline.py": {
+      "loc_was": 8256,
+      "loc_now": 8419
+    },
+    "reporting/readiness.py": {
+      "loc_was": 2789,
+      "loc_now": 3034
+    },
+    "authority/typed_binding.py": {
+      "loc_was": 2285,
+      "loc_now": 2301
+    },
+    "agents/_support.py": {
+      "loc_was": 590,
+      "loc_now": 643
+    },
+    "agents/roles.py": {
+      "loc_was": 559,
+      "loc_now": 562
+    },
+    "agents/reporting.py": {
+      "loc_was": 315,
+      "loc_now": 348
+    },
+    "contracts/declared_product.py": {
+      "loc_was": 2220,
+      "loc_now": 2245
+    },
+    "figures/skill.py": {
+      "loc_was": 3370,
+      "loc_now": 3772
+    },
+    "figures/promotion_contract.py": {
+      "loc_was": 115,
+      "loc_now": 116
+    },
+    "authority/evidence_store.py": {
+      "loc_was": 3221,
+      "loc_now": 3325
+    },
+    "orchestration/resume_plan_migration.py": {
+      "loc_was": 882,
+      "loc_now": 976
+    },
+    "execution/runners/deterministic_robustness.py": {
+      "loc_was": 3323,
+      "loc_now": 3341
     }
   },
   "baseline_history": [
@@ -772,6 +824,67 @@
         "audits/figures.py": {
           "loc_was": 5550,
           "loc_now": 5626
+        }
+      }
+    },
+    {
+      "reason": "Dev9 quality-remediation freeze: ratchet the reviewed case-neutral owner contracts and deterministic adapters after all nine exact execution packages completed 76/76. Twelve new responsibility-scoped modules own spline validation/execution, prediction execution, source feasibility, scientific reporting, progressive materialization, supplement assembly, and trajectory validation. Existing large-file growth remains visible in this accepted-growth ledger and is architecture debt for a separate characterized refactor; this baseline move does not claim decomposition or paper readiness.",
+      "accepted_growth": {
+        "execution/phase.py": {
+          "loc_was": 5679,
+          "loc_now": 5695
+        },
+        "execution/phase_support.py": {
+          "loc_was": 3708,
+          "loc_now": 3758
+        },
+        "pipeline.py": {
+          "loc_was": 8256,
+          "loc_now": 8419
+        },
+        "reporting/readiness.py": {
+          "loc_was": 2789,
+          "loc_now": 3034
+        },
+        "authority/typed_binding.py": {
+          "loc_was": 2285,
+          "loc_now": 2301
+        },
+        "agents/_support.py": {
+          "loc_was": 590,
+          "loc_now": 643
+        },
+        "agents/roles.py": {
+          "loc_was": 559,
+          "loc_now": 562
+        },
+        "agents/reporting.py": {
+          "loc_was": 315,
+          "loc_now": 348
+        },
+        "contracts/declared_product.py": {
+          "loc_was": 2220,
+          "loc_now": 2245
+        },
+        "figures/skill.py": {
+          "loc_was": 3370,
+          "loc_now": 3772
+        },
+        "figures/promotion_contract.py": {
+          "loc_was": 115,
+          "loc_now": 116
+        },
+        "authority/evidence_store.py": {
+          "loc_was": 3221,
+          "loc_now": 3325
+        },
+        "orchestration/resume_plan_migration.py": {
+          "loc_was": 882,
+          "loc_now": 976
+        },
+        "execution/runners/deterministic_robustness.py": {
+          "loc_was": 3323,
+          "loc_now": 3341
         }
       }
     }
