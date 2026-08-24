@@ -30,7 +30,23 @@ _SECTION_TOKENS: dict[str, tuple[str, ...]] = {
     "clinical_utility": ("decision_curve", "clinical_utility", "net_benefit"),
     "cluster_selection": ("cluster_selection", "candidate", "silhouette", "bic"),
     "cluster_stability": ("cluster_stability", "stability", "adjusted_rand"),
-    "external_reproducibility": ("external", "transport", "replication"),
+    "external_reproducibility": (
+        "external_reproducibility",
+        "cross_cohort_replication",
+        "replication_cohort",
+        "transportability_assessment",
+    ),
+    "external_validation": (
+        "external_validation",
+        "external_validation_cohort",
+        "transport_validation",
+    ),
+    "resampling_validation": (
+        "bootstrap_validation",
+        "repeated_split",
+        "cross_validation",
+        "resampling_validation",
+    ),
     "ph_diagnostics": ("schoenfeld", "proportional_hazards", "ph_diagnostic"),
     "non_ph_alternative": ("rmst", "time_varying", "extended_cox", "non_ph"),
     "trajectory_window_missingness": ("trajectory", "window", "missing"),
@@ -48,7 +64,14 @@ _COMMON_REQUIRED = (
 )
 
 _FAMILY_REQUIRED: dict[str, tuple[str, ...]] = {
-    "prediction": ("calibration", "discrimination", "validation", "clinical_utility"),
+    "prediction": (
+        "calibration",
+        "discrimination",
+        "validation",
+        "clinical_utility",
+        "resampling_validation",
+        "external_validation",
+    ),
     "phenotyping": (
         "cluster_selection",
         "cluster_stability",

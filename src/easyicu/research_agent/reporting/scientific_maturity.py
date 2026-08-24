@@ -134,7 +134,7 @@ def _registered_figure_adjustment_authority(
     run_dir: Path,
     *,
     figure_evidence_ids: set[str],
-) -> tuple[Optional[tuple[str, ...]], list[str]]:
+) -> tuple[Optional[tuple[str, ...]], list[str], bool]:
     """Resolve a figure's executed adjustment roster from registered receipts.
 
     A host-owned executor may compile its model contract after the Planner plan
@@ -177,6 +177,7 @@ def _registered_figure_adjustment_authority(
             if str(value).strip() and str(value).strip() not in visited_ids
         )
     rosters: dict[tuple[str, ...], list[str]] = {}
+    promoted_rosters: dict[tuple[str, ...], list[str]] = {}
     root = run_dir.resolve()
     for record in records:
         if str(record.get("produced_by_step") or "").strip() not in related_steps:
@@ -203,6 +204,14 @@ def _registered_figure_adjustment_authority(
         schema_version = str(receipt.get("schema_version") or "").strip()
         if not re.fullmatch(r"easyicu\.[a-z0-9_]+_runtime_receipt/1", schema_version):
             continue
+        promoted_columns = receipt.get("promoted_adjustment_columns")
+        if isinstance(promoted_columns, list) and all(
+            isinstance(value, str) and value.strip() for value in promoted_columns
+        ):
+            roster = tuple(value.strip() for value in promoted_columns)
+            promoted_rosters.setdefault(roster, []).append(relative_path)
+        elif promoted_columns == []:
+            promoted_rosters.setdefault((), []).append(relative_path)
         adjustment_columns = receipt.get("adjustment_columns")
         if not isinstance(adjustment_columns, list) or any(
             not isinstance(value, str) or not value.strip()
@@ -211,10 +220,15 @@ def _registered_figure_adjustment_authority(
             continue
         roster = tuple(value.strip() for value in adjustment_columns)
         rosters.setdefault(roster, []).append(relative_path)
+    if len(promoted_rosters) == 1:
+        roster, refs = next(iter(promoted_rosters.items()))
+        return roster, sorted(set(refs)), True
+    if promoted_rosters:
+        return None, [], True
     if len(rosters) != 1:
-        return None, []
+        return None, [], False
     roster, refs = next(iter(rosters.items()))
-    return roster, sorted(set(refs))
+    return roster, sorted(set(refs)), False
 
 
 def _scientific_steps(plan: Optional[AnalysisPlan]) -> list[Any]:
@@ -744,12 +758,16 @@ def _primary_figure_facts(
                 adjustment_labels.append(label)
                 adjustment_roles.append(role)
     plan_covariates = _model_covariates(plan)
-    executed_covariates, execution_refs = _registered_figure_adjustment_authority(
-        run_dir,
-        figure_evidence_ids=figure_evidence_ids,
+    executed_covariates, execution_refs, promoted_authority = (
+        _registered_figure_adjustment_authority(
+            run_dir,
+            figure_evidence_ids=figure_evidence_ids,
+        )
     )
     covariates = (
-        plan_covariates
+        executed_covariates
+        if promoted_authority and executed_covariates is not None
+        else plan_covariates
         if plan_covariates
         else executed_covariates
         if executed_covariates is not None
@@ -774,7 +792,9 @@ def _primary_figure_facts(
         "adjustment_panel_roles": adjustment_roles,
         "adjustment_covariates": list(covariates),
         "adjustment_authority": (
-            "plan"
+            "promoted_runtime_receipt"
+            if promoted_authority and executed_covariates is not None
+            else "plan"
             if plan_covariates
             else "runtime_receipt"
             if executed_covariates is not None

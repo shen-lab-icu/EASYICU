@@ -1038,6 +1038,18 @@ def run_landmark_survival_figure(
         out_dir=out_dir,
     )
     receipt_path = out_dir / "landmark_survival_figure_runtime_receipt.json"
+    ph_statuses = {
+        str(value).strip()
+        for value in pd.DataFrame(ph_table).get("ph_status", pd.Series(dtype=str))
+        if str(value).strip()
+    }
+    ph_rejected = any(status.startswith("violation_") for status in ph_statuses)
+    promotes_rmst = bool(
+        ph_rejected
+        and sealed.non_ph_alternative == "unadjusted_rmst_difference"
+        and sealed.rmst_product is not None
+        and rmst_table is not None
+    )
     receipt_path.write_text(
         json.dumps(
             {
@@ -1046,6 +1058,14 @@ def run_landmark_survival_figure(
                 ),
                 "adjustment_columns": list(sealed.adjustment_columns),
                 "effect_measure": sealed.effect_measure,
+                "promoted_adjustment_columns": (
+                    [] if promotes_rmst else list(sealed.adjustment_columns)
+                ),
+                "promoted_effect_measure": (
+                    "restricted_mean_survival_time_difference"
+                    if promotes_rmst
+                    else sealed.effect_measure
+                ),
                 "source_sha256": {
                     product: hashlib.sha256(
                         Path(source_paths[product]).read_bytes()

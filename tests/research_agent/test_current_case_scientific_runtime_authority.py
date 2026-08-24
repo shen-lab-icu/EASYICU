@@ -578,6 +578,16 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         (figure_dir / "landmark_survival_figure_runtime_receipt.json").read_text()
     )
     assert figure_receipt["adjustment_columns"] == list(authority.adjustment_columns)
+    if summary["proportional_hazards_status"].startswith("violation_"):
+        assert figure_receipt["promoted_adjustment_columns"] == []
+        assert figure_receipt["promoted_effect_measure"] == (
+            "restricted_mean_survival_time_difference"
+        )
+    else:
+        assert figure_receipt["promoted_adjustment_columns"] == list(
+            authority.adjustment_columns
+        )
+        assert figure_receipt["promoted_effect_measure"] == "hazard_ratio"
     assert figure_summary["figure_assets"]["runtime_receipt"] == (
         "landmark_survival_figure_runtime_receipt.json"
     )
