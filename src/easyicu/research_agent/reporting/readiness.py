@@ -41,9 +41,17 @@ import re
 import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
-from ..contracts.capability_ids import LANDMARK_SPLINE_ANALYSIS_KIND
+from ..contracts.capability_ids import (
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    PHENOTYPING_ANALYSIS_KIND,
+    PHENOTYPING_CLUSTER_CAPABILITY_ID,
+)
 from ..contracts.landmark_spline_validation import (
     landmark_spline_runtime_receipt_valid,
+)
+from ..contracts.phenotyping_validation import (
+    phenotyping_runtime_bundle_errors,
+    phenotyping_runtime_receipt_valid,
 )
 
 from .article_contract import (
@@ -1468,6 +1476,7 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
         EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
         PREDICTION_MODEL_ANALYSIS_KIND,
         LANDMARK_SPLINE_ANALYSIS_KIND,
+        PHENOTYPING_ANALYSIS_KIND,
         SURVIVAL_PRIMARY_ANALYSIS_KIND,
     }
 )
@@ -1486,6 +1495,16 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
         ):
             continue
         if landmark_spline_runtime_receipt_valid(record.get("step_summary")):
+            return True
+
+    for record in per_step_records or []:
+        if (
+            not isinstance(record, dict)
+            or record.get("deterministic_standard_analysis")
+            != PHENOTYPING_ANALYSIS_KIND
+        ):
+            continue
+        if phenotyping_runtime_receipt_valid(record.get("step_summary")):
             return True
 
     for record in per_step_records or []:
@@ -1936,12 +1955,19 @@ def _compute_readiness_gates(
             f"{capability_assessment.reason}"
         ]
     )
+    phenotyping_validation_errors = (
+        phenotyping_runtime_bundle_errors(per_step_records or [])
+        if capability_assessment.capability_id
+        == PHENOTYPING_CLUSTER_CAPABILITY_ID
+        else []
+    )
     base_analysis_errors = (
         non_manuscript_errors
         + blocked_outcome_errors
         + plausibility_errors
         + survival_integrity_errors
         + scientific_capability_errors
+        + phenotyping_validation_errors
     )
     selected_capability = get_capability_by_id(capability_assessment.capability_id)
     _no_det_primary_expected = bool(

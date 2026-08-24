@@ -21,6 +21,8 @@ from sklearn.impute import SimpleImputer
 from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
 
+from ...contracts.capability_ids import PHENOTYPING_ANALYSIS_KIND
+from ...contracts.phenotyping_validation import PhenotypingRuntimeReceipt
 from ...research_context.typed import parse_research_context_json
 from ...schema import AnalysisStep
 from .typed_input_binding import (
@@ -29,7 +31,6 @@ from .typed_input_binding import (
     sole_typed_cohort_input,
 )
 
-PHENOTYPING_ANALYSIS_KIND = "cross_sectional_phenotyping"
 PHENOTYPE_PROFILES_PRODUCT = "table:phenotype_profiles"
 PHENOTYPE_ASSIGNMENTS_PRODUCT = "table:phenotype_assignments"
 CLUSTER_SELECTION_PRODUCT = "table:cluster_selection"
@@ -235,8 +236,41 @@ def run_primary_phenotyping(
     profiles = pd.DataFrame(profile_rows)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    profiles.to_csv(out_dir / "phenotype_profiles.csv", index=False)
-    assignments.to_csv(out_dir / "phenotype_assignments.csv", index=False)
+    profiles_path = out_dir / "phenotype_profiles.csv"
+    assignments_path = out_dir / "phenotype_assignments.csv"
+    profiles.to_csv(profiles_path, index=False)
+    assignments.to_csv(assignments_path, index=False)
+    selected_silhouette = next(
+        row["silhouette"] for row in scores if row["selected"]
+    )
+    receipt = PhenotypingRuntimeReceipt(
+        schema_version="easyicu.cross_sectional_phenotyping_runtime_receipt/1",
+        analysis_kind=PHENOTYPING_ANALYSIS_KIND,
+        owner=(
+            "easyicu.research_agent.execution.runners."
+            "cross_sectional_phenotyping_executor"
+        ),
+        n_rows=len(assignments),
+        feature_roster=list(features),
+        preprocessing="median_imputation_then_standard_scaling",
+        clustering_method="minibatch_kmeans",
+        random_seed=_SEED,
+        candidates=scores,
+        selected_n_clusters=selected_k,
+        selected_silhouette_score=selected_silhouette,
+        cluster_counts={
+            str(int(cluster)): int(count)
+            for cluster, count in assignments["cluster"].value_counts().items()
+        },
+        source_cohort_sha256=sha256_file(Path(source_cohort)),
+        phenotype_profiles_sha256=sha256_file(profiles_path),
+        phenotype_assignments_sha256=sha256_file(assignments_path),
+        outcome_used_for_fit=False,
+        downstream_outcome_use="descriptive_only",
+        causal_entity_claim_authorized=False,
+        external_reproducibility_established=False,
+        paper_authorization_allowed=False,
+    ).model_dump(mode="json")
     summary = {
         "step_id": step_id,
         "status": "ok",
@@ -247,14 +281,15 @@ def run_primary_phenotyping(
         "authority_scope": "analysis_only",
         "paper_authorization_allowed": False,
         "selected_n_clusters": selected_k,
-        "selected_silhouette_score": next(row["silhouette"] for row in scores if row["selected"]),
+        "selected_silhouette_score": selected_silhouette,
         "cluster_selection": {
             "criterion": "silhouette_score",
-            "selection_rule": "maximum_then_lower_k",
+            "selection_rule": "maximum_silhouette_then_lower_k",
             "direction": "maximize",
             "selected_n_clusters": selected_k,
             "candidates": scores,
         },
+        "scientific_runtime_receipt": receipt,
         "feature_roster": list(features),
         "source_cohort": str(Path(source_cohort).resolve()),
         "source_cohort_sha256": sha256_file(Path(source_cohort)),
@@ -302,7 +337,15 @@ def run_phenotyping_diagnostic(
         filename = "cluster_selection.csv"
         product = CLUSTER_SELECTION_PRODUCT
         result.to_csv(out_dir / filename, index=False)
-        details = {"selected_n_clusters": selected_k, "cluster_selection": {"criterion": "silhouette_score", "selection_rule": "maximum", "selected_n_clusters": selected_k, "candidates": scores}}
+        details = {
+            "selected_n_clusters": selected_k,
+            "cluster_selection": {
+                "criterion": "silhouette_score",
+                "selection_rule": "maximum_silhouette_then_lower_k",
+                "selected_n_clusters": selected_k,
+                "candidates": scores,
+            },
+        }
     elif action_id == "phenotyping.cluster_stability":
         selected_k = int(pd.Series(reference).nunique())
         rows = []
@@ -319,7 +362,14 @@ def run_phenotyping_diagnostic(
         filename = "cluster_stability.csv"
         product = CLUSTER_STABILITY_PRODUCT
         result.to_csv(out_dir / filename, index=False)
-        details = {"cluster_stability": {"selected_n_clusters": selected_k, "n_resamples": len(rows), "mean_adjusted_rand_index": mean_ari}}
+        details = {
+            "cluster_stability": {
+                "selected_n_clusters": selected_k,
+                "n_resamples": len(rows),
+                "mean_adjusted_rand_index": mean_ari,
+                "replicates": rows,
+            }
+        }
     else:
         raise RuntimeError("unsupported cross-sectional phenotyping action")
     summary = {

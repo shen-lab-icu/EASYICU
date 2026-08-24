@@ -6,6 +6,8 @@ from typing import Final
 
 LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID: Final = "association_landmark_spline_v1"
 LANDMARK_SPLINE_ANALYSIS_KIND: Final = "signed_landmark_spline_association"
+PHENOTYPING_CLUSTER_CAPABILITY_ID: Final = "phenotyping_cluster_v1"
+PHENOTYPING_ANALYSIS_KIND: Final = "cross_sectional_phenotyping"
 
 CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "survival_time_to_event_v1": "time_to_event",
@@ -16,7 +18,7 @@ CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "association_freeform_v1": "association",
     "prediction_risk_model_v1": "prediction",
     "dynamic_prediction_landmark_v1": "prediction",
-    "phenotyping_cluster_v1": "phenotyping",
+    PHENOTYPING_CLUSTER_CAPABILITY_ID: "phenotyping",
     "descriptive_measurement_v1": "descriptive",
     "descriptive_exposure_outcome_distribution_v1": "descriptive",
 }
@@ -32,5 +34,7 @@ __all__ = [
     "CAPABILITY_FAMILIES",
     "LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID",
     "LANDMARK_SPLINE_ANALYSIS_KIND",
+    "PHENOTYPING_CLUSTER_CAPABILITY_ID",
+    "PHENOTYPING_ANALYSIS_KIND",
     "capability_family",
 ]
