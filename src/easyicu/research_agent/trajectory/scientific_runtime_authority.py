@@ -261,7 +261,11 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
 
     def is_development_execution_only_plan(self, plan: AnalysisPlan) -> bool:
         observed = {step.step_id for step in plan.steps}
-        return set(self.development_execution_step_ids).issubset(observed)
+        # Check the three scientific owners, not the display suffix introduced
+        # by the current runtime.  This lets an exact checkpoint created before
+        # the suffix existed be upgraded deterministically instead of falling
+        # through to generic article shaping.
+        return set(self.development_execution_step_ids[:3]).issubset(observed)
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
         owners: dict[str, list[Any]] = {

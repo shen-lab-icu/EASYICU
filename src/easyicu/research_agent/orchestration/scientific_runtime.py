@@ -81,7 +81,7 @@ class ScientificRuntimeAuthorities:
                     severity="warning",
                     message=(
                         "Removed generic article-shaping additions and compiled "
-                        "the three signed trajectory execution owners."
+                        "the four signed trajectory execution owners."
                     ),
                     detail={
                         "reason_code": (
