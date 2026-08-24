@@ -10,6 +10,7 @@
 (function () {
   const { esc } = window.EU_HTML;
   const S = (window.SCREENS = window.SCREENS || {});
+  const RUN_HISTORY_VIEW = window.EU_AGENT_RUN_HISTORY_VIEW;
 
   /* Fixture data + pure renderers live in screens-agent-render.js
      (owner-file carve-out; loads before this file). Rebind the names
@@ -190,14 +191,7 @@
     return '…/' + tail;
   }
   function projectFolderLabel(s) {
-    if (s && s.empty) return t('No local project folder yet', '还没有本地项目文件夹');
-    const persisted = historyRowsForStudy(s)[0];
-    if (persisted && persisted.project_dir) {
-      return displayPath(String(persisted.project_dir).replace(/[\\/]run_[^\\/]+[\\/]?$/, ''));
-    }
-    return s && s.ideaSeed && s.ideaSeed.project_dir
-      ? displayPath(s.ideaSeed.project_dir)
-      : t('Created when this study is first run', '首次运行时创建');
+    return RUN_HISTORY_VIEW.projectFolder(agHistory, s, displayPath, { empty: t('No local project folder yet', '还没有本地项目文件夹'), pending: t('Created when this study is first run', '首次运行时创建') });
   }
   function studyBadgeLabel(s) {
     if (s && s.readOnlyImport) return t('Read-only result', '只读结果');
@@ -286,37 +280,9 @@
     const s = study();
     return window.EU_AGENT_LAST_RUN && window.EU_AGENT_LAST_RUN.study_id === s.id ? window.EU_AGENT_LAST_RUN : null;
   }
-  function historyRowsForStudy(s) {
-    if (!s || agHistory.studyId !== s.id || !agHistory.data || !Array.isArray(agHistory.data.runs)) return [];
-    return agHistory.data.runs;
-  }
-  function monitorRunCount(s) {
-    if (!realMode()) return Array.isArray(s && s.runs) ? s.runs.length : 0;
-    if (!s || agHistory.studyId !== s.id || agHistory.loading || agHistory.error || !agHistory.data) return null;
-    return Number.isInteger(agHistory.data.count) ? agHistory.data.count : historyRowsForStudy(s).length;
-  }
-  function historyRunForStudy(s) {
-    const row = historyRowsForStudy(s)[0];
-    if (!row || !row.project_dir) return null;
-    return {
-      run_id: row.run_id,
-      run_label: row.run_label,
-      study_id: row.study_id || s.id,
-      mode: row.mode || s.mode,
-      run_type: row.run_type || 'preflight',
-      project_dir: row.project_dir,
-      source: {},
-      summary: {},
-      gate: {
-        status: row.gate_status || 'blocked',
-        reportable: false,
-        draft_unlocked: false,
-        checks: [],
-      },
-      artifacts: [],
-      persistedHistory: true,
-    };
-  }
+  const historyRowsForStudy = s => RUN_HISTORY_VIEW.rows(agHistory, s);
+  const monitorRunCount = s => RUN_HISTORY_VIEW.count(agHistory, s, realMode());
+  const historyRunForStudy = s => RUN_HISTORY_VIEW.run(agHistory, s);
   function importedRunForStudy(s) {
     if (!s || !s.reviewProjectDir || !s.readOnlyImport) return null;
     const row = Array.isArray(s.seedRuns) ? s.seedRuns.find(r => r && r.project_dir === s.reviewProjectDir) : null;
