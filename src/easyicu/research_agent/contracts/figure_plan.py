@@ -143,19 +143,19 @@ def landmark_association_composite_panels(
         DeterministicFigurePanelTemplate(
             panel_id="association_curve",
             article_role="primary_estimand",
-            chart_type="continuous_effect_curve",
+            chart_type="marginal_effect_panel",
             source_products=(curve,),
         ),
         DeterministicFigurePanelTemplate(
             panel_id="absolute_risk_context",
             article_role="descriptive_result",
-            chart_type="absolute_risk",
+            chart_type="dot_interval_absolute_risk",
             source_products=("table:absolute_risk_context",),
         ),
         DeterministicFigurePanelTemplate(
             panel_id="robustness_summary",
             article_role="robustness",
-            chart_type="sensitivity_range",
+            chart_type="specification_grid",
             source_products=("table:robustness_summary",),
         ),
         DeterministicFigurePanelTemplate(

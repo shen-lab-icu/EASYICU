@@ -689,6 +689,8 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     assert summary["status"] == "ok"
     assert summary["primary_or"] == 2.0
     assert summary["primary_effect_is_nonlinear_curve_summary"] is False
+    assert "exposure_value=5" in summary["primary_effect_label"]
+    assert "reference_value=2.1" in summary["primary_effect_label"]
     assert summary["complete_case_n"] == 44095
     assert len(summary["input_bindings"]) == 2
     matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
