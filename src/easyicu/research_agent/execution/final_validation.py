@@ -45,6 +45,10 @@ from ..contracts.descriptive_execution import (
 from ..contracts.runtime import ValidationFinding
 from ..contracts.prediction_execution import PREDICTION_MODEL_ANALYSIS_KIND
 from ..contracts.prediction_validation import PredictionValidationReceipt
+from ..contracts.capability_ids import LANDMARK_SPLINE_ANALYSIS_KIND
+from ..contracts.landmark_spline_validation import (
+    landmark_spline_runtime_receipt_valid,
+)
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..gates.contract import _step_deterministic_contract_findings
@@ -67,6 +71,7 @@ _PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
     PREDICTION_MODEL_ANALYSIS_KIND,
+    LANDMARK_SPLINE_ANALYSIS_KIND,
     SURVIVAL_PRIMARY_ANALYSIS_KIND,
 }
 
@@ -124,6 +129,8 @@ def _primary_runner_core_estimate_present(
         except Exception:
             return False
         return bool(step_summary.get("paper_authorization_allowed") is False)
+    if kind == LANDMARK_SPLINE_ANALYSIS_KIND:
+        return landmark_spline_runtime_receipt_valid(step_summary)
     if kind == EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND:
         return exposure_outcome_distribution_result_receipt_valid(step_summary)
     if kind in ("causal_primary_iptw", "ordinal_dose_response"):
@@ -334,9 +341,7 @@ def _evaluate_final_deterministic_gates(
         final_fraction_envelope_validator=StepSummaryFractionEnvelopeDualReader(),
         final_fraction_envelope=result_envelope_snapshot.envelope,
         final_fraction_current_status=current_step_status,
-        final_registered_output_envelope_validator=(
-            RegisteredOutputEnvelopeConsumer()
-        ),
+        final_registered_output_envelope_validator=(RegisteredOutputEnvelopeConsumer()),
         final_registered_output_evidence_store=evidence_store,
     )
     contract_findings.extend(

@@ -18,6 +18,7 @@ from ...authority.current_case_scientific_runtime import (
 )
 from ...schema import AnalysisPlan, AnalysisStep
 from ...numeric_scalars import coerce_finite_float
+from ...planning.robustness_contract import RobustnessSpec, complete_case_variables
 from .deterministic_robustness import (
     declared_robustness_product_registrations,
     robustness_replay_spec_is_emittable,
@@ -141,6 +142,34 @@ def _summary_rows(matrix: Any) -> Any:
     return pd.DataFrame(rows)
 
 
+def _matching_complete_case_spec_id(
+    *,
+    specs: list[RobustnessSpec],
+    authority: LandmarkSplineRuntimeAuthority,
+) -> str:
+    """Bind the documentation row to one scientifically equivalent lock entry."""
+
+    model_variables = {
+        authority.exposure_column,
+        authority.outcome_column,
+        *authority.required_adjustment_columns,
+    }
+    matches = [
+        spec.spec_id
+        for spec in specs
+        if spec.axis == "missing"
+        and (variables := complete_case_variables(spec)) is not None
+        and set(variables) == model_variables
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "signed landmark robustness requires exactly one locked complete-case "
+            "spec over the primary model variables; matched "
+            f"{len(matches)}"
+        )
+    return matches[0]
+
+
 def run_landmark_spline_robustness(
     *,
     step: AnalysisStep,
@@ -151,6 +180,7 @@ def run_landmark_spline_robustness(
     contrast_evidence_id: str,
     linear_evidence_id: str,
     out_dir: Path,
+    complete_case_spec_id: str,
     input_bindings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Project already-fitted signed outputs into the robustness contract."""
@@ -191,9 +221,7 @@ def run_landmark_spline_robustness(
         upper[coordinate], label="upper contrast coordinate"
     )
     reference_columns = [
-        column
-        for column in contrasts.columns
-        if "reference" in str(column).casefold()
+        column for column in contrasts.columns if "reference" in str(column).casefold()
     ]
     if len(reference_columns) != 1:
         raise ValueError("signed landmark contrasts require one reference coordinate")
@@ -276,7 +304,7 @@ def run_landmark_spline_robustness(
         },
         {
             **base,
-            "spec_id": "signed_complete_case_analysis_set",
+            "spec_id": complete_case_spec_id,
             "point_estimate": primary_or,
             "ci_low": primary_low,
             "ci_high": primary_high,
@@ -406,10 +434,15 @@ def run_bound_landmark_spline_robustness(
     out_dir: Path,
 ) -> dict[str, Any]:
     from .typed_input_binding import load_typed_input
+    from ...robustness.panel import load_locked_robustness_specs
 
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
         raise TypeError("landmark robustness executor received wrong authority kind")
+    complete_case_spec_id = _matching_complete_case_spec_id(
+        specs=load_locked_robustness_specs(run_dir),
+        authority=sealed,
+    )
     manifest = json.loads(resolved_inputs.read_text(encoding="utf-8"))
     resolved = manifest.get("inputs") if isinstance(manifest, dict) else None
     if not isinstance(resolved, dict) or not resolved:
@@ -464,6 +497,7 @@ def run_bound_landmark_spline_robustness(
         linear_evidence_id=linear.evidence_id,
         out_dir=out_dir,
         input_bindings=receipts,
+        complete_case_spec_id=complete_case_spec_id,
     )
 
 

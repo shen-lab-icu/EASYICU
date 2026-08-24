@@ -30,6 +30,10 @@ from easyicu.research_agent.reporting.readiness import (
     _PRIMARY_DETERMINISTIC_RUNNERS as REPORT_RUNNERS,
 )
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
+from easyicu.research_agent.contracts.capability_ids import (
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+)
 
 _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "adjusted_association_estimates": (
@@ -48,7 +52,25 @@ _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
         "execution.runners.prediction_model_executor",
         "prediction_model_executor_code",
     ),
+    LANDMARK_SPLINE_ANALYSIS_KIND: (
+        "execution.runners.landmark_spline_executor",
+        "landmark_spline_executor_code",
+    ),
 }
+
+
+def test_landmark_spline_and_freeform_have_distinct_validation_ceilings():
+    landmark = cr.get_capability_by_id(LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID)
+    freeform = cr.get_capability_by_id("association_freeform_v1")
+
+    assert landmark is not None
+    assert landmark.primary_analysis == "deterministic"
+    assert landmark.scientific_validation == "reportable"
+    assert landmark.scientific_validator_contract == (
+        "easyicu.landmark_spline_runtime_receipt/1"
+    )
+    assert freeform is not None
+    assert freeform.scientific_validation == "analysis_only"
 
 
 def _registry_primary_runners() -> set:
@@ -114,6 +136,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
     assert reportable == {
         "survival_time_to_event_v1",
         "association_adjusted_v1",
+        LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
         "descriptive_exposure_outcome_distribution_v1",
         "prediction_risk_model_v1",
     }
@@ -148,6 +171,7 @@ def test_partition_helpers_are_consistent():
     llm = set(cr.llm_coded_primary_families())
     assert det == {
         "Association — exact single-model adjusted",
+        "Association — digest-bound landmark spline",
         "Descriptive — typed exposure/outcome absolute risks",
         "Prediction / risk modelling",
         "Survival / time-to-event",
@@ -348,9 +372,7 @@ def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
     # in the module the registry points to.
     active: set[str] = set()
     for runner in cr.AUXILIARY_DETERMINISTIC_RUNNERS:
-        module = importlib.import_module(
-            f"easyicu.research_agent.{runner.module}"
-        )
+        module = importlib.import_module(f"easyicu.research_agent.{runner.module}")
         if runner.entrypoint in inspect.getsource(module):
             active.add(runner.name)
     assert active == documented

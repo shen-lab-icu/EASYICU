@@ -23,6 +23,7 @@ from ..contracts.association_execution import (
     association_execution_verdict,
     sole_primary_model_requirement,
 )
+from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.figure_plan import landmark_association_composite_panels
 from ..contracts.model_terms import ModelTermSpec
@@ -585,7 +586,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             update={
                 "method": self.plan_method,
                 "intent": self.plan_intent,
-                "scientific_capability": "association_freeform_v1",
+                "scientific_capability": LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
                 "expected_outputs": list(self.plan_outputs),
                 "inputs": [cohort_input, *self.required_columns],
                 "model_requirements": [],
@@ -740,7 +741,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             issues.append("method")
         if step.intent != self.plan_intent:
             issues.append("intent")
-        if step.scientific_capability != "association_freeform_v1":
+        if step.scientific_capability != LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
             issues.append("scientific_capability")
         if tuple(step.expected_outputs) != self.plan_outputs:
             issues.append("expected_outputs")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,19 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
+from easyicu.research_agent.contracts.capability_ids import (
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+)
+from easyicu.research_agent.contracts.landmark_spline_validation import (
+    landmark_spline_runtime_receipt_valid,
+)
+from easyicu.research_agent.execution.final_validation import (
+    _primary_runner_core_estimate_present,
+)
+from easyicu.research_agent.reporting.readiness import (
+    _deterministic_primary_estimate_bound,
+)
 from easyicu.research_agent.execution.runners.landmark_spline_executor import (
     run_landmark_spline_association,
 )
@@ -28,6 +42,7 @@ from easyicu.research_agent.execution.runners.landmark_spline_functional_form_ex
     run_landmark_spline_functional_form,
 )
 from easyicu.research_agent.execution.runners.landmark_spline_robustness_executor import (
+    _matching_complete_case_spec_id,
     run_landmark_spline_robustness,
 )
 from easyicu.research_agent.execution.runners.landmark_survival_executor import (
@@ -49,6 +64,11 @@ from easyicu.research_agent.plan_utils import (
     effect_output_authorized,
 )
 from easyicu.research_agent.schema import AnalysisPlan
+from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
+from easyicu.research_agent.planning.capability_registry import (
+    assess_scientific_capability,
+    resolve_primary_capability,
+)
 
 
 def _authority(task_id: str):
@@ -77,12 +97,46 @@ def _e2_plan(authority: LandmarkSplineRuntimeAuthority) -> AnalysisPlan:
                     ],
                     "expected_outputs": list(authority.plan_outputs),
                     "method": authority.plan_method,
-                    "scientific_capability": "association_freeform_v1",
+                    "scientific_capability": LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
                     "icu_rule_refs": [authority.plan_rule_ref],
                 }
             ],
         }
     )
+
+
+def test_landmark_complete_case_row_binds_only_to_equivalent_locked_spec() -> None:
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    variables = [
+        authority.exposure_column,
+        authority.outcome_column,
+        *authority.required_adjustment_columns,
+    ]
+    specs = [
+        RobustnessSpec(
+            spec_id="primary_complete_case",
+            axis="missing",
+            description="Use complete observations for the signed primary model.",
+            missing_override={"strategy": "complete_case", "variables": variables},
+        )
+    ]
+
+    assert (
+        _matching_complete_case_spec_id(specs=specs, authority=authority)
+        == "primary_complete_case"
+    )
+    specs[0] = RobustnessSpec(
+        spec_id="narrow_complete_case",
+        axis="missing",
+        description="Uses a scientifically different analysis set.",
+        missing_override={
+            "strategy": "complete_case",
+            "variables": variables[:-1],
+        },
+    )
+    with pytest.raises(ValueError, match="matched 0"):
+        _matching_complete_case_spec_id(specs=specs, authority=authority)
 
 
 def _h2_plan(authority: SourceFeasibilityRuntimeAuthority) -> AnalysisPlan:
@@ -137,6 +191,27 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
     plan = _e2_plan(authority)
     authority.validate_plan(plan)
+    verdict = resolve_primary_capability(
+        analysis_type=plan.analysis_type,
+        plan=plan,
+    )
+    assert verdict.capability_id == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
+    assert verdict.execution_owner == "host_deterministic"
+    assert verdict.scientific_validation == "reportable"
+    assessment = assess_scientific_capability(
+        analysis_type=plan.analysis_type,
+        context=SimpleNamespace(
+            research_question=plan.research_question,
+            primary_exposure=authority.exposure_column,
+            target_outcome=authority.outcome_column,
+            variables=[],
+            cohort=object(),
+            endpoint=None,
+        ),
+        plan=plan,
+    )
+    assert assessment.scientific_validator_available
+    assert assessment.claim_ceiling == "reportable"
 
     drifted_step = plan.steps[0].model_copy(
         update={"method": "linear_logistic_regression"}
@@ -151,9 +226,7 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     sex = rng.choice(["F", "M"], size=n).astype(object)
     sex[0] = None
     charlson = rng.poisson(3.0, size=n).astype(float)
-    probability = 1.0 / (
-        1.0 + np.exp(-(-3.6 + 0.45 * lactate + 0.018 * (age - 60.0)))
-    )
+    probability = 1.0 / (1.0 + np.exp(-(-3.6 + 0.45 * lactate + 0.018 * (age - 60.0))))
     death = rng.binomial(1, probability, size=n)
     death_time = np.where(death == 1, rng.uniform(30.0, 180.0, size=n), np.nan)
     frame = pd.DataFrame(
@@ -176,8 +249,22 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     assert summary["status"] == "ok"
     assert set(summary["output_files"]) == set(authority.plan_outputs)
     receipt = summary["scientific_runtime_receipt"]
-    assert receipt["execution_contract_sha256"] == (
-        authority.execution_contract_sha256
+    assert receipt["execution_contract_sha256"] == (authority.execution_contract_sha256)
+    assert landmark_spline_runtime_receipt_valid(summary)
+    assert _primary_runner_core_estimate_present(LANDMARK_SPLINE_ANALYSIS_KIND, summary)
+    records = [
+        {
+            "step_id": "01_signed_primary",
+            "deterministic_standard_analysis": LANDMARK_SPLINE_ANALYSIS_KIND,
+            "step_summary": summary,
+        }
+    ]
+    assert _deterministic_primary_estimate_bound(records)
+    broken = json.loads(json.dumps(summary))
+    broken["scientific_runtime_receipt"]["observed_knots"] = [2.0, 1.0, 3.0]
+    assert not landmark_spline_runtime_receipt_valid(broken)
+    assert not _primary_runner_core_estimate_present(
+        LANDMARK_SPLINE_ANALYSIS_KIND, broken
     )
     assert receipt["runtime_projection_sha256"] == (
         projection.runtime_projection_sha256
@@ -275,9 +362,7 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
         rebound,
         plan=bound,
         current_case_scientific_runtime_authority=authority,
-        scientific_runtime_projection_sha256=(
-            projection.runtime_projection_sha256
-        ),
+        scientific_runtime_projection_sha256=(projection.runtime_projection_sha256),
     )
     assert selected is not None
     assert selected.analysis_kind == LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND
@@ -471,9 +556,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     figure_receipt = json.loads(
         (figure_dir / "landmark_survival_figure_runtime_receipt.json").read_text()
     )
-    assert figure_receipt["adjustment_columns"] == list(
-        authority.adjustment_columns
-    )
+    assert figure_receipt["adjustment_columns"] == list(authority.adjustment_columns)
     assert figure_summary["figure_assets"]["runtime_receipt"] == (
         "landmark_survival_figure_runtime_receipt.json"
     )
@@ -699,6 +782,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         contrast_evidence_id="contrast_evidence",
         linear_evidence_id="linear_evidence",
         out_dir=tmp_path,
+        complete_case_spec_id="primary_complete_case",
         input_bindings=[
             {
                 "input_key": authority.downstream_parent_product,
@@ -725,6 +809,10 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     assert len(summary["input_bindings"]) == 2
     matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
     assert set(matrix["axis"]) == {"primary", "functional_form", "missing"}
+    assert (
+        matrix.loc[matrix["axis"] == "missing", "spec_id"].item()
+        == "primary_complete_case"
+    )
     assert matrix.loc[matrix["axis"] == "missing", "independent_variant"].item() in (
         False,
         0,
@@ -773,7 +861,9 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
     rebound, rebound_findings = ScientificRuntimeAuthorities(
         trajectory=None,
         current_case=authority,
-    ).bind_plan(plan.model_copy(update={"steps": [plan.steps[0], generic_article_step]}))
+    ).bind_plan(
+        plan.model_copy(update={"steps": [plan.steps[0], generic_article_step]})
+    )
     authority.validate_plan(rebound)
     assert len(rebound.steps) == 1
     assert rebound.steps[0].method == authority.plan_method
@@ -807,7 +897,9 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
     assert pd.isna(table.loc[0, "effect_estimate"])
 
 
-def test_signed_current_case_contracts_are_selected_by_the_real_execution_router() -> None:
+def test_signed_current_case_contracts_are_selected_by_the_real_execution_router() -> (
+    None
+):
     for task_id, expected_kind, plan_factory in (
         (
             "e2_lactate_mortality",
@@ -826,9 +918,7 @@ def test_signed_current_case_contracts_are_selected_by_the_real_execution_router
             plan.steps[0],
             plan=plan,
             current_case_scientific_runtime_authority=authority,
-            scientific_runtime_projection_sha256=(
-                projection.runtime_projection_sha256
-            ),
+            scientific_runtime_projection_sha256=(projection.runtime_projection_sha256),
         )
         assert selected is not None
         assert selected.analysis_kind == expected_kind
@@ -841,9 +931,7 @@ def test_signed_current_case_contracts_are_selected_by_the_real_execution_router
             rebuilt_step,
             plan=plan,
             current_case_scientific_runtime_authority=authority,
-            scientific_runtime_projection_sha256=(
-                projection.runtime_projection_sha256
-            ),
+            scientific_runtime_projection_sha256=(projection.runtime_projection_sha256),
         )
         assert rebuilt is not None
         assert rebuilt.analysis_kind == expected_kind
@@ -863,7 +951,5 @@ def test_pipeline_config_requires_the_signed_contract_and_projection_as_a_pair(
     with pytest.raises(ValueError, match="configured together"):
         PipelineConfig(
             workdir=tmp_path,
-            current_case_scientific_runtime_authority=authority.model_dump(
-                mode="json"
-            ),
+            current_case_scientific_runtime_authority=authority.model_dump(mode="json"),
         )
