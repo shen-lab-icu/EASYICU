@@ -9,6 +9,12 @@ from easyicu.research_agent.execution.runners.landmark_association_figure_execut
     landmark_association_figure_executor_owns_step,
     run_landmark_association_figure,
 )
+from easyicu.research_agent.contracts.figure_plan import (
+    landmark_association_composite_panels,
+)
+from easyicu.research_agent.execution.figure_plan_binding import (
+    validate_step_planned_figure_contract_binding,
+)
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
 from easyicu.research_agent.planning.figure_plan_shaping import (
     close_empty_deterministic_figure_contracts,
@@ -150,3 +156,20 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
         "robustness",
         "data_quality",
     ]
+    step = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render four typed sources.",
+        inputs=list(INPUTS),
+        expected_outputs=["figure:display_suite"],
+        method="visualization",
+        figure_panels=[
+            panel.bind(figure_output="figure:display_suite")
+            for panel in landmark_association_composite_panels(INPUTS)
+        ],
+    )
+    assert validate_step_planned_figure_contract_binding(
+        step=step,
+        out_dir=tmp_path / "outputs",
+        step_summary=summary,
+    ) == []
