@@ -163,11 +163,12 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
         return f"scientific_runtime_contract:{self.execution_contract_sha256}"
 
     @property
-    def development_execution_step_ids(self) -> tuple[str, str, str]:
+    def development_execution_step_ids(self) -> tuple[str, str, str, str]:
         return (
             "00_authority_compiled_trajectory_representation",
             "01_authority_compiled_trajectory_candidates",
             "02_authority_compiled_trajectory_stability",
+            "03_authority_compiled_trajectory_selection_figure",
         )
 
     def development_execution_only_plan(
@@ -175,9 +176,9 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
         *,
         research_question: str,
     ) -> AnalysisPlan:
-        """Project the three signed trajectory owners without a Planner call."""
+        """Project the four signed trajectory owners without a Planner call."""
 
-        representation_id, candidate_id, stability_id = (
+        representation_id, candidate_id, stability_id, figure_id = (
             self.development_execution_step_ids
         )
         plan = AnalysisPlan.model_validate(
@@ -211,6 +212,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                             "artifact:candidate_cluster_assignments",
                             "manifest:cluster_selection",
                             "manifest:candidate_cluster_solution_schema",
+                            "table:trajectory_candidate_selection",
                         ],
                         "method": OBSERVED_DATA_DIAG_GMM_METHOD,
                         "icu_rule_refs": [self.plan_rule_ref],
@@ -234,6 +236,22 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                         "trajectory_stability_spec": self.stability_spec.model_dump(
                             mode="json"
                         ),
+                    },
+                    {
+                        "step_id": figure_id,
+                        "planned_analysis_role": "auxiliary",
+                        "intent": (
+                            "Render the signed candidate-grid decision and coordinate "
+                            "availability without presenting candidate labels as "
+                            "validated phenotypes."
+                        ),
+                        "inputs": [
+                            "table:trajectory_candidate_selection",
+                            "table:feature_availability",
+                        ],
+                        "expected_outputs": ["figure:trajectory_selection_diagnostics"],
+                        "method": "signed_trajectory_selection_diagnostic_figure",
+                        "icu_rule_refs": [self.plan_rule_ref],
                     },
                 ],
             }
@@ -301,6 +319,30 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
         ):
             raise TrajectoryScientificAuthorityError(
                 "trajectory stability design drifted from signed execution contract"
+            )
+        figures = [
+            step
+            for step in plan.steps
+            if step.step_id == "03_authority_compiled_trajectory_selection_figure"
+        ]
+        if len(figures) != 1:
+            raise TrajectoryScientificAuthorityError(
+                "signed trajectory authority requires one selection-figure owner"
+            )
+        figure = figures[0]
+        if (
+            figure.method != "signed_trajectory_selection_diagnostic_figure"
+            or tuple(figure.inputs)
+            != (
+                "table:trajectory_candidate_selection",
+                "table:feature_availability",
+            )
+            or tuple(figure.expected_outputs)
+            != ("figure:trajectory_selection_diagnostics",)
+            or order[figure.step_id] <= order[stability.step_id]
+        ):
+            raise TrajectoryScientificAuthorityError(
+                "trajectory selection-figure plan drifted from signed authority"
             )
 
     def validate_representation_schema(self, schema: Mapping[str, Any]) -> None:

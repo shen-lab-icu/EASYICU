@@ -238,6 +238,32 @@ def run_trajectory_scientific_candidate_selection(
             "reason_code": sealed.minimum_cluster_fraction_reason_code,
             "reportable_result": "no_stable_phenotype_solution",
         }
+    selection_table = pd.DataFrame(
+        [
+            {
+                "n_clusters": int(row["n_clusters"]),
+                "bic": float(row["bic"]),
+                "selected": int(row["n_clusters"]) == selected_k,
+                "upper_boundary": int(row["n_clusters"])
+                == max(sealed.candidate_cluster_counts),
+                "scientific_status": (
+                    "failed_closed" if scientific_rejection else "selected"
+                ),
+                "reason_code": (
+                    scientific_rejection["reason_code"]
+                    if scientific_rejection
+                    else "NOT_APPLICABLE"
+                ),
+                "reportable_result": (
+                    scientific_rejection["reportable_result"]
+                    if scientific_rejection
+                    else "candidate_selected_pending_stability"
+                ),
+            }
+            for row in candidate_rows
+        ]
+    )
+    selection_table.to_csv(out_dir / "trajectory_candidate_selection.csv", index=False)
     assignments = pd.DataFrame(
         {id_column: representation[id_column].to_numpy(), "candidate_cluster": labels}
     )
@@ -320,6 +346,9 @@ def run_trajectory_scientific_candidate_selection(
             "manifest:cluster_selection": "cluster_selection.json",
             "manifest:candidate_cluster_solution_schema": (
                 "candidate_cluster_solution_schema.json"
+            ),
+            "table:trajectory_candidate_selection": (
+                "trajectory_candidate_selection.csv"
             ),
         },
     }

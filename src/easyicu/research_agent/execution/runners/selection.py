@@ -146,6 +146,11 @@ from .trajectory_scientific_representation_executor import (
     trajectory_scientific_representation_executor_code,
     trajectory_scientific_representation_executor_owns_step,
 )
+from .trajectory_selection_figure_executor import (
+    TRAJECTORY_SELECTION_FIGURE_INPUTS,
+    trajectory_selection_figure_executor_code,
+    trajectory_selection_figure_executor_owns_step,
+)
 from .typed_input_binding import sole_typed_cohort_input
 from .landmark_spline_executor import (
     LANDMARK_SPLINE_ANALYSIS_KIND,
@@ -1144,6 +1149,17 @@ def select_standard_executor(
             )
         )
     _missed("trajectory_cluster_stability")
+    if trajectory_selection_figure_executor_owns_step(step):
+        return _selected(
+            StandardExecutorSelection(
+                analysis_kind="trajectory_selection_diagnostic_figure",
+                selection_reason="signed_trajectory_selection_figure_contract",
+                progress_message="Rendering signed trajectory selection diagnostics",
+                code=trajectory_selection_figure_executor_code(step),
+                consumed_input_keys=TRAJECTORY_SELECTION_FIGURE_INPUTS,
+            )
+        )
+    _missed("trajectory_selection_diagnostic_figure")
     survival_verdict = survival_primary_executor_verdict(step)
     if survival_verdict.claimed:
         survival_requirement = step.family_primary_result_requirement

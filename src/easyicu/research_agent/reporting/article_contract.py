@@ -83,6 +83,8 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "measurement",
         "coverage",
         "quality",
+        "feature availability",
+        "feature_availability",
         "missingness_profile",
         "data_quality_source_status",
         "measurement_missingness",
@@ -124,6 +126,9 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
     ),
     "phenotype_profile": (
         "phenotype profile",
+        "phenotype_profiles",
+        "trajectory profile",
+        "trajectory_profiles",
         "cluster characteristics",
         "cluster summary",
         "cluster_summary",
