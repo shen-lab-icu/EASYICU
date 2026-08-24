@@ -485,6 +485,7 @@ def run_landmark_association_figure(
                 "claim": "This panel renders the complete registered source table without model refitting.",
                 "evidence_ids": [evidence[source] for source in panel.source_products],
                 "metadata": {
+                    "chart_type": panel.chart_type,
                     "source_products": list(panel.source_products),
                     "estimate_geometry": (
                         "continuous_fitted_curve_with_95ci"
