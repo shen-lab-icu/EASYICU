@@ -16,6 +16,7 @@ from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     AssociationModelGridRuntimeAuthority,
     CurrentCaseScientificAuthorityError,
+    build_current_case_scientific_runtime_authority,
     load_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
@@ -559,3 +560,68 @@ def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(
             resolved_inputs=manifest,
             step_id=plan.steps[1].step_id,
         )
+
+
+def test_grid_can_compare_a_prespecified_exposure_definition(
+    tmp_path: Path,
+) -> None:
+    projection, original, draft, _ = _authority_and_plan()
+    body = original.model_dump(
+        mode="json", exclude={"execution_contract_sha256"}
+    )
+    reference = body["variants"][0]
+    alternate = {
+        **reference,
+        "analysis_id": "alternate_definition",
+        "exposure_column": "sep3_sofa2_alternate",
+        "metadata": {
+            **reference["metadata"],
+            "readmission_restriction": "alternate exposure definition",
+        },
+    }
+    body["variants"] = [reference, alternate]
+    body["reference_variant_id"] = reference["analysis_id"]
+    authority = build_current_case_scientific_runtime_authority(body)
+    assert isinstance(authority, AssociationModelGridRuntimeAuthority)
+    plan = authority.bind_plan(draft)
+    frame = _cohort()
+    frame["sep3_sofa2_alternate"] = frame["sep3_sofa2_max"]
+    run_dir, manifest = _parent_binding(
+        tmp_path=tmp_path,
+        frame=frame,
+        authority=authority,
+        plan=plan,
+    )
+
+    summary = run_association_model_grid(
+        frame=frame,
+        cohort_path=Path("cohort.parquet"),
+        authority=authority,
+        runtime_projection_sha256=projection["runtime_projection_sha256"],
+        parent_requirement=plan.steps[0].model_requirements[0],
+        out_dir=tmp_path / "outputs",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=plan.steps[1].step_id,
+    )
+
+    table = pd.read_csv(tmp_path / "outputs" / "e1_scientific_sensitivity.csv")
+    assert table["exposure"].tolist() == [
+        "sep3_sofa2_max",
+        "sep3_sofa2_alternate",
+    ]
+    assert summary["scientific_runtime_receipt"]["variant_exposures"] == {
+        reference["analysis_id"]: "sep3_sofa2_max",
+        "alternate_definition": "sep3_sofa2_alternate",
+    }
+
+
+def test_grid_reference_cannot_replace_the_parent_exposure() -> None:
+    _projection, original, _draft, _ = _authority_and_plan()
+    body = original.model_dump(
+        mode="json", exclude={"execution_contract_sha256"}
+    )
+    body["variants"][0]["exposure_column"] = "different_exposure"
+
+    with pytest.raises(ValueError, match="reference variant must retain"):
+        build_current_case_scientific_runtime_authority(body)
