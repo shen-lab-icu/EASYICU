@@ -42,6 +42,7 @@ from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_literature import (
     audit_manuscript_literature,
+    repair_evidence_ids_mistyped_as_literature,
     repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
@@ -1256,6 +1257,25 @@ def _bind_and_review_manuscript(
     run_dir: Path,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
+    scaffold, mistyped_literature_repairs = (
+        repair_evidence_ids_mistyped_as_literature(
+            scaffold,
+            literature,
+            evidence_ids=tuple(current_evidence_names),
+        )
+    )
+    if mistyped_literature_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="warning",
+                message=(
+                    "Removed evidence id(s) mistyped as literature keys: "
+                    + ", ".join(mistyped_literature_repairs)
+                ),
+                detail={"evidence_ids": mistyped_literature_repairs},
+            )
+        )
     manuscript_literature_audit = audit_manuscript_literature(scaffold, literature)
     manuscript_literature_path = run_dir / "manuscript_literature_audit.json"
     manuscript_literature_path.write_text(

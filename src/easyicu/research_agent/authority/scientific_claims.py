@@ -53,6 +53,9 @@ class ScientificClaimDraft(BaseModel):
     ]
     status: Literal["supported"]
     adjusted_for: list[str] = Field(default_factory=list)
+    point_estimate: float | None = None
+    interval_lower: float | None = None
+    interval_upper: float | None = None
 
     @field_validator("exposure", "outcome", "estimand", "population")
     @classmethod
@@ -76,6 +79,23 @@ class ScientificClaimDraft(BaseModel):
 
     @model_validator(mode="after")
     def _claim_kind_matches_its_ceiling(self) -> "ScientificClaimDraft":
+        numeric_values = (
+            self.point_estimate,
+            self.interval_lower,
+            self.interval_upper,
+        )
+        if any(value is not None for value in numeric_values):
+            if any(value is None for value in numeric_values):
+                raise ValueError(
+                    "scientific claim numeric estimate and interval must be complete"
+                )
+            point, lower, upper = (float(value) for value in numeric_values)
+            if not all(math.isfinite(value) for value in (point, lower, upper)):
+                raise ValueError("scientific claim numeric values must be finite")
+            if lower > point or point > upper:
+                raise ValueError(
+                    "scientific claim interval must contain its point estimate"
+                )
         if self.claim_type == "association":
             if self.schema_version != "easyicu.scientific_claim/1":
                 raise ValueError("association claims require scientific_claim/1")
@@ -133,9 +153,15 @@ class ScientificClaim(ScientificClaimDraft):
         adjustment = ""
         if self.adjusted_for:
             adjustment = "After adjustment for " + ", ".join(self.adjusted_for) + ", "
+        estimate_text = f"estimand: {self.estimand}"
+        if self.point_estimate is not None:
+            estimate_text = (
+                f"{self.estimand}, {self.point_estimate:.6g}; 95% CI, "
+                f"{self.interval_lower:.6g} to {self.interval_upper:.6g}"
+            )
         return (
             f"{adjustment}{self.exposure} {relation} {self.outcome} in "
-            f"{self.population} (estimand: {self.estimand}; analysis role: "
+            f"{self.population} ({estimate_text}; analysis role: "
             f"{self.analysis_role})."
         )
 
@@ -222,6 +248,19 @@ def derive_scientific_claim_drafts(summary: object) -> list[ScientificClaimDraft
         raise ValueError(
             "scientific_claims primary_estimate_interval must be finite and ordered"
         )
+    raw_point = summary.get("primary_estimate", summary.get("adjusted_effect"))
+    point: float | None = None
+    if raw_point is not None:
+        try:
+            point = float(raw_point)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "scientific_claims primary estimate must be numeric"
+            ) from exc
+        if not math.isfinite(point) or point < low or point > high:
+            raise ValueError(
+                "scientific_claims primary estimate must be finite and inside its interval"
+            )
     if low > null_value:
         direction = "positive"
     elif high < null_value:
@@ -251,6 +290,9 @@ def derive_scientific_claim_drafts(summary: object) -> list[ScientificClaimDraft
             analysis_role=role,
             status="supported",
             adjusted_for=[str(value) for value in covariates],
+            point_estimate=point,
+            interval_lower=low if point is not None else None,
+            interval_upper=high if point is not None else None,
         )
     ]
 

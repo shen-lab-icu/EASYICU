@@ -908,6 +908,50 @@ def _walk_numeric_leaves(obj: Any, prefix: str = "") -> List[Tuple[str, str, flo
     return out
 
 
+def _walk_numeric_leaves_with_effect_scale(
+    obj: Any,
+    prefix: str = "",
+    inherited_effect_scale: Any = None,
+) -> List[Tuple[str, str, float, Any]]:
+    """Walk numeric leaves while carrying a row-local effect-measure label."""
+
+    out: List[Tuple[str, str, float, Any]] = []
+    local_effect_scale = inherited_effect_scale
+    if isinstance(obj, dict):
+        for key in ("effect_scale", "effect_measure"):
+            candidate = obj.get(key)
+            if candidate not in (None, ""):
+                local_effect_scale = candidate
+                break
+        for key, value in obj.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            out.extend(
+                _walk_numeric_leaves_with_effect_scale(
+                    value,
+                    child,
+                    local_effect_scale,
+                )
+            )
+    elif isinstance(obj, (list, tuple)):
+        for index, value in enumerate(obj):
+            child = f"{prefix}[{index}]"
+            out.extend(
+                _walk_numeric_leaves_with_effect_scale(
+                    value,
+                    child,
+                    local_effect_scale,
+                )
+            )
+    else:
+        coerced = _coerce_numeric_literal(obj)
+        if coerced is not None:
+            literal, canonical = coerced
+            out.append(
+                (prefix or "<root>", literal, canonical, local_effect_scale)
+            )
+    return out
+
+
 def sha256_of_file(path: Path, chunk: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -2365,9 +2409,12 @@ class EvidenceStore:
                 summary=summary,
                 drafts=scientific_claim_drafts,
             )
-        leaves = _walk_numeric_leaves(summary)
         declared_effect_scale = (
             summary.get("effect_scale") if isinstance(summary, Mapping) else None
+        )
+        leaves = _walk_numeric_leaves_with_effect_scale(
+            summary,
+            inherited_effect_scale=declared_effect_scale,
         )
         truncated = False
         if max_leaves is not None and max_leaves > 0 and len(leaves) > max_leaves:
@@ -2378,7 +2425,7 @@ class EvidenceStore:
             truncated_count = 0
         registered: List[NumericClaim] = []
         with self._lock:
-            for path, literal, canonical in leaves:
+            for path, literal, canonical, local_effect_scale in leaves:
                 registered.append(
                     self._upsert_numeric_claim_in_memory(
                         value=literal,
@@ -2387,7 +2434,7 @@ class EvidenceStore:
                         step_id=step_id,
                         source_field=path,
                         tolerance=tolerance,
-                        effect_scale=declared_effect_scale,
+                        effect_scale=local_effect_scale,
                     )
                 )
             if truncated:

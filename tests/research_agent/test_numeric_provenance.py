@@ -690,6 +690,36 @@ def test_registered_array_interval_binds_without_numeric_sentence_drop(
     }
 
 
+def test_nested_effect_measure_types_sensitivity_interval_claims(
+    ra,
+    tmp_path: Path,
+) -> None:
+    store = ra.EvidenceStore(tmp_path, enforcement_mode="strict")
+    claims = store.register_step_summary_numerics(
+        step_id="sensitivity",
+        evidence_id="sensitivity_summary",
+        summary={
+            "analysis_rows": [
+                {
+                    "effect_measure": "odds_ratio",
+                    "odds_ratio": 2.03,
+                    "ci_low": 1.93,
+                    "ci_high": 2.13,
+                }
+            ]
+        },
+    )
+    by_field = {claim.source_field: claim for claim in claims}
+    assert by_field["analysis_rows[0].ci_low"].effect_scale.value == "odds_ratio"
+    assert by_field["analysis_rows[0].ci_high"].effect_scale.value == "odds_ratio"
+    assert by_field["analysis_rows[0].ci_low"].estimand.value == (
+        "confidence_interval_lower"
+    )
+    assert by_field["analysis_rows[0].ci_high"].estimand.value == (
+        "confidence_interval_upper"
+    )
+
+
 def test_strict_numeric_sentence_filter_drops_wrong_owner_not_valid_prose(
     ra,
     tmp_path: Path,

@@ -377,6 +377,40 @@ def test_host_derives_association_direction_from_interval_against_null(
     assert [claim.direction for claim in claims] == [expected_direction]
 
 
+def test_host_association_claim_renders_registered_estimate_and_interval() -> None:
+    from easyicu.research_agent.authority.scientific_claims import (
+        bind_scientific_claim_drafts,
+        derive_scientific_claim_drafts,
+    )
+
+    drafts = derive_scientific_claim_drafts(
+        {
+            "interpretation_class": "adjusted_association",
+            "exposure": "exposure",
+            "outcome": "mortality",
+            "effect_scale": "odds_ratio",
+            "primary_estimate": 1.6058663945340168,
+            "primary_estimate_interval": [
+                1.5375641608263024,
+                1.6772027748798501,
+            ],
+            "analysis_set": "primary_cohort",
+            "analysis_role": "primary",
+            "adjustment_covariates": ["age"],
+        }
+    )
+    claim = bind_scientific_claim_drafts(
+        [drafts[0].model_dump(mode="json")],
+        step_id="04_association",
+        evidence_id="04_summary",
+    )[0]
+
+    rendered = claim.render_text()
+    assert "adjusted odds ratio, 1.60587" in rendered
+    assert "95% CI, 1.53756 to 1.6772" in rendered
+    assert "After adjustment for age" in rendered
+
+
 def test_host_derives_only_descriptive_absolute_risks_and_risk_difference() -> None:
     from easyicu.research_agent.authority.scientific_claims import (
         bind_scientific_claim_drafts,
