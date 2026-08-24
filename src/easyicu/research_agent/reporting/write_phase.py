@@ -40,7 +40,10 @@ from ..authority.manuscript_claim_policy import (
     missing_scientific_claims_in_results,
     place_scientific_claim_tokens_in_results,
 )
-from ..authority.runtime_artifacts import current_step_records
+from ..authority.runtime_artifacts import (
+    current_step_records,
+    verified_run_evidence_path,
+)
 from ..figures.skill import PublicationFigureSkill
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
@@ -862,6 +865,71 @@ def _activate_publication_inputs(
     return literature
 
 
+def _writer_execution_checkpoint_sha256(
+    records: Sequence[Dict[str, Any]],
+) -> str:
+    """Digest the final record for every execution step."""
+
+    payload = current_step_records(records)
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _verified_resume_writer_scaffold(
+    *,
+    resume_state: Optional[Dict[str, Any]],
+    evidence: Any,
+    run_dir: Path,
+    per_step_records: Sequence[Dict[str, Any]],
+) -> Optional[tuple[str, Dict[str, Any]]]:
+    """Return the prior Writer draft only for an unchanged execution ledger.
+
+    A report-only resume should not pay for or introduce a second free-form
+    manuscript when every analysis checkpoint is unchanged. Reuse is denied
+    when the prior step ledger differs, the registered raw draft is absent, or
+    its immutable EvidenceStore copy fails path/digest verification. The
+    caller still runs every current host-owned manuscript gate.
+    """
+
+    if not isinstance(resume_state, dict):
+        return None
+    prior_records = resume_state.get("per_step_records")
+    if not isinstance(prior_records, list) or not prior_records:
+        return None
+    current_records = list(per_step_records)
+    if not current_records:
+        return None
+    prior_digest = _writer_execution_checkpoint_sha256(prior_records)
+    current_digest = _writer_execution_checkpoint_sha256(current_records)
+    if prior_digest != current_digest:
+        return None
+    record = evidence.get("manuscript_scaffold_raw")
+    if record is None:
+        return None
+    verified_path = verified_run_evidence_path(run_dir, record)
+    if verified_path is None:
+        return None
+    try:
+        scaffold = verified_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    if not scaffold.strip():
+        return None
+    return scaffold, {
+        "reason_code": "verified_prior_writer_scaffold_reused",
+        "source_evidence_id": str(record.evidence_id),
+        "source_sha256": str(record.sha256),
+        "execution_checkpoint_sha256": current_digest,
+        "source_relative_path": str(record.relative_path),
+    }
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -871,6 +939,7 @@ def _draft_manuscript(
     findings: List[ValidationFinding],
     literature: Optional[LiteratureBundle],
     per_step_records: Sequence[Dict[str, Any]],
+    resume_state: Optional[Dict[str, Any]],
     prompt_version: str,
     role_resolver: Callable[[str], Any],
     runtime_state: Any,
@@ -1010,15 +1079,38 @@ def _draft_manuscript(
                     ),
                 },
             )
-        scaffold = writer.run(
-            context=agent_context,
-            evidence_ids=preferred_writer_evidence_names,
-            evidence_digest=writer_evidence_digest,
-            literature_digest=render_writer_literature_digest(
-                literature,
-                plan=execute_result.plan,
-            ),
+        resume_scaffold = _verified_resume_writer_scaffold(
+            resume_state=resume_state,
+            evidence=evidence,
+            run_dir=run_dir,
+            per_step_records=per_step_records,
         )
+        if resume_scaffold is not None:
+            scaffold, resume_detail = resume_scaffold
+            findings.append(
+                ValidationFinding(
+                    validator="writer_resume",
+                    severity="info",
+                    message=(
+                        "Reused the digest-verified prior Writer scaffold because "
+                        "the current execution checkpoint is unchanged. Current "
+                        "evidence, numeric, literature, and critique gates still "
+                        "revalidate the manuscript."
+                    ),
+                    evidence_ids=["manuscript_scaffold_raw"],
+                    detail=resume_detail,
+                )
+            )
+        else:
+            scaffold = writer.run(
+                context=agent_context,
+                evidence_ids=preferred_writer_evidence_names,
+                evidence_digest=writer_evidence_digest,
+                literature_digest=render_writer_literature_digest(
+                    literature,
+                    plan=execute_result.plan,
+                ),
+            )
     except Exception as exc:
         writer_error_message = f"{type(exc).__name__}: {exc}"
         scaffold = ""
@@ -1267,7 +1359,7 @@ def _draft_manuscript(
         )
     scaffold_path = run_dir / "manuscript_scaffold.md"
     scaffold_path.write_text(scaffold, encoding="utf-8")
-    if evidence.get("manuscript_scaffold_raw") is None:
+    if evidence.get("manuscript_scaffold_raw") is None or scaffold.strip():
         evidence.register_file(
             kind="log",
             description="Manuscript scaffold (raw, with {evidence:*} placeholders).",
@@ -1276,6 +1368,7 @@ def _draft_manuscript(
             producer="writer",
             generation_mode="llm",
             prompt_pack_version=prompt_version,
+            on_sha_change="new_id",
         )
     return _DraftStageResult(
         current_verified_evidence_records=current_verified_evidence_records,
@@ -2578,6 +2671,7 @@ def run_write_phase(
         findings=findings,
         literature=literature,
         per_step_records=per_step_records,
+        resume_state=plan_result.resume_state,
         prompt_version=prompt_version,
         role_resolver=role_resolver,
         runtime_state=runtime_state,

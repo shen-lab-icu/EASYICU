@@ -257,3 +257,61 @@ def test_legacy_unscoped_mechanical_error_stays_active_if_any_step_failed() -> N
 
     assert active == [finding]
     assert superseded == []
+
+
+@pytest.mark.parametrize(
+    ("validator", "message", "gate_key"),
+    [
+        (
+            "writer_agent",
+            "WriterAgent failed before producing a manuscript scaffold: timeout",
+            "manuscript_bound_clean",
+        ),
+        (
+            "evidence_bound_writer",
+            "Bound manuscript is empty or non-substantive after writer execution.",
+            "manuscript_bound_clean",
+        ),
+        (
+            "manuscript_literature",
+            "Manuscript literature authority is incomplete: no exact citation",
+            "manuscript_literature_complete",
+        ),
+    ],
+)
+def test_current_manuscript_gate_supersedes_prior_reporting_failure(
+    validator: str,
+    message: str,
+    gate_key: str,
+) -> None:
+    finding = ValidationFinding(
+        validator=validator,
+        severity="error",
+        message=message,
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids=set(),
+        gate_state={gate_key: True},
+    )
+
+    assert active == []
+    assert superseded == [finding]
+
+
+def test_prior_writer_failure_stays_active_without_current_bound_manuscript() -> None:
+    finding = ValidationFinding(
+        validator="writer_agent",
+        severity="error",
+        message="WriterAgent failed before producing a manuscript scaffold: timeout",
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids=set(),
+        gate_state={"manuscript_bound_clean": False},
+    )
+
+    assert active == [finding]
+    assert superseded == []
