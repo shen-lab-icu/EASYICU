@@ -26,6 +26,7 @@ from easyicu.research_agent.execution.runners.selection import select_standard_e
 from easyicu.research_agent.reporting.writer_evidence import (
     _render_writer_evidence_digest,
 )
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -198,6 +199,44 @@ def test_typed_owner_executes_and_replays_without_coder(monkeypatch, tmp_path: P
     )
     assert '"reportable_secondary_results"' in digest
     assert '"continuous_outcome": "duration"' in digest
+
+    canonical_summary = json.loads(json.dumps(summary))
+    canonical_summary.pop("interpretation_class")
+    canonical_summary.pop("interpretation_ceiling")
+    canonical_reporting = canonical_summary["reportable_secondary_results"]
+    canonical_reporting.pop("schema_version")
+    canonical_reporting.pop("interpretation_ceiling")
+    canonical_contract = canonical_summary["ordered_stratified_contract"]
+    canonical_contract.pop("schema_version")
+    canonical_contract.pop("execution_owner")
+    writer_store = EvidenceStore(tmp_path / "writer_authority")
+    canonical_record = {
+        "step_id": step.step_id,
+        "status": "ok",
+        "generation_mode": "deterministic_standard",
+        "deterministic_standard_analysis": "ordered_stratified_analysis",
+        "writer_result_envelope_evidence_id": "envelope_fixture",
+        "step_summary": canonical_summary,
+    }
+    canonical_digest = _render_writer_evidence_digest(
+        [canonical_record],
+        run_dir=writer_store.root,
+        include_robustness_panel=False,
+        evidence=writer_store,
+    )
+    assert '"reportable_secondary_results"' in canonical_digest
+    assert '"continuous_outcome": "duration"' in canonical_digest
+    assert '"deterministic_standard_analysis": "ordered_stratified_analysis"' in canonical_digest
+
+    unowned_record = dict(canonical_record)
+    unowned_record.pop("deterministic_standard_analysis")
+    unowned_digest = _render_writer_evidence_digest(
+        [unowned_record],
+        run_dir=writer_store.root,
+        include_robustness_panel=False,
+        evidence=writer_store,
+    )
+    assert '"reportable_secondary_results"' not in unowned_digest
 
 
 def test_typed_owner_fails_closed_on_undeclared_exposure_level(
