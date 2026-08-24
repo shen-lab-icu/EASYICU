@@ -35,6 +35,7 @@ from easyicu.research_agent.contracts.capability_ids import (
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
     PHENOTYPING_ANALYSIS_KIND,
     PHENOTYPING_CLUSTER_CAPABILITY_ID,
+    SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
 )
 
 _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
@@ -146,6 +147,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
         PHENOTYPING_CLUSTER_CAPABILITY_ID,
         "descriptive_exposure_outcome_distribution_v1",
         "prediction_risk_model_v1",
+        SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
     }
     for capability in cr.CAPABILITY_REGISTRY:
         if capability.capability_id in reportable:
@@ -183,6 +185,7 @@ def test_partition_helpers_are_consistent():
         "Prediction / risk modelling",
         "Survival / time-to-event",
         "Phenotyping / clustering",
+        "Causal feasibility — verified non-use unavailable",
     }
     assert llm
     assert det.isdisjoint(llm)
@@ -197,6 +200,7 @@ def test_survival_and_exact_association_have_deterministic_primary_owners():
         "prediction",
         "phenotyping",
         "time_to_event",
+        "causal_emulation",
     }
 
 
