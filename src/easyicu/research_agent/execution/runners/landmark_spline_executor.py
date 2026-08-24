@@ -169,6 +169,7 @@ def run_landmark_spline_association(
     import pandas as pd
     import patsy
     import statsmodels.api as sm
+    from scipy.stats import chi2
 
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSplineRuntimeAuthority):
@@ -319,6 +320,18 @@ def run_landmark_spline_association(
         raise ValueError("signed landmark linear sensitivity did not converge")
     coefficient = _finite(linear_fit.params[sealed.exposure_column])
     standard_error = _finite(linear_fit.bse[sealed.exposure_column])
+    additional_parameters = int(fit.df_model - linear_fit.df_model)
+    if additional_parameters <= 0:
+        raise ValueError("signed spline model does not extend the linear model")
+    likelihood_ratio = _finite(max(2.0 * (fit.llf - linear_fit.llf), 0.0))
+    nonlinearity_p_value = _finite(
+        chi2.sf(likelihood_ratio, additional_parameters)
+    )
+    sample_size = int(len(model_frame))
+    spline_bic = _finite(-2.0 * fit.llf + len(fit.params) * math.log(sample_size))
+    linear_bic = _finite(
+        -2.0 * linear_fit.llf + len(linear_fit.params) * math.log(sample_size)
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     curve_path = out_dir / "e2_landmark_rcs_curve.csv"
@@ -333,8 +346,15 @@ def run_landmark_spline_association(
                 "adjusted_odds_ratio": _finite(math.exp(coefficient)),
                 "ci_low": _finite(math.exp(coefficient - 1.96 * standard_error)),
                 "ci_high": _finite(math.exp(coefficient + 1.96 * standard_error)),
-                "n": int(len(model_frame)),
+                "n": sample_size,
                 "events": int(model_frame["__outcome"].sum()),
+                "linear_aic": _finite(linear_fit.aic),
+                "spline_aic": _finite(fit.aic),
+                "linear_bic": linear_bic,
+                "spline_bic": spline_bic,
+                "likelihood_ratio_statistic": likelihood_ratio,
+                "additional_spline_parameters": additional_parameters,
+                "nonlinearity_p_value": nonlinearity_p_value,
             }
         ]
     ).to_csv(sensitivity_path, index=False)
@@ -351,6 +371,16 @@ def run_landmark_spline_association(
         "primary_population_n": int(primary_mask.sum()),
         "complete_case_n": int(len(model_frame)),
         "events": int(model_frame["__outcome"].sum()),
+        "functional_form_comparison": {
+            "comparison": "restricted_cubic_spline_vs_linear",
+            "likelihood_ratio_statistic": likelihood_ratio,
+            "degrees_of_freedom": additional_parameters,
+            "p_value": nonlinearity_p_value,
+            "linear_aic": _finite(linear_fit.aic),
+            "spline_aic": _finite(fit.aic),
+            "linear_bic": linear_bic,
+            "spline_bic": spline_bic,
+        },
         "interpretation": sealed.interpretation,
     }
     receipt_path = out_dir / "e2_scientific_runtime_receipt.json"

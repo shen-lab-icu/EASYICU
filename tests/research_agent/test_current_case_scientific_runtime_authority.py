@@ -23,6 +23,10 @@ from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilitySc
 from easyicu.research_agent.execution.runners.landmark_spline_executor import (
     run_landmark_spline_association,
 )
+from easyicu.research_agent.execution.runners.landmark_spline_functional_form_executor import (
+    LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
+    run_landmark_spline_functional_form,
+)
 from easyicu.research_agent.execution.runners.landmark_spline_robustness_executor import (
     run_landmark_spline_robustness,
 )
@@ -180,6 +184,12 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     )
     assert summary["n_primary_population"] == n
     assert summary["n_complete_case"] == n - 1
+    sensitivity = pd.read_csv(tmp_path / "e2_linear_sensitivity.csv")
+    assert len(sensitivity) == 1
+    assert int(sensitivity.loc[0, "n"]) == n - 1
+    assert int(sensitivity.loc[0, "additional_spline_parameters"]) > 0
+    assert 0.0 <= sensitivity.loc[0, "nonlinearity_p_value"] <= 1.0
+    assert sensitivity.loc[0, "likelihood_ratio_statistic"] >= 0.0
 
 
 def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
@@ -222,8 +232,10 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
 
 
-def test_e2_runtime_clears_rebound_binary_sensitivity_capability() -> None:
-    _projection, authority = _authority("e2_lactate_mortality")
+def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
+    tmp_path: Path,
+) -> None:
+    projection, authority = _authority("e2_lactate_mortality")
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
     exact = _e2_plan(authority)
     draft_step = exact.steps[0].model_copy(
@@ -257,6 +269,42 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability() -> None:
     assert authority.downstream_parent_product in rebound.inputs
     assert authority.linear_sensitivity_product in rebound.inputs
     AnalysisPlan.model_validate(bound.model_dump(mode="json"))
+    selected = select_standard_executor(
+        rebound,
+        plan=bound,
+        current_case_scientific_runtime_authority=authority,
+        scientific_runtime_projection_sha256=(
+            projection.runtime_projection_sha256
+        ),
+    )
+    assert selected is not None
+    assert selected.analysis_kind == LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND
+    summary = run_landmark_spline_functional_form(
+        step=rebound,
+        authority=authority,
+        runtime_projection_sha256=projection.runtime_projection_sha256,
+        linear_sensitivity=pd.DataFrame(
+            [
+                {
+                    "n": 44095,
+                    "events": 6200,
+                    "linear_aic": 310.0,
+                    "spline_aic": 300.0,
+                    "linear_bic": 340.0,
+                    "spline_bic": 338.0,
+                    "likelihood_ratio_statistic": 14.0,
+                    "additional_spline_parameters": 2,
+                    "nonlinearity_p_value": 0.00091,
+                }
+            ]
+        ),
+        linear_evidence_id="table_linear",
+        out_dir=tmp_path,
+    )
+    assert summary["n_complete_case"] == 44095
+    projected = pd.read_csv(tmp_path / "functional_form_check.csv")
+    assert projected.loc[0, "n_complete_case"] == 44095
+    assert projected.loc[0, "nonlinearity_p_value"] == pytest.approx(0.00091)
 
 
 def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
