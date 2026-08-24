@@ -89,7 +89,34 @@
     const owner = window.EU_PATIENT_SERIES;
     const mode = state.patientMode === 'lanes' ? 'lanes' : 'single';
     const review = payload.trajectory_review || {};
-    const lanes = Array.isArray(review.lanes) ? review.lanes : (payload.time_lanes || []);
+    const rawLanes = Array.isArray(review.lanes) ? review.lanes : (payload.time_lanes || []);
+    const detailByFeature = new Map((payload.loaded_feature_details || []).map(detail => [
+      String(detail && detail.feature && detail.feature.feature || ''), detail,
+    ]).filter(row => row[0]));
+    const loadedByModule = new Map();
+    detailByFeature.forEach(detail => {
+      if (!detail || !detail.signal) return;
+      const module = String(detail.feature && detail.feature.module || '');
+      if (!module) return;
+      const signals = loadedByModule.get(module) || [];
+      signals.push({ ...detail.signal, module, lazy_loaded: true });
+      loadedByModule.set(module, signals);
+    });
+    const lanesByModule = new Map((rawLanes || []).map(lane => [String(lane && lane.lane || ''), lane]));
+    const augmentedLanes = Array.from(new Set([...lanesByModule.keys(), ...loadedByModule.keys()])).filter(Boolean).map(module => {
+      const lane = lanesByModule.get(module) || { lane: module, label: module, signals: [], signal_count: 0, status: 'unavailable' };
+      const loaded = loadedByModule.get(module) || [];
+      const loadedKeys = new Set(loaded.map(signal => String(signal.feature || signal.key || '')));
+      const signals = loaded.concat((lane.signals || []).filter(signal => !loadedKeys.has(String(signal && (signal.feature || signal.key) || ''))));
+      return { ...lane, signals, signal_count: signals.length, status: signals.length ? 'ready' : lane.status };
+    });
+    const featureOwner = window.EU_PATIENT_FEATURES;
+    const lanes = featureOwner && typeof featureOwner.catalogLanes === 'function'
+      ? featureOwner.catalogLanes(augmentedLanes, payload.feature_coverage, feature => {
+        const detail = detailByFeature.get(String(feature || ''));
+        return detail ? { payload: detail, loaded: true } : {};
+      })
+      : augmentedLanes;
     const body = owner && typeof owner.renderTimeSeriesWorkspace === 'function' ? owner.renderTimeSeriesWorkspace({
       drill: payload, review, lanes, selected: payload.selected || {}, mode,
     }, context.patientSeriesHelpers ? context.patientSeriesHelpers() : {}) : '';

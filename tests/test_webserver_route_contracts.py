@@ -236,6 +236,7 @@ EXPECTED_WORKSPACE_ROUTES = [
     ("POST", "/api/workspaces/register", "post_workspaces_register"),
     ("POST", "/api/workspaces/rename", "post_workspaces_rename"),
     ("POST", "/api/workspaces/remove", "post_workspaces_remove"),
+    ("POST", "/api/workspaces/download", "post_workspaces_download"),
 ]
 
 EXPECTED_STUDY_CONTEXT_ROUTES = [

@@ -467,12 +467,14 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
         revision = value.get("study_revision")
         state = stable_code(value.get("state"))
         job_id = stable_code(value.get("job_id"))
+        source_id = stable_code(value.get("source_id"))
         if (
             route != "extraction"
             or not study_id
             or not isinstance(revision, int)
             or revision < 0
             or state not in {"setup", "running", "review"}
+            or (source_id and not re.fullmatch(r"src_[a-f0-9]{12}", source_id))
         ):
             return None
         return {
@@ -484,6 +486,7 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "label": _bounded_text(value.get("label") or "Data Extraction", 160),
             "media_type": "application/vnd.easyicu.native-workspace",
             **({"job_id": job_id} if job_id else {}),
+            **({"source_id": source_id} if source_id else {}),
         }
     if kind in {"file", "webpage"}:
         file_name = _bounded_text(value.get("file"), 240).replace("\\", "/")

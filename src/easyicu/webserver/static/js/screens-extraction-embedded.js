@@ -22,14 +22,17 @@
   function paint() {
     const owner = window.EU_EXTRACTION_NATIVE_OWNER;
     if (!host || !host.isConnected || !owner) return;
+    const sourceId = String(options.sourceId || '').trim();
     host.innerHTML = `<div class="gpi-extraction-embed" data-gpi-extraction-embed>
       <div class="gpi-extraction-toolbar">
         <div><span>${t('Native Data Extraction', '原生数据提取')}</span><strong>${t('The same owner as Classic Workspace', '与经典工作台共用同一个功能 owner')}</strong></div>
         <div class="row gap-8">
           ${owner.isReal() ? '' : `<button class="btn sm" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real local data', '使用本地真实数据')}</button>`}
+          ${sourceId ? `<button class="btn sm" type="button" data-gpi-extraction-download>${icon('download', 12)} ${t('Download data package', '下载数据包')}</button>` : ''}
           <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon('agent', 12)} ${t('Sync back to Copilot', '同步回 Copilot')}</button>
         </div>
       </div>
+      ${options.downloadError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Download blocked', '下载已阻止')}</div><div class="d">${escHtml(options.downloadError)}</div></div></div>` : ''}
       ${jobSummary(options.jobSnapshot)}
       <div class="gpi-extraction-native">${owner.render()}</div>
     </div>`;
@@ -45,8 +48,26 @@
     if (realButton) realButton.addEventListener('click', () => { owner.useRealData(); paint(); });
     const syncButton = host.querySelector('[data-gpi-extraction-sync]');
     if (syncButton) syncButton.addEventListener('click', syncToCopilot);
+    const downloadButton = host.querySelector('[data-gpi-extraction-download]');
+    if (downloadButton) downloadButton.addEventListener('click', downloadExport);
     const refresh = host.querySelector('[data-gpi-extraction-refresh]');
     if (refresh) refresh.addEventListener('click', refreshJob);
+  }
+
+  function downloadExport(event) {
+    const button = event.currentTarget;
+    const sourceId = String(options.sourceId || '').trim();
+    const api = window.EU_API;
+    if (!sourceId || !api || typeof api.downloadRegisteredExport !== 'function') return;
+    button.disabled = true;
+    button.textContent = t('Preparing download…', '正在准备下载…');
+    options.downloadError = '';
+    api.downloadRegisteredExport(sourceId).then(() => {
+      button.textContent = t('Download started', '已开始下载');
+    }).catch(error => {
+      options.downloadError = String(error && (error.message || error.code) || error);
+      paint();
+    });
   }
 
   function syncToCopilot(event) {

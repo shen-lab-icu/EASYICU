@@ -992,7 +992,17 @@ def _selected_feature_profile(frame: Any, feature: Dict[str, Any]) -> Dict[str, 
     column = str(feature.get("column") or "")
     kind = _infer_feature_kind(frame, column)
     if kind == "binary":
-        mapping = dataio._stay_bool(frame, column, missing_false=False)
+        # The Cohort owner already defines missing hospital-death event rows as
+        # non-events when it builds the mortality summary above.  Reuse that
+        # exact concept-specific semantic for the selected-feature view so the
+        # same export cannot report 10/10 mortality coverage in one panel and
+        # six unknown outcomes in another.  Other binary concepts remain
+        # fail-closed because their missingness may not mean a negative event.
+        missing_false = (
+            str(feature.get("module") or "").strip().lower() == "outcome"
+            and column.strip().lower() in _DEATH_COLUMNS
+        )
+        mapping = dataio._stay_bool(frame, column, missing_false=missing_false)
         aggregation = "entity_any_positive_pct"
     elif kind == "numeric":
         mapping = dataio._stay_numeric(frame, column, "median")

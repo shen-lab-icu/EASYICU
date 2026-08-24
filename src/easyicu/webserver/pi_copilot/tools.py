@@ -79,6 +79,7 @@ READ_TOOLS = frozenset(
         "easyicu_list_source_concepts",
         "easyicu_inspect_data_package",
         "easyicu_review_cohort",
+        "easyicu_open_data_download",
         "easyicu_preview_icd_cohort",
         "easyicu_review_patient_timeline",
         "easyicu_compare_data_sources",
@@ -370,6 +371,7 @@ def _extraction_workspace_resource(
     *,
     state: str,
     job_id: Any = None,
+    source_id: Any = None,
 ) -> Dict[str, Any]:
     """Project the native Extraction owner without exposing its host paths."""
 
@@ -385,6 +387,9 @@ def _extraction_workspace_resource(
     clean_job_id = str(job_id or "").strip()
     if clean_job_id:
         resource["job_id"] = clean_job_id[:160]
+    clean_source_id = str(source_id or "").strip()
+    if clean_source_id:
+        resource["source_id"] = clean_source_id[:80]
     return resource
 
 
@@ -1036,6 +1041,45 @@ def _review_cohort(
     )
 
 
+def _open_data_download(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Open a browser-controlled download for one registered export."""
+
+    _require_args(params, allowed=("source_id",))
+    source = _registered_source_choice(context, params.get("source_id"))
+    if not source:
+        return _result(
+            context,
+            status="blocked",
+            code="pi_data_source_not_registered",
+            summary="Choose a validated registered EasyICU export before downloading it.",
+            owner="easyicu.webserver.sources",
+        )
+    study = _bound_context(context.session.binding) or {}
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_registered_export_download_ready",
+        summary=(
+            "Prepared a user-controlled browser download for the exact registered "
+            "export. The model received only the source coordinate and aggregate "
+            "package metadata; bytes remain behind the browser click."
+        ),
+        owner="easyicu.webserver.export_download",
+        details={
+            "source_id": str(source.get("id") or "")[:80],
+            "file_count": int((source.get("summary") or {}).get("file_count") or 0),
+            "total_rows": int((source.get("summary") or {}).get("total_rows") or 0),
+            "resource": _extraction_workspace_resource(
+                study,
+                state="review",
+                source_id=source.get("id"),
+            ),
+        },
+    )
+
+
 def _bounded_icd_codes(value: Any, *, field: str, required: bool) -> list[str]:
     if value in (None, []):
         if required:
@@ -1187,7 +1231,7 @@ def _review_patient_timeline(
 ) -> Dict[str, Any]:
     """Open one bounded pseudonymous patient timeline without model-visible rows."""
 
-    _require_args(params, allowed=("source_id", "entity_ordinal"))
+    _require_args(params, allowed=("source_id", "entity_ordinal", "features"))
     source = _registered_source_choice(context, params.get("source_id"))
     if not source:
         return _result(
@@ -1203,6 +1247,32 @@ def _review_patient_timeline(
             "pi_entity_ordinal_invalid",
             "The patient timeline requires a positive pseudonymous entity ordinal.",
         )
+    requested_features = params.get("features")
+    if requested_features in (None, []):
+        feature_ids: list[str] = []
+    elif not isinstance(requested_features, list):
+        raise PiCopilotError(
+            "pi_patient_features_invalid",
+            "Patient Review features must be a bounded list of exact concept identifiers.",
+        )
+    else:
+        if len(requested_features) > 8:
+            raise PiCopilotError(
+                "pi_patient_features_too_many",
+                "Select at most eight Patient Review features for one conversational view.",
+            )
+        feature_ids = []
+        for raw in requested_features:
+            feature = str(raw or "").strip().lower()
+            if not feature or len(feature) > 80 or not re.fullmatch(
+                r"[a-z][a-z0-9_]*", feature
+            ):
+                raise PiCopilotError(
+                    "pi_patient_feature_invalid",
+                    "Each Patient Review feature must be an exact bounded EasyICU concept identifier.",
+                )
+            if feature not in feature_ids:
+                feature_ids.append(feature)
     page_size = 24
     page = ((ordinal - 1) // page_size) + 1
     source_path = str(source.get("path") or "")
@@ -1225,6 +1295,18 @@ def _review_patient_timeline(
         payload = patient_drilldown.patient_review_drilldown(
             {"source_path": source_path, "entity_ref": selected["ref"]}
         )
+        loaded_feature_details = []
+        for feature in feature_ids:
+            loaded_feature_details.append(
+                patient_drilldown.patient_review_feature(
+                    {
+                        "source_path": source_path,
+                        "entity_ref": selected["ref"],
+                        "entity_ordinal": ordinal,
+                        "feature": feature,
+                    }
+                )
+            )
     except patient_drilldown.PatientReviewError as exc:
         return _result(
             context,
@@ -1240,6 +1322,8 @@ def _review_patient_timeline(
             "eligibility_flow": payload.get("eligibility_flow"),
             "selected": payload.get("selected"),
             "time_lanes": payload.get("time_lanes"),
+            "feature_coverage": payload.get("feature_coverage"),
+            "loaded_feature_details": loaded_feature_details,
             "patient_overview": payload.get("patient_overview"),
             "trajectory_review": payload.get("trajectory_review"),
             "quality_metrics": payload.get("quality_metrics"),
@@ -1255,21 +1339,34 @@ def _review_patient_timeline(
         privacy=payload.get("privacy") if isinstance(payload.get("privacy"), Mapping) else {},
     )
     lanes = payload.get("time_lanes")
-    lane_count = len(lanes) if isinstance(lanes, list) else 0
+    available_lane_count = sum(
+        1
+        for lane in (lanes if isinstance(lanes, list) else [])
+        if isinstance(lane, Mapping) and (lane.get("signals") or [])
+    )
+    loaded_trajectory_count = sum(
+        1
+        for detail in loaded_feature_details
+        if isinstance(detail, Mapping)
+        and detail.get("status") == "numeric_trajectory"
+    )
     return _result(
         context,
         status="ok",
         code="easyicu_patient_timeline_ready",
         summary=(
             f"Prepared a bounded browser-only timeline for pseudonymous Entity {ordinal} "
-            f"with {lane_count} available time lanes. Direct identifiers, raw rows, "
+            f"with {available_lane_count} populated time lanes and "
+            f"{loaded_trajectory_count} requested feature trajectories. Direct identifiers, raw rows, "
             "timestamps, and host locations stayed inside the browser-only boundary."
         ),
         owner="easyicu.webserver.patient_drilldown",
         details={
             "source_id": str(source.get("id") or "")[:80],
             "entity_ordinal": ordinal,
-            "available_time_lane_count": lane_count,
+            "available_time_lane_count": available_lane_count,
+            "requested_feature_count": len(feature_ids),
+            "loaded_trajectory_count": loaded_trajectory_count,
             "resource": resource,
         },
     )
@@ -4623,6 +4720,7 @@ _DISPATCH = {
     "easyicu_list_source_concepts": _list_source_concepts,
     "easyicu_inspect_data_package": _inspect_data_package,
     "easyicu_review_cohort": _review_cohort,
+    "easyicu_open_data_download": _open_data_download,
     "easyicu_preview_icd_cohort": _preview_icd_cohort,
     "easyicu_review_patient_timeline": _review_patient_timeline,
     "easyicu_compare_data_sources": _compare_data_sources,

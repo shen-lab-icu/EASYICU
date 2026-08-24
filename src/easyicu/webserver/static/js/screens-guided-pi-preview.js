@@ -108,7 +108,7 @@
     if (value.kind === 'data_workbench_snapshot') {
       const view = String(value.view || '').trim();
       const snapshotSha256 = String(value.snapshot_sha256 || '').trim().toLowerCase();
-      if (!['cohort_summary', 'feature_distribution', 'patient_timeline', 'crossdb_comparison'].includes(view)) return null;
+      if (!['cohort_summary', 'feature_distribution', 'icd_cohort_preview', 'patient_timeline', 'crossdb_comparison'].includes(view)) return null;
       if (!/^[a-f0-9]{64}$/.test(snapshotSha256)) return null;
       return {
         kind: 'data_workbench_snapshot', view, snapshot_sha256: snapshotSha256,
@@ -122,16 +122,19 @@
       const studyContextId = String(value.study_context_id || '').trim();
       const studyRevision = Number(value.study_revision);
       const jobId = String(value.job_id || '').trim();
+      const sourceId = String(value.source_id || '').trim();
       if (route !== 'extraction' || !['setup', 'running', 'review'].includes(state)) return null;
       if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(studyContextId)) return null;
       if (!Number.isInteger(studyRevision) || studyRevision < 0) return null;
       if (jobId && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(jobId)) return null;
+      if (sourceId && !/^src_[a-f0-9]{12}$/.test(sourceId)) return null;
       return {
         kind: 'native_workspace', route, state,
         study_context_id: studyContextId, study_revision: studyRevision,
         label: String(value.label || tr('Data Extraction', '数据提取')).slice(0, 160),
         media_type: 'application/vnd.easyicu.native-workspace',
         ...(jobId ? { job_id: jobId } : {}),
+        ...(sourceId ? { source_id: sourceId.slice(0, 80) } : {}),
       };
     }
     const file = String(value.file || '').trim().replace(/\\/g, '/');
@@ -319,6 +322,7 @@
       const mount = state.host.querySelector('[data-gpi-native-workspace-mount]');
       if (owner && typeof owner.mount === 'function') owner.mount(mount, {
         jobId: state.resource.job_id || '', jobSnapshot: state.payload || null,
+        sourceId: state.resource.source_id || '',
         resource: state.resource,
       });
     }
