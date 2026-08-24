@@ -5,6 +5,7 @@ from easyicu.research_agent.literature import (
 )
 from easyicu.research_agent.reporting.manuscript_literature import (
     audit_manuscript_literature,
+    repair_evidence_ids_mistyped_as_literature,
     repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
@@ -96,6 +97,24 @@ def test_manuscript_literature_audit_rejects_aggregate_only_or_unknown() -> None
     unknown = audit_manuscript_literature("Prior work [@invented].", _bundle())
     assert unknown.status == "blocked"
     assert unknown.unknown_keys == ["invented"]
+
+
+def test_evidence_id_mistyped_as_literature_is_demoted_not_promoted() -> None:
+    manuscript = (
+        "The study used typed context {[@research_context]} "
+        "{evidence:research_context}. Prior work was invented [@invented]."
+    )
+
+    repaired, repairs = repair_evidence_ids_mistyped_as_literature(
+        manuscript,
+        _bundle(),
+        evidence_ids=("research_context",),
+    )
+
+    assert repairs == ["research_context"]
+    assert "[@research_context]" not in repaired
+    assert "{evidence:research_context}" in repaired
+    assert "[@invented]" in repaired
 
 
 def test_manuscript_literature_audit_accepts_bound_exact_key() -> None:

@@ -80,6 +80,45 @@ def _section_citations(manuscript: str) -> Dict[str, list[str]]:
     return output
 
 
+def repair_evidence_ids_mistyped_as_literature(
+    manuscript: str,
+    literature: Optional[LiteratureBundle],
+    *,
+    evidence_ids: list[str] | tuple[str, ...],
+) -> tuple[str, list[str]]:
+    """Remove only unknown literature markers that are exact evidence ids.
+
+    Writer occasionally emits ``[@research_context]`` beside the correct
+    ``{evidence:research_context}`` citation.  It is not a paper key and must
+    not be promoted into one.  Unknown keys that are not registered evidence
+    remain untouched so the literature audit still blocks invented sources.
+    """
+
+    allowed = {
+        record.key for record in (literature.citations if literature else [])
+    }
+    evidence_names = {str(value).strip() for value in evidence_ids if str(value).strip()}
+    repairs: list[str] = []
+    repaired = manuscript
+    matches = list(_MARKER.finditer(manuscript or ""))
+    for match in reversed(matches):
+        key = match.group("key")
+        if key in allowed or key not in evidence_names:
+            continue
+        start, end = match.span()
+        left = start - 1
+        while left >= 0 and repaired[left].isspace():
+            left -= 1
+        right = end
+        while right < len(repaired) and repaired[right].isspace():
+            right += 1
+        if left >= 0 and repaired[left] == "{" and right < len(repaired) and repaired[right] == "}":
+            start, end = left, right + 1
+        repaired = repaired[:start] + repaired[end:]
+        repairs.append(key)
+    return repaired, sorted(set(repairs))
+
+
 def render_writer_literature_digest(
     literature: Optional[LiteratureBundle],
     *,

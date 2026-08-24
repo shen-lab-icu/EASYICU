@@ -1564,7 +1564,8 @@ def _prose_effect_scale(
         local_prefix,
         re.I,
     ) or re.match(
-        r"\s*(?:patients?|stays?|admissions?|observations?|rows?|groups?)\b",
+        r"\s*(?:(?:icu|hospital)\s+)?"
+        r"(?:patients?|stays?|admissions?|observations?|rows?|groups?)\b",
         local_suffix,
         re.I,
     ):
