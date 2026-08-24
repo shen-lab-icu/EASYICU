@@ -468,6 +468,15 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     )
     assert figure_summary["status"] == "ok"
     assert (figure_dir / "landmark_survival_suite.svg").is_file()
+    figure_receipt = json.loads(
+        (figure_dir / "landmark_survival_figure_runtime_receipt.json").read_text()
+    )
+    assert figure_receipt["adjustment_columns"] == list(
+        authority.adjustment_columns
+    )
+    assert figure_summary["figure_assets"]["runtime_receipt"] == (
+        "landmark_survival_figure_runtime_receipt.json"
+    )
     assert set(figure_summary["source_data_files"]) == {
         "landmark_km_curve.csv",
         "landmark_cox_summary.csv",

@@ -894,6 +894,29 @@ def run_landmark_survival_figure(
         sealed=sealed,
         out_dir=out_dir,
     )
+    receipt_path = out_dir / "landmark_survival_figure_runtime_receipt.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "schema_version": (
+                    "easyicu.landmark_survival_figure_runtime_receipt/1"
+                ),
+                "adjustment_columns": list(sealed.adjustment_columns),
+                "effect_measure": sealed.effect_measure,
+                "source_sha256": {
+                    product: hashlib.sha256(
+                        Path(source_paths[product]).read_bytes()
+                    ).hexdigest()
+                    for product in sealed.figure_input_products
+                },
+            },
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    outputs["runtime_receipt"] = receipt_path
     figure_file = outputs.get("svg") or outputs.get("png")
     if figure_file is None:
         raise ValueError("landmark survival figure export is missing")
