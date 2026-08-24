@@ -190,6 +190,7 @@ def patient_identity_available(context: ResearchContext) -> bool:
 _EXECUTABLE_TEMPORAL_METHODS = frozenset(
     {
         "signed_landmark_restricted_cubic_spline",
+        "signed_landmark_survival_suite",
         "landmark_analysis",
         "time_varying_exposure_model",
         "clone_censor_weight",
