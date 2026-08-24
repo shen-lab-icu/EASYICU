@@ -316,10 +316,17 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
                 "panels": [
                     {
                         "panel_id": "A",
+                        "title": "Unadjusted landmark Kaplan-Meier survival",
+                        "role": "temporal_absolute_risk",
+                        "claim": "Unadjusted absolute survival by exposure group.",
+                        "evidence_ids": ["figure_primary_effect"],
+                    },
+                    {
+                        "panel_id": "B",
                         "title": "Adjusted effect estimate",
-                        "role": "effect",
+                        "role": "survival_effect",
                         "claim": "Adjusted estimate from the executed model.",
-                        "evidence_ids": ["table_primary_effect"],
+                        "evidence_ids": ["figure_primary_effect"],
                     }
                 ],
                 "source_data": ["effect.csv"],
@@ -344,6 +351,15 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
         json.dumps(
             {
                 "records": [
+                    {
+                        "evidence_id": "figure_primary_effect",
+                        "kind": "figure",
+                        "producer": "runner",
+                        "produced_by_step": "figure_step",
+                        "relative_path": "evidence/primary_effect.png",
+                        "sha256": "not_needed_for_lineage",
+                        "inputs": ["table_primary_effect"],
+                    },
                     {
                         "evidence_id": "table_primary_effect",
                         "kind": "table",
@@ -383,6 +399,9 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
     assert audit.facts["primary_figure"]["expected_adjustment_label"] == "adjusted"
     assert audit.facts["primary_figure"]["adjustment_covariates"] == ["age", "sex"]
     assert audit.facts["primary_figure"]["adjustment_authority"] == "runtime_receipt"
+    assert audit.facts["primary_figure"]["adjustment_panel_roles"] == [
+        "survival_effect"
+    ]
     assert audit.facts["primary_covariates"] == ["age", "sex"]
     assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" in codes
     assert "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE" not in codes

@@ -140,8 +140,10 @@ def _registered_figure_adjustment_authority(
     A host-owned executor may compile its model contract after the Planner plan
     is frozen. In that case the registered runtime receipt, not missing plan
     prose, is the authority for whether the rendered estimate is adjusted.
-    Only digest-matching runner receipts produced by the same step as a plotted
-    evidence record are accepted.
+    Only digest-matching runner receipts produced by a step on the plotted
+    evidence lineage are accepted. Figure-only steps commonly copy an upstream
+    result table, so requiring the receipt to share the renderer's step id would
+    discard the model authority that the evidence graph already binds.
     """
 
     authority = _read_json(run_dir / "evidence", "evidence_authority.json")
@@ -150,16 +152,34 @@ def _registered_figure_adjustment_authority(
         for record in authority.get("records") or []
         if isinstance(record, Mapping)
     ]
-    plotted_steps = {
-        str(record.get("produced_by_step") or "").strip()
+    records_by_id = {
+        str(record.get("evidence_id") or "").strip(): record
         for record in records
-        if str(record.get("evidence_id") or "").strip() in figure_evidence_ids
-        and str(record.get("produced_by_step") or "").strip()
+        if str(record.get("evidence_id") or "").strip()
     }
+    related_steps: set[str] = set()
+    pending_ids = list(figure_evidence_ids)
+    visited_ids: set[str] = set()
+    while pending_ids:
+        evidence_id = pending_ids.pop()
+        if evidence_id in visited_ids:
+            continue
+        visited_ids.add(evidence_id)
+        record = records_by_id.get(evidence_id)
+        if record is None:
+            continue
+        produced_by_step = str(record.get("produced_by_step") or "").strip()
+        if produced_by_step:
+            related_steps.add(produced_by_step)
+        pending_ids.extend(
+            str(value).strip()
+            for value in record.get("inputs") or []
+            if str(value).strip() and str(value).strip() not in visited_ids
+        )
     rosters: dict[tuple[str, ...], list[str]] = {}
     root = run_dir.resolve()
     for record in records:
-        if str(record.get("produced_by_step") or "").strip() not in plotted_steps:
+        if str(record.get("produced_by_step") or "").strip() not in related_steps:
             continue
         if record.get("producer") != "runner" or record.get("kind") != "log":
             continue
@@ -479,6 +499,8 @@ def _primary_figure_facts(
     ]
     labels: list[str] = []
     roles: list[str] = []
+    adjustment_labels: list[str] = []
+    adjustment_roles: list[str] = []
     figure_evidence_ids: set[str] = set()
     absolute_risk_panel_present = False
     for path in primary_contracts:
@@ -489,20 +511,30 @@ def _primary_figure_facts(
             absolute_risk_panel_present = (
                 absolute_risk_panel_present or panel_has_absolute_risk_context(panel)
             )
-            roles.append(str(panel.get("role") or "").strip().casefold())
+            role = str(panel.get("role") or "").strip().casefold()
+            roles.append(role)
             figure_evidence_ids.update(
                 str(value).strip()
                 for value in panel.get("evidence_ids") or []
                 if str(value).strip()
             )
-            labels.append(
-                " ".join(
-                    [
-                        str(panel.get("title") or ""),
-                        str(panel.get("claim") or ""),
-                    ]
-                ).casefold()
-            )
+            label = " ".join(
+                [
+                    str(panel.get("title") or ""),
+                    str(panel.get("claim") or ""),
+                ]
+            ).casefold()
+            labels.append(label)
+            if role in {
+                "association",
+                "association_forest",
+                "effect",
+                "primary_effect",
+                "primary_estimand",
+                "survival_effect",
+            }:
+                adjustment_labels.append(label)
+                adjustment_roles.append(role)
     plan_covariates = _model_covariates(plan)
     executed_covariates, execution_refs = _registered_figure_adjustment_authority(
         run_dir,
@@ -516,10 +548,14 @@ def _primary_figure_facts(
         else ()
     )
     expected_label = "adjusted" if covariates else "unadjusted"
+    labels_to_check = adjustment_labels or labels
     conflicting = (
-        any("adjusted" in label and "unadjusted" not in label for label in labels)
+        any(
+            "adjusted" in label and "unadjusted" not in label
+            for label in labels_to_check
+        )
         if expected_label == "unadjusted"
-        else any("unadjusted" in label for label in labels)
+        else any("unadjusted" in label for label in labels_to_check)
     )
     return {
         "expected_adjustment_label": expected_label,
@@ -527,6 +563,7 @@ def _primary_figure_facts(
             str(path.relative_to(run_dir)) for path in primary_contracts
         ],
         "primary_panel_roles": roles,
+        "adjustment_panel_roles": adjustment_roles,
         "adjustment_covariates": list(covariates),
         "adjustment_authority": (
             "plan"
