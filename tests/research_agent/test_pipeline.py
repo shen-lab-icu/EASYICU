@@ -6444,6 +6444,51 @@ def test_apply_writer_evidence_repair_decisions_cites_or_drops_without_rewriting
     assert [item["action"] for item in applied] == ["cite", "drop"]
 
 
+def test_apply_writer_evidence_repair_replaces_only_stale_placeholder(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    stale = "statistic_step_summary_stale"
+    selected = "statistic_step_summary_selected"
+    existing = "prediction_figure_suite"
+    sentence = (
+        "Calibration slope was 0.98 "
+        f"{{evidence:{stale}}} {{evidence:{existing}}}."
+    )
+
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        f"## Results\n\n{sentence}\n",
+        missing_sentences=[sentence],
+        decisions=[
+            {"index": 0, "action": "cite", "evidence_ids": [selected]}
+        ],
+        allowed_evidence_ids=[selected, existing],
+    )
+
+    assert f"{{evidence:{stale}}}" not in repaired
+    assert repaired.count(f"{{evidence:{selected}}}") == 1
+    assert repaired.count(f"{{evidence:{existing}}}") == 1
+    assert applied[0]["evidence_ids"] == [selected]
+
+
+def test_apply_writer_evidence_repair_rejects_unregistered_selected_id(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    sentence = "Calibration slope was 0.98."
+    with pytest.raises(ValueError, match="registered allowed evidence ids"):
+        _apply_writer_evidence_repair_decisions(
+            sentence,
+            missing_sentences=[sentence],
+            decisions=[
+                {"index": 0, "action": "cite", "evidence_ids": ["stale"]}
+            ],
+            allowed_evidence_ids=["registered"],
+        )
+
+
 def test_apply_writer_evidence_repair_replaces_prose_with_exact_host_claim(ra):
     from easyicu.research_agent.reporting.manuscript_post import (
         _apply_writer_evidence_repair_decisions,
