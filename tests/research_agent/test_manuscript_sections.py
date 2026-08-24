@@ -125,6 +125,7 @@ def test_section_specs_keep_literature_and_evidence_boundaries() -> None:
     assert "direct-comparator" in instructions["introduction"]
     assert "method-source key" in instructions["methods"]
     assert "{evidence:id}" in instructions["results"]
+    assert "reportable_secondary_results" in instructions["results"]
     assert "specific population" in instructions["discussion"]
     assert "host owns those administrative facts" in instructions["conclusion"]
     assert "released alongside this manuscript" not in instructions["methods"]
