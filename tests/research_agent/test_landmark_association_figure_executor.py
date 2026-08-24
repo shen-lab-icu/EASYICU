@@ -120,6 +120,34 @@ def test_empty_visualization_contract_closes_and_selects_owner(tmp_path: Path) -
     assert selection.analysis_kind == "landmark_association_composite_figure"
 
 
+def test_composite_owner_accepts_a_case_neutral_curve_product(tmp_path: Path) -> None:
+    generic_curve = "table:continuous_exposure_curve"
+    generic_inputs = (generic_curve, *INPUTS[1:])
+    draft = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render the four typed sources.",
+        method="visualization",
+        inputs=list(generic_inputs),
+        expected_outputs=["figure:display_suite"],
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"} for key in generic_inputs
+        ],
+    )
+    frames = _frames()
+    frames[generic_curve] = frames.pop(INPUTS[0])
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    assert landmark_association_figure_executor_owns_step(
+        draft,
+        resolved_bindings=bindings,
+    )
+
+
 def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     bindings = {}
     for key, frame in _frames().items():

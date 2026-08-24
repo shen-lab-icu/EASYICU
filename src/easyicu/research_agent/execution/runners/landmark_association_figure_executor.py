@@ -58,11 +58,17 @@ def _figure_product(value: Any) -> str | None:
 
 
 def _curve_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+    reserved = {
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+    }
     matches = [
         value
         for value in inputs
         if value.startswith("table:")
-        and value.partition(":")[2].endswith("landmark_rcs_curve")
+        and value not in reserved
+        and value.partition(":")[2]
+        not in {"measurement_process", "measurement_process_audit"}
     ]
     return matches[0] if len(matches) == 1 else None
 

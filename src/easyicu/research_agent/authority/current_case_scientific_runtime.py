@@ -744,7 +744,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 "table:robustness_summary",
                 measurement_products[0],
             )
-        composite_candidates = [
+        broad_composite_candidates = [
             step
             for step in plan.steps
             if composite_inputs is not None
@@ -754,6 +754,22 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             and len(step.expected_outputs) == 1
             and step.expected_outputs[0].startswith("figure:")
         ]
+        exact_composite_candidates = [
+            step
+            for step in broad_composite_candidates
+            if {
+                generic_parent,
+                "table:absolute_risk_context",
+                "table:robustness_summary",
+                measurement_products[0],
+            }
+            <= set(step.inputs)
+        ]
+        composite_candidates = (
+            exact_composite_candidates
+            if exact_composite_candidates
+            else broad_composite_candidates
+        )
         composite_step_id = (
             composite_candidates[0].step_id if len(composite_candidates) == 1 else None
         )
