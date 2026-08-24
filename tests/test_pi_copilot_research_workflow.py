@@ -2490,6 +2490,7 @@ def test_extraction_rebuilds_registered_export_when_requested_contract_differs(
 
     assert result["code"] == "easyicu_extraction_submitted"
     assert submitted[0]["path"] == "/private/demo/raw"
+    assert submitted[0]["registered_export_path"] == "/private/registered/export"
     assert submitted[0]["format"] == "csv"
     assert submitted[0]["cohort"] == handoff_cohort
     assert result["details"]["extraction_contract"]["reusable"] is False
