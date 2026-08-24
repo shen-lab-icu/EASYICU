@@ -260,12 +260,26 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
         return plan
 
     def is_development_execution_only_plan(self, plan: AnalysisPlan) -> bool:
-        observed = {step.step_id for step in plan.steps}
-        # Check the three scientific owners, not the display suffix introduced
-        # by the current runtime.  This lets an exact checkpoint created before
-        # the suffix existed be upgraded deterministically instead of falling
-        # through to generic article shaping.
-        return set(self.development_execution_step_ids[:3]).issubset(observed)
+        # Generic article shaping and the step cap run before this final owner
+        # compiler. They may temporarily remove a later stability/figure step,
+        # so identifying the signed plan by every projected id is not stable
+        # across host versions. The representation and candidate owners are the
+        # minimal unambiguous signed prefix: require their exact methods and
+        # this authority's digest, then reconstruct all four owners.
+        expected_methods = (
+            self.representation_plan_method,
+            OBSERVED_DATA_DIAG_GMM_METHOD,
+        )
+        signed_prefix = [
+            step
+            for step in plan.steps
+            if step.method in expected_methods
+            and self.plan_rule_ref in set(step.icu_rule_refs)
+        ]
+        return (
+            len(signed_prefix) == 2
+            and tuple(step.method for step in signed_prefix) == expected_methods
+        )
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
         owners: dict[str, list[Any]] = {

@@ -332,6 +332,20 @@ def test_signed_trajectory_authority_projects_and_rebinds_execution_only_plan() 
         "trajectory_development_execution_only_authority_compiled"
     )
 
+    host_capped_prefix = plan.model_copy(update={"steps": plan.steps[:2]})
+    assert authority.is_development_execution_only_plan(host_capped_prefix)
+    rebuilt, rebuild_findings = authorities.bind_plan(host_capped_prefix)
+    authority.validate_plan(rebuilt)
+    assert tuple(step.step_id for step in rebuilt.steps) == (
+        "00_authority_compiled_trajectory_representation",
+        "01_authority_compiled_trajectory_candidates",
+        "02_authority_compiled_trajectory_stability",
+        "03_authority_compiled_trajectory_selection_figure",
+    )
+    assert rebuild_findings[0].detail["reason_code"] == (
+        "trajectory_development_execution_only_authority_compiled"
+    )
+
 
 def test_signed_representation_excludes_owner_unavailable_zero(tmp_path: Path) -> None:
     authority = _authority()
