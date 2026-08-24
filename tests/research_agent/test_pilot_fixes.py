@@ -114,6 +114,44 @@ def test_register_step_summary_numerics_respects_max_leaves(ra, tmp_path: Path):
     assert overflows[0].canonical == 15.0  # dropped count
 
 
+def test_numeric_claim_cap_keeps_headline_fields_ahead_of_nested_diagnostics(
+    ra,
+    tmp_path: Path,
+):
+    store = ra.EvidenceStore(tmp_path)
+    summary = {
+        "model_contracts": {f"term_{index}": float(index) for index in range(120)},
+        "primary_ci_low": 0.72,
+        "primary_ci_high": 1.31,
+        "primary_estimate": 0.97,
+        "n_total": 24_819,
+    }
+
+    claims = store.register_step_summary_numerics(
+        step_id="s1",
+        evidence_id="evid_a",
+        summary=summary,
+        max_leaves=100,
+    )
+
+    source_fields = [claim.source_field for claim in claims]
+    assert source_fields[:4] == [
+        "primary_estimate",
+        "primary_ci_low",
+        "primary_ci_high",
+        "n_total",
+    ]
+    assert "model_contracts.term_0" in source_fields
+    assert "model_contracts.term_96" not in source_fields
+    overflows = [
+        claim
+        for claim in store.numeric_claims()
+        if claim.source_field == "__easyicu_numeric_claim_overflow__"
+    ]
+    assert len(overflows) == 1
+    assert overflows[0].canonical == 24.0
+
+
 def test_register_step_summary_numerics_no_cap_when_none(ra, tmp_path: Path):
     store = ra.EvidenceStore(tmp_path)
     summary = {f"x_{i}": float(i) for i in range(10)}
