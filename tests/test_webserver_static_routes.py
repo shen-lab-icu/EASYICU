@@ -126,7 +126,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
+    assert "js/api.js?v=20260824-local-open1" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -182,7 +182,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
-    assert "js/screens-extraction.js?v=20260824-icd-source1" in index_html
+    assert "js/screens-extraction.js?v=20260824-local-open1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
@@ -399,7 +399,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
+    assert "js/api.js?v=20260824-local-open1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
 
 
@@ -536,7 +536,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260815-compact-rail2" in index_html
     assert "css/guided-projects.css?v=20260815-mobile-rail1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
+    assert "js/api.js?v=20260824-local-open1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     )
@@ -2384,7 +2384,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260816-copilot-provider-owner1" in index_html
+    assert "api.js?v=20260824-local-open1" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2657,7 +2657,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260816-copilot-provider-owner1" in index_html
+    assert "api.js?v=20260824-local-open1" in index_html
     assert "screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -3426,7 +3426,10 @@ def test_analysis_handoffs_route_to_copilot_and_monitor_links_use_one_name() -> 
 
     for owner in (viz_js, crossdb_js, ext_js):
         assert 'data-study-target="agent"' not in owner
+    for owner in (viz_js, crossdb_js):
         assert 'data-study-target="guided"' in owner
+    assert "data-ex-sync-guided" in ext_js
+    assert "syncExtractionToCopilot" in ext_js
     assert "Continue in Guided Copilot" in viz_js
     assert "Continue in Guided Copilot" in ext_js
     assert "Plan in Guided Copilot" in crossdb_js
@@ -3435,6 +3438,32 @@ def test_analysis_handoffs_route_to_copilot_and_monitor_links_use_one_name() -> 
         assert "Open Project Monitor" in owner
         assert "Open Agent Projects" not in owner
     assert "t('Project Monitor', '项目监控')" in app_js
+
+
+def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> None:
+    index_html = _static_html("index.html")
+    api_js = _static_js("api.js")
+    extraction_js = _static_js("screens-extraction.js")
+    embedded_js = _static_js("screens-extraction-embedded.js")
+    guided_js = _static_js("screens-guided-pi.js")
+    output_css = _static_css("extraction-output.css")
+
+    assert "css/extraction-output.css?v=20260824-local-open1" in index_html
+    assert "js/screens-extraction-embedded.js?v=20260824-visible-sync1" in index_html
+    assert "js/screens-guided-pi.js?v=20260824-extraction-receipt1" in index_html
+    assert "/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output" in api_js
+    assert "window.EU_API.openExtractionOutput = openExtractionOutput" in api_js
+    assert "data-ex-open-output" in extraction_js
+    assert "column_metadata" in extraction_js
+    assert "syncToCopilot: syncExtractionToCopilot" in extraction_js
+    assert "notifyExtractionHandoff" in embedded_js
+    assert "role: 'workflow_receipt'" in guided_js
+    assert "This is EasyICU state, not a model reply." in guided_js
+    assert ".ex-output-path" in output_css
+    assert ".ex-output-file" in output_css
+    assert "!important" not in output_css
+    for foreign_route in ("crossdb", "patient", "cohort", "settings", "agent"):
+        assert foreign_route not in output_css.lower()
 
 
 def test_agent_run_status_labels_cover_success_statuses() -> None:

@@ -15,6 +15,7 @@
     projectInitialization: null, projectIssue: '', workflow: null,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
+    workflowReceipts: [],
   };
 
   const ACCESS_MODE_GRANTS = Object.freeze({
@@ -444,6 +445,24 @@
 
   function messageHtml(row) {
     if (row.role === 'activity') return ACTIVITY.render(row);
+    if (row.role === 'workflow_receipt') {
+      const rows = row.total_rows == null ? Number.NaN : Number(row.total_rows);
+      const files = Number(row.data_file_count);
+      const supports = Number(row.support_file_count);
+      return `<article class="gpi-message assistant gpi-workflow-receipt" role="status">
+        <div class="gpi-message-body">
+          <div class="gpi-workflow-receipt-head">${iconHtml('check', 15)}<div><strong>${tr('Local workflow receipt · extraction synced', '本地工作流回执 · 数据抽取已同步')}</strong><span>${tr('This is EasyICU state, not a model reply.', '这是 EasyICU 本地状态，不是模型回复。')}</span></div></div>
+          <div class="gpi-workflow-receipt-grid">
+            <span>${tr('Database', '数据库')}<b>${esc(row.database || row.source_label || '—')}</b></span>
+            <span>${tr('Output', '产物')}<b>${Number.isFinite(files) ? files : 0} + ${Number.isFinite(supports) ? supports : 0} ${tr('files', '个文件')}</b></span>
+            <span>${tr('Rows', '行数')}<b>${Number.isFinite(rows) ? rows.toLocaleString() : '—'}</b></span>
+            <span>${tr('Cohort', '队列')}<b>${esc(row.cohort_summary || tr('Current confirmed cohort', '当前确认队列'))}</b></span>
+          </div>
+          ${row.output_dir ? `<div class="gpi-workflow-receipt-path"><span>${tr('Local output folder', '本机输出文件夹')}</span><code>${esc(row.output_dir)}</code></div>` : ''}
+          <p>${tr('Copilot is now rebound to the updated database, cohort, feature modules, and export format. The absolute local path is shown only in this host UI and is not inserted as model-authored text.', 'Copilot 已重新绑定到更新后的数据库、队列、特征模块和导出格式。本机绝对路径只显示在当前宿主界面，不会被伪装成模型生成的文字。')}</p>
+        </div>
+      </article>`;
+    }
     const cls = row.role === 'user' ? 'user' : 'assistant';
     const preferredArtifacts = [
       'system_validation_report.html', 'system_validation_report.pdf',
@@ -627,7 +646,7 @@
     const model = session.model || {};
     const research = session.research_provider || {};
     const connection = session.model_connection || null;
-    const messages = state.messages.map(messageHtml).join('');
+    const messages = state.messages.concat(state.workflowReceipts).map(messageHtml).join('');
     const stale = sessionIsStale();
     const workspace = agentMode() === 'workspace';
     return `
@@ -1623,6 +1642,29 @@
     } catch (error) { state.error = errorText(error); render(); }
   }
 
+  function notifyExtractionHandoff(receipt) {
+    if (!receipt || typeof receipt !== 'object') return false;
+    const id = String(receipt.id || ('extraction-' + Date.now()));
+    const projected = {
+      id,
+      role: 'workflow_receipt',
+      database: String(receipt.database || '').slice(0, 80),
+      source_label: String(receipt.source_label || '').slice(0, 160),
+      output_dir: String(receipt.output_dir || '').slice(0, 2048),
+      data_file_count: Number(receipt.data_file_count || 0),
+      support_file_count: Number(receipt.support_file_count || 0),
+      total_rows: receipt.total_rows == null ? null : Number(receipt.total_rows),
+      cohort_summary: String(receipt.cohort_summary || '').slice(0, 240),
+    };
+    state.workflowReceipts = state.workflowReceipts.filter(row => row.id !== id).concat([projected]).slice(-3);
+    render();
+    requestAnimationFrame(() => {
+      const log = state.host && state.host.querySelector('[data-gpi-log]');
+      if (log) log.scrollTop = log.scrollHeight;
+    });
+    return true;
+  }
+
   async function archiveChildJob(jobId) {
     if (!state.session || !jobId || !api().archivePiCopilotChildJob) return null;
     return api().archivePiCopilotChildJob(
@@ -1764,5 +1806,5 @@
   function unmount() {
     stopCodexPoll(); closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
-  window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive, rebind };
+  window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive, rebind, notifyExtractionHandoff };
 })();

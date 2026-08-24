@@ -328,6 +328,10 @@
   function cancelJob(jobId, reason) {
     return postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/cancel', { reason: reason || 'user_requested' });
   }
+  function openExtractionOutput(jobId, file) {
+    const body = file ? { file: file } : {};
+    return postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output', body);
+  }
   function loadAgentRunReview(projectDir) {
     return postJSON('/api/agent-runs/review', { project_dir: projectDir });
   }
@@ -652,6 +656,7 @@
   window.EU_API.handoffStudyContext = handoffStudyContext;
   window.EU_API.loadJobSnapshot = loadJobSnapshot;
   window.EU_API.cancelJob = cancelJob;
+  window.EU_API.openExtractionOutput = openExtractionOutput;
   window.EU_API.loadAgentRunReview = loadAgentRunReview;
   window.EU_API.loadAgentScienceWorkbench = loadAgentScienceWorkbench;
   window.EU_API.loadCapabilities = loadCapabilities;

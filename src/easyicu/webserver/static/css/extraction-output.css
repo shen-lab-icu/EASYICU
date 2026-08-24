@@ -1,0 +1,19 @@
+/* Owner: Data Extraction terminal output and local-open controls. */
+.ex-output-path{
+  display:inline-flex;max-width:100%;align-items:center;gap:5px;padding:0;border:0;
+  background:transparent;color:var(--accent-ink);cursor:pointer;vertical-align:baseline
+}
+.ex-output-path .mono{overflow-wrap:anywhere;text-decoration:underline;text-underline-offset:3px}
+.ex-output-path:hover .mono{color:var(--accent)}
+.ex-output-path:focus-visible,.ex-output-file:focus-visible{
+  outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:3px
+}
+.ex-output-feedback{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:7px 10px;border-radius:8px;font-size:11.5px}
+.ex-output-feedback.ok{background:var(--ok-soft);color:var(--ok)}
+.ex-output-feedback.bad{background:var(--bad-soft);color:var(--bad)}
+.ex-output-file{width:100%;min-width:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
+button.ex-output-file:hover{border-color:color-mix(in srgb,var(--accent) 36%,var(--hair));background:color-mix(in srgb,var(--accent) 4%,var(--surface))}
+.ex-output-file-copy{display:block;min-width:0;flex:1}
+.ex-output-file-name{display:block;overflow-wrap:anywhere;font-weight:600;font-size:12px}
+.ex-output-file-detail{display:block;margin-top:2px;color:var(--ink-4);font-size:11px}
+.ex-output-open-icon{display:grid;place-items:center;flex:none;color:var(--ink-4)}
