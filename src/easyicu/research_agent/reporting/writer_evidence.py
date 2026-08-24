@@ -383,6 +383,124 @@ def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
     return _first_present_scalar(summary, (key,))
 
 
+def _has_envelope_writer_authority(
+    record: Mapping[str, Any], *, evidence: EvidenceStore | None
+) -> bool:
+    """Return whether Writer received the host's verified scalar projection.
+
+    ``authoritative_writer_records`` adds the envelope evidence id only after
+    the sidecar and the legacy summary agree exactly. Canonical scalar
+    reconstruction intentionally drops unregistered prose metadata, so
+    downstream reporting must not require those dropped strings again.
+    """
+
+    return bool(
+        evidence is not None
+        and str(record.get("writer_result_envelope_evidence_id") or "").strip()
+    )
+
+
+def _descriptive_reporting_is_authorized(
+    *,
+    record: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    payload: Any,
+    evidence: EvidenceStore | None,
+) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    overall = payload.get("overall_outcome")
+    exposures = payload.get("exposures")
+    if not isinstance(overall, Mapping) or not isinstance(exposures, list):
+        return False
+    raw_owner_authority = (
+        payload.get("schema_version") == "easyicu.absolute_risk_reporting/1"
+        and payload.get("execution_owner") == "absolute_risk_context_executor_v1"
+    )
+    envelope_owner_authority = (
+        _has_envelope_writer_authority(record, evidence=evidence)
+        and record.get("deterministic_standard_analysis") == "absolute_risk_context"
+        and summary.get("analysis_family") == "absolute_risk_context"
+    )
+    return bool(raw_owner_authority or envelope_owner_authority)
+
+
+def _secondary_reporting_is_authorized(
+    *,
+    record: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    payload: Any,
+    ordered_contract: Any,
+    evidence: EvidenceStore | None,
+) -> bool:
+    if not isinstance(payload, Mapping) or not isinstance(ordered_contract, Mapping):
+        return False
+    if not isinstance(payload.get("continuous_level_summaries"), list):
+        return False
+    if not isinstance(payload.get("continuous_trend"), Mapping):
+        return False
+    raw_owner_authority = (
+        payload.get("schema_version") == "easyicu.ordered_stratified_reporting/1"
+        and ordered_contract.get("execution_owner")
+        == "ordered_stratified_executor_v1"
+    )
+    envelope_owner_authority = (
+        _has_envelope_writer_authority(record, evidence=evidence)
+        and record.get("deterministic_standard_analysis")
+        == "ordered_stratified_analysis"
+        and summary.get("analysis_family") == "association"
+        and summary.get("analysis_role") == "secondary"
+    )
+    return bool(raw_owner_authority or envelope_owner_authority)
+
+
+def _executed_method_boundary_rows(
+    records: Sequence[Mapping[str, Any]], *, evidence: EvidenceStore | None
+) -> List[Dict[str, Any]]:
+    """Render only methods backed by a verified current result envelope."""
+
+    rows: List[Dict[str, Any]] = []
+    for record in records:
+        if (
+            str(record.get("status") or "").strip().lower() != "ok"
+            or not _has_envelope_writer_authority(record, evidence=evidence)
+        ):
+            continue
+        summary = record.get("step_summary")
+        if not isinstance(summary, Mapping):
+            continue
+        row: Dict[str, Any] = {"step_id": str(record.get("step_id") or "unknown_step")}
+        for key in ("generation_mode", "deterministic_standard_analysis"):
+            value = record.get(key)
+            if isinstance(value, str) and value.strip():
+                row[key] = value
+        for key in (
+            "analysis_family",
+            "analysis_role",
+            "analysis_set",
+            "method",
+            "estimator_kind",
+            "effect_scale",
+        ):
+            value = summary.get(key)
+            if isinstance(value, (str, int, float, bool)) and str(value).strip():
+                row[key] = value
+        contracts = summary.get("model_contracts")
+        if isinstance(contracts, list):
+            fit_methods = sorted(
+                {
+                    str(contract.get("fit_method") or "").strip()
+                    for contract in contracts
+                    if isinstance(contract, Mapping)
+                    and str(contract.get("fit_method") or "").strip()
+                }
+            )
+            if fit_methods:
+                row["fit_methods"] = fit_methods
+        rows.append(row)
+    return rows
+
+
 def _render_writer_evidence_digest(
     per_step_records: Sequence[Dict[str, Any]] | None = None,
     *,
@@ -545,13 +663,11 @@ def _render_writer_evidence_digest(
                 digest_row.setdefault("primary_ci_high", ci_values[1])
         digest_row.update(_summarise_table_one_rows(summary.get("table_one_rows")))
         reportable_descriptive = summary.get("reportable_descriptive_results")
-        if (
-            summary.get("interpretation_class") == "absolute_risk_context"
-            and isinstance(reportable_descriptive, Mapping)
-            and reportable_descriptive.get("schema_version")
-            == "easyicu.absolute_risk_reporting/1"
-            and reportable_descriptive.get("execution_owner")
-            == "absolute_risk_context_executor_v1"
+        if _descriptive_reporting_is_authorized(
+            record=record,
+            summary=summary,
+            payload=reportable_descriptive,
+            evidence=evidence,
         ):
             # This compact result is emitted by the deterministic owner from
             # the same validated table used by the figure. Keep counts, risks,
@@ -561,14 +677,12 @@ def _render_writer_evidence_digest(
             )
         reportable_secondary = summary.get("reportable_secondary_results")
         ordered_contract = summary.get("ordered_stratified_contract")
-        if (
-            summary.get("interpretation_class") == "ordered_stratified_secondary"
-            and isinstance(ordered_contract, Mapping)
-            and ordered_contract.get("execution_owner")
-            == "ordered_stratified_executor_v1"
-            and isinstance(reportable_secondary, Mapping)
-            and reportable_secondary.get("schema_version")
-            == "easyicu.ordered_stratified_reporting/1"
+        if _secondary_reporting_is_authorized(
+            record=record,
+            summary=summary,
+            payload=reportable_secondary,
+            ordered_contract=ordered_contract,
+            evidence=evidence,
         ):
             # This is a compact, host-issued view of a validated secondary
             # result table. Keep it intact in the primary digest so a nested
@@ -643,6 +757,21 @@ def _render_writer_evidence_digest(
             "  "
             + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
         )
+    method_rows = _executed_method_boundary_rows(records, evidence=evidence)
+    lines.extend(
+        [
+            "## EXECUTED METHOD BOUNDARY",
+            "Only the verified current-run methods listed below were executed. "
+            "A planned or cited method absent from this block was not executed.",
+        ]
+    )
+    if method_rows:
+        lines.extend(
+            "- " + json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+            for row in method_rows
+        )
+    else:
+        lines.append("- none")
     primary = "\n".join(lines)
     primary = _append_blocked_outcome_gate_block(
         primary,
