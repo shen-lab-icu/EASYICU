@@ -9282,6 +9282,59 @@ def test_critic_does_not_flag_footnote_provenance_block(ra):
     assert flagged.unsupported_claims
 
 
+def test_critic_accepts_numeric_claim_refs_with_bound_footnote_provenance(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "## Results\n"
+        "The adjusted odds ratio was 1.61[^claim_1] (95% CI, "
+        "1.54[^claim_2] to 1.68[^claim_3]) for death.\n\n"
+        "[^claim_1]: value=1.61; step=primary; field=estimate; evidence=primary\n"
+        "[^claim_2]: value=1.54; step=primary; field=ci_lower; evidence=primary\n"
+        "[^claim_3]: value=1.68; step=primary; field=ci_upper; evidence=primary\n"
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=["primary"],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+
+def test_critic_does_not_treat_literature_key_year_as_result_number(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "Repeated ICU stays can affect patient-level inference "
+        "[@strobe_2007; @record_2015]."
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=[],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+
+def test_critic_rejects_numeric_claim_ref_without_bound_footnote_provenance(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "## Results\n"
+        "The adjusted odds ratio was 1.61[^claim_1] for death.\n\n"
+        "[^claim_1]: value=1.61; step=primary; field=estimate; evidence=not_registered\n"
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=[],
+    )
+
+    assert critique.status == "needs_revision"
+    assert critique.unsupported_claims
+
+
 def test_critic_ignores_manuscript_metadata_sections(ra):
     critic = ra.CriticAgent()
     scaffold = (
