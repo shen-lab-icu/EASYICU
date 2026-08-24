@@ -240,6 +240,17 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     assert performance["predictor_n"] == 3
     assert performance["auroc_ci_low"] <= performance["auroc"]
     assert performance["auroc_ci_high"] >= performance["auroc"]
+    assert performance["repeated_split_n"] == 10
+    assert performance["repeated_split_auroc_sd"] >= 0
+    assert performance["repeated_split_average_precision_sd"] >= 0
+    assert performance["repeated_split_brier_sd"] >= 0
+    repeats = json.loads(performance["repeated_split_results"])
+    assert len(repeats) == 10
+    assert [row["split_seed"] for row in repeats] == list(range(1730, 1740))
+    assert all(row["patient_overlap_n"] == 0 for row in repeats)
+    assert primary["resampling_validation"]["n_repeats"] == 10
+    assert primary["resampling_validation"]["all_patient_overlap_zero"] is True
+    assert primary["resampling_validation"]["external_validation_established"] is False
 
     score_binding = _binding(
         PREDICTION_SCORES_PRODUCT,
