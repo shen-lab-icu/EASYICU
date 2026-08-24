@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.contracts.capability_ids import (
     SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
@@ -18,6 +20,7 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
     TrajectoryStabilitySpec,
+    ValidationFinding,
 )
 from easyicu.research_agent.trajectory.runtime_validation import (
     signed_trajectory_runtime_bundle_errors,
@@ -266,3 +269,51 @@ def test_signed_trajectory_non_solution_tampering_fails_closed(tmp_path: Path) -
         plan=plan, records=tampered, run_dir=tmp_path
     )
     assert errors == ["signed trajectory failed-closed decision is incoherent"]
+
+
+@pytest.mark.parametrize(
+    "validator",
+    [
+        "writer_agent",
+        "manuscript_literature",
+        "manuscript_result_sufficiency",
+    ],
+)
+def test_signed_trajectory_analysis_validation_is_independent_of_manuscript_errors(
+    tmp_path: Path, validator: str
+) -> None:
+    plan = _plan()
+    records = _records(tmp_path, plan)
+    context = ResearchContext(
+        research_question=plan.research_question,
+        cohort=CohortDescriptor(
+            cohort_name="trajectory cohort",
+            database="synthetic",
+            n_stays=100,
+            n_patients=100,
+        ),
+        variables=[],
+    )
+
+    gates = _compute_readiness_gates(
+        context=context,
+        plan=plan,
+        per_step_records=records,
+        findings=[
+            ValidationFinding(
+                validator=validator,
+                severity="error",
+                message="Reporting stage failed after validated analysis.",
+            )
+        ],
+        evidence=EvidenceStore(tmp_path),
+        run_dir=tmp_path,
+        manuscript_path=tmp_path / "manuscript.md",
+        stop_after_analysis=False,
+    )
+
+    assert gates["execution_complete"] is True
+    assert gates["analysis_validated"] is True
+    assert gates["analysis_errors"] == []
+    assert gates["evidence_complete"] is False
+    assert gates["manuscript_ready"] is False
