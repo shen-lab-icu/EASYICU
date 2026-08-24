@@ -118,6 +118,37 @@ def test_prediction_model_alias_uses_prediction_supplement_contract(
     assert "resampling_validation" in payload["required_sections"]
 
 
+def test_registered_repeated_split_model_output_closes_only_internal_resampling(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    records = [
+        {
+            "step_id": "primary_prediction",
+            "step_summary": {
+                "method": (
+                    "deterministic_static_prediction_model_with_"
+                    "repeated_split_validation"
+                ),
+                "output_files": {
+                    "table:model_performance": "prediction_performance.csv"
+                },
+            },
+        }
+    ]
+
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="prediction"),
+        evidence=store,
+        per_step_records=records,
+        run_dir=tmp_path,
+    )
+
+    assert payload["sections"]["resampling_validation"]["present"] is True
+    assert payload["sections"]["external_validation"]["present"] is False
+    assert "external_validation" in payload["missing_required_sections"]
+
+
 def test_external_provider_privacy_audit_is_not_external_reproducibility(
     tmp_path: Path,
 ) -> None:
