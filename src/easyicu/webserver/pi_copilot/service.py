@@ -60,6 +60,7 @@ from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
 )
+from .turn_authority import infer_explicit_turn_actions
 from .workspace import ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
@@ -1248,7 +1249,7 @@ class PiCopilotService:
             )
         requested_actions = frozenset(
             str(item).strip() for item in allowed_actions if str(item).strip()
-        )
+        ) | infer_explicit_turn_actions(text)
         unknown_actions = sorted(requested_actions - ALLOWED_TURN_ACTIONS)
         if unknown_actions:
             raise PiCopilotError(
