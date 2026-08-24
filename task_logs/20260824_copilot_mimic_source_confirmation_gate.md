@@ -3,7 +3,8 @@
 - 日期：2026-08-24
 - 分支：`codex/easyicu-unified-product-20260823`
 - 基线：`189d0acfd7c7d26fefe797357337d775fb98c503`
-- 状态：隔离 worktree 内完成，未提交、未推送、未合并，local main 未触碰。
+- 实现提交：`e54c21c`（提交内容随后仅补充本日志中的提交坐标）
+- 状态：隔离 worktree 内完成并本地提交，未推送、未合并，local main 未触碰。
 
 ## 问题
 
