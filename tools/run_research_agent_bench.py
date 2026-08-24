@@ -255,6 +255,13 @@ def _operational_exposure_for_item(item: object) -> object:
     return None if legacy_predictor == "" else legacy_predictor
 
 
+def _exposure_concept_for_item(item: object) -> object:
+    """Return the benchmark concept coordinate, distinct from its data column."""
+
+    concept = getattr(item, "primary_predictor", None)
+    return None if concept == "" else concept
+
+
 def _reject_jsonl_duplicate_pairs(
     pairs: Sequence[tuple[str, object]],
 ) -> Dict[str, object]:
@@ -1089,7 +1096,7 @@ def _figure2_evaluation_attempt(*, run_dir: Path, item) -> Dict[str, Any]:
             run_dir,
             task_id=task_id,
             research_question=str(getattr(item, "research_question", "") or ""),
-            exposure_concept=_operational_exposure_for_item(item),
+            exposure_concept=_exposure_concept_for_item(item),
             outcome_concept=getattr(item, "target_outcome", None),
             operational_exposure=_operational_exposure_for_item(item),
         )
@@ -1897,7 +1904,7 @@ def _figure2_run_is_reusable(run_dir: Path, item: object) -> bool:
             run_dir,
             task_id=str(getattr(item, "key", "") or ""),
             research_question=str(getattr(item, "research_question", "") or ""),
-            exposure_concept=_operational_exposure_for_item(item),
+            exposure_concept=_exposure_concept_for_item(item),
             outcome_concept=getattr(item, "target_outcome", None),
             operational_exposure=_operational_exposure_for_item(item),
         )
