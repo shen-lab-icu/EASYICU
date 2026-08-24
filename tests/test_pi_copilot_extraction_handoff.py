@@ -8,6 +8,7 @@ from pathlib import Path
 from easyicu.webserver.pi_copilot.extraction_handoff import (
     compile_registered_export_handoff,
 )
+from easyicu.webserver.routes.jobs import _study_source_matches
 
 
 def _write_export(
@@ -133,3 +134,40 @@ def test_handoff_reuses_only_contract_matching_registered_export(
     assert handoff.reusable is True
     assert handoff.mismatch_codes == ()
     assert handoff.public_receipt()["reusable"] is True
+
+
+def test_job_source_gate_accepts_only_manifest_bound_raw_source(
+    tmp_path: Path,
+) -> None:
+    raw_path = tmp_path / "raw"
+    raw_path.mkdir()
+    export_path = tmp_path / "export"
+    _write_export(
+        export_path,
+        raw_path,
+        export_format="parquet",
+        cohort={"preset": "all_icu"},
+        modules=["demographics"],
+    )
+    bound_source = {"path": str(export_path), "database": "miiv"}
+
+    assert _study_source_matches(
+        requested_path=str(raw_path),
+        requested_database="miiv",
+        bound_source=bound_source,
+        registered_export_path=str(export_path),
+    )
+    assert not _study_source_matches(
+        requested_path=str(raw_path),
+        requested_database="miiv",
+        bound_source=bound_source,
+        registered_export_path=None,
+    )
+    other_raw = tmp_path / "other-raw"
+    other_raw.mkdir()
+    assert not _study_source_matches(
+        requested_path=str(other_raw),
+        requested_database="miiv",
+        bound_source=bound_source,
+        registered_export_path=str(export_path),
+    )

@@ -22,6 +22,44 @@ submission_router = APIRouter()
 lifecycle_router = APIRouter()
 
 
+def _study_source_matches(
+    *,
+    requested_path: str,
+    requested_database: str,
+    bound_source: Dict[str, Any],
+    registered_export_path: Any,
+) -> bool:
+    """Accept the bound path or its manifest-sealed raw extraction source."""
+
+    try:
+        bound_path = context_store.normalize_path(bound_source.get("path"))
+        normalized_request = context_store.normalize_path(requested_path)
+    except context_store.StudyContextError:
+        return False
+    if not bound_path or not normalized_request:
+        return False
+    if bound_path == normalized_request:
+        return True
+    if not registered_export_path:
+        return False
+    try:
+        claimed_export = context_store.normalize_path(registered_export_path)
+    except context_store.StudyContextError:
+        return False
+    if claimed_export != bound_path:
+        return False
+    try:
+        binding = dataio.resolve_registered_export_binding(
+            claimed_export, requested_database
+        )
+        sealed_raw_path = context_store.normalize_path(
+            binding.get("source_data_path")
+        )
+    except (dataio.ExportCohortError, context_store.StudyContextError):
+        return False
+    return bool(sealed_raw_path and sealed_raw_path == normalized_request)
+
+
 def submit_job(kind: str, runner: Any):
     """Submit a local job while preserving the public capacity error contract."""
     try:
@@ -105,19 +143,6 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
             )
         bound_source = study_context.get("data_source")
         bound_source = bound_source if isinstance(bound_source, dict) else {}
-        try:
-            bound_path = context_store.normalize_path(bound_source.get("path"))
-            requested_path = context_store.normalize_path(path)
-        except context_store.StudyContextError as exc:
-            raise HTTPException(status_code=400, detail=exc.detail) from exc
-        if not bound_path or bound_path != requested_path:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "study_context_source_mismatch",
-                    "study_context_id": study_context_id,
-                },
-            )
         if str(bound_source.get("database") or "").strip() != database:
             raise HTTPException(
                 status_code=409,
@@ -126,7 +151,19 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
                     "study_context_id": study_context_id,
                 },
             )
-
+        if not _study_source_matches(
+            requested_path=path,
+            requested_database=database,
+            bound_source=bound_source,
+            registered_export_path=body.get("registered_export_path"),
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "study_context_source_mismatch",
+                    "study_context_id": study_context_id,
+                },
+            )
     start_gate = threading.Event()
     start_abort: Dict[str, Any] = {}
 

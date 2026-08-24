@@ -3580,6 +3580,7 @@ def _start_extraction(
             details={"supported_formats": ["csv", "parquet"]},
         )
     handoff_receipt: Optional[Dict[str, Any]] = None
+    registered_export_path: Optional[str] = None
     try:
         if registered_source is not None:
             handoff = compile_registered_export_handoff(study, registered_source)
@@ -3607,6 +3608,7 @@ def _start_extraction(
                         ),
                     },
                 )
+            registered_export_path = source_path
             source_path = handoff.source_data_path
             database = handoff.database
             modules = list(handoff.modules)
@@ -3640,6 +3642,7 @@ def _start_extraction(
         submitted = jobs_extract(
             {
                 "path": source_path,
+                "registered_export_path": registered_export_path,
                 "database": database,
                 "modules": modules,
                 "format": export_format,
