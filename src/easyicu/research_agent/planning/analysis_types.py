@@ -693,20 +693,34 @@ def get_analysis_type(key: str) -> AnalysisTypeSpec:
     return _REGISTRY[key]
 
 
-def analysis_type_for_capability(capability_id: str) -> AnalysisTypeSpec:
-    """Return the unique analysis type owned by one registered capability."""
+def optional_analysis_type_for_capability(
+    capability_id: str,
+) -> Optional[AnalysisTypeSpec]:
+    """Return a unique subtype binding, or ``None`` for family-wide capabilities."""
 
     matches = [
         spec
         for spec in _REGISTRY.values()
         if spec.capability_id == str(capability_id).strip()
     ]
-    if len(matches) != 1:
+    if len(matches) > 1:
         raise ValueError(
             "scientific capability must map to exactly one analysis type: "
             f"{capability_id!r}"
         )
-    return matches[0]
+    return matches[0] if matches else None
+
+
+def analysis_type_for_capability(capability_id: str) -> AnalysisTypeSpec:
+    """Return the analysis subtype owned by one registered capability."""
+
+    match = optional_analysis_type_for_capability(capability_id)
+    if match is None:
+        raise ValueError(
+            "scientific capability must map to exactly one analysis type: "
+            f"{capability_id!r}"
+        )
+    return match
 
 
 def required_endpoint_kind_for_family(value: Optional[str]) -> Optional[str]:
@@ -1604,6 +1618,7 @@ __all__ = [
     "is_concept_set_family",
     "list_analysis_types",
     "get_analysis_type",
+    "optional_analysis_type_for_capability",
     "analysis_type_for_capability",
     "required_endpoint_kind_for_family",
     "infer_analysis_type",

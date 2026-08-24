@@ -2082,8 +2082,8 @@ class ResearchAgentPipeline:
             ]
             if len(primary_steps) == 1 and primary_steps[0].scientific_capability:
                 from .planning.analysis_types import (
-                    analysis_type_for_capability,
                     get_analysis_type,
+                    optional_analysis_type_for_capability,
                 )
                 from .planning.capability_registry import get_capability_by_id
 
@@ -2094,6 +2094,7 @@ class ResearchAgentPipeline:
                 expected_capability = get_capability_by_id(
                     current_type.capability_id
                 )
+                rebound_type = None
                 if (
                     declared_capability is not None
                     and expected_capability is not None
@@ -2101,9 +2102,10 @@ class ResearchAgentPipeline:
                     and declared_capability.capability_id
                     != expected_capability.capability_id
                 ):
-                    rebound_type = analysis_type_for_capability(
+                    rebound_type = optional_analysis_type_for_capability(
                         declared_capability.capability_id
                     )
+                if rebound_type is not None:
                     findings.append(
                         ValidationFinding(
                             validator="scientific_capability",
