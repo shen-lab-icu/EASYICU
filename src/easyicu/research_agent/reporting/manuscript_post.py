@@ -1635,6 +1635,17 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     are unbroken by prose, so the next sentence's words can never enter.
     """
 
+    context_start, context_end = _numeric_sentence_bounds(
+        text,
+        start=start,
+        end=end,
+    )
+    return text[context_start:context_end]
+
+
+def _numeric_sentence_bounds(text: str, *, start: int, end: int) -> Tuple[int, int]:
+    """Return the exact sentence span used by numeric provenance binding."""
+
     context_start = 0
     for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
         context_start = match.end()
@@ -1652,7 +1663,7 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     max_chars = 1600
     context_start = max(context_start, start - max_chars)
     context_end = min(context_end, end + max_chars)
-    return text[context_start:context_end]
+    return context_start, context_end
 
 
 #: A markdown link whose target is an evidence artefact, as the writer emits
@@ -1991,6 +2002,76 @@ def bind_numeric_values(
     return bound, binding_map, untraced
 
 
+def drop_untraceable_numeric_sentences(
+    manuscript: str,
+    *,
+    evidence: EvidenceStore,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Remove only sentences that the unchanged STRICT numeric gate rejects.
+
+    Writer prose is optional; numeric authority is not.  A model can still
+    calculate a plausible number or attach a real value to the wrong evidence
+    owner after being told not to.  Rather than guessing a replacement or
+    weakening :func:`bind_numeric_values`, test each numeric sentence against
+    that same gate, remove the complete rejected sentence, record why it was
+    removed, and let the caller run the full-document STRICT binder again.
+    """
+
+    if not manuscript:
+        return manuscript, []
+    skip_spans = _spans_to_skip(manuscript)
+    rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for match in _NUMERIC_IN_PROSE_RE.finditer(manuscript):
+        start, end = match.start("value"), match.end("value")
+        if _position_is_inside(start, skip_spans):
+            continue
+        value = match.group("value")
+        if _is_bibliographic_year_context(
+            manuscript,
+            start=start,
+            end=end,
+            value=value,
+        ):
+            continue
+        span = _numeric_sentence_bounds(manuscript, start=start, end=end)
+        if span in rejected_by_span:
+            continue
+        sentence = manuscript[span[0] : span[1]]
+        try:
+            bind_numeric_values(
+                sentence,
+                evidence=evidence,
+                enforcement_mode=EvidenceEnforcementMode.STRICT,
+                per_step_records=per_step_records,
+            )
+        except EvidenceEnforcementError as exc:
+            detail = dict(exc.detail or {})
+            rejected_by_span[span] = {
+                "sentence": sentence.strip(),
+                "untraced": [str(item) for item in detail.get("untraced", [])],
+                "miscited": list(detail.get("miscited", [])),
+            }
+
+    if not rejected_by_span:
+        return manuscript, []
+    filtered = manuscript
+    for (start, end), _detail in sorted(
+        rejected_by_span.items(),
+        key=lambda item: item[0][0],
+        reverse=True,
+    ):
+        filtered = filtered[:start] + filtered[end:]
+    removed = [
+        detail
+        for _span, detail in sorted(
+            rejected_by_span.items(),
+            key=lambda item: item[0][0],
+        )
+    ]
+    return filtered, removed
+
+
 def enforce_writer_claim_language(
     manuscript: str,
     *,
@@ -2039,5 +2120,6 @@ __all__ = [
     "_demote_unresolved_evidence_placeholders",
     "_remove_tbd_sentences",
     "bind_numeric_values",
+    "drop_untraceable_numeric_sentences",
     "enforce_writer_claim_language",
 ]

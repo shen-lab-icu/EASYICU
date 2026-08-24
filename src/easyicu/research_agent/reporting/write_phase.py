@@ -54,6 +54,7 @@ from ..providers.structured_retry import StructuredResponseFailure
 from .manuscript_post import (
     _apply_writer_evidence_repair_decisions,
     bind_numeric_values,
+    drop_untraceable_numeric_sentences,
     enforce_writer_claim_language,
     _demote_unresolved_evidence_placeholders,
     _remove_tbd_sentences,
@@ -1324,6 +1325,42 @@ def _bind_and_review_manuscript(
             f"The bound manuscript must not carry unresolved writer "
             f"placeholders before submission.",
             detail={"tbd_sentences": removed_tbd_sentences},
+        )
+    removed_numeric_sentences: List[Dict[str, Any]] = []
+    if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
+        bound, removed_numeric_sentences = drop_untraceable_numeric_sentences(
+            bound,
+            evidence=evidence,
+            per_step_records=per_step_records,
+        )
+    if removed_numeric_sentences:
+        numeric_filtered_path = run_dir / "manuscript_scaffold_numeric_filtered.md"
+        numeric_filtered_path.write_text(bound, encoding="utf-8")
+        if evidence.get("manuscript_scaffold_numeric_filtered") is None:
+            evidence.register_file(
+                kind="log",
+                description=(
+                    "Manuscript scaffold after deterministic removal of "
+                    "sentences rejected by strict numeric provenance binding."
+                ),
+                source_path=numeric_filtered_path,
+                evidence_id="manuscript_scaffold_numeric_filtered",
+                producer="pipeline",
+                generation_mode="system",
+            )
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_numeric_auditor",
+                severity="warning",
+                message=(
+                    "Removed "
+                    f"{len(removed_numeric_sentences)} sentence(s) rejected by "
+                    "the unchanged STRICT numeric provenance gate; the full "
+                    "manuscript is revalidated after this deterministic filter."
+                ),
+                evidence_ids=["manuscript_scaffold_numeric_filtered"],
+                detail={"removed_sentences": removed_numeric_sentences},
+            )
         )
     side_findings = collect_side_findings(per_step_records)
     bound, language_guard_detail = enforce_writer_claim_language(
