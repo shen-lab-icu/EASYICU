@@ -19,6 +19,9 @@ from easyicu.research_agent.execution.runners.composite_descriptive_figure_execu
     run_composite_descriptive_figure,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.execution.figure_plan_binding import (
+    validate_step_planned_figure_contract_binding,
+)
 from easyicu.research_agent.planning.figure_plan_shaping import (
     bind_deterministic_figure_panels,
 )
@@ -476,10 +479,20 @@ def test_association_scientific_sensitivity_contract_shapes_and_renders(
         (out_dir / "primary_figure_suite.figure_contract.json").read_text()
     )
     panels = {panel["panel_id"]: panel for panel in contract["panels"]}
-    assert panels["C"]["title"] == "Scientific sensitivity analyses"
-    assert panels["C"]["metadata"]["source_products"] == [
+    assert panels["scientific_sensitivity"]["title"] == (
+        "Scientific sensitivity analyses"
+    )
+    assert panels["scientific_sensitivity"]["metadata"]["chart_type"] == (
+        "sensitivity_forest_plot"
+    )
+    assert panels["scientific_sensitivity"]["metadata"]["source_products"] == [
         "table:scientific_sensitivity"
     ]
+    assert validate_step_planned_figure_contract_binding(
+        step=shaped_figure,
+        out_dir=out_dir,
+        step_summary=summary,
+    ) == []
 
 
 def test_association_summary_contract_renders_ranges_without_point_estimates(
