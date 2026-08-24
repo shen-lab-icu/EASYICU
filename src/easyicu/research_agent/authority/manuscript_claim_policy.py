@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from .scientific_claims import ScientificClaim
 
@@ -31,6 +31,13 @@ class ScientificClaimExpansion:
     scaffold: str
     missing_claim_refs: tuple[str, ...]
     malformed_sentences: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ScientificClaimPlacement:
+    scaffold: str
+    inserted_claim_refs: tuple[str, ...]
+    missing_claim_refs: tuple[str, ...]
 
 
 _RESULT_TOKEN_RE = re.compile(
@@ -122,6 +129,8 @@ _HEADING_RESULT_VERB_RE = re.compile(
     r"\b(?:was|were|had|showed|demonstrated|differ(?:ed|s)?|varied)\b",
     re.I,
 )
+_RESULTS_HEADING_RE = re.compile(r"^##\s+results\s*$", re.I | re.MULTILINE)
+_NEXT_H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
 
 
 def _looks_manuscript_metadata_sentence(sentence: str) -> bool:
@@ -277,6 +286,103 @@ def _split_markdown_heading_prefix(content: str) -> tuple[str, str]:
     if match is None:
         return "", content
     return match.group(1), content[match.end() :]
+
+
+def _results_section_span(manuscript: str) -> tuple[int, int] | None:
+    heading = _RESULTS_HEADING_RE.search(manuscript or "")
+    if heading is None:
+        return None
+    next_heading = _NEXT_H2_RE.search(manuscript, heading.end())
+    return heading.end(), next_heading.start() if next_heading else len(manuscript)
+
+
+def _claim_target_position(
+    results_section: str,
+    *,
+    claim: ScientificClaim,
+) -> int:
+    if claim.analysis_role == "sensitivity":
+        pattern = r"^###\s+.*(?:sensitivity|robustness).*$"
+    elif claim.claim_type == "association":
+        pattern = r"^###\s+.*(?:primary\s+association|association|primary\s+model).*$"
+    else:
+        pattern = r"^###\s+.*(?:primary\s+outcome|outcome|cohort).*$"
+    heading = re.search(pattern, results_section, re.I | re.MULTILINE)
+    return heading.end() if heading is not None else 0
+
+
+def place_scientific_claim_tokens_in_results(
+    scaffold: str,
+    *,
+    claims: Sequence[ScientificClaim],
+) -> ScientificClaimPlacement:
+    """Ensure every host-authorized claim is represented inside Results.
+
+    A Writer may repeat a claim in the Abstract or Conclusion while omitting
+    it from the actual Results section.  The claim registry already defines
+    the reportable set, so placement is structural rather than scientific:
+    this function inserts only complete host-owned claim tokens and never
+    authors prose or derives a value.
+    """
+
+    ordered_claims = list(claims)
+    span = _results_section_span(scaffold)
+    if span is None:
+        return ScientificClaimPlacement(
+            scaffold=scaffold,
+            inserted_claim_refs=(),
+            missing_claim_refs=tuple(claim.claim_ref for claim in ordered_claims),
+        )
+    start, end = span
+    results_section = scaffold[start:end]
+    existing_refs = {
+        match.group("ref")
+        for match in _SCIENTIFIC_CLAIM_TOKEN_RE.finditer(results_section)
+    }
+    missing_claims = [
+        claim for claim in ordered_claims if claim.claim_ref not in existing_refs
+    ]
+    if not missing_claims:
+        return ScientificClaimPlacement(
+            scaffold=scaffold,
+            inserted_claim_refs=(),
+            missing_claim_refs=(),
+        )
+
+    insertions: dict[int, list[str]] = {}
+    for claim in missing_claims:
+        position = _claim_target_position(results_section, claim=claim)
+        insertions.setdefault(position, []).append(claim.placeholder)
+    repaired_results = results_section
+    for position in sorted(insertions, reverse=True):
+        block = "\n\n" + "\n\n".join(insertions[position])
+        repaired_results = (
+            repaired_results[:position] + block + repaired_results[position:]
+        )
+    return ScientificClaimPlacement(
+        scaffold=scaffold[:start] + repaired_results + scaffold[end:],
+        inserted_claim_refs=tuple(claim.claim_ref for claim in missing_claims),
+        missing_claim_refs=(),
+    )
+
+
+def missing_scientific_claims_in_results(
+    manuscript: str,
+    *,
+    claims: Sequence[ScientificClaim],
+) -> tuple[str, ...]:
+    """Return host-authorized claims absent from the final Results prose."""
+
+    span = _results_section_span(manuscript)
+    if span is None:
+        return tuple(claim.claim_ref for claim in claims)
+    start, end = span
+    normalized_results = " ".join(manuscript[start:end].split())
+    return tuple(
+        claim.claim_ref
+        for claim in claims
+        if " ".join(claim.render_text().split()) not in normalized_results
+    )
 
 
 def _heading_requires_evidence(content: str) -> bool:
@@ -470,7 +576,10 @@ def expand_scientific_claim_tokens(
 __all__ = [
     "ScaffoldPolicyResult",
     "ScientificClaimExpansion",
+    "ScientificClaimPlacement",
     "expand_scientific_claim_tokens",
     "filter_evidence_bound_scaffold",
     "malformed_authority_placeholder_sentences",
+    "missing_scientific_claims_in_results",
+    "place_scientific_claim_tokens_in_results",
 ]

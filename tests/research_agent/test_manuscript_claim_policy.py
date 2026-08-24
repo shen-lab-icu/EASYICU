@@ -10,6 +10,8 @@ from easyicu.research_agent.authority.evidence_store import (
 from easyicu.research_agent.authority.manuscript_claim_policy import (
     expand_scientific_claim_tokens,
     filter_evidence_bound_scaffold,
+    missing_scientific_claims_in_results,
+    place_scientific_claim_tokens_in_results,
 )
 from easyicu.research_agent.authority.scientific_claims import ScientificClaim
 
@@ -325,3 +327,44 @@ def test_claim_expansion_reports_missing_and_malformed_tokens() -> None:
     assert result.malformed_sentences == (
         "Prose {claim:04_association.adjusted_association}.",
     )
+
+
+def test_host_claim_is_placed_in_results_even_when_writer_used_only_conclusion() -> None:
+    claim = _claim()
+    scaffold = (
+        "## Results\n\n"
+        "### Primary association\n\n"
+        "The model included 100 stays {evidence:model}.\n\n"
+        "## Conclusion\n\n"
+        f"{claim.placeholder}\n"
+    )
+
+    placement = place_scientific_claim_tokens_in_results(
+        scaffold,
+        claims=[claim],
+    )
+
+    results = placement.scaffold.split("## Conclusion", 1)[0]
+    assert claim.placeholder in results
+    assert placement.inserted_claim_refs == (claim.claim_ref,)
+    assert placement.missing_claim_refs == ()
+
+    expanded = expand_scientific_claim_tokens(
+        placement.scaffold,
+        resolve_claim=_resolver,
+    ).scaffold
+    assert missing_scientific_claims_in_results(
+        expanded,
+        claims=[claim],
+    ) == ()
+
+
+def test_host_claim_placement_fails_closed_without_results_section() -> None:
+    claim = _claim()
+    placement = place_scientific_claim_tokens_in_results(
+        f"## Conclusion\n\n{claim.placeholder}\n",
+        claims=[claim],
+    )
+
+    assert placement.inserted_claim_refs == ()
+    assert placement.missing_claim_refs == (claim.claim_ref,)
