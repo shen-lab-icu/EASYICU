@@ -22,8 +22,12 @@ from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from ...contracts.capability_ids import PHENOTYPING_ANALYSIS_KIND
-from ...contracts.phenotyping_validation import PhenotypingRuntimeReceipt
+from ...contracts.phenotyping_validation import (
+    PhenotypingCompleteCaseReceipt,
+    PhenotypingRuntimeReceipt,
+)
 from ...research_context.typed import parse_research_context_json
+from ...robustness.panel import load_locked_robustness_specs
 from ...schema import AnalysisStep
 from .typed_input_binding import (
     load_typed_input,
@@ -43,6 +47,7 @@ _ACTION_OUTPUTS = {
     "phenotyping.cluster_stability": (CLUSTER_STABILITY_PRODUCT,),
 }
 _SEED = 1729
+_COMPLETE_CASE_BOOTSTRAPS = 200
 _FEATURE_PREFIX = "feature__"
 
 
@@ -162,6 +167,177 @@ def _candidate_scores(matrix: np.ndarray) -> tuple[list[dict[str, Any]], int]:
     return rows, selected
 
 
+def _paired_assignment_interval(
+    reference: np.ndarray,
+    sensitivity: np.ndarray,
+) -> tuple[float, float, float, float]:
+    """Return ARI and a deterministic paired-assignment bootstrap interval."""
+
+    point = float(adjusted_rand_score(reference, sensitivity))
+    rng = np.random.default_rng(_SEED)
+    bootstrap = np.empty(_COMPLETE_CASE_BOOTSTRAPS, dtype=float)
+    for replicate in range(_COMPLETE_CASE_BOOTSTRAPS):
+        indices = rng.integers(0, len(reference), size=len(reference))
+        bootstrap[replicate] = adjusted_rand_score(
+            reference[indices], sensitivity[indices]
+        )
+    low, high = np.quantile(bootstrap, [0.025, 0.975])
+    return point, float(low), float(high), float(bootstrap.std(ddof=1))
+
+
+def _fit_locked_complete_case_sensitivities(
+    *,
+    frame: pd.DataFrame,
+    features: tuple[str, ...],
+    primary_labels: np.ndarray,
+    primary_selected_k: int,
+    out_dir: Path,
+    run_dir: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Execute only locked complete-case specs supported by this method owner.
+
+    The lock decides which variables define completeness.  The primary feature
+    representation stays fixed: features not named by the lock retain the
+    primary median-imputation policy, so the owner neither widens the locked
+    complete-case set nor silently changes the phenotype definition.
+    """
+
+    supported = []
+    for spec in load_locked_robustness_specs(Path(run_dir)):
+        override = spec.missing_override or {}
+        if spec.axis == "missing" and override.get("strategy") == "complete_case":
+            supported.append((spec, override))
+    if not supported:
+        return [], []
+
+    feature_set = set(features)
+    calculations: list[dict[str, Any]] = []
+    for spec, override in supported:
+        variables = tuple(str(value or "").strip() for value in override.get("variables", []))
+        if not variables or any(not value for value in variables):
+            raise RuntimeError(
+                f"phenotyping complete-case spec {spec.spec_id!r} has no exact variable roster"
+            )
+        if len(set(variables)) != len(variables):
+            raise RuntimeError(
+                f"phenotyping complete-case spec {spec.spec_id!r} repeats variables"
+            )
+        outside = sorted(set(variables) - feature_set)
+        if outside:
+            raise RuntimeError(
+                f"phenotyping complete-case spec {spec.spec_id!r} names variables "
+                "outside the primary feature roster: " + ", ".join(outside)
+            )
+        complete_mask = frame.loc[:, variables].notna().all(axis=1).to_numpy()
+        complete = frame.loc[complete_mask, features]
+        if len(complete) < 20:
+            raise RuntimeError(
+                f"phenotyping complete-case spec {spec.spec_id!r} retains fewer than 20 rows"
+            )
+        # The lock applies complete-case deletion only to its exact variable
+        # list. Any remaining primary feature follows the unchanged primary
+        # median-imputation policy before scaling.
+        imputed = SimpleImputer(strategy="median").fit_transform(complete)
+        matrix = StandardScaler().fit_transform(imputed)
+        candidates, selected_k = _candidate_scores(matrix)
+        labels = MiniBatchKMeans(
+            n_clusters=selected_k,
+            random_state=_SEED,
+            n_init=10,
+            batch_size=min(2048, len(matrix)),
+        ).fit_predict(matrix)
+        point, low, high, standard_error = _paired_assignment_interval(
+            np.asarray(primary_labels)[complete_mask], labels
+        )
+        calculations.append(
+            {
+                "spec_id": spec.spec_id,
+                "axis": "missing",
+                "missing_strategy": "complete_case",
+                "complete_case_variables": list(variables),
+                "primary_feature_roster": list(features),
+                "n_total": int(len(frame)),
+                "n_complete": int(len(complete)),
+                "primary_selected_n_clusters": int(primary_selected_k),
+                "complete_case_selected_n_clusters": int(selected_k),
+                "complete_case_candidates": candidates,
+                "comparison_metric": "adjusted_rand_index",
+                "point_estimate": point,
+                "ci_low": low,
+                "ci_high": high,
+                "standard_error": standard_error,
+                "interval_method": "paired_assignment_bootstrap_percentile_95",
+                "n_bootstrap": _COMPLETE_CASE_BOOTSTRAPS,
+                "random_seed": _SEED,
+                "primary_preprocessing": "median_imputation_then_standard_scaling",
+                "sensitivity_preprocessing": "complete_case_then_standard_scaling",
+                "clustering_method": "minibatch_kmeans",
+                "outcome_used_for_fit": False,
+                "causal_entity_claim_authorized": False,
+                "paper_authorization_allowed": False,
+            }
+        )
+
+    table_path = Path(out_dir) / "phenotyping_complete_case_sensitivity.csv"
+    pd.DataFrame(
+        [
+            {
+                key: value
+                for key, value in calculation.items()
+                if key
+                not in {
+                    "complete_case_candidates",
+                    "complete_case_variables",
+                    "primary_feature_roster",
+                }
+            }
+            | {
+                "complete_case_variables": json.dumps(
+                    calculation["complete_case_variables"], separators=(",", ":")
+                ),
+                "primary_feature_roster": json.dumps(
+                    calculation["primary_feature_roster"], separators=(",", ":")
+                ),
+                "complete_case_candidates": json.dumps(
+                    calculation["complete_case_candidates"], separators=(",", ":")
+                ),
+            }
+            for calculation in calculations
+        ]
+    ).to_csv(table_path, index=False)
+    table_sha256 = sha256_file(table_path)
+    receipts = [
+        PhenotypingCompleteCaseReceipt(
+            schema_version=(
+                "easyicu.cross_sectional_phenotyping_complete_case_receipt/1"
+            ),
+            table_sha256=table_sha256,
+            **calculation,
+        ).model_dump(mode="json")
+        for calculation in calculations
+    ]
+    rows = [
+        {
+            "spec_id": receipt["spec_id"],
+            "axis": "missing",
+            "n": receipt["n_complete"],
+            "point_estimate": receipt["point_estimate"],
+            "ci_low": receipt["ci_low"],
+            "ci_high": receipt["ci_high"],
+            "se": receipt["standard_error"],
+            "evidence_id": "",
+            "converged": True,
+            "notes": (
+                "Adjusted Rand index comparing primary assignments with a "
+                "complete-case refit; interval is a paired assignment "
+                "bootstrap and does not establish external reproducibility."
+            ),
+        }
+        for receipt in receipts
+    ]
+    return receipts, rows
+
+
 def _feature_roster(run_dir: Path, declared: tuple[str, ...], frame: pd.DataFrame) -> tuple[str, ...]:
     context = parse_research_context_json((Path(run_dir) / "research_context.json").read_text("utf-8"))
     descriptors = {item.name: item for item in context.variables}
@@ -240,6 +416,14 @@ def run_primary_phenotyping(
     assignments_path = out_dir / "phenotype_assignments.csv"
     profiles.to_csv(profiles_path, index=False)
     assignments.to_csv(assignments_path, index=False)
+    complete_case_receipts, robustness_rows = _fit_locked_complete_case_sensitivities(
+        frame=frame,
+        features=features,
+        primary_labels=labels,
+        primary_selected_k=selected_k,
+        out_dir=out_dir,
+        run_dir=Path(run_dir),
+    )
     selected_silhouette = next(
         row["silhouette"] for row in scores if row["selected"]
     )
@@ -265,6 +449,7 @@ def run_primary_phenotyping(
         source_cohort_sha256=sha256_file(Path(source_cohort)),
         phenotype_profiles_sha256=sha256_file(profiles_path),
         phenotype_assignments_sha256=sha256_file(assignments_path),
+        complete_case_sensitivities=complete_case_receipts,
         outcome_used_for_fit=False,
         downstream_outcome_use="descriptive_only",
         causal_entity_claim_authorized=False,
@@ -290,6 +475,7 @@ def run_primary_phenotyping(
             "candidates": scores,
         },
         "scientific_runtime_receipt": receipt,
+        "robustness_rows": robustness_rows,
         "feature_roster": list(features),
         "source_cohort": str(Path(source_cohort).resolve()),
         "source_cohort_sha256": sha256_file(Path(source_cohort)),
