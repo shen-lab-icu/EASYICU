@@ -45,7 +45,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         in index
     )
     assert "js/screens-guided-pi-project.js?v=20260823-project-owner1" in index
-    assert "js/screens-guided-pi.js?v=20260823-provider-extraction2" in index
+    assert "js/screens-guided-pi.js?v=20260824-single-copilot1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
@@ -358,7 +358,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "state.demoMode ? demoPanel()" in pi_owner
     assert "extraction_ready" in pi_owner
     assert "plan_ready" in pi_owner
-    assert "provider_plan_ready" in pi_owner
+    assert "provider_ready_to_generate_plan" in pi_owner
     assert "生成 Agent 计划" in pi_owner
     assert "plan_configuration_superseded" in pi_owner
     assert "重新生成计划" in pi_owner

@@ -237,9 +237,9 @@
       </button>
       <nav class="shell-nav" aria-label="${t('Primary navigation', '主导航')}">
       ${navSection('discovery', 'Discovery & Plan', '发现与计划', progress)}
-      <button type="button" class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided" aria-label="${navLabel(t('Guided Copilot', '研究引导'), guidedSub)}">
+      <button type="button" class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided" aria-label="${navLabel(t('EasyICU Copilot', 'EasyICU 研究助手'), guidedSub)}">
         <span class="cp-ico">${icon('spark', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Guided Copilot', '研究引导')}</span><span class="cp-d">${guidedSub}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span><span class="cp-d">${guidedSub}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
       <button type="button" class="cp-entry ideas-entry ${route === 'ideas' ? 'on' : ''}" data-nav="ideas" aria-label="${navLabel(t('Idea Mining', '想法挖掘'), t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划'))}">
@@ -319,7 +319,7 @@
       <div class="crumbs">${crumbs}</div>
       <div class="spacer"></div>
       ${scr.status || ''}
-      <!-- This control sits between "Page guide" and the EN/中 toggle, but it
+      <!-- This control sits between "EasyICU Copilot" and the EN/中 toggle, but it
            is not a display preference: flipping it swaps the data source,
            marks every downstream cohort/extraction/review stale and cancels a
            running Cross-DB scan. Once there IS downstream work, give it the
@@ -332,7 +332,7 @@
         <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en" aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>
         <button type="button" class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh" aria-pressed="${window.EU_LANG === 'zh'}">中</button>
       </div>
-      <button type="button" class="btn sm" data-cpopen title="${t('Open page guide for this screen', '打开当前页面指南')}">${icon('spark', 13)} ${t('Page guide','页面指南')}</button>
+      <button type="button" class="btn sm" data-cpopen title="${t('Open the one EasyICU Copilot conversation', '打开唯一的 EasyICU 研究助手对话')}">${icon('spark', 13)} ${t('EasyICU Copilot','研究助手')}</button>
       ${actionHtml}
     </header>`;
   }
@@ -346,7 +346,7 @@
         <button type="button" class="mark" data-nav="entry" aria-label="${t('Back to home', '返回首页')}">${icon('flask', 16)}</button>
         <div class="name">${title}</div>
         <div class="spacer"></div>
-        <button type="button" class="btn sm icon" data-cpopen title="${t('Page guide', '页面指南')}" aria-label="${t('Page guide', '页面指南')}">${icon('spark', 16)}</button>
+        <button type="button" class="btn sm icon" data-cpopen title="${t('EasyICU Copilot', 'EasyICU 研究助手')}" aria-label="${t('Open EasyICU Copilot', '打开 EasyICU 研究助手')}">${icon('spark', 16)}</button>
         ${actionHtml}
       </header>`;
     const bottom = `
@@ -451,7 +451,7 @@
   document.addEventListener('keydown', (e) => {
     const tgt = e.target;
     const typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable);
-    // ⌘K / Ctrl+K → open the Page guide command surface (works even while typing)
+    // ⌘K / Ctrl+K → open the single EasyICU Copilot conversation.
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
       const guide = window.EUPageGuide || window.EUCopilot;

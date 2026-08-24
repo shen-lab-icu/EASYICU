@@ -48,7 +48,7 @@
     return `
       <aside class="gd-rail">
         <div class="gd-rail-top">
-          <button class="gd-rail-brand" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}"><span class="brand-mark">${icon('spark', 15)}</span><span class="gd-name">${t('Guided Copilot', '研究引导')}</span></button>
+          <button class="gd-rail-brand" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}"><span class="brand-mark">${icon('spark', 15)}</span><span class="gd-name">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span></button>
           <div class="gd-folder-controls" id="gdFolderControls"></div>
         </div>
         <div class="gd-rail-list" id="gdSessions"></div>
