@@ -678,6 +678,16 @@ def _verified_resolved_input_bindings(
     """Load one exact resolved-input receipt, failing closed on any drift."""
 
     relative_text = str(record.get("resolved_inputs_path") or "").strip()
+    if not relative_text:
+        # Resume revalidation deliberately removes the former execution-time
+        # path from the current step record.  The immutable receipt remains at
+        # the host-owned canonical location and is still bound by its digest.
+        # Recover only that one dependency-neutral location; arbitrary or
+        # legacy paths continue to fail closed below.
+        step_id = str(record.get("step_id") or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", step_id) is None:
+            return None
+        relative_text = f"resolved_inputs/{step_id}.json"
     expected_sha = str(record.get("resolved_inputs_sha256") or "").strip().lower()
     relative = Path(relative_text)
     if (

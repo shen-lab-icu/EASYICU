@@ -253,7 +253,13 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "data_quality",
                 "Feature availability, imputation, and leakage checks affect reported model performance.",
-                ("feature_availability_panel", "missingness_matrix", "leakage_audit"),
+                (
+                    "feature_availability_panel",
+                    "availability_panel",
+                    "missingness_matrix",
+                    "coverage_heatmap",
+                    "leakage_audit",
+                ),
                 search_terms=(
                     "missingness",
                     "feature availability",
