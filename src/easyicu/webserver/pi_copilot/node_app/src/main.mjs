@@ -569,7 +569,14 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
   const empty = Type.Object({}, { additionalProperties: false });
   const optionalText = (maxLength) => Type.Optional(Type.String({ maxLength }));
   const studyCohort = Type.Object({
-    preset: optionalText(500), label: optionalText(500), review: optionalText(500),
+    preset: Type.Optional(Type.Union([
+      Type.Literal("all_icu"), Type.Literal("adult_first"),
+      Type.Literal("adult_all"), Type.Literal("sepsis3"),
+      Type.Literal("aki"), Type.Literal("ventilation"),
+      Type.Literal("vasopressor"), Type.Literal("respiratory"),
+      Type.Literal("icd"),
+    ])),
+    label: optionalText(500), review: optionalText(500),
     review_scope: optionalText(500), comparison: optionalText(500), source_type: optionalText(500),
     comparison_mode: optionalText(500), age_min: Type.Optional(Type.Number()),
     age_max: Type.Optional(Type.Number()), min_icu_los_hours: Type.Optional(Type.Number()),

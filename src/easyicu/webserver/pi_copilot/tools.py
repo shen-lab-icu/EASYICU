@@ -2358,6 +2358,30 @@ def _update_study_context(
         patch = _merge_nested_study_patch(current, patch)
     if current and current.get("id"):
         patch["id"] = current["id"]
+    proposed_cohort = params.get("cohort")
+    if isinstance(proposed_cohort, Mapping) and "preset" in proposed_cohort:
+        try:
+            normalized_preset = dataio.normalize_export_cohort_preset(
+                proposed_cohort.get("preset")
+            )
+        except dataio.ExportCohortError as exc:
+            return _result(
+                context,
+                status="blocked",
+                code=exc.error,
+                summary=(
+                    "Use one canonical Data Extraction cohort preset and keep "
+                    "the user's natural-language cohort wording in label or review."
+                ),
+                owner="easyicu.webserver.dataio",
+                details={
+                    "field": "cohort.preset",
+                    "allowed": list(exc.detail.get("supported") or []),
+                },
+            )
+        normalized_cohort = dict(patch.get("cohort") or {})
+        normalized_cohort["preset"] = normalized_preset
+        patch["cohort"] = normalized_cohort
     for field in (
         "title",
         "question",

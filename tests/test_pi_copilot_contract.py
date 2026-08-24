@@ -2615,6 +2615,46 @@ def test_conversational_setup_merges_partial_nested_scientific_patch(
     }
 
 
+def test_conversational_setup_rejects_prose_extraction_cohort_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-prose-cohort-preset",
+        "revision": 3,
+        "question": "Describe an adult ICD cohort.",
+        "active_job_id": None,
+        "cohort": {},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: current)
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or raw,
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"cohort": {"preset": "ICU stay; age >= 18; ICD-10 prefix A41"}},
+        ToolExecutionContext(
+            session=PiSessionRecord(
+                session_id="pi-prose-cohort-preset",
+                binding=AuthorityBinding(
+                    study_context_id=current["id"],
+                    study_revision=current["revision"],
+                ),
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "unsupported_cohort_preset"
+    assert result["owner"] == "easyicu.webserver.dataio"
+    assert result["details"]["field"] == "cohort.preset"
+    assert writes == []
+
+
 def test_conversational_setup_rejects_generic_sepsis_sofa2_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
