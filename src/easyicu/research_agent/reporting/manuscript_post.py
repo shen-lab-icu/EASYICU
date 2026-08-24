@@ -359,6 +359,41 @@ def _append_evidence_citation(sentence: str, evidence_id: str) -> str:
     return sentence.rstrip() + citation
 
 
+def _remove_unregistered_evidence_placeholders(
+    text: str,
+    *,
+    allowed_evidence_ids: Sequence[str],
+) -> tuple[str, List[str]]:
+    """Delete only evidence tokens absent from the current registry.
+
+    The unchanged strict evidence gate remains responsible for the surrounding
+    sentence. A result sentence left without a registered citation is still
+    rejected; this helper only prevents one stale token from poisoning a
+    sentence that already carries current evidence authority.
+    """
+
+    allowed = {
+        str(evidence_id).strip()
+        for evidence_id in allowed_evidence_ids
+        if str(evidence_id).strip()
+    }
+    removed: List[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        evidence_id = match.group("id").strip()
+        if evidence_id in allowed:
+            return match.group(0)
+        removed.append(evidence_id)
+        return ""
+
+    rewritten = re.sub(
+        r"[ \t]*\{evidence:(?P<id>[^{}]+)\}",
+        _replace,
+        text,
+    )
+    return rewritten, removed
+
+
 def _writer_repair_target_span(scaffold: str, target: str) -> Optional[Tuple[int, int]]:
     """Locate a policy-normalized rejected sentence in the original draft."""
 
@@ -445,14 +480,9 @@ def _apply_writer_evidence_repair_decisions(
                 )
             replacement = matched_target
             if allowed_evidence:
-                replacement = re.sub(
-                    r"[ \t]*\{evidence:(?P<id>[^{}]+)\}",
-                    lambda match: (
-                        match.group(0)
-                        if match.group("id").strip() in allowed_evidence
-                        else ""
-                    ),
+                replacement, _ = _remove_unregistered_evidence_placeholders(
                     replacement,
+                    allowed_evidence_ids=tuple(allowed_evidence),
                 )
                 replacement = replacement.lstrip(" \t")
             for evidence_id in evidence_ids:

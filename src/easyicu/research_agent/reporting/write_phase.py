@@ -67,6 +67,7 @@ from .manuscript_post import (
     enforce_writer_claim_language,
     _demote_unresolved_evidence_placeholders,
     _remove_tbd_sentences,
+    _remove_unregistered_evidence_placeholders,
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
     repair_miscited_numeric_citations,
@@ -1147,6 +1148,27 @@ def _draft_manuscript(
                     "repairs": [
                         {"from": old, "to": new} for old, new in placeholder_repairs
                     ]
+                },
+            )
+        )
+    scaffold, removed_unregistered_placeholders = (
+        _remove_unregistered_evidence_placeholders(
+            scaffold,
+            allowed_evidence_ids=current_evidence_names,
+        )
+    )
+    if removed_unregistered_placeholders:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    "Removed unregistered manuscript evidence placeholder(s) "
+                    "before the unchanged STRICT sentence and binding gates."
+                ),
+                detail={
+                    "reason_code": "unregistered_evidence_placeholder_removed",
+                    "evidence_ids": removed_unregistered_placeholders,
                 },
             )
         )
