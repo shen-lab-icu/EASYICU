@@ -2375,6 +2375,19 @@ def test_extraction_reuses_project_bound_registered_export_even_when_not_global_
             ],
         },
     )
+    monkeypatch.setattr(
+        tool_module,
+        "compile_registered_export_handoff",
+        lambda _study, _source: SimpleNamespace(
+            reusable=True,
+            public_receipt=lambda: {
+                "schema_version": "easyicu.pi-extraction-handoff/1",
+                "source_id": "src_project",
+                "reusable": True,
+                "mismatch_codes": [],
+            },
+        ),
+    )
     context = ToolExecutionContext(
         session=PiSessionRecord(session_id="pi-extract-reuse"),
         allowed_actions={"extract"},
@@ -2384,6 +2397,102 @@ def test_extraction_reuses_project_bound_registered_export_even_when_not_global_
 
     assert result["code"] == "easyicu_registered_export_reused"
     assert result["details"]["active_export"]["source_id"] == "src_project"
+    assert "/private/" not in json.dumps(result)
+
+
+def test_extraction_rebuilds_registered_export_when_requested_contract_differs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = {
+        **_complete_study(),
+        "data_source": {
+            "path": "/private/registered/export",
+            "database": "miiv",
+        },
+        "cohort": {
+            "preset": "icd",
+            "age_min": 18,
+            "include_diagnoses": ["A41"],
+        },
+        "modules": ["demographics", "blood_gas", "outcome"],
+        "time_window": {"observation_hours": 24, "anchor": "ICU admission"},
+        "export_format": "csv",
+    }
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: study)
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {
+            "sources": [
+                {
+                    "id": "src_project",
+                    "path": "/private/registered/export",
+                    "database": "miiv",
+                    "ok": True,
+                }
+            ]
+        },
+    )
+    handoff_cohort = {
+        "preset": "icd",
+        "age_min": 18,
+        "age_max": 100,
+        "exclude_readmissions": False,
+        "icd_enabled": True,
+        "icd_include": ["A41"],
+        "icd_exclude": [],
+        "observation_window_hours": 24,
+    }
+    monkeypatch.setattr(
+        tool_module,
+        "compile_registered_export_handoff",
+        lambda _study, _source: SimpleNamespace(
+            reusable=False,
+            source_data_path="/private/demo/raw",
+            database="miiv",
+            modules=("demographics", "blood_gas", "outcome"),
+            export_format="csv",
+            cohort=handoff_cohort,
+            public_receipt=lambda: {
+                "schema_version": "easyicu.pi-extraction-handoff/1",
+                "reusable": False,
+                "mismatch_codes": [
+                    "registered_export_cohort_mismatch",
+                    "registered_export_format_mismatch",
+                ],
+            },
+        ),
+    )
+    from easyicu.webserver.routes import jobs as jobs_route
+
+    monkeypatch.setattr(
+        jobs_route,
+        "jobs_extract",
+        lambda body: submitted.append(dict(body))
+        or {
+            "job_id": "extract-a41",
+            "kind": "extract",
+            "status": "running",
+            "study_context_id": study["id"],
+            "study_context_revision": study["revision"],
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_start_extraction",
+        {},
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-extract-contract-mismatch"),
+            allowed_actions={"extract"},
+        ),
+    )
+
+    assert result["code"] == "easyicu_extraction_submitted"
+    assert submitted[0]["path"] == "/private/demo/raw"
+    assert submitted[0]["format"] == "csv"
+    assert submitted[0]["cohort"] == handoff_cohort
+    assert result["details"]["extraction_contract"]["reusable"] is False
     assert "/private/" not in json.dumps(result)
 
 

@@ -46,6 +46,9 @@ from .contracts import (
     ToolExecutionContext,
     WorkspaceMutationLimitError,
 )
+from .extraction_handoff import (
+    compile_registered_export_handoff,
+)
 from .literature_tool_projection import compile_literature_tool_projection
 from .projections import (
     bounded_json_projection,
@@ -3541,27 +3544,6 @@ def _start_extraction(
         ),
         None,
     )
-    if source_path and registered_source is not None:
-        return _result(
-            context,
-            status="ok",
-            code="easyicu_registered_export_reused",
-            summary=(
-                "The bound study already uses a validated registered EasyICU "
-                "export; no duplicate extraction was started."
-            ),
-            owner="easyicu.webserver.sources",
-            details={
-                "active_export": {
-                    "present": True,
-                    "path_digest": path_digest(source_path),
-                    "source_id": str(registered_source.get("id") or "")[:80],
-                },
-                "resource": _extraction_workspace_resource(
-                    study, state="review"
-                ),
-            },
-        )
     database = str(source.get("database") or "").strip()
     modules = [str(item) for item in (study.get("modules") or []) if str(item).strip()]
     if not source_path or not database or not modules:
@@ -3597,6 +3579,61 @@ def _start_extraction(
             owner="easyicu.webserver.routes.jobs",
             details={"supported_formats": ["csv", "parquet"]},
         )
+    handoff_receipt: Optional[Dict[str, Any]] = None
+    try:
+        if registered_source is not None:
+            handoff = compile_registered_export_handoff(study, registered_source)
+            handoff_receipt = handoff.public_receipt()
+            if handoff.reusable:
+                return _result(
+                    context,
+                    status="ok",
+                    code="easyicu_registered_export_reused",
+                    summary=(
+                        "The bound registered export exactly matches the requested "
+                        "cohort, window, format, and module contract; no duplicate "
+                        "extraction was started."
+                    ),
+                    owner="easyicu.webserver.pi_copilot.extraction_handoff",
+                    details={
+                        "active_export": {
+                            "present": True,
+                            "path_digest": path_digest(source_path),
+                            "source_id": str(registered_source.get("id") or "")[:80],
+                        },
+                        "extraction_contract": handoff_receipt,
+                        "resource": _extraction_workspace_resource(
+                            study, state="review"
+                        ),
+                    },
+                )
+            source_path = handoff.source_data_path
+            database = handoff.database
+            modules = list(handoff.modules)
+            export_format = handoff.export_format
+            cohort = dict(handoff.cohort)
+        else:
+            cohort = dict(study.get("cohort") or {})
+            window = study.get("time_window")
+            window = window if isinstance(window, Mapping) else {}
+            if "observation_window_hours" not in cohort:
+                hours = window.get("observation_hours")
+                if hours is None:
+                    hours = window.get("hours")
+                if hours is not None:
+                    cohort["observation_window_hours"] = hours
+    except dataio.ExportCohortError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=exc.error,
+            summary=(
+                "The Copilot-to-Data Extraction owner could not compile a "
+                "path-safe extraction handoff from the registered export."
+            ),
+            owner="easyicu.webserver.pi_copilot.extraction_handoff",
+            details={"reason_code": exc.error},
+        )
     from easyicu.webserver.routes.jobs import jobs_extract
 
     try:
@@ -3607,8 +3644,8 @@ def _start_extraction(
                 "modules": modules,
                 "format": export_format,
                 "merge": True,
-                "cohort": dict(study.get("cohort") or {}),
-                "max_patients": (study.get("cohort") or {}).get("max_patients"),
+                "cohort": cohort,
+                "max_patients": cohort.get("max_patients"),
                 "include_feature_definitions": True,
                 "label": study.get("title"),
                 "study_context_id": study["id"],
@@ -3647,6 +3684,11 @@ def _start_extraction(
             if submitted.get(key) is not None
         }
         | {
+            **(
+                {"extraction_contract": handoff_receipt}
+                if handoff_receipt is not None
+                else {}
+            ),
             "resource": _extraction_workspace_resource(
                 study,
                 state="running",
