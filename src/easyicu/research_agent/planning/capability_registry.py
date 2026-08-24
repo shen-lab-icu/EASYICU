@@ -32,7 +32,11 @@ from dataclasses import dataclass, field
 import re
 from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
-from ..contracts.capability_ids import CAPABILITY_FAMILIES
+from ..contracts.capability_ids import (
+    CAPABILITY_FAMILIES,
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+)
 from ..contracts.association_execution import association_execution_verdict
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
@@ -309,6 +313,48 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         scientific_validation="reportable",
         scientific_validator_owner="execution.runners.adjusted_association_executor",
         scientific_validator_contract="AssociationExecutionVerdict",
+    ),
+    ScientificCapability(
+        family="association",
+        label="Association — digest-bound landmark spline",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed adjusted nonlinear association under a signed "
+            "fixed-landmark restricted-cubic-spline contract"
+        ),
+        primary_runner=LANDMARK_SPLINE_ANALYSIS_KIND,
+        primary_runner_module="execution.runners.landmark_spline_executor",
+        figure="deterministic",
+        figure_renderer="base_association_skill",
+        data_contract=(
+            "typed cohort input",
+            "signed exposure, outcome, event-time and observation-duration columns",
+            "signed adjustment set, landmark, knots and reference",
+        ),
+        fail_closed=(
+            "The runtime owner rejects authority-digest drift, incomplete event "
+            "timing or observation opportunity, missing signed columns, invalid "
+            "knots, rank loss, non-convergence, or a plan that changes the signed "
+            "landmark estimand."
+        ),
+        notes=(
+            "The caller-reviewed authority owns study-specific coordinates; the "
+            "host executor only performs the sealed landmark population build, "
+            "spline fit, functional-form comparison and registered products."
+        ),
+        capability_id=LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+        result_contract=(
+            "LandmarkSplineRuntimeAuthority + easyicu.landmark_spline_runtime_receipt/1"
+        ),
+        required_diagnostics=(
+            "landmark eligibility and exposure opportunity",
+            "observed knots and reference",
+            "spline-versus-linear likelihood-ratio comparison",
+            "complete-case model population",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.landmark_spline_executor",
+        scientific_validator_contract="easyicu.landmark_spline_runtime_receipt/1",
     ),
     ScientificCapability(
         family="association",
@@ -904,9 +950,7 @@ def resolve_primary_capability(
 
     primary = primary_steps[0]
     if canonical == "descriptive_epidemiology":
-        descriptive_verdict = exposure_outcome_distribution_execution_verdict(
-            primary
-        )
+        descriptive_verdict = exposure_outcome_distribution_execution_verdict(primary)
         if descriptive_verdict.claimed:
             capability = get_capability_by_id(
                 DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID
@@ -981,6 +1025,31 @@ def resolve_primary_capability(
             detail=(
                 "The prediction primary does not match the deterministic static "
                 f"prediction owner: {prediction_verdict.reason}"
+            ),
+        )
+
+    if declared == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
+        landmark_capability = get_capability_by_id(declared)
+        if str(getattr(primary, "method", "") or "").strip() != (
+            "signed_landmark_restricted_cubic_spline"
+        ):
+            return _verdict_for(
+                landmark_capability,
+                analysis_family=canonical,
+                failure_reason="scientific_capability_step_incompatible",
+                detail=(
+                    "The digest-bound landmark-spline capability requires the "
+                    "signed landmark spline method; a declaration alone cannot "
+                    "promote another association kernel."
+                ),
+            )
+        return _verdict_for(
+            landmark_capability,
+            analysis_family=canonical,
+            owner_claimed=True,
+            owner_reason=(
+                "the primary declares the signed landmark-spline host method; "
+                "the runtime authority separately verifies its digest-bound coordinates"
             ),
         )
 

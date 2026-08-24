@@ -13,13 +13,11 @@ from ...authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...contracts.capability_ids import LANDMARK_SPLINE_ANALYSIS_KIND
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...schema import AnalysisPlan, AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
-
-LANDMARK_SPLINE_ANALYSIS_KIND = "signed_landmark_spline_association"
-
 
 def landmark_spline_executor_owns_step(
     step: AnalysisStep,

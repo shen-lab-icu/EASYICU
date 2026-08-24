@@ -41,6 +41,10 @@ import re
 import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+from ..contracts.capability_ids import LANDMARK_SPLINE_ANALYSIS_KIND
+from ..contracts.landmark_spline_validation import (
+    landmark_spline_runtime_receipt_valid,
+)
 
 from .article_contract import (
     article_contract_audit_payload,
@@ -1463,6 +1467,7 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
         ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
         EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
         PREDICTION_MODEL_ANALYSIS_KIND,
+        LANDMARK_SPLINE_ANALYSIS_KIND,
         SURVIVAL_PRIMARY_ANALYSIS_KIND,
     }
 )
@@ -1474,9 +1479,21 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
     from ..contracts.prediction_validation import PredictionValidationReceipt
 
     for record in per_step_records or []:
-        if not isinstance(record, dict) or record.get(
-            "deterministic_standard_analysis"
-        ) != PREDICTION_MODEL_ANALYSIS_KIND:
+        if (
+            not isinstance(record, dict)
+            or record.get("deterministic_standard_analysis")
+            != LANDMARK_SPLINE_ANALYSIS_KIND
+        ):
+            continue
+        if landmark_spline_runtime_receipt_valid(record.get("step_summary")):
+            return True
+
+    for record in per_step_records or []:
+        if (
+            not isinstance(record, dict)
+            or record.get("deterministic_standard_analysis")
+            != PREDICTION_MODEL_ANALYSIS_KIND
+        ):
             continue
         summary = record.get("step_summary")
         if not isinstance(summary, Mapping) or summary.get("status") != "ok":
@@ -1998,9 +2015,7 @@ def _compute_readiness_gates(
         display_suite=display_suite,
         publication_bundle=publication,
     )
-    scientific_maturity_gates = scientific_maturity_readiness_gates(
-        scientific_maturity
-    )
+    scientific_maturity_gates = scientific_maturity_readiness_gates(scientific_maturity)
     # Read the FULL findings list, not `active_findings`: supersession retires a
     # finding when its step later succeeds, and a dropped step never ran, so no
     # later success can speak for it. What *can* speak for it is a later plan
