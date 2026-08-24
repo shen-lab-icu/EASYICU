@@ -303,6 +303,37 @@ def test_association_dev_coverage_does_not_claim_top_journal_replication(
     ]
 
 
+def test_survival_dev_coverage_keeps_external_replication_as_p2(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    for evidence_id, filename in (
+        ("cohort", "risk_set_flow.csv"),
+        ("baseline", "landmark_table_one.csv"),
+        ("missing", "missingness_measurement.csv"),
+        ("primary", "effect_estimate.csv"),
+        ("sensitivity", "robustness.csv"),
+        ("figure", "figure_contract.json"),
+        ("provenance", "runner_provenance.json"),
+        ("ph", "ph_diagnostics.csv"),
+        ("rmst", "rmst_summary.csv"),
+    ):
+        _register(store, evidence_id, filename)
+
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="survival"),
+        evidence=store,
+        per_step_records=[],
+        run_dir=tmp_path,
+    )
+
+    assert payload["development_supplement_complete"] is True
+    assert payload["top_journal_supplement_complete"] is False
+    assert payload["missing_top_journal_required_sections"] == [
+        "external_reproducibility"
+    ]
+
+
 def test_source_feasibility_has_a_terminal_dev_supplement_contract(
     tmp_path: Path,
 ) -> None:
