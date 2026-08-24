@@ -39,7 +39,12 @@ _REQUIRED_COLUMNS = {
     ),
     PHENOTYPE_ASSIGNMENTS_PRODUCT: frozenset({"unit_id", "cluster"}),
     CLUSTER_STABILITY_PRODUCT: frozenset(
-        {"replicate", "adjusted_rand_index", "mean_adjusted_rand_index"}
+        {
+            "replicate",
+            "adjusted_rand_index",
+            "mean_adjusted_rand_index",
+            "algorithm_agreement_ari",
+        }
     ),
 }
 
@@ -168,6 +173,16 @@ def run_cross_sectional_phenotyping_figure(
     stability_values = pd.to_numeric(stability["adjusted_rand_index"], errors="coerce")
     if stability_values.isna().any() or not np.isfinite(stability_values).all():
         raise RuntimeError("phenotyping stability table is not finite")
+    algorithm_values = pd.to_numeric(
+        stability.get("algorithm_agreement_ari"), errors="coerce"
+    )
+    if (
+        algorithm_values.isna().any()
+        or not np.isfinite(algorithm_values).all()
+        or algorithm_values.nunique() != 1
+    ):
+        raise RuntimeError("phenotyping algorithm-agreement value is not sealed")
+    algorithm_agreement = float(algorithm_values.iloc[0])
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -212,10 +227,18 @@ def run_cross_sectional_phenotyping_figure(
     axes[2].axhline(
         float(stability_values.mean()), color="#333333", linestyle="--", linewidth=0.9
     )
+    axes[2].axhline(
+        algorithm_agreement,
+        color=palette["blue"],
+        linestyle=":",
+        linewidth=1.1,
+        label="GMM agreement",
+    )
     axes[2].set_ylim(-0.05, 1.0)
     axes[2].set_xlabel("Resample")
     axes[2].set_ylabel("Adjusted Rand index")
-    axes[2].set_title("Resampling stability", loc="left", pad=10)
+    axes[2].set_title("Stability and algorithm agreement", loc="left", pad=10)
+    axes[2].legend(frameon=False, fontsize=6, loc="upper right")
     add_panel_label(axes[2], "C", x=-0.16, y=1.05)
 
     evidence = {key: item.evidence_id for key, item in bound.items()}
@@ -227,7 +250,12 @@ def run_cross_sectional_phenotyping_figure(
             (PHENOTYPE_PROFILES_PRODUCT,),
         ),
         ("B", "Cluster size", "phenotype_profile", (PHENOTYPE_ASSIGNMENTS_PRODUCT,)),
-        ("C", "Resampling stability", "stability", (CLUSTER_STABILITY_PRODUCT,)),
+        (
+            "C",
+            "Stability and algorithm agreement",
+            "stability",
+            (CLUSTER_STABILITY_PRODUCT,),
+        ),
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
@@ -259,8 +287,10 @@ def run_cross_sectional_phenotyping_figure(
         source_data=source_files,
         statistics_note=(
             "Profiles and assignments are produced by the deterministic adapter; "
-            "adjusted Rand indices compare fixed-seed subsample refits. Results "
-            "remain analysis_only."
+            "adjusted Rand indices compare fixed-seed subsample refits, and the "
+            "dotted line compares the primary MiniBatchKMeans assignments with "
+            "a deterministic diagonal-GMM alternative at the same K. Results "
+            "remain analysis_only and do not establish external reproducibility."
         ),
     )
     outputs = save_publication_figure(

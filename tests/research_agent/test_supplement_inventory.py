@@ -168,3 +168,32 @@ def test_external_provider_privacy_audit_is_not_external_reproducibility(
 
     assert payload["sections"]["external_reproducibility"]["present"] is False
     assert "external_reproducibility" in payload["missing_required_sections"]
+
+
+def test_algorithm_agreement_output_closes_only_alternative_algorithm(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    records = [
+        {
+            "step_id": "cluster_stability",
+            "step_summary": {
+                "method": "deterministic_cross_sectional_phenotyping_diagnostic",
+                "output_files": {
+                    "table:cluster_stability": (
+                        "cluster_stability_with_algorithm_agreement.csv"
+                    )
+                },
+            },
+        }
+    ]
+
+    payload, _findings = write_supplement_inventory(
+        plan=SimpleNamespace(analysis_type="trajectory_clustering"),
+        evidence=store,
+        per_step_records=records,
+        run_dir=tmp_path,
+    )
+
+    assert payload["sections"]["alternative_algorithm"]["present"] is True
+    assert payload["sections"]["external_reproducibility"]["present"] is False

@@ -247,6 +247,14 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
         step_id="stability",
     )
     assert stability_summary["output_files"].keys() == {CLUSTER_STABILITY_PRODUCT}
+    agreement = stability_summary["algorithm_agreement"]
+    assert agreement["alternative_algorithm"] == "diagonal_gaussian_mixture"
+    assert -1 <= agreement["adjusted_rand_index"] <= 1
+    assert agreement["outcome_used_for_fit"] is False
+    stability_table = pd.read_csv(
+        stability_dir / "cluster_stability_with_algorithm_agreement.csv"
+    )
+    assert stability_table["algorithm_agreement_ari"].nunique() == 1
     records = [
         {"step_summary": summary},
         {"step_summary": selection_summary},
@@ -260,6 +268,13 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
         "adjusted_rand_index"
     ] = 2.0
     assert "invalid ARI values" in " ".join(phenotyping_runtime_bundle_errors(tampered))
+    tampered_agreement = copy.deepcopy(records)
+    tampered_agreement[2]["step_summary"]["algorithm_agreement"][
+        "adjusted_rand_index"
+    ] = 2.0
+    assert "alternative-algorithm agreement is invalid" in " ".join(
+        phenotyping_runtime_bundle_errors(tampered_agreement)
+    )
     tampered_grid = copy.deepcopy(records)
     tampered_grid[1]["step_summary"]["cluster_selection"]["candidates"][0][
         "silhouette"
@@ -271,7 +286,9 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
     product_paths = {
         PHENOTYPE_PROFILES_PRODUCT: primary_dir / "phenotype_profiles.csv",
         PHENOTYPE_ASSIGNMENTS_PRODUCT: primary_dir / "phenotype_assignments.csv",
-        CLUSTER_STABILITY_PRODUCT: stability_dir / "cluster_stability.csv",
+        CLUSTER_STABILITY_PRODUCT: (
+            stability_dir / "cluster_stability_with_algorithm_agreement.csv"
+        ),
     }
     bindings = {}
     for key, path in product_paths.items():
@@ -317,6 +334,7 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
         (figure_dir / "phenotype_figure.figure_contract.json").read_text("utf-8")
     )
     assert "candidate" in contract["panels"][0]["title"].lower()
+    assert "algorithm agreement" in contract["panels"][2]["title"].lower()
     assert "no phenotype name" in contract["core_claim"].lower()
     for key, parent_path in product_paths.items():
         product = key.partition(":")[2]
