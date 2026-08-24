@@ -315,8 +315,12 @@ def test_icd_preview_resource_replays_and_uses_extraction_renderer() -> None:
 
     static = Path(__file__).parents[1] / "src/easyicu/webserver/static"
     embedded = (static / "js/screens-viz-embedded.js").read_text(encoding="utf-8")
+    preview = (static / "js/screens-guided-pi-preview.js").read_text(
+        encoding="utf-8"
+    )
     css = (static / "css/guided-pi-data-preview.css").read_text(encoding="utf-8")
     assert "icd_cohort_preview" in embedded
+    assert "'icd_cohort_preview'" in preview
     assert "data-gpi-icd-flow" in embedded
     assert "return 'extraction'" in embedded
     assert ".gpi-icd-flow" in css

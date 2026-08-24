@@ -17,7 +17,7 @@
       if (resource.kind === 'demo_document') return `demo-document:${resource.artifact || ''}`;
       if (resource.kind === 'data_package_review') return `data-package:${resource.study_context_id || ''}:${resource.study_revision || 0}:${resource.review_sha256 || ''}`;
       if (resource.kind === 'data_workbench_snapshot') return `data-workbench:${resource.view || ''}:${resource.snapshot_sha256 || ''}`;
-      if (resource.kind === 'native_workspace') return `native-workspace:${resource.route || ''}:${resource.study_context_id || ''}:${resource.job_id || resource.state || ''}`;
+      if (resource.kind === 'native_workspace') return `native-workspace:${resource.route || ''}:${resource.study_context_id || ''}:${resource.job_id || resource.source_id || resource.state || ''}`;
       return resource.kind === 'research_artifact' || resource.kind === 'research_document' || resource.kind === 'system_validation_document'
         ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
         : `${resource.kind || 'file'}:${resource.file || ''}`;
@@ -61,6 +61,7 @@
         data-gpi-resource-route="${esc(resource.route || '')}"
         data-gpi-resource-state="${esc(resource.state || '')}"
         data-gpi-resource-job="${esc(resource.job_id || '')}"
+        data-gpi-resource-source="${esc(resource.source_id || '')}"
         data-gpi-resource-view="${esc(resource.view || '')}"
         data-gpi-resource-digest="${esc(resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}">${esc(overrideLabel || label(resource))}</button>`;
     }
@@ -85,6 +86,7 @@
         route: element.dataset.gpiResourceRoute,
         state: element.dataset.gpiResourceState,
         job_id: element.dataset.gpiResourceJob,
+        source_id: element.dataset.gpiResourceSource,
         view: element.dataset.gpiResourceView,
         snapshot_sha256: element.dataset.gpiResourceDigest,
         review_sha256: element.dataset.gpiResourceDigest,

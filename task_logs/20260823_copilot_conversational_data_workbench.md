@@ -123,3 +123,22 @@ Python 聚焦范围覆盖新 Data Workbench、数据包快照、Pi 静态/合同
 - 跨库结果是描述性数据可用性/分布审阅，不代表患者级匹配、因果或推断性比较。
 - 安装包仍是 Apple Silicon、ad-hoc 签名的内测包；未做 Developer ID/notarization、Intel Mac 或 Windows 验证。
 - 分支未推送、未合并；`main` 未被改写。
+
+## 2026-08-24 统一产品分支续验
+
+在 `codex/easyicu-unified-product-20260823`（基线 `b32917b`）继续完成真实 A41 提取后的工作台接入，仍未改写或合并 `main`。
+
+- 新增 `easyicu_open_data_download`：模型只收到精确注册源坐标和聚合回执；浏览器点击后由 `easyicu.webserver.export_download` 根据 `_manifest.json` 白名单临时打包，拒绝路径穿越、符号链接、缺失文件和超过 512 MB 的浏览器包。真实点击返回 ZIP，流结束后临时 ZIP 已清理。
+- ICD 队列资源现可在右侧打开原生 Data Extraction 漏斗；A41 从 140 个 ICU stay 筛到 10 个。
+- Cohort owner 的院内死亡分布与其既有缺失语义对齐：A41 子队列显示 4 positive、6 negative、0 unknown；其他二元特征仍保持缺失为 unknown。乳酸 stay-level 覆盖为 9/10。
+- Patient Review 工具新增最多 8 个精确特征的预加载参数，调用既有单特征 owner。真实 Luna 对话预加载 `lact` 后，右侧原生 Patient renderer 显示 Entity 1 的 12 个有界观测点；单点/分类/缺失状态不被伪造成折线。
+- Cross-DB owner 复用成功：完整 MIMIC-IV Demo 与 A41 注册导出显示 3 个共享模块和 1 个可比分布；乳酸非空值为 583 vs 79，范围为 0.50–13.2 vs 0.70–13.2。对话明确标注这是同库不同导出的描述性比较，不是匹配、跨库推断或因果分析。
+
+真实本地 `8317/v1`、`gpt-5.6-luna` 截图：
+
+- `task_logs/screenshots/20260824_copilot_patient_lact_native.png`
+- `task_logs/screenshots/20260824_copilot_crossdb_lact_native.png`
+- `task_logs/screenshots/20260824_copilot_cohort_distribution_native.png`
+- `task_logs/screenshots/20260824_copilot_controlled_download.png`
+
+聚焦验证：Python `237 passed, 5 warnings`；Node owner contracts `7 passed`；所有改动 JS/MJS `node --check` 通过；Ruff 与 `git diff --check` 通过；`GET /api/health` 返回 `{"status":"ok"}`。本轮仍未运行完整 exact-head CI，也未重建桌面 App/DMG；Web 源码和下一次桌面重建会共享这些改动，但既有安装包不会自动改变。

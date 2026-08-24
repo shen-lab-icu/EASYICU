@@ -48,6 +48,13 @@ test('visualization context keeps snapshot and hydration behind one explicit con
 global.EU_PATIENT_SERIES = {
   renderTimeSeriesWorkspace: payload => `<section data-native-patient="${payload.mode}">${payload.selected.label}</section>`,
 };
+let patientCatalogInput = null;
+global.EU_PATIENT_FEATURES = {
+  catalogLanes: (lanes, coverage, stateFor) => {
+    patientCatalogInput = { lanes, coverage, stateFor };
+    return lanes;
+  },
+};
 global.EU_PATIENT_CHARTS = { mount: () => 1 };
 global.EU_CROSSDB_RESULTS = {
   render: payload => `<section data-native-crossdb>${payload.source_count}</section>`,
@@ -62,10 +69,20 @@ test('embedded preview delegates patient, cohort, and cross-db bodies to native 
     source: { label: 'MIMIC-IV' },
     selected: { label: 'Entity 3', ref: 'browser-only-ref' },
     time_lanes: [],
+    feature_coverage: { modules: [{ module: 'blood_gas' }] },
+    loaded_feature_details: [{
+      feature: { feature: 'lact', module: 'blood_gas' },
+      status: 'numeric_trajectory',
+      signal: { feature: 'lact', values: [1.2, 2.4], times: [0, 1] },
+    }],
   }, 'patient_timeline', { patientMode: 'single' });
   assert.match(patient, /data-native-patient="single"/);
   assert.match(patient, /Open full Patient Review/);
   assert.doesNotMatch(patient, /browser-only-ref/);
+  assert.equal(patientCatalogInput.lanes[0].lane, 'blood_gas');
+  assert.deepEqual(patientCatalogInput.lanes[0].signals[0].values, [1.2, 2.4]);
+  assert.equal(patientCatalogInput.coverage.modules[0].module, 'blood_gas');
+  assert.equal(patientCatalogInput.stateFor('lact').loaded, true);
 
   const cohort = global.EU_VIZ_EMBEDDED_WORKBENCH.render({
     source: { label: 'MIMIC-IV' }, summary: { cohort_size: 120 },

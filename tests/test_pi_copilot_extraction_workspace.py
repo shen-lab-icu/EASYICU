@@ -146,6 +146,57 @@ def test_replay_projection_preserves_native_workspace_coordinates() -> None:
     ) is None
 
 
+def test_registered_export_download_opens_exact_source_in_native_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda _binding: {
+            "id": "study-extraction-workspace",
+            "revision": 3,
+            "data_source": {"path": "/private/registered/export"},
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {
+            "active_path": "/private/registered/export",
+            "sources": [
+                {
+                    "id": "src_0123456789ab",
+                    "path": "/private/registered/export",
+                    "ok": True,
+                    "summary": {"file_count": 3, "total_rows": 147},
+                }
+            ],
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_open_data_download",
+        {"source_id": "src_0123456789ab"},
+        _context(),
+    )
+
+    assert result["code"] == "easyicu_registered_export_download_ready"
+    assert "/private/" not in json.dumps(result)
+    assert result["details"]["resource"] == {
+        "kind": "native_workspace",
+        "route": "extraction",
+        "state": "review",
+        "study_context_id": "study-extraction-workspace",
+        "study_revision": 3,
+        "label": "Data Extraction",
+        "media_type": "application/vnd.easyicu.native-workspace",
+        "source_id": "src_0123456789ab",
+    }
+
+    replay = projections._project_replay_resource(result["details"]["resource"])
+    assert replay and replay["source_id"] == "src_0123456789ab"
+
+
 def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() -> None:
     static_root = (
         Path(__file__).parents[1]
@@ -162,6 +213,8 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "window.EU_EXTRACTION_NATIVE_OWNER" in extraction
     assert "window.EU_EXTRACTION_EMBEDDED_WORKSPACE" in embedded
     assert "Prepared export is ready — sync to Copilot" in embedded
+    assert "data-gpi-extraction-download" in embedded
+    assert "downloadRegisteredExport" in embedded
     assert "recommendedUsesFirstStay" in extraction
     assert "['miiv', 'miii', 'mimic', 'mimiciv', 'mimiciii']" in extraction
     assert "preset: firstStay ? 'adult_first' : 'all_icu'" in extraction
@@ -169,6 +222,11 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "window.EU_EXTRACTION_EMBEDDED_WORKSPACE" in preview
     assert "typeof owner.mount === 'function'" in preview
     assert "native_workspace" in resources
+    assert "data-gpi-resource-source" in resources
+
+    api = (static_root / "js" / "api.js").read_text()
+    assert "downloadRegisteredExport" in api
+    assert "'/api/workspaces/download'" in api
 
     index = (static_root / "index.html").read_text()
     assert 'screens-extraction-embedded.js?v=20260823-extraction-workspace4' in index

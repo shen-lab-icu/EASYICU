@@ -177,12 +177,14 @@ function projectedResource(value) {
     const studyRevision = Number(value.study_revision);
     const state = boundedText(value.state, 40).trim();
     const jobId = safeJobId(value.job_id);
+    const sourceId = safeStableId(value.source_id);
     if (
       route !== "extraction"
       || !studyContextId
       || !Number.isInteger(studyRevision)
       || studyRevision < 0
       || !["setup", "running", "review"].includes(state)
+      || (sourceId && !/^src_[a-f0-9]{12}$/.test(sourceId))
     ) return undefined;
     return {
       kind: "native_workspace",
@@ -193,6 +195,7 @@ function projectedResource(value) {
       label: boundedText(value.label || "Data Extraction", 160),
       media_type: "application/vnd.easyicu.native-workspace",
       ...(jobId ? { job_id: jobId } : {}),
+      ...(sourceId ? { source_id: sourceId } : {}),
     };
   }
   const file = safeRelativeFile(value.file);

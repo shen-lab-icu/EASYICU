@@ -152,6 +152,63 @@ def test_selected_feature_distributions_are_bounded_stay_level_aggregates() -> N
     assert all("mapping" not in row for row in distributions)
 
 
+def test_selected_hospital_death_distribution_matches_cohort_owner_semantics() -> None:
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        {
+            "stay_id": ["stay-a", "stay-b", "stay-c", "stay-d"],
+            "death": [True, None, False, None],
+        }
+    )
+
+    profile = cohort_review._selected_feature_profile(
+        frame,
+        {
+            "id": "outcome:death",
+            "module": "outcome",
+            "column": "death",
+            "label": "Death",
+        },
+    )
+    [distribution] = cohort_review._selected_feature_distributions(
+        ["stay-a", "stay-b", "stay-c", "stay-d"], [profile]
+    )
+
+    assert distribution["observed"] == 4
+    assert distribution["observed_pct"] == 100.0
+    assert distribution["categories"] == [
+        {"label": "Positive", "count": 1},
+        {"label": "Negative", "count": 3},
+        {"label": "Unknown", "count": 0},
+    ]
+
+
+def test_other_binary_feature_missingness_remains_unknown() -> None:
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        {
+            "stay_id": ["stay-a", "stay-b"],
+            "aki": [True, None],
+        }
+    )
+
+    profile = cohort_review._selected_feature_profile(
+        frame,
+        {
+            "id": "renal:aki",
+            "module": "renal",
+            "column": "aki",
+            "label": "AKI",
+        },
+    )
+    [distribution] = cohort_review._selected_feature_distributions(
+        ["stay-a", "stay-b"], [profile]
+    )
+
+    assert distribution["observed"] == 1
+    assert distribution["categories"][-1] == {"label": "Unknown", "count": 1}
+
+
 def test_cohort_tool_resolves_feature_and_returns_snapshot_coordinate_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -243,6 +300,7 @@ def test_patient_timeline_stays_browser_only_and_uses_pseudonymous_ordinal(
                 }
             },
             "trajectory_review": {},
+            "feature_coverage": {"modules": []},
             "quality_metrics": {},
             "eligibility_flow": {},
             "blocked_features": [],
@@ -250,16 +308,36 @@ def test_patient_timeline_stays_browser_only_and_uses_pseudonymous_ordinal(
             "privacy": {"direct_identifiers_returned": False},
         },
     )
+    monkeypatch.setattr(
+        patient_drilldown,
+        "patient_review_feature",
+        lambda body: {
+            "feature": {"feature": body["feature"], "module": "vitals"},
+            "status": "numeric_trajectory",
+            "signal": {
+                "feature": body["feature"],
+                "unit": "mmol/L",
+                "times": [0, 1],
+                "values": [1.2, 2.4],
+            },
+        },
+    )
     monkeypatch.setattr(tool_owner, "CopilotDataWorkbenchSnapshotStore", lambda: store)
 
     result = tool_owner._review_patient_timeline(
-        _context(), {"source_id": "source-mimic", "entity_ordinal": 3}
+        _context(),
+        {
+            "source_id": "source-mimic",
+            "entity_ordinal": 3,
+            "features": ["lact"],
+        },
     )
 
     model_receipt = json.dumps(result)
     assert result["code"] == "easyicu_patient_timeline_ready"
     assert "ent_browser_only" not in model_receipt
     assert '"times"' not in model_receipt
+    assert result["details"]["loaded_trajectory_count"] == 1
     resource = result["details"]["resource"]
     snapshot = store.load(
         project_id="project-data-workbench", digest=resource["snapshot_sha256"]
@@ -268,6 +346,11 @@ def test_patient_timeline_stays_browser_only_and_uses_pseudonymous_ordinal(
     signal = snapshot["payload"]["time_lanes"][0]["signals"][0]
     assert signal["values"] == [18, 22]
     assert signal["unit"] == "1/min"
+    assert snapshot["payload"]["feature_coverage"] == {"modules": []}
+    assert snapshot["payload"]["loaded_feature_details"][0]["signal"]["values"] == [
+        1.2,
+        2.4,
+    ]
     assert (
         snapshot["payload"]["patient_overview"]["dashboard"]["trend_panels"][0][
             "cards"

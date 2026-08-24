@@ -588,6 +588,11 @@
     triggerDownload(file.blob, file.filename);
     return file;
   }
+  async function downloadRegisteredExport(sourceId) {
+    const file = await postBlob('/api/workspaces/download', { source_id: sourceId });
+    triggerDownload(file.blob, file.filename);
+    return file;
+  }
   function triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -720,6 +725,7 @@
   window.EU_API.loadAgentRunArtifact = loadAgentRunArtifact;
   window.EU_API.downloadAgentRunArtifact = downloadAgentRunArtifact;
   window.EU_API.downloadAgentRunBundle = downloadAgentRunBundle;
+  window.EU_API.downloadRegisteredExport = downloadRegisteredExport;
 
   window.EU_SOURCES = window.EU_SOURCES || {};
   window.EU_SOURCES.registry = registry;
