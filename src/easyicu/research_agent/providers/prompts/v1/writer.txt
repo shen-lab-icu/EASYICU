@@ -88,6 +88,16 @@ deterministic gate. There is no soft margin. Therefore:
   "see {evidence:<id>}".
 - Sentences without an evidence id will be removed by the post-processor.
 - Do not invent confidence intervals, p-values, or hazard ratios.
+- Attach each p-value only to the exact named hypothesis or test that owns it
+  in the evidence digest. Never describe a functional-form, interaction,
+  calibration, or trend-test p-value as the "corresponding p-value" for a
+  separate effect estimate.
+- When the digest labels an estimate as a boundary contrast, display anchor,
+  or not a summary of an entire curve, report the exact contrast and preserve
+  that boundary in Abstract, Results, and Discussion.
+- Cite only literature keys explicitly present in the current literature
+  digest. Ignore citation-like names from task prose or other context when
+  they are absent from that allow-list.
 - Never write `p=0`. If the evidence digest marks a p-value as
   `source_underflow=true`, report its supplied conservative inequality
   (for example `p < 1e-300`) rather than the raw floating-point zero.
