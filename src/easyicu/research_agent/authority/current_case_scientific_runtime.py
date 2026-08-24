@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -544,6 +545,20 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         )
 
     @property
+    def model_complete_case_columns(self) -> tuple[str, ...]:
+        """Source columns whose joint completeness defines the signed model fit."""
+
+        return tuple(
+            dict.fromkeys(
+                (
+                    self.exposure_column,
+                    self.outcome_column,
+                    *self.required_adjustment_columns,
+                )
+            )
+        )
+
+    @property
     def downstream_parent_product(self) -> str:
         return next(
             value
@@ -633,6 +648,39 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         composite_step_id = (
             composite_candidates[0].step_id if len(composite_candidates) == 1 else None
         )
+        signed_robustness_spec_ids = {
+            spec_id
+            for step in plan.steps
+            if step.planned_analysis_role == "sensitivity"
+            and step.robustness_replay_spec is not None
+            for spec_id in step.sensitivity_spec_ids
+        }
+        robustness_specs = list(plan.robustness_specs)
+        if signed_robustness_spec_ids:
+            complete_case_specs = [
+                spec
+                for spec in robustness_specs
+                if spec.spec_id in signed_robustness_spec_ids
+                and spec.axis == "missing"
+                and str((spec.missing_override or {}).get("strategy") or "")
+                .strip()
+                .lower()
+                == "complete_case"
+            ]
+            if len(complete_case_specs) != 1:
+                raise CurrentCaseScientificAuthorityError(
+                    "landmark spline robustness projection requires exactly one "
+                    "referenced complete-case specification"
+                )
+            complete_case_spec = complete_case_specs[0]
+            override = dict(complete_case_spec.missing_override or {})
+            override["variables"] = list(self.model_complete_case_columns)
+            robustness_specs = [
+                replace(spec, missing_override=override)
+                if spec is complete_case_spec
+                else spec
+                for spec in robustness_specs
+            ]
         steps: list[AnalysisStep] = []
         for step in plan.steps:
             if step is candidate:
@@ -725,7 +773,9 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     }
                 )
             )
-        return plan.model_copy(update={"steps": steps})
+        return plan.model_copy(
+            update={"steps": steps, "robustness_specs": robustness_specs}
+        )
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         primary = [
