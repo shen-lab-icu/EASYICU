@@ -162,11 +162,17 @@ def association_sensitivity_composite_panels(
 
 
 def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
+    reserved = {
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+    }
     matches = [
         value
         for value in source_products
         if value.startswith("table:")
-        and value.partition(":")[2].endswith("landmark_rcs_curve")
+        and value not in reserved
+        and value.partition(":")[2]
+        not in {"measurement_process", "measurement_process_audit"}
     ]
     return matches[0] if len(matches) == 1 else None
 

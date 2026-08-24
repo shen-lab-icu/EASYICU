@@ -1060,6 +1060,79 @@ def test_landmark_authority_migrates_one_legacy_missingness_axis() -> None:
     }
 
 
+def test_landmark_authority_prefers_four_table_hero_over_robustness_figure() -> None:
+    _projection, authority = _authority("m1_hepatobiliary_missingness")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Render robustness and a primary display.",
+            "analysis_type": "association_study",
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_absolute_risk",
+                    "intent": "Report absolute-risk context.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:absolute_risk_context"],
+                    "method": "descriptive_statistics",
+                },
+                {
+                    "step_id": "03_measurement",
+                    "intent": "Audit measurement.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:measurement_process_audit"],
+                    "method": "missing_data",
+                },
+                {
+                    "step_id": "04_robustness",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Summarize robustness.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:robustness_summary"],
+                    "method": "robustness_sensitivity",
+                },
+                {
+                    "step_id": "05_robustness_figure",
+                    "intent": "Render robustness only.",
+                    "inputs": ["table:robustness_summary"],
+                    "expected_outputs": ["figure:robustness_plot"],
+                    "method": "visualization",
+                },
+                {
+                    "step_id": "06_publication_figure",
+                    "intent": "Render the four-table publication display.",
+                    "inputs": [
+                        "table:adjusted_association_estimates",
+                        "table:absolute_risk_context",
+                        "table:robustness_summary",
+                        "table:measurement_process_audit",
+                    ],
+                    "expected_outputs": ["figure:publication_figure"],
+                    "method": "visualization",
+                },
+            ],
+        }
+    )
+
+    bound = authority.bind_plan(plan)
+    robustness_figure = next(
+        step for step in bound.steps if step.step_id == "05_robustness_figure"
+    )
+    publication_figure = next(
+        step for step in bound.steps if step.step_id == "06_publication_figure"
+    )
+
+    assert robustness_figure.inputs == ["table:robustness_summary"]
+    assert publication_figure.inputs == [
+        authority.curve_product,
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    ]
+    assert len(publication_figure.figure_panels) == 4
+
+
 def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
     tmp_path: Path,
 ) -> None:
