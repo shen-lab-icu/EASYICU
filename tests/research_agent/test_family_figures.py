@@ -643,3 +643,56 @@ def test_the_figure_strategy_validator_is_silent_when_coverage_is_complete(
             )
             == []
         )
+
+
+def test_prediction_data_quality_accepts_deterministic_audit_chart_types(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.planning.figure_strategy import (
+        summarize_article_figure_strategy_coverage,
+    )
+
+    run_dir = tmp_path / "run"
+    contract_dir = run_dir / "steps" / "audit" / "outputs"
+    contract_dir.mkdir(parents=True)
+    (contract_dir / "data_quality.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "data_quality",
+                "title": "Feature availability and missingness",
+                "panels": [
+                    {
+                        "panel_id": "availability",
+                        "title": "Feature availability",
+                        "role": "data_quality",
+                        "chart_type": "availability_panel",
+                    },
+                    {
+                        "panel_id": "missingness",
+                        "title": "Feature missingness coverage",
+                        "role": "data_quality",
+                        "chart_type": "coverage_heatmap",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = _context(
+        ra,
+        "Build an in-hospital mortality prediction model and report AUROC and calibration.",
+        exposure="vitals_labs",
+    )
+
+    status = summarize_article_figure_strategy_coverage(
+        context=context,
+        run_dir=run_dir,
+        analysis_family="prediction",
+    )
+
+    assert "data_quality" in status["article_figure_strategy_covered_roles"]
+    assert not any(
+        "Figure role data_quality is present but uses unsupported chart type"
+        in error
+        for error in status["article_figure_strategy_errors"]
+    )
