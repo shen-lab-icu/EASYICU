@@ -19,6 +19,9 @@ from easyicu.research_agent.execution.runners.composite_descriptive_figure_execu
     run_composite_descriptive_figure,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.planning.figure_plan_shaping import (
+    bind_deterministic_figure_panels,
+)
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -208,6 +211,25 @@ def _source_aware_association_frames() -> dict[str, pd.DataFrame]:
     return frames
 
 
+def _association_scientific_sensitivity_frames() -> dict[str, pd.DataFrame]:
+    frames = _association_measurement_frames()
+    frames.pop("table:missingness_measurement_audit")
+    frames["table:scientific_sensitivity"] = pd.DataFrame(
+        {
+            "analysis_id": ["primary", "landmark", "non_readmission"],
+            "is_reference": [True, False, False],
+            "n_stays": [100, 90, 85],
+            "n_events": [14, 10, 9],
+            "estimate": [1.4, 1.6, 1.5],
+            "ci_low": [1.1, 1.2, 1.1],
+            "ci_high": [1.8, 2.1, 2.0],
+            "effect_measure": ["odds_ratio"] * 3,
+            "converged": [True] * 3,
+        }
+    )
+    return frames
+
+
 def _binding(key: str, frame: pd.DataFrame, path: Path) -> dict[str, object]:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     product = key.partition(":")[2]
@@ -372,6 +394,92 @@ def test_association_four_table_contract_selects_and_renders(tmp_path: Path) -> 
     )
     for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
         assert (out_dir / f"publication_figure_suite.{suffix}").is_file()
+
+
+def test_association_scientific_sensitivity_contract_shapes_and_renders(
+    tmp_path: Path,
+) -> None:
+    core_inputs = [
+        "table:exposure_outcome_distribution",
+        "table:adjusted_association_estimates",
+    ]
+    sensitivity = AnalysisStep(
+        step_id="scientific_sensitivity",
+        planned_analysis_role="sensitivity",
+        intent="Execute the signed association model grid.",
+        method="verified_association_model_grid",
+        inputs=["artifact:analysis_cohort", "table:adjusted_association_estimates"],
+        expected_outputs=["table:scientific_sensitivity"],
+        sensitivity_spec_ids=["primary", "landmark", "non_readmission"],
+    )
+    completeness = AnalysisStep(
+        step_id="measurement_audit",
+        planned_analysis_role="auxiliary",
+        intent="Audit component completeness.",
+        method="measurement_audit",
+        expected_outputs=["table:exposure_component_completeness_audit"],
+    )
+    figure = AnalysisStep(
+        step_id="primary_figure_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render the primary association suite.",
+        method="visualization",
+        inputs=core_inputs,
+        expected_outputs=["figure:primary_figure_suite"],
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"} for key in core_inputs
+        ],
+    )
+    shaped, findings = bind_deterministic_figure_panels(
+        plan=AnalysisPlan(
+            research_question="Estimate an association.",
+            steps=[sensitivity, completeness, figure],
+        )
+    )
+    shaped_figure = shaped.steps[2]
+    expected_inputs = [
+        *core_inputs,
+        "table:scientific_sensitivity",
+        "table:exposure_component_completeness_audit",
+    ]
+    assert shaped_figure.inputs == expected_inputs
+    assert [panel.article_role for panel in shaped_figure.figure_panels] == [
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+        "data_quality",
+    ]
+    assert any(
+        finding.detail.get("reason") == "association_scientific_sensitivity_bound"
+        for finding in findings
+    )
+
+    bindings = {}
+    for key, frame in _association_scientific_sensitivity_frames().items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    assert composite_descriptive_figure_executor_owns_step(
+        shaped_figure, resolved_bindings=bindings
+    )
+    out_dir = tmp_path / "outputs"
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": shaped_figure.step_id, "inputs": bindings},
+        step_id=shaped_figure.step_id,
+        figure_product="primary_figure_suite",
+        input_keys=tuple(expected_inputs),
+    )
+    assert summary["status"] == "ok"
+    contract = json.loads(
+        (out_dir / "primary_figure_suite.figure_contract.json").read_text()
+    )
+    panels = {panel["panel_id"]: panel for panel in contract["panels"]}
+    assert panels["C"]["title"] == "Scientific sensitivity analyses"
+    assert panels["C"]["metadata"]["source_products"] == [
+        "table:scientific_sensitivity"
+    ]
 
 
 def test_association_summary_contract_renders_ranges_without_point_estimates(

@@ -381,6 +381,36 @@ def render_association_publication_figure(
         if "table:exposure_component_completeness_audit" in bound
         else None
     )
+    scientific_sensitivity_key = next(
+        (
+            key
+            for key in bound
+            if key
+            not in {
+                "table:exposure_outcome_distribution",
+                "table:adjusted_association_estimates",
+                "table:exposure_component_completeness_audit",
+                "table:absolute_risk_context",
+                "table:robustness_matrix",
+                "table:robustness_summary",
+                "table:measurement_missingness",
+                "table:missingness_measurement_audit",
+                "table:measurement_process_audit",
+            }
+        ),
+        None,
+    )
+    scientific_sensitivity = None
+    if scientific_sensitivity_key is not None:
+        scientific_sensitivity = _validate_interval_table(
+            bound[scientific_sensitivity_key].frame,
+            estimate_column="estimate",
+        )
+        if not scientific_sensitivity["converged"].astype(bool).all():
+            raise ValueError("scientific sensitivity table contains non-converged rows")
+        scientific_sensitivity["effect_scale"] = scientific_sensitivity[
+            "effect_measure"
+        ]
 
     if distribution is not None:
         levels = distribution.loc[
@@ -546,7 +576,21 @@ def render_association_publication_figure(
     )
     add_panel_label(axes[0, 1], "B", x=-0.12, y=1.04)
 
-    if robustness_key == "table:robustness_matrix" and robustness is not None:
+    if scientific_sensitivity is not None and scientific_sensitivity_key is not None:
+        _forest(
+            axes[1, 0],
+            scientific_sensitivity,
+            estimate_column="estimate",
+            label_column="analysis_id",
+            title="Scientific sensitivity analyses",
+            color=palette["blue_soft"],
+        )
+        panel_c = (
+            "Scientific sensitivity analyses",
+            "robustness",
+            scientific_sensitivity_key,
+        )
+    elif robustness_key == "table:robustness_matrix" and robustness is not None:
         robustness_labels = "spec_id" if "spec_id" in robustness.columns else "axis"
         _forest(
             axes[1, 0],

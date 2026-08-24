@@ -70,6 +70,26 @@ COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS = (
     "table:robustness_summary",
     "table:measurement_process_audit",
 )
+_ASSOCIATION_SENSITIVITY_FIXED_INPUTS = frozenset(
+    {
+        "table:exposure_outcome_distribution",
+        "table:adjusted_association_estimates",
+        "table:exposure_component_completeness_audit",
+    }
+)
+_SCIENTIFIC_SENSITIVITY_REQUIRED_COLUMNS = frozenset(
+    {
+        "analysis_id",
+        "is_reference",
+        "n_stays",
+        "n_events",
+        "estimate",
+        "ci_low",
+        "ci_high",
+        "effect_measure",
+        "converged",
+    }
+)
 
 _REQUIRED_COLUMNS = {
     "table:cohort_flow": frozenset({"n_remaining"}),
@@ -175,6 +195,21 @@ def _binding_carries_required_columns(binding: Any, input_key: str) -> bool:
     )
 
 
+def _association_sensitivity_input(inputs: tuple[str, ...]) -> str | None:
+    values = tuple(str(value) for value in inputs)
+    extra = [value for value in values if value not in _ASSOCIATION_SENSITIVITY_FIXED_INPUTS]
+    if (
+        len(values) == 4
+        and len(values) == len(set(values))
+        and _ASSOCIATION_SENSITIVITY_FIXED_INPUTS <= set(values)
+        and len(extra) == 1
+        and extra[0].startswith("table:")
+        and extra[0] not in _REQUIRED_COLUMNS
+    ):
+        return extra[0]
+    return None
+
+
 def composite_descriptive_figure_executor_owns_step(
     step: AnalysisStep,
     *,
@@ -194,17 +229,30 @@ def composite_descriptive_figure_executor_owns_step(
         ),
         None,
     )
+    dynamic_sensitivity_input = _association_sensitivity_input(tuple(step.inputs))
     if not (
         step.planned_analysis_role == "auxiliary"
         and _method_head(step.method) == "visualization"
-        and profile is not None
+        and (profile is not None or dynamic_sensitivity_input is not None)
         and len(products) == 1
         and products[0] is not None
         and step.trajectory_stability_spec is None
         and isinstance(resolved_bindings, Mapping)
-        and set(resolved_bindings) == set(profile)
+        and set(resolved_bindings) == set(profile or tuple(step.inputs))
     ):
         return False
+    if dynamic_sensitivity_input is not None:
+        for key in _ASSOCIATION_SENSITIVITY_FIXED_INPUTS:
+            if not _binding_carries_required_columns(resolved_bindings.get(key), key):
+                return False
+        binding = resolved_bindings.get(dynamic_sensitivity_input)
+        contract = binding.get("product_contract") if isinstance(binding, Mapping) else None
+        columns = contract.get("columns") if isinstance(contract, Mapping) else None
+        return bool(
+            isinstance(columns, list)
+            and _SCIENTIFIC_SENSITIVITY_REQUIRED_COLUMNS <= set(columns)
+        )
+    assert profile is not None
     return all(
         _binding_carries_required_columns(resolved_bindings.get(key), key)
         for key in profile
@@ -220,6 +268,8 @@ def composite_descriptive_figure_consumed_input_keys(
     ):
         if capability.admits_step(step):
             return profile
+    if _association_sensitivity_input(tuple(step.inputs)) is not None:
+        return tuple(str(value) for value in step.inputs)
     return ()
 
 
@@ -352,8 +402,14 @@ def run_composite_descriptive_figure(
         step_id=step_id,
         input_keys=input_keys,
     )
+    sensitivity_key = _association_sensitivity_input(tuple(input_keys))
     for key, item in bound.items():
-        missing = _REQUIRED_COLUMNS[key] - set(item.frame.columns)
+        required = (
+            _SCIENTIFIC_SENSITIVITY_REQUIRED_COLUMNS
+            if key == sensitivity_key
+            else _REQUIRED_COLUMNS[key]
+        )
+        missing = required - set(item.frame.columns)
         if missing:
             raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
 
@@ -363,7 +419,7 @@ def run_composite_descriptive_figure(
         COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
         COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
         COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
-    }:
+    } or sensitivity_key is not None:
         from .association_publication_figure_renderer import (
             render_association_publication_figure,
         )

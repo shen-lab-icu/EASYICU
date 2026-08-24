@@ -101,6 +101,64 @@ LANDMARK_ASSOCIATION_COMPOSITE_INPUTS = frozenset(
         "table:robustness_summary",
     }
 )
+ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS = frozenset(
+    {
+        "table:exposure_outcome_distribution",
+        "table:adjusted_association_estimates",
+        "table:exposure_component_completeness_audit",
+    }
+)
+
+
+def association_sensitivity_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind a scientific-sensitivity association display to four typed tables."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    extra = [
+        value
+        for value in cleaned
+        if value not in ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS
+    ]
+    if (
+        len(cleaned) != 4
+        or len(cleaned) != len(set(cleaned))
+        or not ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS <= set(cleaned)
+        or len(extra) != 1
+        or not extra[0].startswith("table:")
+    ):
+        raise ValueError(
+            "association sensitivity composite requires three fixed tables "
+            "and one scientific-sensitivity table"
+        )
+    sensitivity = extra[0]
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="absolute_risk_context",
+            article_role="descriptive_result",
+            chart_type="grouped_absolute_risk",
+            source_products=("table:exposure_outcome_distribution",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="primary_adjusted_association",
+            article_role="primary_estimand",
+            chart_type="forest_plot",
+            source_products=("table:adjusted_association_estimates",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="scientific_sensitivity",
+            article_role="robustness",
+            chart_type="sensitivity_forest_plot",
+            source_products=(sensitivity,),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="component_completeness",
+            article_role="data_quality",
+            chart_type="availability_heatmap",
+            source_products=("table:exposure_component_completeness_audit",),
+        ),
+    )
 
 
 def _landmark_curve_product(source_products: Sequence[str]) -> str | None:

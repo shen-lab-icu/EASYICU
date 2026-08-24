@@ -13,6 +13,7 @@ from typing import Sequence
 
 from ..contracts.declared_product import typed_product
 from ..contracts.figure_plan import (
+    ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS,
     COHORT_FLOW_FIGURE_PANELS,
     COHORT_FLOW_INPUT,
     DATA_QUALITY_AUDIT_ROLES,
@@ -27,6 +28,7 @@ from ..contracts.figure_plan import (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     ROBUSTNESS_FIGURE_INPUT,
     ROBUSTNESS_FIGURE_KNOWN_INPUTS,
+    association_sensitivity_composite_panels,
     data_quality_audit_source_candidates,
     landmark_association_composite_panels,
     measurement_availability_figure_panels,
@@ -68,6 +70,12 @@ _PREDICTION_FIGURE_CORE_INPUTS = frozenset(
     }
 )
 _PREDICTION_CLINICAL_UTILITY_INPUT = "table:clinical_utility"
+_ASSOCIATION_FIGURE_CORE_INPUTS = frozenset(
+    {
+        "table:exposure_outcome_distribution",
+        "table:adjusted_association_estimates",
+    }
+)
 
 
 def _method_head(method: str) -> str:
@@ -464,6 +472,19 @@ def bind_deterministic_figure_panels(
         if _PREDICTION_CLINICAL_UTILITY_INPUT
         in {str(value) for value in candidate.expected_outputs}
     ]
+    sensitivity_outputs = [
+        (str(output), candidate.step_id)
+        for candidate in plan.steps
+        if candidate.method == "verified_association_model_grid"
+        for output in candidate.expected_outputs
+        if str(output).startswith("table:")
+    ]
+    completeness_owners = [
+        candidate.step_id
+        for candidate in plan.steps
+        if "table:exposure_component_completeness_audit"
+        in {str(value) for value in candidate.expected_outputs}
+    ]
     for step in plan.steps:
         figure_outputs = [
             str(output)
@@ -511,6 +532,50 @@ def bind_deterministic_figure_panels(
                     },
                 )
             )
+        if (
+            _method_head(str(step.method or "")) == "visualization"
+            and step.planned_analysis_role == "auxiliary"
+            and input_set == _ASSOCIATION_FIGURE_CORE_INPUTS
+            and len(figure_outputs) == 1
+            and len(sensitivity_outputs) == 1
+            and len(completeness_owners) == 1
+        ):
+            sensitivity_input, sensitivity_owner = sensitivity_outputs[0]
+            additions = (
+                sensitivity_input,
+                "table:exposure_component_completeness_audit",
+            )
+            step = step.model_copy(
+                update={
+                    "inputs": [*step.inputs, *additions],
+                    "input_consumption_contracts": [
+                        *step.input_consumption_contracts,
+                        *(
+                            ArtifactConsumptionContract(input_key=value, mode="all_rows")
+                            for value in additions
+                        ),
+                    ],
+                }
+            )
+            input_set = frozenset(str(value) for value in step.inputs)
+            changed = True
+            findings.append(
+                ValidationFinding(
+                    validator="deterministic_figure_plan_binding",
+                    severity="warning",
+                    message=(
+                        "Bound the registered scientific-sensitivity and component-"
+                        f"completeness tables to association figure {step.step_id!r}."
+                    ),
+                    detail={
+                        "reason": "association_scientific_sensitivity_bound",
+                        "step_id": step.step_id,
+                        "sensitivity_source_step_id": sensitivity_owner,
+                        "completeness_source_step_id": completeness_owners[0],
+                        "inputs": list(additions),
+                    },
+                )
+            )
         templates = templates_by_inputs.get(input_set)
         if (
             ROBUSTNESS_FIGURE_INPUT in input_set
@@ -521,6 +586,11 @@ def bind_deterministic_figure_panels(
             data_quality_sources
         ):
             templates = _data_quality_panel_templates(data_quality_sources)
+        if (
+            ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS <= input_set
+            and len(input_set) == 4
+        ):
+            templates = association_sensitivity_composite_panels(step.inputs)
         if input_set == frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}):
             producers = [
                 candidate
