@@ -3001,6 +3001,8 @@ def _benchmark_pipeline_options(
     development_diagnostic: bool = False,
     development_progressive_resume_checkpoint_path: Optional[Path] = None,
     development_progressive_resume_checkpoint_sha256: Optional[str] = None,
+    development_locked_analysis_plan_path: Optional[Path] = None,
+    development_locked_analysis_plan_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -3046,6 +3048,22 @@ def _benchmark_pipeline_options(
         )
         options["development_progressive_resume_checkpoint_sha256"] = str(
             development_progressive_resume_checkpoint_sha256
+        )
+    locked_plan_values = (
+        development_locked_analysis_plan_path,
+        development_locked_analysis_plan_sha256,
+    )
+    if any(value is not None for value in locked_plan_values):
+        if any(value is None for value in locked_plan_values):
+            raise SystemExit(
+                "--development-locked-analysis-plan and its SHA-256 must be "
+                "supplied together."
+            )
+        options["development_locked_analysis_plan_path"] = Path(
+            development_locked_analysis_plan_path
+        )
+        options["development_locked_analysis_plan_sha256"] = str(
+            development_locked_analysis_plan_sha256
         )
     if enable_pubmed:
         options["enable_pubmed"] = True
@@ -4004,6 +4022,24 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--development-locked-analysis-plan",
+        type=Path,
+        default=None,
+        help=(
+            "Development-only locked AnalysisPlan JSON. The exact file SHA-256 "
+            "is required; the current host revalidates and executes it without "
+            "calling Planner."
+        ),
+    )
+    parser.add_argument(
+        "--development-locked-analysis-plan-sha256",
+        default=None,
+        help=(
+            "Exact SHA-256 of --development-locked-analysis-plan. Formal "
+            "paper-facing profiles reject this option."
+        ),
+    )
+    parser.add_argument(
         "--max-step-provider-calls",
         type=int,
         default=9,
@@ -4544,6 +4580,16 @@ def main() -> int:
             "development_progressive_resume_checkpoint_sha256",
             None,
         ),
+        development_locked_analysis_plan_path=getattr(
+            args,
+            "development_locked_analysis_plan",
+            None,
+        ),
+        development_locked_analysis_plan_sha256=getattr(
+            args,
+            "development_locked_analysis_plan_sha256",
+            None,
+        ),
     )
     planner_strict_json_schema = bool(
         getattr(args, "planner_strict_json_schema", False)
@@ -4574,6 +4620,22 @@ def main() -> int:
         getattr(args, "development_progressive_resume_checkpoint", None)
         is not None
     )
+    locked_plan_requested = (
+        getattr(args, "development_locked_analysis_plan", None) is not None
+    )
+    if locked_plan_requested and not args.ehrflowbench_jsonl:
+        raise SystemExit(
+            "--development-locked-analysis-plan requires --ehrflowbench-jsonl "
+            "so one source question can be selected."
+        )
+    if locked_plan_requested and (
+        _figure2_batch_binding is not None
+        or bool(args.require_figure2_paper_acceptance)
+    ):
+        raise SystemExit(
+            "FORMAL_LOCKED_ANALYSIS_PLAN_FORBIDDEN: cross-run plan execution is "
+            "development-only and cannot enter a formal Figure 2 batch."
+        )
     if progressive_resume_requested and not args.ehrflowbench_jsonl:
         raise SystemExit(
             "--development-progressive-resume-checkpoint requires "
@@ -5552,6 +5614,16 @@ def _run_ehrflowbench_jsonl(
         raise SystemExit(
             "Development Progressive Planner checkpoint resume requires exactly "
             "one selected JSONL item and one arm."
+        )
+    locked_plan_path = (pipeline_options or {}).get(
+        "development_locked_analysis_plan_path"
+    )
+    if locked_plan_path is not None and (
+        len(input_task_ids) != 1 or len(_normalize_arms(arms)) != 1
+    ):
+        raise SystemExit(
+            "Development locked AnalysisPlan execution requires exactly one "
+            "selected JSONL item and one arm."
         )
     hard_stop_limits = _provider_hard_stop_limits(pipeline_options or {})
     if batch_binding is not None and hard_stop_limits is None:

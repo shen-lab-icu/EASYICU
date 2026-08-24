@@ -381,6 +381,14 @@ class PipelineConfig:
         Union[str, Path]
     ] = None
     development_progressive_resume_checkpoint_sha256: Optional[str] = None
+    # Explicit non-paper execution of one previously locked AnalysisPlan.  The
+    # exact JSON bytes are digest-bound, then revalidated and shaped by the
+    # current host before any step runs.  This is deliberately separate from
+    # Progressive checkpoint replay: a changed Planner/compiler may invalidate
+    # its prompt dependency while the already selected scientific plan remains
+    # a valid execution input.
+    development_locked_analysis_plan_path: Optional[Union[str, Path]] = None
+    development_locked_analysis_plan_sha256: Optional[str] = None
     # Development canaries stop before another expensive Planner request once
     # any one of these exact-run limits is exhausted. Formal profiles cannot
     # enable this partial-run checkpointing envelope.
@@ -681,6 +689,41 @@ class PipelineConfig:
             ):
                 raise ValueError(
                     "development progressive resume checkpoint SHA-256 is invalid"
+                )
+        locked_plan_values = (
+            self.development_locked_analysis_plan_path,
+            self.development_locked_analysis_plan_sha256,
+        )
+        if any(value is not None for value in locked_plan_values):
+            if any(value is None for value in locked_plan_values):
+                raise ValueError(
+                    "development locked analysis plan path and SHA-256 must be "
+                    "configured together"
+                )
+            if not self.development_diagnostic:
+                raise ValueError(
+                    "development locked analysis plan requires "
+                    "development_diagnostic=True"
+                )
+            if is_paper_facing_profile(self.submission_profile_name):
+                raise ValueError(
+                    "development locked analysis plan cannot be combined with "
+                    "a paper-facing submission profile"
+                )
+            if any(value is not None for value in progressive_resume_values):
+                raise ValueError(
+                    "development locked analysis plan and Progressive checkpoint "
+                    "resume are mutually exclusive"
+                )
+            locked_digest = str(
+                self.development_locked_analysis_plan_sha256 or ""
+            ).strip()
+            if len(locked_digest) != 64 or any(
+                character not in "0123456789abcdef"
+                for character in locked_digest
+            ):
+                raise ValueError(
+                    "development locked analysis plan SHA-256 is invalid"
                 )
         planner_efficiency_values = (
             self.development_planner_efficiency_max_calls,
