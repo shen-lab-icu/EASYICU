@@ -12,7 +12,10 @@ from ..planning.method_literature import METHOD_CARDS
 from ..schema import AnalysisPlan
 
 
-_MARKER = re.compile(r"\[@(?P<key>[A-Za-z0-9_.:-]+)\]")
+_CITATION_BLOCK = re.compile(
+    r"\[(?P<body>[^\[\]]*@[A-Za-z0-9_.:-]+[^\[\]]*)\]"
+)
+_CITATION_KEY = re.compile(r"@(?P<key>[A-Za-z0-9_.:-]+)")
 _HEADING = re.compile(
     r"^(?P<marks>#{1,3})\s+(?P<title>.+?)\s*$",
     re.MULTILINE,
@@ -57,6 +60,16 @@ def _canonical_section(title: str) -> Optional[str]:
     return None
 
 
+def _citation_keys(text: str) -> list[str]:
+    """Extract every exact key from single or grouped Pandoc citations."""
+
+    return [
+        key_match.group("key")
+        for block_match in _CITATION_BLOCK.finditer(text or "")
+        for key_match in _CITATION_KEY.finditer(block_match.group("body"))
+    ]
+
+
 def _section_citations(manuscript: str) -> Dict[str, list[str]]:
     matches = list(_HEADING.finditer(manuscript or ""))
     output: Dict[str, list[str]] = {
@@ -75,7 +88,7 @@ def _section_citations(manuscript: str) -> Dict[str, list[str]]:
                 end = candidate.start()
                 break
         output[section] = sorted(
-            set(_MARKER.findall(manuscript[match.end() : end]))
+            set(_citation_keys(manuscript[match.end() : end]))
         )
     return output
 
@@ -99,23 +112,27 @@ def repair_evidence_ids_mistyped_as_literature(
     }
     evidence_names = {str(value).strip() for value in evidence_ids if str(value).strip()}
     repairs: list[str] = []
-    repaired = manuscript
-    matches = list(_MARKER.finditer(manuscript or ""))
-    for match in reversed(matches):
-        key = match.group("key")
-        if key in allowed or key not in evidence_names:
-            continue
-        start, end = match.span()
-        left = start - 1
-        while left >= 0 and repaired[left].isspace():
-            left -= 1
-        right = end
-        while right < len(repaired) and repaired[right].isspace():
-            right += 1
-        if left >= 0 and repaired[left] == "{" and right < len(repaired) and repaired[right] == "}":
-            start, end = left, right + 1
-        repaired = repaired[:start] + repaired[end:]
-        repairs.append(key)
+    repairs: list[str] = []
+
+    def _repair_block(match: re.Match[str]) -> str:
+        body = match.group("body")
+
+        def _repair_key(key_match: re.Match[str]) -> str:
+            key = key_match.group("key")
+            if key in allowed or key not in evidence_names:
+                return key_match.group(0)
+            repairs.append(key)
+            return ""
+
+        repaired_body = _CITATION_KEY.sub(_repair_key, body)
+        repaired_body = re.sub(r"\s*;\s*(?=;|$)", "", repaired_body)
+        repaired_body = repaired_body.strip(" ;")
+        if not _CITATION_KEY.search(repaired_body):
+            return ""
+        return f"[{repaired_body}]"
+
+    repaired = _CITATION_BLOCK.sub(_repair_block, manuscript or "")
+    repaired = re.sub(r"\{\s*\}", "", repaired)
     return repaired, sorted(set(repairs))
 
 
@@ -384,7 +401,7 @@ def audit_manuscript_literature(
         if literature is not None
         else set()
     )
-    cited = sorted(set(_MARKER.findall(manuscript or "")))
+    cited = sorted(set(_citation_keys(manuscript or "")))
     unknown = sorted(set(cited) - set(allowed))
     section_cited = _section_citations(manuscript or "")
     missing_sections = [

@@ -571,11 +571,22 @@ def _sentences_missing_evidence_tokens(
         # Citation keys commonly contain publication years.  Their digits are
         # literature provenance, not quantitative manuscript results; citation
         # validity is enforced independently by the literature audit.
+        has_literature_citation = bool(
+            re.search(r"\[[^\[\]]*@[A-Za-z0-9_.:-]+[^\[\]]*\]", sentence)
+        )
         prose_for_result_detection = re.sub(r"\[@[^\]]+\]", " ", sentence)
         has_number = bool(re.search(r"\d", prose_for_result_detection))
         has_claimy_word = bool(
             re.search(
                 r"\b(cohort|stays|patients|mortality|death|auroc|auc|hazard|odds|risk|cluster|survival|ci|p=|calibration|brier|discrimination|performance|robust(?:ness)?|overfitting|miscalibration|missingness|generalisability|generalizability)\b",
+                prose_for_result_detection,
+                flags=re.I,
+            )
+        )
+        is_literature_attribution = bool(
+            re.search(
+                r"\b(?:prior|previous|published|recent)\s+"
+                r"(?:stud(?:y|ies)|work|reports?|evaluations?|literature)\b",
                 prose_for_result_detection,
                 flags=re.I,
             )
@@ -586,7 +597,7 @@ def _sentences_missing_evidence_tokens(
                 prose_for_result_detection,
                 flags=re.I,
             )
-        )
+        ) and not (has_literature_citation and is_literature_attribution)
         if (has_number and has_claimy_word) or has_unquantified_result_claim:
             unsupported.append(sentence)
     return unsupported
