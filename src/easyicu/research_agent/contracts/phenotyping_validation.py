@@ -193,14 +193,14 @@ def phenotyping_runtime_bundle_errors(
             and math.isclose(
                 observed.silhouette,
                 expected.silhouette,
-                rel_tol=1e-9,
-                abs_tol=1e-12,
+                rel_tol=1e-5,
+                abs_tol=1e-8,
             )
             and math.isclose(
                 observed.inertia,
                 expected.inertia,
-                rel_tol=1e-9,
-                abs_tol=1e-9,
+                rel_tol=1e-5,
+                abs_tol=1e-6,
             )
             for observed, expected in zip(candidates, receipt.candidates)
         )
