@@ -84,6 +84,7 @@ def test_writer_digest_exposes_exact_key_and_relevance() -> None:
     assert "direct_comparator" in digest
     assert "method:" in digest
     assert "Run-bound typed methodology applications" in digest
+    assert "not evidence that the method was executed" in digest
     assert "step=01_primary_description" in digest
     assert "design_elements=reporting" in digest
 
