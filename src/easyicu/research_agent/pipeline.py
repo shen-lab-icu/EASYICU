@@ -4120,6 +4120,11 @@ class ResearchAgentPipeline:
         gate. The pause is not an error and carries no result: nothing
         downstream of it executed. Answer it with :meth:`resume_human_review`.
         """
+        # A requested execution checkpoint is an analysis-only boundary.  The
+        # execute coordinator already stops after the selected step; carry the
+        # same boundary into Write/Finalise so a checkpoint replay cannot spend
+        # Writer calls or overwrite a prior manuscript after execution stops.
+        stop_after_analysis = bool(stop_after_analysis or stop_after_step_id)
         skill_obj: Optional[ClinicalSkill] = None
         if skill is not None:
             skill_obj = get_skill(skill) if isinstance(skill, str) else skill

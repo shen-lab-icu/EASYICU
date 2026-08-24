@@ -97,6 +97,7 @@ from ..planning.capability_registry import (
 from ..planning.figure_strategy import summarize_article_figure_strategy_coverage
 from ..planning.study_design import study_design_family_for_analysis_type
 from ..research_context.cohort_granularity import format_patient_count
+from ..robustness.panel import load_robustness_panel, unexecuted_locked_spec_ids
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from ..plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
@@ -1021,6 +1022,11 @@ _GATE_STATE_SUPERSESSION_PATTERNS = (
         "execution_complete",
     ),
     (
+        "robustness_panel",
+        "locked robustness specifications that no step estimated",
+        "robustness_panel_complete",
+    ),
+    (
         "evidence_bound_writer",
         "strict evidence enforcement blocked manuscript generation",
         "manuscript_bound_clean",
@@ -1817,7 +1823,15 @@ def _compute_readiness_gates(
         ),
         "manuscript_critique_passed": False,
         "manuscript_literature_complete": False,
+        "robustness_panel_complete": False,
     }
+    current_robustness_panel = load_robustness_panel(
+        Path(run_dir) / "robustness_panel.json"
+    )
+    current_gate_state["robustness_panel_complete"] = bool(
+        current_robustness_panel is not None
+        and not unexecuted_locked_spec_ids(current_robustness_panel)
+    )
     critique_path = run_dir / "manuscript_critique.json"
     if critique_path.exists():
         try:
