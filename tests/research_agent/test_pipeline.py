@@ -9334,6 +9334,31 @@ def test_critic_accepts_cited_prior_study_performance_framing(ra):
     assert critique.unsupported_claims == []
 
 
+def test_critic_does_not_treat_scientific_version_names_as_results(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "A direct comparison in MIMIC-IV evaluated SOFA-2 against SOFA-1 "
+        "for mortality prediction [@paper_2026]. "
+        "A multicentre study examined SOFA-2 for sepsis identification and "
+        "mortality prediction [@external_2026]."
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=[],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+    genuine_result = critic.review_manuscript(
+        scaffold="Mortality was 10% for SOFA-2 [@paper_2026].",
+        available_evidence_ids=[],
+    )
+    assert genuine_result.status == "needs_revision"
+    assert genuine_result.unsupported_claims
+
+
 def test_critic_rejects_numeric_claim_ref_without_bound_footnote_provenance(ra):
     critic = ra.CriticAgent()
     scaffold = (

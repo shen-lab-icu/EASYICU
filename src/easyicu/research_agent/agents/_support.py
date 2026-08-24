@@ -575,6 +575,14 @@ def _sentences_missing_evidence_tokens(
             re.search(r"\[[^\[\]]*@[A-Za-z0-9_.:-]+[^\[\]]*\]", sentence)
         )
         prose_for_result_detection = re.sub(r"\[@[^\]]+\]", " ", sentence)
+        # Versioned scientific names and database releases (for example
+        # SOFA-2, Sepsis-3, and MIMIC-IV) are identifiers, not quantitative
+        # results.  Preserve ordinary values such as ``2-fold`` or ``10%``.
+        prose_for_result_detection = re.sub(
+            r"\b(?:[A-Za-z][A-Za-z0-9]*-\d+[A-Za-z0-9-]*|[A-Z]{2,}-[IVXLCDM]+)\b",
+            " ",
+            prose_for_result_detection,
+        )
         has_number = bool(re.search(r"\d", prose_for_result_detection))
         has_claimy_word = bool(
             re.search(
