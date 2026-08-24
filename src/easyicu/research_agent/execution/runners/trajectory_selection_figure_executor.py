@@ -201,13 +201,25 @@ def run_trajectory_selection_figure(
     out_dir.mkdir(parents=True, exist_ok=True)
     selection_source = out_dir / "trajectory_selection_bic_source_data.csv"
     availability_source = out_dir / "trajectory_selection_availability_source_data.csv"
-    selection.to_csv(selection_source, index=False)
+    selection_parent_step = str(
+        selection_bound.binding.get("produced_by_step") or ""
+    )
+    availability_parent_step = str(
+        availability_bound.binding.get("produced_by_step") or ""
+    )
+    if not selection_parent_step or not availability_parent_step:
+        raise ValueError("trajectory figure parents lack producer-step lineage")
+    selection_projection = selection.copy()
+    selection_projection["source_table"] = selection_bound.path.name
+    selection_projection["source_step_id"] = selection_parent_step
+    selection_projection.to_csv(selection_source, index=False)
     # Keep the registered source-data bytes as a row/value projection of the
     # exact parent table. ``available_pct`` is a renderer-local derivation from
     # the two count columns and must not masquerade as an upstream value.
-    availability.loc[:, list(_AVAILABILITY_COLUMNS)].to_csv(
-        availability_source, index=False
-    )
+    availability_projection = availability.loc[:, list(_AVAILABILITY_COLUMNS)].copy()
+    availability_projection["source_table"] = availability_bound.path.name
+    availability_projection["source_step_id"] = availability_parent_step
+    availability_projection.to_csv(availability_source, index=False)
 
     import matplotlib
 

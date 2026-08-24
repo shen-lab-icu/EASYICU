@@ -30,6 +30,7 @@ def _binding(
         "declared_kind": "table",
         "evidence_kind": "table",
         "product": product,
+        "produced_by_step": f"producer_{product}",
         "product_contract": {
             "columns": list(frame.columns),
             "row_count": len(frame),
@@ -112,7 +113,15 @@ def test_failed_closed_selection_renders_a_bound_diagnostic_without_labels(
         / "figure"
         / "trajectory_selection_availability_source_data.csv"
     )
-    assert list(availability_source.columns) == list(_availability().columns)
+    assert list(availability_source.columns) == [
+        *_availability().columns,
+        "source_table",
+        "source_step_id",
+    ]
+    assert set(availability_source["source_table"]) == {"feature_availability.csv"}
+    assert set(availability_source["source_step_id"]) == {
+        "producer_feature_availability"
+    }
     for suffix in ("png", "svg", "pdf", "tiff"):
         assert (
             tmp_path / "figure" / f"trajectory_selection_diagnostics.{suffix}"
