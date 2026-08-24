@@ -358,7 +358,7 @@ def run_trajectory_selection_figure(
         selection_claim = (
             "The minimum BIC occurred at the upper candidate boundary, so no "
             "interior solution was established; AIC is shown only as a "
-            "prespecified diagnostic and cannot rescue the selection."
+            "prespecified diagnostic and cannot alter the selection."
         )
     else:
         core_claim = (
