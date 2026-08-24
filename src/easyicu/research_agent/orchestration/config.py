@@ -638,12 +638,18 @@ class PipelineConfig:
         from .profiles import (
             is_paper_facing_profile,
             require_profile_planner_strategy,
+            require_profile_pubmed_setting,
         )
 
         require_profile_planner_strategy(
             name=self.submission_profile_name,
             version=self.submission_profile_version,
             planner_strategy=self.planner_strategy,
+        )
+        require_profile_pubmed_setting(
+            name=self.submission_profile_name,
+            version=self.submission_profile_version,
+            enabled=self.enable_pubmed,
         )
         progressive_resume_values = (
             self.development_progressive_resume_checkpoint_path,
