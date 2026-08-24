@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.contracts.phenotyping_validation import (
     phenotyping_runtime_bundle_errors,
@@ -33,6 +35,12 @@ from easyicu.research_agent.planning.scientific_action_catalog import (
 from easyicu.research_agent.reporting.article_contract import (
     build_article_analysis_contract,
     roles_covered_by_plan,
+)
+from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
+from easyicu.research_agent.robustness.panel import (
+    build_robustness_panel_from_records,
+    robustness_specs_sha,
+    unexecuted_locked_spec_ids,
 )
 from easyicu.research_agent.schema import (
     AnalysisPlan,
@@ -112,6 +120,25 @@ def _primary_step() -> AnalysisStep:
         method="cross-sectional phenotyping",
         scientific_action_id="phenotyping.cluster_solution",
     )
+
+
+def _write_robustness_lock(tmp_path: Path, variables: list[str]) -> RobustnessSpec:
+    spec = RobustnessSpec(
+        spec_id="complete_case_primary_features",
+        axis="missing",
+        description="Refit on the exact locked complete-case population.",
+        missing_override={"strategy": "complete_case", "variables": variables},
+    )
+    payload = {
+        "schema_version": "easyicu.robustness_specs/1",
+        "locked_at": "2026-08-24T00:00:00+00:00",
+        "spec_sha256": robustness_specs_sha([spec]),
+        "specs": [spec.to_dict()],
+    }
+    (tmp_path / "robustness_specs_locked.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    return spec
 
 
 def test_phenotyping_actions_publish_one_exact_host_profile() -> None:
@@ -272,3 +299,112 @@ def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(tmp_path
         assert source["source_table"].eq(parent_path.name).all()
         assert source["source_step_id"].eq(f"producer_{product}").all()
         assert source["source_row_index"].tolist() == list(range(len(source)))
+
+
+def test_phenotyping_owner_executes_locked_complete_case_sensitivity(
+    tmp_path: Path,
+) -> None:
+    frame = _frame()
+    frame.loc[::5, "marker_a"] = np.nan
+    frame.loc[::7, "marker_b"] = np.nan
+    (tmp_path / "research_context.json").write_text(
+        _context(len(frame)).model_dump_json(indent=2), encoding="utf-8"
+    )
+    cohort_path = tmp_path / "cohort.csv"
+    frame.to_csv(cohort_path, index=False)
+    spec = _write_robustness_lock(tmp_path, ["marker_a", "marker_b"])
+
+    summary = run_primary_phenotyping(
+        frame=frame,
+        declared_columns=("stay_id", "marker_a", "marker_b", "death"),
+        typed_cohort_input="artifact:analysis_cohort",
+        source_cohort=cohort_path,
+        out_dir=tmp_path / "primary",
+        run_dir=tmp_path,
+        step_id="primary_phenotypes",
+    )
+
+    expected_n = int(frame[["marker_a", "marker_b"]].notna().all(axis=1).sum())
+    row = summary["robustness_rows"][0]
+    receipt = summary["scientific_runtime_receipt"][
+        "complete_case_sensitivities"
+    ][0]
+    assert row["spec_id"] == spec.spec_id
+    assert row["n"] == expected_n
+    assert row["converged"] is True
+    assert -1 <= row["point_estimate"] <= 1
+    assert receipt["complete_case_variables"] == ["marker_a", "marker_b"]
+    assert receipt["n_complete"] == expected_n
+    assert receipt["n_bootstrap"] == 200
+    assert (tmp_path / "primary/phenotyping_complete_case_sensitivity.csv").is_file()
+    panel = build_robustness_panel_from_records(
+        specs=[spec],
+        per_step_records=[
+            {
+                "step_id": "primary_phenotypes",
+                "status": "ok",
+                "step_summary": summary,
+                "step_summary_evidence_id": "primary_phenotypes",
+            }
+        ],
+    )
+    assert unexecuted_locked_spec_ids(panel) == []
+
+    selection_summary = {
+        "deterministic_standard_analysis": PHENOTYPING_ANALYSIS_KIND,
+        "method": "deterministic_cross_sectional_phenotyping_diagnostic",
+        "cluster_selection": summary["cluster_selection"],
+    }
+    assignments = pd.read_csv(tmp_path / "primary/phenotype_assignments.csv")
+    assignment_path = tmp_path / "primary/phenotype_assignments.csv"
+    stability_summary = run_phenotyping_diagnostic(
+        action_id="phenotyping.cluster_stability",
+        out_dir=tmp_path / "stability",
+        run_dir=tmp_path,
+        resolved_inputs={
+            "step_id": "stability",
+            "inputs": {
+                PHENOTYPE_ASSIGNMENTS_PRODUCT: _binding(
+                    PHENOTYPE_ASSIGNMENTS_PRODUCT,
+                    assignments,
+                    assignment_path,
+                    "stability",
+                )
+            },
+        },
+        step_id="stability",
+    )
+    records = [
+        {"step_summary": summary},
+        {"step_summary": selection_summary},
+        {"step_summary": stability_summary},
+    ]
+    assert phenotyping_runtime_bundle_errors(records) == []
+    tampered = copy.deepcopy(records)
+    tampered[0]["step_summary"]["robustness_rows"][0]["point_estimate"] += 0.01
+    assert "disagrees with its robustness row" in " ".join(
+        phenotyping_runtime_bundle_errors(tampered)
+    )
+
+
+def test_phenotyping_complete_case_spec_cannot_widen_the_feature_roster(
+    tmp_path: Path,
+) -> None:
+    frame = _frame()
+    (tmp_path / "research_context.json").write_text(
+        _context(len(frame)).model_dump_json(indent=2), encoding="utf-8"
+    )
+    cohort_path = tmp_path / "cohort.csv"
+    frame.to_csv(cohort_path, index=False)
+    _write_robustness_lock(tmp_path, ["marker_a", "death"])
+
+    with pytest.raises(RuntimeError, match="outside the primary feature roster: death"):
+        run_primary_phenotyping(
+            frame=frame,
+            declared_columns=("stay_id", "marker_a", "marker_b", "death"),
+            typed_cohort_input="artifact:analysis_cohort",
+            source_cohort=cohort_path,
+            out_dir=tmp_path / "primary",
+            run_dir=tmp_path,
+            step_id="primary_phenotypes",
+        )

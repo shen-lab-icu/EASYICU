@@ -28,6 +28,86 @@ class PhenotypingCandidateReceipt(BaseModel):
         return self
 
 
+class PhenotypingCompleteCaseReceipt(BaseModel):
+    """One locked missingness sensitivity for the cluster solution.
+
+    The metric is label-invariant agreement between the primary assignments
+    and a complete-case refit on the same rows.  Its interval is a deterministic
+    paired bootstrap of those two assignment vectors; it is not an interval for
+    biological or external reproducibility.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[
+        "easyicu.cross_sectional_phenotyping_complete_case_receipt/1"
+    ]
+    spec_id: str = Field(min_length=1)
+    axis: Literal["missing"]
+    missing_strategy: Literal["complete_case"]
+    complete_case_variables: list[str] = Field(min_length=1)
+    primary_feature_roster: list[str] = Field(min_length=2)
+    n_total: int = Field(ge=20)
+    n_complete: int = Field(ge=20)
+    primary_selected_n_clusters: int = Field(ge=2)
+    complete_case_selected_n_clusters: int = Field(ge=2)
+    complete_case_candidates: list[PhenotypingCandidateReceipt] = Field(min_length=1)
+    comparison_metric: Literal["adjusted_rand_index"]
+    point_estimate: float = Field(ge=-1, le=1)
+    ci_low: float = Field(ge=-1, le=1)
+    ci_high: float = Field(ge=-1, le=1)
+    standard_error: float = Field(ge=0)
+    interval_method: Literal["paired_assignment_bootstrap_percentile_95"]
+    n_bootstrap: int = Field(ge=100)
+    random_seed: Literal[1729]
+    primary_preprocessing: Literal["median_imputation_then_standard_scaling"]
+    sensitivity_preprocessing: Literal["complete_case_then_standard_scaling"]
+    clustering_method: Literal["minibatch_kmeans"]
+    table_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outcome_used_for_fit: Literal[False]
+    causal_entity_claim_authorized: Literal[False]
+    paper_authorization_allowed: Literal[False]
+
+    @model_validator(mode="after")
+    def _coherent_sensitivity(self) -> "PhenotypingCompleteCaseReceipt":
+        if len(set(self.complete_case_variables)) != len(
+            self.complete_case_variables
+        ):
+            raise ValueError("complete-case variables must be unique")
+        if len(set(self.primary_feature_roster)) != len(self.primary_feature_roster):
+            raise ValueError("primary feature roster must be unique")
+        if not set(self.complete_case_variables).issubset(
+            self.primary_feature_roster
+        ):
+            raise ValueError("complete-case variables must belong to the primary roster")
+        if self.n_complete > self.n_total:
+            raise ValueError("complete-case population exceeds the primary population")
+        selected = [row for row in self.complete_case_candidates if row.selected]
+        if len(selected) != 1:
+            raise ValueError("complete-case sensitivity requires one selected k")
+        expected = max(
+            self.complete_case_candidates,
+            key=lambda row: (row.silhouette, -row.candidate_k),
+        )
+        if selected[0].candidate_k != expected.candidate_k:
+            raise ValueError("complete-case selected k does not maximize silhouette")
+        if self.complete_case_selected_n_clusters != selected[0].candidate_k:
+            raise ValueError("complete-case selected k disagrees with its candidate grid")
+        if not all(
+            math.isfinite(value)
+            for value in (
+                self.point_estimate,
+                self.ci_low,
+                self.ci_high,
+                self.standard_error,
+            )
+        ):
+            raise ValueError("complete-case agreement metrics must be finite")
+        if self.ci_low > self.ci_high:
+            raise ValueError("complete-case agreement interval is reversed")
+        return self
+
+
 class PhenotypingRuntimeReceipt(BaseModel):
     """Evidence for one bounded exploratory cluster solution, not a phenotype fact."""
 
@@ -50,6 +130,9 @@ class PhenotypingRuntimeReceipt(BaseModel):
     source_cohort_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     phenotype_profiles_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     phenotype_assignments_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    complete_case_sensitivities: list[PhenotypingCompleteCaseReceipt] = Field(
+        default_factory=list
+    )
     outcome_used_for_fit: Literal[False]
     downstream_outcome_use: Literal["descriptive_only"]
     causal_entity_claim_authorized: Literal[False]
@@ -92,6 +175,18 @@ class PhenotypingRuntimeReceipt(BaseModel):
             raise ValueError("every selected cluster must contain rows")
         if sum(self.cluster_counts.values()) != self.n_rows:
             raise ValueError("cluster counts do not sum to the fitted population")
+        sensitivity_ids = [row.spec_id for row in self.complete_case_sensitivities]
+        if len(sensitivity_ids) != len(set(sensitivity_ids)):
+            raise ValueError("complete-case sensitivity spec ids must be unique")
+        if any(
+            row.primary_feature_roster != self.feature_roster
+            or row.n_total != self.n_rows
+            or row.primary_selected_n_clusters != self.selected_n_clusters
+            for row in self.complete_case_sensitivities
+        ):
+            raise ValueError(
+                "complete-case sensitivity disagrees with the primary phenotype receipt"
+            )
         return self
 
 
@@ -140,6 +235,52 @@ def phenotyping_runtime_bundle_errors(
     except Exception as exc:
         return [f"phenotyping primary runtime receipt is invalid: {exc}"]
 
+    robustness_rows = {
+        str(row.get("spec_id") or ""): row
+        for row in (primary[0].get("robustness_rows") or [])
+        if isinstance(row, Mapping)
+    }
+    for sensitivity in receipt.complete_case_sensitivities:
+        row = robustness_rows.get(sensitivity.spec_id)
+        if row is None:
+            errors = [
+                "phenotyping complete-case receipt lacks its robustness panel row"
+            ]
+            break
+        try:
+            row_matches = (
+                row.get("axis") == "missing"
+                and bool(row.get("converged"))
+                and int(row.get("n")) == sensitivity.n_complete
+                and math.isclose(
+                    float(row.get("point_estimate")),
+                    sensitivity.point_estimate,
+                    rel_tol=0,
+                    abs_tol=1e-12,
+                )
+                and math.isclose(
+                    float(row.get("ci_low")),
+                    sensitivity.ci_low,
+                    rel_tol=0,
+                    abs_tol=1e-12,
+                )
+                and math.isclose(
+                    float(row.get("ci_high")),
+                    sensitivity.ci_high,
+                    rel_tol=0,
+                    abs_tol=1e-12,
+                )
+            )
+        except (TypeError, ValueError):
+            row_matches = False
+        if not row_matches:
+            errors = [
+                "phenotyping complete-case receipt disagrees with its robustness row"
+            ]
+            break
+    else:
+        errors = []
+
     selections = [
         summary
         for summary in summaries
@@ -158,7 +299,6 @@ def phenotyping_runtime_bundle_errors(
         == "deterministic_cross_sectional_phenotyping_diagnostic"
         and isinstance(summary.get("cluster_stability"), Mapping)
     ]
-    errors: list[str] = []
     if len(selections) != 1:
         errors.append(
             "phenotyping validator requires exactly one deterministic k-selection replay"
@@ -237,6 +377,7 @@ def phenotyping_runtime_bundle_errors(
 
 __all__ = [
     "PhenotypingCandidateReceipt",
+    "PhenotypingCompleteCaseReceipt",
     "PhenotypingRuntimeReceipt",
     "phenotyping_runtime_bundle_errors",
     "phenotyping_runtime_receipt_valid",
