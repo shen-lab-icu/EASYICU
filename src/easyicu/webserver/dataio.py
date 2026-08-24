@@ -532,6 +532,20 @@ _SUPPORTED_COHORT_PRESETS = {
     "respiratory",
     "icd",
 }
+
+
+def normalize_export_cohort_preset(value: Any) -> str:
+    """Return one canonical Data Extraction cohort preset or fail closed."""
+
+    preset = str(value or "").strip().lower()
+    if preset not in _SUPPORTED_COHORT_PRESETS:
+        raise ExportCohortError(
+            "unsupported_cohort_preset",
+            {"preset": preset, "supported": sorted(_SUPPORTED_COHORT_PRESETS)},
+        )
+    return preset
+
+
 _ICD_SUPPORTED_DATABASES = {"miiv", "mimic", "miii", "eicu"}
 _CONCEPT_DERIVED_COHORTS = {
     "sepsis3": {
@@ -1354,18 +1368,9 @@ def _split_icd_tokens(raw: Any) -> List[str]:
 def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = cohort if isinstance(cohort, dict) else {}
     has_explicit_contract = isinstance(cohort, dict) and bool(cohort)
-    preset = (
-        str(
-            raw.get("preset") or ("adult_first" if has_explicit_contract else "all_icu")
-        )
-        .strip()
-        .lower()
+    preset = normalize_export_cohort_preset(
+        raw.get("preset") or ("adult_first" if has_explicit_contract else "all_icu")
     )
-    if preset not in _SUPPORTED_COHORT_PRESETS:
-        raise ExportCohortError(
-            "unsupported_cohort_preset",
-            {"preset": preset, "supported": sorted(_SUPPORTED_COHORT_PRESETS)},
-        )
 
     include = _split_icd_tokens(
         raw.get("icd_include")

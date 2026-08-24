@@ -326,4 +326,11 @@ def test_icd_preview_resource_replays_and_uses_extraction_renderer() -> None:
     event_projection = (node / "event-projection.mjs").read_text(encoding="utf-8")
     assert 'name: "easyicu_preview_icd_cohort"' in main
     assert "For an ICD-defined cohort count" in main
+    assert 'Type.Literal("all_icu")' in main
+    assert 'Type.Literal("adult_first")' in main
+    assert 'Type.Literal("icd")' in main
+    study_cohort_schema = main.split("const studyCohort", 1)[1].split(
+        "const studyWindow", 1
+    )[0]
+    assert "preset: optionalText(500)" not in study_cohort_schema
     assert '"icd_cohort_preview"' in event_projection
