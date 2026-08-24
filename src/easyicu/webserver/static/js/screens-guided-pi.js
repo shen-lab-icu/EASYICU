@@ -41,6 +41,17 @@
     const config = runtime.configuration || {};
     return runtimeReady() && (config.api_transport || runtime.api_transport) === 'openai-completions';
   }
+  function restoreConfiguredResearchProvider() {
+    const runtime = state.runtime || {};
+    const config = runtime.configuration || {};
+    if (
+      config.connection_verified === true
+      && config.credential_present === true
+      && (config.api_transport || runtime.api_transport) === 'openai-completions'
+    ) {
+      state.researchProvider = 'api';
+    }
+  }
   function connectionConfigured() {
     if (state.researchProvider !== 'codex') return apiResearchReady();
     return !!(
@@ -493,7 +504,7 @@
       note: tr('The Agent may run a local preflight first and will pause again before executing the approved plan.', 'Agent 可以先运行本地预检，并会在执行计划前再次暂停等待批准。'),
       approve: tr('Prepare plan', '生成计划'),
     };
-    if (code === 'provider_plan_ready') return {
+    if (code === 'provider_ready_to_generate_plan') return {
       code, grants: ['provider_run'],
       message: tr(
         'I approve the completed local preflight. Start the full Research Agent only to generate the evidence-bound plan, then pause for my plan review.',
@@ -812,6 +823,7 @@
     try {
       const payload = await api().loadPiCopilotStatus();
       state.runtime = payload && payload.runtime;
+      restoreConfiguredResearchProvider();
       await loadCodexResearchStatus(false);
       if (projectId()) {
         try { await prepareProject(); }

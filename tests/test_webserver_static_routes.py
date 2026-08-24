@@ -118,9 +118,8 @@ def test_native_shell_language_icon_is_stateful() -> None:
         "window.addEventListener('easyicu:languagechange', refreshLanguage)" in dock_js
     )
     assert "window.EUPageGuide = { open, close, toggle, refreshLanguage }" in dock_js
-    assert "setTimeout(refreshLanguage, 250)" in dock_js
     assert (
-        "function shouldHideFab(route) { return route === 'guided' || route === 'agent'; }"
+        "return route === 'guided' || route === 'agent';"
         in dock_js
     )
     assert "window.setLang(val);" in settings_js
@@ -139,7 +138,7 @@ def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
     )
 
 
-def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agent_guide() -> (
+def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     None
 ):
     app_js = _static_js("app.js")
@@ -149,39 +148,40 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     help_js = _static_js("screens-help.js")
     index_html = _static_html("index.html")
 
-    assert "Page guide" in app_js
-    assert "页面指南" in app_js
+    assert "EasyICU Copilot" in app_js
+    assert "打开唯一的 EasyICU 研究助手对话" in app_js
     assert "window.EUPageGuide || window.EUCopilot" in app_js
-    assert "t('Guided Copilot', '研究引导')" in app_js
-    # One guide surface, one name: the per-screen 'Agent guide' duplicate opened
-    # the same dock as the adjacent topbar 'Page guide' button and was removed.
+    assert "t('EasyICU Copilot', 'EasyICU 研究助手')" in app_js
+    # All shell affordances open the one #guided Pi conversation. Project
+    # Monitor must not add an agent-specific conversation opener.
     assert "Agent guide" not in agent_js
     assert "data-cpopen" not in agent_js
-    assert "Open EasyICU page guide" in dock_js
-    assert "打开 EasyICU 页面指南" in dock_js
-    assert "Page guide" in dock_js
-    assert "页面指南" in dock_js
-    assert "Open Guided Copilot" in dock_js
-    assert "当前页面 · 安全快捷操作 · 仅本地" in dock_js
-    assert "label: bi('Cohort Statistics', '队列统计')" in dock_js
+    assert "Open EasyICU Copilot" in dock_js
+    assert "打开 EasyICU 研究助手" in dock_js
+    assert "function open()" in dock_js
+    assert "location.hash = '#guided'" in dock_js
+    assert "The historical page-guide dock intentionally is not constructed" in dock_js
+    assert "createPageGuideSession" not in dock_js
+    assert "sendPageGuideMessage" not in dock_js
+    assert "document.body.appendChild(dock)" not in dock_js
     assert "Start Guided Copilot" in extraction_js
     assert "Continue in Guided Copilot" in agent_js
-    assert "Open Page guide" in help_js
+    assert "Open EasyICU Copilot" in help_js
 
     assert "Quick help" not in app_js
     assert "Quick help" not in dock_js
     assert "Quick help" not in help_js
     assert 'title="Ask the Copilot"' not in app_js
     assert "${t('Copilot','助手')}" not in app_js
-    assert "Open EasyICU Copilot" not in dock_js
+    assert "Open Guided Copilot" not in dock_js
     assert '<div class="cp-name">Copilot</div>' not in dock_js
     assert "Let Copilot drive" not in extraction_js
     assert "Continue in Copilot" not in agent_js
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260817-project-monitor1" in index_html
-    assert "js/copilot-dock.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/app.js?v=20260824-single-copilot1" in index_html
+    assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
     assert "js/screens-extraction.js?v=20260823-extraction-workspace4" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
@@ -337,11 +337,11 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260817-project-monitor1" in index_html
+    assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
-def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
+def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     guided_js = _static_js("screens-guided.js")
     dock_js = _static_js("copilot-dock.js")
     index_html = _static_html("index.html")
@@ -351,11 +351,9 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "htmlOf(t.html)" in guided_js
     assert "你好，我是<strong>研究引导</strong>" in guided_js
     assert "脚本化演示流程" in guided_js
-    assert "正在打开研究引导" in dock_js
-    assert "页面指南会解释当前页面" in dock_js
-    assert "页面指南只支持固定快捷操作" in dock_js
-    assert "htmlOf(t.html)" in dock_js
-    assert "htmlOf(label)" in dock_js
+    assert "打开 EasyICU 研究助手" in dock_js
+    assert "研究助手" in dock_js
+    assert "Page guide" not in dock_js
     assert (
         "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
     )
@@ -364,10 +362,10 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         in index_html
     )
     assert "js/screens-guided.js?v=20260817-copilot-boundary1" in index_html
-    assert "js/copilot-dock.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
 
 
-def test_native_page_guide_uses_backend_page_guide_contract() -> None:
+def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     api_js = _static_js("api.js")
     dock_js = _static_js("copilot-dock.js")
     index_html = _static_html("index.html")
@@ -392,21 +390,17 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "runCopilotAction" in api_js
     assert "loadCopilotSessions" in api_js
 
-    assert "function currentContext()" in dock_js
-    assert "ensureSession()" in dock_js
-    assert "sendBackendMessage" in dock_js
-    assert "runBackendAction" in dock_js
-    assert "data-cp-action" in dock_js
-    assert "selected_source" in dock_js
-    assert "createPageGuideSession" in dock_js
-    assert "sendPageGuideMessage" in dock_js
-    assert "runPageGuideAction" in dock_js
+    assert "location.hash = '#guided'" in dock_js
+    assert "document.querySelector('[data-gpi-input]')" in dock_js
+    assert "createPageGuideSession" not in dock_js
+    assert "sendPageGuideMessage" not in dock_js
+    assert "runPageGuideAction" not in dock_js
     assert "createCopilotSession" not in dock_js
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
-    assert "Page guide backend unavailable, using local fallback" in dock_js
+    assert "page-guide dock intentionally is not constructed" in dock_js
     assert "js/api.js?v=20260816-copilot-provider-owner1" in index_html
-    assert "js/copilot-dock.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
 
 
 def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> (
@@ -1550,7 +1544,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20260812-route-a11y1" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260817-project-monitor1" in index_html
+    assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2648,7 +2642,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "screens-guided.js?v=20260817-copilot-boundary1" in index_html
     assert "guided.css?v=20260815-compact-rail2" in index_html
     assert "guided-projects.css?v=20260815-mobile-rail1" in index_html
-    assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in projects_js
+    assert "gd-name\">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span>" in projects_js
     assert "${t('New / open research folder', '新建/打开研究目录')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
@@ -3350,21 +3344,13 @@ def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
     assert demo_pos < drilldown_pos < main_pos
 
 
-def test_dock_bridge_forwards_data_mode_to_guided() -> None:
-    """Regression: a Real-mode floating-dock handoff must NOT drop the user into
-    the seeded-demo (welcome/BRANCH) pipeline. The dock must forward dataMode so
-    Guided Copilot's real-mode guard routes to the real project frontdoor."""
+def test_shell_copilot_entry_opens_the_pi_route_without_a_second_bridge_chat() -> None:
+    """The floating entry is a route/focus control, not another conversation."""
     dock_js = _static_js("copilot-dock.js")
-    # openGuided() must include dataMode in the bridge object
-    assert (
-        "route: routeOf(), lastUser: lastUser ? lastUser.html : null, dataMode: window.EU_DATA"
-        in dock_js
-    )
-    guided_js = _static_js("screens-guided.js")
-    # the real-mode guard that consumes it must still be present
-    assert "if (b.dataMode) dataMode = b.dataMode;" in guided_js
-    assert "if (dataMode === 'real') {" in guided_js
-    assert "go('frontdoor');" in guided_js
+    assert "location.hash = '#guided'" in dock_js
+    assert "document.querySelector('[data-gpi-input]')" in dock_js
+    assert "__cpBridge" not in dock_js
+    assert "createPageGuideSession" not in dock_js
 
 
 def test_guided_handoff_banner_surfaces_full_study_design() -> None:
