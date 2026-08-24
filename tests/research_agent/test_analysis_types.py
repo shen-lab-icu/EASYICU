@@ -12,6 +12,7 @@ from easyicu.research_agent.planning.analysis_types import (
     analysis_type_for_capability,
     is_concept_set_family,
     normalize_analysis_family,
+    optional_analysis_type_for_capability,
 )
 
 
@@ -21,6 +22,10 @@ def test_registered_capability_maps_to_one_analysis_type() -> None:
     )
     with pytest.raises(ValueError, match="exactly one analysis type"):
         analysis_type_for_capability("not_registered")
+
+
+def test_family_wide_capability_does_not_force_an_analysis_subtype() -> None:
+    assert optional_analysis_type_for_capability("association_freeform_v1") is None
 
 
 def test_infer_analysis_type_quality_audit(ra):
