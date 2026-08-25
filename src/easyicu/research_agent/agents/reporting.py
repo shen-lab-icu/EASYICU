@@ -44,6 +44,21 @@ _ANALYZER_PROMPT_BYTE_LIMIT = 48_000
 _WRITER_PROMPT_BYTE_LIMIT = 64_000
 
 
+def _project_writer_evidence_digest(
+    section_name: str,
+    evidence_digest: Optional[str],
+) -> str:
+    """Project result-heavy evidence away from non-result section calls."""
+
+    digest = str(evidence_digest or "")
+    if str(section_name).strip().casefold() in {"abstract", "results"}:
+        return digest
+    marker = "\n## secondary numbers"
+    if marker not in digest:
+        return digest
+    return digest.split(marker, 1)[0].rstrip() + "\n"
+
+
 class ReportingPromptBudgetError(RuntimeError):
     """A lossless Analyzer/Writer request exceeds its transport envelope."""
 
@@ -184,6 +199,10 @@ class WriterAgent:
             ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
         )
         reporting_context = scoped_reporting_context(context)
+        section_evidence_digest = _project_writer_evidence_digest(
+            section_name,
+            evidence_digest,
+        )
         messages = [
             LLMMessage(
                 role="system",
@@ -320,7 +339,7 @@ class WriterAgent:
                     "SECTION-SPECIFIC LENGTH TARGET:\n"
                     f"- {section_name}: follow the requested length and paragraph structure exactly.\n\n"
                     "MACHINE EVIDENCE DIGEST:\n"
-                    + (evidence_digest or "(none)")
+                    + (section_evidence_digest or "(none)")
                     + "\n\nRUN-BOUND LITERATURE DIGEST:\n"
                     + (literature_digest or "(none)")
                     + "\n\nRESEARCH CONTEXT:\n"
