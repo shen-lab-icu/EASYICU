@@ -137,6 +137,18 @@ def test_exact_literature_key_keeps_only_nonnumeric_background_context() -> None
     assert blocked.scaffold == "\n"
 
 
+def test_grouped_exact_literature_keys_keep_nonnumeric_context() -> None:
+    context = (
+        "Cohort reporting followed observational guidance "
+        "[@strobe_2007; @record_2015]."
+    )
+
+    result = filter_evidence_bound_scaffold(context, resolve_claim=_resolver)
+
+    assert result.scaffold == context + "\n"
+    assert result.filtered_sentences == ()
+
+
 @pytest.mark.parametrize(
     "sentence",
     [

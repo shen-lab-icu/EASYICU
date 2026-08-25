@@ -589,6 +589,79 @@ def repair_existing_manuscript_sections(
     return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
 
 
+def repair_named_manuscript_sections(
+    manuscript: str,
+    *,
+    section_errors: Mapping[str, tuple[str, ...]],
+    call_section: Callable[..., str],
+    common: Mapping[str, Any],
+    administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+) -> tuple[str, tuple[str, ...]]:
+    """Regenerate explicitly named Writer owners for an adjacent contract.
+
+    The caller owns the adjacent validator and supplies only its rejected
+    sentence excerpts. This function retains section dispatch, structural
+    checks and final reader-quality validation in the manuscript owner.
+    """
+
+    sections = _existing_scientific_sections(manuscript)
+    specs = {spec.key: spec for spec in MANUSCRIPT_SECTION_SPECS}
+    unknown = sorted(set(section_errors) - set(specs))
+    if unknown:
+        raise ValueError(
+            "unknown manuscript section owner keys: " + ", ".join(unknown)
+        )
+    repaired_keys: list[str] = []
+    for spec in MANUSCRIPT_SECTION_SPECS:
+        errors = tuple(section_errors.get(spec.key) or ())
+        if not errors:
+            continue
+        detail = "\n".join(f"- {item}" for item in errors[:12])
+        instruction = (
+            spec.instruction
+            + "\n\nEVIDENCE-AUTHORITY CONTRACT REPAIR:\n"
+            + "The adjacent deterministic claim policy rejected these sentences "
+            + f"owned by this section:\n{detail}\n"
+            + "Regenerate the complete section. Every current-study method or "
+            + "numeric fact must carry an exact allowed `{evidence:<id>}` token. "
+            + "A qualitative scientific conclusion is allowed only as the exact "
+            + "standalone `{claim:<step>.<claim>}` sentence supplied by the digest. "
+            + "Do not append a claim token to prose. Omit a sentence when no such "
+            + "authority exists. Preserve required headings and do not mention "
+            + "this repair."
+        )
+        repaired = _ensure_section_heading(
+            spec,
+            call_section(
+                section_name=spec.section_name,
+                instruction=instruction,
+                max_tokens=spec.max_tokens,
+                **common,
+            ),
+        )
+        missing = _missing_required_subsections(spec, repaired)
+        if missing:
+            raise ManuscriptSectionContractError(
+                section_name=spec.section_name,
+                missing_subsections=missing,
+            )
+        sections[spec.key] = repaired
+        repaired_keys.append(spec.key)
+    scientific = _assemble_scientific_sections(sections)
+    from .manuscript_quality import expected_manuscript_display_labels
+
+    remaining = _remaining_quality_errors(
+        scientific,
+        expected_display_labels=expected_manuscript_display_labels(
+            tuple(common.get("evidence_ids") or ())
+        ),
+    )
+    if remaining:
+        raise ManuscriptReaderQualityContractError(findings=remaining)
+    administrative = render_manuscript_administrative_sections(administrative_authority)
+    return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
+
+
 def render_manuscript_sections(
     *,
     call_section: Callable[..., str],
@@ -714,6 +787,7 @@ __all__ = [
     "ManuscriptSectionSpec",
     "manuscript_writer_contract_sha256",
     "quality_repair_section_keys",
+    "repair_named_manuscript_sections",
     "repair_existing_manuscript_sections",
     "render_manuscript_sections",
 ]
