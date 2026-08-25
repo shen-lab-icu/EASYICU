@@ -9,10 +9,12 @@ not reimplement any of those governance rules.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..authority.evidence_store import EvidenceStore
+from ..contracts.runtime import _PlanPhaseResult
 from ..literature import LiteratureBundle
 from ..planning.figure_strategy import ArticleFigureStrategy
 from ..planning.scientific_review import (
@@ -24,6 +26,8 @@ from ..planning.literature_design_authority import (
     validate_selected_design_against_literature,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
+from ..providers.llm import resolve_role_client
+from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 
 SCIENTIFIC_PLAN_REVIEW_EVIDENCE_ID = "scientific_plan_review"
 SCIENTIFIC_PLAN_REVIEW_FILENAME = "scientific_plan_review.json"
@@ -45,6 +49,111 @@ class ScientificPlanReviewGate:
     finding: ValidationFinding
     artifact_path: Path
     evidence_id: str = SCIENTIFIC_PLAN_REVIEW_EVIDENCE_ID
+
+
+@dataclass(frozen=True)
+class PreplanAbortContext:
+    run_id: str
+    run_dir: Path
+    context: Any
+    context_path: Path
+    agent_context: Any
+    evidence: Any
+    findings: Any
+    llm: Any
+    resume_state: Any
+
+    def finish(self, pipeline: Any, *, reason: str) -> _PlanPhaseResult:
+        aborted = pipeline._finalise_aborted(
+            run_id=self.run_id,
+            run_dir=self.run_dir,
+            context=self.context,
+            context_path=self.context_path,
+            evidence=self.evidence,
+            findings=self.findings,
+            reason=reason,
+        )
+        return _PlanPhaseResult(
+            context=self.context,
+            agent_context=self.agent_context,
+            context_path=self.context_path,
+            evidence=self.evidence,
+            findings=self.findings,
+            plan=AnalysisPlan(
+                research_question=self.context.research_question,
+                steps=[],
+            ),
+            plan_path=self.run_dir / "analysis_plan.json",
+            llm_signature=pipeline._llm_signature(self.llm),
+            used_mock_llm=any(True for _ in pipeline._iter_mock_clients(self.llm)),
+            prompt_version=PROMPT_PACK_VERSION,
+            prompt_files=prompt_pack_files(),
+            role_resolver=lambda _role: resolve_role_client(self.llm, _role),
+            cost_meter=None,
+            repro_envelope=None,
+            started_at=datetime.now(timezone.utc),
+            resume_state=self.resume_state,
+            aborted_result=aborted,
+        )
+
+
+def require_strict_planner_route(enabled: bool, skill_obj: Any) -> None:
+    if enabled and skill_obj is not None:
+        raise LiteratureDesignAuthorityError(
+            "literature_design_authority_requires_planner",
+            "strict literature-to-design authority cannot be bypassed by a fixed skill plan",
+            path="pipeline.skill",
+        )
+
+
+def record_literature_authority_abort(
+    findings: Any, emit_progress: Any, run_id: str,
+    error: LiteratureDesignAuthorityError,
+) -> None:
+    findings.append(
+        ValidationFinding(
+            validator="literature_design_authority",
+            severity="error",
+            message=(
+                "Reviewed literature is not design-ready; stopped before "
+                f"Planner Provider use: {error}"
+            ),
+            evidence_ids=["preplan_literature_bundle"],
+            detail={
+                "reason": error.reason_code,
+                "path": error.path,
+                "human_review_required": True,
+                "approval_allowed": False,
+            },
+        )
+    )
+    emit_progress(
+        "hypothesis",
+        "Literature-to-design authority is incomplete; aborting before Planner.",
+        status="error",
+        run_id=run_id,
+    )
+
+
+def fail_if_strict_prompt_compilation_failed(
+    enabled: bool, error: Exception
+) -> None:
+    if enabled:
+        raise LiteratureDesignAuthorityError(
+            "literature_design_prompt_compilation_failed",
+            "reviewed literature could not be compiled into the Planner context",
+            path="hypothesis_blueprint",
+        ) from error
+
+
+def append_literature_design_authority_finding(
+    findings: Any,
+    plan: AnalysisPlan,
+    literature: Optional[LiteratureBundle],
+) -> None:
+    finding = literature_design_authority_finding(plan=plan, literature=literature)
+    if finding is not None:
+        findings.append(finding)
 
 
 def literature_design_authority_finding(
@@ -211,9 +320,14 @@ def prepare_scientific_plan_review_gate(
 __all__ = [
     "SCIENTIFIC_PLAN_REVIEW_EVIDENCE_ID",
     "SCIENTIFIC_PLAN_REVIEW_FILENAME",
+    "PreplanAbortContext",
+    "append_literature_design_authority_finding",
     "ScientificPlanReviewArtifactError",
     "ScientificPlanReviewGate",
     "literature_design_authority_finding",
+    "fail_if_strict_prompt_compilation_failed",
+    "record_literature_authority_abort",
+    "require_strict_planner_route",
     "persist_or_validate_scientific_plan_review",
     "prepare_scientific_plan_review_gate",
     "scientific_plan_review_finding",

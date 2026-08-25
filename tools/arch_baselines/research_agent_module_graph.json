@@ -1141,6 +1141,10 @@
     ],
     [
       "easyicu.research_agent.audits.envelope_consumers",
+      "easyicu.research_agent.authority.registration"
+    ],
+    [
+      "easyicu.research_agent.audits.envelope_consumers",
       "easyicu.research_agent.authority.result_envelope_sidecar"
     ],
     [
@@ -6233,6 +6237,10 @@
     ],
     [
       "easyicu.research_agent.literature",
+      "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.literature",
       "easyicu.research_agent.planning.method_literature"
     ],
     [
@@ -6677,6 +6685,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.scientific_plan_review_gate",
+      "easyicu.research_agent.contracts.runtime"
+    ],
+    [
+      "easyicu.research_agent.orchestration.scientific_plan_review_gate",
       "easyicu.research_agent.literature"
     ],
     [
@@ -6685,7 +6697,19 @@
     ],
     [
       "easyicu.research_agent.orchestration.scientific_plan_review_gate",
+      "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.orchestration.scientific_plan_review_gate",
       "easyicu.research_agent.planning.scientific_review"
+    ],
+    [
+      "easyicu.research_agent.orchestration.scientific_plan_review_gate",
+      "easyicu.research_agent.providers.llm"
+    ],
+    [
+      "easyicu.research_agent.orchestration.scientific_plan_review_gate",
+      "easyicu.research_agent.providers.prompts"
     ],
     [
       "easyicu.research_agent.orchestration.scientific_plan_review_gate",
@@ -7061,6 +7085,10 @@
     ],
     [
       "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.planning.preplan_know_how"
     ],
     [
@@ -7378,6 +7406,10 @@
     [
       "easyicu.research_agent.planning.dependence_authority",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.design_selection",
+      "easyicu.research_agent.planning.literature_design_authority"
     ],
     [
       "easyicu.research_agent.planning.endpoint_contract",
@@ -9636,9 +9668,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2401,
+    "edge_count": 2409,
     "largest_scc_size": 0,
-    "module_count": 590,
+    "module_count": 591,
     "package_count": 32,
     "top_level_module_count": 34
   },
@@ -10050,6 +10082,7 @@
     "easyicu.research_agent.planning.final_plan_shape": "planning/final_plan_shape.py",
     "easyicu.research_agent.planning.literature_bindings": "planning/literature_bindings.py",
     "easyicu.research_agent.planning.literature_contract": "planning/literature_contract.py",
+    "easyicu.research_agent.planning.literature_design_authority": "planning/literature_design_authority.py",
     "easyicu.research_agent.planning.method_adapter_catalog": "planning/method_adapter_catalog.py",
     "easyicu.research_agent.planning.method_literature": "planning/method_literature.py",
     "easyicu.research_agent.planning.method_vocabulary": "planning/method_vocabulary.py",
