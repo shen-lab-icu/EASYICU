@@ -2136,20 +2136,42 @@ def drop_untraceable_numeric_sentences(
 
     if not rejected_by_span:
         return manuscript, []
+    merged: List[Tuple[int, int, List[Dict[str, Any]]]] = []
+    for (start, end), detail in sorted(rejected_by_span.items()):
+        if merged and start <= merged[-1][1]:
+            previous_start, previous_end, previous_details = merged[-1]
+            merged[-1] = (
+                previous_start,
+                max(previous_end, end),
+                [*previous_details, detail],
+            )
+        else:
+            merged.append((start, end, [detail]))
     filtered = manuscript
-    for (start, end), _detail in sorted(
-        rejected_by_span.items(),
-        key=lambda item: item[0][0],
-        reverse=True,
-    ):
+    for start, end, _details in reversed(merged):
         filtered = filtered[:start] + filtered[end:]
-    removed = [
-        detail
-        for _span, detail in sorted(
-            rejected_by_span.items(),
-            key=lambda item: item[0][0],
+    removed: List[Dict[str, Any]] = []
+    for start, end, details in merged:
+        if len(details) == 1:
+            removed.append(details[0])
+            continue
+        removed.append(
+            {
+                "sentence": manuscript[start:end].strip(),
+                "untraced": list(
+                    dict.fromkeys(
+                        value
+                        for detail in details
+                        for value in detail.get("untraced", [])
+                    )
+                ),
+                "miscited": [
+                    item
+                    for detail in details
+                    for item in detail.get("miscited", [])
+                ],
+            }
         )
-    ]
     return filtered, removed
 
 
