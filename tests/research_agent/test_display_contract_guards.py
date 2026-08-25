@@ -23,6 +23,7 @@ from easyicu.research_agent.planning.figure_plan_shaping import (
     dedicated_renderer_consumes_typed_source,
     ensure_cohort_accounting_figure_step,
     ensure_data_quality_figure_step,
+    ensure_descriptive_context_figure_step,
     ensure_primary_result_figure_step,
     step_declares_audit_panel,
 )
@@ -328,6 +329,47 @@ def test_primary_result_figure_is_added_even_when_secondary_figure_exists() -> N
         "primary_result_figure_bound_to_typed_primary_source"
     )
     assert panel_findings[0].detail["reason"] == ("deterministic_figure_panels_bound")
+
+
+def test_association_gets_unique_descriptive_context_renderer() -> None:
+    context_table = AnalysisStep(
+        step_id="04_exposure_outcome_context",
+        planned_analysis_role="auxiliary",
+        intent="Report observed exposure prevalence and outcome risk.",
+        method="descriptive",
+        expected_outputs=["table:exposure_outcome_distribution"],
+    )
+    primary = AnalysisStep(
+        step_id="05_primary_association",
+        planned_analysis_role="primary",
+        intent="Estimate the adjusted association.",
+        method="adjusted_association_models",
+        expected_outputs=["table:adjusted_association_estimates"],
+    )
+    plan = AnalysisPlan(
+        research_question="Estimate an association with absolute context.",
+        steps=[context_table, primary],
+    )
+
+    shaped, findings = ensure_descriptive_context_figure_step(plan=plan)
+    shaped, panel_findings = bind_deterministic_figure_panels(plan=shaped)
+
+    figure = shaped.steps[-1]
+    assert figure.inputs == ["table:exposure_outcome_distribution"]
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "distribution",
+        "descriptive_result",
+    ]
+    assert findings[0].detail["reason"] == (
+        "descriptive_context_figure_bound_to_typed_source"
+    )
+    assert panel_findings[0].detail["reason"] == (
+        "deterministic_figure_panels_bound"
+    )
+
+    again, repeated = ensure_descriptive_context_figure_step(plan=shaped)
+    assert again == shaped
+    assert repeated == []
 
 
 def test_counts_only_primary_figure_has_no_interval_panel() -> None:

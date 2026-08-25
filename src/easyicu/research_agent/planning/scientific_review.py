@@ -713,6 +713,28 @@ def _sensitivity_facts(
         and step.robustness_replay_spec is not None
         and _has_scientific_output(step)
     ]
+    plan_specs_by_id = {spec.spec_id: spec for spec in plan.robustness_specs}
+    for step in replay_steps:
+        for spec_id in step.sensitivity_spec_ids:
+            typed_spec = typed_specs.get(spec_id)
+            plan_spec = plan_specs_by_id.get(spec_id)
+            if typed_spec is None or plan_spec is None:
+                continue
+            missing_override = dict(plan_spec.missing_override or {})
+            if (
+                typed_spec.axis == "missing_data"
+                and typed_spec.strategy == "complete_case"
+                and plan_spec.axis == "missing"
+                and str(missing_override.get("strategy") or "")
+                .strip()
+                .casefold()
+                == "complete_case"
+            ):
+                # ``robustness_sensitivity`` is the deterministic replay owner
+                # for a locked plan-level complete-case spec.  The context and
+                # plan ids must agree exactly; prose or a method label alone is
+                # never enough to credit execution.
+                executed_spec_ids.add(spec_id)
     plan_spec_axes = {
         {"missing": "missing", "cohort": "cohort", "outcome": "outcome_definition"}[
             spec.axis
@@ -734,7 +756,10 @@ def _sensitivity_facts(
         protocol_only.add("readmission")
     missing_spec_ids = sorted(set(typed_specs) - executed_spec_ids)
     typed_axes = {
-        "readmission" if spec.axis == "repeated_stays" else spec.axis
+        {
+            "repeated_stays": "readmission",
+            "missing_data": "missing",
+        }.get(spec.axis, spec.axis)
         for spec_id, spec in typed_specs.items()
         if spec_id in executed_spec_ids
     }
@@ -784,13 +809,12 @@ def _endpoint_resolved(context: ResearchContext) -> bool:
     descriptor = context.variable(target) if target else None
     if context.endpoint is None or descriptor is None:
         return False
-    text = " ".join(
-        [str(descriptor.description or ""), str(descriptor.source_concept or "")]
-    ).casefold()
+    description = str(descriptor.description or "").strip()
+    description_text = description.casefold()
     return bool(
-        descriptor.description
-        and "mortality_unspecified" not in text
-        and "declared_primary_outcome" not in text
+        description
+        and "mortality_unspecified" not in description_text
+        and "declared_primary_outcome" not in description_text
         and not any(
             "endpoint-definition conflict" in str(value).casefold()
             for value in descriptor.clinical_caveats

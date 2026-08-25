@@ -408,9 +408,11 @@ from .planning.figure_plan_shaping import (
     bind_deterministic_figure_panels,
     close_empty_deterministic_figure_contracts,
     ensure_cohort_accounting_figure_step,
+    ensure_descriptive_context_figure_step,
     ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
     ensure_primary_result_figure_step,
 )
+from .planning.sensitivity_plan_shaping import ensure_prespecified_sensitivity_steps
 from .planning.final_plan_shape import validate_final_plan_shape
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
 from .orchestration.scientific_plan_review_gate import (
@@ -2511,6 +2513,11 @@ class ResearchAgentPipeline:
             findings.extend(plan_contract_findings)
             plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
             findings.extend(split_findings)
+            plan, sensitivity_step_findings = ensure_prespecified_sensitivity_steps(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(sensitivity_step_findings)
             plan, report_input_findings = _augment_report_typed_product_inputs(
                 plan=plan
             )
@@ -2528,6 +2535,10 @@ class ResearchAgentPipeline:
                 plan=plan,
             )
             findings.extend(primary_figure_findings)
+            plan, descriptive_figure_findings = (
+                ensure_descriptive_context_figure_step(plan=plan)
+            )
+            findings.extend(descriptive_figure_findings)
             plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
                 plan=plan,
                 context=context,

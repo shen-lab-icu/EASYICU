@@ -9,6 +9,7 @@ import pytest
 
 from easyicu.research_agent.contracts.figure_plan import (
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
 )
 from easyicu.research_agent.execution.runners.composite_descriptive_figure_executor import (
@@ -187,6 +188,25 @@ def _cohort_balance_association_frames() -> dict[str, pd.DataFrame]:
             "table:adjusted_association_estimates"
         ],
         "table:robustness_matrix": association["table:robustness_matrix"],
+    }
+
+
+def _balance_association_frames() -> dict[str, pd.DataFrame]:
+    association = _association_frames()
+    summary = _association_summary_frames()["table:robustness_summary"]
+    return {
+        "table:balance_positivity_context": pd.DataFrame(
+            {
+                "variable": ["age", "severity"],
+                "absolute_standardized_mean_difference": [0.08, 0.22],
+                "standardized_difference_status": ["computed", "computed"],
+            }
+        ),
+        "table:adjusted_association_estimates": association[
+            "table:adjusted_association_estimates"
+        ],
+        "table:robustness_matrix": association["table:robustness_matrix"],
+        "table:robustness_summary": summary,
     }
 
 
@@ -592,6 +612,79 @@ def test_cohort_balance_association_profile_selects_and_renders(
         "primary_estimand",
         "robustness",
     ]
+
+
+def test_balance_association_profile_shapes_selects_and_renders(
+    tmp_path: Path,
+) -> None:
+    frames = _balance_association_frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep.model_validate(
+        {
+            **_step().model_dump(mode="json"),
+            "step_id": "primary_figure_suite",
+            "inputs": list(BALANCE_ASSOCIATION_COMPOSITE_INPUTS),
+            "expected_outputs": ["figure:primary_figure_suite"],
+            "input_consumption_contracts": [
+                {"input_key": key, "mode": "all_rows"}
+                for key in BALANCE_ASSOCIATION_COMPOSITE_INPUTS
+            ],
+        }
+    )
+    shaped, findings = bind_deterministic_figure_panels(
+        plan=AnalysisPlan(research_question="Estimate an association.", steps=[step])
+    )
+    step = shaped.steps[0]
+    assert [panel.article_role for panel in step.figure_panels] == [
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+        "robustness",
+    ]
+    assert any(
+        finding.detail.get("reason") == "deterministic_figure_panels_bound"
+        for finding in findings
+    )
+
+    selection = select_standard_executor(
+        step,
+        plan=shaped,
+        resolved_bindings=bindings,
+    )
+    assert selection is not None
+    assert selection.host_sealed_renderer is True
+    assert selection.consumed_input_keys == BALANCE_ASSOCIATION_COMPOSITE_INPUTS
+
+    out_dir = tmp_path / "outputs"
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="primary_figure_suite",
+        input_keys=BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+    )
+    assert summary["deterministic_standard_analysis"] == (
+        "balance_association_figure"
+    )
+    contract = json.loads(
+        (out_dir / "primary_figure_suite.figure_contract.json").read_text()
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+        "robustness",
+    ]
+    assert validate_step_planned_figure_contract_binding(
+        step=step,
+        out_dir=out_dir,
+        step_summary=summary,
+    ) == []
 
 
 def test_absolute_risk_association_profile_covers_article_roles(

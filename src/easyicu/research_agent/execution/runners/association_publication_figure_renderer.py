@@ -12,6 +12,7 @@ import pandas as pd
 
 from ...contracts.figure_plan import (
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
 )
 from ...figures.publication import (
@@ -497,6 +498,215 @@ def _render_cohort_balance_association_figure(
     return summary
 
 
+def _render_balance_association_figure(
+    *,
+    bound: Mapping[str, BoundTypedInput],
+    out_dir: Path,
+    step_id: str,
+    figure_product: str,
+    input_keys: tuple[str, ...],
+) -> dict[str, Any]:
+    """Render a source-bound balance, estimate, and robustness suite."""
+
+    balance = bound["table:balance_positivity_context"].frame.copy()
+    balance = balance.loc[
+        balance["standardized_difference_status"].astype(str).eq("computed")
+    ].copy()
+    balance["absolute_standardized_mean_difference"] = pd.to_numeric(
+        balance["absolute_standardized_mean_difference"], errors="coerce"
+    )
+    balance = balance.loc[
+        balance["absolute_standardized_mean_difference"].notna()
+    ].copy()
+    if balance.empty:
+        raise ValueError("balance context has no computed standardized differences")
+    if (
+        balance["absolute_standardized_mean_difference"] < 0
+    ).any() or not np.isfinite(
+        balance["absolute_standardized_mean_difference"].to_numpy(dtype=float)
+    ).all():
+        raise ValueError(
+            "balance-context standardized differences must be finite and non-negative"
+        )
+    balance = (
+        balance.groupby("variable", as_index=False)[
+            "absolute_standardized_mean_difference"
+        ]
+        .max()
+        .sort_values("absolute_standardized_mean_difference", ascending=True)
+    )
+    adjusted = _validate_interval_table(
+        bound["table:adjusted_association_estimates"].frame,
+        estimate_column="estimate",
+        require_fitted=True,
+    )
+    robustness = _validate_interval_table(
+        bound["table:robustness_matrix"].frame,
+        estimate_column="point_estimate",
+    )
+    if not robustness["converged"].astype(bool).all():
+        raise ValueError("robustness matrix contains non-converged rows")
+    robustness_summary = bound["table:robustness_summary"].frame.copy()
+
+    source_files = [_source_copy(bound[key], out_dir) for key in input_keys]
+    evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
+    palette = apply_publication_style(font_size=7.0)
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
+
+    positions = np.arange(len(balance))
+    axes[0, 0].barh(
+        positions,
+        balance["absolute_standardized_mean_difference"],
+        color=palette["orange"],
+    )
+    axes[0, 0].set_yticks(
+        positions,
+        [_label(value) for value in balance["variable"]],
+        fontsize=5.5,
+    )
+    axes[0, 0].axvline(0.1, color="#777777", linewidth=0.8, linestyle="--")
+    axes[0, 0].set_xlabel("Absolute standardized difference")
+    axes[0, 0].set_title("Baseline balance", loc="left", pad=12)
+    add_panel_label(axes[0, 0], "A", x=-0.12, y=1.04)
+
+    adjusted_label = next(
+        (
+            candidate
+            for candidate in ("contrast", "exposure", "model_id")
+            if candidate in adjusted.columns
+            and adjusted[candidate].notna().all()
+            and adjusted[candidate].astype(str).str.strip().ne("").all()
+        ),
+        "model_id",
+    )
+    _forest(
+        axes[0, 1],
+        adjusted,
+        estimate_column="estimate",
+        label_column=adjusted_label,
+        title="Primary adjusted association",
+        color=palette["blue"],
+    )
+    add_panel_label(axes[0, 1], "B", x=-0.12, y=1.04)
+
+    robustness_label = "spec_id" if "spec_id" in robustness.columns else "axis"
+    _forest(
+        axes[1, 0],
+        robustness,
+        estimate_column="point_estimate",
+        label_column=robustness_label,
+        title="Robustness estimates",
+        color=palette["blue_soft"],
+    )
+    add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
+
+    _robustness_ranges(axes[1, 1], robustness_summary, color=palette["orange"])
+    add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
+
+    panels = (
+        (
+            "baseline_balance",
+            "Baseline balance",
+            "descriptive_result",
+            "standardized_difference",
+            input_keys[0],
+        ),
+        (
+            "primary_adjusted_association",
+            "Primary adjusted association",
+            "primary_estimand",
+            "forest",
+            input_keys[1],
+        ),
+        (
+            "robustness_estimates",
+            "Robustness estimates",
+            "robustness",
+            "sensitivity_forest",
+            input_keys[2],
+        ),
+        (
+            "robustness_ranges",
+            "Robustness ranges",
+            "robustness",
+            "specification_grid",
+            input_keys[3],
+        ),
+    )
+    contract = make_figure_contract(
+        figure_id=f"figure:{figure_product}",
+        core_claim=(
+            "Observed baseline balance contextualizes the primary adjusted "
+            "association and its prespecified robustness estimates."
+        ),
+        archetype="quantitative_grid",
+        width_mm=183.0,
+        height_mm=178.0,
+        panels=[
+            {
+                "panel_id": panel_id,
+                "title": title,
+                "role": role,
+                "article_role": role,
+                "chart_type": chart_type,
+                "claim": f"This panel visualizes values from {source} without refitting.",
+                "evidence_ids": [evidence[source]],
+                "metadata": {
+                    "source_products": [source],
+                    "source_data": [
+                        f"{source.partition(':')[2]}_source_data.csv"
+                    ],
+                },
+            }
+            for panel_id, title, role, chart_type, source in panels
+        ],
+        source_data=source_files,
+        statistics_note=(
+            "All source rows and original columns are preserved in source-data "
+            "files. The renderer performs no model fitting or row selection."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / figure_product,
+        contract=contract,
+        formats=("png", "svg", "pdf", "tiff"),
+        dpi=300,
+    )
+    plt.close(fig)
+
+    for item in bound.values():
+        if sha256_file(item.path) != item.sha256:
+            raise ValueError(f"typed input changed while rendering: {item.input_key}")
+    summary = {
+        "step_id": step_id,
+        "status": "ok",
+        "analysis_status": "ok",
+        "method": "deterministic_balance_association_figure",
+        "analysis_family": "association",
+        "deterministic_standard_analysis": "balance_association_figure",
+        "rendering_only": True,
+        "source_inputs": list(input_keys),
+        "source_data_files": source_files,
+        "figure_files": [
+            path.name for key, path in outputs.items() if key != "contract"
+        ],
+        "figure_path": f"{figure_product}.png",
+        "figure_contract": f"{figure_product}.figure_contract.json",
+        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "output_files": {
+            f"figure:{figure_product}": f"{figure_product}.png"
+        },
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
 def render_association_publication_figure(
     *,
     bound: Mapping[str, BoundTypedInput],
@@ -515,6 +725,14 @@ def render_association_publication_figure(
 
     if tuple(input_keys) == COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS:
         return _render_cohort_balance_association_figure(
+            bound=bound,
+            out_dir=out_dir,
+            step_id=step_id,
+            figure_product=figure_product,
+            input_keys=input_keys,
+        )
+    if tuple(input_keys) == BALANCE_ASSOCIATION_COMPOSITE_INPUTS:
+        return _render_balance_association_figure(
             bound=bound,
             out_dir=out_dir,
             step_id=step_id,
