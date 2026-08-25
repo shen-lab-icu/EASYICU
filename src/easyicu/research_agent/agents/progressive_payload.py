@@ -304,6 +304,7 @@ def _bind_outline_authorities(
     step = definitions.get("ProgressiveOutlineStep")
     selection = definitions.get("ResearchDesignSelection")
     candidate = definitions.get("ResearchDesignCandidate")
+    literature_decision = definitions.get("CandidateLiteratureDesignDecision")
     if not all(
         isinstance(value, dict) for value in (properties, step, selection, candidate)
     ):
@@ -313,6 +314,11 @@ def _bind_outline_authorities(
     step_properties = step.get("properties")
     selection_properties = selection.get("properties")
     candidate_properties = candidate.get("properties")
+    literature_decision_properties = (
+        literature_decision.get("properties")
+        if isinstance(literature_decision, dict)
+        else None
+    )
     if not all(
         isinstance(value, dict)
         for value in (
@@ -333,8 +339,17 @@ def _bind_outline_authorities(
     candidate_citations = candidate_properties["literature_citation_keys"]
     if allowed_citation_keys:
         candidate_citations["items"] = _string_enum(allowed_citation_keys)
+        if isinstance(literature_decision_properties, dict):
+            literature_decision_properties["citation_keys"]["items"] = _string_enum(
+                allowed_citation_keys
+            )
     else:
         candidate_citations["maxItems"] = 0
+        candidate_properties["literature_design_decisions"] = {
+            "type": "array",
+            "maxItems": 0,
+        }
+        definitions.pop("CandidateLiteratureDesignDecision", None)
     step_properties["module_id"] = _string_enum(
         progressive_module_ids_for_analysis_types(analysis_types)
     )

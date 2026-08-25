@@ -396,6 +396,53 @@ def test_pipeline_stops_when_hypothesis_blueprint_is_blocked(
     assert any(e["evidence_id"] == "hypothesis_blueprint" for e in manifest["evidence"])
 
 
+def test_strict_literature_design_gate_stops_before_planner_provider(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+):
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    planner_calls = 0
+
+    def forbidden_planner_run(*_args, **_kwargs):
+        nonlocal planner_calls
+        planner_calls += 1
+        raise AssertionError("Planner must not run without reviewed comparator cards")
+
+    monkeypatch.setattr(
+        pipeline_module.ProgressivePlannerAgent,
+        "run",
+        forbidden_planner_run,
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        planner_strategy="progressive_v2",
+        require_human_plan_review=True,
+        require_literature_design_authority=True,
+    )
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="strict_literature_design_gate",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert planner_calls == 0
+    assert result.plan_path == ""
+    assert manifest["notes"].startswith("aborted: literature_")
+    assert any(
+        finding["validator"] == "literature_design_authority"
+        and finding["severity"] == "error"
+        and finding["detail"]["approval_allowed"] is False
+        for finding in manifest["findings"]
+    )
+
+
 def test_pipeline_run_async(ra, synthetic_cohort, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
 

@@ -42,6 +42,8 @@ from .gates.data_answerability import analysis_answerability_findings
 from .literature_concepts import literature_concept_identity
 from .literature_excerpt import select_source_backed_excerpt
 from .planning.method_literature import method_literature_citations
+from .planning.literature_design_authority import LiteratureDesignEvidenceCard
+from .planning.literature_design_authority import render_literature_design_cards_for_prompt
 from .providers.mocks import MockLLMClient
 from .providers.factory import authorized_complete
 from .providers.protocol import LLMClient, LLMMessage
@@ -222,6 +224,13 @@ class LiteratureBundle(BaseModel):
             "Retrieval alone is not evidence that a paper supports the plan."
         ),
     )
+    design_evidence_cards: List["LiteratureDesignEvidenceCard"] = Field(
+        default_factory=list,
+        description=(
+            "Bounded reviewed full-text/supplement facts used to shape study design; "
+            "the article body is never stored here."
+        ),
+    )
 
 
 class HypothesisBlueprintAgent:
@@ -349,6 +358,12 @@ def render_hypothesis_blueprint_for_prompt(
             "- prior_literature_keys: " + ", ".join(blueprint.prior_literature_keys[:8])
         )
     if literature is not None:
+        if literature.design_evidence_cards:
+            lines.append(
+                render_literature_design_cards_for_prompt(
+                    literature.design_evidence_cards
+                )
+            )
         comparison_roles = {
             decision.citation_key: decision.evidence_role
             for decision in literature.screening_decisions
@@ -2390,6 +2405,11 @@ class LiteratureAgent:
                 else None
             ),
             screening_decisions=screening_decisions,
+            design_evidence_cards=(
+                list(self.bound_seed.design_evidence_cards)
+                if self.bound_seed is not None
+                else []
+            ),
         )
 
 

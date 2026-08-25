@@ -87,6 +87,8 @@ class SubmissionProfile:
     # therefore be a frozen coordinate for profiled runs. Historical profiles
     # omit it to preserve their serialized replay contracts.
     enable_pubmed: Optional[bool] = None
+    require_human_plan_review: Optional[bool] = None
+    require_literature_design_authority: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -154,6 +156,12 @@ class SubmissionProfile:
             options["planner_strategy"] = self.planner_strategy
         if self.enable_pubmed is not None:
             options["enable_pubmed"] = self.enable_pubmed
+        if self.require_human_plan_review is not None:
+            options["require_human_plan_review"] = self.require_human_plan_review
+        if self.require_literature_design_authority is not None:
+            options["require_literature_design_authority"] = (
+                self.require_literature_design_authority
+            )
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -192,6 +200,8 @@ class SubmissionProfile:
             "planner_only",
             "planner_strategy",
             "enable_pubmed",
+            "require_human_plan_review",
+            "require_literature_design_authority",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -629,6 +639,39 @@ DEV9_AI_REVIEWED_DEMO_2026_08_24 = SubmissionProfile(
 
 CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF = DEV9_AI_REVIEWED_DEMO_2026_08_24.ref
 
+QUALIFICATION12_LITERATURE_DESIGN_2026_08_25 = SubmissionProfile(
+    name="npj_dm_qualification12_design_dev",
+    version="20260825",
+    locked_at="2026-08-25T00:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=(
+        DEV9_AI_REVIEWED_DEMO_2026_08_24.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        DEV9_AI_REVIEWED_DEMO_2026_08_24.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    enable_know_how=True,
+    allow_curated_mvp_know_how=True,
+    planner_only=False,
+    planner_strategy="progressive_v2",
+    enable_pubmed=True,
+    require_human_plan_review=True,
+    require_literature_design_authority=True,
+)
+
+CURRENT_QUALIFICATION12_LITERATURE_DESIGN_PROFILE_REF = (
+    QUALIFICATION12_LITERATURE_DESIGN_2026_08_25.ref
+)
+
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
     name="npj_dm_know_how_dev",
     version="20260721",
@@ -749,6 +792,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     ),
     DEV9_AI_REVIEWED_DEMO_2026_08_22.ref: DEV9_AI_REVIEWED_DEMO_2026_08_22,
     DEV9_AI_REVIEWED_DEMO_2026_08_24.ref: DEV9_AI_REVIEWED_DEMO_2026_08_24,
+    QUALIFICATION12_LITERATURE_DESIGN_2026_08_25.ref: (
+        QUALIFICATION12_LITERATURE_DESIGN_2026_08_25
+    ),
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
@@ -949,6 +995,26 @@ def require_profile_pubmed_setting(
         )
 
 
+def require_profile_literature_design_authority_setting(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    enabled: bool,
+) -> None:
+    """Keep the strict literature-to-design gate profile-owned."""
+
+    if name is None:
+        return
+    ref = f"{name}/{version}"
+    expected = bool(get_submission_profile(ref).require_literature_design_authority)
+    if bool(enabled) != expected:
+        raise ValueError(
+            "Literature-to-design authority changes planning and Provider call "
+            f"eligibility and must match the submission profile; profile {ref!r} "
+            f"pins require_literature_design_authority={expected}"
+        )
+
+
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
@@ -974,6 +1040,8 @@ __all__ = [
     "DEV9_AI_REVIEWED_DEMO_2026_08_22",
     "DEV9_AI_REVIEWED_DEMO_2026_08_24",
     "CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF",
+    "QUALIFICATION12_LITERATURE_DESIGN_2026_08_25",
+    "CURRENT_QUALIFICATION12_LITERATURE_DESIGN_PROFILE_REF",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
@@ -988,4 +1056,5 @@ __all__ = [
     "require_profile_capability_workflow_setting",
     "require_profile_planner_strategy",
     "require_profile_pubmed_setting",
+    "require_profile_literature_design_authority_setting",
 ]

@@ -19,6 +19,10 @@ from ..planning.scientific_review import (
     PlanScientificReview,
     build_plan_scientific_review,
 )
+from ..planning.literature_design_authority import (
+    LiteratureDesignAuthorityError,
+    validate_selected_design_against_literature,
+)
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
 SCIENTIFIC_PLAN_REVIEW_EVIDENCE_ID = "scientific_plan_review"
@@ -41,6 +45,41 @@ class ScientificPlanReviewGate:
     finding: ValidationFinding
     artifact_path: Path
     evidence_id: str = SCIENTIFIC_PLAN_REVIEW_EVIDENCE_ID
+
+
+def literature_design_authority_finding(
+    *,
+    plan: AnalysisPlan,
+    literature: Optional[LiteratureBundle],
+) -> Optional[ValidationFinding]:
+    """Project an exact post-Plan literature decision failure into workflow."""
+
+    comparison_keys = [
+        decision.citation_key
+        for decision in (literature.screening_decisions if literature else [])
+        if decision.disposition == "include"
+        and decision.evidence_role in {"direct_comparator", "design_analogue"}
+    ]
+    try:
+        validate_selected_design_against_literature(
+            plan.design_selection,
+            design_evidence_cards=(literature.design_evidence_cards if literature else []),
+            comparison_keys=comparison_keys,
+        )
+    except LiteratureDesignAuthorityError as exc:
+        return ValidationFinding(
+            validator="literature_design_authority",
+            severity="error",
+            message=str(exc),
+            evidence_ids=["analysis_plan", "preplan_literature_bundle"],
+            detail={
+                "reason": exc.reason_code,
+                "path": exc.path,
+                "human_review_required": True,
+                "approval_allowed": False,
+            },
+        )
+    return None
 
 
 def persist_or_validate_scientific_plan_review(
@@ -174,6 +213,7 @@ __all__ = [
     "SCIENTIFIC_PLAN_REVIEW_FILENAME",
     "ScientificPlanReviewArtifactError",
     "ScientificPlanReviewGate",
+    "literature_design_authority_finding",
     "persist_or_validate_scientific_plan_review",
     "prepare_scientific_plan_review_gate",
     "scientific_plan_review_finding",
