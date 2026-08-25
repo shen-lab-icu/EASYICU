@@ -104,6 +104,7 @@ class WriterOnlyMigrationResult:
     authority_filtered_section_keys: tuple[str, ...]
     removed_unresolved_evidence_refs: tuple[str, ...]
     removed_unresolved_evidence_token_count: int
+    normalized_claim_token_count: int
 
 
 @dataclass(frozen=True)
@@ -258,6 +259,25 @@ def _remove_unresolved_evidence_tokens(
     cleaned = re.sub(r" {2,}", " ", cleaned)
     cleaned = re.sub(r"\s+([.,;:!?])", r"\1", cleaned)
     return cleaned, tuple(dict.fromkeys(removed)), len(removed)
+
+
+def _normalize_claim_token_sentences(manuscript: str) -> tuple[str, int]:
+    """Place each exact claim token on its own paragraph before filtering."""
+
+    count = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        return f"\n\n{match.group(1)}\n\n"
+
+    normalized = re.sub(
+        r"\s*(\{claim:[^{}\s]+\})\s*",
+        replace,
+        manuscript,
+    )
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip() + "\n", count
 
 
 def prepare_writer_only_migration(
@@ -460,6 +480,9 @@ def repair_writer_only(
         prepared.source_run_dir,
         manuscript,
     )
+    manuscript, normalized_claim_token_count = _normalize_claim_token_sentences(
+        manuscript
+    )
     authority_repaired: list[str] = []
     authority_filtered: list[str] = []
     for _attempt in range(2):
@@ -549,6 +572,7 @@ def repair_writer_only(
         removed_unresolved_evidence_token_count=(
             removed_unresolved_evidence_token_count
         ),
+        normalized_claim_token_count=normalized_claim_token_count,
     )
 
 
@@ -744,6 +768,7 @@ def publish_writer_only_result(
         "removed_unresolved_evidence_token_count": (
             result.removed_unresolved_evidence_token_count
         ),
+        "normalized_claim_token_count": result.normalized_claim_token_count,
         "removed_unknown_literature_keys": list(
             prepared.removed_unknown_literature_keys
         ),
