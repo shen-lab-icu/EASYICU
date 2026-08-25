@@ -122,16 +122,14 @@ def test_the_guard_actually_sees_the_dead_modules_it_was_written_for():
     """Reachability of the guard itself.
 
     If ``_modules_imported_from_src`` over-reported, every module would look
-    live and the guard above would pass vacuously forever. These six are the
-    measured dead set on 2026-07-30; they must be invisible to the host-import
-    scan, or this file is checking nothing.
+    live and the guard above would pass vacuously forever. These modules are
+    retained negative controls; once a real host owner imports one, it must be
+    removed from this list.
     """
 
     host_imported = _modules_imported_from_src()
     for module in (
-        "delong_auc",
         "decision_curve",
-        "rmst",
         "conformal",
         # Found by this guard, not by the hand survey that preceded it: a
         # loose grep reported it as live. It is the most consequential of the

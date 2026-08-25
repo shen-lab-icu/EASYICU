@@ -4558,6 +4558,26 @@ def test_render_writer_evidence_digest_flattens_nested_statistics(ra):
     assert '"p_value": 2.9e-05' in digest
 
 
+def test_render_writer_evidence_digest_withholds_ambiguous_nested_p_values(ra):
+    from easyicu.research_agent.pipeline import _render_writer_evidence_digest
+
+    digest = _render_writer_evidence_digest(
+        [
+            {
+                "step_id": "03_primary_association_model",
+                "status": "ok",
+                "step_summary": {
+                    "primary_predictor": "lactate_max_24h",
+                    "model_a": {"p_value": 0.01},
+                    "model_b": {"p_value": 0.02},
+                },
+            }
+        ]
+    )
+
+    assert '"p_value"' not in digest
+
+
 def test_step_contract_repair_guidance_flags_missing_primary_predictor_in_x(ra):
     from easyicu.research_agent.pipeline import _step_contract_repair_guidance
 
@@ -9482,7 +9502,14 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     assert critique["status"] == "pass"
     assert critique["unsupported_claims"] == []
     assert "performance was consistent" not in filtered
-    assert run_status["gates"]["evidence_complete"] is True
+    # Filtering the unsupported result sentence succeeds, but a deliberately
+    # citation-free mock manuscript must still fail the independent literature
+    # authority gate introduced for article-grade outputs.
+    assert run_status["gates"]["evidence_complete"] is False
+    assert any(
+        "Manuscript literature authority is incomplete" in error
+        for error in run_status["gates"]["evidence_errors"]
+    )
     assert not any(
         finding["validator"] == "critic_agent" and "manuscript" in finding["message"]
         for finding in manifest["findings"]
