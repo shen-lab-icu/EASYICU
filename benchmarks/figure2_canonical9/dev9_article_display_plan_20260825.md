@@ -48,8 +48,10 @@ development outputs into paper-ready evidence.
 
 ## Exact development realization
 
-Renderer `84824c1` realized this plan from frozen Dev9 tables without model
-refitting, imputation, Provider calls, or scientific recomputation:
+Renderer `de6403a` realized this plan from frozen Dev9 tables plus the exact
+deterministic H1 time-varying Cox remediation. The display-only portion did not
+refit models or call a Provider; the H1 source analysis was recomputed once by
+the typed method owner with zero Planner/Coder/Provider calls:
 
 | Task | Main figures | Supplementary figures | Exact interpretation boundary |
 |---|---:|---:|---|
@@ -59,9 +61,13 @@ refitting, imputation, Provider calls, or scientific recomputation:
 | M1 | 3 | 0 | Measurement availability remains main because source absence versus normality is the study question. |
 | M2 | 1 | 1 | Calibration/discrimination/repeated-split evidence is main; exploratory decision-curve analysis is supplementary. |
 | M3 | 3 | 0 | Profiles, size and stability are separated; low ARI prevents phenotype naming or outcome interpretation. |
-| H1 | 3 | 0 | Survival, RMST and the material PH/reportability failure are separated; a constant Cox exposure effect is withheld. |
+| H1 | 4 | 0 | Survival, RMST, interval-specific adjusted associations and risk-set/PH diagnostics are separated; the invalid constant Cox exposure effect remains withheld. |
 | H2 | 0 | 1 | No effect figure exists; only the fail-closed source-feasibility receipt is visualized. |
 | H3 | 0 | 1 | No trajectory phenotype figure exists; only upper-boundary BIC and availability diagnostics are visualized. |
 
-The exact package contains 17 main figures and 6 supplementary figures. It
-remains `analysis_only`, with paper authorization 0/9.
+The exact package contains 18 main figures and 6 supplementary figures. All 24
+FigureContracts have source data and PNG/SVG/PDF/TIFF exports; the contracts,
+SVG XML, single-page PDFs and raster geometry passed exact-package QA. It
+remains `analysis_only`, with paper authorization 0/9. H2 and H3 remain signed
+fail-closed non-results rather than being cosmetically promoted into main
+figures.
