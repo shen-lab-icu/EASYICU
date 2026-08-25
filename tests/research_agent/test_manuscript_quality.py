@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from easyicu.research_agent.reporting.manuscript_quality import (
     audit_manuscript_quality,
+    repair_registered_display_callouts,
     repair_reader_structure_from_existing_prose,
     render_reader_manuscript,
 )
@@ -146,6 +147,20 @@ def test_registered_display_callouts_are_recorded() -> None:
 
     assert audit.status == "pass"
     assert audit.observed_display_labels == ("Table 1", "Figure 1")
+
+
+def test_registered_display_callouts_are_restored_without_inventing_results() -> None:
+    text = _valid_manuscript().replace("Table 1 and Figure 1", "the displays")
+
+    repaired, repairs = repair_registered_display_callouts(
+        text,
+        expected_display_labels=("Table 1", "Figure 1", "Figure 2"),
+    )
+
+    assert "Cohort characteristics are summarized in Table 1" in repaired
+    assert "The principal study results are presented in Figure 1" in repaired
+    assert "Figure 2" not in repaired
+    assert [item["label"] for item in repairs] == ["Table 1", "Figure 1"]
 
 
 def test_literature_year_does_not_create_unnamed_robustness_metric() -> None:

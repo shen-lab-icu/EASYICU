@@ -375,20 +375,8 @@ def test_existing_manuscript_migration_repairs_missing_display_callouts() -> Non
     calls: list[str] = []
 
     def call_section(**kwargs: object) -> str:
-        section_name = str(kwargs["section_name"])
-        calls.append(section_name)
-        assert section_name == "Results"
-        return (
-            _minimal_valid_section(section_name)
-            .replace(
-                "Evidence-bound cohort prose.",
-                "Evidence-bound cohort prose (Table 1).",
-            )
-            .replace(
-                "Evidence-bound association prose.",
-                "Evidence-bound association prose (Figure 1).",
-            )
-        )
+        calls.append(str(kwargs["section_name"]))
+        raise AssertionError("registered display callouts should be host-restored")
 
     repaired, repaired_keys = repair_existing_manuscript_sections(
         manuscript,
@@ -398,8 +386,8 @@ def test_existing_manuscript_migration_repairs_missing_display_callouts() -> Non
         },
     )
 
-    assert repaired_keys == ("results",)
-    assert calls == ["Results"]
+    assert repaired_keys == ()
+    assert calls == []
     audit = audit_manuscript_quality(
         repaired,
         expected_display_labels=("Table 1", "Figure 1"),

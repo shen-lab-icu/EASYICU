@@ -212,6 +212,55 @@ def _replace_subsection_body(
     return _replace_section_body(text, section, replaced)
 
 
+def repair_registered_display_callouts(
+    manuscript: str,
+    *,
+    expected_display_labels: Sequence[str],
+) -> tuple[str, tuple[Mapping[str, str], ...]]:
+    """Add neutral Results callouts only for host-registered displays."""
+
+    repaired = str(manuscript or "")
+    templates = {
+        "Table 1": (
+            "Cohort characteristics",
+            "Cohort characteristics are summarized in Table 1 "
+            "{evidence:table_one}.",
+        ),
+        "Figure 1": (
+            "Primary association",
+            "The principal study results are presented in Figure 1 "
+            "{evidence:publication_figure_contract}.",
+        ),
+    }
+    repairs: list[Mapping[str, str]] = []
+    for raw_label in expected_display_labels:
+        label = str(raw_label).strip()
+        target = templates.get(label)
+        results = _sections(repaired).get("Results")
+        if target is None or results is None:
+            continue
+        if re.search(rf"\b{re.escape(label)}\b", results, flags=re.I):
+            continue
+        subsection, sentence = target
+        subsection_body = _subsections(results).get(subsection)
+        if subsection_body is None:
+            continue
+        repaired = _replace_subsection_body(
+            repaired,
+            "Results",
+            subsection,
+            "\n\n".join(part for part in (subsection_body.strip(), sentence) if part),
+        )
+        repairs.append(
+            {
+                "code": "MANUSCRIPT_DISPLAY_CALLOUT_RESTORED",
+                "source": "registered_display_authority",
+                "label": label,
+            }
+        )
+    return repaired, tuple(repairs)
+
+
 def repair_reader_structure_from_existing_prose(
     manuscript: str,
 ) -> tuple[str, tuple[Mapping[str, str], ...]]:
@@ -898,6 +947,7 @@ __all__ = [
     "ManuscriptQualityFinding",
     "audit_manuscript_quality",
     "expected_manuscript_display_labels",
+    "repair_registered_display_callouts",
     "repair_reader_structure_from_existing_prose",
     "render_reader_manuscript",
 ]
