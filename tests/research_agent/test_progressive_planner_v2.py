@@ -63,6 +63,7 @@ from easyicu.research_agent.planning.progressive_contract import (
 )
 from easyicu.research_agent.planning.progressive_host_materialization import (
     host_materialize_progressive_step,
+    normalize_progressive_cohort_identity,
 )
 from easyicu.research_agent.planning.progressive_resume import (
     ProgressivePrefixState,
@@ -883,6 +884,130 @@ def test_host_materializes_only_mechanical_outline_coordinates() -> None:
     assert distribution.step.outcome == context.target_outcome
     # The model still owns the primary model-term and estimand decisions.
     assert primary is None
+
+
+def _multi_identity_context(*, proven_stay: bool) -> ResearchContext:
+    stay_id = "stay_id" if proven_stay else "episode_key"
+    patient_id = "patient_id" if proven_stay else "person_key"
+    return _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "id_columns": [stay_id, patient_id],
+                    "provenance": (
+                        {
+                            "analysis_unit": "icu_stay",
+                            "stay_id_columns": [stay_id],
+                            "patient_id_columns": [patient_id],
+                        }
+                        if proven_stay
+                        else {"analysis_unit": "row"}
+                    ),
+                }
+            ),
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(name=stay_id, role=VariableRole.ID, dtype="int64"),
+                ConceptDescriptor(name=patient_id, role=VariableRole.ID, dtype="int64"),
+            ],
+        }
+    )
+
+
+def test_host_cohort_uses_proven_stay_identity_not_patient_count_id() -> None:
+    context = _multi_identity_context(proven_stay=True)
+    outline_payload = _outline_payload()
+    outline_payload["steps"][0]["variable_names"] = [
+        "stay_id",
+        "patient_id",
+        "exposure_flag",
+    ]
+    outline = ProgressivePlanOutline.model_validate(outline_payload)
+    foundation = ProgressiveFoundationMaterialization.model_validate(
+        _foundation_payload()
+    ).foundation
+
+    materialization = host_materialize_progressive_step(
+        context=context,
+        outline=outline,
+        outline_step=outline.steps[0],
+        foundation=foundation,
+        available_product_refs=(),
+    )
+
+    assert materialization is not None
+    assert materialization.step.raw_inputs == ["stay_id", "exposure_flag"]
+
+
+def test_host_cohort_does_not_guess_between_untyped_id_columns() -> None:
+    context = _multi_identity_context(proven_stay=False)
+    outline_payload = _outline_payload()
+    outline_payload["steps"][0]["variable_names"] = [
+        "episode_key",
+        "person_key",
+    ]
+    outline = ProgressivePlanOutline.model_validate(outline_payload)
+    foundation = ProgressiveFoundationMaterialization.model_validate(
+        _foundation_payload()
+    ).foundation
+
+    assert (
+        host_materialize_progressive_step(
+            context=context,
+            outline=outline,
+            outline_step=outline.steps[0],
+            foundation=foundation,
+            available_product_refs=(),
+        )
+        is None
+    )
+
+
+def test_host_normalizes_proven_identity_without_dropping_planner_bindings() -> None:
+    context = _multi_identity_context(proven_stay=True)
+    payload = _materialization_payloads()[0]
+    payload["step"]["raw_inputs"] = ["stay_id", "patient_id", "exposure_flag"]
+    payload["step"]["literature_bindings"] = [
+        {
+            "citation_key": "strobe_2007",
+            "design_elements": ["reporting"],
+            "application": "Retain the Planner-authored reporting application.",
+            "divergence": None,
+        }
+    ]
+    materialization = ProgressiveStepMaterialization.model_validate(payload)
+
+    normalized = normalize_progressive_cohort_identity(
+        materialization,
+        context=context,
+    )
+
+    assert normalized.step.raw_inputs == ["stay_id", "exposure_flag"]
+    assert (
+        normalized.step.literature_bindings
+        == materialization.step.literature_bindings
+    )
+
+
+def test_host_does_not_fabricate_dynamic_literature_application() -> None:
+    context = _multi_identity_context(proven_stay=True)
+    outline_payload = _outline_payload()
+    outline_payload["steps"][0]["variable_names"] = ["stay_id", "patient_id"]
+    outline_payload["steps"][0]["literature_citation_keys"] = ["dynamic_card"]
+    outline = ProgressivePlanOutline.model_validate(outline_payload)
+
+    assert (
+        host_materialize_progressive_step(
+            context=context,
+            outline=outline,
+            outline_step=outline.steps[0],
+            foundation=ProgressiveFoundationMaterialization.model_validate(
+                _foundation_payload()
+            ).foundation,
+            available_product_refs=(),
+        )
+        is None
+    )
 
 
 def test_host_materialization_keeps_one_schema_ledger_entry_per_step(
