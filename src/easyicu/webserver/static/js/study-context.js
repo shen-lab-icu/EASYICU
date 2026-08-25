@@ -511,7 +511,10 @@
     let patch = Object.assign({}, cleanObject(supplied), explicitPatch);
     const currentSource = sourceIdentity(current && current.data_source);
     const nextSource = sourceIdentity(patch.data_source);
-    const sourceBoundary = !!(currentSource && nextSource && currentSource !== nextSource);
+    const sourceBoundary = !!(
+      currentSource && nextSource && currentSource !== nextSource
+      && !(opts.allowSourceRebind === true && sourceRoute === 'extraction')
+    );
     const currentQuestion = text(current && current.question);
     const nextQuestion = text(patch.question);
     const questionBoundary = !opts.continueExisting && !!(currentQuestion && nextQuestion && currentQuestion !== nextQuestion);

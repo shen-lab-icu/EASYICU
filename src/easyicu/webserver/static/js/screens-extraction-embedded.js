@@ -72,16 +72,29 @@
     const previousScroller = host.querySelector('[data-gpi-extraction-embed]');
     const previousScrollTop = previousScroller ? previousScroller.scrollTop : 0;
     const sourceId = String(options.sourceId || '').trim();
+    const currentReceipt = typeof owner.handoffReceipt === 'function' ? owner.handoffReceipt() : {};
+    const resultReady = !!(currentReceipt && currentReceipt.output_dir);
+    const syncLabel = resultReady
+      ? t('Send result to Copilot', '将抽取结果交给 Copilot')
+      : t('Save setup to Copilot', '保存配置到 Copilot');
+    const syncReceiptMessage = options.syncReceipt ? t(
+      'StudyContext revision ' + Number(options.syncReceipt.study_revision || 0)
+        + ' now contains this ' + (options.syncReceipt.receipt_kind === 'extraction_result' ? 'extraction result' : 'extraction setup')
+        + '. The next Copilot turn reads that typed state; the local folder path is not sent as model-authored text.',
+      'StudyContext 第 ' + Number(options.syncReceipt.study_revision || 0)
+        + ' 版已保存本次' + (options.syncReceipt.receipt_kind === 'extraction_result' ? '抽取结果' : '抽取配置')
+        + '。下一轮 Copilot 会读取这份结构化状态；本机文件夹路径不会作为模型文字发送。'
+    ) : '';
     host.innerHTML = `<div class="gpi-extraction-embed" data-gpi-extraction-embed>
       <div class="gpi-extraction-toolbar">
         <div><span>${t('Native Data Extraction', '原生数据提取')}</span><strong>${t('The same owner as Classic Workspace', '与经典工作台共用同一个功能 owner')}</strong></div>
         <div class="row gap-8">
           ${owner.isReal() ? '' : `<button class="btn sm" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real local data', '使用本地真实数据')}</button>`}
           ${sourceId ? `<button class="btn sm" type="button" data-gpi-extraction-download>${icon('download', 12)} ${t('Download data package', '下载数据包')}</button>` : ''}
-          <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon(options.syncReceipt ? 'check' : 'agent', 12)} ${options.syncReceipt ? t('Synced to Copilot', '已同步到 Copilot') : t('Sync back to Copilot', '同步回 Copilot')}</button>
+          <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon(options.syncReceipt ? 'check' : 'agent', 12)} ${options.syncReceipt ? t('Synced to Copilot', '已同步到 Copilot') : syncLabel}</button>
         </div>
       </div>
-      ${options.syncReceipt ? `<div class="note ok gpi-extraction-sync-receipt" role="status"><div class="ico">${icon('check', 13)}</div><div class="body"><div class="t">${t('Synced to Copilot', '已同步到 Copilot')}</div><div class="d">${t('The updated extraction state is bound to this project, and a visible local workflow receipt was added to the conversation. The local folder path is not sent as model text.', '更新后的抽取状态已绑定到当前项目，并已在对话中加入可见的本地工作流回执；本机文件夹路径不会作为模型消息发送。')}</div></div></div>` : ''}
+      ${options.syncReceipt ? `<div class="note ok gpi-extraction-sync-receipt" role="status"><div class="ico">${icon('check', 13)}</div><div class="body"><div class="t">${t('Synced to Copilot', '已同步到 Copilot')}</div><div class="d">${escapeHtml(syncReceiptMessage)}</div></div></div>` : ''}
       ${options.syncError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Copilot sync failed', 'Copilot 同步失败')}</div><div class="d">${escapeHtml(options.syncError)}</div></div></div>` : ''}
       ${options.downloadError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Download blocked', '下载已阻止')}</div><div class="d">${escapeHtml(options.downloadError)}</div></div></div>` : ''}
       ${jobSummary(options.jobSnapshot)}
@@ -106,6 +119,15 @@
     if (downloadButton) downloadButton.addEventListener('click', downloadExport);
     const refresh = host.querySelector('[data-gpi-extraction-refresh]');
     if (refresh) refresh.addEventListener('click', refreshJob);
+  }
+
+  function hydrateStudyContext() {
+    const bridge = window.EU_EXTRACTION_STUDY_CONTEXT;
+    if (!bridge || typeof bridge.hydrate !== 'function') return null;
+    return bridge.hydrate(
+      options.studyContext,
+      options.resource && options.resource.expected_database,
+    );
   }
 
   function downloadExport(event) {
@@ -163,6 +185,7 @@
       host = nextHost;
       options = Object.assign({}, nextOptions || {});
       const owner = window.EU_EXTRACTION_NATIVE_OWNER;
+      hydrateStudyContext();
       if (options.resource && options.resource.state === 'setup' && owner && !owner.isReal()) {
         owner.useRealData();
       }

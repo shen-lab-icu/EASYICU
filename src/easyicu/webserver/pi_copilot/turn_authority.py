@@ -36,11 +36,13 @@ _CONFIRMATION_MARKERS = (
     "确认,授权",
     "我确认",
     "我授权",
+    "继续打开",
     "同意执行",
     "批准执行",
     "i confirm",
     "i authorize",
     "i approve",
+    "continue opening",
     "confirmed and authorized",
 )
 

@@ -62,6 +62,7 @@
         data-gpi-resource-state="${esc(resource.state || '')}"
         data-gpi-resource-job="${esc(resource.job_id || '')}"
         data-gpi-resource-source="${esc(resource.source_id || '')}"
+        data-gpi-resource-database="${esc(resource.expected_database || '')}"
         data-gpi-resource-view="${esc(resource.view || '')}"
         data-gpi-resource-digest="${esc(resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}">${esc(overrideLabel || label(resource))}</button>`;
     }
@@ -87,6 +88,7 @@
         state: element.dataset.gpiResourceState,
         job_id: element.dataset.gpiResourceJob,
         source_id: element.dataset.gpiResourceSource,
+        expected_database: element.dataset.gpiResourceDatabase,
         view: element.dataset.gpiResourceView,
         snapshot_sha256: element.dataset.gpiResourceDigest,
         review_sha256: element.dataset.gpiResourceDigest,

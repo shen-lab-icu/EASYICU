@@ -2337,6 +2337,7 @@ def test_registered_data_source_choices_are_path_free(
     assert catalog["details"]["source_count"] == 0
     assert catalog["details"]["selected_database"] is None
     assert catalog["details"]["source_modes"] == []
+    assert catalog["details"]["database_selection_deferred"] is False
     assert [row["database"] for row in catalog["details"]["supported_databases"]] == [
         "miiv",
         "eicu",
@@ -2384,11 +2385,36 @@ def test_registered_data_source_choices_are_path_free(
         "registered_export",
         "official_demo",
     ]
+    assert result["details"]["database_selection_deferred"] is False
     assert result["details"]["selection_policy"]["mimic_database_choices"] == [
         "mimic",
         "miiv",
     ]
     assert "/private/" not in json.dumps(result)
+
+    ambiguous = tool_module.execute_tool(
+        "easyicu_list_data_sources",
+        {"database": "miiv"},
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-sources-ambiguous"),
+            user_message="帮我查一下 MIMIC 数据库里的 A41 队列",
+        ),
+    )
+    assert ambiguous["details"]["selected_database"] is None
+    assert ambiguous["details"]["sources"] == []
+    assert ambiguous["details"]["source_modes"] == []
+    assert ambiguous["details"]["database_selection_deferred"] is True
+
+    explicit = tool_module.execute_tool(
+        "easyicu_list_data_sources",
+        {"database": "miiv"},
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-sources-explicit"),
+            user_message="使用 MIMIC-IV 3.1",
+        ),
+    )
+    assert explicit["details"]["selected_database"]["database"] == "miiv"
+    assert explicit["details"]["database_selection_deferred"] is False
 
 
 def test_source_concept_choices_are_exact_module_scoped_and_path_free(

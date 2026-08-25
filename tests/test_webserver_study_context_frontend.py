@@ -29,7 +29,7 @@ def _node_binary() -> str | None:
 
 def test_study_context_owner_is_wired_before_route_modules() -> None:
     index = _read("index.html")
-    assert "js/study-context.js?v=20260812-natural-conversations1" in index
+    assert "js/study-context.js?v=20260824-extraction-roundtrip1" in index
     assert index.index("js/api.js?") < index.index("js/study-context.js?")
     assert index.index("js/study-context.js?") < index.index("js/screens-extraction.js?")
     assert index.index("js/screens-extraction.js?") < index.index(
@@ -126,11 +126,17 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
     viz = _read("js/screens-viz.js")
     viz_owner = _read("js/screens-viz-study-context.js")
     shell = _read("js/app.js")
-    assert 'data-study-source="extraction" data-study-target="guided"' in extraction
+    assert "syncExtractionToCopilot" in extraction
+    assert "bridge.matchesDatabase(currentDatabase, nextDatabase)" in extraction
+    assert "continueExisting: true, allowSourceRebind" in extraction
     assert "window.EU_EXTRACTION_CONTEXT" in extraction
     assert "registerSource(" not in extraction
     assert "window.EU_EXTRACTION_CONTEXT" in extraction_owner
     assert "window.EU_STUDY_CONTEXT.registerSource('extraction'" in extraction_owner
+    assert "window.EU_EXTRACTION_STUDY_CONTEXT" in extraction_owner
+    assert "function project(context, expectedDatabase)" in extraction_owner
+    assert "function hydrate(context, expectedDatabase)" in extraction_owner
+    assert "function matchesDatabase(expected, actual)" in extraction_owner
     # crossdb moved out of screens-viz.js into its own owner files; its handoff
     # marker moved with it. Assert per-owner rather than in the shell file, or
     # the test drifts into demanding a layering violation.

@@ -373,6 +373,7 @@ def _extraction_workspace_resource(
     state: str,
     job_id: Any = None,
     source_id: Any = None,
+    expected_database: Any = None,
 ) -> Dict[str, Any]:
     """Project the native Extraction owner without exposing its host paths."""
 
@@ -391,6 +392,16 @@ def _extraction_workspace_resource(
     clean_source_id = str(source_id or "").strip()
     if clean_source_id:
         resource["source_id"] = clean_source_id[:80]
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    database = str(expected_database or source.get("database") or "").strip()
+    if database:
+        try:
+            profile = get_database_profile(database)
+        except KeyError:
+            profile = None
+        if profile is not None and profile.is_public:
+            resource["expected_database"] = profile.key
     return resource
 
 
@@ -585,6 +596,21 @@ def _list_data_sources(
 
     _require_args(params, allowed=("database",))
     requested_database = str(params.get("database") or "").strip()
+    user_message = str(context.user_message or "").casefold()
+    explicit_mimic_database = None
+    if re.search(r"\bmimic[\s_-]*(?:iv|4)\b", user_message):
+        explicit_mimic_database = "miiv"
+    elif re.search(r"\bmimic[\s_-]*(?:iii|3)\b", user_message):
+        explicit_mimic_database = "mimic"
+    ambiguous_mimic_request = bool(
+        requested_database in {"miiv", "mimic"}
+        and "mimic" in user_message
+        and explicit_mimic_database is None
+    )
+    if ambiguous_mimic_request:
+        # The model argument is not user authority. A bare "MIMIC" request
+        # cannot inherit an active source or silently become MIMIC-IV.
+        requested_database = ""
     selected_profile = None
     if requested_database:
         try:
@@ -677,6 +703,7 @@ def _list_data_sources(
                 if selected_profile is None
                 else ["local_full_database", "registered_export", "official_demo"]
             ),
+            "database_selection_deferred": ambiguous_mimic_request,
             "selection_policy": {
                 "database_family_selected_before_source_mode": True,
                 "mimic_database_choices": ["mimic", "miiv"],
@@ -3709,6 +3736,36 @@ def _start_extraction(
         )
     source_mode = str(params.get("source_mode") or "").strip()
     requested_database = str(params.get("database") or "").strip()
+    current_message = str(context.user_message or "").casefold()
+    local_request = any(
+        marker in current_message
+        for marker in ("本机", "本地", "local", "数据文件夹", "data folder")
+    )
+    explicit_database = None
+    for database, pattern in (
+        ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
+        ("mimic", r"\bmimic[\s_-]*(?:iii|3)\b"),
+        ("eicu", r"\beicu\b"),
+        ("aumc", r"\b(?:amsterdamumcdb|aumc)\b"),
+        ("hirid", r"\bhirid\b"),
+        ("sic", r"\b(?:sicdb|sic)\b"),
+    ):
+        if re.search(pattern, current_message):
+            explicit_database = database
+            break
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    if (
+        not source_mode
+        and not requested_database
+        and not str(source.get("path") or "").strip()
+        and local_request
+        and explicit_database
+    ):
+        # Recover a model-omitted tool argument only from the current user's
+        # exact local database wording. Bare family names remain unresolved.
+        source_mode = "local"
+        requested_database = explicit_database
     if source_mode:
         if source_mode != "local":
             raise PiCopilotError(
@@ -3736,7 +3793,9 @@ def _start_extraction(
         release_label = (
             f" {profile.reference_release}" if profile.reference_release else ""
         )
-        resource = _extraction_workspace_resource(study, state="setup")
+        resource = _extraction_workspace_resource(
+            study, state="setup", expected_database=profile.key
+        )
         resource["label"] = (
             f"Connect local {profile.display_name}{release_label}"
         )[:160]
@@ -3760,8 +3819,6 @@ def _start_extraction(
             },
         )
     registry = sources.load_registry()
-    source = study.get("data_source")
-    source = source if isinstance(source, Mapping) else {}
     source_path = str(source.get("path") or "").strip()
     registered_source = next(
         (

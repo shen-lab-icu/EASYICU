@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +20,7 @@ from easyicu.webserver.pi_copilot.contracts import (
 )
 
 
-def _context() -> ToolExecutionContext:
+def _context(user_message: str = "") -> ToolExecutionContext:
     return ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-extraction-workspace",
@@ -27,6 +29,7 @@ def _context() -> ToolExecutionContext:
                 study_revision=3,
             ),
         ),
+        user_message=user_message,
         allowed_actions={"extract"},
     )
 
@@ -114,7 +117,60 @@ def test_explicit_local_source_choice_does_not_reuse_bound_demo(
     }
     assert result["details"]["resource"]["state"] == "setup"
     assert result["details"]["resource"]["label"] == "Connect local MIMIC-IV 3.1"
+    assert result["details"]["resource"]["expected_database"] == "miiv"
     assert "/private/" not in json.dumps(result)
+
+
+def test_exact_current_user_local_database_recovers_omitted_tool_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda binding: {
+            "id": "study-extraction-workspace",
+            "revision": 3,
+            "data_source": {},
+            "modules": ["blood_gas"],
+        },
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_start_extraction",
+        {},
+        _context("继续打开本机 MIMIC-IV 3.1 数据提取工作区。"),
+    )
+
+    assert result["code"] == "easyicu_local_source_workspace_ready"
+    assert result["details"]["resource"]["expected_database"] == "miiv"
+
+
+def test_bare_mimic_never_recovers_omitted_tool_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tool_module,
+        "_bound_context",
+        lambda binding: {
+            "id": "study-extraction-workspace",
+            "revision": 3,
+            "data_source": {},
+            "modules": ["blood_gas"],
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {"active_path": None, "sources": []},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_start_extraction",
+        {},
+        _context("继续打开本机 MIMIC 数据提取工作区。"),
+    )
+
+    assert result["code"] == "extraction_setup_incomplete"
 
 
 def test_submitted_extraction_workspace_carries_only_job_coordinate(
@@ -171,6 +227,7 @@ def test_replay_projection_preserves_native_workspace_coordinates() -> None:
             "state": "running",
             "study_context_id": "study-extraction-workspace",
             "study_revision": 3,
+            "expected_database": "miiv",
             "job_id": "extract-job-42",
             "label": "Data Extraction",
         }
@@ -182,6 +239,7 @@ def test_replay_projection_preserves_native_workspace_coordinates() -> None:
         "state": "running",
         "study_context_id": "study-extraction-workspace",
         "study_revision": 3,
+        "expected_database": "miiv",
         "label": "Data Extraction",
         "media_type": "application/vnd.easyicu.native-workspace",
         "job_id": "extract-job-42",
@@ -195,6 +253,50 @@ def test_replay_projection_preserves_native_workspace_coordinates() -> None:
             "study_revision": 3,
         }
     ) is None
+
+
+def test_replay_projection_rejects_unknown_expected_database() -> None:
+    assert projections._project_replay_resource(
+        {
+            "kind": "native_workspace",
+            "route": "extraction",
+            "state": "setup",
+            "study_context_id": "study-extraction-workspace",
+            "study_revision": 3,
+            "expected_database": "unknown-db",
+        }
+    ) is None
+
+
+def test_sidecar_projection_preserves_expected_database() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    projection = (
+        Path(__file__).parents[1]
+        / "src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs"
+    ).as_uri()
+    script = f"""
+      import {{ projectTranscriptMessage }} from {json.dumps(projection)};
+      const message = projectTranscriptMessage({{
+        role: 'toolResult', toolCallId: 'call-1', toolName: 'easyicu_start_extraction',
+        details: {{ status: 'ok', code: 'easyicu_local_source_workspace_ready',
+          summary: 'Ready', owner: 'easyicu.webserver.dataio', details: {{ resource: {{
+            kind: 'native_workspace', route: 'extraction', state: 'setup',
+            study_context_id: 'study-workspace', study_revision: 3,
+            expected_database: 'miiv', label: 'Connect local MIMIC-IV 3.1'
+          }} }} }}
+      }});
+      console.log(JSON.stringify(message));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["content"][0]["resource"]["expected_database"] == "miiv"
 
 
 def test_registered_export_download_opens_exact_source_in_native_workspace(
@@ -300,13 +402,20 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "typeof owner.mount === 'function'" in preview
     assert "native_workspace" in resources
     assert "data-gpi-resource-source" in resources
+    assert "data-gpi-resource-database" in resources
+    assert "expected_database" in preview
+    assert "loadStudyContext" in preview
+    assert "studyContext:" in preview
+    assert "hydrateStudyContext" in embedded
+    assert "database_mismatch" in extraction
+    assert "exExpectedDatabase" in extraction
 
     api = (static_root / "js" / "api.js").read_text()
     assert "downloadRegisteredExport" in api
     assert "'/api/workspaces/download'" in api
 
     index = (static_root / "index.html").read_text()
-    assert 'screens-extraction-embedded.js?v=20260824-visible-sync1' in index
+    assert 'screens-extraction-embedded.js?v=20260824-extraction-roundtrip1' in index
     assert index.index("screens-extraction.js") < index.index("screens-extraction-embedded.js")
 
     node_main = (

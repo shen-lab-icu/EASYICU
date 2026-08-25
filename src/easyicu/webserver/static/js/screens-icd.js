@@ -34,6 +34,16 @@
   }
 
   window.EUIcd = {
+    apply(value) {
+      const source = value && typeof value === 'object' ? value : {};
+      const include = Array.isArray(source.include_diagnoses)
+        ? source.include_diagnoses : splitTokens(source.icd_include);
+      const exclude = Array.isArray(source.exclude_diagnoses)
+        ? source.exclude_diagnoses : splitTokens(source.icd_exclude);
+      icdInclude = include.map(token => String(token).trim()).filter(Boolean).join(', ');
+      icdExclude = exclude.map(token => String(token).trim()).filter(Boolean).join(', ');
+      return this.contract();
+    },
     contract() {
       return {
         icd_include: splitTokens(icdInclude).join(', '),

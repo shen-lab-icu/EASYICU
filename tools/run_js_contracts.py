@@ -38,6 +38,7 @@ CONTRACTS: dict[str, list[str]] = {
     "extraction_embedded_handoff.test.js": ["screens-extraction-embedded.js"],
     "extraction_icd_source_binding.test.js": ["screens-icd.js"],
     "extraction_job_continuity.test.js": ["screens-extraction-job-continuity.js"],
+    "extraction_study_roundtrip.test.js": ["screens-extraction-study-context.js"],
     "guided_gate_state.test.js": ["screens-guided.js"],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],

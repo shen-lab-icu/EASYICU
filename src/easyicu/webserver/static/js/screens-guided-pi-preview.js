@@ -11,6 +11,7 @@
     resource: null,
     artifact: null,
     payload: null,
+    studyContext: null,
     governance: null,
     mode: 'code',
     loading: false,
@@ -123,11 +124,14 @@
       const studyRevision = Number(value.study_revision);
       const jobId = String(value.job_id || '').trim();
       const sourceId = String(value.source_id || '').trim();
+      const expectedDatabase = String(value.expected_database || '').trim();
+      const supportedDatabases = new Set(['miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic']);
       if (route !== 'extraction' || !['setup', 'running', 'review'].includes(state)) return null;
       if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(studyContextId)) return null;
       if (!Number.isInteger(studyRevision) || studyRevision < 0) return null;
       if (jobId && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(jobId)) return null;
       if (sourceId && !/^src_[a-f0-9]{12}$/.test(sourceId)) return null;
+      if (expectedDatabase && !supportedDatabases.has(expectedDatabase)) return null;
       return {
         kind: 'native_workspace', route, state,
         study_context_id: studyContextId, study_revision: studyRevision,
@@ -135,6 +139,7 @@
         media_type: 'application/vnd.easyicu.native-workspace',
         ...(jobId ? { job_id: jobId } : {}),
         ...(sourceId ? { source_id: sourceId.slice(0, 80) } : {}),
+        ...(expectedDatabase ? { expected_database: expectedDatabase } : {}),
       };
     }
     const file = String(value.file || '').trim().replace(/\\/g, '/');
@@ -323,6 +328,7 @@
       if (owner && typeof owner.mount === 'function') owner.mount(mount, {
         jobId: state.resource.job_id || '', jobSnapshot: state.payload || null,
         sourceId: state.resource.source_id || '',
+        studyContext: state.studyContext,
         resource: state.resource,
       });
     }
@@ -334,6 +340,7 @@
     try {
       const api = window.EU_API || {};
       let payload;
+      let loadedStudyContext = null;
       if (isDemoArtifact()) {
         const demo = window.EU_GUIDED_PI_DEMO;
         if (!demo || typeof demo.artifact !== 'function') throw new Error(tr('The product-demo artifact owner is unavailable.', '产品演示产物 owner 不可用。'));
@@ -361,14 +368,21 @@
           state.projectId, state.resource.snapshot_sha256,
         );
       } else if (isNativeWorkspace()) {
-        payload = state.resource.job_id && api.loadJobSnapshot
-          ? await api.loadJobSnapshot(state.resource.job_id)
-          : null;
+        if (!api.loadStudyContext) throw new Error(tr('Study setup API is unavailable.', '研究配置 API 暂不可用。'));
+        const [jobPayload, contextPayload] = await Promise.all([
+          state.resource.job_id && api.loadJobSnapshot
+            ? api.loadJobSnapshot(state.resource.job_id)
+            : Promise.resolve(null),
+          api.loadStudyContext(state.resource.study_context_id),
+        ]);
+        payload = jobPayload;
+        loadedStudyContext = contextPayload && contextPayload.context ? contextPayload.context : null;
       } else {
         if (!api.loadPiCopilotWorkspaceFile) throw new Error(tr('The workspace file API is unavailable.', '工作区文件接口不可用。'));
         payload = await api.loadPiCopilotWorkspaceFile(state.projectId, state.resource.file);
       }
       if (ticket !== state.request) return;
+      state.studyContext = isNativeWorkspace() ? loadedStudyContext : null;
       state.artifact = payload && payload.artifact ? payload.artifact : null;
       state.payload = isNativeWorkspace() ? payload : (isStructuredArtifact() && payload ? (payload.payload || {}) : null);
       state.governance = isStructuredArtifact() && payload ? (payload.governance || null) : null;
@@ -387,6 +401,7 @@
     state.projectId = project;
     state.artifact = null;
     state.payload = null;
+    state.studyContext = null;
     state.governance = null;
     state.error = '';
     state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
@@ -395,7 +410,7 @@
   }
   function close() {
     state.request += 1;
-    state.resource = null; state.artifact = null; state.payload = null; state.governance = null; state.error = ''; state.loading = false;
+    state.resource = null; state.artifact = null; state.payload = null; state.studyContext = null; state.governance = null; state.error = ''; state.loading = false;
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }

@@ -37,7 +37,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260823-extraction-workspace1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260824-extraction-roundtrip1" in index
     assert "js/screens-guided-pi-replay.js?v=20260815-mode-resume1" in index
     assert "js/screens-guided-pi-activity.js?v=20260817-visible-activity2" in index
     assert (
@@ -45,7 +45,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         in index
     )
     assert "js/screens-guided-pi-project.js?v=20260823-project-owner1" in index
-    assert "js/screens-guided-pi.js?v=20260824-extraction-receipt1" in index
+    assert "js/screens-guided-pi.js?v=20260824-extraction-roundtrip1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index

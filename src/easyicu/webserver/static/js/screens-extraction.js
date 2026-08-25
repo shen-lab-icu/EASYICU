@@ -292,6 +292,9 @@
   let exSource = null;      // 'prepared' | 'module' | 'raw' — what the user pointed at
   let exScanResult = null;  // live /api/data/scan payload for exPath (null until scanned)
   let exScanError = null;   // scan failure message, if any
+  let exExpectedDatabase = ''; // path-free Copilot requirement; scan must match it
+  let exDatabaseMismatch = null;
+  let exHydratedStudyCoordinate = '';
   let exCohortPreset = 'all_icu';
   let exAgeMin = 0;
   let exAgeMax = 100;
@@ -514,6 +517,56 @@
     if (Number.isFinite(cfg.max_patients)) exMaxPatients = cfg.max_patients;
     if (Number.isFinite(cfg.observation_window_hours) && cfg.observation_window_hours > 0) exWindowHours = cfg.observation_window_hours;
   }
+
+  function applyStudySetup(setup) {
+    if (!setup || typeof setup !== 'object') return null;
+    const coordinate = `${setup.study_context_id || ''}:${setup.revision || 0}:${setup.expected_database || ''}`;
+    if (coordinate && coordinate === exHydratedStudyCoordinate) return setup;
+    exHydratedStudyCoordinate = coordinate;
+    exExpectedDatabase = String(setup.expected_database || '').trim();
+    exDatabaseMismatch = null;
+
+    const cohort = setup.cohort && typeof setup.cohort === 'object' ? setup.cohort : {};
+    const includeDiagnoses = Array.isArray(cohort.include_diagnoses) ? cohort.include_diagnoses : [];
+    const excludeDiagnoses = Array.isArray(cohort.exclude_diagnoses) ? cohort.exclude_diagnoses : [];
+    const requestedPreset = (cohort.icd_enabled || includeDiagnoses.length || excludeDiagnoses.length)
+      ? 'icd' : String(cohort.preset || '');
+    if (COHORT_PRESETS.some(row => row[0] === requestedPreset)) exCohortPreset = requestedPreset;
+    if (Number.isFinite(cohort.age_min)) exAgeMin = Math.max(0, Math.min(100, cohort.age_min));
+    if (Number.isFinite(cohort.age_max)) exAgeMax = Math.max(exAgeMin, Math.min(100, cohort.age_max));
+    if (Number.isFinite(cohort.min_icu_los_hours)) exMinLosHours = Math.max(0, Math.min(168, cohort.min_icu_los_hours));
+    const windowHours = Number.isFinite(cohort.observation_window_hours)
+      ? cohort.observation_window_hours
+      : (setup.time_window && (setup.time_window.observation_hours ?? setup.time_window.hours));
+    if (Number.isFinite(windowHours)) exWindowHours = Math.max(1, Math.min(MAX_OBSERVATION_WINDOW_HOURS, windowHours));
+    if (typeof cohort.exclude_readmissions === 'boolean') exExcludeReadmissions = cohort.exclude_readmissions;
+    if (Number.isFinite(cohort.max_patients)) exMaxPatients = Math.max(0, cohort.max_patients);
+    if (window.EUIcd && typeof window.EUIcd.apply === 'function') window.EUIcd.apply(cohort);
+
+    const requestedModules = new Set(Array.isArray(setup.modules) ? setup.modules.map(String) : []);
+    MODS.forEach(module => { module[3] = requestedModules.has(moduleKey(module)) || requestedModules.has(module[0]); });
+    exSelectedConcepts = {};
+    const execution = setup.execution_concepts && typeof setup.execution_concepts === 'object'
+      ? setup.execution_concepts : {};
+    const requestedConcepts = new Set([
+      execution.outcome,
+      execution.primary_exposure,
+      ...(Array.isArray(execution.covariates) ? execution.covariates : []),
+    ].map(value => String(value || '').trim()).filter(Boolean));
+    if (requestedConcepts.size) {
+      MODS.forEach(module => {
+        const selected = conceptIdsForModule(module).filter(id => requestedConcepts.has(id));
+        if (!selected.length) return;
+        module[3] = true;
+        setModuleConceptSelection(module, selected);
+      });
+    }
+    if (EX_EXT[setup.export_format]) exFormat = setup.export_format;
+    exAdvCohort = true;
+    exCustomOpen = true;
+    window.EU_STALE = true;
+    return setup;
+  }
   function setExportDir(path) {
     exExportDir = path || null;
     if (window.EU_API && window.EU_API.saveSetting) {
@@ -661,6 +714,33 @@
     ['Write shard layout', '写入分片布局'],
     ['Index & freeze', '建立索引并冻结'],
   ];
+  function copilotPrefillSummary() {
+    if (!exHydratedStudyCoordinate) return '';
+    const cohort = cohortContract();
+    const database = {
+      miiv: 'MIMIC-IV 3.1', mimic: 'MIMIC-III 1.4', eicu: 'eICU 2.0',
+      aumc: 'AmsterdamUMCdb', hirid: 'HiRID 1.1.1', sic: 'SICdb 1.0.6',
+    }[exExpectedDatabase] || exExpectedDatabase.toUpperCase();
+    const diagnoses = Array.isArray(cohort.include_diagnoses) ? cohort.include_diagnoses.join(', ') : '';
+    const parts = [
+      database,
+      diagnoses ? `ICD ${diagnoses}` : t(cohortPresetMeta()[1], cohortPresetMeta()[2]),
+      t('age ', '年龄 ') + fmtAgeRange(),
+      fmtObservationWindow(exWindowHours),
+      selMods().map(moduleKey).join(', ') || t('modules not yet selected', '特征模块尚未选择'),
+      String(exFormat || '').toUpperCase(),
+    ].filter(Boolean);
+    return `
+      <div class="ex-connect-primary ex-copilot-prefill" role="note">
+        <div class="ex-connect-copy">
+          <div class="ex-connect-copy-ico">${icon('spark', 15)}</div>
+          <div>
+            <div class="ex-connect-copy-title">${t('Loaded from Copilot', '已从 Copilot 带入')}</div>
+            <div class="ex-connect-copy-desc">${escHtml(parts.join(' · '))}</div>
+          </div>
+        </div>
+      </div>`;
+  }
   function connectState() {
     const opt = (src, ico, tEn, tZh, dEn, dZh) => `
       <button class="modcard" data-ex-src="${src}" style="align-items:flex-start;padding:14px;">
@@ -674,6 +754,7 @@
           <div class="grow"><div class="cfg-h">${t('Connect your data', '连接你的数据')}</div><div class="cfg-sub">${t('local-only · nothing is uploaded', '仅本地 · 不上传任何数据')}</div></div>
         </div>
         <div class="cfg-body">
+          ${copilotPrefillSummary()}
           <label class="ex-connect-label" for="exPathInput">${t('Data folder on this machine', '本机上的数据文件夹')}</label>
           <div class="path-field editable ex-connect-path">
             <span class="pf-ico">${icon('folder', 14)}</span>
@@ -752,7 +833,12 @@
              ready: d.ready, size: d.size || '', est: d.est || '', missing: [] };
   }
   function scanErrorState() {
-    const msg = exScanError === 'no_path'
+    const msg = exScanError === 'database_mismatch'
+      ? t(
+          `This study expects ${String(exDatabaseMismatch && exDatabaseMismatch.expected || '').toUpperCase()}, but the selected folder was identified as ${String(exDatabaseMismatch && exDatabaseMismatch.actual || 'unknown').toUpperCase()}. Choose the matching database folder; EasyICU will not continue with a different database.`,
+          `当前研究要求 ${String(exDatabaseMismatch && exDatabaseMismatch.expected || '').toUpperCase()}，但所选文件夹被识别为 ${String(exDatabaseMismatch && exDatabaseMismatch.actual || '未知').toUpperCase()}。请选择匹配的数据库目录；EasyICU 不会使用其他数据库继续。`
+        )
+      : exScanError === 'no_path'
       ? t('Choose or paste a local folder path first.', '请先选择或粘贴本机文件夹路径。')
       : exScanError === 'not_a_directory'
       ? t('That path is not a folder on this machine.', '该路径不是本机上的文件夹。')
@@ -767,7 +853,7 @@
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
           <div class="cfg-ico" style="color:var(--bad,#c0392b);">${icon('alert', 17)}</div>
-          <div class="grow"><div class="cfg-h">${t('Folder not recognized', '未识别该文件夹')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))}</div></div>
+          <div class="grow"><div class="cfg-h">${exScanError === 'database_mismatch' ? t('Database does not match this study', '数据库与当前研究不匹配') : t('Folder not recognized', '未识别该文件夹')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))}</div></div>
         </div>
         <div class="cfg-body">
           <div class="note mt-4" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
@@ -1084,13 +1170,22 @@
       repaint();
       return;
     }
-    exSource = src || null; exScanResult = null; exScanError = null;
+    exSource = src || null; exScanResult = null; exScanError = null; exDatabaseMismatch = null;
     exReal = 'scanning'; repaint();
     // Real folder recognition is authoritative only when returned by FastAPI.
     if (window.EU_API && window.EU_API.scanPath) {
       window.EU_API.scanPath(exPath, src).then(r => {
         if (exReal !== 'scanning') return;          // user navigated away
-        if (r && r.ok) { exScanResult = r; exSource = r.source || src || null; exReal = 'scanresult'; }
+        if (r && r.ok) {
+          exScanResult = r;
+          exSource = r.source || src || null;
+          const bridge = window.EU_EXTRACTION_STUDY_CONTEXT;
+          if (exExpectedDatabase && (!bridge || !bridge.matchesDatabase(exExpectedDatabase, r.db_key))) {
+            exDatabaseMismatch = { expected: exExpectedDatabase, actual: String(r.db_key || '') };
+            exScanError = 'database_mismatch';
+          }
+          exReal = 'scanresult';
+        }
         else { exScanError = (r && r.error) || 'scan_failed'; exReal = 'scanresult'; }
         repaint();
       }).catch(err => {
@@ -1206,26 +1301,32 @@
     };
   }
   window.EU_EXTRACTION_CONTEXT = {
+    applyStudySetup,
     snapshot() {
     const recommended = exportRunMode === 'recommended';
     const cohort = recommended ? recommendedCohortContract() : cohortContract();
     const preset = COHORT_PRESETS.find(row => row[0] === cohort.preset) || COHORT_PRESETS[0];
     const active = window.EU_SOURCES && window.EU_SOURCES.activeSource ? window.EU_SOURCES.activeSource() : null;
     const resultPath = exportResult && exportResult.out_dir;
-    const sourcePath = resultPath || (active && active.path) || '';
-    const sourceLabel = (active && active.label) || (dataMode() === 'demo' ? 'Demo data' : 'Local EasyICU export');
+    const detectedDatabase = String(exScanResult && exScanResult.db_key || '').trim();
+    const sourcePath = resultPath || '';
+    const sourceLabel = resultPath
+      ? ((active && active.label) || 'EasyICU extraction')
+      : (exExpectedDatabase ? exExpectedDatabase.toUpperCase() : (dataMode() === 'demo' ? 'Demo data' : 'Local EasyICU data'));
     const modules = (exportRunModules || runModuleKeys(recommended ? 'recommended' : 'custom')).slice();
     return {
       data_source: {
         path: sourcePath,
         label: sourceLabel,
-        database: (active && active.database) || (dataMode() === 'demo' ? 'demo' : ''),
+        database: detectedDatabase || exExpectedDatabase || (dataMode() === 'demo' ? 'demo' : ''),
       },
       cohort,
       modules,
       preset_label: preset[1],
       export_format: exFormat,
       observation_hours: cohort.observation_window_hours,
+      expected_database: exExpectedDatabase,
+      completed: !!(exportResult && resultPath),
     };
     },
   };
@@ -1681,8 +1782,8 @@
     const databaseKey = String(source.database || '').toLowerCase();
     const databaseLabel = {
       miiv: 'MIMIC-IV', mimiciv: 'MIMIC-IV', mimic_iv: 'MIMIC-IV',
-      miii: 'MIMIC-III', mimiciii: 'MIMIC-III', mimic_iii: 'MIMIC-III',
-      eicu: 'eICU', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sicdb: 'SICdb',
+      mimic: 'MIMIC-III', miii: 'MIMIC-III', mimiciii: 'MIMIC-III', mimic_iii: 'MIMIC-III',
+      eicu: 'eICU', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb', sicdb: 'SICdb',
     }[databaseKey] || String(source.database || source.label || '');
     return {
       id: 'extraction-' + String(exportJobId || Date.now()),
@@ -1693,9 +1794,11 @@
       data_file_count: Number(result.file_count || (Array.isArray(result.files) ? result.files.length : 0)),
       support_file_count: extractionSupportFiles(result).length,
       total_rows: result.total_rows == null ? null : Number(result.total_rows),
-      cohort_summary: cohortScaleNote(),
+      cohort_summary: cohortScaleNote() || extractionSetupSummary().cohort,
       modules: Array.isArray(snapshot.modules) ? snapshot.modules.slice(0, 30) : [],
       export_format: String(snapshot.export_format || ''),
+      expected_database: String(snapshot.expected_database || ''),
+      receipt_kind: result.out_dir ? 'extraction_result' : 'extraction_setup',
     };
   }
   function syncExtractionToCopilot() {
@@ -1703,8 +1806,33 @@
     if (!store || typeof store.handoff !== 'function') {
       return Promise.reject(new Error(t('StudyContext sync is unavailable.', '研究配置同步暂不可用。')));
     }
-    const handoff = store.handoff({ sourceRoute: 'extraction', targetRoute: 'guided' });
-    return Promise.resolve(handoff && handoff.persisted).then(() => extractionHandoffReceipt());
+    if (exDatabaseMismatch) {
+      return Promise.reject(new Error(t(
+        'The selected folder does not match the database requested in Copilot. Choose the matching folder before syncing.',
+        '所选文件夹与 Copilot 要求的数据库不匹配。请先选择正确的数据库目录再同步。'
+      )));
+    }
+    const snapshot = window.EU_EXTRACTION_CONTEXT && window.EU_EXTRACTION_CONTEXT.snapshot
+      ? window.EU_EXTRACTION_CONTEXT.snapshot() : {};
+    const current = typeof store.active === 'function' ? store.active() : null;
+    const currentDatabase = current && current.data_source ? current.data_source.database : '';
+    const nextDatabase = snapshot && snapshot.data_source ? snapshot.data_source.database : '';
+    const bridge = window.EU_EXTRACTION_STUDY_CONTEXT;
+    const allowSourceRebind = !currentDatabase || !!(
+      bridge && typeof bridge.matchesDatabase === 'function'
+      && bridge.matchesDatabase(currentDatabase, nextDatabase)
+    );
+    const handoff = store.handoff({
+      sourceRoute: 'extraction', targetRoute: 'guided',
+      continueExisting: true, allowSourceRebind,
+    });
+    return Promise.resolve(handoff && handoff.persisted).then(saved => Object.assign(
+      extractionHandoffReceipt(),
+      {
+        study_context_id: String(saved && saved.id || ''),
+        study_revision: Number(saved && saved.revision || 0),
+      },
+    ));
   }
   function notifyCopilotOfExtraction(receipt) {
     const copilot = window.EU_GUIDED_PI;
