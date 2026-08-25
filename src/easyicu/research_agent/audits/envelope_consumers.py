@@ -23,6 +23,9 @@ from easyicu.research_agent.authority.result_envelope_sidecar import (
 from easyicu.research_agent.authority.runtime_artifacts import (
     verified_run_evidence_path,
 )
+from easyicu.research_agent.authority.registration import (
+    registered_artifact_evidence_kind,
+)
 from easyicu.research_agent.authority.run_input import (
     _host_cohort_materializer_authority_error,
     _host_probe_authority_error,
@@ -154,10 +157,9 @@ class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
         evidence_records = list(evidence_store.records())
         bindings: Dict[str, Dict[str, Any]] = {}
         for artifact in envelope.artifacts:
-            expected_kind = (
-                artifact.kind
-                if artifact.kind in {"table", "statistic", "figure"}
-                else "log"
+            expected_kind = registered_artifact_evidence_kind(
+                source_name=artifact.relative_path,
+                declared_kinds=[artifact.kind],
             )
             matches = [
                 candidate

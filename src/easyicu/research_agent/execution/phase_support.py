@@ -104,6 +104,7 @@ from ..authority.evidence_store import (
     sha256_of_file,
 )
 from ..authority.registration import (
+    registered_artifact_evidence_kind,
     step_owned_artifact_evidence_id,
 )
 from ..authority.typed_binding import (
@@ -1921,22 +1922,10 @@ def _step_register_run_artifacts(
             continue
         step_aliases = services.semantic_aliases_for(step, art)
         generation_mode = worker_progress.generation_mode()
-        registered_kinds = declared_output_kinds.get(art.name, set())
-        if len(registered_kinds) == 1:
-            artifact_kind = next(iter(registered_kinds))
-        elif art.suffix.lower() in {".csv", ".tsv", ".parquet", ".feather"}:
-            artifact_kind = "table"
-        elif art.suffix.lower() in {
-            ".png",
-            ".svg",
-            ".pdf",
-            ".tiff",
-            ".tif",
-            ".pptx",
-        }:
-            artifact_kind = "figure"
-        else:
-            artifact_kind = "log"
+        artifact_kind = registered_artifact_evidence_kind(
+            source_name=art.name,
+            declared_kinds=declared_output_kinds.get(art.name, set()),
+        )
         artifact_evidence_id = step_owned_artifact_evidence_id(
             kind=artifact_kind,
             step_id=step.step_id,
