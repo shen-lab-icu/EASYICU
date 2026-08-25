@@ -45,3 +45,23 @@ stability evidence merely to fill a four-panel grid.
 This plan borrows article structure and reporting expectations only. It does not
 copy published numerical results, infer unobserved analyses, or convert Dev9
 development outputs into paper-ready evidence.
+
+## Exact development realization
+
+Renderer `84824c1` realized this plan from frozen Dev9 tables without model
+refitting, imputation, Provider calls, or scientific recomputation:
+
+| Task | Main figures | Supplementary figures | Exact interpretation boundary |
+|---|---:|---:|---|
+| E1 | 3 | 1 | Denominator/absolute risk, adjusted association and sensitivity are separated; component availability is supplementary. |
+| E2 | 2 | 1 | Source-state outcome context and continuous association/robustness are main; the detailed measurement audit is supplementary. |
+| E3 | 2 | 1 | Ordered outcomes and adjusted/sensitivity estimates are main; routine missingness is supplementary. |
+| M1 | 3 | 0 | Measurement availability remains main because source absence versus normality is the study question. |
+| M2 | 1 | 1 | Calibration/discrimination/repeated-split evidence is main; exploratory decision-curve analysis is supplementary. |
+| M3 | 3 | 0 | Profiles, size and stability are separated; low ARI prevents phenotype naming or outcome interpretation. |
+| H1 | 3 | 0 | Survival, RMST and the material PH/reportability failure are separated; a constant Cox exposure effect is withheld. |
+| H2 | 0 | 1 | No effect figure exists; only the fail-closed source-feasibility receipt is visualized. |
+| H3 | 0 | 1 | No trajectory phenotype figure exists; only upper-boundary BIC and availability diagnostics are visualized. |
+
+The exact package contains 17 main figures and 6 supplementary figures. It
+remains `analysis_only`, with paper authorization 0/9.
