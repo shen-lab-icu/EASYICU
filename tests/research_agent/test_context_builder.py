@@ -16,6 +16,35 @@ from easyicu.research_agent.research_context.outbound import (
 )
 
 
+def test_string_dtype_is_stable_across_pandas_storage_modes(ra):
+    object_frame = pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "sex": pd.Series(["female", "male"], dtype="object"),
+            "mixed": pd.Series(["1", 2], dtype="object"),
+        }
+    )
+    string_frame = object_frame.copy()
+    string_frame["sex"] = string_frame["sex"].astype("string")
+
+    object_context = ra.build_research_context(
+        research_question="Describe the cohort.",
+        cohort=object_frame,
+        cohort_name="object_strings",
+        database="synthetic",
+    )
+    string_context = ra.build_research_context(
+        research_question="Describe the cohort.",
+        cohort=string_frame,
+        cohort_name="extension_strings",
+        database="synthetic",
+    )
+
+    assert object_context.variable("sex").dtype == "str"
+    assert string_context.variable("sex").dtype == "str"
+    assert object_context.variable("mixed").dtype == "object"
+
+
 def test_wide_companion_columns_inherit_exact_base_concept_metadata(ra, monkeypatch):
     from easyicu.research_agent.research_context import builder as context_module
 
