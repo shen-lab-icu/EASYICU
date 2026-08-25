@@ -891,7 +891,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260817-project-monitor1" in index_html
+    assert "js/screens-agent-render.js?v=20260825-manuscript-reader1" in index_html
 
 
 def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
