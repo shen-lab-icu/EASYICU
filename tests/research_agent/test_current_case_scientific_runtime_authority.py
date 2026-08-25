@@ -582,23 +582,24 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert summary["n_landmark_population"] < n
     assert summary["missingness_measurement_audit"]["source_n"] == n
     assert set(
-        summary["missingness_measurement_audit"][
-            "source_missing_n_by_column"
-        ]
+        summary["missingness_measurement_audit"]["source_missing_n_by_column"]
     ) == set(authority.required_columns)
     assert set(
-        summary["missingness_measurement_audit"][
-            "landmark_missing_n_by_model_column"
-        ]
+        summary["missingness_measurement_audit"]["landmark_missing_n_by_model_column"]
     ) == set(authority.adjustment_columns)
     assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
     assert authority.rmst_product is not None
     assert (tmp_path / "landmark_rmst_summary.csv").is_file()
+    assert (tmp_path / "landmark_time_varying_cox_summary.csv").is_file()
     rmst = pd.read_csv(tmp_path / "landmark_rmst_summary.csv")
     assert len(rmst) == 1
     assert rmst.loc[0, "tau_days_from_landmark"] == pytest.approx(27.0)
     assert rmst.loc[0, "ci_low"] <= rmst.loc[0, "rmst_difference_days"]
     assert rmst.loc[0, "rmst_difference_days"] <= rmst.loc[0, "ci_high"]
+    time_varying = pd.read_csv(tmp_path / "landmark_time_varying_cox_summary.csv")
+    exposure_intervals = time_varying.loc[time_varying["is_exposure"]]
+    assert exposure_intervals["interval_start_days"].tolist() == [0.0, 7.0, 14.0]
+    assert exposure_intervals["interval_end_days"].tolist() == [7.0, 14.0, 27.0]
     assert not (tmp_path / "landmark_survival_suite.svg").exists()
     risk = pd.read_csv(tmp_path / "landmark_risk_set_flow.csv")
     final_count = risk.loc[
@@ -616,6 +617,10 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         (authority.risk_set_product, "landmark_risk_set_flow.csv"),
         (authority.ph_product, "landmark_ph_diagnostics.csv"),
         (authority.rmst_product, "landmark_rmst_summary.csv"),
+        (
+            authority.time_varying_cox_product,
+            "landmark_time_varying_cox_summary.csv",
+        ),
     ):
         evidence_path = evidence_dir / f"table_step_artifact_deadbeef__{source_name}"
         evidence_path.write_bytes((tmp_path / source_name).read_bytes())
@@ -625,6 +630,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
         cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
         rmst_table=rmst,
+        time_varying_table=time_varying,
         risk_flow=risk,
         ph_table=pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv"),
         source_paths=figure_sources,
@@ -638,9 +644,11 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     )
     assert figure_receipt["adjustment_columns"] == list(authority.adjustment_columns)
     if summary["proportional_hazards_status"].startswith("violation_"):
-        assert figure_receipt["promoted_adjustment_columns"] == []
+        assert figure_receipt["promoted_adjustment_columns"] == list(
+            authority.adjustment_columns
+        )
         assert figure_receipt["promoted_effect_measure"] == (
-            "restricted_mean_survival_time_difference"
+            "interval_specific_hazard_ratio"
         )
     else:
         assert figure_receipt["promoted_adjustment_columns"] == list(
@@ -656,16 +664,17 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         "landmark_risk_set_flow.csv",
         "landmark_ph_diagnostics.csv",
         "landmark_rmst_summary.csv",
+        "landmark_time_varying_cox_summary.csv",
     }
     contract = json.loads(
         (figure_dir / "landmark_survival_suite.figure_contract.json").read_text()
     )
     assert contract["panels"][0]["title"].startswith("Unadjusted landmark")
     if summary["proportional_hazards_status"].startswith("violation_"):
-        assert contract["panels"][1]["title"] == "PH-free survival contrast"
+        assert contract["panels"][1]["title"] == ("Time-varying adjusted association")
         assert contract["panels"][1]["role"] == "survival_effect"
         assert contract["panels"][1]["metadata"]["chart_type"] == (
-            "rmst_difference_forest"
+            "time_varying_hazard_ratio_forest"
         )
         assert "withheld" in contract["core_claim"]
     else:
@@ -683,6 +692,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
         cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
         rmst_table=rmst,
+        time_varying_table=time_varying,
         risk_flow=risk,
         ph_table=violation_ph,
         source_paths=figure_sources,
@@ -693,10 +703,10 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         (violation_dir / "landmark_survival_suite.figure_contract.json").read_text()
     )
     assert violation_contract["panels"][1]["title"] == (
-        "PH-free survival contrast"
+        "Time-varying adjusted association"
     )
     assert violation_contract["panels"][1]["metadata"]["chart_type"] == (
-        "rmst_difference_forest"
+        "time_varying_hazard_ratio_forest"
     )
     assert "landmark_rmst_summary.csv" in violation_contract["source_data"]
 
@@ -707,6 +717,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
             km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
             cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
             rmst_table=rmst,
+            time_varying_table=time_varying,
             risk_flow=risk,
             ph_table=invalid_ph,
             source_paths=figure_sources,
@@ -1043,9 +1054,7 @@ def test_landmark_authority_migrates_one_legacy_missingness_axis() -> None:
                     "inputs": ["dataset:analysis_cohort"],
                     "expected_outputs": ["table:robustness_summary"],
                     "method": "robustness_sensitivity",
-                    "sensitivity_spec_ids": [
-                        "informative_measurement_missingness"
-                    ],
+                    "sensitivity_spec_ids": ["informative_measurement_missingness"],
                     "robustness_replay_spec": {
                         "products": [
                             {

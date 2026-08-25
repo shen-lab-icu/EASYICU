@@ -1140,15 +1140,19 @@ def _render_m3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
 
 
 def _render_h1(source_dir: Path, out_dir: Path) -> dict[str, Any]:
+    table_names = {
+        "km": "landmark_km_curve.csv",
+        "cox": "landmark_cox_summary.csv",
+        "risk_flow": "landmark_risk_set_flow.csv",
+        "ph": "landmark_ph_diagnostics.csv",
+        "rmst": "landmark_rmst_summary.csv",
+    }
+    time_varying_name = "landmark_time_varying_cox_summary.csv"
+    if (source_dir / time_varying_name).is_file():
+        table_names["time_varying"] = time_varying_name
     paths, frames = _load_frozen_tables(
         source_dir,
-        {
-            "km": "landmark_km_curve.csv",
-            "cox": "landmark_cox_summary.csv",
-            "risk_flow": "landmark_risk_set_flow.csv",
-            "ph": "landmark_ph_diagnostics.csv",
-            "rmst": "landmark_rmst_summary.csv",
-        },
+        table_names,
     )
     source_files = _copy_frozen_tables(
         out_dir=out_dir, task_id="h1", paths=paths, frames=frames
@@ -1335,6 +1339,73 @@ def _render_h1(source_dir: Path, out_dir: Path) -> dict[str, Any]:
         statistics_note="RMST estimates, 95% confidence intervals and the unadjusted difference are copied from the frozen RMST summary.",
     )
 
+    if "time_varying" in frames:
+        time_varying = frames["time_varying"].copy()
+        exposure_rows = time_varying.loc[
+            time_varying["is_exposure"].astype(bool)
+        ].sort_values("interval_index")
+        _finite(
+            exposure_rows,
+            (
+                "interval_start_days",
+                "interval_end_days",
+                "hazard_ratio",
+                "ci_low",
+                "ci_high",
+            ),
+        )
+        if len(exposure_rows) < 2:
+            raise ValueError("H1 time-varying sensitivity lacks interval estimates")
+        estimates = exposure_rows["hazard_ratio"].to_numpy(dtype=float)
+        lows = exposure_rows["ci_low"].to_numpy(dtype=float)
+        highs = exposure_rows["ci_high"].to_numpy(dtype=float)
+        positions = np.arange(len(exposure_rows))
+        labels = [
+            f"{row.interval_start_days:g}–{row.interval_end_days:g} days"
+            for row in exposure_rows.itertuples()
+        ]
+        fig, ax = plt.subplots(figsize=(89 / 25.4, 82 / 25.4), constrained_layout=True)
+        ax.errorbar(
+            estimates,
+            positions,
+            xerr=np.vstack((estimates - lows, highs - estimates)),
+            fmt="o",
+            color=palette["blue"],
+            capsize=2.5,
+        )
+        ax.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+        ax.set_xscale("log")
+        ax.set_yticks(positions, labels)
+        ax.invert_yaxis()
+        ax.set_xlabel("Adjusted interval-specific hazard ratio (95% CI)")
+        ax.set_title("Time-varying adjusted association", loc="left", pad=10)
+        add_panel_label(ax, "a", x=-0.19, y=1.04, fontsize=8.0)
+        figure_files += _save(
+            fig,
+            out_dir=out_dir,
+            product="h1_main_figure_3_time_varying_association",
+            width_mm=89.0,
+            height_mm=82.0,
+            panels=[
+                {
+                    "panel_id": "a",
+                    "title": "Time-varying adjusted association",
+                    "role": "survival_effect",
+                    "article_role": "survival_effect",
+                    "chart_type": "time_varying_hazard_ratio_forest",
+                    "claim": "The prespecified extended Cox sensitivity reports interval-specific adjusted associations instead of one invalid constant effect.",
+                    "evidence_ids": [_sha256(paths["time_varying"])],
+                    "metadata": {
+                        "placement": "main",
+                        "source_data": [source_files["time_varying"]],
+                    },
+                }
+            ],
+            source_data=[source_files["time_varying"]],
+            core_claim="The adjusted association is allowed to vary over post-landmark follow-up after the constant-effect assumption was rejected.",
+            statistics_note="Interval cut points and all covariate-by-interval interactions are prespecified in the signed runtime authority. Wald 95% confidence intervals remain observational and analysis-only.",
+        )
+
     risk_flow = frames["risk_flow"].copy().sort_values("stage_order")
     ph = frames["ph"].copy()
     _finite(
@@ -1377,7 +1448,11 @@ def _render_h1(source_dir: Path, out_dir: Path) -> dict[str, Any]:
     figure_files += _save(
         fig,
         out_dir=out_dir,
-        product="h1_main_figure_3_risk_set_and_ph_diagnostics",
+        product=(
+            "h1_main_figure_4_risk_set_and_ph_diagnostics"
+            if "time_varying" in frames
+            else "h1_main_figure_3_risk_set_and_ph_diagnostics"
+        ),
         height_mm=100.0,
         panels=[
             {
@@ -1419,9 +1494,13 @@ def _render_h1(source_dir: Path, out_dir: Path) -> dict[str, Any]:
         source=source_dir,
         paths=paths,
         figure_files=figure_files,
-        main_figure_count=3,
+        main_figure_count=4 if "time_varying" in frames else 3,
         supplementary_figure_count=0,
-        reason_code="H1_PROPORTIONAL_HAZARDS_REJECTED",
+        reason_code=(
+            "H1_CONSTANT_HR_WITHHELD_TIME_VARYING_SENSITIVITY_AVAILABLE"
+            if "time_varying" in frames
+            else "H1_PROPORTIONAL_HAZARDS_REJECTED"
+        ),
     )
 
 
@@ -1664,11 +1743,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--visual-source-root", type=Path, required=True)
+    parser.add_argument("--h1-source-dir", type=Path)
     parser.add_argument("--h2-run", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     args = parser.parse_args()
     source_root = args.source_root.resolve()
     visual_source_root = args.visual_source_root.resolve()
+    h1_source_dir = (
+        args.h1_source_dir.resolve()
+        if args.h1_source_dir is not None
+        else visual_source_root / "h1"
+    )
     h2_run = args.h2_run.resolve()
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -1711,7 +1796,7 @@ def main() -> int:
         }
     )
     m3 = _render_m3(visual_source_root / "m3", output_root / "m3")
-    h1 = _render_h1(visual_source_root / "h1", output_root / "h1")
+    h1 = _render_h1(h1_source_dir, output_root / "h1")
     h2 = _render_h2(h2_run, output_root / "h2")
     h3 = _render_h3(visual_source_root / "h3", output_root / "h3")
     try:
