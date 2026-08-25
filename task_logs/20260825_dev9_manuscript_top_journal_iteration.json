@@ -107,8 +107,7 @@
     ]
   },
   "validation": {
-    "focused_tests": "159 passed, 4 deselected",
-    "post_cherry_pick_tests": "82 passed",
+    "focused_tests": "160 passed, 4 deselected",
     "ruff": "pass",
     "diff_check": "pass"
   },
