@@ -2256,16 +2256,38 @@ def make_export_runner(
                 module_kwargs = dict(load_kwargs)
                 if _module_uses_sepsis_kwargs(list(load_plan.source_concepts)):
                     module_kwargs.update(sepsis_load_kwargs)
-                df = api.load_concepts(
-                    list(load_plan.source_concepts),
-                    patient_ids=patient_ids,
-                    database=database,
-                    data_path=str(data_path),
-                    use_sofa2=use_sofa2,
-                    merge=True,
-                    verbose=False,
-                    **module_kwargs,
+                from easyicu.datasource import (
+                    DuckDBQueryInterrupted,
+                    get_duckdb_interrupt_callback,
                 )
+
+                def unregister_cancel() -> None:
+                    pass
+
+                register_cancel = getattr(job, "register_cancel_callback", None)
+                if callable(register_cancel):
+                    unregister_cancel = register_cancel(
+                        get_duckdb_interrupt_callback()
+                    )
+                try:
+                    if getattr(job, "cancel_requested", False):
+                        break
+                    df = api.load_concepts(
+                        list(load_plan.source_concepts),
+                        patient_ids=patient_ids,
+                        database=database,
+                        data_path=str(data_path),
+                        use_sofa2=use_sofa2,
+                        merge=True,
+                        verbose=False,
+                        **module_kwargs,
+                    )
+                except DuckDBQueryInterrupted:
+                    if getattr(job, "cancel_requested", False):
+                        break
+                    raise
+                finally:
+                    unregister_cancel()
                 if isinstance(df, dict):
                     df = {
                         key: _materialize_concept_load_plan(sub, load_plan)
