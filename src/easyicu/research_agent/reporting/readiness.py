@@ -121,6 +121,7 @@ _MANUSCRIPT_ERROR_VALIDATORS = frozenset(
         "manuscript_gate",
         "manuscript_language_guard",
         "manuscript_literature",
+        "manuscript_quality",
         "manuscript_result_sufficiency",
         "writer_agent",
     }
@@ -2411,6 +2412,17 @@ def write_readiness_artifacts(
         encoding="utf-8",
     )
     artifact_paths["author_review_note"] = str(author_review_path.relative_to(run_dir))
+
+    quality_audit_path = run_dir / "manuscript_quality_audit.json"
+    if quality_audit_path.exists():
+        artifact_paths["manuscript_quality_audit"] = str(
+            quality_audit_path.relative_to(run_dir)
+        )
+    reader_manuscript_path = run_dir / "manuscript_reader.md"
+    if reader_manuscript_path.exists():
+        artifact_paths["manuscript_reader"] = str(
+            reader_manuscript_path.relative_to(run_dir)
+        )
 
     manuscript_ready_path = run_dir / "manuscript_ready.md"
     if gates["manuscript_ready"] and manuscript_path.exists():

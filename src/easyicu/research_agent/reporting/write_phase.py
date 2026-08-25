@@ -55,6 +55,11 @@ from .manuscript_literature import (
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
 )
+from .manuscript_quality import (
+    ManuscriptQualityFinding,
+    audit_manuscript_quality,
+    render_reader_manuscript,
+)
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
@@ -578,6 +583,77 @@ def _persist_manuscript_critique(
             generation_mode="system",
         )
     return critique_path
+
+
+def _persist_manuscript_quality_artifacts(
+    *,
+    bound: str,
+    bound_evidence_id: str,
+    run_dir: Path,
+    evidence: Any,
+    findings: List[ValidationFinding],
+) -> tuple[ManuscriptQualityFinding, ...]:
+    """Persist a non-authoritative reader view and its deterministic audit."""
+
+    audit = audit_manuscript_quality(bound)
+    quality_audit_path = run_dir / "manuscript_quality_audit.json"
+    quality_audit_path.write_text(
+        json.dumps(
+            audit.to_dict(),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    reader_path = run_dir / "manuscript_reader.md"
+    reader_path.write_text(render_reader_manuscript(bound), encoding="utf-8")
+    if evidence.get("manuscript_quality_audit") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Deterministic reader-facing manuscript structure, terminology, "
+                "and cross-section consistency audit."
+            ),
+            source_path=quality_audit_path,
+            evidence_id="manuscript_quality_audit",
+            producer="pipeline",
+            generation_mode="system",
+        )
+    if evidence.get("manuscript_reader") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Non-authoritative reader view with audit links and numeric claim "
+                "footnotes removed; the bound manuscript remains authoritative."
+            ),
+            source_path=reader_path,
+            evidence_id="manuscript_reader",
+            producer="pipeline",
+            generation_mode="system",
+            metadata={
+                "authoritative_manuscript": False,
+                "source_evidence_id": bound_evidence_id,
+                "source_sha256": audit.source_sha256,
+            },
+        )
+    errors = tuple(item for item in audit.findings if item.severity == "error")
+    if errors:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_quality",
+                severity="error",
+                message=(
+                    "Deterministic manuscript quality audit requires changes: "
+                    + "; ".join(
+                        f"{item.code} ({item.section})" for item in errors[:8]
+                    )
+                ),
+                evidence_ids=["manuscript_quality_audit", "manuscript_reader"],
+                detail=audit.to_dict(),
+            )
+        )
+    return errors
 
 
 @dataclass(frozen=True)
@@ -1774,6 +1850,14 @@ def _bind_and_review_manuscript(
         *manuscript_value_findings,
     ]
 
+    manuscript_quality_errors = _persist_manuscript_quality_artifacts(
+        bound=bound,
+        bound_evidence_id=bound_evidence_id,
+        run_dir=run_dir,
+        evidence=evidence,
+        findings=findings,
+    )
+
     manuscript_critique, critic_review_error = _review_manuscript_with_fail_safe(
         critic,
         scaffold=bound,
@@ -1819,6 +1903,19 @@ def _bind_and_review_manuscript(
                 + [
                     "Manuscript numeric claims disagree with registered step_summary values."
                 ],
+            }
+        )
+    if manuscript_quality_errors:
+        manuscript_critique = manuscript_critique.model_copy(
+            update={
+                "status": "blocked",
+                "concerns": list(manuscript_critique.concerns)
+                + [
+                    "The deterministic manuscript quality audit found structural, "
+                    "terminology, or cross-section consistency errors."
+                ],
+                "suggested_repairs": list(manuscript_critique.suggested_repairs)
+                + [item.message for item in manuscript_quality_errors[:8]],
             }
         )
     _persist_manuscript_critique(
