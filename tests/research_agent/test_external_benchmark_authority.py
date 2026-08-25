@@ -47,7 +47,7 @@ def test_external_study_authority_compiles_existing_typed_contracts() -> None:
     assert authority.endpoint.name == "event"
     assert authority.user_preferences is not None
     assert authority.user_preferences["covariate_selection"] == "exact"
-    assert authority.time_windows[0]["name"] == "followup"
+    assert authority.time_windows[0].name == "followup"
     assert authority.id_columns == ("stay_id",)
     assert authority.time_columns == ("followup_hour",)
     assert authority.outcome_columns == ("event",)

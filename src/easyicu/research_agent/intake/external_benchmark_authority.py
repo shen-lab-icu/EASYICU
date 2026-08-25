@@ -37,7 +37,7 @@ class ExternalBenchmarkStudyAuthority:
     endpoint: EndpointSpec | None
     user_preferences: dict[str, Any] | None
     concept_descriptions: dict[str, str]
-    time_windows: tuple[dict[str, Any], ...]
+    time_windows: tuple[TimeWindow, ...]
     id_columns: tuple[str, ...]
     time_columns: tuple[str, ...]
     outcome_columns: tuple[str, ...]
@@ -145,7 +145,7 @@ def compile_external_benchmark_study_authority(
 
     raw_windows = row.get("time_windows")
     if raw_windows is None:
-        windows: tuple[dict[str, Any], ...] = ()
+        windows: tuple[TimeWindow, ...] = ()
     elif not isinstance(raw_windows, list):
         raise ExternalBenchmarkAuthorityError(
             reason_code="TIME_WINDOWS_NOT_LIST",
@@ -155,8 +155,7 @@ def compile_external_benchmark_study_authority(
     else:
         try:
             windows = tuple(
-                TimeWindow.model_validate(value).model_dump(mode="json")
-                for value in raw_windows
+                TimeWindow.model_validate(value) for value in raw_windows
             )
         except ValidationError as exc:
             raise ExternalBenchmarkAuthorityError(
