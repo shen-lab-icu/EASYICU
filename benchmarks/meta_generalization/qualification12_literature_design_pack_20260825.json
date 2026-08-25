@@ -1,0 +1,1946 @@
+{
+  "schema_version": "easyicu.qualification12_literature_design_pack/1",
+  "profile_ref": "npj_dm_qualification12_design_dev/20260825",
+  "reviewed_at": "2026-08-25T12:00:00-04:00",
+  "selection_policy": {
+    "sources_per_item": 2,
+    "required_dimensions": [
+      "study_population",
+      "time_zero_and_windows",
+      "variable_operationalization",
+      "missingness_and_censoring",
+      "primary_model_and_sensitivities",
+      "table_and_figure_completeness",
+      "conclusion_boundaries"
+    ],
+    "full_text_required": true,
+    "supplement_disposition_required": true,
+    "recent_source_window_years": 5,
+    "published_effects_are_expected_answers": false,
+    "note": "Articles are external design and reporting benchmarks. Their numerical results must never be copied into benchmark expectations or used to override database-specific estimates."
+  },
+  "source_manifest_sha256": "485a2f7e0c37a15804f71ecbeda1ecdabed603133f187949bad7e6f4c81118e3",
+  "review_manifest_sha256": "0a0dd93a091164be44b01f64a85bb678db7d5f552431d5743637e0893b9fc585",
+  "items": [
+    {
+      "task_id": "MG01",
+      "title": "Early RBC transfusion and mortality (eICU)",
+      "expected_behavior": "bound_result",
+      "expected_gap_reason": null,
+      "manual_screening_query": "intensive care red blood cell transfusion mortality early cohort",
+      "bound_preplan_literature": {
+        "research_question": "Among adult ICU patients in eICU-CRD, does early (first-24h) red-blood-cell transfusion change in-hospital mortality?",
+        "citations": [
+          {
+            "key": "pmc9547456_mg01",
+            "title": "Association between in-ICU red blood cells transfusion and 1-year mortality in ICU survivors.",
+            "year": "2022",
+            "venue": "Crit Care",
+            "relevance": "ICU transfusion cohort and confounding-control design.",
+            "doi": "10.1186/s13054-022-04171-1",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9547456/",
+            "pmid": "36207737",
+            "publication_types": []
+          },
+          {
+            "key": "pmc11867898_mg01",
+            "title": "Red Blood Cell Transfusion in Critically Ill Adults: An American College of Chest Physicians Clinical Practice Guideline.",
+            "year": "2025",
+            "venue": "Chest",
+            "relevance": "Current critical-care transfusion evidence and reporting framework.",
+            "doi": "10.1016/j.chest.2024.09.016",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11867898/",
+            "pmid": "39341492",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:36207737 AND SRC:MED",
+              "EXT_ID:39341492 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc9547456_mg01": [
+              "EXT_ID:36207737 AND SRC:MED"
+            ],
+            "pmc11867898_mg01": [
+              "EXT_ID:39341492 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc9547456_mg01",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "ICU transfusion cohort and confounding-control design.",
+            "query": "EXT_ID:36207737 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc11867898_mg01",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Current critical-care transfusion evidence and reporting framework.",
+            "query": "EXT_ID:39341492 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc9547456_mg01",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9547456/fullTextXML",
+            "full_text_sha256": "9b518b3d679f5d703b79dc8625c531da7bf27901c8aac4b920bf7631d48586cf",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "a50d59636210fd817315dfeaadf911cbb00859bd2bf62d5ae660f54905c21b44",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The cohort enrolled adults across multiple ICUs but analyzed ICU survivors, so its population restriction must not be copied into an admission-based eICU target trial.",
+                "locator": "Methods: study population; Discussion: selection bias"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Transfusion was observed during the ICU stay and follow-up began at ICU discharge; this differs from a first-24-hour exposure anchored at ICU admission and exposes survivor-selection risk.",
+                "locator": "Methods: exposure and follow-up; Supplementary analyses"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "The cohort used multiple imputation and a missingness-aware sensitivity approach, while also acknowledging selection and loss-to-follow-up mechanisms; eICU exposure absence requires a separate structural-absence audit.",
+                "locator": "Statistical analysis; Supplementary methods"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The analysis combined survival models, propensity weighting and alternate estimands; this supports prespecified confounding adjustment and overlap diagnostics, not automatic reuse of a one-year survivor model.",
+                "locator": "Statistical analysis; propensity and sensitivity sections"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "The authors explicitly retain residual-confounding and survivor-selection limitations; the Qualification12 result may support an adjusted association only, not a causal claim that transfusion changes mortality.",
+                "locator": "Discussion: limitations"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc11867898_mg01",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC11867898/fullTextXML",
+            "full_text_sha256": "005122a6fbdefd61df015f95cdf71c6696e362d8ad461b4b7c8b9c620eaebbb2",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "668d8a13803dd8ff0e7a17e9329021988401c5c88652b622f38b224b9e419444",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "The guideline separates transfusion strategies by explicit hemoglobin thresholds and clinically defined subgroups; an eICU study must instead prespecify a documented RBC administration rule and cannot equate an order with administration without validation.",
+                "locator": "Guideline PICO questions and recommendations"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The guideline presents evidence profiles by PICO, intervention threshold, outcome and certainty; the study should likewise show cohort flow, baseline balance, exposure prevalence, adjusted effects and absolute mortality with uncertainty.",
+                "locator": "Evidence tables and recommendation summaries"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG02",
+      "title": "Sedation-depth tier and prolonged ventilation (HiRID)",
+      "expected_behavior": "bound_result",
+      "expected_gap_reason": null,
+      "manual_screening_query": "mechanically ventilated early deep sedation prolonged mechanical ventilation cohort",
+      "bound_preplan_literature": {
+        "research_question": "Among mechanically ventilated adults in HiRID, is there a dose-response gradient between first-24h sedation-depth tier and prolonged mechanical ventilation?",
+        "citations": [
+          {
+            "key": "pmc10186077_mg02",
+            "title": "The Profile of Early Sedation Depth and Clinical Outcomes of Mechanically Ventilated Patients in Korea.",
+            "year": "2023",
+            "venue": "J Korean Med Sci",
+            "relevance": "Prospective early-sedation cohort with ventilation outcomes.",
+            "doi": "10.3346/jkms.2023.38.e141",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10186077/",
+            "pmid": "37191845",
+            "publication_types": []
+          },
+          {
+            "key": "pmc9198202_mg02",
+            "title": "A dual-center cohort study on the association between early deep sedation and clinical outcomes in mechanically ventilated patients during the COVID-19 pandemic: The COVID-SED study.",
+            "year": "2022",
+            "venue": "Crit Care",
+            "relevance": "Independent early deep-sedation cohort and reporting analogue.",
+            "doi": "10.1186/s13054-022-04042-9",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9198202/",
+            "pmid": "35705989",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:37191845 AND SRC:MED",
+              "EXT_ID:35705989 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc10186077_mg02": [
+              "EXT_ID:37191845 AND SRC:MED"
+            ],
+            "pmc9198202_mg02": [
+              "EXT_ID:35705989 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc10186077_mg02",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "direct_comparator",
+            "rationale": "Prospective early-sedation cohort with ventilation outcomes.",
+            "query": "EXT_ID:37191845 AND SRC:MED",
+            "population_match": true,
+            "exposure_match": true,
+            "outcome_match": true,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc9198202_mg02",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "direct_comparator",
+            "rationale": "Independent early deep-sedation cohort and reporting analogue.",
+            "query": "EXT_ID:35705989 AND SRC:MED",
+            "population_match": true,
+            "exposure_match": true,
+            "outcome_match": true,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc10186077_mg02",
+            "evidence_role": "direct_comparator",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC10186077/fullTextXML",
+            "full_text_sha256": "0526a7b4643585ee81216122ea12f942af747fc9bca8c6a6a4994e206c268a98",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "af6ec12f79cef5f933ce69bd40f0138e8d9838c786e013f512a36afbd5958362",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "A prospective multicenter cohort enrolled adults expected to require invasive ventilation and sedation beyond 48 hours; that eligibility condition can select for prolonged ventilation and must be adapted for HiRID.",
+                "locator": "Methods: patients and study setting"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Sedation depth was summarized during the first 48 hours after ventilation-related ICU care, whereas the target question requires an exact ventilation-start time zero and a first-24-hour exposure window.",
+                "locator": "Methods: early sedation period"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "Sedation assessments and follow-up eligibility were protocol-defined, but routine HiRID scores are irregular; measurement frequency and sparse assessment must be reported rather than treated as exchangeable missing values.",
+                "locator": "Methods: data collection; study flow"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The cohort used adjusted time-to-event models and propensity-score matching; an ordinal dose-response analysis should add a trend test, flexible tier contrasts and sensitivity to the tier-construction rule.",
+                "locator": "Statistical analysis; matched analyses"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc9198202_mg02",
+            "evidence_role": "direct_comparator",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9198202/fullTextXML",
+            "full_text_sha256": "93f4b822e2fd2f6c939f542cf09baf46d23f272be96ad373ec85c7b0b97b2e52",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "df828d9d09c40a658eb3f2a9377a7cd71b5ff6dd1dd7d28fd60bb3d1359ffe7d",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "Deep sedation was defined from recorded RASS or SAS values using prespecified cutoffs; HiRID tier 0-3 therefore needs an auditable mapping from irregular scores and a rule for patients with no assessment.",
+                "locator": "Methods: exposure definition"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The report includes participant flow, baseline comparisons, adjusted outcome analyses and supplementary covariate detail; the target analysis should additionally plot tier-specific absolute prolonged-ventilation risk with uncertainty.",
+                "locator": "Figures, main tables and supplement"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "The observational dual-center design cannot eliminate confounding by illness severity or treatment indication; a monotonic tier association would not establish that deeper sedation causes prolonged ventilation.",
+                "locator": "Discussion: limitations"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG03",
+      "title": "Time from intubation to extubation-or-death (AmsterdamUMCdb)",
+      "expected_behavior": "bound_result",
+      "expected_gap_reason": null,
+      "manual_screening_query": "driving pressure extubation mortality time varying mechanical ventilation cohort",
+      "bound_preplan_literature": {
+        "research_question": "Among intubated adults in AmsterdamUMCdb, what is the hazard of extubation-or-death and how does it vary with first-day driving pressure?",
+        "citations": [
+          {
+            "key": "pmc11579024_mg03",
+            "title": "Impacts of initial ICU driving pressure on outcomes in acute hypoxemic respiratory failure: a MIMIC-IV database study.",
+            "year": "2024",
+            "venue": "Sci Rep",
+            "relevance": "First-day driving-pressure cohort with explicit derivation and missing-data analysis.",
+            "doi": "10.1038/s41598-024-80355-9",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11579024/",
+            "pmid": "39567641",
+            "publication_types": []
+          },
+          {
+            "key": "pmc7906666_mg03",
+            "title": "Time-varying intensity of mechanical ventilation and mortality in patients with acute respiratory failure: a registry-based, prospective cohort study.",
+            "year": "2020",
+            "venue": "Lancet Respir Med",
+            "relevance": "Prospective time-varying ventilation-intensity analysis.",
+            "doi": "10.1016/s2213-2600(20)30325-8",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7906666/",
+            "pmid": "32735841",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:39567641 AND SRC:MED",
+              "EXT_ID:32735841 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc11579024_mg03": [
+              "EXT_ID:39567641 AND SRC:MED"
+            ],
+            "pmc7906666_mg03": [
+              "EXT_ID:32735841 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc11579024_mg03",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "direct_comparator",
+            "rationale": "First-day driving-pressure cohort with explicit derivation and missing-data analysis.",
+            "query": "EXT_ID:39567641 AND SRC:MED",
+            "population_match": true,
+            "exposure_match": true,
+            "outcome_match": true,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc7906666_mg03",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Prospective time-varying ventilation-intensity analysis.",
+            "query": "EXT_ID:32735841 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc11579024_mg03",
+            "evidence_role": "direct_comparator",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC11579024/fullTextXML",
+            "full_text_sha256": "ffa491666e9ec69799890b3c50b8d25b63e86bf6310215783c4e95af02e7377e",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "c079b1ff29e8c0f547bee86d2e83013f4ce9a2c768df29c5f362d53b812d6471",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The MIMIC-IV cohort restricted to acute hypoxemic respiratory failure and required plateau pressure plus PEEP in the first ICU day; this documents the severe complete-case selection that driving-pressure eligibility can create.",
+                "locator": "Methods: participants; Figure 1"
+              },
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "Initial driving pressure was calculated as plateau pressure minus PEEP from first-day values and then dichotomized; the target must certify compatible measurements and prespecify how repeated pairs are selected.",
+                "locator": "Methods: data collection and exposure definition"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "Patients lacking either plateau pressure or PEEP were excluded and remaining covariate gaps were multiply imputed; the target should quantify both derivation failure and downstream covariate missingness.",
+                "locator": "Methods: exclusions and statistical analysis"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "The single-center retrospective study notes residual confounding, measurement availability and population restrictions; a first-day driving-pressure association cannot prove a ventilator-setting intervention effect.",
+                "locator": "Discussion: limitations"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc7906666_mg03",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC7906666/fullTextXML",
+            "full_text_sha256": "bd2f1fa3b4593e78bddc612a68177671e8ef1fcdf3caa1515bc4c5679074ecc0",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "447951539c0dac1f098cc699b10cdbbd4aa1ce62905dc94bb856a5634b45fb6d",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Ventilation intensity was handled longitudinally during mechanical ventilation, illustrating that ventilator exposure belongs on a ventilation-aligned clock rather than an ICU-admission clock.",
+                "locator": "Methods: longitudinal exposure assessment"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The registry study modeled ventilation intensity as time-varying and examined cumulative burden with adjusted survival methods; extubation and death require an estimand that respects their competing terminal states rather than a cause-naive composite shortcut.",
+                "locator": "Methods: statistical models and sensitivity analyses"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The report pairs exposure distributions with adjusted intensity-response and cumulative-burden displays; the target should show risk sets, event counts and the consequences of treating death jointly or separately from extubation.",
+                "locator": "Main figures and appendix"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG04",
+      "title": "Beta-blocker exposure and new-onset AF (MIMIC-IV)",
+      "expected_behavior": "bound_result",
+      "expected_gap_reason": null,
+      "manual_screening_query": "intensive care new onset atrial fibrillation beta blocker observational cohort",
+      "bound_preplan_literature": {
+        "research_question": "Among adult ICU patients in MIMIC-IV without prior atrial fibrillation, is early beta-blocker exposure associated with new-onset atrial fibrillation?",
+        "citations": [
+          {
+            "key": "pmc9362765_mg04",
+            "title": "New-onset atrial fibrillation in intensive care: epidemiology and outcomes.",
+            "year": "2022",
+            "venue": "Eur Heart J Acute Cardiovasc Care",
+            "relevance": "ICU new-onset atrial-fibrillation ascertainment and outcome design.",
+            "doi": "10.1093/ehjacc/zuac080",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9362765/",
+            "pmid": "35792651",
+            "publication_types": []
+          },
+          {
+            "key": "pmc8116825_mg04",
+            "title": "Premorbid β1-selective (but not non-selective) β-blocker exposure reduces intensive care unit mortality among septic patients.",
+            "year": "2021",
+            "venue": "J Intensive Care",
+            "relevance": "Premorbid beta-blocker exposure and confounding-control analogue.",
+            "doi": "10.1186/s40560-021-00553-9",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8116825/",
+            "pmid": "33985572",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:35792651 AND SRC:MED",
+              "EXT_ID:33985572 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc9362765_mg04": [
+              "EXT_ID:35792651 AND SRC:MED"
+            ],
+            "pmc8116825_mg04": [
+              "EXT_ID:33985572 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc9362765_mg04",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "ICU new-onset atrial-fibrillation ascertainment and outcome design.",
+            "query": "EXT_ID:35792651 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc8116825_mg04",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Premorbid beta-blocker exposure and confounding-control analogue.",
+            "query": "EXT_ID:33985572 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc9362765_mg04",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9362765/fullTextXML",
+            "full_text_sha256": "3bc416604db60fa586aea810703c983e9cc3ba2c7e1251e680d9bd982516a711",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "190b5babf8394f7a3527ed9153b674ce27f2a71267add04b045d3d0d1ba8ee24",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The ICU epidemiology study distinguishes new-onset atrial fibrillation from pre-existing disease using linked clinical history; the MIMIC-IV cohort needs an explicit prior-AF lookback and exclusion receipt.",
+                "locator": "Methods: cohort and AF history"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "New-onset AF is observed during critical illness after ICU entry; exposure classification must therefore finish before outcome surveillance begins to avoid immortal-time and reverse-causation bias.",
+                "locator": "Methods: AF timing and follow-up"
+              },
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "AF ascertainment combines clinically recorded rhythm information with diagnostic history; absence of a code alone is not equivalent to a validated no-AF state.",
+                "locator": "Methods: outcome ascertainment"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "Routine rhythm documentation varies with monitoring and clinical concern; the target should report ascertainment sources and monitoring opportunity instead of assuming undocumented AF is uniformly absent.",
+                "locator": "Methods and limitations: routine-data ascertainment"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The epidemiology report separates cohort construction, AF incidence and downstream outcomes; the target should add exposure balance, propensity overlap and cumulative AF incidence with death/discharge handling made explicit.",
+                "locator": "Study flow, tables and outcome figures"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc8116825_mg04",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC8116825/fullTextXML",
+            "full_text_sha256": "d0741ae24dc9bc59262a80b0dcb37c0dc3300dba397dd1e978d97650ef5d642c",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "630f44f05ce960fb49d03da020ae8d0ac3a46d26510fcf549a46da9777fc780f",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The beta-blocker study uses multivariable adjustment and propensity-based analyses for a strongly confounded treatment exposure; the target additionally needs overlap, treatment-indication and early-outcome sensitivity checks.",
+                "locator": "Statistical analysis and supplementary propensity analyses"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "The exposure analogue is premorbid beta-blocker use in sepsis and mortality, not early ICU treatment for AF prevention; it supplies design cautions but no direct efficacy evidence for the target question.",
+                "locator": "Discussion: interpretation and limitations"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG05",
+      "title": "Early prediction of 48h mortality (SICdb)",
+      "expected_behavior": "bound_result",
+      "expected_gap_reason": null,
+      "manual_screening_query": "ICU dynamic 48 hour mortality prediction vital signs calibration external validation",
+      "bound_preplan_literature": {
+        "research_question": "Among adults in SICdb, can first-6h vital-sign summaries discriminate 48-hour mortality?",
+        "citations": [
+          {
+            "key": "pmc12528449_mg05",
+            "title": "An interpretable machine learning algorithm enables dynamic 48-hour mortality prediction during an ICU stay.",
+            "year": "2025",
+            "venue": "Commun Med (Lond)",
+            "relevance": "Dynamic 48-hour ICU mortality prediction with validation and interpretability.",
+            "doi": "10.1038/s43856-025-01192-z",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12528449/",
+            "pmid": "41094092",
+            "publication_types": []
+          },
+          {
+            "key": "pmc11102905_mg05",
+            "title": "Salzburg Intensive Care database (SICdb): a detailed exploration and comparative analysis with MIMIC-IV.",
+            "year": "2024",
+            "venue": "Sci Rep",
+            "relevance": "SICdb content, time structure and cross-database comparison.",
+            "doi": "10.1038/s41598-024-61380-0",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11102905/",
+            "pmid": "38763952",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:41094092 AND SRC:MED",
+              "EXT_ID:38763952 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc12528449_mg05": [
+              "EXT_ID:41094092 AND SRC:MED"
+            ],
+            "pmc11102905_mg05": [
+              "EXT_ID:38763952 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc12528449_mg05",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "direct_comparator",
+            "rationale": "Dynamic 48-hour ICU mortality prediction with validation and interpretability.",
+            "query": "EXT_ID:41094092 AND SRC:MED",
+            "population_match": true,
+            "exposure_match": true,
+            "outcome_match": true,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc11102905_mg05",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "SICdb content, time structure and cross-database comparison.",
+            "query": "EXT_ID:38763952 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc12528449_mg05",
+            "evidence_role": "direct_comparator",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC12528449/fullTextXML",
+            "full_text_sha256": "28ebf48564a63ce107001802bebd6070b9c2778cbf210bd9782415580a47ec3b",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "c07cc2767fca02008428ce90adaf94c09a026b31381b7eaca099de5570fad2ea",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The dynamic prediction study defines eligible ICU stays and separates development from external validation cohorts; SICdb analysis must use patient-level splits and state whether repeated stays cross partitions.",
+                "locator": "Methods: cohorts and validation design"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Predictions are updated on a rolling ICU timeline for a future 48-hour horizon; the target instead fixes first-six-hour predictors at admission and must exclude information recorded after that window.",
+                "locator": "Methods: prediction times and horizon"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "The model describes preprocessing and incomplete data handling across time; first-six-hour exclusion can create informative selection, so window completeness and excluded-patient outcomes must be audited.",
+                "locator": "Methods and supplement: preprocessing"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The study evaluates discrimination, calibration and external performance with interpretable machine learning; the target should prespecify patient-level resampling, calibration intercept/slope, Brier score and a simple baseline model.",
+                "locator": "Methods: model development and validation"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "Performance is accompanied by cohort detail, temporal behavior, calibration and feature interpretation; AUROC alone is insufficient for acceptance.",
+                "locator": "Main performance figures and supplementary validation"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc11102905_mg05",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC11102905/fullTextXML",
+            "full_text_sha256": "59e24e6d84d1333819c7b99d90831140bce59d9796b07f4c9f1a8dbb58632a1b",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "c0183d5279ed8b58c2e361dd4be0bf35466780ef391c592a7797dd57620e486e",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "The SICdb descriptor documents its high-resolution vital-sign structure and differences from MIMIC-IV; each summary feature needs unit harmonization, sampling rules and a stable stay/patient key.",
+                "locator": "Dataset structure and comparative analysis"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "SICdb is a single-center data resource with database-specific structure and coverage; internal discrimination cannot establish transportability or clinical utility without external validation and decision-impact testing.",
+                "locator": "Discussion: database comparison and limitations"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG06",
+      "title": "Septic-shock sub-phenotypes from trajectories (MIMIC-IV)",
+      "expected_behavior": "bound_result",
+      "expected_gap_reason": null,
+      "manual_screening_query": "sepsis physiologic trajectory subphenotype reproducibility external validation",
+      "bound_preplan_literature": {
+        "research_question": "Among adults with septic shock in MIMIC-IV, do first-24h physiologic trajectories cluster into reproducible sub-phenotypes?",
+        "citations": [
+          {
+            "key": "pmc9250715_mg06",
+            "title": "Sepsis subphenotyping based on organ dysfunction trajectory.",
+            "year": "2022",
+            "venue": "Crit Care",
+            "relevance": "Multi-cohort organ-dysfunction trajectory phenotyping.",
+            "doi": "10.1186/s13054-022-04071-4",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9250715/",
+            "pmid": "35786445",
+            "publication_types": []
+          },
+          {
+            "key": "pmc11059505_mg06",
+            "title": "Identification and validation of sepsis subphenotypes using time-series data.",
+            "year": "2024",
+            "venue": "Heliyon",
+            "relevance": "Time-series sepsis subphenotypes with validation.",
+            "doi": "10.1016/j.heliyon.2024.e28520",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11059505/",
+            "pmid": "38689952",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:35786445 AND SRC:MED",
+              "EXT_ID:38689952 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc9250715_mg06": [
+              "EXT_ID:35786445 AND SRC:MED"
+            ],
+            "pmc11059505_mg06": [
+              "EXT_ID:38689952 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc9250715_mg06",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "direct_comparator",
+            "rationale": "Multi-cohort organ-dysfunction trajectory phenotyping.",
+            "query": "EXT_ID:35786445 AND SRC:MED",
+            "population_match": true,
+            "exposure_match": true,
+            "outcome_match": true,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc11059505_mg06",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "direct_comparator",
+            "rationale": "Time-series sepsis subphenotypes with validation.",
+            "query": "EXT_ID:38689952 AND SRC:MED",
+            "population_match": true,
+            "exposure_match": true,
+            "outcome_match": true,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc9250715_mg06",
+            "evidence_role": "direct_comparator",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9250715/fullTextXML",
+            "full_text_sha256": "50cd07965364edca75d2ac7f5f154a189c63f637662c42317bb1da50ac5ead04",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "c3fe07ae0592b93d30cf965dfd2a3a7ff22a04e3588464a11ae76650fcf02d4f",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The study derives sepsis trajectory phenotypes in one cohort and evaluates them in multiple independent cohorts; the MIMIC-IV target must define septic-shock onset and derivation eligibility before clustering.",
+                "locator": "Methods: study cohorts and inclusion"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Organ-dysfunction trajectories are aligned to a clinically defined early sepsis period and followed over repeated intervals; ICU admission is not an interchangeable substitute for shock onset.",
+                "locator": "Methods: trajectory construction"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The multi-cohort study combines trajectory clustering with cross-cohort validation and alternate characterization; acceptance requires cluster-number justification, resampling stability and a held-out reproducibility metric.",
+                "locator": "Methods: clustering, validation and sensitivity analyses"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The report shows cohort flow, trajectory profiles, phenotype composition and external-cohort behavior; outcome-by-cluster tables are descriptive and should be separated from the clustering objective.",
+                "locator": "Main figures, tables and supplement"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc11059505_mg06",
+            "evidence_role": "direct_comparator",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC11059505/fullTextXML",
+            "full_text_sha256": "1785f5c6dd8020d9709c12cb545f2ee9739136e063f7c0095a537374b5f69323",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "48437c4dbeb09da2dcc7bec0d1ef25bf4b61e63790ecd5d241e3e0b5fa33290d",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "The time-series study standardizes repeated physiologic variables before clustering and then characterizes groups clinically; feature units, binning, scaling and directionality must be frozen before outcome comparison.",
+                "locator": "Methods: variables and time-series preprocessing"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "Trajectory preprocessing includes imputation and minimum data requirements; sparse stays should be flagged and cluster stability rechecked under alternate imputation rather than silently completed.",
+                "locator": "Methods and supplement: missing-data processing"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "Data-driven clusters depend on variables, sampling and algorithm choices; labels must remain descriptive unless they are stable across perturbations and an independent cohort, and outcome differences are not causal effects.",
+                "locator": "Discussion: limitations"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG07",
+      "title": "Lactate measurement frequency across ICU types (eICU)",
+      "expected_behavior": "bound_result",
+      "expected_gap_reason": null,
+      "manual_screening_query": "ICU electronic health record measurement frequency informative missingness laboratory",
+      "bound_preplan_literature": {
+        "research_question": "Among adults in eICU-CRD, how does lactate measurement frequency vary across ICU unit types, and is the variation informative?",
+        "citations": [
+          {
+            "key": "pmc12220764_mg07",
+            "title": "Implicit bias in ICU electronic health record data: measurement frequencies and missing data rates of clinical variables.",
+            "year": "2025",
+            "venue": "BMC Med Inform Decis Mak",
+            "relevance": "ICU measurement-frequency and missing-data process analysis.",
+            "doi": "10.1186/s12911-025-03058-9",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12220764/",
+            "pmid": "40598240",
+            "publication_types": []
+          },
+          {
+            "key": "pmc7810439_mg07",
+            "title": "Informative presence and observation in routine health data: A review of methodology for clinical risk prediction.",
+            "year": "2021",
+            "venue": "J Am Med Inform Assoc",
+            "relevance": "Methodological review of informative observation in routine health data.",
+            "doi": "10.1093/jamia/ocaa242",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7810439/",
+            "pmid": "33164082",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:40598240 AND SRC:MED",
+              "EXT_ID:33164082 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc12220764_mg07": [
+              "EXT_ID:40598240 AND SRC:MED"
+            ],
+            "pmc7810439_mg07": [
+              "EXT_ID:33164082 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc12220764_mg07",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "direct_comparator",
+            "rationale": "ICU measurement-frequency and missing-data process analysis.",
+            "query": "EXT_ID:40598240 AND SRC:MED",
+            "population_match": true,
+            "exposure_match": true,
+            "outcome_match": true,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc7810439_mg07",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Methodological review of informative observation in routine health data.",
+            "query": "EXT_ID:33164082 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc12220764_mg07",
+            "evidence_role": "direct_comparator",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC12220764/fullTextXML",
+            "full_text_sha256": "3ac7aa77e17f3e9c291c624d699e25818b6fb6bb1638fe6090af3935cd4fa75a",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "6227ac59ffce18b3f249b5fab9a560440f03ff2e872a4fa89a9b6237f00ab7b5",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The empirical study compares measurement behavior across ICU patients and clinical strata; eICU analyses must retain unit type, hospital and stay identifiers so institutional practice is not mistaken for physiology.",
+                "locator": "Methods: cohort and strata"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Measurement frequencies are evaluated over fixed ICU-time intervals; the target should prespecify a common observation window and handle short stays without rewarding longer opportunity time.",
+                "locator": "Methods: observation windows"
+              },
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "The study treats measurement counts and missing-data rates as outcomes rather than nuisance fields; lactate frequency should be defined as both any measurement and opportunity-adjusted count.",
+                "locator": "Methods: measurement-frequency definitions"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The empirical analysis compares frequencies while accounting for patient and care-context factors; eICU should use clustered uncertainty and test robustness to stay length, severity and hospital mix.",
+                "locator": "Statistical analysis and supplementary models"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The report visualizes missingness and measurement-rate variation across variables and groups; the target should show denominators, zero-inflation, hospital/unit distributions and adjusted contrasts.",
+                "locator": "Main figures and supplementary tables"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc7810439_mg07",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC7810439/fullTextXML",
+            "full_text_sha256": "2ec7e33cc6ecbecc96e9a94bb324c21f59b1da132bd28f2bdd7e4cadddaa9a0d",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "98d5fa3a4449c11bbe0809567628301e64eefb66419aed2a23740a5a76ba68b9",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "The review shows that whether and when clinicians record a variable can carry prognostic information and violate missing-at-random assumptions; imputation must not erase the process being studied.",
+                "locator": "Review: informative presence and observation taxonomy"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "Observation-process associations can reveal care patterns and bias but do not identify why a clinician ordered a test; unit-level differences cannot be interpreted as quality or causal effects without additional design.",
+                "locator": "Review: discussion and limitations"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG08",
+      "title": "FAIL-CLOSED: post-discharge readmission-free survival (MIMIC-IV)",
+      "expected_behavior": "fail_closed",
+      "expected_gap_reason": "follow-up beyond discharge is not derivable from the ICU tables",
+      "manual_screening_query": "ICU discharge readmission death external validation MIMIC-IV follow-up",
+      "bound_preplan_literature": {
+        "research_question": "Among adults in MIMIC-IV, what is the 30-day POST-DISCHARGE readmission-free survival after ICU stay?",
+        "citations": [
+          {
+            "key": "pmc9810617_mg08",
+            "title": "MIMIC-IV, a freely accessible electronic health record dataset.",
+            "year": "2023",
+            "venue": "Sci Data",
+            "relevance": "MIMIC-IV data scope and linkage boundary.",
+            "doi": "10.1038/s41597-022-01899-x",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9810617/",
+            "pmid": "36596836",
+            "publication_types": []
+          },
+          {
+            "key": "pmc9848213_mg08",
+            "title": "Predicting Readmission or Death After Discharge From the ICU: External Validation and Retraining of a Machine Learning Model.",
+            "year": "2023",
+            "venue": "Crit Care Med",
+            "relevance": "Post-ICU readmission-or-death ascertainment and external validation.",
+            "doi": "10.1097/ccm.0000000000005758",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9848213/",
+            "pmid": "36524820",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:36596836 AND SRC:MED",
+              "EXT_ID:36524820 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc9810617_mg08": [
+              "EXT_ID:36596836 AND SRC:MED"
+            ],
+            "pmc9848213_mg08": [
+              "EXT_ID:36524820 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc9810617_mg08",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "MIMIC-IV data scope and linkage boundary.",
+            "query": "EXT_ID:36596836 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc9848213_mg08",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Post-ICU readmission-or-death ascertainment and external validation.",
+            "query": "EXT_ID:36524820 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc9810617_mg08",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9810617/fullTextXML",
+            "full_text_sha256": "ebec2ae1cf8a6ba7fd46b6391999756133b24d0c4447bb5d8c1ecd8406c04b2e",
+            "supplement_status": "not_published",
+            "supplement_sha256": null,
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "MIMIC-IV links hospital and ICU events within one health system and deidentifies longitudinal records; it is not a population-wide post-discharge registry.",
+                "locator": "Data descriptor: scope and modules"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Hospital discharge timestamps exist, but observation after discharge depends on later encounters returning to the same source; a 30-day complete follow-up window is not certified by ICU tables alone.",
+                "locator": "Data descriptor: hospital admissions and date handling"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "The database descriptor supports in-system retrospective research but does not claim complete out-of-system readmission capture; the correct result is a data-linkage gap, not a low readmission estimate.",
+                "locator": "Data descriptor: limitations"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc9848213_mg08",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9848213/fullTextXML",
+            "full_text_sha256": "243a39db2f9cffe7fd8daeb1ec885d2d6b6fbc73bef493feef7f52cb185ecd38",
+            "supplement_status": "not_published",
+            "supplement_sha256": null,
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "The validation study defines a composite of ICU readmission or death after ICU discharge using site-specific electronic records; both event components and their ascertainment window require explicit linked sources.",
+                "locator": "Methods: outcome definition"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "External validation relies on a known at-risk interval and recorded post-discharge events; absent linkage cannot be repaired by censoring everyone at discharge because that leaves no requested follow-up.",
+                "locator": "Methods: follow-up and validation cohort"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The study evaluates external performance and retraining for a post-ICU outcome; such modeling is meaningful only after event and censoring certification, so the current Qualification12 item must fail before estimation.",
+                "locator": "Methods: external validation and retraining"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The report includes cohort flow, outcome prevalence, discrimination and calibration across sites; no survival curve should be drawn when post-discharge risk sets are unobservable.",
+                "locator": "Results tables and validation figures"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG09",
+      "title": "FAIL-CLOSED: exposure absent from the database mapping (eICU)",
+      "expected_behavior": "fail_closed",
+      "expected_gap_reason": "declared exposure cannot be resolved",
+      "manual_screening_query": "eICU medication mapping drug names crosswalk multi center database heterogeneity",
+      "bound_preplan_literature": {
+        "research_question": "Among adults in eICU-CRD, does exposure to [an agent absent from the eICU medication crosswalk] change in-hospital mortality?",
+        "citations": [
+          {
+            "key": "pmc6132188_mg09",
+            "title": "The eICU Collaborative Research Database, a freely available multi-center database for critical care research.",
+            "year": "2018",
+            "venue": "Sci Data",
+            "relevance": "eICU medication tables, hospital coverage and data heterogeneity.",
+            "doi": "10.1038/sdata.2018.178",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6132188/",
+            "pmid": "30204154",
+            "publication_types": []
+          },
+          {
+            "key": "pmc12084561_mg09",
+            "title": "FedWeight: mitigating covariate shift of federated learning on electronic health records data through patients re-weighting.",
+            "year": "2025",
+            "venue": "NPJ Digit Med",
+            "relevance": "Cross-database drug-name harmonization and covariate-shift methods.",
+            "doi": "10.1038/s41746-025-01661-8",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12084561/",
+            "pmid": "40379766",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:30204154 AND SRC:MED",
+              "EXT_ID:40379766 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc6132188_mg09": [
+              "EXT_ID:30204154 AND SRC:MED"
+            ],
+            "pmc12084561_mg09": [
+              "EXT_ID:40379766 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc6132188_mg09",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "eICU medication tables, hospital coverage and data heterogeneity.",
+            "query": "EXT_ID:30204154 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc12084561_mg09",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Cross-database drug-name harmonization and covariate-shift methods.",
+            "query": "EXT_ID:40379766 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc6132188_mg09",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC6132188/fullTextXML",
+            "full_text_sha256": "0505f98c853d855248ac2f312d9720de5d8f426c9df6851cabd402fb1803ada2",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "5c473295342c104855d630577184e0e569550190b6036fcfd67de8556f0a646b",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "eICU aggregates stays from many hospitals with different interfaces and table coverage; exposure resolvability must be checked at hospital and stay levels before defining the cohort.",
+                "locator": "Data descriptor: participating units and table coverage"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Medication and infusion records use event offsets relative to ICU care, but coverage and charting conventions differ; a first-day window requires a certified event-time field for the named agent.",
+                "locator": "Data descriptor: medication and infusion tables"
+              },
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "Medication orders and infusion records are distinct and an order does not guarantee administration; an absent crosswalk entry cannot be replaced with a guessed synonym or therapeutic class.",
+                "locator": "Data descriptor: medication and infusionDrug"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "Table availability varies across hospitals, creating structural absence that is different from a documented unexposed state; site coverage must be reported before any comparison.",
+                "locator": "Data descriptor: data completeness and limitations"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc12084561_mg09",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC12084561/fullTextXML",
+            "full_text_sha256": "1596622090845e3a96508c70bb01b6c35fa8c982c79d31cd68f6f2d1cff292a0",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "cdda7f242078babdd7751b130c27afafbb9bf67210d82dcb4ceec0c25871b073",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The harmonization study maps heterogeneous EHR features for prediction and addresses covariate shift; mapping algorithms may propose candidates but cannot certify a causal exposure without source-table validation.",
+                "locator": "Methods: feature mapping and reweighting"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "Cross-site performance and feature-availability summaries make heterogeneity visible; this item instead needs a mapping receipt listing searched tables, terms and unresolved status before any clinical figure.",
+                "locator": "Methods and results: mapping and site comparisons"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "Successful predictive harmonization does not prove that a specific administered drug is present in eICU; unresolved exposure identity must remain a fail-closed capability result.",
+                "locator": "Discussion: limitations and transportability"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG10",
+      "title": "FAIL-CLOSED: pre-hospital time origin (MIMIC-IV)",
+      "expected_behavior": "fail_closed",
+      "expected_gap_reason": "time origin (symptom onset) is not reconstructable from ICU tables",
+      "manual_screening_query": "sepsis antibiotic timing symptom onset emergency department meta analysis guideline",
+      "bound_preplan_literature": {
+        "research_question": "Among adults in MIMIC-IV, what is the effect of early antibiotics measured from time of symptom onset on mortality?",
+        "citations": [
+          {
+            "key": "pmc8486643_mg10",
+            "title": "Surviving sepsis campaign: international guidelines for management of sepsis and septic shock 2021.",
+            "year": "2021",
+            "venue": "Intensive Care Med",
+            "relevance": "Current sepsis guideline definitions for antimicrobial timing.",
+            "doi": "10.1007/s00134-021-06506-y",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8486643/",
+            "pmid": "34599691",
+            "publication_types": []
+          },
+          {
+            "key": "pmc12425674_mg10",
+            "title": "Appropriate timing of antibiotic initiation in patients with sepsis or septic shock: a systematic review and meta-analysis.",
+            "year": "2025",
+            "venue": "Korean J Intern Med",
+            "relevance": "Recent antibiotic-timing meta-analysis and time-zero heterogeneity.",
+            "doi": "10.3904/kjim.2025.037",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12425674/",
+            "pmid": "40859809",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:34599691 AND SRC:MED",
+              "EXT_ID:40859809 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc8486643_mg10": [
+              "EXT_ID:34599691 AND SRC:MED"
+            ],
+            "pmc12425674_mg10": [
+              "EXT_ID:40859809 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc8486643_mg10",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Current sepsis guideline definitions for antimicrobial timing.",
+            "query": "EXT_ID:34599691 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc12425674_mg10",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Recent antibiotic-timing meta-analysis and time-zero heterogeneity.",
+            "query": "EXT_ID:40859809 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc8486643_mg10",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC8486643/fullTextXML",
+            "full_text_sha256": "6a55ec3be31d9c147e086e7e14b97b035c5dc3d7224da26d3b2a86c691c94953",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "003c8c179431015e7ea55046c01592930036a77f3b61d02aceb65299cdc89090",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The guideline separates septic shock or high-likelihood sepsis from possible sepsis without shock; timing recommendations are conditional on these clinically assessed populations.",
+                "locator": "Antimicrobial timing recommendations"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Antibiotic clocks are anchored to recognition and urgent clinical assessment, not an unrecorded biologic symptom-onset time; substituting ICU admission would change the estimand.",
+                "locator": "Guideline rationale for timing"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "Guideline recommendations reflect clinical urgency and evidence certainty, not proof that an ICU database can estimate effects from symptom onset; fail-closed preserves the requested scientific question.",
+                "locator": "Recommendations and evidence-quality statements"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc12425674_mg10",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC12425674/fullTextXML",
+            "full_text_sha256": "690f9766268209ee0bdcd5cb71375f03ea8695debba32a0f9b531004a8cbdf61",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "1c792f715ae6943dbd41bc90c360bca783159a7c731547b097a37b2549d6e3a0",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "The meta-analysis compares prespecified treatment-delay thresholds but documents inconsistent definitions of sepsis, shock and time zero across studies; the target exposure cannot be built without an observable onset anchor.",
+                "locator": "Methods: exposure definitions; subgroup analyses"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "Included observational studies vary in timestamp availability and adjustment, producing substantial design heterogeneity; an entirely absent symptom-onset field is a structural data gap, not imputable missingness.",
+                "locator": "Risk of bias and heterogeneity sections"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "Pooled timing associations use stratified meta-analysis and sensitivity analyses across definitions; these methods cannot rescue a local cohort whose requested time origin is unobserved.",
+                "locator": "Statistical analysis and sensitivity analyses"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "Forest plots, subgroup results and study-definition tables expose between-study variation; the Qualification12 output should instead present a concise time-origin failure receipt and no effect plot.",
+                "locator": "Study characteristics, forest plots and supplement"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG11",
+      "title": "FAIL-CLOSED: dose-response requested on a binary exposure (MIMIC-IV)",
+      "expected_behavior": "fail_closed",
+      "expected_gap_reason": "graded ordinal exposure",
+      "manual_screening_query": "mechanical ventilation dose response intensity duration mechanical power mortality",
+      "bound_preplan_literature": {
+        "research_question": "Among adults in MIMIC-IV, characterise the dose-response gradient of mechanical ventilation (yes/no) against in-hospital mortality.",
+        "citations": [
+          {
+            "key": "pmc7906666_mg11",
+            "title": "Time-varying intensity of mechanical ventilation and mortality in patients with acute respiratory failure: a registry-based, prospective cohort study.",
+            "year": "2020",
+            "venue": "Lancet Respir Med",
+            "relevance": "Time-varying graded ventilation-intensity and cumulative burden.",
+            "doi": "10.1016/s2213-2600(20)30325-8",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7906666/",
+            "pmid": "32735841",
+            "publication_types": []
+          },
+          {
+            "key": "pmc10685677_mg11",
+            "title": "Visualizing the dynamic mechanical power and time burden of mechanical ventilation patients: an analysis of the MIMIC-IV database.",
+            "year": "2023",
+            "venue": "J Intensive Care",
+            "relevance": "Joint mechanical-power intensity and duration surface.",
+            "doi": "10.1186/s40560-023-00709-9",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10685677/",
+            "pmid": "38031184",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:32735841 AND SRC:MED",
+              "EXT_ID:38031184 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc7906666_mg11": [
+              "EXT_ID:32735841 AND SRC:MED"
+            ],
+            "pmc10685677_mg11": [
+              "EXT_ID:38031184 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc7906666_mg11",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Time-varying graded ventilation-intensity and cumulative burden.",
+            "query": "EXT_ID:32735841 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc10685677_mg11",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Joint mechanical-power intensity and duration surface.",
+            "query": "EXT_ID:38031184 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc7906666_mg11",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC7906666/fullTextXML",
+            "full_text_sha256": "bd2f1fa3b4593e78bddc612a68177671e8ef1fcdf3caa1515bc4c5679074ecc0",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "447951539c0dac1f098cc699b10cdbbd4aa1ce62905dc94bb856a5634b45fb6d",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The prospective registry studies invasively ventilated adults with repeated ventilator measurements; a binary ever-ventilated flag lacks the exposure detail used to study intensity-response.",
+                "locator": "Methods: cohort and ventilation measurements"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "Repeated ventilator data and covariates require explicit handling of missing measurements and informative treatment duration; binary exposure cannot identify unrecorded dose values through imputation.",
+                "locator": "Methods and appendix: longitudinal missing data"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The study uses adjusted time-varying and cumulative-exposure models with sensitivity analyses; a dose-response contract requires at least three ordered levels or a continuous dose before such models are eligible.",
+                "locator": "Statistical analysis and appendix"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "Observed ventilation intensity is confounded by disease severity and treatment changes; even a real graded association would not prove causality, while the current binary input cannot answer the dose-response question at all.",
+                "locator": "Discussion: limitations"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc10685677_mg11",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC10685677/fullTextXML",
+            "full_text_sha256": "ad96decc98803a3054890f302b6fdadb3baa21336bd97741e227b2914be24bb6",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "428c381847761d2b3827750cea96e527d7dcfc364e759f914c4cc0e5e5659091",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Mechanical-power burden is indexed jointly by intensity and duration during ventilation; dose begins only after ventilation starts and cannot be aligned solely to ICU admission.",
+                "locator": "Methods: dynamic power-time construction"
+              },
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "The exposure combines graded mechanical power with accumulated ventilation time, producing an interpretable two-dimensional burden; yes/no ventilation contains neither quantity nor duration.",
+                "locator": "Methods: exposure calculation"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The power-time burden is displayed as a response surface with supporting distributions and adjusted analyses; drawing a gradient from two binary groups would be a fabricated scientific figure.",
+                "locator": "Main dynamic burden figures"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "MG12",
+      "title": "FAIL-CLOSED: competing-risks CIF with no cause-specific events (MIMIC-IV)",
+      "expected_behavior": "fail_closed",
+      "expected_gap_reason": "no deterministic competing-risks runner; Cox HR is not a CIF",
+      "manual_screening_query": "acute kidney injury renal replacement therapy cumulative incidence death competing risk ICU",
+      "bound_preplan_literature": {
+        "research_question": "Among adults in MIMIC-IV, estimate the cumulative incidence of RRT initiation treating death as a competing risk.",
+        "citations": [
+          {
+            "key": "pmc10760471_mg12",
+            "title": "Introduction to Survival Analysis in the Presence of Competing Risks.",
+            "year": "2021",
+            "venue": "Ann Clin Epidemiol",
+            "relevance": "Competing-risk estimands and model-selection tutorial.",
+            "doi": "10.37737/ace.3.4_97",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10760471/",
+            "pmid": "38505470",
+            "publication_types": []
+          },
+          {
+            "key": "pmc10008759_mg12",
+            "title": "Long-term outcomes after severe acute kidney injury in critically ill patients: the SALTO study.",
+            "year": "2023",
+            "venue": "Ann Intensive Care",
+            "relevance": "Severe-AKI cohort using death as a competing event.",
+            "doi": "10.1186/s13613-023-01108-x",
+            "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10008759/",
+            "pmid": "36907976",
+            "publication_types": []
+          }
+        ],
+        "prisma": {
+          "identified": 2,
+          "duplicates_removed": 0,
+          "screened": 2,
+          "eligible": 2,
+          "included": 2
+        },
+        "search_provenance": {
+          "schema_version": "easyicu.literature_search_provenance/1",
+          "curated_seed_count": 0,
+          "sources_enabled": [
+            "europe_pmc_review"
+          ],
+          "sources_returning": [
+            "europe_pmc_review"
+          ],
+          "search_queries": {
+            "europe_pmc_review": [
+              "EXT_ID:38505470 AND SRC:MED",
+              "EXT_ID:36907976 AND SRC:MED"
+            ]
+          },
+          "record_queries": {
+            "pmc10760471_mg12": [
+              "EXT_ID:38505470 AND SRC:MED"
+            ],
+            "pmc10008759_mg12": [
+              "EXT_ID:36907976 AND SRC:MED"
+            ]
+          },
+          "search_conducted": true,
+          "searched_at": "2026-08-25T12:00:00-04:00",
+          "note": "The two retained identifiers were verified through Europe PMC; open full text plus any published supplement was reviewed. The manual candidate-screening query is stored at item level and its unbounded result count is not represented as a PRISMA flow. Published effect estimates are not expected answers."
+        },
+        "authority_trace": null,
+        "screening_decisions": [
+          {
+            "citation_key": "pmc10760471_mg12",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Competing-risk estimands and model-selection tutorial.",
+            "query": "EXT_ID:38505470 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          },
+          {
+            "citation_key": "pmc10008759_mg12",
+            "source": "europe_pmc_review",
+            "disposition": "include",
+            "evidence_role": "design_analogue",
+            "rationale": "Severe-AKI cohort using death as a competing event.",
+            "query": "EXT_ID:36907976 AND SRC:MED",
+            "population_match": false,
+            "exposure_match": false,
+            "outcome_match": false,
+            "design_excerpt_available": true,
+            "publication_type_eligible": true
+          }
+        ],
+        "design_evidence_cards": [
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc10760471_mg12",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC10760471/fullTextXML",
+            "full_text_sha256": "4014d60fed3013433a86cc5a9c1cdb4b1e9b82a5b2b8b96a5d68b8444f117a0a",
+            "supplement_status": "not_published",
+            "supplement_sha256": null,
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "variable_operationalization",
+                "source_backed_summary": "Competing-risk analysis requires mutually exclusive event types and valid event times; a generic death flag or an uncertified RRT indicator is insufficient to construct the cumulative-incidence function.",
+                "locator": "Tutorial: competing events and data structure"
+              },
+              {
+                "dimension": "primary_model_and_sensitivities",
+                "source_backed_summary": "The tutorial distinguishes cause-specific hazards from Fine-Gray subdistribution models and cumulative incidence; a Cox hazard is not a substitute for a CIF, and model choice depends on the scientific estimand.",
+                "locator": "Tutorial: cause-specific and subdistribution approaches"
+              },
+              {
+                "dimension": "conclusion_boundaries",
+                "source_backed_summary": "Competing-risk methods answer different etiologic and prognostic questions and require explicit interpretation; the correct current output is an unsupported-estimand receipt, not a cause-naive survival claim.",
+                "locator": "Tutorial: interpretation and conclusion"
+              }
+            ]
+          },
+          {
+            "schema_version": "easyicu.literature_design_evidence/1",
+            "citation_key": "pmc10008759_mg12",
+            "evidence_role": "design_analogue",
+            "access_mode": "open_access_fulltext",
+            "full_text_locator": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC10008759/fullTextXML",
+            "full_text_sha256": "fe8479e469361ece83eda81afb0659265f4bc7f72fc3a0cf95e7aeaf5a2b70de",
+            "supplement_status": "reviewed",
+            "supplement_sha256": "7275512f5650a0addd2cfddb21d2dbbd70558d1d9af8d15b92a9c73c51c5c518",
+            "reviewed_at": "2026-08-25T12:00:00-04:00",
+            "evidence": [
+              {
+                "dimension": "study_population",
+                "source_backed_summary": "The SALTO cohort follows critically ill patients with severe AKI who survive to a defined landmark; its eligibility differs from an all-ICU RRT-initiation risk set and makes the landmark population explicit.",
+                "locator": "Methods: cohort and follow-up"
+              },
+              {
+                "dimension": "time_zero_and_windows",
+                "source_backed_summary": "Long-term kidney outcomes are anchored to a prespecified post-acute landmark with subsequent follow-up; an ICU RRT analysis likewise needs certified event times from ICU admission for both RRT and death.",
+                "locator": "Methods: outcomes and timeline"
+              },
+              {
+                "dimension": "missingness_and_censoring",
+                "source_backed_summary": "The cohort distinguishes observed kidney outcomes, death and follow-up status; unknown event identity cannot be treated as ordinary right censoring without changing the cumulative-incidence estimand.",
+                "locator": "Methods and supplement: outcome ascertainment"
+              },
+              {
+                "dimension": "table_and_figure_completeness",
+                "source_backed_summary": "The report presents cumulative-incidence displays with death handled as a competing event and provides detailed outcome definitions; the target should produce no CIF until both event processes and a deterministic runner are certified.",
+                "locator": "Outcome figures and supplementary definitions"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
