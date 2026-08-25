@@ -94,6 +94,39 @@ def test_multiple_denominator_owners_are_not_assumed_to_be_the_same_fact() -> No
     assert repaired == MISCITING
 
 
+def test_unique_canonical_stay_count_owner_outranks_derived_row_counts() -> None:
+    from easyicu.research_agent.authority.evidence_store import NumericClaim
+
+    store = _FakeStore(
+        [
+            NumericClaim(
+                value="94,458",
+                canonical=94458.0,
+                evidence_id="research_context",
+                step_id="research_context",
+                source_field="cohort.n_stays",
+                tolerance=0.0,
+            ),
+            NumericClaim(
+                value="94,458",
+                canonical=94458.0,
+                evidence_id="01_model",
+                step_id="01_model",
+                source_field="input_bindings[0].row_count",
+                tolerance=0.0,
+            ),
+        ],
+        names={"00_probe", "research_context", "01_model"},
+    )
+
+    repaired, repairs = repair_miscited_numeric_citations(MISCITING, evidence=store)
+
+    assert repairs == [
+        {"value": "94,458", "cited": "00_probe", "added": "research_context"}
+    ]
+    assert "{evidence:research_context}" in repaired
+
+
 def test_the_unique_owning_citation_is_added() -> None:
     from easyicu.research_agent.authority.evidence_store import NumericClaim
 
