@@ -186,6 +186,20 @@ def test_numeric_claim_cap_keeps_nested_prediction_metrics(ra, tmp_path: Path):
     } <= fields
 
 
+def test_scalar_lookup_reads_metrics_inside_list_rows() -> None:
+    from easyicu.research_agent.scalar_utils import _first_present_scalar
+
+    payload = {
+        "prediction_robustness_results": [
+            {"auroc": 0.772, "auroc_ci_low": 0.750, "auroc_ci_high": 0.793}
+        ]
+    }
+
+    assert _first_present_scalar(payload, ("auroc",)) == 0.772
+    assert _first_present_scalar(payload, ("auroc_ci_low",)) == 0.750
+    assert _first_present_scalar(payload, ("auroc_ci_high",)) == 0.793
+
+
 def test_register_step_summary_numerics_no_cap_when_none(ra, tmp_path: Path):
     store = ra.EvidenceStore(tmp_path)
     summary = {f"x_{i}": float(i) for i in range(10)}

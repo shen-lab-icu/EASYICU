@@ -2250,7 +2250,7 @@ def repair_single_variant_robustness_metric_prose(
                 continue
             if metric_label.casefold() not in lowered and raw_metric not in lowered:
                 continue
-            if len(_NUMERIC_IN_PROSE_RE.findall(sentence)) < 2:
+            if not _NUMERIC_IN_PROSE_RE.search(sentence):
                 continue
             sentences[sentence_index] = canonical
             repairs.append(
