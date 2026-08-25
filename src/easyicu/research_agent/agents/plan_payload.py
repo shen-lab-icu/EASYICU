@@ -322,6 +322,7 @@ def _planner_transport_schema(
         schema["properties"].pop("design_selection", None)
         definitions.pop("ResearchDesignSelection", None)
         definitions.pop("ResearchDesignCandidate", None)
+        definitions.pop("CandidateLiteratureDesignDecision", None)
         robustness = definitions["RobustnessSpec"]["properties"]
         missing_override = _closed_object_schema(
             {
