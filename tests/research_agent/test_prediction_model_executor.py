@@ -337,6 +337,7 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
         "calibration",
         "validation",
     ]
+    assert {panel["metadata"]["placement"] for panel in contract["panels"]} == {"main"}
     assert contract["panels"][-1]["metadata"]["chart_type"] == ("metric_dot_interval")
     supplementary_contract = json.loads(
         (
