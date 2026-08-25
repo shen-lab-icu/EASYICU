@@ -111,7 +111,7 @@ def test_methods_results_adjustment_conflict_is_reported() -> None:
 
     assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in _codes(text)
     assert audit.adjustment_sets["Methods"] == ("age", "sex")
-    assert audit.adjustment_sets["Results"] == ("age", "charlson_max")
+    assert audit.adjustment_sets["Results"] == ("age", "charlson")
 
 
 def test_trailing_adjustment_phrase_is_compared_with_methods() -> None:
@@ -126,7 +126,7 @@ def test_trailing_adjustment_phrase_is_compared_with_methods() -> None:
     assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in _codes(text)
     assert audit.adjustment_sets["Results"] == (
         "age",
-        "charlson comorbidity score",
+        "charlson",
     )
 
     raw = text.replace(
@@ -136,8 +136,27 @@ def test_trailing_adjustment_phrase_is_compared_with_methods() -> None:
     assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in _codes(raw)
     assert raw_audit.adjustment_sets["Results"] == (
         "age",
-        "charlson comorbidity score",
+        "charlson",
     )
+
+
+def test_adjustment_aliases_and_materialisation_suffixes_are_equivalent() -> None:
+    text = _valid_manuscript().replace(
+        "The adjustment set comprised age and sex.",
+        "The adjustment set comprised age and charlson_max.",
+    ).replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        "The adjusted odds ratio was 1.61, after adjustment for patient age and "
+        "Charlson comorbidity score.",
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in _codes(text)
+    assert audit.adjustment_sets == {
+        "Methods": ("age", "charlson"),
+        "Results": ("age", "charlson"),
+    }
 
 
 def test_internal_runtime_terms_are_rejected_in_reader_facing_prose() -> None:
