@@ -641,6 +641,21 @@ def _sentences(text: str) -> tuple[str, ...]:
     )
 
 
+def _abstract_blocks(abstract: str) -> Mapping[str, str]:
+    matches = list(
+        re.finditer(
+            r"\*\*(Background|Methods|Results|Conclusions):\*\*",
+            abstract,
+            flags=re.I,
+        )
+    )
+    blocks: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(abstract)
+        blocks[match.group(1).casefold()] = abstract[match.end() : end].strip()
+    return blocks
+
+
 def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
     excerpts: list[str] = []
     for sentence in _sentences(section_text):
@@ -787,6 +802,27 @@ def audit_manuscript_quality(
                         excerpts=(label,),
                     )
                 )
+        abstract_blocks = _abstract_blocks(abstract)
+        abstract_results = abstract_blocks.get("results", "")
+        abstract_conclusions = abstract_blocks.get("conclusions", "")
+        normalized_results = re.sub(
+            r"\s+", " ", _strip_audit_markup(abstract_results)
+        ).strip().casefold()
+        normalized_conclusions = re.sub(
+            r"\s+", " ", _strip_audit_markup(abstract_conclusions)
+        ).strip().casefold()
+        if normalized_results and normalized_results == normalized_conclusions:
+            findings.append(
+                ManuscriptQualityFinding(
+                    code="MANUSCRIPT_ABSTRACT_CONCLUSION_DUPLICATES_RESULTS",
+                    severity="error",
+                    section="Abstract",
+                    message=(
+                        "Abstract Conclusions repeats Results verbatim instead of "
+                        "stating the bounded interpretation."
+                    ),
+                )
+            )
 
     adjustments = _adjustment_sets(section_map)
     if (
