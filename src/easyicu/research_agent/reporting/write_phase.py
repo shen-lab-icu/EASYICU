@@ -80,6 +80,7 @@ from .manuscript_post import (
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
     repair_miscited_numeric_citations,
+    repair_single_variant_robustness_metric_prose,
 )
 from .readiness import _is_cosmetic_visual_error, execution_gate_status
 from .writer_evidence import (
@@ -103,6 +104,7 @@ from .reporting_checklist import (
 from .reviewer import run_reviewer_round
 from ..schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
+from ..robustness.panel import load_robustness_panel
 from ..gates.figure_egress import (
     FigureEgressReceiptError,
     register_figure_egress_receipt,
@@ -1159,6 +1161,125 @@ def _verified_resume_writer_scaffold_for_quality_migration(
     return None
 
 
+def _rehydrate_step_numeric_authority(
+    *,
+    pipeline: Any,
+    evidence: Any,
+    per_step_records: Sequence[Dict[str, Any]],
+) -> None:
+    """Idempotently reapply the current headline-priority numeric cap."""
+
+    max_leaves = (
+        pipeline._max_numeric_claims_per_step
+        if pipeline._max_numeric_claims_per_step > 0
+        else None
+    )
+    for record in current_step_records(per_step_records):
+        summary = record.get("step_summary")
+        evidence_id = record.get("step_summary_evidence_id")
+        step_id = record.get("step_id")
+        if isinstance(summary, dict) and evidence_id and step_id:
+            evidence.register_step_summary_numerics(
+                step_id=str(step_id),
+                evidence_id=str(evidence_id),
+                summary=summary,
+                max_leaves=max_leaves,
+            )
+
+
+def _register_novelty_positioning_packet(
+    *,
+    context: Any,
+    plan: Any,
+    literature: Optional[LiteratureBundle],
+    run_dir: Path,
+    evidence: Any,
+) -> None:
+    """Create and register the unsigned appraisal packet once."""
+
+    novelty_path = run_dir / "novelty_positioning_audit.json"
+    if not novelty_path.exists():
+        novelty_packet = build_unsigned_novelty_positioning_packet(
+            context=context,
+            plan=plan,
+            literature=literature,
+        )
+        novelty_path.write_text(
+            novelty_packet.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+    if evidence.get("novelty_positioning_audit") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Unsigned source-bound novelty comparison packet for independent "
+                "clinical and methods appraisal."
+            ),
+            source_path=novelty_path,
+            evidence_id="novelty_positioning_audit",
+            producer="pipeline",
+            generation_mode="system",
+        )
+
+
+def _repair_robustness_reader_prose(
+    *,
+    scaffold: str,
+    run_dir: Path,
+    findings: List[ValidationFinding],
+) -> str:
+    """Apply and report the single-variant robustness reader contract."""
+
+    repaired, repairs = repair_single_variant_robustness_metric_prose(
+        scaffold,
+        panel=load_robustness_panel(run_dir / "robustness_panel.json"),
+    )
+    if repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_robustness_prose",
+                severity="warning",
+                message=(
+                    "Replaced a one-variant robustness envelope with the "
+                    "registered point estimate and confidence interval."
+                ),
+                detail={"repairs": repairs},
+            )
+        )
+    return repaired
+
+
+def _repair_and_report_common_placeholders(
+    *,
+    scaffold: str,
+    context: Any,
+    evidence: Any,
+    evidence_names: Sequence[str],
+    findings: List[ValidationFinding],
+) -> str:
+    repaired, repairs = _repair_common_writer_placeholders(
+        scaffold,
+        context=context,
+        evidence=evidence,
+        allowed_evidence_names=evidence_names,
+    )
+    if repairs:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    "Repaired common manuscript evidence placeholder(s): "
+                    + ", ".join(f"{old}->{new}" for old, new in repairs)
+                ),
+                detail={
+                    "repairs": [{"from": old, "to": new} for old, new in repairs]
+                },
+            )
+        )
+    return repaired
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -1179,6 +1300,11 @@ def _draft_manuscript(
     emit_progress: Callable[..., None],
 ) -> _DraftStageResult:
     """Generate and minimally repair the evidence-aware manuscript scaffold."""
+    _rehydrate_step_numeric_authority(
+        pipeline=pipeline,
+        evidence=evidence,
+        per_step_records=per_step_records,
+    )
     # The evidence store is append-only across resume attempts. Freeze one
     # digest-verified view after the optional literature inputs are registered
     # and use it for every analysis-facing writer consumer; otherwise an old
@@ -1196,29 +1322,13 @@ def _draft_manuscript(
     # deliberately unsigned and leaves comparator/difference cells blank; an
     # abstract search hit cannot authorize the Agent to declare its own work
     # novel.  Existing independently reviewed packets are never overwritten.
-    novelty_path = run_dir / "novelty_positioning_audit.json"
-    if not novelty_path.exists():
-        novelty_packet = build_unsigned_novelty_positioning_packet(
-            context=context,
-            plan=execute_result.plan,
-            literature=literature,
-        )
-        novelty_path.write_text(
-            novelty_packet.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-    if evidence.get("novelty_positioning_audit") is None:
-        evidence.register_file(
-            kind="log",
-            description=(
-                "Unsigned source-bound novelty comparison packet for independent "
-                "clinical and methods appraisal."
-            ),
-            source_path=novelty_path,
-            evidence_id="novelty_positioning_audit",
-            producer="pipeline",
-            generation_mode="system",
-        )
+    _register_novelty_positioning_packet(
+        context=context,
+        plan=execute_result.plan,
+        literature=literature,
+        run_dir=run_dir,
+        evidence=evidence,
+    )
     emit_progress(
         "writer",
         "Drafting manuscript scaffold.",
@@ -1390,28 +1500,18 @@ def _draft_manuscript(
                 },
             )
         )
-    scaffold, placeholder_repairs = _repair_common_writer_placeholders(
-        scaffold,
+    scaffold = _repair_robustness_reader_prose(
+        scaffold=scaffold,
+        run_dir=run_dir,
+        findings=findings,
+    )
+    scaffold = _repair_and_report_common_placeholders(
+        scaffold=scaffold,
         context=context,
         evidence=evidence,
-        allowed_evidence_names=current_evidence_names,
+        evidence_names=current_evidence_names,
+        findings=findings,
     )
-    if placeholder_repairs:
-        findings.append(
-            ValidationFinding(
-                validator="evidence_bound_writer",
-                severity="warning",
-                message=(
-                    "Repaired common manuscript evidence placeholder(s): "
-                    + ", ".join(f"{old}->{new}" for old, new in placeholder_repairs)
-                ),
-                detail={
-                    "repairs": [
-                        {"from": old, "to": new} for old, new in placeholder_repairs
-                    ]
-                },
-            )
-        )
     scaffold, removed_unregistered_placeholders = (
         _remove_unregistered_evidence_placeholders(
             scaffold,
