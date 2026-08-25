@@ -596,7 +596,14 @@ def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
     excerpts: list[str] = []
     for sentence in _sentences(section_text):
         lowered = sentence.casefold()
-        if "point estimate" not in lowered:
+        has_unlabelled_numeric_summary = (
+            "point estimate" in lowered
+            or (
+                "robustness" in lowered
+                and re.search(r"[-+]?\d+(?:\.\d+)?", lowered) is not None
+            )
+        )
+        if not has_unlabelled_numeric_summary:
             continue
         if any(term in lowered for term in _NAMED_METRIC_TERMS):
             continue
@@ -736,18 +743,15 @@ def audit_manuscript_quality(
         section_text = section_map.get(section, "")
         excerpts = _internal_excerpts(section_text)
         if excerpts:
-            severity = "warning" if section == "Methods" else "error"
             findings.append(
                 ManuscriptQualityFinding(
                     code="MANUSCRIPT_INTERNAL_TERM_EXPOSED",
-                    severity=severity,
+                    severity="error",
                     section=section,
                     message=(
                         "Reader-facing prose exposes raw runtime identifiers or "
-                        "engineering terminology."
-                        if severity == "error"
-                        else "Methods retains exact variable or runtime terminology; "
-                        "keep it only where reproducibility requires it."
+                        "engineering terminology. Methods may describe a variable "
+                        "concept and analysis window, but not its implementation name."
                     ),
                     excerpts=excerpts[:12],
                 )
