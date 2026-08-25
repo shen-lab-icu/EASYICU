@@ -108,6 +108,50 @@ ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS = frozenset(
         "table:exposure_component_completeness_audit",
     }
 )
+COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS = (
+    "table:cohort_flow",
+    "table:table_one",
+    "table:adjusted_association_estimates",
+    "table:robustness_matrix",
+)
+
+
+def cohort_balance_association_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind cohort, balance, primary-association, and robustness panels."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    if cleaned != COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS:
+        raise ValueError(
+            "cohort-balance association composite requires its four exact tables"
+        )
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="cohort_accounting",
+            article_role="cohort_accounting",
+            chart_type="cohort_flow",
+            source_products=("table:cohort_flow",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="baseline_balance",
+            article_role="descriptive_result",
+            chart_type="standardized_difference",
+            source_products=("table:table_one",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="primary_adjusted_association",
+            article_role="primary_estimand",
+            chart_type="forest_plot",
+            source_products=("table:adjusted_association_estimates",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_estimates",
+            article_role="robustness",
+            chart_type="forest_plot",
+            source_products=("table:robustness_matrix",),
+        ),
+    )
 
 
 def association_sensitivity_composite_panels(
@@ -408,6 +452,7 @@ def robustness_figure_panels(
 
 
 __all__ = [
+    "COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS",
     "COHORT_FLOW_FIGURE_PANELS",
     "COHORT_FLOW_INPUT",
     "DATA_QUALITY_AUDIT_ROLES",
@@ -427,6 +472,7 @@ __all__ = [
     "ROBUSTNESS_PRIMARY_ESTIMATE_INPUT",
     "PlannedFigurePanelSpec",
     "data_quality_audit_source_candidates",
+    "cohort_balance_association_composite_panels",
     "measurement_availability_figure_panels",
     "LANDMARK_ASSOCIATION_COMPOSITE_INPUTS",
     "landmark_association_composite_panels",

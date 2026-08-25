@@ -12,6 +12,7 @@ from typing import Mapping, Sequence
 
 from ..authority.declared_levels import observed_levels_for
 from ..canonical_json import canonical_sha256
+from ..contracts.figure_plan import COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS
 from ..schema import ResearchContext
 from .method_literature import METHOD_CARDS
 from .progressive_contract import (
@@ -68,6 +69,53 @@ def _bindings(step: ProgressiveOutlineStep) -> list[ProgressiveLiteratureBinding
     return bindings
 
 
+def _rendering_bindings(
+    *,
+    outline: ProgressivePlanOutline,
+    step: ProgressiveOutlineStep,
+    existing: Sequence[ProgressiveLiteratureBinding],
+) -> list[ProgressiveLiteratureBinding]:
+    """Reuse selected design decisions for deterministic figure/report wiring."""
+
+    bindings = list(existing)
+    bound_keys = {binding.citation_key for binding in bindings}
+    selection = outline.design_selection
+    if selection is None:
+        return bindings
+    dimensions = {
+        "visualization": {"table_and_figure_completeness"},
+        "report": {"table_and_figure_completeness", "conclusion_boundaries"},
+    }.get(step.module_id, set())
+    decisions = [
+        decision
+        for decision in selection.selected.literature_design_decisions
+        if decision.dimension in dimensions
+    ]
+    for key in step.literature_citation_keys:
+        if key in bound_keys:
+            continue
+        rationales = [
+            decision.rationale
+            for decision in decisions
+            if key in decision.citation_keys
+        ]
+        if not rationales:
+            continue
+        bindings.append(
+            ProgressiveLiteratureBinding(
+                citation_key=key,
+                design_elements=["reporting"],
+                application=(
+                    "Apply the selected, literature-bound design decision to "
+                    f"the {step.module_id} coordinate: " + " ".join(rationales)
+                ),
+                divergence=None,
+            )
+        )
+        bound_keys.add(key)
+    return bindings
+
+
 def _output(product_id: str, role: str) -> ProgressiveOutputIntent:
     return ProgressiveOutputIntent(product_id=product_id, semantic_role=role)
 
@@ -93,6 +141,30 @@ def _refs(
     return refs
 
 
+def _exact_profile_refs(
+    available: Sequence[tuple[str, str]],
+    dependencies: Sequence[str],
+    products: Sequence[str],
+) -> list[ProgressiveProductRef]:
+    allowed = set(dependencies)
+    refs = []
+    for product in products:
+        matches = [
+            producer
+            for producer, candidate in available
+            if producer in allowed and candidate == product
+        ]
+        if len(matches) != 1:
+            return []
+        refs.append(
+            ProgressiveProductRef(
+                producer_step_id=matches[0],
+                product_id=product,
+            )
+        )
+    return refs
+
+
 def _table_summary(descriptor: object) -> str:
     levels = observed_levels_for(
         name=descriptor.name, variables={descriptor.name: descriptor}
@@ -109,6 +181,7 @@ def _common_step(
     step: ProgressiveOutlineStep,
     *,
     raw_inputs: Sequence[str],
+    literature_bindings: Sequence[ProgressiveLiteratureBinding],
     product_inputs: Sequence[ProgressiveProductRef] = (),
     outputs: Sequence[ProgressiveOutputIntent] = (),
     **kwargs: object,
@@ -123,7 +196,7 @@ def _common_step(
         product_inputs=list(product_inputs),
         outputs=list(outputs),
         scientific_action_id=step.scientific_action_id,
-        literature_bindings=_bindings(step),
+        literature_bindings=list(literature_bindings),
         **kwargs,
     )
 
@@ -193,9 +266,16 @@ def host_materialize_progressive_step(
     module = outline_step.module_id
     variables = {item.name: item for item in context.variables}
     raw = [name for name in outline_step.variable_names if name in variables]
-    if {
-        binding.citation_key for binding in _bindings(outline_step)
-    } != set(outline_step.literature_citation_keys):
+    bindings = _bindings(outline_step)
+    if module in {"visualization", "report"}:
+        bindings = _rendering_bindings(
+            outline=outline,
+            step=outline_step,
+            existing=bindings,
+        )
+    if {binding.citation_key for binding in bindings} != set(
+        outline_step.literature_citation_keys
+    ):
         # Dynamic design-analogue cards carry question-specific applications
         # that this mechanical owner cannot reconstruct from a citation key.
         return None
@@ -218,7 +298,11 @@ def host_materialize_progressive_step(
             for name in raw
             if name not in declared_ids or name == identity
         ]
-        skeleton = _common_step(outline_step, raw_inputs=cohort_raw)
+        skeleton = _common_step(
+            outline_step,
+            raw_inputs=cohort_raw,
+            literature_bindings=bindings,
+        )
     elif module == "table_one":
         exposure = context.primary_exposure
         if not exposure or exposure not in raw:
@@ -233,6 +317,7 @@ def host_materialize_progressive_step(
         skeleton = _common_step(
             outline_step,
             raw_inputs=raw,
+            literature_bindings=bindings,
             table_one_group_by=exposure,
             table_one_mode="descriptive_smd_only",
             table_one_variables=rows,
@@ -248,6 +333,7 @@ def host_materialize_progressive_step(
         skeleton = _common_step(
             outline_step,
             raw_inputs=raw,
+            literature_bindings=bindings,
             primary_exposure=exposure,
             outcome=outcome,
             outcome_type="binary",
@@ -269,15 +355,25 @@ def host_materialize_progressive_step(
         skeleton = _common_step(
             outline_step,
             raw_inputs=raw,
+            literature_bindings=bindings,
             sensitivity_spec_ids=[item.spec_id for item in foundation.robustness_intents],
         )
     elif module == "visualization":
-        refs = _refs(available_product_refs, outline_step.depends_on, result_only=True)
+        refs = _exact_profile_refs(
+            available_product_refs,
+            outline_step.depends_on,
+            COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+        ) or _refs(
+            available_product_refs,
+            outline_step.depends_on,
+            result_only=True,
+        )
         if not refs or len(refs) > 4:
             return None
         skeleton = _common_step(
             outline_step,
             raw_inputs=(),
+            literature_bindings=bindings,
             product_inputs=refs,
             outputs=(_output(f"figure:{_product_name(outline_step.step_id)}", "figure"),),
         )
@@ -288,6 +384,7 @@ def host_materialize_progressive_step(
         skeleton = _common_step(
             outline_step,
             raw_inputs=(),
+            literature_bindings=bindings,
             product_inputs=refs,
             outputs=(_output(f"report:{_product_name(outline_step.step_id)}", "report"),),
         )
