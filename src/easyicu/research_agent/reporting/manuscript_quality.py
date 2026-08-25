@@ -153,8 +153,8 @@ def _words(text: str) -> int:
 def _strip_audit_markup(text: str) -> str:
     cleaned = _EVIDENCE_LINK_RE.sub("", text)
     cleaned = _EVIDENCE_PLACEHOLDER_RE.sub("", cleaned)
-    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
     cleaned = _CLAIM_DEFINITION_RE.sub("", cleaned)
+    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
     cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
     return cleaned
 
@@ -588,7 +588,9 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
                 )
             )
         overprecise = tuple(
-            dict.fromkeys(_OVERPRECISE_DECIMAL_RE.findall(section_text))
+            dict.fromkeys(
+                _OVERPRECISE_DECIMAL_RE.findall(_strip_audit_markup(section_text))
+            )
         )
         if overprecise:
             findings.append(

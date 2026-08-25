@@ -239,6 +239,15 @@ def test_machine_precision_is_rejected_in_reader_facing_sections() -> None:
     }
 
 
+def test_exact_numeric_footnote_value_is_not_reader_overprecision() -> None:
+    text = _valid_manuscript() + (
+        "\n[^claim_1]: value=0.463888712444; step=context; field=missingness; "
+        "evidence=context; display=46.4%; match=rounded_or_transformed\n"
+    )
+
+    assert "MANUSCRIPT_NUMERIC_OVERPRECISION" not in _codes(text)
+
+
 def test_discussion_cannot_deny_a_reported_risk_difference() -> None:
     text = (
         _valid_manuscript()
