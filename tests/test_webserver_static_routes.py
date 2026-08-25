@@ -185,7 +185,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
-    assert "js/screens-extraction.js?v=20260824-query-cancel1" in index_html
+    assert "js/screens-extraction.js?v=20260824-user-selection1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
@@ -1289,8 +1289,9 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     assert ".ex-connect-primary" not in redesign_css
 
 
-def test_native_extraction_custom_modules_default_to_all_with_bulk_actions() -> None:
+def test_native_extraction_custom_modules_default_empty_with_bulk_actions() -> None:
     extraction_js = _static_js("screens-extraction.js")
+    embedded_js = _static_js("screens-extraction-embedded.js")
     sepsis_js = _static_js("screens-extraction-sepsis.js")
     extraction_css = _static_css("extraction.css")
     redesign_css = _static_css("redesign.css")
@@ -1305,7 +1306,27 @@ def test_native_extraction_custom_modules_default_to_all_with_bulk_actions() -> 
         "if (window.__euExtractFocusICD) { exAdvCohort = true; exCustomOpen = true; exCohortPreset = 'icd'; }"
         in extraction_js
     )
-    assert "['SOFA-1 scores', 'SOFA-1 评分', 7, true, false]" in extraction_js
+    module_block = extraction_js.split("const MODS = [", 1)[1].split("];", 1)[0]
+    assert module_block.count(", false, true]") == 6
+    assert module_block.count(", false, false]") == 13
+    assert ", true, true]" not in module_block
+    assert ", true, false]" not in module_block
+    assert (
+        "const saved = Array.isArray(exSelectedConcepts[key]) ? exSelectedConcepts[key] : (m[3] ? ids : []);"
+        in extraction_js
+    )
+    assert (
+        "function setAllModules(on) { MODS.forEach(m => { m[3] = !!on; }); exSelectedConcepts = {};"
+        in extraction_js
+    )
+    assert "function extractionSetupSummary()" in extraction_js
+    assert "setupSummary: extractionSetupSummary" in extraction_js
+    assert "const summary = owner.setupSummary();" in embedded_js
+    assert "custom.querySelector('[data-ex-run=\"custom\"]')" in embedded_js
+    assert 'data-ex-run="custom"' in embedded_js
+    assert 'data-ex-run="recommended"' not in embedded_js
+    assert "function escapeHtml(value)" in embedded_js
+    assert "escHtml(" not in embedded_js
     assert "data-ex-selectall" in extraction_js
     assert "Select all" in extraction_js
     assert "data-ex-clearmods" in extraction_js
@@ -3452,7 +3473,7 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
-    assert "js/screens-extraction-embedded.js?v=20260824-visible-sync1" in index_html
+    assert "js/screens-extraction-embedded.js?v=20260824-user-selection1" in index_html
     assert "js/screens-guided-pi.js?v=20260824-extraction-receipt1" in index_html
     assert "/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output" in api_js
     assert "window.EU_API.openExtractionOutput = openExtractionOutput" in api_js
