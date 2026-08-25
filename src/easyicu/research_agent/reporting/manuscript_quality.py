@@ -252,6 +252,40 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
+    if (
+        abstract is not None
+        and not _abstract_label_has_prose(abstract, "Conclusions")
+        and _abstract_label_has_prose(abstract, "Background")
+    ):
+        background_match = re.search(
+            r"(?mi)^\*\*Background:\*\*\s*(?P<body>[^\n]+)$",
+            abstract,
+        )
+        background_body = (
+            background_match.group("body").strip() if background_match else ""
+        )
+        if re.search(
+            r"\b(?:external|independent)\s+validation\b.*\b"
+            r"(?:warranted|required|needed)\b",
+            background_body,
+            flags=re.I,
+        ):
+            abstract = (
+                abstract[: background_match.start()]
+                + "**Conclusions:** "
+                + background_body
+                + abstract[background_match.end() :]
+            )
+            repaired = _replace_section_body(repaired, "Abstract", abstract)
+            repairs.append(
+                {
+                    "code": "MANUSCRIPT_ABSTRACT_CONCLUSION_RELABELLED",
+                    "source": "existing_validation_conclusion_prose",
+                }
+            )
+
+    section_map = _sections(repaired)
+    abstract = section_map.get("Abstract")
     if abstract is not None and not _abstract_label_has_prose(
         abstract, "Background"
     ):
