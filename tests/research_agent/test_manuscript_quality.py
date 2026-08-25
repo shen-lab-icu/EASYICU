@@ -8,6 +8,7 @@ from easyicu.research_agent.reporting.manuscript_quality import (
 from easyicu.research_agent.reporting.write_phase import (
     _persist_manuscript_quality_artifacts,
 )
+from tools.build_manuscript_reader import _prepare_reader_manuscript
 from easyicu.research_agent.reporting.readiness import _MANUSCRIPT_ERROR_VALIDATORS
 
 
@@ -327,6 +328,24 @@ def test_structure_repair_replaces_evidence_only_abstract_background() -> None:
     assert "MANUSCRIPT_ABSTRACT_BACKGROUND_RESTORED" in {
         item["code"] for item in repairs
     }
+
+
+def test_reader_bundle_preparation_applies_structure_repair() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Background:** Sepsis remains an important ICU syndrome.",
+        '**Background:** [context](evidence/context.json "sha256=' + "a" * 64 + '")',
+    ).replace(
+        "Sepsis definitions and transparent cohort accounting matter for reproducible ICU research.",
+        "Sepsis definitions and transparent cohort accounting matter for reproducible ICU "
+        'research [context](evidence/context.json "sha256=' + "a" * 64 + '").',
+    )
+
+    prepared, repairs = _prepare_reader_manuscript(manuscript)
+
+    assert "**Background:** Sepsis definitions" in prepared
+    assert [item["code"] for item in repairs] == [
+        "MANUSCRIPT_ABSTRACT_BACKGROUND_RESTORED"
+    ]
 
 
 def test_structure_repair_restores_existing_results_prose_slots() -> None:
