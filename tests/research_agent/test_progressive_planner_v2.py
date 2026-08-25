@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.agents.progressive_payload import (
+    ProgressiveTransportSchemaError,
     progressive_foundation_structured_output_request,
     progressive_outline_structured_output_request,
     progressive_step_materialization_request,
@@ -1331,6 +1332,39 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
     for object_schema in _walk_objects(schema):
         assert set(object_schema["required"]) == set(object_schema["properties"])
         assert object_schema["additionalProperties"] is False
+
+
+def test_outline_schema_separates_reviewed_design_cards_from_method_sources() -> None:
+    request = progressive_outline_structured_output_request(
+        analysis_types=["association_study"],
+        variable_names=["exposure", "outcome", "age"],
+        scientific_action_ids=["association.adjusted_association"],
+        allowed_literature_citation_keys=["reviewed_card", "spline_method"],
+        design_card_citation_keys=["reviewed_card"],
+    )
+    schema = json.loads(request.schema_json)
+
+    candidate = schema["$defs"]["ResearchDesignCandidate"]["properties"]
+    decision = schema["$defs"]["CandidateLiteratureDesignDecision"]["properties"]
+    assert candidate["literature_citation_keys"]["items"]["enum"] == [
+        "reviewed_card",
+        "spline_method",
+    ]
+    assert decision["citation_keys"]["items"]["enum"] == ["reviewed_card"]
+
+
+def test_outline_schema_rejects_design_card_key_outside_sealed_roster() -> None:
+    with pytest.raises(
+        ProgressiveTransportSchemaError,
+        match="design-card citation keys must be a subset",
+    ):
+        progressive_outline_structured_output_request(
+            analysis_types=["association_study"],
+            variable_names=["exposure", "outcome"],
+            scientific_action_ids=["association.adjusted_association"],
+            allowed_literature_citation_keys=["method_source"],
+            design_card_citation_keys=["unsealed_card"],
+        )
 
 
 def test_descriptive_outline_schema_advertises_only_scientific_step_owners() -> None:

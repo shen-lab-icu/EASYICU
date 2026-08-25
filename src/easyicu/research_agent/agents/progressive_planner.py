@@ -841,6 +841,61 @@ class ProgressivePlannerAgent:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
+            "Analysis-family action matrix (do not cross family boundaries):\n"
+            + json.dumps(
+                [
+                    {
+                        "analysis_type": analysis_type,
+                        "available_modules": list(
+                            progressive_module_ids_for_analysis_types(
+                                (analysis_type,)
+                            )
+                        ),
+                        "scientific_action_ids": [
+                            str(row.get("action_id") or "")
+                            for row in action_rows
+                            if row.get("analysis_type") == analysis_type
+                        ],
+                    }
+                    for analysis_type in analysis_types
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\nAfter selecting analysis_type, use only that row's action ids. "
+            "Cohort-definition, table_one, raw-distribution, visualization, "
+            "and report support steps must set scientific_action_id to null.",
+            "Citation-role separation:\n"
+            + json.dumps(
+                {
+                    "reviewed_design_card_keys": [
+                        card.citation_key
+                        for card in literature_design_evidence_cards
+                    ],
+                    "method_layer_to_eligible_keys": {
+                        layer: [
+                            key
+                            for key in allowed_literature_citation_keys
+                            if layer in method_layers_for_source_keys((key,))
+                        ]
+                        for layer in sorted(
+                            {
+                                layer
+                                for key in allowed_literature_citation_keys
+                                for layer in method_layers_for_source_keys((key,))
+                            }
+                        )
+                    },
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\nliterature_design_decisions.citation_keys may cite ONLY "
+            "reviewed_design_card_keys. Generic method/reporting sources belong "
+            "in candidate or step literature_citation_keys, never in the seven "
+            "design-card decisions. If adjusted_association uses any continuous "
+            "variable, its step citations must cover both interpretation and "
+            "functional_form method layers.",
             (
                 "Pre-result design selection contract:\nCompare 2-4 scientifically "
                 "distinct candidate designs for this exact question, mark exactly "
@@ -2124,11 +2179,17 @@ class ProgressivePlannerAgent:
         )
         outline_schema = None
         if llm_supports_strict_json_schema(self.llm):
+            design_card_keys = tuple(
+                card.citation_key
+                for card in design_cards
+                if card.citation_key in set(comparison_keys)
+            )
             outline_schema = progressive_outline_structured_output_request(
                 analysis_types=analysis_types,
                 variable_names=variables,
                 scientific_action_ids=action_ids,
                 allowed_literature_citation_keys=allowed_citations,
+                design_card_citation_keys=design_card_keys,
             )
         user_prompt = self._user_prompt(
             context,

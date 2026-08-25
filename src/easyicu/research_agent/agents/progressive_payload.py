@@ -299,6 +299,7 @@ def _bind_outline_authorities(
     variable_names: tuple[str, ...],
     scientific_action_ids: tuple[str, ...],
     allowed_citation_keys: tuple[str, ...],
+    design_card_citation_keys: tuple[str, ...] | None,
 ) -> None:
     properties = schema.get("properties")
     step = definitions.get("ProgressiveOutlineStep")
@@ -340,9 +341,21 @@ def _bind_outline_authorities(
     if allowed_citation_keys:
         candidate_citations["items"] = _string_enum(allowed_citation_keys)
         if isinstance(literature_decision_properties, dict):
-            literature_decision_properties["citation_keys"]["items"] = _string_enum(
+            decision_keys = (
                 allowed_citation_keys
+                if design_card_citation_keys is None
+                else design_card_citation_keys
             )
+            if decision_keys:
+                literature_decision_properties["citation_keys"]["items"] = (
+                    _string_enum(decision_keys)
+                )
+            else:
+                candidate_properties["literature_design_decisions"] = {
+                    "type": "array",
+                    "maxItems": 0,
+                }
+                definitions.pop("CandidateLiteratureDesignDecision", None)
     else:
         candidate_citations["maxItems"] = 0
         candidate_properties["literature_design_decisions"] = {
@@ -745,6 +758,7 @@ def progressive_outline_structured_output_request(
     variable_names: Sequence[str],
     scientific_action_ids: Sequence[str],
     allowed_literature_citation_keys: Sequence[str] = (),
+    design_card_citation_keys: Sequence[str] | None = None,
 ) -> StructuredOutputRequest:
     """Return the tiny run-bound schema used for the first Planner response."""
 
@@ -772,6 +786,23 @@ def progressive_outline_structured_output_request(
             if str(value).strip()
         )
     )
+    normalized_design_cards = (
+        None
+        if design_card_citation_keys is None
+        else tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in design_card_citation_keys
+                if str(value).strip()
+            )
+        )
+    )
+    if normalized_design_cards is not None and not set(
+        normalized_design_cards
+    ).issubset(set(normalized_citations)):
+        raise ProgressiveTransportSchemaError(
+            "design-card citation keys must be a subset of the sealed citation roster"
+        )
     if not normalized_types or not normalized_variables:
         raise ProgressiveTransportSchemaError(
             "progressive outline transport requires analysis-type and variable rosters"
@@ -787,6 +818,7 @@ def progressive_outline_structured_output_request(
         variable_names=normalized_variables,
         scientific_action_ids=normalized_actions,
         allowed_citation_keys=normalized_citations,
+        design_card_citation_keys=normalized_design_cards,
     )
     return _closed_request(
         name="easyicu_progressive_plan_outline_v1",
