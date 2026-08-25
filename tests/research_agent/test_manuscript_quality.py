@@ -309,6 +309,26 @@ def test_structure_repair_restores_background_from_existing_evidence_prose() -> 
     ]
 
 
+def test_structure_repair_replaces_evidence_only_abstract_background() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Background:** Sepsis remains an important ICU syndrome.",
+        '**Background:** [context](evidence/context.json "sha256=' + "a" * 64 + '")',
+    ).replace(
+        "Sepsis definitions and transparent cohort accounting matter for reproducible ICU research.",
+        "Sepsis definitions and transparent cohort accounting matter for reproducible ICU "
+        'research [context](evidence/context.json "sha256=' + "a" * 64 + '").',
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    abstract = repaired.split("## Abstract", 1)[1].split("## Introduction", 1)[0]
+    assert "**Background:** Sepsis definitions" in abstract
+    assert "**Background:** [context]" not in abstract
+    assert "MANUSCRIPT_ABSTRACT_BACKGROUND_RESTORED" in {
+        item["code"] for item in repairs
+    }
+
+
 def test_structure_repair_restores_existing_results_prose_slots() -> None:
     manuscript = _valid_manuscript().replace(
         "**Results:** Sepsis status was associated with in-hospital mortality.",

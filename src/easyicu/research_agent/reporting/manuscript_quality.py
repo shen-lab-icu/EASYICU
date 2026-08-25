@@ -49,6 +49,9 @@ _EVIDENCE_LINK_RE = re.compile(r"\[[^\]]+\]\(evidence/[^\n)]*(?:\"[^\"]*\")?\)")
 _EVIDENCE_PLACEHOLDER_RE = re.compile(r"\{evidence:[^}\n]+\}")
 _CLAIM_MARKER_RE = re.compile(r"\[\^claim_\d+\]")
 _CLAIM_DEFINITION_RE = re.compile(r"^\[\^claim_\d+\]:.*$", flags=re.M)
+_LITERATURE_CITATION_RE = re.compile(
+    r"\[@[A-Za-z0-9_.:-]+(?:\s*;\s*@[A-Za-z0-9_.:-]+)*\]"
+)
 _INTERNAL_PHRASES = (
     "analysis role:",
     "bound typed cohort",
@@ -146,6 +149,17 @@ def _has_prose(text: str) -> bool:
     return bool(re.search(r"[A-Za-z]{2,}", cleaned))
 
 
+def _abstract_label_has_prose(abstract: str, label: str) -> bool:
+    """Return true only when a label has reader-visible prose on its line."""
+
+    match = re.search(
+        rf"^\*\*{re.escape(label)}:\*\*(?P<body>[^\n]*)$",
+        abstract,
+        flags=re.I | re.M,
+    )
+    return bool(match and _has_prose(match.group("body")))
+
+
 def _words(text: str) -> int:
     return len(re.findall(r"[A-Za-z][A-Za-z0-9'-]*", text))
 
@@ -238,8 +252,8 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not re.search(
-        r"\*\*Background:\*\*\s+\S+", abstract, flags=re.I
+    if abstract is not None and not _abstract_label_has_prose(
+        abstract, "Background"
     ):
         paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
         candidate_index = next(
@@ -248,7 +262,7 @@ def repair_reader_structure_from_existing_prose(
                 for index, paragraph in enumerate(paragraphs)
                 if _has_prose(paragraph)
                 and not re.match(
-                    r"\*\*(?:Methods|Results|Conclusions):\*\*",
+                    r"\*\*(?:Background|Methods|Results|Conclusions):\*\*",
                     paragraph,
                     flags=re.I,
                 )
@@ -274,8 +288,8 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not re.search(
-        r"\*\*Background:\*\*\s+\S+", abstract, flags=re.I
+    if abstract is not None and not _abstract_label_has_prose(
+        abstract, "Background"
     ):
         introduction = section_map.get("Introduction", "")
         candidate = next(
@@ -287,17 +301,18 @@ def repair_reader_structure_from_existing_prose(
                     "{evidence:" in sentence
                     or "{claim:" in sentence
                     or _EVIDENCE_LINK_RE.search(sentence) is not None
+                    or _LITERATURE_CITATION_RE.search(sentence) is not None
                 )
             ),
             None,
         )
         if candidate is not None:
             populated = re.sub(
-                r"(\*\*Background:\*\*)\s*(?=\n\s*\n|\Z)",
-                lambda match: f"{match.group(1)} {candidate}",
+                r"^\*\*Background:\*\*[^\n]*$",
+                lambda _match: f"**Background:** {candidate}",
                 abstract,
                 count=1,
-                flags=re.I,
+                flags=re.I | re.M,
             )
             if populated == abstract:
                 populated = f"**Background:** {candidate}\n\n{abstract.lstrip()}"
@@ -347,9 +362,7 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not re.search(
-        r"\*\*Results:\*\*\s+\S+", abstract, flags=re.I
-    ):
+    if abstract is not None and not _abstract_label_has_prose(abstract, "Results"):
         paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
         methods_index = next(
             (
@@ -422,8 +435,8 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not re.search(
-        r"\*\*Conclusions:\*\*\s+\S+", abstract, flags=re.I
+    if abstract is not None and not _abstract_label_has_prose(
+        abstract, "Conclusions"
     ):
         paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
         results_index = next(
@@ -463,8 +476,8 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not re.search(
-        r"\*\*Conclusions:\*\*\s+\S+", abstract, flags=re.I
+    if abstract is not None and not _abstract_label_has_prose(
+        abstract, "Conclusions"
     ):
         conclusion = section_map.get("Conclusion", "")
         results = section_map.get("Results", "")
@@ -664,9 +677,7 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
     abstract = section_map.get("Abstract")
     if abstract is not None:
         for label in _ABSTRACT_LABELS:
-            if not re.search(
-                rf"\*\*{re.escape(label)}:\*\*\s+\S+", abstract, flags=re.I
-            ):
+            if not _abstract_label_has_prose(abstract, label):
                 findings.append(
                     ManuscriptQualityFinding(
                         code="MANUSCRIPT_ABSTRACT_LABEL_MISSING_OR_EMPTY",
