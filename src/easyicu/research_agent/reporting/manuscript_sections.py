@@ -150,7 +150,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "public, or supplementary material; the host owns release facts.\n"
             "Target: 400-600 words. Cite at least one exact method-source key "
             "from the literature digest when available; do not cite a disease "
-            "definition paper as statistical-method authority."
+            "definition paper as statistical-method authority. Use reader-facing "
+            "clinical labels; never expose raw variable names, snake_case ids, "
+            "reason codes, or host/runtime terminology."
         ),
         max_tokens=2048,
         required_subsections=(
