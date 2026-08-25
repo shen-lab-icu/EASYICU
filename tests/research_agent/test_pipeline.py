@@ -7125,6 +7125,7 @@ def _register_complete_display_suite_for_readiness(
     *,
     table_step_id: str | None = None,
     publication_source_step_id: str | None = None,
+    supporting_data_quality_step_id: str | None = "03_sensitivity",
 ) -> dict[str, list[str]]:
     provenance_path = tmp_path / "provenance_sources.json"
     provenance_path.write_text(
@@ -7181,7 +7182,7 @@ def _register_complete_display_suite_for_readiness(
         source_step_id=publication_source_step_id,
         contract={
             "figure_id": "easyicu_publication_figure",
-            "core_claim": "Absolute risk, primary effect, data quality, and sensitivity audit are shown.",
+            "core_claim": "Absolute risk, primary effect, and sensitivity audit are shown.",
             "panels": [
                 {
                     "panel_id": "A",
@@ -7198,13 +7199,6 @@ def _register_complete_display_suite_for_readiness(
                     "claim": "The primary effect estimate is drawn from source data.",
                 },
                 {
-                    "panel_id": "C",
-                    "title": "Missingness and measurement availability",
-                    "role": "data_quality",
-                    "chart_type": "availability_panel",
-                    "claim": "Missingness and measurement availability are shown with source-data denominators.",
-                },
-                {
                     "panel_id": "D",
                     "title": "Sensitivity and denominator audit",
                     "role": "robustness",
@@ -7214,6 +7208,43 @@ def _register_complete_display_suite_for_readiness(
             ],
         },
     )
+    if supporting_data_quality_step_id:
+        support_dir = (
+            tmp_path / "steps" / supporting_data_quality_step_id / "outputs"
+        )
+        support_dir.mkdir(parents=True, exist_ok=True)
+        (support_dir / "missingness_measurement_panel.png").write_text(
+            "supporting figure",
+            encoding="utf-8",
+        )
+        (support_dir / "missingness_measurement_panel.svg").write_text(
+            "supporting figure",
+            encoding="utf-8",
+        )
+        (support_dir / "missingness_measurement_panel.figure_contract.json").write_text(
+            json.dumps(
+                {
+                    "figure_id": "missingness_measurement_panel",
+                    "core_claim": (
+                        "Supporting missingness and measurement availability "
+                        "are shown with source-data denominators."
+                    ),
+                    "panels": [
+                        {
+                            "panel_id": "C",
+                            "title": "Missingness and measurement availability",
+                            "role": "data_quality",
+                            "chart_type": "availability_panel",
+                            "claim": (
+                                "Missingness and measurement availability are shown "
+                                "with source-data denominators."
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
     bound: dict[str, list[str]] = {}
     if table_step_id:
         bound.setdefault(table_step_id, []).append(table_record.evidence_id)
@@ -7746,6 +7777,7 @@ def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
         tmp_path,
         table_step_id="01_table_one",
         publication_source_step_id="02_model",
+        supporting_data_quality_step_id=None,
     )
     write_support_contract(
         "03_old_primary_render",
