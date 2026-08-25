@@ -1069,7 +1069,7 @@ def _verified_resume_writer_scaffold(
     current_contract_sha256 = manuscript_writer_contract_sha256()
     records = [
         record
-        for record in evidence.records()
+        for record in evidence.current_verified_records(per_step_records)
         if record.evidence_id == "manuscript_scaffold_raw"
         or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
     ]
@@ -1130,7 +1130,7 @@ def _verified_resume_writer_scaffold_for_quality_migration(
     current_contract_sha256 = manuscript_writer_contract_sha256()
     candidates = [
         record
-        for record in evidence.records()
+        for record in evidence.current_verified_records(per_step_records)
         if record.evidence_id == "manuscript_scaffold_raw"
         or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
     ]
