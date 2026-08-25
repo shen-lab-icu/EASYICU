@@ -298,3 +298,20 @@ def test_explicit_resume_reopens_existing_hard_stop_ledger(
     assert task["status"] == "completed"
     assert task["resume_count"] == 1
     assert task["terminal_attempts"][0]["status"] == "failed"
+
+
+def test_benchmark_rejects_impossible_provider_token_ceiling_before_run() -> None:
+    import tools.run_research_agent_bench as bench
+
+    options = bench._benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        max_total_tokens_per_run=120_000,
+        max_total_tokens_per_batch=120_000,
+    )
+    with pytest.raises(
+        ValueError,
+        match="cannot fund one minimum Provider transport reservation",
+    ):
+        bench._provider_hard_stop_limits(options)

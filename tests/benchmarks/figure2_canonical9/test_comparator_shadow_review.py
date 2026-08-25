@@ -106,6 +106,7 @@ def test_exact_anchor_hydration_records_source_coverage_without_article_text() -
     assert all(record.abstract_available for record in pack.records)
     assert all(record.pmc_full_text_available for record in pack.records)
     assert all(record.figure_caption_count == 1 for record in pack.records)
+    assert all(record.supplementary_material_count == 0 for record in pack.records)
     assert all(record.pmcid != "PMC999999" for record in pack.records)
     payload = pack.model_dump(mode="json")
     encoded = json.dumps(payload)
@@ -125,7 +126,23 @@ def test_exact_anchor_hydration_fails_when_protocol_id_is_absent() -> None:
         hydrate_anchor_source_pack(protocol, fetch_text=fetch)
 
 
-def test_run_bound_review_requires_all_dimensions_and_exact_task_anchors() -> None:
+def test_exact_anchor_hydration_requires_accessible_full_text() -> None:
+    protocol = load_shadow_review_protocol(_PROTOCOL)
+
+    def fetch(db: str, ids: tuple[str, ...] | list[str]) -> str:
+        values = list(ids)
+        if db == "pmc":
+            available = [value for value in values if value != "PMC38905261"]
+            return _pmc_xml(available, {"PMC9322581": "35938334"})
+        return _pubmed_xml(values)
+
+    with pytest.raises(ComparatorShadowReviewError, match="must be replaced"):
+        hydrate_anchor_source_pack(protocol, fetch_text=fetch)
+
+
+def test_run_bound_review_requires_all_dimensions_and_exact_task_anchors(
+    tmp_path: Path,
+) -> None:
     protocol = load_shadow_review_protocol(_PROTOCOL)
 
     def fetch(db: str, ids: tuple[str, ...] | list[str]) -> str:
@@ -137,6 +154,13 @@ def test_run_bound_review_requires_all_dimensions_and_exact_task_anchors() -> No
     pack = hydrate_anchor_source_pack(protocol, fetch_text=fetch)
     task = protocol.task("e2_lactate_mortality")
     anchor_ids = tuple(anchor.citation_id for anchor in task.anchors)
+    run_path = tmp_path / "run_e2"
+    (run_path / "run").mkdir(parents=True)
+    (run_path / "run" / "evidence.json").write_text("{}\n", encoding="utf-8")
+    (run_path / "run_status.json").write_text(
+        json.dumps({"code_version": {"git_sha": "abcdef1"}}) + "\n",
+        encoding="utf-8",
+    )
     dimensions = tuple(
         ReviewDimension(
             dimension=dimension,
@@ -155,10 +179,11 @@ def test_run_bound_review_requires_all_dimensions_and_exact_task_anchors() -> No
         protocol_ref=protocol.protocol_ref,
         protocol_sha256=protocol_content_sha256(protocol),
         anchor_pack_sha256=canonical_json_sha256(pack.model_dump(mode="json")),
+        supplement_review_sha256="a" * 64,
         task_id=task.task_id,
         run_head="abcdef1",
         run_image="sha256:image",
-        run_path="/run/e2",
+        run_path=str(run_path),
         anchors=anchor_ids,
         dimensions=dimensions,
         overall_status="accepted",
@@ -168,3 +193,9 @@ def test_run_bound_review_requires_all_dimensions_and_exact_task_anchors() -> No
     drifted = review.model_copy(update={"anchors": ("pmid_wrong",)})
     with pytest.raises(ComparatorShadowReviewError, match="anchors differ"):
         validate_run_bound_review(drifted, protocol=protocol, anchor_pack=pack)
+    wrong_head = review.model_copy(update={"run_head": "deadbee"})
+    with pytest.raises(ComparatorShadowReviewError, match="run_head differs"):
+        validate_run_bound_review(wrong_head, protocol=protocol, anchor_pack=pack)
+    (run_path / "run" / "evidence.json").unlink()
+    with pytest.raises(ComparatorShadowReviewError, match="evidence path is missing"):
+        validate_run_bound_review(review, protocol=protocol, anchor_pack=pack)
