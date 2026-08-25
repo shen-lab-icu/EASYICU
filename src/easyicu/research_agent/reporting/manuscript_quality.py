@@ -485,14 +485,18 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
         section_text = section_map.get(section, "")
         excerpts = _internal_excerpts(section_text)
         if excerpts:
+            severity = "warning" if section == "Methods" else "error"
             findings.append(
                 ManuscriptQualityFinding(
                     code="MANUSCRIPT_INTERNAL_TERM_EXPOSED",
-                    severity="error",
+                    severity=severity,
                     section=section,
                     message=(
                         "Reader-facing prose exposes raw runtime identifiers or "
                         "engineering terminology."
+                        if severity == "error"
+                        else "Methods retains exact variable or runtime terminology; "
+                        "keep it only where reproducibility requires it."
                     ),
                     excerpts=excerpts[:12],
                 )

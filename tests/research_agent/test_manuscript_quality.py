@@ -172,6 +172,7 @@ def test_internal_runtime_terms_are_also_rejected_in_methods() -> None:
         if item.code == "MANUSCRIPT_INTERNAL_TERM_EXPOSED"
         and item.section == "Methods"
     )
+    assert finding.severity == "warning"
     assert "`sep3_sofa2_max`" in finding.excerpts
 
 
