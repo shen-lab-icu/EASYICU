@@ -2191,6 +2191,79 @@ def drop_untraceable_numeric_sentences(
     return filtered, removed
 
 
+def repair_single_variant_robustness_metric_prose(
+    scaffold: str,
+    *,
+    panel: Any,
+) -> tuple[str, List[Dict[str, str]]]:
+    """Render one converged metric variant as point estimate plus its CI.
+
+    A panel envelope is not a range of point estimates when only one variant
+    exists. Replace only numeric sentences that explicitly cite the panel and
+    label the metric, using the row's own evidence owner and registered values.
+    """
+
+    if not scaffold or panel is None or int(getattr(panel, "n_variants", 0)) != 1:
+        return scaffold, []
+    variants = [
+        row
+        for row in getattr(panel, "rows", ())
+        if row.spec_id != panel.primary_spec_id
+        and row.converged
+        and row.point_estimate is not None
+        and row.ci_low is not None
+        and row.ci_high is not None
+        and row.evidence_id
+    ]
+    if len(variants) != 1:
+        return scaffold, []
+    row = variants[0]
+    metric_match = re.search(r"\bmetric=([A-Za-z0-9_+-]+)", row.notes or "")
+    if metric_match is None:
+        return scaffold, []
+    raw_metric = metric_match.group(1).casefold()
+    metric_labels = {
+        "auroc": "AUROC",
+        "auc": "AUROC",
+        "brier": "Brier score",
+        "brier_score": "Brier score",
+    }
+    metric_label = metric_labels.get(raw_metric)
+    if metric_label is None:
+        return scaffold, []
+    canonical = (
+        f"The evaluated robustness specification had an {metric_label} of "
+        f"{row.point_estimate:.12g} (95% CI, {row.ci_low:.12g}–"
+        f"{row.ci_high:.12g}) {{evidence:{row.evidence_id}}}."
+        if metric_label == "AUROC"
+        else f"The evaluated robustness specification had a {metric_label} of "
+        f"{row.point_estimate:.12g} (95% CI, {row.ci_low:.12g}–"
+        f"{row.ci_high:.12g}) {{evidence:{row.evidence_id}}}."
+    )
+    paragraph_parts = re.split(r"(\n\s*\n)", scaffold)
+    repairs: List[Dict[str, str]] = []
+    for paragraph_index in range(0, len(paragraph_parts), 2):
+        sentences = re.split(r"(?<=[.!?])\s+", paragraph_parts[paragraph_index])
+        for sentence_index, sentence in enumerate(sentences):
+            lowered = sentence.casefold()
+            if "{evidence:robustness_panel" not in lowered:
+                continue
+            if metric_label.casefold() not in lowered and raw_metric not in lowered:
+                continue
+            if len(_NUMERIC_IN_PROSE_RE.findall(sentence)) < 2:
+                continue
+            sentences[sentence_index] = canonical
+            repairs.append(
+                {
+                    "source": "single_variant_robustness_panel",
+                    "metric": metric_label,
+                    "evidence_id": row.evidence_id,
+                }
+            )
+        paragraph_parts[paragraph_index] = " ".join(sentences)
+    return "".join(paragraph_parts), repairs
+
+
 def enforce_writer_claim_language(
     manuscript: str,
     *,
