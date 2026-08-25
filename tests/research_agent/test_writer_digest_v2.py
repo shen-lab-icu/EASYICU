@@ -730,6 +730,65 @@ def test_writer_digest_preferred_keys_is_tuple_and_nonempty() -> None:
     assert "auroc" in WRITER_DIGEST_PREFERRED_KEYS
 
 
+def test_writer_digest_prioritizes_owner_issued_non_ph_survival_results() -> None:
+    payload = {
+        "schema_version": "easyicu.survival_reporting/1",
+        "execution_owner": "landmark_survival_executor_v1",
+        "interpretation_ceiling": "descriptive_prognostic_association_not_causal",
+        "contrast": "exposed versus comparator",
+        "constant_hazard_ratio_authorized": False,
+        "proportional_hazards_status": "violation_block_paper_authorization",
+        "rmst": {
+            "method": "unadjusted_kaplan_meier_plugin",
+            "tau_days_from_landmark": 27.0,
+            "difference_days": -0.3,
+            "ci_low": -0.4,
+            "ci_high": -0.2,
+            "p_value": 1e-8,
+        },
+        "time_varying_adjusted_association": {
+            "method": "piecewise_time_varying_cox",
+            "adjustment_columns": ["age", "sex"],
+            "intervals": [
+                {
+                    "start_days": 0.0,
+                    "end_days": 7.0,
+                    "hazard_ratio": 0.54,
+                    "ci_low": 0.50,
+                    "ci_high": 0.58,
+                    "p_value": 1e-20,
+                }
+            ],
+        },
+    }
+    records = [
+        {
+            "step_id": "01_survival",
+            "status": "ok",
+            "deterministic_standard_analysis": "signed_landmark_survival_suite",
+            "step_summary": {
+                "analysis_family": "survival",
+                "analysis_role": "primary",
+                "reportable_survival_results": payload,
+            },
+        }
+    ]
+
+    digest = _render_writer_evidence_digest(records)
+
+    assert '"reportable_survival_results"' in digest
+    assert '"difference_days": -0.3' in digest
+    assert '"hazard_ratio": 0.54' in digest
+
+    records[0]["step_summary"]["reportable_survival_results"] = {
+        **payload,
+        "execution_owner": "untrusted",
+    }
+    assert '"reportable_survival_results"' not in _render_writer_evidence_digest(
+        records
+    )
+
+
 def test_primary_digest_flattens_unique_nested_p_value_beside_effect(
     tmp_path: Path,
 ) -> None:
