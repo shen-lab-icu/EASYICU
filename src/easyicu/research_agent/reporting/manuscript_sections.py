@@ -427,6 +427,76 @@ def _remaining_quality_errors(scientific: str) -> tuple[tuple[str, str, str], ..
     )
 
 
+def _existing_scientific_sections(manuscript: str) -> dict[str, str]:
+    """Project an existing scaffold back onto the eight Writer owners."""
+
+    text = str(manuscript or "")
+    sections: dict[str, str] = {}
+    first_level_two = re.search(r"^##\s+", text, flags=re.M)
+    title = text[: first_level_two.start() if first_level_two else len(text)].strip()
+    if title:
+        sections["title"] = title
+    matches = list(re.finditer(r"^##\s+([^\n]+?)\s*$", text, flags=re.M))
+    key_by_name = {
+        spec.section_name.casefold(): spec.key
+        for spec in MANUSCRIPT_SECTION_SPECS
+        if spec.key != "title"
+    }
+    for index, match in enumerate(matches):
+        key = key_by_name.get(match.group(1).strip().casefold())
+        if key is None:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections[key] = text[match.start() : end].strip()
+    return sections
+
+
+def repair_existing_manuscript_sections(
+    manuscript: str,
+    *,
+    call_section: Callable[..., str],
+    common: Mapping[str, Any],
+) -> tuple[str, tuple[str, ...]]:
+    """Regenerate only section owners named by deterministic quality errors."""
+
+    sections = _existing_scientific_sections(manuscript)
+    repaired_keys: list[str] = []
+    for spec, error_detail in _quality_repair_specs(manuscript):
+        repair_instruction = (
+            spec.instruction
+            + "\n\nREADER-QUALITY CONTRACT MIGRATION:\n"
+            + "The prior verified draft failed these deterministic checks owned "
+            + f"by this section:\n{error_detail}\n"
+            + "Regenerate the complete section from the same machine evidence. "
+            + "Resolve every listed error without adding an unsupported result, "
+            + "changing the executed method, exposing runtime identifiers, or "
+            + "mentioning this migration. Preserve all required headings and labels."
+        )
+        repaired = _ensure_section_heading(
+            spec,
+            call_section(
+                section_name=spec.section_name,
+                instruction=repair_instruction,
+                max_tokens=spec.max_tokens,
+                **common,
+            ),
+        )
+        missing_subsections = _missing_required_subsections(spec, repaired)
+        if missing_subsections:
+            raise ManuscriptSectionContractError(
+                section_name=spec.section_name,
+                missing_subsections=missing_subsections,
+            )
+        sections[spec.key] = repaired
+        repaired_keys.append(spec.key)
+
+    scientific = _assemble_scientific_sections(sections)
+    remaining = _remaining_quality_errors(scientific)
+    if remaining:
+        raise ManuscriptReaderQualityContractError(findings=remaining)
+    return scientific, tuple(repaired_keys)
+
+
 def render_manuscript_sections(
     *,
     call_section: Callable[..., str],
@@ -534,5 +604,6 @@ __all__ = [
     "ManuscriptSectionContractError",
     "ManuscriptSectionSpec",
     "manuscript_writer_contract_sha256",
+    "repair_existing_manuscript_sections",
     "render_manuscript_sections",
 ]

@@ -19,7 +19,10 @@ from ..schema import (
     AnalysisStep,
     ResearchContext,
 )
-from ..reporting.manuscript_sections import render_manuscript_sections
+from ..reporting.manuscript_sections import (
+    repair_existing_manuscript_sections,
+    render_manuscript_sections,
+)
 
 from ._support import (
     _NATURE_WRITING_GUIDE,
@@ -345,6 +348,26 @@ class WriterAgent:
         literature_digest: Optional[str] = None,
     ) -> str:
         return render_manuscript_sections(
+            call_section=self._call_section,
+            common={
+                "context": context,
+                "evidence_ids": evidence_ids,
+                "evidence_digest": evidence_digest,
+                "literature_digest": literature_digest,
+            },
+        )
+
+    def repair_existing(
+        self,
+        manuscript: str,
+        *,
+        context: ResearchContext,
+        evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
+    ) -> tuple[str, tuple[str, ...]]:
+        return repair_existing_manuscript_sections(
+            manuscript,
             call_section=self._call_section,
             common={
                 "context": context,

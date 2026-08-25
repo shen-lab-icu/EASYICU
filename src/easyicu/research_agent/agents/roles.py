@@ -33,7 +33,13 @@ from ..research_context.temporal_semantics import (
 )
 from ..review.step_semantics import decide_step_scientific_review
 
-from ._support import _coerce_primary_estimate, _empty_df_placeholder, _initial_reflection_memory, _sentences_missing_evidence_tokens, _suggest_repairs_for
+from ._support import (
+    _coerce_primary_estimate,
+    _empty_df_placeholder,
+    _initial_reflection_memory,
+    _sentences_missing_evidence_tokens,
+    _suggest_repairs_for,
+)
 from .reporting import WriterAgent
 
 # ---------------------------------------------------------------------------
@@ -313,6 +319,28 @@ class ManuscriptAgent:
             nature_writing_enabled=self.nature_writing_enabled,
             user_writing_advisory=self.user_writing_advisory,
         ).run(
+            context=context,
+            evidence_ids=evidence_ids,
+            evidence_digest=evidence_digest,
+            literature_digest=literature_digest,
+        )
+
+    def repair_existing(
+        self,
+        manuscript: str,
+        *,
+        context: ResearchContext,
+        evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
+    ) -> tuple[str, tuple[str, ...]]:
+        return WriterAgent(
+            self.llm,
+            language=self.language,
+            nature_writing_enabled=self.nature_writing_enabled,
+            user_writing_advisory=self.user_writing_advisory,
+        ).repair_existing(
+            manuscript,
             context=context,
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
