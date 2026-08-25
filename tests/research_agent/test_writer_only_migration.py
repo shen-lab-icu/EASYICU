@@ -19,6 +19,7 @@ from easyicu.research_agent.reporting.writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
     _normalize_claim_token_sentences,
+    _repair_abstract_conclusion_boundary,
     _remove_unresolved_evidence_tokens,
     publish_writer_only_result,
     repair_writer_only,
@@ -312,3 +313,17 @@ def test_claim_tokens_are_normalized_to_standalone_paragraphs() -> None:
         "The cohort included 10 stays.\n\n{claim:step.first}\n\n"
         "{claim:step.second}"
     ) in normalized
+
+
+def test_abstract_conclusion_fallback_is_cited_and_noncausal() -> None:
+    raw = _manuscript().replace(
+        "**Conclusions:** The association requires external validation.",
+        "**Conclusions:** The treatment improved survival {evidence:unsupported}.",
+    )
+
+    repaired, changed = _repair_abstract_conclusion_boundary(raw, _literature())
+
+    assert changed is True
+    assert "The treatment improved survival" not in repaired
+    assert "do not establish causation [@strobe_2007]" in repaired
+    assert "validation in other cohorts" in repaired
