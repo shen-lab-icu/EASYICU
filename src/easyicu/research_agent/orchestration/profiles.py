@@ -508,6 +508,66 @@ CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF = (
 )
 CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_2026_08_19.ref
 
+# Web Copilot may request live prior-art retrieval only after an explicit turn
+# grant. Keep that evidence-changing option out of the default E1 profiles and
+# bind it to additive coordinates selected only for the authorized request.
+E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24 = SubmissionProfile(
+    name="npj_dm_e1_canary_live_pubmed_dev",
+    version="20260824",
+    locked_at="2026-08-24T00:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_08_19.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=True,
+    planner_strategy="progressive_v2",
+    enable_pubmed=True,
+)
+
+E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24 = SubmissionProfile(
+    name="npj_dm_e1_demo_live_pubmed_dev",
+    version="20260824",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.locked_at,
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.expected_concept_dict_sha
+    ),
+    expected_sofa2_dict_sha=(
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.expected_sofa2_dict_sha
+    ),
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    planner_only=False,
+    planner_strategy="progressive_v2",
+    enable_pubmed=True,
+)
+
+CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF = (
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.ref
+)
+CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF = (
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24.ref
+)
+
 DEV9_AI_REVIEWED_DEMO_2026_08_22 = SubmissionProfile(
     name="npj_dm_dev9_demo_dev",
     version="20260822",
@@ -681,6 +741,12 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     E1_REVIEWED_DEMO_2026_08_17.ref: E1_REVIEWED_DEMO_2026_08_17,
     E1_REVIEWED_DEMO_2026_08_19.ref: E1_REVIEWED_DEMO_2026_08_19,
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24
+    ),
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24.ref: (
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24
+    ),
     DEV9_AI_REVIEWED_DEMO_2026_08_22.ref: DEV9_AI_REVIEWED_DEMO_2026_08_22,
     DEV9_AI_REVIEWED_DEMO_2026_08_24.ref: DEV9_AI_REVIEWED_DEMO_2026_08_24,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
@@ -901,6 +967,10 @@ __all__ = [
     "E1_REVIEWED_DEMO_2026_08_19",
     "CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF",
     "CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF",
+    "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24",
+    "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_08_24",
+    "CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF",
+    "CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF",
     "DEV9_AI_REVIEWED_DEMO_2026_08_22",
     "DEV9_AI_REVIEWED_DEMO_2026_08_24",
     "CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF",

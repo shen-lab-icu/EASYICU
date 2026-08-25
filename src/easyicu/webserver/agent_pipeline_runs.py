@@ -3376,7 +3376,9 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.orchestration.config import PipelineConfig
             from easyicu.research_agent.orchestration.profiles import (
                 CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
+                CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF,
                 CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
+                CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
                 get_submission_profile,
             )
             from easyicu.research_agent.orchestration.services import PipelineServices
@@ -3494,11 +3496,22 @@ def make_research_pipeline_run_runner(
                     )
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
-            submission_profile_ref = (
-                CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF
-                if selected_budget_mode == "full_reviewed"
-                else CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF
+            live_pubmed_requested = (
+                bool(literature_search_authorized)
+                and bound_preplan_literature is None
             )
+            if selected_budget_mode == "full_reviewed":
+                submission_profile_ref = (
+                    CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF
+                    if live_pubmed_requested
+                    else CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF
+                )
+            else:
+                submission_profile_ref = (
+                    CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF
+                    if live_pubmed_requested
+                    else CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF
+                )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()
             profile_options.update(
@@ -3545,15 +3558,10 @@ def make_research_pipeline_run_runner(
                 bound_plan_revision_contract=(
                     bound_plan_revision_contract or None
                 ),
-                # The Web host carries this from the user's turn grant.  When
-                # an accepted Idea handoff already supplies a digest-bound
-                # search receipt, reuse it and do not silently issue a second
-                # search.  Otherwise a full Web study can now establish dated
-                # direct prior art before the Planner runs.
-                enable_pubmed=(
-                    bool(literature_search_authorized)
-                    and bound_preplan_literature is None
-                ),
+                # Live PubMed is frozen by the selected additive profile, not
+                # passed as an ad-hoc override. When an accepted Idea handoff
+                # already supplies a digest-bound receipt, the no-search
+                # profile above prevents a silent second retrieval.
                 runner_kind=submission_profile.requires_runner,
                 runner_image=(selected_runner_image or DockerRunner.DEFAULT_IMAGE),
                 runner_network="none",

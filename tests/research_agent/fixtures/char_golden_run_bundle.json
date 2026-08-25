@@ -294,7 +294,7 @@
       "analysis_error_count": 2,
       "analysis_errors": [
         "The run locked robustness specifications that no step estimated, so the panel carries them as blank rows: complete_case_trajectory_inputs. A step re-estimating the locked grid must declare robustness_replay_spec to reach the deterministic replay owner; generic refitting stays disabled here because it would choose an exposure, outcome or method on the plan's behalf.",
-        "scientific_validator_unavailable: The analysis can execute, but no registered deterministic validator establishes its identification claim."
+        "phenotyping validator requires exactly one sealed primary runtime receipt"
       ],
       "analysis_validated": false,
       "blocked_outcome_not_leaked": true,
@@ -403,9 +403,9 @@
     "by_severity": {
       "error": 1,
       "info": 3,
-      "warning": 11
+      "warning": 12
     },
-    "count": 15,
+    "count": 16,
     "identities": [
       {
         "reason": "Using the deterministic calculator for the complete Planner-owned standard-executor specification in step 03_stability.",
@@ -496,9 +496,15 @@
         "severity": "warning",
         "step_id": null,
         "validator": "study_design_brief"
+      },
+      {
+        "reason": "The study-family supplementary analysis inventory is incomplete: alternative_algorithm, external_reproducibility.",
+        "severity": "warning",
+        "step_id": null,
+        "validator": "supplement_inventory"
       }
     ],
-    "set_sha256": "39b76f4f5736468df2bad010faa6cd1416b43f0208a8eb33cf6355be69e2de49"
+    "set_sha256": "fbad592e050cfa25bab915c0974a592ea5ad9f561179237c13842103750c5253"
   },
   "volatile_field_allowlist": [
     "absolute_path",

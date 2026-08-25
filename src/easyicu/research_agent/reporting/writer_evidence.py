@@ -26,7 +26,7 @@ from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
 )
-from ..scalar_utils import _first_present_scalar
+from ..scalar_utils import _first_present_scalar, _flatten_scalar_dict
 from .p_values import prepare_p_values_for_writer, render_claim_value_for_writer
 
 __all__ = [
@@ -377,15 +377,25 @@ _REPORTABLE_NUMERIC_CAP_PER_STEP = 50
 
 
 def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
-    """Keep a nested p-value attached to the named hypothesis it tested."""
+    """Return one unambiguous scalar for the compact writer digest.
+
+    A top-level p-value is already the step's declared primary value.  Generated
+    summaries also commonly nest the only p-value beside its estimate and
+    confidence interval; expose that value only when exactly one nested
+    candidate exists.  Multiple nested hypothesis tests remain absent instead
+    of assigning an arbitrary p-value to the primary result.
+    """
 
     if key == "p_value":
         value = summary.get(key)
-        return (
-            value
-            if value is not None and not isinstance(value, (dict, list))
-            else None
-        )
+        if value is not None and not isinstance(value, (dict, list)):
+            return value
+        nested = [
+            nested_value
+            for path, nested_value in _flatten_scalar_dict(dict(summary)).items()
+            if path.endswith(".p_value")
+        ]
+        return nested[0] if len(nested) == 1 else None
     return _first_present_scalar(summary, (key,))
 
 
@@ -538,97 +548,6 @@ def _render_writer_evidence_digest(
     has_panel_primary = _robustness_panel_has_primary_effect(
         run_dir, evidence=evidence
     )
-    preferred_keys = (
-        "sample_size",
-        "n_total",
-        "n_total_stays",
-        "n_death",
-        "n_complete",
-        "n_complete_case",
-        "complete_case_n",
-        "outcome_rate",
-        "overall_mortality_rate",
-        "overall_ci_low",
-        "overall_ci_high",
-        "mortality_rate",
-        "median_age",
-        "estimate",
-        "effect_estimate",
-        "primary_or",
-        "odds_ratio",
-        "adjusted_or",
-        "primary_hr",
-        "hazard_ratio",
-        "adjusted_hr",
-        "primary_ate",
-        "ate",
-        "average_treatment_effect",
-        "treatment_effect",
-        "risk_difference",
-        "mean_difference",
-        "coef",
-        "coefficient",
-        "beta",
-        "primary_beta",
-        "ci_lower",
-        "ci_upper",
-        "ci_low",
-        "ci_high",
-        "primary_ci_low",
-        "primary_ci_high",
-        "primary_or_ci",
-        "primary_hr_ci",
-        "primary_effect_ci",
-        "estimate_ci_low",
-        "estimate_ci_high",
-        "p_value",
-        "median_los_icu",
-        "mean_los_icu",
-        "median_los_hosp",
-        "mean_los_hosp",
-        "median_los_hospital",
-        "mean_los_hospital",
-        "los_icu_median",
-        "los_hosp_median",
-        "icu_los_median",
-        "hospital_los_median",
-        "auroc",
-        "statistic:auroc",
-        "auc",
-        "statistic:auc",
-        "cv_auroc",
-        "statistic:cv_auroc",
-        "held_out_auroc",
-        "statistic:held_out_auroc",
-        "mean_auroc",
-        "statistic:mean_auroc",
-        "auroc_median",
-        "statistic:auroc_ci_lower",
-        "statistic:auroc_ci_upper",
-        "brier_score",
-        "statistic:brier_score",
-        "held_out_brier",
-        "statistic:held_out_brier",
-        "brier_median",
-        "calibration_slope",
-        "statistic:calibration_slope",
-        "calibration_slope_median",
-        "calibration_intercept",
-        "statistic:calibration_intercept",
-        "calibration_intercept_median",
-        "baseline_prevalence",
-        "statistic:baseline_prevalence",
-        "split_strategy",
-        "statistic:split_strategy",
-        "silhouette_score",
-        "silhouette",
-        "n_clusters",
-        "cluster_count",
-        "spearman_rho",
-        "rho",
-        "skipped",
-        "error",
-    )
     records = [dict(record) for record in current_step_records(per_step_records or [])]
     for record in records:
         step_id = str(record.get("step_id") or "unknown_step")
@@ -643,7 +562,7 @@ def _render_writer_evidence_digest(
             lines.append("  {}")
             continue
         digest_row: Dict[str, Any] = {}
-        for key in preferred_keys:
+        for key in WRITER_DIGEST_PREFERRED_KEYS:
             if (
                 has_panel_primary
                 and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT
