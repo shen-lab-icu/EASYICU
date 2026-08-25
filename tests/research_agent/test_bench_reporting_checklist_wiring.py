@@ -81,6 +81,57 @@ def test_association_kind_forces_strobe(monkeypatch, tmp_path):
     assert captured.get("reporting_checklist_names") == ["strobe"]
 
 
+def test_planner_only_human_review_pause_is_a_completed_planning_outcome(
+    monkeypatch, tmp_path
+):
+    import easyicu.research_agent as rapkg
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewPending,
+        HumanReviewRequest,
+    )
+    import tools.run_research_agent_bench as bench
+
+    run_dir = tmp_path / "run_demo"
+    run_dir.mkdir()
+    (run_dir / "analysis_plan.json").write_text("{}\n", encoding="utf-8")
+    (run_dir / "human_review_checkpoint.json").write_text("{}\n", encoding="utf-8")
+    request = HumanReviewRequest.create(
+        kind="protocol_claim",
+        authority_sha256="a" * 64,
+        summary="Review the locked plan.",
+        payload={"run_id": "run_demo"},
+    )
+
+    class PausingPipeline:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, **kwargs):
+            return HumanReviewPending(
+                run_id="run_demo",
+                thread_id="thread_demo",
+                run_dir=str(run_dir),
+                requests=(request,),
+            )
+
+    monkeypatch.setattr(rapkg, "ResearchAgentPipeline", PausingPipeline)
+
+    score = bench._run_one_arm(
+        item=_item("descriptive_association"),
+        cohort=SimpleNamespace(columns=["age", "death"]),
+        workdir=tmp_path,
+        disable_icu_context=False,
+        label="aware",
+        llm=object(),
+        pipeline_options={"planner_only": True},
+    )
+
+    assert score["status"] == "human_review_pending"
+    assert score["planner_only_complete"] is True
+    assert score["execution_complete"] is False
+    assert bench._score_execution_failures({"aware": score}) == []
+
+
 def test_scientific_contract_binds_primary_cohort_mode(monkeypatch, tmp_path):
     captured = _run_and_capture(
         monkeypatch,

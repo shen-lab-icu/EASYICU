@@ -1238,7 +1238,7 @@ def _arm_execution_succeeded(arm: Any) -> bool:
 
 
 def _score_execution_failures(score: Any) -> List[str]:
-    """Return a reason per arm that did not finish executing."""
+    """Return a reason per arm that missed its declared terminal boundary."""
 
     if not isinstance(score, Mapping):
         return ["benchmark item produced no score payload"]
@@ -1251,6 +1251,8 @@ def _score_execution_failures(score: Any) -> List[str]:
         return ["benchmark item produced no scored arm"]
     reasons: List[str] = []
     for label, arm in arms:
+        if arm.get("planner_only_complete"):
+            continue
         if _arm_execution_succeeded(arm):
             continue
         assert isinstance(arm, Mapping)
@@ -1290,6 +1292,59 @@ def _score_execution_failures(score: Any) -> List[str]:
             f"{label} arm did not complete execution{position}: " + "; ".join(detail)
         )
     return reasons
+
+
+def _score_planner_only_pending(
+    *, pending: Any, item: Any, label: str, elapsed_seconds: float
+) -> Dict[str, Any]:
+    """Record a governed plan pause without pretending execution occurred."""
+
+    run_dir = Path(pending.run_dir)
+    required = (run_dir / "analysis_plan.json", run_dir / "human_review_checkpoint.json")
+    if not all(path.is_file() for path in required):
+        missing = [path.name for path in required if not path.is_file()]
+        raise RuntimeError(
+            "planner-only pause is missing terminal artifacts: " + ", ".join(missing)
+        )
+    return {
+        "arm": label,
+        "run_id": pending.run_id,
+        "workdir": str(run_dir),
+        "status": "human_review_pending",
+        "planner_only_complete": True,
+        "human_review_pending": True,
+        "human_review_request_ids": [request.review_id for request in pending.requests],
+        "primary_or": None,
+        "direction_match": None,
+        "expected_direction": getattr(item, "expected_or_direction", None),
+        "icu_findings": {},
+        "workflow_hits": {},
+        "artifact_hits": {},
+        "n_findings": 0,
+        "n_warnings": 0,
+        "n_errors": 0,
+        "n_historical_errors": 0,
+        "gate_status": "planner_review_pending",
+        "execution_complete": False,
+        "step_scientific_requirements_complete": False,
+        "required_step_count": 0,
+        "completed_step_count": 0,
+        "failed_step_ids": [],
+        "missing_step_ids": [],
+        "manuscript_ready": False,
+        "publication_ready": False,
+        "publication_artifacts_ready": False,
+        "execution_paper_eligible": False,
+        "paper_authorized": False,
+        "writer_attempts": 0,
+        "superseded_error_count": 0,
+        "evidence_count": 0,
+        "evidence_kinds": {"complete": False},
+        "evidence_missing_in_manuscript": -1,
+        "five_dim_scorecard": {},
+        "cost_summary": _load_cost_summary(run_dir),
+        "elapsed_seconds": round(elapsed_seconds, 2),
+    }
 
 
 def _finish_task_on_execution_outcome(task_hard_stop: Any, score: Any) -> None:
@@ -1673,6 +1728,19 @@ def _run_one_arm(
             force_writer_probe=bool(force_writer_probe),
         )
         elapsed = time.monotonic() - started
+        from easyicu.research_agent.orchestration.workflow import HumanReviewPending
+
+        if isinstance(result, HumanReviewPending):
+            if not opts.get("planner_only"):
+                raise RuntimeError(
+                    "benchmark received human-review pause outside planner-only mode"
+                )
+            return _score_planner_only_pending(
+                pending=result,
+                item=item,
+                label=label,
+                elapsed_seconds=elapsed,
+            )
         score = _score_arm(run_dir=Path(result.workdir), item=item, label=label)
         score["elapsed_seconds"] = round(elapsed, 2)
         return score
