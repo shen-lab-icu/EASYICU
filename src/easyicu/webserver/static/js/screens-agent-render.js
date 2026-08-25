@@ -415,8 +415,22 @@
     const claims = Array.isArray(p.claims) ? p.claims.slice(0, 240) : [];
     const blocks = Array.isArray(p.article_blocks) ? p.article_blocks.slice(0, 240) : [];
     const claimMap = new Map(claims.map(row => [String(row && row.claim_id || ''), row || {}]));
+    const readableText = value => {
+      const source = String(value || '')
+        .replace(/\s*\[(?!@)[A-Za-z_][A-Za-z0-9_.-]*\]/g, '')
+        .replace(/\s+([,.;:)])/g, '$1');
+      const tokens = source.split(/(\*\*[^*]+\*\*|\[@[^\]]+\])/g).filter(Boolean);
+      return tokens.map(token => {
+        if (/^\*\*[^*]+\*\*$/.test(token)) return `<strong>${esc(token.slice(2, -2))}</strong>`;
+        if (/^\[@[^\]]+\]$/.test(token)) {
+          const key = token.slice(2, -1);
+          return `<span class="gpi-reader-citation" title="${esc(key)}">[ref]</span>`;
+        }
+        return esc(token);
+      }).join('');
+    };
     const renderSegments = value => (Array.isArray(value) ? value : []).map(segment => {
-      const text = esc(String(segment && segment.text || ''));
+      const text = readableText(segment && segment.text || '');
       const claimId = String(segment && segment.claim_id || '');
       if (!segment || segment.kind !== 'claim' || !claimMap.has(claimId)) return text;
       return `<button type="button" class="gpi-bound-number" id="claim-${escAttr(claimId)}" data-gpi-claim="${escAttr(claimId)}" aria-controls="gpi-claim-detail-${escAttr(claimId)}" aria-expanded="false" title="${escAttr(t('Open evidence lineage', '查看证据链路'))}">${text}</button>`;
@@ -429,13 +443,27 @@
       }
       return `<p>${content}</p>`;
     }).join('');
+    const evidenceButton = (row, label, pointer, sourceValue) => {
+      const evidenceId = String(row && row.evidence_id || '').trim();
+      const sha256 = String(row && row.sha256 || '').trim().toLowerCase();
+      if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) {
+        return esc(label || evidenceId || t('Unavailable', '不可用'));
+      }
+      return `<button type="button" class="gpi-evidence-open" data-gpi-evidence-open data-evidence-id="${escAttr(evidenceId)}" data-evidence-sha256="${escAttr(sha256)}" data-evidence-kind="${escAttr(String(row.kind || 'artifact'))}" data-evidence-role="${escAttr(String(row.role || ''))}" data-evidence-label="${escAttr(String(label || evidenceId))}" data-evidence-pointer="${escAttr(String(pointer || ''))}" data-evidence-source-value="${escAttr(String(sourceValue == null ? '' : sourceValue))}">${esc(label || evidenceId)}</button>`;
+    };
+    const lineageTable = (source, rows, pointer, sourceValue) => {
+      const entries = [];
+      if (source && source.evidence_id) {
+        entries.push({ ...source, role: t('Exact result source', '准确结果来源'), kind: source.kind || 'statistic' });
+      }
+      (Array.isArray(rows) ? rows : []).forEach(row => entries.push(row || {}));
+      if (!entries.length) return `<p class="gpi-claim-boundary">${esc(t('No registered evidence artifacts.', '没有登记证据产物。'))}</p>`;
+      return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(t('Open registered evidence', '打开已登记证据'))}</div><div class="ag-artifact-table-wrap"><table class="ag-artifact-table"><thead><tr><th>${esc(t('Role', '角色'))}</th><th>${esc(t('Type', '类型'))}</th><th>${esc(t('Preview', '预览'))}</th><th>SHA-256</th></tr></thead><tbody>${entries.map(row => `<tr><td>${esc(row.role || '')}</td><td>${esc(row.kind || '')}</td><td>${evidenceButton(row, row.evidence_id || t('Open', '打开'), pointer, sourceValue)}</td><td>${esc(row.sha256 || '')}</td></tr>`).join('')}</tbody></table></div></div>`;
+    };
     const panels = claims.map(claim => {
       const claimId = String(claim && claim.claim_id || '');
       const evidence = claim && claim.evidence && typeof claim.evidence === 'object' ? claim.evidence : {};
       const artifacts = Array.isArray(claim && claim.related_artifacts) ? claim.related_artifacts : [];
-      const rows = artifacts.map(row => [
-        row.role || '', row.kind || '', row.evidence_id || '', row.sha256 || '',
-      ]);
       return `<section class="gpi-claim-panel" id="gpi-claim-detail-${escAttr(claimId)}" data-gpi-claim-panel="${escAttr(claimId)}" hidden>
         <div class="gpi-claim-panel-head"><div><span>${esc(t('Bound number', '绑定数字'))}</span><strong>${esc(claim.display_value || '')}</strong></div><button type="button" data-gpi-claim-close aria-label="${escAttr(t('Close evidence detail', '关闭证据详情'))}">${esc(t('Close', '关闭'))}</button></div>
         ${artifactTable(t('Exact result source', '准确结果来源'), [t('Item', '项目'), t('Value', '值')], [
@@ -446,7 +474,7 @@
           [t('Evidence ID', '证据 ID'), evidence.evidence_id || ''],
           ['SHA-256', evidence.sha256 || ''],
         ])}
-        ${artifactTable(t('Code and data lineage', '代码与数据链路'), [t('Role', '角色'), t('Kind', '类型'), t('Evidence ID', '证据 ID'), 'SHA-256'], rows, t('No related artifacts were registered.', '没有登记关联产物。'))}
+        ${lineageTable(evidence, artifacts, claim.source_json_pointer, claim.source_value)}
         <p class="gpi-claim-boundary">${esc(t('This view exposes immutable IDs and digests, not patient rows or host file paths. Scientific authority remains analysis-only until Host gates and human review permit more.', '此视图只显示不可变 ID 与摘要，不暴露患者行或主机文件路径。除非 Host 闸门与人工审阅另行许可，科学权限仍为 analysis-only。'))}</p>
       </section>`;
     }).join('');

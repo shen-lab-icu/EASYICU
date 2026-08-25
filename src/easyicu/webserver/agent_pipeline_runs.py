@@ -78,6 +78,7 @@ from easyicu.webserver.literature_projection import (
 from easyicu.webserver.scientific_readiness_projection import (
     build_scientific_readiness_projection,
 )
+from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     WebReviewRecoveryRecord,
@@ -1689,19 +1690,6 @@ def _figure_projection(run_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _identifier_column(name: Any) -> bool:
-    token = re.sub(r"[^a-z0-9]+", "", str(name or "").lower())
-    return token in {
-        "stayid",
-        "subjectid",
-        "patientid",
-        "hadmid",
-        "icustayid",
-        "patientunitstayid",
-        "recordid",
-    }
-
-
 _TABLE_PREVIEW_PRIORITY_COLUMNS = (
     "row_role",
     "concept",
@@ -1764,7 +1752,7 @@ def _table_projection(run_dir: Path) -> Dict[str, Any]:
                 source_headers = next(reader, [])
                 # Scan the complete header before bounding the preview. An
                 # identifier beyond the visible column cap is still sensitive.
-                if any(_identifier_column(value) for value in source_headers):
+                if any(is_identifier_column(value) for value in source_headers):
                     skipped_sensitive += 1
                     continue
                 column_indices = _table_preview_indices(source_headers)
