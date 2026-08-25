@@ -319,26 +319,26 @@
   // [name_en, name_zh, fallbackConceptCount, selected, isCore]
   const MODS = [
     // —— recommended core ——
-    ['Demographics', '人口统计', 6, true, true],
-    ['Vital signs', '生命体征', 12, true, true],
-    ['Lab — Chemistry', '实验室-生化', 49, true, true],
-    ['SOFA-2 scores', 'SOFA-2 评分', 10, true, true],
-    ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true, true],
-    ['Outcome', '结局', 13, true, true],
+    ['Demographics', '人口统计', 6, false, true],
+    ['Vital signs', '生命体征', 12, false, true],
+    ['Lab — Chemistry', '实验室-生化', 49, false, true],
+    ['SOFA-2 scores', 'SOFA-2 评分', 10, false, true],
+    ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, false, true],
+    ['Outcome', '结局', 13, false, true],
     // —— additional modules ——
-    ['SOFA-1 scores', 'SOFA-1 评分', 7, true, false],
-    ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, true, false],
-    ['Sepsis shared', 'Sepsis 共享概念', 5, true, false],
-    ['Respiratory', '呼吸系统', 15, true, false],
-    ['Ventilator', '呼吸机参数', 15, true, false],
-    ['Blood gas', '血气分析', 9, true, false],
-    ['Lab — Hematology', '实验室-血液学', 25, true, false],
-    ['Vasopressors', '血管活性药物', 17, true, false],
-    ['Other medications', '其他药物', 49, true, false],
-    ['Renal & urine output', '肾脏与尿量', 40, true, false],
-    ['Neurological', '神经系统', 14, true, false],
-    ['Circulatory', '循环系统', 10, true, false],
-    ['Other scores', '其他评分', 9, true, false],
+    ['SOFA-1 scores', 'SOFA-1 评分', 7, false, false],
+    ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, false, false],
+    ['Sepsis shared', 'Sepsis 共享概念', 5, false, false],
+    ['Respiratory', '呼吸系统', 15, false, false],
+    ['Ventilator', '呼吸机参数', 15, false, false],
+    ['Blood gas', '血气分析', 9, false, false],
+    ['Lab — Hematology', '实验室-血液学', 25, false, false],
+    ['Vasopressors', '血管活性药物', 17, false, false],
+    ['Other medications', '其他药物', 49, false, false],
+    ['Renal & urine output', '肾脏与尿量', 40, false, false],
+    ['Neurological', '神经系统', 14, false, false],
+    ['Circulatory', '循环系统', 10, false, false],
+    ['Other scores', '其他评分', 9, false, false],
   ];
   const CORE = MODS.filter(m => m[4]).map(m => m[0]);
   const EX_KEYS = {
@@ -381,7 +381,7 @@
     const key = moduleKey(m);
     const ids = conceptIdsForModule(m);
     if (!ids.length) return [];
-    const saved = Array.isArray(exSelectedConcepts[key]) ? exSelectedConcepts[key] : ids;
+    const saved = Array.isArray(exSelectedConcepts[key]) ? exSelectedConcepts[key] : (m[3] ? ids : []);
     const savedSet = new Set(saved);
     return ids.filter(id => savedSet.has(id));
   }
@@ -1422,6 +1422,16 @@
     return chips.map(c => `<span class="chip solid">${escHtml(c)}</span>`).join('');
   }
 
+  function extractionSetupSummary() {
+    const preset = cohortPresetMeta();
+    return {
+      cohort: t(preset[1], preset[2]) + ' · ' + fmtObservationWindow(exWindowHours),
+      moduleCount: selMods().length,
+      conceptCount: conceptN(),
+      runnable: selMods().length > 0,
+    };
+  }
+
   function icdSourceContext() {
     const result = exScanResult && typeof exScanResult === 'object' ? exScanResult : {};
     const database = String(result.db_key || '').trim();
@@ -2064,6 +2074,7 @@
     bind: host => S.extraction.afterRender(host),
     isReal: () => dataMode() === 'real',
     isPreparedExport: () => dataMode() === 'real' && exSource === 'module' && exReal === 'ready',
+    setupSummary: extractionSetupSummary,
     syncToCopilot: syncExtractionToCopilot,
     handoffReceipt: extractionHandoffReceipt,
     useRealData() {

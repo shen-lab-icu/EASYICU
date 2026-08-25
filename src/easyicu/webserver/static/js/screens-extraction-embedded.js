@@ -3,6 +3,12 @@
   let host = null;
   let options = {};
 
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, character => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character]);
+  }
+
   function jobSummary(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return '';
     const status = String(snapshot.status || 'running');
@@ -12,9 +18,9 @@
     const tone = status === 'done' ? 'ok' : (status === 'failed' || status === 'cancelled' ? 'bad' : 'info');
     return `<div class="note ${tone} gpi-extraction-job" role="status">
       <div class="ico">${icon(status === 'done' ? 'check' : (tone === 'bad' ? 'alert' : 'activity'), 14)}</div>
-      <div class="body"><div class="t">${escHtml(status === 'done' ? t('Extraction completed', '数据提取已完成') : status === 'running' ? t('Extraction is running', '数据提取正在运行') : t('Extraction task stopped', '数据提取任务已停止'))}</div>
-      <div class="d">${escHtml((latest && (latest.message || latest.step)) || t('The live details also remain in the Copilot activity timeline.', '实时详情也会保留在 Copilot 活动时间线中。'))}</div>
-      ${status === 'done' ? `<div class="gpi-extraction-job-metrics"><span>${t('Rows', '行数')} <b>${escHtml(result.total_rows == null ? '—' : result.total_rows)}</b></span><span>${t('Data files', '数据文件')} <b>${escHtml(result.file_count == null ? (result.files_written == null ? '—' : result.files_written) : result.file_count)}</b></span></div>` : ''}
+      <div class="body"><div class="t">${escapeHtml(status === 'done' ? t('Extraction completed', '数据提取已完成') : status === 'running' ? t('Extraction is running', '数据提取正在运行') : t('Extraction task stopped', '数据提取任务已停止'))}</div>
+      <div class="d">${escapeHtml((latest && (latest.message || latest.step)) || t('The live details also remain in the Copilot activity timeline.', '实时详情也会保留在 Copilot 活动时间线中。'))}</div>
+      ${status === 'done' ? `<div class="gpi-extraction-job-metrics"><span>${t('Rows', '行数')} <b>${escapeHtml(result.total_rows == null ? '—' : result.total_rows)}</b></span><span>${t('Data files', '数据文件')} <b>${escapeHtml(result.file_count == null ? (result.files_written == null ? '—' : result.files_written) : result.file_count)}</b></span></div>` : ''}
       </div><button class="btn sm ghost" type="button" data-gpi-extraction-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
     </div>`;
   }
@@ -22,13 +28,17 @@
   function projectCopilotSetup(root) {
     const express = root.querySelector('.express');
     const custom = root.querySelector('.ex2-custom');
-    if (!express || !custom) return;
+    const owner = window.EU_EXTRACTION_NATIVE_OWNER;
+    if (!express || !custom || !owner || typeof owner.setupSummary !== 'function') return;
 
-    const meta = Array.from(express.querySelectorAll('.express-meta > span'))
-      .slice(0, 3)
-      .map(row => `<span>${row.innerHTML}</span>`)
-      .join('');
-    const run = express.querySelector('[data-ex-run="recommended"]');
+    const summary = owner.setupSummary();
+    const meta = [
+      `${t('Cohort', '队列')} · <b>${escapeHtml(summary.cohort || '—')}</b>`,
+      `${t('Modules', '模块')} · <b>${escapeHtml(summary.moduleCount == null ? 0 : summary.moduleCount)}</b>`,
+      `${t('Concepts', '概念')} · <b>${escapeHtml(summary.conceptCount == null ? 0 : summary.conceptCount)}</b>`,
+    ].map(row => `<span>${row}</span>`).join('');
+    const run = custom.querySelector('[data-ex-run="custom"]');
+    const runDisabled = !summary.runnable || !run || run.disabled;
     const compact = document.createElement('div');
     compact.className = 'gpi-extraction-compact';
     compact.setAttribute('aria-label', t('Current extraction setup', '当前抽取设置'));
@@ -36,7 +46,7 @@
       <strong>${t('Current extraction setup', '当前抽取设置')}</strong>
       <div class="gpi-extraction-compact-meta">${meta}</div>
     </div>
-    <button class="btn primary" data-ex-run="recommended" ${run && run.disabled ? 'disabled' : ''}>${icon('play', 14)} ${t('Start extraction', '开始抽取')}</button>`;
+    <button class="btn primary" data-ex-run="custom" ${runDisabled ? 'disabled' : ''}>${icon('play', 14)} ${t('Start extraction', '开始抽取')}</button>`;
     express.replaceWith(compact);
 
     const divider = root.querySelector('.ex2-divider');
@@ -72,8 +82,8 @@
         </div>
       </div>
       ${options.syncReceipt ? `<div class="note ok gpi-extraction-sync-receipt" role="status"><div class="ico">${icon('check', 13)}</div><div class="body"><div class="t">${t('Synced to Copilot', '已同步到 Copilot')}</div><div class="d">${t('The updated extraction state is bound to this project, and a visible local workflow receipt was added to the conversation. The local folder path is not sent as model text.', '更新后的抽取状态已绑定到当前项目，并已在对话中加入可见的本地工作流回执；本机文件夹路径不会作为模型消息发送。')}</div></div></div>` : ''}
-      ${options.syncError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Copilot sync failed', 'Copilot 同步失败')}</div><div class="d">${escHtml(options.syncError)}</div></div></div>` : ''}
-      ${options.downloadError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Download blocked', '下载已阻止')}</div><div class="d">${escHtml(options.downloadError)}</div></div></div>` : ''}
+      ${options.syncError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Copilot sync failed', 'Copilot 同步失败')}</div><div class="d">${escapeHtml(options.syncError)}</div></div></div>` : ''}
+      ${options.downloadError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Download blocked', '下载已阻止')}</div><div class="d">${escapeHtml(options.downloadError)}</div></div></div>` : ''}
       ${jobSummary(options.jobSnapshot)}
       <div class="gpi-extraction-native">${owner.render()}</div>
     </div>`;
