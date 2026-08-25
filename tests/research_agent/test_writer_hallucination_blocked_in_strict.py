@@ -95,3 +95,37 @@ def test_registered_and_derived_writer_numbers_pass_strict(ra, tmp_path: Path):
     }
     assert "formula=exp(log(primary_or) - 1.96 * primary_or_se)" in bound
     assert "derived_from=assoc.primary_or, assoc.primary_or_se" in bound
+
+
+def test_spline_knot_does_not_bind_to_rounded_missingness(ra, tmp_path: Path):
+    """Semantic role wins when a rounded neighbour collides with an exact fact."""
+
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
+    store.register_numeric_claim(
+        value="0.463888712444",
+        canonical=0.46388871244362573,
+        evidence_id="research_context",
+        step_id="research_context",
+        source_field="variable_groups.lact.missingness.max_fraction_missing",
+    )
+    store.register_numeric_claim(
+        value="0.5",
+        canonical=0.5,
+        evidence_id="primary_summary",
+        step_id="primary_association",
+        source_field="scientific_runtime_receipt.spline_knot_quantiles[1]",
+    )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        "Peak lactate was represented by a restricted cubic spline with a "
+        "knot quantile at 0.5.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == (
+        "scientific_runtime_receipt.spline_knot_quantiles[1]"
+    )
+    assert "field=variable_groups.lact.missingness" not in bound

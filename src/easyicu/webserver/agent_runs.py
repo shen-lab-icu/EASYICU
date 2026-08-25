@@ -53,6 +53,7 @@ _RUN_ARTIFACT_NAMES = [
     "scientific_plan_review.json",
     "scientific_readiness.json",
     "manuscript_draft.json",
+    "manuscript_provenance.json",
     "manuscript_pdf_receipt.json",
     "benchmark_scorecard.json",
     "workflow_graph.json",
@@ -725,9 +726,7 @@ def list_run_history(
 ) -> Dict[str, Any]:
     """List local agent run directories by reading whitelisted artifacts only."""
     root = (
-        Path(project_root).expanduser()
-        if project_root
-        else state_paths.projects_root()
+        Path(project_root).expanduser() if project_root else state_paths.projects_root()
     )
     root = root.resolve()
     if not root.exists() or not root.is_dir():
@@ -776,9 +775,7 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
-    artifact_path, raw, path_error = _read_safe_artifact_bytes(
-        run_dir, artifact_name
-    )
+    artifact_path, raw, path_error = _read_safe_artifact_bytes(run_dir, artifact_name)
     if artifact_path is None or raw is None:
         return {
             "ok": False,
@@ -820,9 +817,7 @@ def read_run_artifact_bytes(project_dir: str, artifact_name: str) -> Dict[str, A
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
-    artifact_path, raw, path_error = _read_safe_artifact_bytes(
-        run_dir, artifact_name
-    )
+    artifact_path, raw, path_error = _read_safe_artifact_bytes(run_dir, artifact_name)
     if artifact_path is None or raw is None:
         return {
             "ok": False,
@@ -1499,10 +1494,9 @@ def _signed_artifact_integrity(
     )
     if signed_item is None:
         return "unsigned"
-    if (
-        str(signed_item.get("sha256") or "") == str(artifact.get("sha256") or "")
-        and int(signed_item.get("bytes") or -1) == int(artifact.get("bytes") or -2)
-    ):
+    if str(signed_item.get("sha256") or "") == str(
+        artifact.get("sha256") or ""
+    ) and int(signed_item.get("bytes") or -1) == int(artifact.get("bytes") or -2):
         return "verified"
     return "mismatch"
 
@@ -1598,13 +1592,9 @@ def _public_review_payloads(
     if "literature_evidence.json" in payloads:
         public["literature_evidence.json"] = payloads["literature_evidence.json"]
     if "scientific_plan_review.json" in payloads:
-        public["scientific_plan_review.json"] = payloads[
-            "scientific_plan_review.json"
-        ]
+        public["scientific_plan_review.json"] = payloads["scientific_plan_review.json"]
     if "scientific_readiness.json" in payloads:
-        public["scientific_readiness.json"] = payloads[
-            "scientific_readiness.json"
-        ]
+        public["scientific_readiness.json"] = payloads["scientific_readiness.json"]
     if "manuscript_draft.json" in payloads:
         row = payloads["manuscript_draft.json"]
         public["manuscript_draft.json"] = {
@@ -1616,6 +1606,11 @@ def _public_review_payloads(
             "markdown_preview": row.get("markdown_preview"),
             "source": row.get("source"),
         }
+    if "manuscript_provenance.json" in payloads:
+        # This artifact is already a path-free host projection.  Preserve its
+        # typed reader structure; the normal payload privacy scan still runs
+        # before it crosses the Web boundary.
+        public["manuscript_provenance.json"] = payloads["manuscript_provenance.json"]
     for name in (
         "benchmark_scorecard.json",
         "workflow_graph.json",

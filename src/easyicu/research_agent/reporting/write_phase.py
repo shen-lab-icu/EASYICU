@@ -18,7 +18,7 @@ import re
 import hashlib
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..agents.core import CriticAgent, ManuscriptAgent
 from ..audits.manuscript_claims import audit_manuscript_numeric_claims
@@ -59,6 +59,10 @@ from .manuscript_quality import (
     ManuscriptQualityFinding,
     audit_manuscript_quality,
     render_reader_manuscript,
+)
+from .manuscript_provenance import (
+    ManuscriptProvenanceError,
+    build_manuscript_provenance,
 )
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle
@@ -645,15 +649,64 @@ def _persist_manuscript_quality_artifacts(
                 severity="error",
                 message=(
                     "Deterministic manuscript quality audit requires changes: "
-                    + "; ".join(
-                        f"{item.code} ({item.section})" for item in errors[:8]
-                    )
+                    + "; ".join(f"{item.code} ({item.section})" for item in errors[:8])
                 ),
                 evidence_ids=["manuscript_quality_audit", "manuscript_reader"],
                 detail=audit.to_dict(),
             )
         )
     return errors
+
+
+def _persist_manuscript_provenance_artifact(
+    *,
+    bound: str,
+    numeric_binding_map: Mapping[str, Any],
+    run_dir: Path,
+    evidence: Any,
+    findings: List[ValidationFinding],
+) -> None:
+    """Persist the path-free number -> JSON -> code/data reader contract."""
+
+    try:
+        payload = build_manuscript_provenance(
+            manuscript=bound,
+            evidence=evidence,
+            binding_map=numeric_binding_map,
+        )
+    except ManuscriptProvenanceError as exc:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_provenance",
+                severity="error",
+                message=(
+                    f"Interactive manuscript provenance could not be verified: {exc}"
+                ),
+            )
+        )
+        return
+    path = run_dir / "manuscript_provenance.json"
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    if evidence.get("manuscript_provenance") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Path-free interactive manuscript reader provenance: every bound "
+                "number maps to its JSON field and registered code/data artefacts."
+            ),
+            source_path=path,
+            evidence_id="manuscript_provenance",
+            producer="pipeline",
+            generation_mode="system",
+            metadata={
+                "schema_version": payload["schema_version"],
+                "manuscript_sha256": payload["manuscript_sha256"],
+                "claim_ceiling": payload["claim_ceiling"],
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -1440,9 +1493,7 @@ def _draft_manuscript(
                     },
                 )
             )
-    authoritative_claims = evidence.authoritative_scientific_claims(
-        per_step_records
-    )
+    authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
     claim_placement = place_scientific_claim_tokens_in_results(
         scaffold,
         claims=authoritative_claims,
@@ -1458,9 +1509,7 @@ def _draft_manuscript(
                     "from the Results section by the Writer."
                 ),
                 detail={
-                    "inserted_claim_refs": list(
-                        claim_placement.inserted_claim_refs
-                    )
+                    "inserted_claim_refs": list(claim_placement.inserted_claim_refs)
                 },
             )
         )
@@ -1473,9 +1522,7 @@ def _draft_manuscript(
                     "The manuscript has no Results section in which to place "
                     "host-authorized scientific claims."
                 ),
-                detail={
-                    "missing_claim_refs": list(claim_placement.missing_claim_refs)
-                },
+                detail={"missing_claim_refs": list(claim_placement.missing_claim_refs)},
             )
         )
     scaffold_path = run_dir / "manuscript_scaffold.md"
@@ -1516,12 +1563,10 @@ def _bind_and_review_manuscript(
     run_dir: Path,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
-    scaffold, mistyped_literature_repairs = (
-        repair_evidence_ids_mistyped_as_literature(
-            scaffold,
-            literature,
-            evidence_ids=tuple(current_evidence_names),
-        )
+    scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
+        scaffold,
+        literature,
+        evidence_ids=tuple(current_evidence_names),
     )
     if mistyped_literature_repairs:
         findings.append(
@@ -1659,9 +1704,7 @@ def _bind_and_review_manuscript(
                 detail={"removed_sentences": removed_numeric_sentences},
             )
         )
-    authoritative_claims = evidence.authoritative_scientific_claims(
-        per_step_records
-    )
+    authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
     missing_result_claims = missing_scientific_claims_in_results(
         bound,
         claims=authoritative_claims,
@@ -1857,6 +1900,14 @@ def _bind_and_review_manuscript(
         evidence=evidence,
         findings=findings,
     )
+    if not writer_probe_mode:
+        _persist_manuscript_provenance_artifact(
+            bound=bound,
+            numeric_binding_map=numeric_binding_map,
+            run_dir=run_dir,
+            evidence=evidence,
+            findings=findings,
+        )
 
     manuscript_critique, critic_review_error = _review_manuscript_with_fail_safe(
         critic,
@@ -2371,9 +2422,7 @@ def _publish_and_audit_manuscript(
             evidence=evidence,
             run_dir=run_dir,
         )
-        reviewer_evidence_records = evidence.current_verified_records(
-            per_step_records
-        )
+        reviewer_evidence_records = evidence.current_verified_records(per_step_records)
         reviewer_report = run_reviewer_round(
             evidence_records=reviewer_evidence_records,
             findings=findings,
