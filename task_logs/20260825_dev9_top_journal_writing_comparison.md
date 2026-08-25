@@ -90,3 +90,40 @@
 - 只有 agent pipeline 重新生成并通过零 Provider 审计的稿件才计入本轮修复结果；手工改稿不作为验收证据。
 
 综合决定：**major revision at the reporting layer；retain analysis-only authority。**
+
+## Final bounded Writer migration outcome
+
+本轮最终统一验收目录为
+`/Volumes/外置硬盘/easyicu_data/figure2_dev9_writer_only_topjournal_2481c89_20260825`。
+九题的 `writer_only_migration_receipt.json`、`manuscript_quality_audit.json` 与
+`manuscript_literature_audit.json` 均为 pass；`manuscript_bound.md` 和
+`manuscript_reader.md` 均不再含未展开的 claim/evidence token，且所有运行均记录
+`analysis_steps_executed=0`、`source_run_modified=false`、
+`claim_ceiling=analysis_only`、`publication_authorized=false`。
+
+| 题目 | 当前正文导航 | 本轮 Writer 结果 | 与锚点相比仍需保留的限制 |
+|---|---|---|---|
+| E1 | Table 1 + Figure 1 | 摘要、Methods、Results 与行政段落已收口；非因果结论不再复制 Results | 注册 claim 仍用 generic group wording；重复住院依赖、外部复现和人工定义验证未关闭 |
+| E2 | Table 1 + Figure 1 | Methods 内部术语已移除，display callout 与行政段落齐全 | measurement-by-indication、非线性外推和外部复现未关闭 |
+| E3 | Table 1 + Figure 1 | 机器精度已转为出版精度，Methods 与 display 已收口 | 时间窗机会偏倚、外部复现；注册 claim 的组标签仍不够读者友好 |
+| M1 | Table 1 + Figure 1 | 缺失/测量过程语言转为临床可读，行政段落齐全 | measurement-by-indication 与跨中心复现未关闭 |
+| M2 | Table 1 + Figure 1 | AUROC、Brier、校准截距/斜率和 patient-level split 均明确命名 | 仅内部/重复拆分验证；缺时间或外部验证及 recalibration |
+| M3 | Table 1 + Figure 1 | 低 silhouette、低重采样 ARI 和低算法一致性被明确限制为 candidate phenotypes | 稳定性不足，不能命名为已建立亚型；旧 plan 仅允许 report-only 零调用封装 |
+| H1 | Figure 1 | 时间零点、风险集和时间变化分析语言已读者化 | informative censoring、外部复现和更完整生存诊断未关闭 |
+| H2 | 无已注册主表/主图 | 继续明确报告“不可构造 verified non-use 对照，因此不估计效应” | positivity 与 treatment contrast 未识别；这是正确 fail-closed，不是阴性研究结果 |
+| H3 | Figure 1 | 固定窗口、缺失状态和候选六类写清，未伪造结局效应 | 未提供可报告的稳定性数值/通过判定；不能称稳定轨迹亚型 |
+
+这 9 篇通过的是当前写作、文献和证据绑定合同，不是完整投稿组合。与开放全文及补充材料相比，
+当前 article package 仍普遍只有一个注册主结果 display；H1/H3 只有 Figure 1，H2 因科学不可识别而
+没有主结果图表。是否需要新增主文 Figure 2/3、Table 2 及补充图表，必须由各题已执行结果和
+FigureContract 决定，不能为了模仿顶刊篇数而凭空补图。缺失率/测量过程应默认位于补充材料或
+质量控制 display，除非它本身就是研究问题（如 M1），不应自动占用所有文章的主结果图。
+
+Provider 使用必须按整个修复过程而非最终零调用封装统计：共 35 次 Writer 调用；CLI 未返回
+provider-metered usage，启发式记录为 529,710 tokens。durable hard-stop ledger 的保守上界为
+6,628,360 tokens、US$245.48360。该上界包含 E1 合同调试期间所有失败且未发布的候选；最终统一
+目录的封装本身为零调用。没有 Planner、Executor、Coder 或 Figure Provider 调用。
+
+最终判断：**九篇写作层 9/9 通过；论文级科学与图表充分性 0/9 获得授权。** 下一阶段应按上述
+题目特异缺口补科学执行或图表，而不是继续对已通过的文字做无边界润色，也不能把公开论文的
+效应量当作目标答案。
