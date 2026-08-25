@@ -14,10 +14,17 @@ from easyicu.research_agent.authority.evidence_store import (
     EvidenceEnforcementMode,
     EvidenceStore,
 )
+from easyicu.research_agent.authority.runtime_artifacts import (
+    current_step_records,
+    verified_run_evidence_path,
+)
 from easyicu.research_agent.literature import LiteratureBundle
 from easyicu.research_agent.reporting.bibtex import render_bibtex
 from easyicu.research_agent.reporting.latex import scaffold_to_latex
 from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+from easyicu.research_agent.reporting.manuscript_post import (
+    repair_missing_reportable_survival_results,
+)
 from easyicu.research_agent.reporting.manuscript_quality import (
     repair_reader_structure_from_existing_prose,
 )
@@ -74,11 +81,54 @@ def _publication_figure_exclusion_reason(run_dir: Path) -> str | None:
 
 def _prepare_reader_manuscript(
     source_bound: str,
+    *,
+    per_step_records: list[dict[str, Any]] | None = None,
 ) -> tuple[str, tuple[dict[str, str], ...]]:
     """Apply provider-free reader repairs before provenance is projected."""
 
     repaired, repairs = repair_reader_structure_from_existing_prose(source_bound)
-    return repaired, tuple(dict(item) for item in repairs)
+    repaired, survival_repairs = repair_missing_reportable_survival_results(
+        repaired,
+        per_step_records=per_step_records or [],
+    )
+    return repaired, tuple(
+        [*(dict(item) for item in repairs), *(dict(item) for item in survival_repairs)]
+    )
+
+
+def _load_verified_current_step_records(
+    run_dir: Path, evidence: EvidenceStore
+) -> list[dict[str, Any]]:
+    """Rehydrate current step summaries only from digest-verified evidence."""
+
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+        return []
+    records = manifest.get("per_step_records")
+    if not isinstance(records, list):
+        return []
+    verified: list[dict[str, Any]] = []
+    for raw in current_step_records(records):
+        if not isinstance(raw, dict):
+            continue
+        evidence_id = str(raw.get("step_summary_evidence_id") or "").strip()
+        evidence_record = evidence.get(evidence_id) if evidence_id else None
+        if evidence_record is None:
+            continue
+        source = verified_run_evidence_path(run_dir, evidence_record)
+        if source is None:
+            continue
+        try:
+            summary = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(summary, dict):
+            continue
+        item = dict(raw)
+        item["step_summary"] = summary
+        verified.append(item)
+    return verified
 
 
 def _copy_figures(
@@ -124,8 +174,16 @@ def build_bundle(
     output_dir.mkdir(parents=True, exist_ok=True)
     source_path = run_dir / "manuscript_scaffold_bound.md"
     source_bound = source_path.read_text(encoding="utf-8")
-    prepared_bound, deterministic_repairs = _prepare_reader_manuscript(source_bound)
     evidence = EvidenceStore(run_dir, enforcement_mode=EvidenceEnforcementMode.STRICT)
+    verified_step_records = _load_verified_current_step_records(run_dir, evidence)
+    prepared_bound, deterministic_repairs = _prepare_reader_manuscript(
+        source_bound,
+        per_step_records=verified_step_records,
+    )
+    prepared_bound = evidence.bind_manuscript(
+        prepared_bound,
+        per_step_records=verified_step_records,
+    )
 
     unbound = strip_numeric_provenance(prepared_bound)
     corrected, binding_map, untraced = bind_numeric_values(

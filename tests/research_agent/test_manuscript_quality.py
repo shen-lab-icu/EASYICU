@@ -107,6 +107,58 @@ def test_reader_excludes_figures_when_source_visual_qa_failed(tmp_path) -> None:
     assert _publication_figure_exclusion_reason(tmp_path) is None
 
 
+def test_reader_relabels_validation_conclusion_and_restores_background() -> None:
+    manuscript = """# Study
+
+## Abstract
+
+**Methods:** We conducted a cohort study.
+
+**Results:** The registered analysis produced a bounded result.
+
+**Background:** External validation using independent cohorts is warranted.
+
+## Introduction
+
+Exposure timing complicates interpretation [@strobe_2007].
+
+## Methods
+
+Methods prose.
+
+## Results
+
+Results prose.
+
+## Discussion
+
+Discussion prose.
+
+## Limitations
+
+Limitations prose.
+
+## Conclusion
+
+Conclusion prose.
+"""
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    abstract = repaired.split("## Abstract", 1)[1].split("## Introduction", 1)[0]
+    assert "**Background:** Exposure timing complicates interpretation" in abstract
+    assert (
+        "**Conclusions:** External validation using independent cohorts is warranted."
+        in abstract
+    )
+    assert abstract.index("**Background:**") < abstract.index("**Methods:**")
+    assert abstract.index("**Results:**") < abstract.index("**Conclusions:**")
+    assert any(
+        item["code"] == "MANUSCRIPT_ABSTRACT_CONCLUSION_RELABELLED"
+        for item in repairs
+    )
+
+
 def test_complete_reader_facing_manuscript_passes() -> None:
     audit = audit_manuscript_quality(_valid_manuscript())
 

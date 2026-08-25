@@ -189,7 +189,9 @@ def test_scaffold_to_latex_repairs_bare_h1_spacing_and_scientific_notation(ra):
     rendered = scaffold_to_latex(
         markdown=(
             "#\n\n**Keywords:** ICU\n\n## Results\n\n"
-            "The estimate was 0.54 [result](evidence/result.json); p<1×10⁻⁵²."
+            "The estimate was 0.54 [result](evidence/result.json); "
+            "p<1×10⁻⁵² and p=2.80e-08[^claim_1].\n\n"
+            "[^claim_1]: value=2.79869e-08; display=2.80e-08"
         ),
         title="Host-owned draft title",
     )
@@ -200,6 +202,7 @@ def test_scaffold_to_latex_repairs_bare_h1_spacing_and_scientific_notation(ra):
     assert "0.54;" in rendered
     assert r"p\textless{}" in rendered
     assert r"$1\times 10^{-52}$" in rendered
+    assert r"\hyperlink{claim-claim-1}{$2.80\times 10^{-8}$}" in rendered
 
 
 def test_scaffold_to_latex_renders_grouped_citations(ra):

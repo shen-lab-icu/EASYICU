@@ -80,6 +80,7 @@ from .manuscript_post import (
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
     repair_miscited_numeric_citations,
+    repair_missing_reportable_survival_results,
     repair_single_variant_robustness_metric_prose,
 )
 from .readiness import _is_cosmetic_visual_error, execution_gate_status
@@ -1512,6 +1513,22 @@ def _draft_manuscript(
         evidence_names=current_evidence_names,
         findings=findings,
     )
+    scaffold, survival_reporting_repairs = repair_missing_reportable_survival_results(
+        scaffold,
+        per_step_records=current_step_records(per_step_records),
+    )
+    if survival_reporting_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    "Projected the executor-owned RMST result omitted by Writer; "
+                    "the unchanged STRICT numeric and evidence gates revalidate it."
+                ),
+                detail={"repairs": survival_reporting_repairs},
+            )
+        )
     scaffold, removed_unregistered_placeholders = (
         _remove_unregistered_evidence_placeholders(
             scaffold,

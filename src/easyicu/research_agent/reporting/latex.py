@@ -60,6 +60,14 @@ _LITERATURE_CITATION_PATTERN = re.compile(
 _UNICODE_SCIENTIFIC_NOTATION_PATTERN = re.compile(
     r"(?P<coefficient>\d+(?:\.\d+)?)\s*[×x]\s*10(?P<exponent>[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)"
 )
+_ASCII_SCIENTIFIC_NOTATION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<coefficient>\d+(?:\.\d+)?)[eE]"
+    r"(?P<exponent>[+-]?\d+)(?![A-Za-z0-9_])"
+)
+_ASCII_SCIENTIFIC_NUMERIC_FOOTNOTE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<coefficient>\d+(?:\.\d+)?)[eE]"
+    r"(?P<exponent>[+-]?\d+)\[\^(?P<id>[A-Za-z0-9_-]+)\]"
+)
 _SUPERSCRIPT_TRANSLATION = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _STANDARD_SECTION_HEADINGS = frozenset(
     {
@@ -213,7 +221,9 @@ def _md_inline_to_latex(line: str, *, claim_base_url: Optional[str] = None) -> s
         return f"\x00{len(placeholders) - 1}\x00"
 
     def _scientific_notation(match: "re.Match[str]") -> str:
-        exponent = match.group("exponent").translate(_SUPERSCRIPT_TRANSLATION)
+        exponent = str(
+            int(match.group("exponent").translate(_SUPERSCRIPT_TRANSLATION))
+        )
         placeholders.append(
             "$"
             + _escape_latex(match.group("coefficient"))
@@ -223,8 +233,25 @@ def _md_inline_to_latex(line: str, *, claim_base_url: Optional[str] = None) -> s
         )
         return f"\x00{len(placeholders) - 1}\x00"
 
+    def _scientific_numeric_marker(match: "re.Match[str]") -> str:
+        target = _claim_link(match.group("id"), claim_base_url)
+        command = r"\href" if claim_base_url else r"\hyperlink"
+        value = (
+            "$"
+            + _escape_latex(match.group("coefficient"))
+            + r"\times 10^{"
+            + _escape_latex(str(int(match.group("exponent"))))
+            + "}$"
+        )
+        placeholders.append(command + "{" + target + "}{" + value + "}")
+        return f"\x00{len(placeholders) - 1}\x00"
+
     line = _LITERATURE_CITATION_PATTERN.sub(_literature_citation, line)
+    line = _ASCII_SCIENTIFIC_NUMERIC_FOOTNOTE_PATTERN.sub(
+        _scientific_numeric_marker, line
+    )
     line = _UNICODE_SCIENTIFIC_NOTATION_PATTERN.sub(_scientific_notation, line)
+    line = _ASCII_SCIENTIFIC_NOTATION_PATTERN.sub(_scientific_notation, line)
     line = _BOUND_NUMERIC_MARKER_PATTERN.sub(_bound_numeric_marker, line)
     line = _NUMERIC_FOOTNOTE_MARKER_PATTERN.sub(_numeric_marker, line)
     line = _MD_LINK_PATTERN.sub(_link, line)
