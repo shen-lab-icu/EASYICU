@@ -2713,7 +2713,7 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
     source = pd.read_csv(
         run_dir / "publication_figures" / "publication_figure_source_missingness.csv"
     )
-    assert source["variable"].tolist() == ["Lactate", "Temperature", "Resp. rate"]
+    assert source["variable"].tolist() == ["Lactate", "Temperature", "Respiratory"]
 
 
 def test_primary_association_selector_prefers_single_primary_estimand(
@@ -2874,7 +2874,7 @@ def test_missingness_frame_deduplicates_variable_labels(ra):
         display_labels={"lact": "Lactate", "temp": "Temperature"},
     )
 
-    assert frame["variable"].tolist() == ["Lact Max", "Bun Max"]
+    assert frame["variable"].tolist() == ["Lactate Max", "BUN Max"]
 
 
 def test_missingness_frame_groups_measurement_summary_features(ra):
