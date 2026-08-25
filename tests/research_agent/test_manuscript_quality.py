@@ -114,6 +114,32 @@ def test_methods_results_adjustment_conflict_is_reported() -> None:
     assert audit.adjustment_sets["Results"] == ("age", "charlson_max")
 
 
+def test_trailing_adjustment_phrase_is_compared_with_methods() -> None:
+    text = _valid_manuscript().replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        "The adjusted odds ratio was 1.61, after adjustment for age and "
+        "Charlson comorbidity score.",
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in _codes(text)
+    assert audit.adjustment_sets["Results"] == (
+        "age",
+        "charlson comorbidity score",
+    )
+
+    raw = text.replace(
+        "score.", "score {evidence:primary_association}.", 1
+    )
+    raw_audit = audit_manuscript_quality(raw)
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in _codes(raw)
+    assert raw_audit.adjustment_sets["Results"] == (
+        "age",
+        "charlson comorbidity score",
+    )
+
+
 def test_internal_runtime_terms_are_rejected_in_reader_facing_prose() -> None:
     text = _valid_manuscript().replace(
         "Sepsis status was associated with in-hospital mortality.",
@@ -130,6 +156,23 @@ def test_internal_runtime_terms_are_rejected_in_reader_facing_prose() -> None:
         if finding.code == "MANUSCRIPT_INTERNAL_TERM_EXPOSED"
     )
     assert "`sep3_sofa2_max`" in abstract_finding.excerpts
+
+
+def test_internal_runtime_terms_are_also_rejected_in_methods() -> None:
+    text = _valid_manuscript().replace(
+        "The exposure was Sepsis-3 status and the outcome was in-hospital death.",
+        "The `sep3_sofa2_max` exposure was host-bound.",
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    finding = next(
+        item
+        for item in audit.findings
+        if item.code == "MANUSCRIPT_INTERNAL_TERM_EXPOSED"
+        and item.section == "Methods"
+    )
+    assert "`sep3_sofa2_max`" in finding.excerpts
 
 
 def test_unnamed_point_estimate_is_rejected() -> None:
@@ -183,6 +226,12 @@ def test_discussion_cannot_deny_a_reported_risk_difference() -> None:
 
     assert "MANUSCRIPT_REPORTED_RESULT_DISCLAIMED" in _codes(text)
 
+    tokenised = text.replace(
+        "The risk difference was 4.9 percentage points.",
+        "{claim:distribution.prespecified_unadjusted_risk_difference}",
+    )
+    assert "MANUSCRIPT_REPORTED_RESULT_DISCLAIMED" in _codes(tokenised)
+
 
 def test_structure_repair_relabels_existing_abstract_prose() -> None:
     manuscript = _valid_manuscript().replace(
@@ -215,6 +264,26 @@ def test_structure_repair_copies_results_evidence_to_empty_conclusion() -> None:
     conclusion = repaired.split("## Conclusion", 1)[1]
     assert "{evidence:primary}" in conclusion
     assert [item["code"] for item in repairs] == ["MANUSCRIPT_CONCLUSION_RESTORED"]
+
+
+def test_structure_repair_populates_empty_abstract_conclusions_from_claim() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Conclusions:** The association requires external validation.",
+        "**Conclusions:**",
+    ).replace(
+        "Sepsis status was associated with in-hospital mortality and requires external validation.",
+        "{claim:primary.adjusted_association}",
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    abstract = repaired.split("## Abstract", 1)[1].split("## Introduction", 1)[0]
+    assert (
+        "**Conclusions:**\n\n{claim:primary.adjusted_association}" in abstract
+    )
+    assert [item["code"] for item in repairs] == [
+        "MANUSCRIPT_ABSTRACT_CONCLUSIONS_RESTORED"
+    ]
 
 
 def test_structure_repair_does_not_invent_conclusion_without_evidence() -> None:
