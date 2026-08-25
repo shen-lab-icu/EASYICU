@@ -513,6 +513,7 @@ def run_prediction_figure(
                 ),
                 "evidence_ids": [evidence[source] for source in sources],
                 "metadata": {
+                    "placement": "main",
                     "source_products": list(sources),
                     "source_data": [
                         f"{source.partition(':')[2]}_source_data.csv"

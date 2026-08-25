@@ -1,9 +1,9 @@
-"""Repackage frozen Dev9 E3/M2 outputs into an article-level figure suite.
+"""Repackage frozen Dev9 outputs into article-level figure suites.
 
-This benchmark-only renderer performs no fitting, imputation, row selection, or
-scientific recomputation.  It validates and plots every row of named outputs
-from one already completed analysis-only run.  It must never be used to promote
-Dev9 evidence to paper-authorized status.
+This benchmark-only renderer performs no fitting, imputation, outcome-driven
+selection, or scientific recomputation.  It validates named frozen outputs and
+uses declared row roles only to separate reader-facing panels.  It must never
+be used to promote Dev9 evidence to paper-authorized status.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import pandas as pd
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import easyicu
 from easyicu.research_agent.execution.runners.prediction_figure_executor import (
     run_prediction_figure,
 )
@@ -35,6 +36,18 @@ from easyicu.research_agent.figures.publication import (
 
 E3_RUN_RELATIVE = Path("e3/e3_kdigo_gradient/aware/run_20260825T024928_3b8fef")
 M2_RUN_RELATIVE = Path("m2/m2_mortality_prediction/aware/run_20260825T025332_5c7922")
+H2_FEASIBILITY_RELATIVE = Path(
+    "steps/00_authority_compiled_source_feasibility/outputs/h2_source_feasibility.csv"
+)
+
+
+def _require_current_worktree_import() -> None:
+    expected = Path(__file__).resolve().parents[2] / "src"
+    imported = Path(easyicu.__file__).resolve()
+    if not imported.is_relative_to(expected):
+        raise RuntimeError(
+            "Renderer imported EasyICU outside the current worktree; rerun with PYTHONPATH=src"
+        )
 
 
 def _sha256(path: Path) -> str:
@@ -54,6 +67,12 @@ def _finite(frame: pd.DataFrame, columns: tuple[str, ...]) -> None:
 
 def _copy_source(frame: pd.DataFrame, path: Path, output: Path) -> str:
     copied = frame.copy()
+    for column in ("source_row_index", "source_file", "source_sha256"):
+        if column in copied.columns:
+            upstream = f"upstream_{column}"
+            if upstream in copied.columns:
+                raise ValueError(f"nested provenance collision for {column}")
+            copied = copied.rename(columns={column: upstream})
     copied.insert(0, "source_sha256", _sha256(path))
     copied.insert(0, "source_file", path.name)
     copied.insert(0, "source_row_index", range(len(copied)))
@@ -61,11 +80,61 @@ def _copy_source(frame: pd.DataFrame, path: Path, output: Path) -> str:
     return output.name
 
 
+def _load_frozen_tables(
+    source_dir: Path, names: dict[str, str]
+) -> tuple[dict[str, Path], dict[str, pd.DataFrame]]:
+    paths = {key: source_dir / name for key, name in names.items()}
+    missing = [str(path) for path in paths.values() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Frozen display sources are incomplete: {missing}")
+    return paths, {key: pd.read_csv(path) for key, path in paths.items()}
+
+
+def _copy_frozen_tables(
+    *,
+    out_dir: Path,
+    task_id: str,
+    paths: dict[str, Path],
+    frames: dict[str, pd.DataFrame],
+) -> dict[str, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        key: _copy_source(
+            frames[key], paths[key], out_dir / f"{task_id}_{key}_source_data.csv"
+        )
+        for key in paths
+    }
+
+
+def _task_summary(
+    *,
+    source: Path,
+    paths: dict[str, Path],
+    figure_files: list[str],
+    main_figure_count: int,
+    supplementary_figure_count: int,
+    scientific_status: str = "analysis_only",
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "source": str(source),
+        "authority_scope": "analysis_only",
+        "paper_authorization_allowed": False,
+        "scientific_status": scientific_status,
+        "reason_code": reason_code,
+        "main_figure_count": main_figure_count,
+        "supplementary_figure_count": supplementary_figure_count,
+        "figure_files": sorted(set(figure_files)),
+        "source_sha256": {name: _sha256(path) for name, path in paths.items()},
+    }
+
+
 def _save(
     fig: Any,
     *,
     out_dir: Path,
     product: str,
+    width_mm: float = 183.0,
     height_mm: float,
     panels: list[dict[str, Any]],
     source_data: list[str],
@@ -76,7 +145,7 @@ def _save(
         figure_id=f"figure:{product}",
         core_claim=core_claim,
         archetype="asymmetric_mixed_modality",
-        width_mm=183.0,
+        width_mm=width_mm,
         height_mm=height_mm,
         panels=panels,
         source_data=source_data,
@@ -111,6 +180,9 @@ def _forest(
     )
     ax.axvline(1.0, color="#777777", linestyle="--", linewidth=0.8)
     ax.set_xscale("log")
+    lower = min(1.0, float(np.min(lows)))
+    upper = max(1.0, float(np.max(highs)))
+    ax.set_xlim(max(lower / 1.15, np.finfo(float).tiny), upper * 1.15)
     ax.set_yticks(positions, labels)
     ax.invert_yaxis()
     ax.set_xlabel("Odds ratio (95% CI)")
@@ -217,7 +289,10 @@ def _render_e3(source_run: Path, out_dir: Path) -> dict[str, Any]:
                 "chart_type": "dot_interval_absolute_risk",
                 "claim": "Observed mortality risk with Wilson 95% confidence intervals is shown for every ordered stage.",
                 "evidence_ids": [_sha256(paths["ordered"])],
-                "metadata": {"source_data": [source_files["ordered"]]},
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["ordered"]],
+                },
             },
             {
                 "panel_id": "b",
@@ -227,7 +302,10 @@ def _render_e3(source_run: Path, out_dir: Path) -> dict[str, Any]:
                 "chart_type": "dot_interval",
                 "claim": "Median ICU length of stay and interquartile range are shown for every ordered stage.",
                 "evidence_ids": [_sha256(paths["ordered"])],
-                "metadata": {"source_data": [source_files["ordered"]]},
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["ordered"]],
+                },
             },
         ],
         source_data=[source_files["ordered"]],
@@ -276,7 +354,10 @@ def _render_e3(source_run: Path, out_dir: Path) -> dict[str, Any]:
                 "chart_type": "forest",
                 "claim": "All fitted stage contrasts from the registered primary model are shown with 95% confidence intervals.",
                 "evidence_ids": [_sha256(paths["adjusted"])],
-                "metadata": {"source_data": [source_files["adjusted"]]},
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["adjusted"]],
+                },
             },
             {
                 "panel_id": "b",
@@ -286,7 +367,10 @@ def _render_e3(source_run: Path, out_dir: Path) -> dict[str, Any]:
                 "chart_type": "sensitivity_forest",
                 "claim": "Every converged registered sensitivity analysis is shown with 95% confidence intervals.",
                 "evidence_ids": [_sha256(paths["sensitivity"])],
-                "metadata": {"source_data": [source_files["sensitivity"]]},
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["sensitivity"]],
+                },
             },
         ],
         source_data=[source_files["adjusted"], source_files["sensitivity"]],
@@ -336,23 +420,1281 @@ def _render_e3(source_run: Path, out_dir: Path) -> dict[str, Any]:
         "source_run": str(source_run),
         "authority_scope": "analysis_only",
         "paper_authorization_allowed": False,
+        "main_figure_count": 2,
+        "supplementary_figure_count": 1,
         "figure_files": sorted(set(figure_files)),
         "source_sha256": {name: _sha256(path) for name, path in paths.items()},
     }
 
 
+def _render_e1(source_dir: Path, out_dir: Path) -> dict[str, Any]:
+    paths, frames = _load_frozen_tables(
+        source_dir,
+        {
+            "outcomes": "exposure_outcome_distribution_source_data.csv",
+            "adjusted": "adjusted_association_estimates_source_data.csv",
+            "sensitivity": "e1_scientific_sensitivity_source_data.csv",
+            "completeness": "exposure_component_completeness_audit_source_data.csv",
+        },
+    )
+    source_files = _copy_frozen_tables(
+        out_dir=out_dir, task_id="e1", paths=paths, frames=frames
+    )
+    palette = apply_publication_style(font_size=7.0)
+    figure_files: list[str] = []
+
+    outcomes = frames["outcomes"].copy()
+    levels = outcomes[outcomes["row_role"].astype(str).eq("exposure_level")].copy()
+    overall = outcomes[outcomes["row_role"].astype(str).eq("overall")].copy()
+    if levels["exposure_level"].astype(int).tolist() != [0, 1] or len(overall) != 1:
+        raise ValueError(
+            "E1 outcome table lacks the registered binary levels and overall row"
+        )
+    _finite(levels, ("exposure_pct", "outcome_rate_pct", "ci_low_pct", "ci_high_pct"))
+    _finite(overall, ("outcome_rate_pct", "ci_low_pct", "ci_high_pct"))
+    labels = ["No Sepsis-3", "Sepsis-3"]
+    fig, axes = plt.subplots(
+        1, 2, figsize=(183 / 25.4, 82 / 25.4), constrained_layout=True
+    )
+    positions = np.arange(2)
+    axes[0].bar(
+        positions, levels["exposure_pct"], color=[palette["neutral"], palette["blue"]]
+    )
+    axes[0].set_xticks(positions, labels)
+    axes[0].set_ylabel("Cohort share (%)")
+    axes[0].set_ylim(0, 75)
+    axes[0].set_title("Sepsis-3 denominator", loc="left", pad=10)
+    add_panel_label(axes[0], "a", x=-0.12, y=1.04, fontsize=8.0)
+    risk = levels["outcome_rate_pct"].to_numpy(dtype=float)
+    low = levels["ci_low_pct"].to_numpy(dtype=float)
+    high = levels["ci_high_pct"].to_numpy(dtype=float)
+    axes[1].errorbar(
+        positions,
+        risk,
+        yerr=np.vstack((risk - low, high - risk)),
+        fmt="o",
+        color=palette["blue"],
+        capsize=2.5,
+    )
+    overall_risk = float(overall.iloc[0]["outcome_rate_pct"])
+    axes[1].axhline(
+        overall_risk, color=palette["neutral"], linestyle="--", linewidth=0.9
+    )
+    axes[1].text(
+        1.02,
+        overall_risk,
+        "Overall",
+        transform=axes[1].get_yaxis_transform(),
+        va="center",
+    )
+    axes[1].set_xticks(positions, labels)
+    axes[1].set_ylabel("Observed mortality risk (%)")
+    axes[1].set_title("Absolute mortality risk", loc="left", pad=10)
+    add_panel_label(axes[1], "b", x=-0.12, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="e1_main_figure_1_denominator_and_absolute_risk",
+        height_mm=82.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Sepsis-3 denominator",
+                "role": "cohort_accounting",
+                "article_role": "cohort_accounting",
+                "chart_type": "denominator_bar",
+                "claim": "The two registered exposure strata exhaust the frozen cohort denominator.",
+                "evidence_ids": [_sha256(paths["outcomes"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["outcomes"]],
+                },
+            },
+            {
+                "panel_id": "b",
+                "title": "Absolute mortality risk",
+                "role": "descriptive_result",
+                "article_role": "descriptive_result",
+                "chart_type": "dot_interval_absolute_risk",
+                "claim": "Observed mortality risk and 95% confidence intervals are shown by registered Sepsis-3 status.",
+                "evidence_ids": [_sha256(paths["outcomes"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["outcomes"]],
+                },
+            },
+        ],
+        source_data=[source_files["outcomes"]],
+        core_claim="The frozen cohort denominator and absolute mortality risk differ by registered Sepsis-3 status.",
+        statistics_note="Cohort shares, risks and 95% confidence intervals are copied from the frozen exposure-outcome table; the overall risk is a source row, not a refit.",
+    )
+
+    adjusted = frames["adjusted"].copy()
+    _finite(adjusted, ("estimate", "ci_low", "ci_high"))
+    if len(adjusted) != 1 or not adjusted["fit_status"].astype(str).eq("fitted").all():
+        raise ValueError("E1 adjusted table must contain one fitted primary contrast")
+    fig, ax = plt.subplots(figsize=(89 / 25.4, 70 / 25.4), constrained_layout=True)
+    _forest(
+        ax,
+        adjusted,
+        ["Sepsis-3 vs no Sepsis-3"],
+        "Primary adjusted association",
+        palette["blue"],
+    )
+    add_panel_label(ax, "a", x=-0.17, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="e1_main_figure_2_adjusted_association",
+        width_mm=89.0,
+        height_mm=70.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Primary adjusted association",
+                "role": "primary_estimand",
+                "article_role": "primary_estimand",
+                "chart_type": "forest",
+                "claim": "The registered adjusted mortality odds ratio is shown with its 95% confidence interval.",
+                "evidence_ids": [_sha256(paths["adjusted"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["adjusted"]],
+                },
+            }
+        ],
+        source_data=[source_files["adjusted"]],
+        core_claim="The registered primary adjusted association is displayed separately from descriptive risk.",
+        statistics_note="One fitted primary contrast is copied from the frozen adjusted-association table; no model is refit.",
+    )
+
+    sensitivity = frames["sensitivity"].copy()
+    _finite(sensitivity, ("estimate", "ci_low", "ci_high"))
+    if not sensitivity["converged"].astype(str).str.casefold().eq("true").all():
+        raise ValueError("E1 sensitivity table contains a non-converged row")
+    fig, ax = plt.subplots(figsize=(183 / 25.4, 86 / 25.4), constrained_layout=True)
+    _forest(
+        ax,
+        sensitivity,
+        [str(value).replace("_", " ") for value in sensitivity["analysis_id"]],
+        "Registered scientific sensitivity analyses",
+        palette["orange"],
+    )
+    add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="e1_main_figure_3_definition_and_cohort_sensitivity",
+        height_mm=86.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Registered scientific sensitivity analyses",
+                "role": "robustness",
+                "article_role": "robustness",
+                "chart_type": "sensitivity_forest",
+                "claim": "Every converged registered sensitivity analysis is shown without post-hoc filtering.",
+                "evidence_ids": [_sha256(paths["sensitivity"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["sensitivity"]],
+                },
+            }
+        ],
+        source_data=[source_files["sensitivity"]],
+        core_claim="The primary association is placed beside, but not conflated with, prespecified definition and cohort sensitivities.",
+        statistics_note="All four converged source rows are displayed as odds ratios with 95% confidence intervals.",
+    )
+
+    completeness = frames["completeness"].copy()
+    _finite(completeness, ("n_stratum", "measured_pct", "value_missing_pct"))
+    matrix = completeness.pivot(
+        index="variable", columns="exposure_category", values="measured_pct"
+    )
+    desired = [value for value in ["__all__", "0", "1"] if value in matrix.columns]
+    matrix = matrix[desired]
+    fig, ax = plt.subplots(figsize=(183 / 25.4, 112 / 25.4), constrained_layout=True)
+    image = ax.imshow(
+        matrix.to_numpy(dtype=float), aspect="auto", vmin=0, vmax=100, cmap="Blues"
+    )
+    ax.set_yticks(
+        np.arange(len(matrix)), [str(value).replace("_", " ") for value in matrix.index]
+    )
+    ax.set_xticks(
+        np.arange(len(desired)), ["Overall", "No Sepsis-3", "Sepsis-3"][: len(desired)]
+    )
+    ax.set_title("Component measurement availability", loc="left", pad=10)
+    colorbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
+    colorbar.set_label("Measured (%)")
+    add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="e1_supplementary_figure_s1_component_availability",
+        height_mm=112.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Component measurement availability",
+                "role": "data_quality",
+                "article_role": "data_quality",
+                "chart_type": "availability_heatmap",
+                "claim": "All registered component-availability rows are retained as supplementary audit evidence.",
+                "evidence_ids": [_sha256(paths["completeness"])],
+                "metadata": {
+                    "placement": "supplementary",
+                    "source_data": [source_files["completeness"]],
+                },
+            }
+        ],
+        source_data=[source_files["completeness"]],
+        core_claim="Routine component completeness is visible without occupying the primary clinical-result figures.",
+        statistics_note="Measured percentages are copied from every source row and arranged by variable and exposure stratum; missingness is not interpreted as a clinical effect.",
+    )
+    return _task_summary(
+        source=source_dir,
+        paths=paths,
+        figure_files=figure_files,
+        main_figure_count=3,
+        supplementary_figure_count=1,
+    )
+
+
+def _render_landmark_association(
+    *,
+    task_id: str,
+    source_dir: Path,
+    out_dir: Path,
+    exposure_label: str,
+    curve_file: str,
+    measurement_file: str,
+    measurement_is_main: bool,
+) -> dict[str, Any]:
+    paths, frames = _load_frozen_tables(
+        source_dir,
+        {
+            "absolute_risk": "absolute_risk_context_source_data.csv",
+            "curve": curve_file,
+            "robustness": "robustness_summary_source_data.csv",
+            "measurement": measurement_file,
+        },
+    )
+    source_files = _copy_frozen_tables(
+        out_dir=out_dir, task_id=task_id, paths=paths, frames=frames
+    )
+    palette = apply_publication_style(font_size=7.0)
+    figure_files: list[str] = []
+
+    context = frames["absolute_risk"].copy()
+    prevalence = context[context["prevalence_pct"].notna()].copy()
+    outcomes = context[context["outcome_risk_pct"].notna()].copy()
+    if len(prevalence) != 2 or len(outcomes) != 2:
+        raise ValueError(
+            f"{task_id} absolute-risk context must contain two source states"
+        )
+    _finite(prevalence, ("prevalence_pct", "estimate", "ci_low", "ci_high"))
+    _finite(outcomes, ("outcome_risk_pct", "estimate", "ci_low", "ci_high"))
+    labels = ["Measured", "No recorded source"]
+    colors = [palette["blue"], palette["neutral"]]
+    fig, axes = plt.subplots(
+        1, 2, figsize=(183 / 25.4, 82 / 25.4), constrained_layout=True
+    )
+    positions = np.arange(2)
+    axes[0].bar(positions, prevalence["prevalence_pct"], color=colors)
+    axes[0].set_xticks(positions, labels)
+    axes[0].set_ylabel("Cohort share (%)")
+    axes[0].set_title(f"{exposure_label} source state", loc="left", pad=10)
+    add_panel_label(axes[0], "a", x=-0.12, y=1.04, fontsize=8.0)
+    risk = outcomes["outcome_risk_pct"].to_numpy(dtype=float)
+    low = 100.0 * outcomes["ci_low"].to_numpy(dtype=float)
+    high = 100.0 * outcomes["ci_high"].to_numpy(dtype=float)
+    axes[1].errorbar(
+        positions,
+        risk,
+        yerr=np.vstack((risk - low, high - risk)),
+        fmt="o",
+        color=palette["blue"],
+        capsize=2.5,
+    )
+    axes[1].set_xticks(positions, labels)
+    axes[1].set_ylabel("Observed mortality risk (%)")
+    axes[1].set_title("Outcome risk by source state", loc="left", pad=10)
+    add_panel_label(axes[1], "b", x=-0.12, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product=f"{task_id}_main_figure_1_source_state_and_absolute_risk",
+        height_mm=82.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": f"{exposure_label} source state",
+                "role": "cohort_accounting",
+                "article_role": "cohort_accounting",
+                "chart_type": "source_state_bar",
+                "claim": "Measured and no-recorded-source states exhaust the frozen denominator.",
+                "evidence_ids": [_sha256(paths["absolute_risk"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["absolute_risk"]],
+                },
+            },
+            {
+                "panel_id": "b",
+                "title": "Outcome risk by source state",
+                "role": "descriptive_result",
+                "article_role": "descriptive_result",
+                "chart_type": "dot_interval_absolute_risk",
+                "claim": "Observed mortality risk is separated from the continuous exposure association.",
+                "evidence_ids": [_sha256(paths["absolute_risk"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["absolute_risk"]],
+                },
+            },
+        ],
+        source_data=[source_files["absolute_risk"]],
+        core_claim=f"{exposure_label} availability and observed outcome risk are shown before the continuous association.",
+        statistics_note="Source-state prevalence, mortality risk and 95% confidence intervals are copied from the frozen absolute-risk context table.",
+    )
+
+    curve = frames["curve"].copy().sort_values("exposure_value")
+    robustness = frames["robustness"].copy()
+    _finite(curve, ("exposure_value", "adjusted_odds_ratio", "ci_low", "ci_high"))
+    _finite(robustness, ("range_low", "range_high", "total_specs", "converged_specs"))
+    if (
+        not (curve["ci_low"] <= curve["adjusted_odds_ratio"]).all()
+        or not (curve["adjusted_odds_ratio"] <= curve["ci_high"]).all()
+    ):
+        raise ValueError(f"{task_id} curve intervals are reversed")
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(183 / 25.4, 90 / 25.4),
+        constrained_layout=True,
+        gridspec_kw={"width_ratios": [1.55, 1.0]},
+    )
+    x = curve["exposure_value"].to_numpy(dtype=float)
+    estimate = curve["adjusted_odds_ratio"].to_numpy(dtype=float)
+    low = curve["ci_low"].to_numpy(dtype=float)
+    high = curve["ci_high"].to_numpy(dtype=float)
+    axes[0].plot(x, estimate, color=palette["blue"], linewidth=1.4)
+    axes[0].fill_between(
+        x, low, high, color=palette["blue_soft"], alpha=0.75, linewidth=0
+    )
+    axes[0].axhline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+    axes[0].axvline(
+        float(curve.iloc[0]["reference_exposure_value"]),
+        color=palette["neutral"],
+        linestyle=":",
+        linewidth=0.8,
+    )
+    axes[0].set_xlabel(exposure_label)
+    axes[0].set_ylabel("Adjusted mortality odds ratio (95% CI)")
+    axes[0].set_title("Continuous dose-response", loc="left", pad=10)
+    add_panel_label(axes[0], "a", x=-0.12, y=1.04, fontsize=8.0)
+    positions = np.arange(len(robustness))
+    axes[1].hlines(
+        positions,
+        robustness["range_low"],
+        robustness["range_high"],
+        color=palette["orange"],
+        linewidth=2,
+    )
+    axes[1].plot(
+        robustness["range_low"], positions, "|", color=palette["orange"], markersize=8
+    )
+    axes[1].plot(
+        robustness["range_high"], positions, "|", color=palette["orange"], markersize=8
+    )
+    axes[1].axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+    axes[1].set_xscale("log")
+    axes[1].set_xlim(
+        max(
+            0.85 * min(1.0, float(robustness["range_low"].min())),
+            np.finfo(float).tiny,
+        ),
+        1.12 * max(1.0, float(robustness["range_high"].max())),
+    )
+    axes[1].set_yticks(
+        positions, [str(value).replace("_", " ") for value in robustness["axis"]]
+    )
+    axes[1].invert_yaxis()
+    axes[1].set_xlabel("Registered odds-ratio range")
+    axes[1].set_title("Robustness axes", loc="left", pad=10)
+    add_panel_label(axes[1], "b", x=-0.14, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product=f"{task_id}_main_figure_2_continuous_association_and_robustness",
+        height_mm=90.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Continuous dose-response",
+                "role": "primary_estimand",
+                "article_role": "primary_estimand",
+                "chart_type": "dose_response_curve",
+                "claim": "Every frozen grid point and its 95% confidence interval are shown.",
+                "evidence_ids": [_sha256(paths["curve"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["curve"]],
+                },
+            },
+            {
+                "panel_id": "b",
+                "title": "Robustness axes",
+                "role": "robustness",
+                "article_role": "robustness",
+                "chart_type": "specification_range",
+                "claim": "The full source ranges for every registered robustness axis are shown without inventing a midpoint estimate.",
+                "evidence_ids": [_sha256(paths["robustness"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["robustness"]],
+                },
+            },
+        ],
+        source_data=[source_files["curve"], source_files["robustness"]],
+        core_claim=f"The continuous {exposure_label.lower()} association and registered robustness ranges are displayed as distinct evidence.",
+        statistics_note="The curve and confidence band use every frozen grid row. Robustness bars show source minima and maxima, not newly calculated effect estimates.",
+    )
+
+    measurement = frames["measurement"].copy()
+    _finite(measurement, ("n_total", "measured_one_n", "repeat_measured_n"))
+    measurement["measured_pct_display"] = (
+        100.0 * measurement["measured_one_n"] / measurement["n_total"]
+    )
+    measurement["repeat_pct_display"] = (
+        100.0 * measurement["repeat_measured_n"] / measurement["n_total"]
+    )
+    measurement_source = _copy_source(
+        measurement,
+        paths["measurement"],
+        out_dir / f"{task_id}_measurement_display_source_data.csv",
+    )
+    ordered = measurement.sort_values("measured_pct_display")
+    fig, ax = plt.subplots(figsize=(183 / 25.4, 105 / 25.4), constrained_layout=True)
+    positions = np.arange(len(ordered))
+    ax.barh(
+        positions,
+        ordered["measured_pct_display"],
+        color=palette["blue_soft"],
+        label="Measured",
+    )
+    ax.barh(
+        positions,
+        ordered["repeat_pct_display"],
+        color=palette["blue"],
+        label="Repeated measurement",
+    )
+    ax.set_yticks(
+        positions, [str(value).replace("_", " ") for value in ordered["variable"]]
+    )
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Eligible records (%)")
+    ax.set_title("Measurement-process audit", loc="left", pad=10)
+    ax.legend(loc="lower right")
+    add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
+    placement = "main" if measurement_is_main else "supplementary"
+    product = (
+        f"{task_id}_main_figure_3_measurement_process"
+        if measurement_is_main
+        else f"{task_id}_supplementary_figure_s1_measurement_process"
+    )
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product=product,
+        height_mm=105.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Measurement-process audit",
+                "role": "data_quality",
+                "article_role": "data_quality",
+                "chart_type": "measurement_frequency_bar",
+                "claim": "Measured and repeated-measurement fractions are shown for every registered variable.",
+                "evidence_ids": [_sha256(paths["measurement"])],
+                "metadata": {
+                    "placement": placement,
+                    "source_data": [measurement_source],
+                },
+            }
+        ],
+        source_data=[measurement_source],
+        core_claim=(
+            "Measurement availability is a primary scientific result because source absence is the research question."
+            if measurement_is_main
+            else "Detailed measurement availability is retained as supplementary validity evidence."
+        ),
+        statistics_note="Percentages are deterministic display calculations from frozen total, measured and repeat-measured counts; all registered variables are shown.",
+    )
+    return _task_summary(
+        source=source_dir,
+        paths=paths,
+        figure_files=figure_files,
+        main_figure_count=3 if measurement_is_main else 2,
+        supplementary_figure_count=0 if measurement_is_main else 1,
+    )
+
+
+def _render_m3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
+    paths, frames = _load_frozen_tables(
+        source_dir,
+        {
+            "profiles": "phenotype_profiles_source_data.csv",
+            "assignments": "phenotype_assignments_source_data.csv",
+            "stability": "cluster_stability_source_data.csv",
+        },
+    )
+    source_files = _copy_frozen_tables(
+        out_dir=out_dir, task_id="m3", paths=paths, frames=frames
+    )
+    palette = apply_publication_style(font_size=7.0)
+    figure_files: list[str] = []
+
+    profiles = frames["profiles"].copy()
+    _finite(profiles, ("cluster", "standardised_centroid", "n", "missing_pct"))
+    matrix = profiles.pivot(
+        index="cluster", columns="variable", values="standardised_centroid"
+    ).sort_index()
+    fig, ax = plt.subplots(figsize=(183 / 25.4, 72 / 25.4), constrained_layout=True)
+    limit = max(1.0, float(np.nanmax(np.abs(matrix.to_numpy(dtype=float)))))
+    image = ax.imshow(
+        matrix.to_numpy(dtype=float),
+        aspect="auto",
+        cmap="RdBu_r",
+        vmin=-limit,
+        vmax=limit,
+    )
+    ax.set_yticks(
+        np.arange(len(matrix)),
+        [f"Candidate cluster {int(value) + 1}" for value in matrix.index],
+    )
+    ax.set_xticks(
+        np.arange(len(matrix.columns)),
+        [str(value).replace("_max", "").replace("_", " ") for value in matrix.columns],
+        rotation=35,
+        ha="right",
+    )
+    ax.set_title("Standardised candidate-cluster profiles", loc="left", pad=10)
+    colorbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
+    colorbar.set_label("Standardised centroid")
+    add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="m3_main_figure_1_candidate_cluster_profiles",
+        height_mm=72.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Standardised candidate-cluster profiles",
+                "role": "phenotype_structure",
+                "article_role": "phenotype_structure",
+                "chart_type": "profile_heatmap",
+                "claim": "Every frozen standardised centroid is shown without assigning phenotype names.",
+                "evidence_ids": [_sha256(paths["profiles"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["profiles"]],
+                },
+            }
+        ],
+        source_data=[source_files["profiles"]],
+        core_claim="The frozen candidate clustering has two distinct descriptive profiles, without establishing biological phenotypes.",
+        statistics_note="Standardised centroids are copied from every frozen profile row. Candidate numbers are neutral labels and imply no clinical entity.",
+    )
+
+    assignments = frames["assignments"].copy()
+    _finite(assignments, ("cluster",))
+    sizes = assignments.groupby("cluster", sort=True).size().rename("n").reset_index()
+    sizes["percentage"] = 100.0 * sizes["n"] / sizes["n"].sum()
+    size_source = _copy_source(
+        sizes, paths["assignments"], out_dir / "m3_cluster_size_source_data.csv"
+    )
+    fig, ax = plt.subplots(figsize=(89 / 25.4, 72 / 25.4), constrained_layout=True)
+    positions = np.arange(len(sizes))
+    ax.bar(
+        positions,
+        sizes["percentage"],
+        color=[palette["blue"], palette["teal"]][: len(sizes)],
+    )
+    ax.set_xticks(
+        positions, [f"Candidate cluster {int(value) + 1}" for value in sizes["cluster"]]
+    )
+    ax.set_ylabel("Assigned records (%)")
+    ax.set_title("Candidate-cluster size", loc="left", pad=10)
+    for position, row in zip(positions, sizes.itertuples(index=False), strict=True):
+        ax.text(
+            position,
+            row.percentage + 1.0,
+            f"n={int(row.n):,}",
+            ha="center",
+            va="bottom",
+        )
+    add_panel_label(ax, "a", x=-0.17, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="m3_main_figure_2_candidate_cluster_size",
+        width_mm=89.0,
+        height_mm=72.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Candidate-cluster size",
+                "role": "phenotype_profile",
+                "article_role": "phenotype_profile",
+                "chart_type": "cluster_size_bar",
+                "claim": "The complete frozen assignment table is summarized as candidate-cluster counts and shares.",
+                "evidence_ids": [_sha256(paths["assignments"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [size_source, source_files["assignments"]],
+                },
+            }
+        ],
+        source_data=[size_source, source_files["assignments"]],
+        core_claim="Candidate-cluster size is reported separately from profile structure and stability.",
+        statistics_note="Counts are deterministic tabulations of all frozen assignments; no reassignment or clustering is performed.",
+    )
+
+    stability = frames["stability"].copy().sort_values("replicate")
+    _finite(
+        stability,
+        (
+            "replicate",
+            "adjusted_rand_index",
+            "mean_adjusted_rand_index",
+            "algorithm_agreement_ari",
+        ),
+    )
+    if (
+        stability["mean_adjusted_rand_index"].nunique() != 1
+        or stability["algorithm_agreement_ari"].nunique() != 1
+    ):
+        raise ValueError("M3 stability summary is inconsistent across replicates")
+    fig, ax = plt.subplots(figsize=(183 / 25.4, 78 / 25.4), constrained_layout=True)
+    ax.plot(
+        stability["replicate"],
+        stability["adjusted_rand_index"],
+        "o-",
+        color=palette["blue"],
+        label="Subsample refit ARI",
+    )
+    ax.axhline(
+        float(stability.iloc[0]["mean_adjusted_rand_index"]),
+        color=palette["blue"],
+        linestyle="--",
+        label="Mean refit ARI",
+    )
+    ax.axhline(
+        float(stability.iloc[0]["algorithm_agreement_ari"]),
+        color=palette["orange"],
+        linestyle=":",
+        label="Alternative-algorithm ARI",
+    )
+    ax.set_ylim(0, 1)
+    ax.set_xticks(stability["replicate"].astype(int))
+    ax.set_xlabel("Fixed-seed stability replicate")
+    ax.set_ylabel("Adjusted Rand index")
+    ax.set_title(
+        "Candidate-cluster stability and algorithm agreement", loc="left", pad=10
+    )
+    ax.legend(loc="upper right")
+    add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="m3_main_figure_3_stability_and_algorithm_agreement",
+        height_mm=78.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Candidate-cluster stability and algorithm agreement",
+                "role": "stability",
+                "article_role": "stability",
+                "chart_type": "stability_trace",
+                "claim": "All fixed-seed refit ARIs and the frozen alternative-algorithm agreement are shown.",
+                "evidence_ids": [_sha256(paths["stability"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["stability"]],
+                },
+            }
+        ],
+        source_data=[source_files["stability"]],
+        core_claim="Low resampling and algorithm agreement limit interpretation of the candidate clustering.",
+        statistics_note="ARI values are copied from all five registered replicates; the horizontal references are source-reported mean and algorithm-agreement values.",
+    )
+    return _task_summary(
+        source=source_dir,
+        paths=paths,
+        figure_files=figure_files,
+        main_figure_count=3,
+        supplementary_figure_count=0,
+    )
+
+
+def _render_h1(source_dir: Path, out_dir: Path) -> dict[str, Any]:
+    paths, frames = _load_frozen_tables(
+        source_dir,
+        {
+            "km": "landmark_km_curve.csv",
+            "cox": "landmark_cox_summary.csv",
+            "risk_flow": "landmark_risk_set_flow.csv",
+            "ph": "landmark_ph_diagnostics.csv",
+            "rmst": "landmark_rmst_summary.csv",
+        },
+    )
+    source_files = _copy_frozen_tables(
+        out_dir=out_dir, task_id="h1", paths=paths, frames=frames
+    )
+    palette = apply_publication_style(font_size=7.0)
+    figure_files: list[str] = []
+
+    km = frames["km"].copy()
+    _finite(
+        km,
+        (
+            "exposure_group",
+            "time_from_landmark_days",
+            "survival_probability",
+            "at_risk",
+            "group_n",
+            "group_events",
+        ),
+    )
+    groups = sorted(km["exposure_group"].unique())
+    if groups != [0, 1]:
+        raise ValueError("H1 Kaplan-Meier table lacks both registered groups")
+    fig, axes = plt.subplots(
+        2,
+        1,
+        figsize=(183 / 25.4, 126 / 25.4),
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [3.2, 1.0]},
+    )
+    labels = {0: "No incident ventilation by 24 h", 1: "Incident ventilation by 24 h"}
+    colors = {0: palette["neutral"], 1: palette["blue"]}
+    for group in groups:
+        subset = km[km["exposure_group"].eq(group)].sort_values(
+            "time_from_landmark_days"
+        )
+        axes[0].step(
+            subset["time_from_landmark_days"],
+            subset["survival_probability"],
+            where="post",
+            color=colors[group],
+            label=labels[group],
+            linewidth=1.4,
+        )
+    axes[0].set_ylim(0.82, 1.005)
+    axes[0].set_xlabel("Days from 24-h landmark")
+    axes[0].set_ylabel("Survival probability")
+    axes[0].set_title("Unadjusted post-landmark survival", loc="left", pad=10)
+    axes[0].legend(loc="lower left")
+    add_panel_label(axes[0], "a", x=-0.08, y=1.04, fontsize=8.0)
+    risk_times = [0, 7, 14, 21, 27]
+    risk_rows: list[list[str]] = []
+    for group in groups:
+        subset = km[km["exposure_group"].eq(group)].set_index("time_from_landmark_days")
+        risk_rows.append(
+            [f"{int(subset.loc[time, 'at_risk']):,}" for time in risk_times]
+        )
+    axes[1].axis("off")
+    table = axes[1].table(
+        cellText=risk_rows,
+        rowLabels=[labels[group] for group in groups],
+        colLabels=[str(time) for time in risk_times],
+        cellLoc="center",
+        rowLoc="right",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(6.5)
+    axes[1].set_title("Number at risk", loc="left", pad=4)
+    add_panel_label(axes[1], "b", x=-0.08, y=1.04, fontsize=8.0)
+    risk_source = out_dir / "h1_selected_risk_table_source_data.csv"
+    risk_frame = pd.DataFrame(
+        risk_rows, index=[labels[group] for group in groups], columns=risk_times
+    ).reset_index(names="exposure_group")
+    risk_frame.to_csv(risk_source, index=False)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="h1_main_figure_1_landmark_survival",
+        height_mm=126.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Unadjusted post-landmark survival",
+                "role": "temporal_absolute_risk",
+                "article_role": "temporal_absolute_risk",
+                "chart_type": "kaplan_meier",
+                "claim": "The complete frozen post-landmark survival curves are shown for both exposure groups.",
+                "evidence_ids": [_sha256(paths["km"])],
+                "metadata": {"placement": "main", "source_data": [source_files["km"]]},
+            },
+            {
+                "panel_id": "b",
+                "title": "Number at risk",
+                "role": "cohort_accounting",
+                "article_role": "cohort_accounting",
+                "chart_type": "risk_table",
+                "claim": "The risk set is displayed at fixed reader-facing time points.",
+                "evidence_ids": [_sha256(paths["km"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [risk_source.name, source_files["km"]],
+                },
+            },
+        ],
+        source_data=[source_files["km"], risk_source.name],
+        core_claim="Post-landmark survival is shown with the denominator remaining under observation.",
+        statistics_note="Kaplan-Meier estimates are unadjusted. The risk table selects prespecified display days from the same frozen source without interpolation.",
+    )
+
+    rmst = frames["rmst"].copy()
+    _finite(
+        rmst,
+        (
+            "tau_days_from_landmark",
+            "exposed_rmst_days",
+            "exposed_rmst_ci_low",
+            "exposed_rmst_ci_high",
+            "comparator_rmst_days",
+            "comparator_rmst_ci_low",
+            "comparator_rmst_ci_high",
+            "rmst_difference_days",
+            "ci_low",
+            "ci_high",
+        ),
+    )
+    if len(rmst) != 1:
+        raise ValueError("H1 RMST summary must contain exactly one registered contrast")
+    row = rmst.iloc[0]
+    estimates = np.array(
+        [row["comparator_rmst_days"], row["exposed_rmst_days"]], dtype=float
+    )
+    lows = np.array(
+        [row["comparator_rmst_ci_low"], row["exposed_rmst_ci_low"]], dtype=float
+    )
+    highs = np.array(
+        [row["comparator_rmst_ci_high"], row["exposed_rmst_ci_high"]], dtype=float
+    )
+    fig, ax = plt.subplots(figsize=(89 / 25.4, 76 / 25.4), constrained_layout=True)
+    positions = np.arange(2)
+    ax.errorbar(
+        positions,
+        estimates,
+        yerr=np.vstack((estimates - lows, highs - estimates)),
+        fmt="o",
+        color=palette["blue"],
+        capsize=2.5,
+    )
+    ax.set_xticks(positions, ["No incident\nventilation", "Incident\nventilation"])
+    ax.set_ylabel(
+        f"Restricted mean survival through {row['tau_days_from_landmark']:.0f} days"
+    )
+    ax.set_title("PH-free descriptive survival contrast", loc="left", pad=10)
+    ax.text(
+        0.02,
+        0.04,
+        f"Difference {row['rmst_difference_days']:.2f} days\n95% CI {row['ci_low']:.2f} to {row['ci_high']:.2f}",
+        transform=ax.transAxes,
+        va="bottom",
+    )
+    add_panel_label(ax, "a", x=-0.17, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="h1_main_figure_2_rmst_contrast",
+        width_mm=89.0,
+        height_mm=76.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "PH-free descriptive survival contrast",
+                "role": "survival_effect",
+                "article_role": "survival_effect",
+                "chart_type": "rmst_interval",
+                "claim": "The frozen unadjusted restricted-mean survival contrast is shown because a constant Cox effect is not reportable.",
+                "evidence_ids": [_sha256(paths["rmst"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["rmst"]],
+                },
+            }
+        ],
+        source_data=[source_files["rmst"]],
+        core_claim="A proportional-hazards-free descriptive contrast replaces the blocked constant hazard-ratio interpretation.",
+        statistics_note="RMST estimates, 95% confidence intervals and the unadjusted difference are copied from the frozen RMST summary.",
+    )
+
+    risk_flow = frames["risk_flow"].copy().sort_values("stage_order")
+    ph = frames["ph"].copy()
+    _finite(
+        risk_flow, ("stage_order", "count", "source_denominator", "percent_of_source")
+    )
+    _finite(ph, ("p_value", "declared_alpha"))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(183 / 25.4, 100 / 25.4),
+        constrained_layout=True,
+        gridspec_kw={"width_ratios": [1.15, 1.0]},
+    )
+    positions = np.arange(len(risk_flow))
+    axes[0].barh(positions, risk_flow["percent_of_source"], color=palette["blue_soft"])
+    axes[0].set_yticks(
+        positions, [str(value).replace("_", " ") for value in risk_flow["stage"]]
+    )
+    axes[0].invert_yaxis()
+    axes[0].set_xlim(0, 105)
+    axes[0].set_xlabel("Source denominator retained (%)")
+    axes[0].set_title("Risk-set accounting", loc="left", pad=10)
+    add_panel_label(axes[0], "a", x=-0.12, y=1.04, fontsize=8.0)
+    ph_values = -np.log10(ph["p_value"].to_numpy(dtype=float))
+    positions = np.arange(len(ph))
+    axes[1].barh(positions, ph_values, color=palette["red_soft"])
+    axes[1].axvline(
+        -np.log10(float(ph["declared_alpha"].iloc[0])),
+        color=palette["red"],
+        linestyle="--",
+        linewidth=0.9,
+    )
+    axes[1].set_yticks(
+        positions, [str(value).replace("_", " ") for value in ph["covariate"]]
+    )
+    axes[1].invert_yaxis()
+    axes[1].set_xlabel("−log10(P), Schoenfeld test")
+    axes[1].set_title("Proportional-hazards diagnostics", loc="left", pad=10)
+    add_panel_label(axes[1], "b", x=-0.14, y=1.04, fontsize=8.0)
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product="h1_main_figure_3_risk_set_and_ph_diagnostics",
+        height_mm=100.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Risk-set accounting",
+                "role": "cohort_accounting",
+                "article_role": "cohort_accounting",
+                "chart_type": "cohort_attrition_bar",
+                "claim": "Every frozen denominator gate is shown.",
+                "evidence_ids": [_sha256(paths["risk_flow"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["risk_flow"]],
+                },
+            },
+            {
+                "panel_id": "b",
+                "title": "Proportional-hazards diagnostics",
+                "role": "diagnostics",
+                "article_role": "diagnostics",
+                "chart_type": "ph_diagnostic_bar",
+                "claim": "All Schoenfeld-residual tests disclose the assumption failure that blocks a constant Cox effect.",
+                "evidence_ids": [_sha256(paths["ph"]), _sha256(paths["cox"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["ph"], source_files["cox"]],
+                },
+            },
+        ],
+        source_data=[
+            source_files["risk_flow"],
+            source_files["ph"],
+            source_files["cox"],
+        ],
+        core_claim="Risk-set loss and proportional-hazards failure materially limit the survival interpretation.",
+        statistics_note="All risk-set stages and Schoenfeld-test rows are shown. The frozen Cox table is retained as audit source data but its constant exposure hazard ratio is not plotted as a reportable effect.",
+    )
+    return _task_summary(
+        source=source_dir,
+        paths=paths,
+        figure_files=figure_files,
+        main_figure_count=3,
+        supplementary_figure_count=0,
+        reason_code="H1_PROPORTIONAL_HAZARDS_REJECTED",
+    )
+
+
+def _render_h2(source_run: Path, out_dir: Path) -> dict[str, Any]:
+    path = source_run / H2_FEASIBILITY_RELATIVE
+    if not path.is_file():
+        raise FileNotFoundError(f"H2 feasibility receipt is missing: {path}")
+    frame = pd.read_csv(path)
+    required = [
+        "verified_non_use_available",
+        "binary_control_arm_authorized",
+        "causal_contrast_authorized",
+    ]
+    if len(frame) != 1 or any(bool(frame.iloc[0][column]) for column in required):
+        raise ValueError(
+            "H2 source authority no longer supports the registered fail-closed result"
+        )
+    if str(frame.iloc[0]["decision"]) != "fail_closed" or pd.notna(
+        frame.iloc[0]["effect_estimate"]
+    ):
+        raise ValueError(
+            "H2 feasibility receipt contains an unauthorized causal result"
+        )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    source_file = _copy_source(
+        frame, path, out_dir / "h2_source_feasibility_source_data.csv"
+    )
+    palette = apply_publication_style(font_size=7.0)
+    labels = ["Verified non-use", "Control arm", "Causal contrast", "Effect estimate"]
+    fig, ax = plt.subplots(figsize=(183 / 25.4, 70 / 25.4), constrained_layout=True)
+    positions = np.arange(len(labels))
+    ax.scatter(
+        positions,
+        np.zeros(len(labels)),
+        s=90,
+        color=palette["red_soft"],
+        edgecolor=palette["red"],
+    )
+    for position in positions:
+        ax.text(
+            position,
+            0,
+            "×",
+            ha="center",
+            va="center",
+            color=palette["red"],
+            fontsize=10,
+            fontweight="bold",
+        )
+    ax.set_xticks(positions, labels)
+    ax.set_yticks([])
+    ax.set_ylim(-0.35, 0.35)
+    ax.set_title("Source-authority feasibility gate", loc="left", pad=10)
+    ax.text(
+        0.0,
+        -0.26,
+        "No effect estimate was generated",
+        color=palette["red"],
+        fontweight="bold",
+    )
+    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=8.0)
+    figure_files = _save(
+        fig,
+        out_dir=out_dir,
+        product="h2_supplementary_figure_s1_fail_closed_feasibility",
+        height_mm=70.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Source-authority feasibility gate",
+                "role": "data_quality",
+                "article_role": "data_quality",
+                "chart_type": "fail_closed_gate",
+                "claim": "Verified non-use, a binary control arm and a causal contrast are all unauthorized; no effect estimate exists.",
+                "evidence_ids": [_sha256(path)],
+                "metadata": {
+                    "placement": "supplementary",
+                    "source_data": [source_file],
+                },
+            }
+        ],
+        source_data=[source_file],
+        core_claim="The available source cannot identify a verified non-use comparator, so the causal analysis stops before estimation.",
+        statistics_note="This is a categorical source-authority receipt, not an effect figure. Crosses encode frozen false states; no patient-level analysis or effect calculation is performed.",
+    )
+    return _task_summary(
+        source=source_run,
+        paths={"feasibility": path},
+        figure_files=figure_files,
+        main_figure_count=0,
+        supplementary_figure_count=1,
+        scientific_status="failed_closed",
+        reason_code=str(frame.iloc[0]["reason_code"]),
+    )
+
+
+def _render_h3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
+    paths, frames = _load_frozen_tables(
+        source_dir,
+        {
+            "selection": "trajectory_selection_bic_source_data.csv",
+            "availability": "trajectory_selection_availability_source_data.csv",
+        },
+    )
+    selection = frames["selection"].copy().sort_values("n_clusters")
+    availability = frames["availability"].copy()
+    _finite(selection, ("n_clusters", "bic", "aic"))
+    _finite(availability, ("observed_n", "missing_n", "missing_fraction"))
+    if not selection["scientific_status"].astype(str).eq("failed_closed").all():
+        raise ValueError("H3 selection table is no longer fail closed")
+    if not bool(selection.iloc[-1]["upper_boundary"]) or not bool(
+        selection.iloc[-1]["selected"]
+    ):
+        raise ValueError("H3 source no longer records the upper-boundary minimum")
+    source_files = _copy_frozen_tables(
+        out_dir=out_dir, task_id="h3", paths=paths, frames=frames
+    )
+    palette = apply_publication_style(font_size=7.0)
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(183 / 25.4, 102 / 25.4),
+        constrained_layout=True,
+        gridspec_kw={"width_ratios": [1.0, 1.35]},
+    )
+    axes[0].plot(
+        selection["n_clusters"],
+        selection["bic"],
+        "o-",
+        color=palette["blue"],
+        label="BIC",
+    )
+    axes[0].plot(
+        selection["n_clusters"],
+        selection["aic"],
+        "o--",
+        color=palette["neutral"],
+        label="AIC diagnostic",
+    )
+    axes[0].scatter(
+        [selection.iloc[-1]["n_clusters"]],
+        [selection.iloc[-1]["bic"]],
+        s=80,
+        facecolors="none",
+        edgecolors=palette["red"],
+        linewidths=1.2,
+    )
+    axes[0].set_xlabel("Candidate number of trajectory classes")
+    axes[0].set_ylabel("Information criterion")
+    axes[0].set_title("Prespecified candidate-grid assessment", loc="left", pad=10)
+    axes[0].legend()
+    add_panel_label(axes[0], "a", x=-0.14, y=1.04, fontsize=8.0)
+    parts = (
+        availability["feature"]
+        .astype(str)
+        .str.extract(r"^(?P<component>.+)__h(?P<start>\d+)_(?P<end>\d+)$")
+    )
+    if parts.isna().any().any():
+        raise ValueError(
+            "H3 availability labels do not match the registered component-window schema"
+        )
+    availability = availability.assign(
+        component=parts["component"], window=parts["start"] + "–" + parts["end"] + " h"
+    )
+    matrix = availability.pivot(
+        index="component", columns="window", values="missing_fraction"
+    )
+    ordered_windows = sorted(
+        matrix.columns, key=lambda value: int(str(value).split("–")[0])
+    )
+    matrix = matrix[ordered_windows]
+    image = axes[1].imshow(
+        matrix.to_numpy(dtype=float) * 100.0,
+        aspect="auto",
+        vmin=0,
+        vmax=100,
+        cmap="Reds",
+    )
+    axes[1].set_yticks(
+        np.arange(len(matrix)),
+        [str(value).replace("sofa2_", "") for value in matrix.index],
+    )
+    axes[1].set_xticks(
+        np.arange(len(matrix.columns)), matrix.columns, rotation=35, ha="right"
+    )
+    axes[1].set_title("Trajectory-coordinate missingness", loc="left", pad=10)
+    colorbar = fig.colorbar(image, ax=axes[1], fraction=0.035, pad=0.02)
+    colorbar.set_label("Missing (%)")
+    add_panel_label(axes[1], "b", x=-0.12, y=1.04, fontsize=8.0)
+    figure_files = _save(
+        fig,
+        out_dir=out_dir,
+        product="h3_supplementary_figure_s1_fail_closed_selection_diagnostics",
+        height_mm=102.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Prespecified candidate-grid assessment",
+                "role": "phenotype_structure",
+                "article_role": "phenotype_structure",
+                "chart_type": "information_criterion_trace",
+                "claim": "The minimum BIC occurs at the upper candidate boundary, so no interior solution is authorized.",
+                "evidence_ids": [_sha256(paths["selection"])],
+                "metadata": {
+                    "placement": "supplementary",
+                    "source_data": [source_files["selection"]],
+                },
+            },
+            {
+                "panel_id": "b",
+                "title": "Trajectory-coordinate missingness",
+                "role": "data_quality",
+                "article_role": "data_quality",
+                "chart_type": "availability_heatmap",
+                "claim": "Every prespecified component-window availability row is shown as diagnostic evidence.",
+                "evidence_ids": [_sha256(paths["availability"])],
+                "metadata": {
+                    "placement": "supplementary",
+                    "source_data": [source_files["availability"]],
+                },
+            },
+        ],
+        source_data=[source_files["selection"], source_files["availability"]],
+        core_claim="The prespecified grid did not establish a trajectory-class solution; only fail-closed diagnostics are displayed.",
+        statistics_note="BIC and AIC values are copied from all candidate rows. Missingness percentages are deterministic displays of every frozen component-window row; no class is named or selected.",
+    )
+    return _task_summary(
+        source=source_dir,
+        paths=paths,
+        figure_files=figure_files,
+        main_figure_count=0,
+        supplementary_figure_count=1,
+        scientific_status="failed_closed",
+        reason_code="H3_NO_INTERIOR_BIC_OPTIMUM",
+    )
+
+
 def main() -> int:
+    _require_current_worktree_import()
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--visual-source-root", type=Path, required=True)
+    parser.add_argument("--h2-run", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     args = parser.parse_args()
     source_root = args.source_root.resolve()
+    visual_source_root = args.visual_source_root.resolve()
+    h2_run = args.h2_run.resolve()
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
+    e1 = _render_e1(visual_source_root / "e1", output_root / "e1")
+    e2 = _render_landmark_association(
+        task_id="e2",
+        source_dir=visual_source_root / "e2",
+        out_dir=output_root / "e2",
+        exposure_label="Maximum lactate (mmol/L)",
+        curve_file="e2_landmark_rcs_curve_source_data.csv",
+        measurement_file="measurement_process_source_data.csv",
+        measurement_is_main=False,
+    )
     e3_run = source_root / E3_RUN_RELATIVE
     m2_run = source_root / M2_RUN_RELATIVE
     e3 = _render_e3(e3_run, output_root / "e3")
+    m1 = _render_landmark_association(
+        task_id="m1",
+        source_dir=visual_source_root / "m1",
+        out_dir=output_root / "m1",
+        exposure_label="Maximum bilirubin (mg/dL)",
+        curve_file="m1_landmark_bilirubin_curve_source_data.csv",
+        measurement_file="measurement_process_audit_source_data.csv",
+        measurement_is_main=True,
+    )
     m2_summary = run_prediction_figure(
         out_dir=output_root / "m2",
         run_dir=m2_run,
@@ -360,6 +1702,18 @@ def main() -> int:
         step_id="prediction_figure_suite",
         figure_product="m2_main_figure_prediction_performance",
     )
+    m2_summary.update(
+        {
+            "authority_scope": "analysis_only",
+            "paper_authorization_allowed": False,
+            "main_figure_count": 1,
+            "supplementary_figure_count": 1,
+        }
+    )
+    m3 = _render_m3(visual_source_root / "m3", output_root / "m3")
+    h1 = _render_h1(visual_source_root / "h1", output_root / "h1")
+    h2 = _render_h2(h2_run, output_root / "h2")
+    h3 = _render_h3(visual_source_root / "h3", output_root / "h3")
     try:
         code_head = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
@@ -367,15 +1721,24 @@ def main() -> int:
     except (OSError, subprocess.CalledProcessError):
         code_head = "unknown"
     manifest = {
-        "schema_version": "easyicu.dev9_article_display_remediation/1",
+        "schema_version": "easyicu.dev9_article_display_remediation/2",
         "code_head": code_head,
         "source_root": str(source_root),
+        "visual_source_root": str(visual_source_root),
+        "h2_run": str(h2_run),
         "authority_scope": "analysis_only",
         "paper_authorization_allowed": False,
         "provider_calls": 0,
         "scientific_recomputation": False,
+        "e1": e1,
+        "e2": e2,
         "e3": e3,
+        "m1": m1,
         "m2": m2_summary,
+        "m3": m3,
+        "h1": h1,
+        "h2": h2,
+        "h3": h3,
     }
     (output_root / "article_display_remediation_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
