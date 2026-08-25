@@ -251,7 +251,7 @@ def test_internal_runtime_terms_are_also_rejected_in_methods() -> None:
         if item.code == "MANUSCRIPT_INTERNAL_TERM_EXPOSED"
         and item.section == "Methods"
     )
-    assert finding.severity == "warning"
+    assert finding.severity == "error"
     assert "`sep3_sofa2_max`" in finding.excerpts
 
 
@@ -267,6 +267,22 @@ def test_unnamed_point_estimate_is_rejected() -> None:
     named = text.replace(
         "The discrimination point estimate was 0.772.",
         "The area under the receiver operating characteristic curve was 0.772.",
+    )
+    assert "MANUSCRIPT_METRIC_UNNAMED" not in _codes(named)
+
+
+def test_unnamed_robustness_number_is_rejected() -> None:
+    text = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality.",
+        "The robustness values ranged from 0.61 to 0.64.",
+        1,
+    )
+
+    assert "MANUSCRIPT_METRIC_UNNAMED" in _codes(text)
+
+    named = text.replace(
+        "The robustness values ranged from 0.61 to 0.64.",
+        "The adjusted Rand index ranged from 0.61 to 0.64.",
     )
     assert "MANUSCRIPT_METRIC_UNNAMED" not in _codes(named)
 

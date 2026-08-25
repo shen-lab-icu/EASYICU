@@ -132,7 +132,7 @@ MANUSCRIPT_SECTION_SPECS = (
             "period.\n"
             "### Variables\n"
             "  Primary predictor, outcome, covariates. For each, state only the "
-            "host-bound materialized representation and analysis window. A "
+            "verified precomputed representation and analysis window. A "
             "precomputed maximum, minimum, mean, or first value must not be "
             "reinterpreted using the source concept's default aggregation rule.\n"
             "### Statistical analysis\n"
@@ -238,7 +238,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "novelty from database choice alone. Use reader-facing clinical "
             "labels; do not expose raw snake_case identifiers, internal reason "
             "codes, or host/runtime terminology. Avoid generic prose that could "
-            "be copied unchanged into an unrelated ICU study."
+            "be copied unchanged into an unrelated ICU study. Name the exact "
+            "statistical metric and comparison for every current-study number; "
+            "omit an evidence value when its metric is not identified."
         ),
         max_tokens=4096,
     ),
@@ -279,14 +281,16 @@ MANUSCRIPT_SECTION_SPECS = (
             "ethics, conflicts, data/code availability, or release statements; "
             "the host owns those administrative facts. Use reader-facing "
             "clinical labels; do not expose raw snake_case identifiers, internal "
-            "reason codes, or host/runtime terminology."
+            "reason codes, or host/runtime terminology. Name the exact "
+            "statistical metric and comparison for every numeric result; omit "
+            "an evidence value when its metric is not identified."
         ),
         max_tokens=512,
     ),
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "4"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "5"
 
 
 def manuscript_writer_contract_sha256() -> str:
