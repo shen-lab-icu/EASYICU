@@ -1851,20 +1851,36 @@ def repair_miscited_numeric_citations(
         if detail is None:
             continue
         distinct_candidates = {
-            (claim.step_id, claim.evidence_id, claim.source_field)
+            (claim.step_id, claim.evidence_id, claim.source_field): claim
             for claim, _distance in candidates
         }
-        if len(distinct_candidates) != 1:
-            continue
-        citable_candidates = [
-            claim
-            for claim, _distance in candidates
-            if claim.step_id in resolvable or claim.evidence_id in resolvable
-        ]
-        if len(citable_candidates) != 1:
+        selected_claim: Optional[NumericClaim] = None
+        if len(distinct_candidates) == 1:
+            selected_claim = next(iter(distinct_candidates.values()))
+        elif re.search(r"\b(?:icu\s+)?stays?\b", context, flags=re.I):
+            canonical_stay_claims = {
+                (claim.step_id, claim.evidence_id, claim.source_field): claim
+                for claim, _distance in candidates
+                if claim.source_field == "cohort.n_stays"
+            }
+            if len(canonical_stay_claims) == 1:
+                selected_claim = next(iter(canonical_stay_claims.values()))
+        elif re.search(r"\bpatients?\b", context, flags=re.I):
+            canonical_patient_claims = {
+                (claim.step_id, claim.evidence_id, claim.source_field): claim
+                for claim, _distance in candidates
+                if claim.source_field == "cohort.n_patients"
+            }
+            if len(canonical_patient_claims) == 1:
+                selected_claim = next(iter(canonical_patient_claims.values()))
+        if selected_claim is None:
             continue
         owner = next(
-            (item for item in sorted(detail["owned_by"]) if item in resolvable),
+            (
+                item
+                for item in (selected_claim.evidence_id, selected_claim.step_id)
+                if item in resolvable
+            ),
             None,
         )
         if owner is None:
