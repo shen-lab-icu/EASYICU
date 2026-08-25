@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
@@ -32,6 +32,11 @@ _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
     "Discussion": (),
     "Limitations": (),
     "Conclusion": (),
+    "Data and code availability": (),
+    "Funding": (),
+    "Ethics approval": (),
+    "Conflicts of interest": (),
+    "Supplementary artifact release": (),
 }
 _ABSTRACT_LABELS = ("Background", "Methods", "Results", "Conclusions")
 _READER_FACING_SECTIONS = frozenset(
@@ -103,6 +108,8 @@ class ManuscriptQualityAudit:
     adjustment_sets: Mapping[str, tuple[str, ...]]
     internal_evidence_link_count: int
     numeric_claim_marker_count: int
+    expected_display_labels: tuple[str, ...]
+    observed_display_labels: tuple[str, ...]
     findings: tuple[ManuscriptQualityFinding, ...]
 
     def to_dict(self) -> dict[str, Any]:
@@ -597,7 +604,26 @@ def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
     return tuple(excerpts)
 
 
-def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
+def expected_manuscript_display_labels(
+    evidence_ids: Sequence[str],
+) -> tuple[str, ...]:
+    """Map verified evidence identities to reader-facing display labels."""
+
+    names = {str(item).strip() for item in evidence_ids if str(item).strip()}
+    labels: list[str] = []
+    if "table_one" in names:
+        labels.append("Table 1")
+    if "publication_figure_contract" in names:
+        labels.append("Figure 1")
+    return tuple(labels)
+
+
+def audit_manuscript_quality(
+    bound_text: str,
+    *,
+    expected_display_labels: Sequence[str] = (),
+    require_administrative_sections: bool = True,
+) -> ManuscriptQualityAudit:
     """Audit structure, terminology, and one high-confidence consistency rule."""
 
     text = str(bound_text or "")
@@ -624,7 +650,17 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
             )
         )
 
-    for section, required_subsections in _REQUIRED_SECTIONS.items():
+    required_sections = dict(_REQUIRED_SECTIONS)
+    if not require_administrative_sections:
+        for section in (
+            "Data and code availability",
+            "Funding",
+            "Ethics approval",
+            "Conflicts of interest",
+            "Supplementary artifact release",
+        ):
+            required_sections.pop(section, None)
+    for section, required_subsections in required_sections.items():
         body = section_map.get(section)
         if body is None:
             findings.append(
@@ -750,6 +786,33 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
             )
 
     raw_results_text = section_map.get("Results", "")
+    normalized_expected_displays = tuple(
+        dict.fromkeys(
+            str(label).strip()
+            for label in expected_display_labels
+            if str(label).strip()
+        )
+    )
+    observed_displays = tuple(
+        label
+        for label in normalized_expected_displays
+        if re.search(rf"\b{re.escape(label)}\b", raw_results_text, flags=re.I)
+    )
+    for label in normalized_expected_displays:
+        if label in observed_displays:
+            continue
+        findings.append(
+            ManuscriptQualityFinding(
+                code="MANUSCRIPT_DISPLAY_NOT_CALLED_OUT",
+                severity="error",
+                section="Results",
+                message=(
+                    f"A registered manuscript display ({label}) is not called out "
+                    "in Results."
+                ),
+                excerpts=(label,),
+            )
+        )
     results_text = _strip_audit_markup(raw_results_text).casefold()
     discussion_text = _strip_audit_markup(section_map.get("Discussion", "")).casefold()
     reports_risk_difference = (
@@ -778,7 +841,7 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
         )
 
     return ManuscriptQualityAudit(
-        schema_version="manuscript-quality-audit-v2",
+        schema_version="manuscript-quality-audit-v3",
         status="pass"
         if not any(item.severity == "error" for item in findings)
         else "changes_required",
@@ -788,6 +851,8 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
         adjustment_sets=adjustments,
         internal_evidence_link_count=len(_EVIDENCE_LINK_RE.findall(text)),
         numeric_claim_marker_count=len(_CLAIM_MARKER_RE.findall(text)),
+        expected_display_labels=normalized_expected_displays,
+        observed_display_labels=observed_displays,
         findings=tuple(findings),
     )
 
@@ -796,6 +861,7 @@ __all__ = [
     "ManuscriptQualityAudit",
     "ManuscriptQualityFinding",
     "audit_manuscript_quality",
+    "expected_manuscript_display_labels",
     "repair_reader_structure_from_existing_prose",
     "render_reader_manuscript",
 ]

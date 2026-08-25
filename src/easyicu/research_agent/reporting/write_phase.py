@@ -58,8 +58,10 @@ from .manuscript_literature import (
 from .manuscript_quality import (
     ManuscriptQualityFinding,
     audit_manuscript_quality,
+    expected_manuscript_display_labels,
     render_reader_manuscript,
 )
+from .administrative_authority import load_manuscript_administrative_authority
 from .manuscript_provenance import (
     ManuscriptProvenanceError,
     build_manuscript_provenance,
@@ -596,10 +598,14 @@ def _persist_manuscript_quality_artifacts(
     run_dir: Path,
     evidence: Any,
     findings: List[ValidationFinding],
+    expected_display_labels: Sequence[str] = (),
 ) -> tuple[ManuscriptQualityFinding, ...]:
     """Persist a non-authoritative reader view and its deterministic audit."""
 
-    audit = audit_manuscript_quality(bound)
+    audit = audit_manuscript_quality(
+        bound,
+        expected_display_labels=expected_display_labels,
+    )
     quality_audit_path = run_dir / "manuscript_quality_audit.json"
     quality_audit_path.write_text(
         json.dumps(
@@ -1067,7 +1073,7 @@ def _verified_resume_writer_scaffold(
     current_contract_sha256 = manuscript_writer_contract_sha256()
     records = [
         record
-        for record in evidence.records()
+        for record in evidence.current_verified_records(per_step_records)
         if record.evidence_id == "manuscript_scaffold_raw"
         or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
     ]
@@ -1128,7 +1134,7 @@ def _verified_resume_writer_scaffold_for_quality_migration(
     current_contract_sha256 = manuscript_writer_contract_sha256()
     candidates = [
         record
-        for record in evidence.records()
+        for record in evidence.current_verified_records(per_step_records)
         if record.evidence_id == "manuscript_scaffold_raw"
         or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
     ]
@@ -1157,6 +1163,94 @@ def _verified_resume_writer_scaffold_for_quality_migration(
             "target_writer_contract_sha256": current_contract_sha256,
         }
     return None
+
+
+def _render_or_resume_writer_scaffold(
+    *,
+    writer: Any,
+    resume_state: Optional[Dict[str, Any]],
+    evidence: Any,
+    run_dir: Path,
+    per_step_records: Sequence[Dict[str, Any]],
+    execute_result: _ExecutePhaseResult,
+    literature: Optional[LiteratureBundle],
+    agent_context: Any,
+    preferred_evidence_names: Sequence[str],
+    writer_evidence_digest: str,
+    findings: List[ValidationFinding],
+) -> str:
+    """Select exact reuse, bounded section migration, or a fresh Writer draft."""
+
+    resume_scaffold = _verified_resume_writer_scaffold(
+        resume_state=resume_state,
+        evidence=evidence,
+        run_dir=run_dir,
+        per_step_records=per_step_records,
+    )
+    if resume_scaffold is not None:
+        scaffold, resume_detail = resume_scaffold
+        findings.append(
+            ValidationFinding(
+                validator="writer_resume",
+                severity="info",
+                message=(
+                    "Reused the digest-verified prior Writer scaffold because "
+                    "the current execution checkpoint is unchanged. Current "
+                    "evidence, numeric, literature, and critique gates still "
+                    "revalidate the manuscript."
+                ),
+                evidence_ids=["manuscript_scaffold_raw"],
+                detail=resume_detail,
+            )
+        )
+        return scaffold
+
+    administrative_authority = load_manuscript_administrative_authority(run_dir)
+    literature_digest = render_writer_literature_digest(
+        literature,
+        plan=execute_result.plan,
+    )
+    migration_scaffold = _verified_resume_writer_scaffold_for_quality_migration(
+        resume_state=resume_state,
+        evidence=evidence,
+        run_dir=run_dir,
+        per_step_records=per_step_records,
+    )
+    if migration_scaffold is None:
+        return writer.run(
+            context=agent_context,
+            evidence_ids=preferred_evidence_names,
+            evidence_digest=writer_evidence_digest,
+            literature_digest=literature_digest,
+            administrative_authority=administrative_authority,
+        )
+
+    prior_scaffold, migration_detail = migration_scaffold
+    scaffold, repaired_section_keys = writer.repair_existing(
+        prior_scaffold,
+        context=agent_context,
+        evidence_ids=preferred_evidence_names,
+        evidence_digest=writer_evidence_digest,
+        literature_digest=literature_digest,
+        administrative_authority=administrative_authority,
+    )
+    findings.append(
+        ValidationFinding(
+            validator="writer_resume",
+            severity="warning",
+            message=(
+                "Migrated the digest-verified prior Writer scaffold by "
+                "regenerating only deterministic error-owning sections under "
+                "the current Writer contract."
+            ),
+            evidence_ids=[migration_detail["source_evidence_id"]],
+            detail={
+                **migration_detail,
+                "repaired_section_keys": list(repaired_section_keys),
+            },
+        )
+    )
+    return scaffold
 
 
 def _draft_manuscript(
@@ -1308,71 +1402,19 @@ def _draft_manuscript(
                     ),
                 },
             )
-        resume_scaffold = _verified_resume_writer_scaffold(
+        scaffold = _render_or_resume_writer_scaffold(
+            writer=writer,
             resume_state=resume_state,
             evidence=evidence,
             run_dir=run_dir,
             per_step_records=per_step_records,
+            execute_result=execute_result,
+            literature=literature,
+            agent_context=agent_context,
+            preferred_evidence_names=preferred_writer_evidence_names,
+            writer_evidence_digest=writer_evidence_digest,
+            findings=findings,
         )
-        if resume_scaffold is not None:
-            scaffold, resume_detail = resume_scaffold
-            findings.append(
-                ValidationFinding(
-                    validator="writer_resume",
-                    severity="info",
-                    message=(
-                        "Reused the digest-verified prior Writer scaffold because "
-                        "the current execution checkpoint is unchanged. Current "
-                        "evidence, numeric, literature, and critique gates still "
-                        "revalidate the manuscript."
-                    ),
-                    evidence_ids=["manuscript_scaffold_raw"],
-                    detail=resume_detail,
-                )
-            )
-        else:
-            literature_digest = render_writer_literature_digest(
-                literature,
-                plan=execute_result.plan,
-            )
-            migration_scaffold = _verified_resume_writer_scaffold_for_quality_migration(
-                resume_state=resume_state,
-                evidence=evidence,
-                run_dir=run_dir,
-                per_step_records=per_step_records,
-            )
-            if migration_scaffold is not None:
-                prior_scaffold, migration_detail = migration_scaffold
-                scaffold, repaired_section_keys = writer.repair_existing(
-                    prior_scaffold,
-                    context=agent_context,
-                    evidence_ids=preferred_writer_evidence_names,
-                    evidence_digest=writer_evidence_digest,
-                    literature_digest=literature_digest,
-                )
-                findings.append(
-                    ValidationFinding(
-                        validator="writer_resume",
-                        severity="warning",
-                        message=(
-                            "Migrated the digest-verified prior Writer scaffold "
-                            "by regenerating only deterministic error-owning "
-                            "sections under the current Writer contract."
-                        ),
-                        evidence_ids=[migration_detail["source_evidence_id"]],
-                        detail={
-                            **migration_detail,
-                            "repaired_section_keys": list(repaired_section_keys),
-                        },
-                    )
-                )
-            else:
-                scaffold = writer.run(
-                    context=agent_context,
-                    evidence_ids=preferred_writer_evidence_names,
-                    evidence_digest=writer_evidence_digest,
-                    literature_digest=literature_digest,
-                )
     except Exception as exc:
         writer_error_message = f"{type(exc).__name__}: {exc}"
         scaffold = ""
@@ -2047,6 +2089,9 @@ def _bind_and_review_manuscript(
         run_dir=run_dir,
         evidence=evidence,
         findings=findings,
+        expected_display_labels=expected_manuscript_display_labels(
+            current_evidence_names
+        ),
     )
     if not writer_probe_mode:
         _persist_manuscript_provenance_artifact(

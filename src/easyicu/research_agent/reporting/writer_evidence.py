@@ -208,6 +208,7 @@ def _preferred_writer_evidence_names(
         "causal_audit_report",
         "causal_audit_summary",
         "reporting_checklist",
+        "publication_figure_contract",
     ]
     out: List[str] = [name for name in preferred if is_citable(name)]
     step_aliases = [name for name in sorted(aliases) if re.match(r"^\d{2}[_-]", name)]

@@ -51,6 +51,29 @@ def _render_summary(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _expected_display_labels(source: Path) -> tuple[str, ...]:
+    """Infer only displays registered in the source run's review artifacts."""
+
+    run_dir = source.parent
+    labels: list[str] = []
+    digest_path = run_dir / "writer_evidence_digest.md"
+    if digest_path.is_file() and re.search(
+        r"^- table_one \[ok\]\s*$",
+        digest_path.read_text(encoding="utf-8"),
+        flags=re.M,
+    ):
+        labels.append("Table 1")
+    gallery_path = run_dir / "figure_gallery.json"
+    if gallery_path.is_file():
+        try:
+            gallery = json.loads(gallery_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            gallery = {}
+        if int(gallery.get("primary_count") or 0) > 0:
+            labels.append("Figure 1")
+    return tuple(labels)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -67,7 +90,10 @@ def main() -> int:
     for raw in args.inputs:
         label, source = _resolve_source(raw)
         text = source.read_text(encoding="utf-8")
-        audit = audit_manuscript_quality(text)
+        audit = audit_manuscript_quality(
+            text,
+            expected_display_labels=_expected_display_labels(source),
+        )
         audit_path = output_dir / f"{label}_manuscript_quality_audit.json"
         reader_path = output_dir / f"{label}_manuscript_reader.md"
         audit_path.write_text(

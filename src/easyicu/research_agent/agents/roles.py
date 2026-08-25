@@ -32,6 +32,7 @@ from ..research_context.temporal_semantics import (
     TemporalAlignmentEngine,
 )
 from ..review.step_semantics import decide_step_scientific_review
+from ..reporting.administrative_authority import ManuscriptAdministrativeAuthority
 
 from ._support import (
     _coerce_primary_estimate,
@@ -312,6 +313,7 @@ class ManuscriptAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> str:
         return WriterAgent(
             self.llm,
@@ -323,6 +325,7 @@ class ManuscriptAgent:
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
             literature_digest=literature_digest,
+            administrative_authority=administrative_authority,
         )
 
     def repair_existing(
@@ -333,6 +336,7 @@ class ManuscriptAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         return WriterAgent(
             self.llm,
@@ -345,6 +349,7 @@ class ManuscriptAgent:
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
             literature_digest=literature_digest,
+            administrative_authority=administrative_authority,
         )
 
 

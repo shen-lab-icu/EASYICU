@@ -69,6 +69,26 @@ This observational, single-database analysis remains susceptible to residual con
 ## Conclusion
 
 Sepsis status was associated with in-hospital mortality and requires external validation.
+
+## Data and code availability
+
+Data and code availability require author verification before submission.
+
+## Funding
+
+Funding information requires author verification before submission.
+
+## Ethics approval
+
+Ethics information requires author verification before submission.
+
+## Conflicts of interest
+
+Conflict-of-interest information requires author verification before submission.
+
+## Supplementary artifact release
+
+The supplementary release inventory requires author verification before submission.
 """
 
 
@@ -80,12 +100,52 @@ def test_complete_reader_facing_manuscript_passes() -> None:
     audit = audit_manuscript_quality(_valid_manuscript())
 
     assert audit.status == "pass"
-    assert audit.schema_version == "manuscript-quality-audit-v2"
+    assert audit.schema_version == "manuscript-quality-audit-v3"
     assert audit.adjustment_sets == {
         "Methods": ("age", "sex"),
         "Results": ("age", "sex"),
     }
     assert not audit.findings
+
+
+def test_registered_displays_must_be_called_out_in_results() -> None:
+    audit = audit_manuscript_quality(
+        _valid_manuscript(),
+        expected_display_labels=("Table 1", "Figure 1"),
+    )
+
+    assert audit.status == "changes_required"
+    assert audit.expected_display_labels == ("Table 1", "Figure 1")
+    assert audit.observed_display_labels == ()
+    assert (
+        sum(
+            finding.code == "MANUSCRIPT_DISPLAY_NOT_CALLED_OUT"
+            for finding in audit.findings
+        )
+        == 2
+    )
+
+
+def test_registered_display_callouts_are_recorded() -> None:
+    text = (
+        _valid_manuscript()
+        .replace(
+            "The cohort included eligible ICU stays.",
+            "The cohort included eligible ICU stays (Table 1).",
+        )
+        .replace(
+            "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+            "After adjustment for age and sex, Sepsis-3 status was associated with mortality (Figure 1).",
+        )
+    )
+
+    audit = audit_manuscript_quality(
+        text,
+        expected_display_labels=("Table 1", "Figure 1"),
+    )
+
+    assert audit.status == "pass"
+    assert audit.observed_display_labels == ("Table 1", "Figure 1")
 
 
 def test_empty_conclusion_fails_closed() -> None:
