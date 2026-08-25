@@ -13,6 +13,7 @@ from typing import Sequence
 
 from ..contracts.declared_product import typed_product
 from ..contracts.figure_plan import (
+    ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
     ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS,
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     COHORT_FLOW_FIGURE_PANELS,
@@ -30,6 +31,7 @@ from ..contracts.figure_plan import (
     ROBUSTNESS_FIGURE_INPUT,
     ROBUSTNESS_FIGURE_KNOWN_INPUTS,
     association_sensitivity_composite_panels,
+    absolute_risk_association_composite_panels,
     cohort_balance_association_composite_panels,
     data_quality_audit_source_candidates,
     landmark_association_composite_panels,
@@ -595,6 +597,8 @@ def bind_deterministic_figure_panels(
             templates = association_sensitivity_composite_panels(step.inputs)
         if input_set == frozenset(COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS):
             templates = cohort_balance_association_composite_panels(step.inputs)
+        if input_set == frozenset(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS):
+            templates = absolute_risk_association_composite_panels(step.inputs)
         if input_set == frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}):
             producers = [
                 candidate
@@ -746,6 +750,8 @@ def close_empty_deterministic_figure_contracts(
             templates = landmark_association_composite_panels(inputs)
         elif input_set == frozenset(COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS):
             templates = cohort_balance_association_composite_panels(inputs)
+        elif input_set == frozenset(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS):
+            templates = absolute_risk_association_composite_panels(inputs)
         if (
             templates is None
             or (eligible is not None and step_id not in eligible)

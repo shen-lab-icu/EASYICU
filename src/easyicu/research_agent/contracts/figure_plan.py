@@ -114,6 +114,50 @@ COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS = (
     "table:adjusted_association_estimates",
     "table:robustness_matrix",
 )
+ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS = (
+    "table:absolute_risk_context",
+    "table:adjusted_association_estimates",
+    "table:robustness_matrix",
+    "table:measurement_missingness",
+)
+
+
+def absolute_risk_association_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind absolute risk, adjusted association, robustness, and quality."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    if cleaned != ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS:
+        raise ValueError(
+            "absolute-risk association composite requires its four exact tables"
+        )
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="absolute_risk_context",
+            article_role="descriptive_result",
+            chart_type="dot_interval_absolute_risk",
+            source_products=("table:absolute_risk_context",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="primary_adjusted_association",
+            article_role="primary_estimand",
+            chart_type="forest",
+            source_products=("table:adjusted_association_estimates",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_estimates",
+            article_role="robustness",
+            chart_type="sensitivity_forest",
+            source_products=("table:robustness_matrix",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="measurement_missingness",
+            article_role="data_quality",
+            chart_type="availability_panel",
+            source_products=("table:measurement_missingness",),
+        ),
+    )
 
 
 def cohort_balance_association_composite_panels(
@@ -452,6 +496,7 @@ def robustness_figure_panels(
 
 
 __all__ = [
+    "ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS",
     "COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS",
     "COHORT_FLOW_FIGURE_PANELS",
     "COHORT_FLOW_INPUT",
@@ -471,6 +516,7 @@ __all__ = [
     "ROBUSTNESS_PRIMARY_EFFECT_INPUT",
     "ROBUSTNESS_PRIMARY_ESTIMATE_INPUT",
     "PlannedFigurePanelSpec",
+    "absolute_risk_association_composite_panels",
     "data_quality_audit_source_candidates",
     "cohort_balance_association_composite_panels",
     "measurement_availability_figure_panels",

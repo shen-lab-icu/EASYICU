@@ -12,7 +12,7 @@ from typing import Mapping, Sequence
 
 from ..authority.declared_levels import observed_levels_for
 from ..canonical_json import canonical_sha256
-from ..contracts.figure_plan import COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS
+from ..contracts.figure_plan import ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS
 from ..schema import ResearchContext
 from .method_literature import METHOD_CARDS
 from .progressive_contract import (
@@ -362,7 +362,7 @@ def host_materialize_progressive_step(
         refs = _exact_profile_refs(
             available_product_refs,
             outline_step.depends_on,
-            COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+            ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
         ) or _refs(
             available_product_refs,
             outline_step.depends_on,

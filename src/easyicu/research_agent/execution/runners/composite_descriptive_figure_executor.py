@@ -18,7 +18,10 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-from ...contracts.figure_plan import COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS
+from ...contracts.figure_plan import (
+    ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+)
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
@@ -171,6 +174,7 @@ _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES = (
     COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+    ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
 )
 _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES = tuple(
     TypedInputCapability(required=frozenset(profile))
@@ -430,6 +434,7 @@ def run_composite_descriptive_figure(
         COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
         COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
         COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+        ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
     } or sensitivity_key is not None:
         from .association_publication_figure_renderer import (
             render_association_publication_figure,

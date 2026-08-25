@@ -10,7 +10,10 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-from ...contracts.figure_plan import COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS
+from ...contracts.figure_plan import (
+    ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+)
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
@@ -901,7 +904,11 @@ def render_association_publication_figure(
                 "A",
                 absolute_title,
                 "descriptive_result",
-                "grouped_absolute_risk",
+                (
+                    "event_rate_panel"
+                    if distribution is not None
+                    else "dot_interval_absolute_risk"
+                ),
                 (
                     "table:exposure_outcome_distribution"
                     if distribution is not None
@@ -912,12 +919,41 @@ def render_association_publication_figure(
                 "B",
                 "Primary adjusted association",
                 "primary_estimand",
-                "forest_plot",
+                "forest",
                 "table:adjusted_association_estimates",
             ),
-            ("C", panel_c[0], panel_c[1], "forest_plot", panel_c[2]),
-            ("D", panel_d[0], panel_d[1], "availability_panel", panel_d[2]),
+            (
+                "C",
+                panel_c[0],
+                panel_c[1],
+                "sensitivity_forest" if panel_c[1] == "robustness" else "bar",
+                panel_c[2],
+            ),
+            (
+                "D",
+                panel_d[0],
+                panel_d[1],
+                (
+                    "specification_grid"
+                    if panel_d[1] == "robustness"
+                    else "availability_panel"
+                ),
+                panel_d[2],
+            ),
         )
+        if tuple(input_keys) == ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS:
+            panel_specs = tuple(
+                (panel_id, *spec[1:])
+                for panel_id, spec in zip(
+                    (
+                        "absolute_risk_context",
+                        "primary_adjusted_association",
+                        "robustness_estimates",
+                        "measurement_missingness",
+                    ),
+                    panel_specs,
+                )
+            )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
