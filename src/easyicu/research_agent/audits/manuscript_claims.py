@@ -46,15 +46,21 @@ _AUROC_SUMMARY_KEYS = (
 
 _AUROC_CI_LOWER_KEYS = (
     "auroc_ci_lower",
+    "auroc_ci_low",
     "statistic:auroc_ci_lower",
+    "statistic:auroc_ci_low",
     "auc_ci_lower",
+    "auc_ci_low",
     "ci_lower_auroc",
 )
 
 _AUROC_CI_UPPER_KEYS = (
     "auroc_ci_upper",
+    "auroc_ci_high",
     "statistic:auroc_ci_upper",
+    "statistic:auroc_ci_high",
     "auc_ci_upper",
+    "auc_ci_high",
     "ci_upper_auroc",
 )
 
