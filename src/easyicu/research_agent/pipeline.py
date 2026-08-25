@@ -4606,17 +4606,32 @@ class ResearchAgentPipeline:
                 )
                 return cached
 
-        runtime_capabilities = self._preflight_execution_runtime(
-            run_dir=run_dir,
-            cohort_path=cohort_path,
-            target_outcome=target_outcome,
-        )
-        _emit_progress(
-            "runtime",
-            "Execution runtime validated before planning.",
-            run_id=run_id,
-            method_capabilities=list(runtime_capabilities),
-        )
+        if self._config.planner_only:
+            # A planner-only authority cannot cross the human-review boundary
+            # into Execute. Requiring an execution image here couples design
+            # review to code-runtime readiness and prevents the intended cheap
+            # planning canary from running at all.
+            runtime_capabilities = ()
+            self._validated_runtime_capabilities = ()
+            self._validated_runtime_bundle = None
+            _emit_progress(
+                "runtime",
+                "Execution runtime preflight skipped for planner-only authority.",
+                run_id=run_id,
+                method_capabilities=[],
+            )
+        else:
+            runtime_capabilities = self._preflight_execution_runtime(
+                run_dir=run_dir,
+                cohort_path=cohort_path,
+                target_outcome=target_outcome,
+            )
+            _emit_progress(
+                "runtime",
+                "Execution runtime validated before planning.",
+                run_id=run_id,
+                method_capabilities=list(runtime_capabilities),
+            )
 
         def _plan_invoker():
             return _pipeline_run___plan_invoker(

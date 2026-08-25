@@ -1871,6 +1871,18 @@ def test_pipeline_runtime_preflight_precedes_plan_invocation(ra):
     )
 
 
+def test_planner_only_authority_skips_execution_runtime_preflight(ra):
+    pipeline_source = inspect.getsource(ra.ResearchAgentPipeline.run)
+    branch = pipeline_source.index("if self._config.planner_only:")
+    preflight = pipeline_source.index("self._preflight_execution_runtime(", branch)
+    plan = pipeline_source.index("def _plan_invoker()", branch)
+
+    assert branch < preflight < plan
+    assert "Execution runtime preflight skipped for planner-only authority." in (
+        pipeline_source[branch:preflight]
+    )
+
+
 def test_runtime_preflight_failure_spends_zero_llm_calls(
     ra,
     synthetic_cohort,
