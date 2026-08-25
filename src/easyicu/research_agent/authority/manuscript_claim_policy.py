@@ -65,7 +65,9 @@ _VALID_EVIDENCE_TOKEN_RE = re.compile(
     r"(?<!\{)\{evidence:[A-Za-z0-9][A-Za-z0-9_.-]*"
     r"(?:\s*,\s*(?:evidence:)?[A-Za-z0-9][A-Za-z0-9_.-]*)*\}(?!\}))"
 )
-_LITERATURE_CITATION_MARKER_RE = re.compile(r"\[@[A-Za-z0-9_.:-]+\]")
+_LITERATURE_CITATION_MARKER_RE = re.compile(
+    r"\[[^\[\]]*@[A-Za-z0-9_.:-]+[^\[\]]*\]"
+)
 _AUTHORITY_PLACEHOLDER_PREFIX_RE = re.compile(r"\{+\s*(?:claim|evidence)\s*:", re.I)
 _QUALITATIVE_SCIENTIFIC_ASSERTION_RE = re.compile(
     r"\b(?:independently\s+)?associated\s+with\b|"

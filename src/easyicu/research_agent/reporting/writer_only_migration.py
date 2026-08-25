@@ -15,12 +15,19 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 from typing import Any, Mapping, Optional
 import uuid
 
+from ..authority.evidence_snapshot import load_current_evidence_snapshot
+from ..authority.manuscript_claim_policy import (
+    expand_scientific_claim_tokens,
+    filter_evidence_bound_scaffold,
+)
+from ..authority.scientific_claim_registry import load_registered_scientific_claims
 from ..literature import LiteratureBundle
 from ..research_context.typed import ResearchContextAuthority, parse_research_context_json
-from ..schema import AnalysisPlan
+from ..schema import AnalysisPlan, EvidenceRecord
 from .administrative_authority import (
     ManuscriptAdministrativeAuthority,
     load_manuscript_administrative_authority,
@@ -91,6 +98,14 @@ class WriterOnlyMigrationResult:
     quality_audit: ManuscriptQualityAudit
     literature_audit: ManuscriptLiteratureAudit
     deterministic_literature_repairs: tuple[Mapping[str, Any], ...]
+    authority_repaired_section_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ReadOnlyAuthority:
+    records: tuple[EvidenceRecord, ...]
+    aliases: Mapping[str, str]
+    claims_by_ref: Mapping[str, Any]
 
 
 def _sha256(raw: bytes) -> str:
@@ -136,6 +151,83 @@ def _evidence_ids(run_dir: Path, manuscript: str, digest: str) -> tuple[str, ...
                 if label in aliases:
                     ids.add(label)
     return tuple(sorted(ids))
+
+
+def _read_only_authority(run_dir: Path) -> _ReadOnlyAuthority:
+    try:
+        snapshot = load_current_evidence_snapshot(run_dir)
+        records = tuple(EvidenceRecord.model_validate(item) for item in snapshot.records)
+        claims = load_registered_scientific_claims(root=run_dir, records=records)
+    except Exception as exc:
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_EVIDENCE_AUTHORITY_INVALID",
+            detail=f"{type(exc).__name__}: {exc}",
+        ) from exc
+    return _ReadOnlyAuthority(
+        records=records,
+        aliases=dict(snapshot.aliases),
+        claims_by_ref={claim.claim_ref: claim for claim in claims},
+    )
+
+
+def _section_key_for_excerpt(manuscript: str, excerpt: str) -> Optional[str]:
+    matches = list(re.finditer(r"^##\s+([^\n]+?)\s*$", manuscript, flags=re.M))
+    keys = {
+        "title": "title",
+        "abstract": "abstract",
+        "introduction": "introduction",
+        "methods": "methods",
+        "results": "results",
+        "discussion": "discussion",
+        "limitations": "limitations",
+        "conclusion": "conclusion",
+    }
+    for index, match in enumerate(matches):
+        key = keys.get(match.group(1).strip().casefold())
+        if key is None:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(manuscript)
+        if excerpt in manuscript[match.start() : end]:
+            return key
+    return None
+
+
+def _claim_policy_projection(
+    run_dir: Path,
+    manuscript: str,
+) -> tuple[str, dict[str, tuple[str, ...]]]:
+    authority = _read_only_authority(run_dir)
+    records_by_id = {record.evidence_id: record for record in authority.records}
+
+    def resolve_evidence(ref: str) -> bool:
+        evidence_id = authority.aliases.get(ref, ref)
+        return evidence_id in records_by_id
+
+    filtered = filter_evidence_bound_scaffold(
+        manuscript,
+        resolve_claim=authority.claims_by_ref.get,
+        resolve_evidence=resolve_evidence,
+    )
+    rejected = tuple(
+        dict.fromkeys(
+            (
+                *filtered.removed_result_sentences,
+                *filtered.unsupported_scientific_claim_sentences,
+            )
+        )
+    )
+    by_section: dict[str, list[str]] = {}
+    for excerpt in rejected:
+        key = _section_key_for_excerpt(manuscript, excerpt)
+        if key is None:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_AUTHORITY_OWNER_UNRESOLVED",
+                detail=_sha256(excerpt.encode("utf-8")),
+            )
+        by_section.setdefault(key, []).append(excerpt[:500])
+    return filtered.scaffold, {
+        key: tuple(values) for key, values in by_section.items()
+    }
 
 
 def prepare_writer_only_migration(run_dir: Path) -> PreparedWriterOnlyMigration:
@@ -304,6 +396,48 @@ def repair_writer_only(
         deterministic_literature_repairs.append(
             {"kind": "methods_reporting_citation", **method_repair}
         )
+    authority_repaired: list[str] = []
+    for _attempt in range(2):
+        canonical, section_errors = _claim_policy_projection(
+            prepared.source_run_dir,
+            manuscript,
+        )
+        if not section_errors:
+            manuscript = canonical
+            break
+        repair_sections = getattr(writer, "repair_sections", None)
+        if not callable(repair_sections):
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_AUTHORITY_REPAIR_UNAVAILABLE",
+                detail=", ".join(sorted(section_errors)),
+            )
+        try:
+            manuscript, repaired_authority_keys = repair_sections(
+                manuscript,
+                section_errors=section_errors,
+                context=prepared.context,
+                evidence_ids=prepared.evidence_ids,
+                evidence_digest=prepared.evidence_digest,
+                literature_digest=prepared.literature_digest,
+                administrative_authority=prepared.administrative_authority,
+            )
+        except Exception as exc:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED",
+                detail=f"{type(exc).__name__}: {exc}",
+            ) from exc
+        for key in repaired_authority_keys:
+            if key not in authority_repaired:
+                authority_repaired.append(key)
+    else:
+        _canonical, remaining_errors = _claim_policy_projection(
+            prepared.source_run_dir,
+            manuscript,
+        )
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_AUTHORITY_REPAIR_EXHAUSTED_PRIOR_PRESERVED",
+            detail=", ".join(sorted(remaining_errors)),
+        )
     quality = audit_manuscript_quality(
         manuscript,
         expected_display_labels=prepared.expected_display_labels,
@@ -327,7 +461,75 @@ def repair_writer_only(
         quality_audit=quality,
         literature_audit=literature,
         deterministic_literature_repairs=tuple(deterministic_literature_repairs),
+        authority_repaired_section_keys=tuple(authority_repaired),
     )
+
+
+def _bind_and_copy_evidence(
+    prepared: PreparedWriterOnlyMigration,
+    manuscript: str,
+    *,
+    output_dir: Path,
+) -> tuple[str, tuple[str, ...]]:
+    authority = _read_only_authority(prepared.source_run_dir)
+    records_by_id = {record.evidence_id: record for record in authority.records}
+    expanded = expand_scientific_claim_tokens(
+        manuscript,
+        resolve_claim=authority.claims_by_ref.get,
+        current_evidence_ids=set(records_by_id),
+    )
+    if expanded.missing_claim_refs or expanded.malformed_sentences:
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_SCIENTIFIC_CLAIM_BINDING_FAILED",
+            detail=(
+                f"missing={list(expanded.missing_claim_refs)}; "
+                f"malformed={len(expanded.malformed_sentences)}"
+            ),
+        )
+    copied: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        ref = match.group(1)
+        evidence_id = authority.aliases.get(ref, ref)
+        record = records_by_id.get(evidence_id)
+        if record is None:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_EVIDENCE_REFERENCE_UNRESOLVED",
+                detail=ref,
+            )
+        source_path = (prepared.source_run_dir / record.relative_path).resolve()
+        try:
+            source_path.relative_to(prepared.source_run_dir)
+        except ValueError as exc:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_EVIDENCE_PATH_ESCAPE",
+                detail=record.evidence_id,
+            ) from exc
+        if not source_path.is_file() or source_path.is_symlink():
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_EVIDENCE_FILE_UNAVAILABLE",
+                detail=record.evidence_id,
+            )
+        if _sha256(source_path.read_bytes()) != record.sha256:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_EVIDENCE_DIGEST_DRIFT",
+                detail=record.evidence_id,
+            )
+        destination = output_dir / "evidence" / source_path.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            shutil.copy2(source_path, destination)
+        if _sha256(destination.read_bytes()) != record.sha256:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_EVIDENCE_COPY_DRIFT",
+                detail=record.evidence_id,
+            )
+        relative = destination.relative_to(output_dir).as_posix()
+        copied.append(relative)
+        return f'[{ref}]({relative} "sha256={record.sha256[:8]}")'
+
+    bound = _EVIDENCE_TOKEN.sub(replace, expanded.scaffold)
+    return bound, tuple(dict.fromkeys(copied))
 
 
 def _atomic_write(path: Path, raw: bytes) -> None:
@@ -374,10 +576,37 @@ def publish_writer_only_result(
             detail=str(output),
         )
     output.mkdir(parents=True, exist_ok=True)
+    bound_manuscript, copied_evidence = _bind_and_copy_evidence(
+        prepared,
+        result.manuscript,
+        output_dir=output,
+    )
+    bound_quality = audit_manuscript_quality(
+        bound_manuscript,
+        expected_display_labels=prepared.expected_display_labels,
+    )
+    if bound_quality.status != "pass":
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_BOUND_QUALITY_AUDIT_FAILED",
+            detail=", ".join(sorted({item.code for item in bound_quality.findings})),
+        )
+    bound_literature = audit_manuscript_literature(
+        bound_manuscript,
+        prepared.literature,
+    )
+    if bound_literature.status != "pass":
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_BOUND_LITERATURE_AUDIT_FAILED",
+            detail=bound_literature.message,
+        )
     _atomic_write(output / "manuscript_scaffold.md", result.manuscript.encode("utf-8"))
     _atomic_write(
+        output / "manuscript_bound.md",
+        bound_manuscript.encode("utf-8"),
+    )
+    _atomic_write(
         output / "manuscript_reader.md",
-        result.reader_manuscript.encode("utf-8"),
+        render_reader_manuscript(bound_manuscript).encode("utf-8"),
     )
     quality_payload = result.quality_audit.to_dict()
     literature_payload = result.literature_audit.model_dump(mode="json")
@@ -406,8 +635,14 @@ def publish_writer_only_result(
             prepared.source_manuscript.encode("utf-8")
         ),
         "output_manuscript_sha256": _sha256(result.manuscript.encode("utf-8")),
+        "output_bound_manuscript_sha256": _sha256(
+            bound_manuscript.encode("utf-8")
+        ),
         "planned_section_keys": list(prepared.planned_section_keys),
         "repaired_section_keys": list(result.repaired_section_keys),
+        "authority_repaired_section_keys": list(
+            result.authority_repaired_section_keys
+        ),
         "removed_unknown_literature_keys": list(
             prepared.removed_unknown_literature_keys
         ),
@@ -417,6 +652,7 @@ def publish_writer_only_result(
         "deterministic_literature_repairs": list(
             result.deterministic_literature_repairs
         ),
+        "copied_evidence_files": list(copied_evidence),
         "quality_status": result.quality_audit.status,
         "literature_status": result.literature_audit.status,
         "provider": provider,

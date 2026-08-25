@@ -20,6 +20,7 @@ from ..schema import (
     ResearchContext,
 )
 from ..reporting.manuscript_sections import (
+    repair_named_manuscript_sections,
     repair_existing_manuscript_sections,
     render_manuscript_sections,
 )
@@ -372,6 +373,32 @@ class WriterAgent:
     ) -> tuple[str, tuple[str, ...]]:
         return repair_existing_manuscript_sections(
             manuscript,
+            call_section=self._call_section,
+            common={
+                "context": context,
+                "evidence_ids": evidence_ids,
+                "evidence_digest": evidence_digest,
+                "literature_digest": literature_digest,
+            },
+            administrative_authority=administrative_authority,
+        )
+
+    def repair_sections(
+        self,
+        manuscript: str,
+        *,
+        section_errors: Dict[str, tuple[str, ...]],
+        context: ResearchContext,
+        evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+    ) -> tuple[str, tuple[str, ...]]:
+        """Repair section owners rejected by an adjacent deterministic gate."""
+
+        return repair_named_manuscript_sections(
+            manuscript,
+            section_errors=section_errors,
             call_section=self._call_section,
             common={
                 "context": context,

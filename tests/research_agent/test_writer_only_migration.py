@@ -166,8 +166,17 @@ def test_preflight_owner_projection_uses_manuscript_contract() -> None:
 
 def test_writer_only_repair_preserves_source_and_publishes_separately(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepared = _prepared(tmp_path, _manuscript(leak=True))
+    monkeypatch.setattr(
+        "easyicu.research_agent.reporting.writer_only_migration._claim_policy_projection",
+        lambda _run, manuscript: (manuscript, {}),
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.reporting.writer_only_migration._bind_and_copy_evidence",
+        lambda _prepared, manuscript, output_dir: (manuscript, ()),
+    )
 
     class FakeWriter:
         def repair_existing(self, manuscript: str, **_kwargs: object):

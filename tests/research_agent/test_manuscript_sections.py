@@ -10,6 +10,7 @@ from easyicu.research_agent.reporting.manuscript_sections import (
     ManuscriptReaderQualityContractError,
     ManuscriptSectionContractError,
     repair_existing_manuscript_sections,
+    repair_named_manuscript_sections,
     render_manuscript_sections,
 )
 from easyicu.research_agent.reporting.administrative_authority import (
@@ -342,6 +343,29 @@ def test_existing_manuscript_migration_repairs_only_error_owners() -> None:
     assert "host-bound" not in repaired
     assert "## Data and code availability" in repaired
     assert "## Funding" in repaired
+
+
+def test_adjacent_contract_repairs_only_explicit_section_owner() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    )
+    calls: list[str] = []
+
+    def call_section(**kwargs: object) -> str:
+        calls.append(str(kwargs["section_name"]))
+        assert "EVIDENCE-AUTHORITY CONTRACT REPAIR" in str(kwargs["instruction"])
+        return _minimal_valid_section(str(kwargs["section_name"]))
+
+    repaired, keys = repair_named_manuscript_sections(
+        manuscript,
+        section_errors={"methods": ("Unbound method sentence.",)},
+        call_section=call_section,
+        common={},
+    )
+
+    assert keys == ("methods",)
+    assert calls == ["Methods"]
+    assert audit_manuscript_quality(repaired).status == "pass"
 
 
 def test_existing_manuscript_migration_repairs_missing_display_callouts() -> None:

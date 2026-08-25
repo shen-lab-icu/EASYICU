@@ -169,22 +169,38 @@ def main() -> int:
             provider_ledger=str(ledger_path),
         )
         raise
+    summary = meter.summary(hard_stop_accounting=task.accounting_summary())
+    try:
+        receipt = publish_writer_only_result(
+            prepared,
+            result,
+            output_dir=output,
+            provider=args.provider,
+            model=args.model,
+            provider_summary=summary,
+            provider_ledger=str(ledger_path),
+        )
+    except BaseException as exc:
+        task.finish(error=f"{type(exc).__name__}: {exc}")
+        summary = meter.summary(
+            hard_stop_accounting=task.accounting_summary()
+        )
+        publish_writer_only_failure(
+            prepared,
+            output_dir=output,
+            error=exc,
+            provider=args.provider,
+            model=args.model,
+            provider_summary=summary,
+            provider_ledger=str(ledger_path),
+        )
+        raise
     task.finish(
         score={
             "quality_status": result.quality_audit.status,
             "literature_status": result.literature_audit.status,
             "publication_authorized": False,
         }
-    )
-    summary = meter.summary(hard_stop_accounting=task.accounting_summary())
-    receipt = publish_writer_only_result(
-        prepared,
-        result,
-        output_dir=output,
-        provider=args.provider,
-        model=args.model,
-        provider_summary=summary,
-        provider_ledger=str(ledger_path),
     )
     print(json.dumps(receipt, ensure_ascii=False))
     return 0
