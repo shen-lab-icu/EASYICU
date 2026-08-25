@@ -337,6 +337,33 @@ def test_existing_manuscript_migration_repairs_only_error_owners() -> None:
     assert "host-bound" not in repaired
 
 
+def test_existing_manuscript_migration_retries_only_persistent_owner() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace(
+        "Evidence-bound discussion prose.",
+        "The result remained host-bound.",
+    )
+    calls = 0
+
+    def call_section(**kwargs: object) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return "## Discussion\n\nThe result remained host-bound."
+        return _minimal_valid_section("Discussion")
+
+    repaired, repaired_keys = repair_existing_manuscript_sections(
+        manuscript,
+        call_section=call_section,
+        common={},
+    )
+
+    assert repaired_keys == ("discussion",)
+    assert calls == 2
+    assert "host-bound" not in repaired
+
+
 def test_verified_administrative_authority_is_rendered_exactly() -> None:
     authority = ManuscriptAdministrativeAuthority.issue(
         authority_id="submission-metadata-v1",

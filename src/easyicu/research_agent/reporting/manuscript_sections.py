@@ -461,36 +461,49 @@ def repair_existing_manuscript_sections(
 
     sections = _existing_scientific_sections(manuscript)
     repaired_keys: list[str] = []
-    for spec, error_detail in _quality_repair_specs(manuscript):
-        repair_instruction = (
-            spec.instruction
-            + "\n\nREADER-QUALITY CONTRACT MIGRATION:\n"
-            + "The prior verified draft failed these deterministic checks owned "
-            + f"by this section:\n{error_detail}\n"
-            + "Regenerate the complete section from the same machine evidence. "
-            + "Resolve every listed error without adding an unsupported result, "
-            + "changing the executed method, exposing runtime identifiers, or "
-            + "mentioning this migration. Preserve all required headings and labels."
-        )
-        repaired = _ensure_section_heading(
-            spec,
-            call_section(
-                section_name=spec.section_name,
-                instruction=repair_instruction,
-                max_tokens=spec.max_tokens,
-                **common,
-            ),
-        )
-        missing_subsections = _missing_required_subsections(spec, repaired)
-        if missing_subsections:
-            raise ManuscriptSectionContractError(
-                section_name=spec.section_name,
-                missing_subsections=missing_subsections,
-            )
-        sections[spec.key] = repaired
-        repaired_keys.append(spec.key)
-
     scientific = _assemble_scientific_sections(sections)
+    for attempt in range(2):
+        repair_specs = _quality_repair_specs(scientific)
+        if not repair_specs:
+            return scientific, tuple(repaired_keys)
+        for spec, error_detail in repair_specs:
+            repair_instruction = (
+                spec.instruction
+                + "\n\nREADER-QUALITY CONTRACT MIGRATION:\n"
+                + "The prior verified draft failed these deterministic checks owned "
+                + f"by this section:\n{error_detail}\n"
+                + "Regenerate the complete section from the same machine evidence. "
+                + "Resolve every listed error without adding an unsupported result, "
+                + "changing the executed method, exposing runtime identifiers, or "
+                + "mentioning this migration. Preserve all required headings and "
+                + "labels."
+                + (
+                    " This is the final bounded repair attempt; verify every "
+                    "offending term is absent before returning."
+                    if attempt == 1
+                    else ""
+                )
+            )
+            repaired = _ensure_section_heading(
+                spec,
+                call_section(
+                    section_name=spec.section_name,
+                    instruction=repair_instruction,
+                    max_tokens=spec.max_tokens,
+                    **common,
+                ),
+            )
+            missing_subsections = _missing_required_subsections(spec, repaired)
+            if missing_subsections:
+                raise ManuscriptSectionContractError(
+                    section_name=spec.section_name,
+                    missing_subsections=missing_subsections,
+                )
+            sections[spec.key] = repaired
+            if spec.key not in repaired_keys:
+                repaired_keys.append(spec.key)
+        scientific = _assemble_scientific_sections(sections)
+
     remaining = _remaining_quality_errors(scientific)
     if remaining:
         raise ManuscriptReaderQualityContractError(findings=remaining)
