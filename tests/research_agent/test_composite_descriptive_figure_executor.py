@@ -7,6 +7,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.contracts.figure_plan import (
+    COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+)
 from easyicu.research_agent.execution.runners.composite_descriptive_figure_executor import (
     COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
@@ -160,6 +163,30 @@ def _association_summary_frames() -> dict[str, pd.DataFrame]:
         }
     )
     return frames
+
+
+def _cohort_balance_association_frames() -> dict[str, pd.DataFrame]:
+    association = _association_frames()
+    return {
+        "table:cohort_flow": pd.DataFrame(
+            {
+                "concept_id": ["source cohort", "eligible cohort"],
+                "n_remaining": [120, 100],
+            }
+        ),
+        "table:table_one": pd.DataFrame(
+            {
+                "variable": ["age", "severity", "age", "severity"],
+                "group": ["0", "0", "1", "1"],
+                "absolute_standardized_mean_difference": [0.08, 0.22, 0.08, 0.22],
+                "standardized_difference_status": ["computed"] * 4,
+            }
+        ),
+        "table:adjusted_association_estimates": association[
+            "table:adjusted_association_estimates"
+        ],
+        "table:robustness_matrix": association["table:robustness_matrix"],
+    }
 
 
 def _association_measurement_frames() -> dict[str, pd.DataFrame]:
@@ -493,6 +520,77 @@ def test_association_scientific_sensitivity_contract_shapes_and_renders(
         out_dir=out_dir,
         step_summary=summary,
     ) == []
+
+
+def test_cohort_balance_association_profile_selects_and_renders(
+    tmp_path: Path,
+) -> None:
+    frames = _cohort_balance_association_frames()
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep.model_validate(
+        {
+            **_step().model_dump(mode="json"),
+            "step_id": "cohort_balance_figure",
+            "inputs": list(COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS),
+            "expected_outputs": ["figure:cohort_balance_figure"],
+            "input_consumption_contracts": [
+                {"input_key": key, "mode": "all_rows"}
+                for key in COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS
+            ],
+        }
+    )
+
+    shaped, findings = bind_deterministic_figure_panels(
+        plan=AnalysisPlan(research_question="Estimate an association.", steps=[step])
+    )
+    step = shaped.steps[0]
+    assert [panel.article_role for panel in step.figure_panels] == [
+        "cohort_accounting",
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+    ]
+    assert any(
+        finding.detail.get("reason") == "deterministic_figure_panels_bound"
+        for finding in findings
+    )
+    selection = select_standard_executor(
+        step,
+        plan=shaped,
+        resolved_bindings=bindings,
+    )
+    assert selection is not None
+    assert selection.host_sealed_renderer is True
+    assert selection.consumed_input_keys == (
+        COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS
+    )
+
+    out_dir = tmp_path / "outputs"
+    summary = run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="cohort_balance_figure",
+        input_keys=COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+    )
+    assert summary["deterministic_standard_analysis"] == (
+        "cohort_balance_association_figure"
+    )
+    contract = json.loads(
+        (out_dir / "cohort_balance_figure.figure_contract.json").read_text()
+    )
+    panels = {panel["panel_id"]: panel for panel in contract["panels"]}
+    assert [panels[key]["role"] for key in ("A", "B", "C", "D")] == [
+        "cohort_accounting",
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+    ]
 
 
 def test_association_summary_contract_renders_ranges_without_point_estimates(

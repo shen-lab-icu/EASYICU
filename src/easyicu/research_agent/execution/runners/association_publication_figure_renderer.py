@@ -10,6 +10,7 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from ...contracts.figure_plan import COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
@@ -299,6 +300,200 @@ def _draw_component_completeness(ax: Any, frame: pd.DataFrame) -> None:
     ax.set_title("Component completeness", loc="left", pad=12)
 
 
+def _render_cohort_balance_association_figure(
+    *,
+    bound: Mapping[str, BoundTypedInput],
+    out_dir: Path,
+    step_id: str,
+    figure_product: str,
+    input_keys: tuple[str, ...],
+) -> dict[str, Any]:
+    """Render cohort, balance, primary estimate, and robustness without refitting."""
+
+    flow = bound["table:cohort_flow"].frame.copy()
+    flow["n_remaining"] = _integers(flow, "n_remaining")
+    if (flow["n_remaining"] < 0).any():
+        raise ValueError("cohort-flow counts must be non-negative")
+
+    table_one = bound["table:table_one"].frame.copy()
+    computed = table_one.loc[
+        table_one["standardized_difference_status"].astype(str).eq("computed")
+    ].copy()
+    computed["absolute_standardized_mean_difference"] = pd.to_numeric(
+        computed["absolute_standardized_mean_difference"], errors="coerce"
+    )
+    computed = computed.loc[
+        computed["absolute_standardized_mean_difference"].notna()
+    ].copy()
+    if computed.empty:
+        raise ValueError("Table 1 has no computed standardized differences")
+    if (
+        computed["absolute_standardized_mean_difference"] < 0
+    ).any() or not np.isfinite(
+        computed["absolute_standardized_mean_difference"].to_numpy(dtype=float)
+    ).all():
+        raise ValueError("Table 1 standardized differences must be finite and non-negative")
+    balance = (
+        computed.groupby("variable", as_index=False)[
+            "absolute_standardized_mean_difference"
+        ]
+        .max()
+        .sort_values("absolute_standardized_mean_difference", ascending=True)
+    )
+
+    adjusted = _validate_interval_table(
+        bound["table:adjusted_association_estimates"].frame,
+        estimate_column="estimate",
+        require_fitted=True,
+    )
+    robustness = _validate_interval_table(
+        bound["table:robustness_matrix"].frame,
+        estimate_column="point_estimate",
+    )
+    if not robustness["converged"].astype(bool).all():
+        raise ValueError("robustness matrix contains non-converged rows")
+
+    source_files = [_source_copy(bound[key], out_dir) for key in input_keys]
+    evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
+    palette = apply_publication_style(font_size=7.0)
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
+
+    positions = np.arange(len(flow))
+    axes[0, 0].barh(positions, flow["n_remaining"], color=palette["blue_soft"])
+    flow_labels = []
+    for index, row in flow.iterrows():
+        label = row.get("concept_id")
+        if label is None or (not isinstance(label, str) and pd.isna(label)):
+            label = row.get("predicate_kind")
+        flow_labels.append(_label(label) if label is not None else f"Step {index + 1}")
+    axes[0, 0].set_yticks(positions, flow_labels, fontsize=5.5)
+    axes[0, 0].invert_yaxis()
+    axes[0, 0].set_xlabel("ICU stays remaining")
+    axes[0, 0].set_title("Cohort accounting", loc="left", pad=12)
+    add_panel_label(axes[0, 0], "A", x=-0.12, y=1.04)
+
+    positions = np.arange(len(balance))
+    axes[0, 1].barh(
+        positions,
+        balance["absolute_standardized_mean_difference"],
+        color=palette["orange"],
+    )
+    axes[0, 1].set_yticks(
+        positions,
+        [_label(value) for value in balance["variable"]],
+        fontsize=5.5,
+    )
+    axes[0, 1].axvline(0.1, color="#777777", linewidth=0.8, linestyle="--")
+    axes[0, 1].set_xlabel("Absolute standardized difference")
+    axes[0, 1].set_title("Baseline balance", loc="left", pad=12)
+    add_panel_label(axes[0, 1], "B", x=-0.12, y=1.04)
+
+    adjusted_label = next(
+        (
+            candidate
+            for candidate in ("contrast", "exposure", "model_id")
+            if candidate in adjusted.columns
+            and adjusted[candidate].notna().all()
+            and adjusted[candidate].astype(str).str.strip().ne("").all()
+        ),
+        "model_id",
+    )
+    _forest(
+        axes[1, 0],
+        adjusted,
+        estimate_column="estimate",
+        label_column=adjusted_label,
+        title="Primary adjusted association",
+        color=palette["blue"],
+    )
+    add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
+
+    robustness_label = "spec_id" if "spec_id" in robustness.columns else "axis"
+    _forest(
+        axes[1, 1],
+        robustness,
+        estimate_column="point_estimate",
+        label_column=robustness_label,
+        title="Robustness estimates",
+        color=palette["blue_soft"],
+    )
+    add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
+
+    panel_rows = (
+        ("A", "Cohort accounting", "cohort_accounting", "cohort_flow", input_keys[0]),
+        ("B", "Baseline balance", "descriptive_result", "standardized_difference", input_keys[1]),
+        ("C", "Primary adjusted association", "primary_estimand", "forest_plot", input_keys[2]),
+        ("D", "Robustness estimates", "robustness", "forest_plot", input_keys[3]),
+    )
+    contract = make_figure_contract(
+        figure_id=f"figure:{figure_product}",
+        core_claim=(
+            "Cohort accounting and baseline balance contextualize the primary "
+            "adjusted association and its prespecified robustness estimates."
+        ),
+        archetype="quantitative_grid",
+        width_mm=183.0,
+        height_mm=178.0,
+        panels=[
+            {
+                "panel_id": panel_id,
+                "title": title,
+                "role": role,
+                "article_role": role,
+                "chart_type": chart_type,
+                "claim": f"This panel visualizes values from {source} without refitting.",
+                "evidence_ids": [evidence[source]],
+                "metadata": {
+                    "source_products": [source],
+                    "source_data": [f"{source.partition(':')[2]}_source_data.csv"],
+                },
+            }
+            for panel_id, title, role, chart_type, source in panel_rows
+        ],
+        source_data=source_files,
+        statistics_note=(
+            "Panel B reports source-table absolute standardized differences; "
+            "Panels C and D preserve the reported point estimates and confidence "
+            "intervals. The renderer performs no fitting or row selection."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / figure_product,
+        contract=contract,
+        formats=("png", "svg", "pdf", "tiff"),
+        dpi=300,
+    )
+    plt.close(fig)
+
+    for item in bound.values():
+        if sha256_file(item.path) != item.sha256:
+            raise ValueError(f"typed input changed while rendering: {item.input_key}")
+    summary = {
+        "step_id": step_id,
+        "status": "ok",
+        "analysis_status": "ok",
+        "method": "deterministic_cohort_balance_association_figure",
+        "analysis_family": "association",
+        "deterministic_standard_analysis": "cohort_balance_association_figure",
+        "rendering_only": True,
+        "source_inputs": list(input_keys),
+        "source_data_files": source_files,
+        "figure_files": [path.name for key, path in outputs.items() if key != "contract"],
+        "figure_path": f"{figure_product}.png",
+        "figure_contract": f"{figure_product}.figure_contract.json",
+        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
 def render_association_publication_figure(
     *,
     bound: Mapping[str, BoundTypedInput],
@@ -314,6 +509,15 @@ def render_association_publication_figure(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    if tuple(input_keys) == COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS:
+        return _render_cohort_balance_association_figure(
+            bound=bound,
+            out_dir=out_dir,
+            step_id=step_id,
+            figure_product=figure_product,
+            input_keys=input_keys,
+        )
 
     distribution = (
         bound["table:exposure_outcome_distribution"].frame.copy()

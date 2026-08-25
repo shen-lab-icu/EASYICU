@@ -1010,6 +1010,48 @@ def test_host_does_not_fabricate_dynamic_literature_application() -> None:
     )
 
 
+def test_host_reuses_selected_design_decision_for_dynamic_figure_binding() -> None:
+    outline_payload = _outline_payload()
+    selected = outline_payload["design_selection"]["candidates"][0]
+    selected["literature_citation_keys"] = ["dynamic_card"]
+    selected["literature_design_decisions"] = [
+        {
+            "dimension": "table_and_figure_completeness",
+            "citation_keys": ["dynamic_card"],
+            "disposition": "adopt",
+            "rationale": "Show cohort accounting, the primary estimate, and robustness.",
+        }
+    ]
+    figure_payload = next(
+        step
+        for step in outline_payload["steps"]
+        if step["module_id"] == "visualization"
+    )
+    figure_payload["literature_citation_keys"] = ["dynamic_card"]
+    outline = ProgressivePlanOutline.model_validate(outline_payload)
+    figure = next(step for step in outline.steps if step.module_id == "visualization")
+
+    materialization = host_materialize_progressive_step(
+        context=_context(),
+        outline=outline,
+        outline_step=figure,
+        foundation=ProgressiveFoundationMaterialization.model_validate(
+            _foundation_payload()
+        ).foundation,
+        available_product_refs=[
+            (figure.depends_on[0], "table:primary_estimate"),
+        ],
+    )
+
+    assert materialization is not None
+    assert [
+        binding.citation_key for binding in materialization.step.literature_bindings
+    ] == ["dynamic_card"]
+    assert "Show cohort accounting" in materialization.step.literature_bindings[
+        0
+    ].application
+
+
 def test_host_materialization_keeps_one_schema_ledger_entry_per_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
