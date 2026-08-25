@@ -255,6 +255,7 @@ def _render_figure(
     km_table: Any,
     cox_row: Mapping[str, Any],
     rmst_table: Any | None,
+    time_varying_table: Any | None,
     risk_flow: Any,
     ph_table: Any,
     sealed: LandmarkSurvivalRuntimeAuthority,
@@ -327,7 +328,15 @@ def _render_figure(
         counts: list[str] = []
         for time_point in risk_times:
             eligible = group.loc[group["time_from_landmark_days"].le(time_point)]
-            counts.append(str(int((eligible.iloc[-1] if not eligible.empty else group.iloc[0])["at_risk"])))
+            counts.append(
+                str(
+                    int(
+                        (eligible.iloc[-1] if not eligible.empty else group.iloc[0])[
+                            "at_risk"
+                        ]
+                    )
+                )
+            )
         risk_rows.append(counts)
     ax_risk.axis("off")
     table = ax_risk.table(
@@ -342,7 +351,15 @@ def _render_figure(
     table.set_fontsize(5.7)
     for cell in table.get_celld().values():
         cell.set_linewidth(0.0)
-    ax_risk.text(-0.02, 0.98, "Number at risk", transform=ax_risk.transAxes, fontsize=6.2, fontweight="bold", va="top")
+    ax_risk.text(
+        -0.02,
+        0.98,
+        "Number at risk",
+        transform=ax_risk.transAxes,
+        fontsize=6.2,
+        fontweight="bold",
+        va="top",
+    )
 
     ph_statuses = {
         str(value).strip()
@@ -358,6 +375,11 @@ def _render_figure(
     hazard_ratio = float(cox_row["hazard_ratio"])
     ci_low = float(cox_row["ci_low"])
     ci_high = float(cox_row["ci_high"])
+    promotes_time_varying = bool(
+        not headline_hr_authorized
+        and time_varying_table is not None
+        and len(time_varying_table) > 0
+    )
     if headline_hr_authorized:
         ax_hr.errorbar(
             hazard_ratio,
@@ -390,6 +412,39 @@ def _render_figure(
             ha="left",
             va="bottom",
         )
+    elif promotes_time_varying:
+        exposure_rows = time_varying_table.loc[
+            time_varying_table["is_exposure"].astype(bool)
+        ].sort_values("interval_index")
+        if len(exposure_rows) != len(sealed.time_varying_interval_cutpoints_days) + 1:
+            raise ValueError(
+                "landmark survival figure lacks every time-varying exposure interval"
+            )
+        estimates = exposure_rows["hazard_ratio"].to_numpy(dtype=float)
+        lows = exposure_rows["ci_low"].to_numpy(dtype=float)
+        highs = exposure_rows["ci_high"].to_numpy(dtype=float)
+        positions = np.arange(len(exposure_rows))
+        ax_hr.errorbar(
+            estimates,
+            positions,
+            xerr=np.vstack((estimates - lows, highs - estimates)),
+            fmt="o",
+            color=palette["blue"],
+            capsize=3,
+            linewidth=1.2,
+        )
+        ax_hr.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+        ax_hr.set_xscale("log")
+        ax_hr.set_yticks(
+            positions,
+            [
+                f"{row.interval_start_days:g}–{row.interval_end_days:g} d"
+                for row in exposure_rows.itertuples()
+            ],
+        )
+        ax_hr.invert_yaxis()
+        ax_hr.set_xlabel("Adjusted interval-specific HR (95% CI)")
+        ax_hr.set_title("Time-varying adjusted association", loc="left")
     else:
         if rmst_table is None or len(rmst_table) != 1:
             raise ValueError(
@@ -534,26 +589,40 @@ def _render_figure(
                 "title": (
                     "Adjusted Cox association"
                     if headline_hr_authorized
-                    else "PH-free survival contrast"
+                    else (
+                        "Time-varying adjusted association"
+                        if promotes_time_varying
+                        else "PH-free survival contrast"
+                    )
                 ),
-                "role": (
-                    "survival_effect"
-                ),
+                "role": ("survival_effect"),
                 "chart_type": (
                     "hazard_ratio_forest"
                     if headline_hr_authorized
-                    else "rmst_difference_forest"
+                    else (
+                        "time_varying_hazard_ratio_forest"
+                        if promotes_time_varying
+                        else "rmst_difference_forest"
+                    )
                 ),
                 "claim": (
                     "The adjusted hazard ratio quantifies the prespecified descriptive prognostic association."
                     if headline_hr_authorized
-                    else "The unadjusted restricted-mean survival-time difference gives a PH-free descriptive group contrast over the post-landmark horizon."
+                    else (
+                        "The prespecified extended Cox model reports adjusted interval-specific associations instead of one constant hazard ratio."
+                        if promotes_time_varying
+                        else "The unadjusted restricted-mean survival-time difference gives a PH-free descriptive group contrast over the post-landmark horizon."
+                    )
                 ),
                 "evidence_ids": [],
                 "review_risk": (
                     "Interpretation depends on proportional-hazards diagnostics and residual confounding remains possible."
                     if headline_hr_authorized
-                    else "The RMST contrast is unadjusted and observational; do not recover or quote the source-table hazard ratio as a constant headline effect."
+                    else (
+                        "Interval-specific hazard ratios remain observational sensitivities and do not establish a causal ventilation effect."
+                        if promotes_time_varying
+                        else "The RMST contrast is unadjusted and observational; do not recover or quote the source-table hazard ratio as a constant headline effect."
+                    )
                 ),
             },
             {
@@ -582,14 +651,20 @@ def _render_figure(
             "landmark_risk_set_flow.csv",
             "landmark_ph_diagnostics.csv",
             *(("landmark_rmst_summary.csv",) if rmst_table is not None else ()),
+            *(
+                ("landmark_time_varying_cox_summary.csv",)
+                if time_varying_table is not None
+                else ()
+            ),
         ),
         statistics_note=(
             "Kaplan-Meier estimates are unadjusted and use the post-landmark clock; "
             "their direction can differ from the covariate-adjusted Cox estimate. "
             "The Cox model reports a Wald 95% confidence interval and a Schoenfeld "
             "residual audit. The constant hazard-ratio estimate is replaced by "
-            "an unadjusted restricted-mean survival-time difference whenever "
-            "the signed PH policy rejects reportability."
+            "prespecified interval-specific coefficients when available and an "
+            "unadjusted restricted-mean survival-time difference whenever the "
+            "signed PH policy rejects reportability."
         ),
         image_integrity_note="All plotted values are rendered from digest-bound upstream result tables.",
     )
@@ -623,6 +698,7 @@ def run_landmark_survival_suite(
     from ...figures.base import km_estimate
     from ...methods.ph_schoenfeld import ph_test
     from ...methods.rmst import rmst, rmst_difference
+    from ...methods.time_varying_cox import fit_piecewise_time_varying_cox
 
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSurvivalRuntimeAuthority):
@@ -727,9 +803,9 @@ def run_landmark_survival_suite(
                 "stage": stage,
                 "count": int(count),
                 "source_denominator": int(len(working)),
-                "percent_of_source": 100.0 * count / len(working)
-                if len(working)
-                else None,
+                "percent_of_source": (
+                    100.0 * count / len(working) if len(working) else None
+                ),
                 "excluded_since_prior_stage": (
                     0 if index == 0 else int(risk_rows[index - 1][1] - count)
                 ),
@@ -919,6 +995,24 @@ def run_landmark_survival_suite(
             ]
         )
 
+    time_varying_table = None
+    if sealed.time_varying_effect_method is not None:
+        time_varying_table = fit_piecewise_time_varying_cox(
+            model_frame,
+            duration_col=sealed.derived_time_column,
+            event_col=sealed.derived_event_column,
+            covariates=covariates,
+            interval_cutpoints=sealed.time_varying_interval_cutpoints_days,
+            exposure_col=sealed.derived_exposure_column,
+        )
+        exposure_intervals = time_varying_table.loc[time_varying_table["is_exposure"]]
+        if len(exposure_intervals) != (
+            len(sealed.time_varying_interval_cutpoints_days) + 1
+        ):
+            raise ValueError(
+                "landmark survival time-varying result lacks every exposure interval"
+            )
+
     out_dir.mkdir(parents=True, exist_ok=True)
     table_one_path = out_dir / "landmark_table_one.csv"
     risk_path = out_dir / "landmark_risk_set_flow.csv"
@@ -926,6 +1020,7 @@ def run_landmark_survival_suite(
     cox_path = out_dir / "landmark_cox_summary.csv"
     ph_path = out_dir / "landmark_ph_diagnostics.csv"
     rmst_path = out_dir / "landmark_rmst_summary.csv"
+    time_varying_path = out_dir / "landmark_time_varying_cox_summary.csv"
     analysis_path = out_dir / "landmark_analysis_cohort.parquet"
     table_one.to_csv(table_one_path, index=False)
     risk_flow.to_csv(risk_path, index=False)
@@ -934,6 +1029,8 @@ def run_landmark_survival_suite(
     ph_table.to_csv(ph_path, index=False)
     if rmst_table is not None:
         rmst_table.to_csv(rmst_path, index=False)
+    if time_varying_table is not None:
+        time_varying_table.to_csv(time_varying_path, index=False)
     analysis.to_parquet(analysis_path, index=False)
     receipt = {
         "schema_version": "easyicu.landmark_survival_runtime_receipt/1",
@@ -964,6 +1061,10 @@ def run_landmark_survival_suite(
         "ph_exposure_p_value": exposure_p,
         "ph_status": ph_status,
         "non_ph_alternative": sealed.non_ph_alternative,
+        "time_varying_effect_method": sealed.time_varying_effect_method,
+        "time_varying_interval_cutpoints_days": list(
+            sealed.time_varying_interval_cutpoints_days
+        ),
         "rmst_difference_days": (
             None
             if rmst_table is None
@@ -991,6 +1092,8 @@ def run_landmark_survival_suite(
     }
     if sealed.rmst_product is not None:
         output_files[sealed.rmst_product] = rmst_path.name
+    if sealed.time_varying_cox_product is not None:
+        output_files[sealed.time_varying_cox_product] = time_varying_path.name
     return {
         "status": "ok",
         "analysis_family": "survival",
@@ -1014,6 +1117,10 @@ def run_landmark_survival_suite(
         "hazard_ratio_ci_high": float(primary_row["ci_high"]),
         "proportional_hazards_status": ph_status,
         "non_ph_alternative": sealed.non_ph_alternative,
+        "time_varying_effect_method": sealed.time_varying_effect_method,
+        "time_varying_interval_cutpoints_days": list(
+            sealed.time_varying_interval_cutpoints_days
+        ),
         "rmst_difference_days": (
             None
             if rmst_table is None
@@ -1038,6 +1145,7 @@ def run_landmark_survival_figure(
     source_paths: Mapping[str, Path],
     authority: LandmarkSurvivalRuntimeAuthority | Mapping[str, Any],
     out_dir: Path,
+    time_varying_table: Any | None = None,
 ) -> dict[str, Any]:
     """Render only from the digest-bound result tables the authority declares."""
 
@@ -1060,6 +1168,10 @@ def run_landmark_survival_figure(
     }
     if sealed.rmst_product is not None:
         source_filename_by_product[sealed.rmst_product] = "landmark_rmst_summary.csv"
+    if sealed.time_varying_cox_product is not None:
+        source_filename_by_product[sealed.time_varying_cox_product] = (
+            "landmark_time_varying_cox_summary.csv"
+        )
     copied_sources: list[str] = []
     for product in sealed.figure_input_products:
         source = Path(source_paths[product]).resolve()
@@ -1075,6 +1187,9 @@ def run_landmark_survival_figure(
         km_table=pd.DataFrame(km_table),
         cox_row=primary.iloc[0].to_dict(),
         rmst_table=None if rmst_table is None else pd.DataFrame(rmst_table),
+        time_varying_table=(
+            None if time_varying_table is None else pd.DataFrame(time_varying_table)
+        ),
         risk_flow=pd.DataFrame(risk_flow),
         ph_table=pd.DataFrame(ph_table),
         sealed=sealed,
@@ -1089,6 +1204,7 @@ def run_landmark_survival_figure(
     ph_rejected = any(status.startswith("violation_") for status in ph_statuses)
     promotes_rmst = bool(
         ph_rejected
+        and time_varying_table is None
         and sealed.non_ph_alternative == "unadjusted_rmst_difference"
         and sealed.rmst_product is not None
         and rmst_table is not None
@@ -1107,7 +1223,11 @@ def run_landmark_survival_figure(
                 "promoted_effect_measure": (
                     "restricted_mean_survival_time_difference"
                     if promotes_rmst
-                    else sealed.effect_measure
+                    else (
+                        "interval_specific_hazard_ratio"
+                        if ph_rejected and time_varying_table is not None
+                        else sealed.effect_measure
+                    )
                 ),
                 "source_sha256": {
                     product: hashlib.sha256(
@@ -1177,6 +1297,7 @@ def landmark_survival_figure_executor_code(
             km_table=bindings[{sealed.km_product!r}].frame,
             cox_table=bindings[{sealed.cox_product!r}].frame,
             rmst_table={f"bindings[{sealed.rmst_product!r}].frame" if sealed.rmst_product is not None else "None"},
+            time_varying_table={f"bindings[{sealed.time_varying_cox_product!r}].frame" if sealed.time_varying_cox_product is not None else "None"},
             risk_flow=bindings[{sealed.risk_set_product!r}].frame,
             ph_table=bindings[{sealed.ph_product!r}].frame,
             source_paths={{key: value.path for key, value in bindings.items()}},
