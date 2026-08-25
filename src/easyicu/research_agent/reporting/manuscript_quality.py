@@ -189,6 +189,30 @@ def repair_reader_structure_from_existing_prose(
 
     repaired = str(manuscript or "")
     repairs: list[Mapping[str, str]] = []
+
+    rounded_count = 0
+    for section in _READER_FACING_SECTIONS:
+        body = _sections(repaired).get(section)
+        if body is None:
+            continue
+
+        def round_display(match: re.Match[str]) -> str:
+            nonlocal rounded_count
+            rounded_count += 1
+            return f"{float(match.group(0)):.3f}".rstrip("0").rstrip(".")
+
+        rounded = _OVERPRECISE_DECIMAL_RE.sub(round_display, body)
+        if rounded != body:
+            repaired = _replace_section_body(repaired, section, rounded)
+    if rounded_count:
+        repairs.append(
+            {
+                "code": "MANUSCRIPT_NUMERIC_DISPLAY_ROUNDED",
+                "source": "existing_evidence_bound_numeric_prose",
+                "count": str(rounded_count),
+            }
+        )
+
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
     if abstract is not None and not re.search(
@@ -250,6 +274,47 @@ def repair_reader_structure_from_existing_prose(
                 {
                     "code": "MANUSCRIPT_CONCLUSION_RESTORED",
                     "source": "existing_results_evidence_sentence",
+                }
+            )
+
+    section_map = _sections(repaired)
+    abstract = section_map.get("Abstract")
+    if abstract is not None and not re.search(
+        r"\*\*Conclusions:\*\*\s+\S+", abstract, flags=re.I
+    ):
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
+        results_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if paragraph.casefold().startswith("**results:**")
+            ),
+            None,
+        )
+        unlabeled_index = next(
+            (
+                index
+                for index in range(len(paragraphs) - 1, -1, -1)
+                if results_index is not None
+                and index > results_index
+                and _has_prose(paragraphs[index])
+                and not re.match(r"\*\*[A-Za-z ]+:\*\*", paragraphs[index])
+            ),
+            None,
+        )
+        if unlabeled_index is not None:
+            paragraphs[unlabeled_index] = (
+                "**Conclusions:** " + paragraphs[unlabeled_index]
+            )
+            repaired = _replace_section_body(
+                repaired,
+                "Abstract",
+                "\n\n".join(paragraphs),
+            )
+            repairs.append(
+                {
+                    "code": "MANUSCRIPT_ABSTRACT_CONCLUSIONS_RELABELED",
+                    "source": "existing_post_results_abstract_prose",
                 }
             )
 
