@@ -1226,14 +1226,33 @@ def _render_or_resume_writer_scaffold(
         )
 
     prior_scaffold, migration_detail = migration_scaffold
-    scaffold, repaired_section_keys = writer.repair_existing(
-        prior_scaffold,
-        context=agent_context,
-        evidence_ids=preferred_evidence_names,
-        evidence_digest=writer_evidence_digest,
-        literature_digest=literature_digest,
-        administrative_authority=administrative_authority,
-    )
+    try:
+        scaffold, repaired_section_keys = writer.repair_existing(
+            prior_scaffold,
+            context=agent_context,
+            evidence_ids=preferred_evidence_names,
+            evidence_digest=writer_evidence_digest,
+            literature_digest=literature_digest,
+            administrative_authority=administrative_authority,
+        )
+    except Exception as exc:
+        findings.append(
+            ValidationFinding(
+                validator="writer_resume",
+                severity="error",
+                message=(
+                    "Writer quality migration failed; the last digest-verified "
+                    "non-empty scaffold was preserved and remains unpromoted."
+                ),
+                evidence_ids=[migration_detail["source_evidence_id"]],
+                detail={
+                    **migration_detail,
+                    "reason_code": "WRITER_QUALITY_MIGRATION_FAILED_PRIOR_PRESERVED",
+                    "exception_type": type(exc).__name__,
+                },
+            )
+        )
+        return prior_scaffold
     findings.append(
         ValidationFinding(
             validator="writer_resume",
