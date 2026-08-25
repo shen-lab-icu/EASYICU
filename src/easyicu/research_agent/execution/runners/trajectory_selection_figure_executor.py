@@ -21,6 +21,7 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...figures.display_labels import display_label
 from ...schema import AnalysisStep
 from .typed_input_binding import load_typed_input
 
@@ -245,8 +246,8 @@ def run_trajectory_selection_figure(
     fig, (ax_bic, ax_availability) = plt.subplots(
         1,
         2,
-        figsize=(183 / 25.4, 92 / 25.4),
-        gridspec_kw={"width_ratios": [0.9, 1.35]},
+        figsize=(183 / 25.4, 88 / 25.4),
+        gridspec_kw={"width_ratios": [0.94, 1.30]},
     )
     ax_bic.plot(
         selection["n_clusters"],
@@ -282,22 +283,8 @@ def run_trajectory_selection_figure(
     ax_bic.set_ylabel("Information criterion")
     ax_bic.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
     ax_bic.set_title("Prespecified candidate-grid assessment", loc="left", pad=5)
-    ax_bic.grid(color=palette["neutral_light"], linewidth=0.55)
     if "aic" in selection.columns:
         ax_bic.legend(frameon=False, fontsize=5.8, loc="upper right")
-    ax_bic.text(
-        0.04,
-        0.05,
-        (
-            "Boundary selected\nsolution not authorised"
-            if failed_closed
-            else "Interior candidate selected;\nstability remains separate"
-        ),
-        transform=ax_bic.transAxes,
-        color=palette["red"] if failed_closed else palette["blue"],
-        fontsize=6.4,
-        va="bottom",
-    )
 
     concepts: list[str] = []
     windows: list[str] = []
@@ -328,7 +315,7 @@ def run_trajectory_selection_figure(
         [f"{window.replace('_', '–')} h" for window in windows]
     )
     ax_availability.set_yticks(range(len(concepts)))
-    ax_availability.set_yticklabels([value.replace("_", " ") for value in concepts])
+    ax_availability.set_yticklabels([display_label(value) for value in concepts])
     ax_availability.set_xlabel("Prespecified ICU time window")
     ax_availability.set_title("Observed coordinate availability", loc="left", pad=5)
     for row_index in range(len(concepts)):
@@ -345,9 +332,21 @@ def run_trajectory_selection_figure(
             )
     colourbar = fig.colorbar(heatmap, ax=ax_availability, fraction=0.045, pad=0.04)
     colourbar.set_label("Available (%)")
-    add_panel_label(ax_bic, "A", x=-0.20, y=1.06)
-    add_panel_label(ax_availability, "B", x=-0.18, y=1.06)
-    fig.subplots_adjust(left=0.10, right=0.96, bottom=0.18, top=0.86, wspace=0.42)
+    add_panel_label(ax_bic, "a", x=-0.16, y=1.05, fontsize=8.0)
+    add_panel_label(ax_availability, "b", x=-0.15, y=1.05, fontsize=8.0)
+    status_text = (
+        "Fail closed: the minimum occurred at the upper candidate boundary; no trajectory-class solution is authorised."
+        if failed_closed
+        else "Interior candidate selected; stability and external reproducibility remain separate requirements."
+    )
+    fig.text(
+        0.10,
+        0.035,
+        status_text,
+        fontsize=6.2,
+        color=palette["red"] if failed_closed else palette["blue"],
+    )
+    fig.subplots_adjust(left=0.10, right=0.96, bottom=0.24, top=0.86, wspace=0.38)
 
     if failed_closed:
         core_claim = (
@@ -374,10 +373,10 @@ def run_trajectory_selection_figure(
         core_claim=core_claim,
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=92.0,
+        height_mm=88.0,
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": "a",
                 "title": "Prespecified candidate-grid assessment",
                 "role": "phenotype_structure",
                 "claim": selection_claim,
@@ -389,7 +388,7 @@ def run_trajectory_selection_figure(
                 },
             },
             {
-                "panel_id": "B",
+                "panel_id": "b",
                 "title": "Observed coordinate availability",
                 "role": "data_quality",
                 "claim": (

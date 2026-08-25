@@ -273,25 +273,27 @@ def _render_figure(
         make_figure_contract,
         save_publication_figure,
     )
+    from ...figures.display_labels import display_label
 
     palette = apply_publication_style()
-    fig = plt.figure(figsize=(183 / 25.4, 142 / 25.4), constrained_layout=False)
+    fig = plt.figure(figsize=(183 / 25.4, 150 / 25.4), constrained_layout=False)
     grid = fig.add_gridspec(
-        3,
+        4,
         2,
-        width_ratios=(1.5, 1.0),
-        height_ratios=(1.0, 1.0, 1.0),
+        width_ratios=(1.42, 1.0),
+        height_ratios=(1.0, 0.85, 0.85, 0.46),
         left=0.09,
         right=0.975,
         top=0.93,
-        bottom=0.12,
-        wspace=0.42,
-        hspace=0.62,
+        bottom=0.10,
+        wspace=0.38,
+        hspace=0.72,
     )
-    ax_km = fig.add_subplot(grid[:, 0])
+    ax_km = fig.add_subplot(grid[:3, 0])
+    ax_risk = fig.add_subplot(grid[3, 0], sharex=ax_km)
     ax_hr = fig.add_subplot(grid[0, 1])
-    ax_flow = fig.add_subplot(grid[1, 1])
-    ax_ph = fig.add_subplot(grid[2, 1])
+    ax_flow = fig.add_subplot(grid[1:3, 1])
+    ax_ph = fig.add_subplot(grid[3, 1])
     labels = {
         0: sealed.comparator_group_label,
         1: sealed.exposed_group_label,
@@ -313,8 +315,34 @@ def _render_figure(
     ax_km.set_ylabel("Survival probability")
     ax_km.set_title("Unadjusted landmark Kaplan-Meier survival", loc="left")
     ax_km.legend(loc="lower left", fontsize=6.4)
-    ax_km.grid(axis="y", color=palette["neutral_light"], linewidth=0.55)
-    add_panel_label(ax_km, "A", x=-0.09)
+    add_panel_label(ax_km, "a", x=-0.09, fontsize=8.0)
+
+    horizon = sealed.endpoint_horizon_days - sealed.landmark_hours / 24.0
+    risk_times = np.linspace(0.0, horizon, 5)
+    risk_rows: list[list[str]] = []
+    for value in (0, 1):
+        group = km_table.loc[km_table["exposure_group"].eq(value)].sort_values(
+            "time_from_landmark_days"
+        )
+        counts: list[str] = []
+        for time_point in risk_times:
+            eligible = group.loc[group["time_from_landmark_days"].le(time_point)]
+            counts.append(str(int((eligible.iloc[-1] if not eligible.empty else group.iloc[0])["at_risk"])))
+        risk_rows.append(counts)
+    ax_risk.axis("off")
+    table = ax_risk.table(
+        cellText=risk_rows,
+        rowLabels=[labels[0], labels[1]],
+        colLabels=[f"{value:g}" for value in risk_times],
+        cellLoc="center",
+        rowLoc="right",
+        bbox=[0.0, 0.0, 1.0, 1.0],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(5.7)
+    for cell in table.get_celld().values():
+        cell.set_linewidth(0.0)
+    ax_risk.text(-0.02, 0.98, "Number at risk", transform=ax_risk.transAxes, fontsize=6.2, fontweight="bold", va="top")
 
     ph_statuses = {
         str(value).strip()
@@ -398,7 +426,7 @@ def _render_figure(
             ha="left",
             va="bottom",
         )
-    add_panel_label(ax_hr, "B", x=-0.16, y=1.05)
+    add_panel_label(ax_hr, "b", x=-0.16, y=1.05, fontsize=8.0)
 
     display = risk_flow.tail(4).copy()
     display_labels = {
@@ -434,7 +462,7 @@ def _render_figure(
     ax_flow.invert_yaxis()
     ax_flow.set_xlabel(f"{sealed.analysis_unit_label} (n)")
     ax_flow.set_title("Risk-set accounting", loc="left")
-    add_panel_label(ax_flow, "C", x=-0.16, y=1.05)
+    add_panel_label(ax_flow, "c", x=-0.16, y=1.05, fontsize=8.0)
 
     ph_display = ph_table.copy()
     required_ph_columns = {"covariate", "p_value", "declared_alpha"}
@@ -463,7 +491,7 @@ def _render_figure(
     ph_display["neg_log10_p"] = -np.log10(ph_display["p_value"])
     ph_display = ph_display.sort_values("neg_log10_p", ascending=True)
     ph_labels = [
-        "Global" if value == "global" else str(value).replace("_", " ")
+        "Global" if value == "global" else display_label(value)
         for value in ph_display["covariate"]
     ]
     y_ph = np.arange(len(ph_display))
@@ -478,7 +506,7 @@ def _render_figure(
     ax_ph.set_yticks(y_ph, ph_labels, fontsize=5.3)
     ax_ph.set_xlabel(r"Schoenfeld test $-\log_{10}(p)$")
     ax_ph.set_title("Proportional-hazards diagnostics", loc="left")
-    add_panel_label(ax_ph, "D", x=-0.16, y=1.05)
+    add_panel_label(ax_ph, "d", x=-0.16, y=1.05, fontsize=8.0)
 
     contract = make_figure_contract(
         figure_id="landmark_survival_suite",
@@ -493,7 +521,7 @@ def _render_figure(
         ),
         panels=[
             {
-                "panel_id": "A",
+                "panel_id": "a",
                 "title": "Unadjusted landmark Kaplan-Meier survival",
                 "role": "temporal_absolute_risk",
                 "chart_type": "kaplan_meier_curve",
@@ -502,7 +530,7 @@ def _render_figure(
                 "review_risk": "This is an observational landmark comparison and does not identify a causal exposure effect.",
             },
             {
-                "panel_id": "B",
+                "panel_id": "b",
                 "title": (
                     "Adjusted Cox association"
                     if headline_hr_authorized
@@ -529,7 +557,7 @@ def _render_figure(
                 ),
             },
             {
-                "panel_id": "C",
+                "panel_id": "c",
                 "title": "Risk-set accounting",
                 "role": "cohort_accounting",
                 "chart_type": "cohort_flow",
@@ -538,7 +566,7 @@ def _render_figure(
                 "review_risk": "Excluded prevalent or timing-unknown exposure rows define the supported estimand boundary.",
             },
             {
-                "panel_id": "D",
+                "panel_id": "d",
                 "title": "Proportional-hazards diagnostics",
                 "role": "diagnostics",
                 "chart_type": "schoenfeld_plot",

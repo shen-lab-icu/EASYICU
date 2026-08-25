@@ -21,6 +21,7 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...figures.display_labels import display_label
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
@@ -239,7 +240,12 @@ def _continuous_exposure_label(column: str) -> str:
         if token.endswith(suffix):
             name = token[: -len(suffix)]
             return f"{_label(name).title()} ({unit})"
-    return _label(column).title()
+    token = re.sub(r"_(max|min|mean|median|first|last|value)$", "", token)
+    clinical_names = {
+        "lact": "Lactate",
+        "bili": "Bilirubin",
+    }
+    return clinical_names.get(token, _label(token).title())
 
 
 def run_landmark_association_figure(
@@ -314,9 +320,19 @@ def run_landmark_association_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
+    fig = plt.figure(figsize=(183 / 25.4, 132 / 25.4), constrained_layout=True)
+    grid = fig.add_gridspec(
+        2,
+        3,
+        width_ratios=(1.0, 1.0, 0.86),
+        height_ratios=(1.12, 0.88),
+    )
+    ax_curve = fig.add_subplot(grid[0, :2])
+    ax_context = fig.add_subplot(grid[0, 2])
+    ax_robustness = fig.add_subplot(grid[1, :2])
+    ax_process = fig.add_subplot(grid[1, 2])
 
-    ax = axes[0, 0]
+    ax = ax_curve
     display_curve = curve.sort_values(exposure_column, kind="stable")
     x = pd.to_numeric(display_curve[exposure_column]).to_numpy(dtype=float)
     y = pd.to_numeric(display_curve["adjusted_odds_ratio"]).to_numpy(dtype=float)
@@ -328,7 +344,12 @@ def run_landmark_association_figure(
     references = pd.to_numeric(
         display_curve[reference_column], errors="coerce"
     ).dropna()
-    exposure_label = _continuous_exposure_label(exposure_column)
+    source_exposure = (
+        str(risk["exposure"].dropna().iloc[0])
+        if "exposure" in risk.columns and not risk["exposure"].dropna().empty
+        else exposure_column
+    )
+    exposure_label = _continuous_exposure_label(source_exposure)
     if references.nunique() == 1:
         reference = float(references.iloc[0])
         exposure_label = (
@@ -338,10 +359,10 @@ def run_landmark_association_figure(
         )
     ax.set_xlabel(exposure_label)
     ax.set_ylabel("Adjusted odds ratio")
-    ax.set_title("Landmark association curve", loc="left", pad=12)
-    add_panel_label(ax, "A", x=-0.12, y=1.04)
+    ax.set_title("Adjusted landmark association", loc="left", pad=7)
+    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=8.0)
 
-    ax = axes[0, 1]
+    ax = ax_context
     group_column = "group_value" if "group_value" in shown_risk.columns else "label"
     display = shown_risk.copy()
     display["group_key"] = display[group_column].astype(str)
@@ -406,11 +427,11 @@ def run_landmark_association_figure(
     )
     ax.invert_yaxis()
     ax.set_xlabel("Percent")
-    ax.set_title("Measurement state and outcome risk", loc="left", pad=12)
+    ax.set_title("Measurement context", loc="left", pad=7)
     ax.legend(frameon=False, fontsize=5.4, loc="lower right")
-    add_panel_label(ax, "B", x=-0.12, y=1.04)
+    add_panel_label(ax, "b", x=-0.15, y=1.04, fontsize=8.0)
 
-    ax = axes[1, 0]
+    ax = ax_robustness
     total_specs = pd.to_numeric(robustness["total_specs"]).to_numpy(dtype=float)
     converged_specs = pd.to_numeric(robustness["converged_specs"]).to_numpy(
         dtype=float
@@ -421,39 +442,45 @@ def run_landmark_association_figure(
         or (converged_specs > total_specs).any()
     ):
         raise ValueError("robustness specification counts do not nest")
-    convergence_pct = 100.0 * converged_specs / total_specs
     positions = np.arange(len(robustness))
-    ax.barh(positions, convergence_pct, color=palette["blue_soft"])
-    for position, pct, low_value, high_value in zip(
+    for position, total, converged, low_value, high_value in zip(
         positions,
-        convergence_pct,
+        total_specs,
+        converged_specs,
         pd.to_numeric(robustness["range_low"]),
         pd.to_numeric(robustness["range_high"]),
         strict=True,
     ):
+        ax.plot(
+            [float(low_value), float(high_value)],
+            [position, position],
+            color=palette["blue"],
+            linewidth=2.2,
+            solid_capstyle="round",
+        )
+        ax.scatter(
+            [(float(low_value) + float(high_value)) / 2.0],
+            [position],
+            color=palette["blue"],
+            s=14,
+            zorder=3,
+        )
         ax.text(
-            min(float(pct) + 2.0, 98.0),
+            float(high_value),
             position,
-            f"range {low_value:.2f}–{high_value:.2f}",
+            f"  {int(converged)}/{int(total)} fitted",
             va="center",
-            ha="right" if pct > 80 else "left",
+            ha="left",
             fontsize=5.7,
         )
-    ax.set_yticks(positions, [_label(value) for value in robustness["axis"]])
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Converged specifications (%)")
-    ax.set_title("Sensitivity execution audit", loc="left", pad=12)
-    ax.text(
-        0.0,
-        -0.18,
-        "Estimate ranges are within-axis; estimands may differ.",
-        transform=ax.transAxes,
-        fontsize=5.4,
-        color=palette["neutral"],
-    )
-    add_panel_label(ax, "C", x=-0.12, y=1.04)
+    ax.set_yticks(positions, [display_label(value) for value in robustness["axis"]])
+    if (robustness[["range_low", "range_high"]] > 0).all().all():
+        ax.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+    ax.set_xlabel("Reported estimate range")
+    ax.set_title("Prespecified sensitivity analyses", loc="left", pad=7)
+    add_panel_label(ax, "c", x=-0.08, y=1.04, fontsize=8.0)
 
-    ax = axes[1, 1]
+    ax = ax_process
     denominator = pd.to_numeric(process["n_total"])
     numerator = pd.to_numeric(process["measured_one_n"])
     if (
@@ -466,12 +493,12 @@ def run_landmark_association_figure(
     positions = np.arange(len(process))
     ax.barh(positions, pct, color=palette["blue_soft"])
     ax.set_yticks(
-        positions, [_label(value) for value in process["concept"]], fontsize=5.8
+        positions, [display_label(value) for value in process["concept"]], fontsize=5.8
     )
     ax.set_xlim(0, 100)
     ax.set_xlabel("Measured at least once (%)")
-    ax.set_title("Measurement process", loc="left", pad=12)
-    add_panel_label(ax, "D", x=-0.12, y=1.04)
+    ax.set_title("Measurement availability", loc="left", pad=7)
+    add_panel_label(ax, "d", x=-0.15, y=1.04, fontsize=8.0)
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
     panels = landmark_association_composite_panels(profile)
@@ -482,7 +509,7 @@ def run_landmark_association_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=178.0,
+        height_mm=132.0,
         panels=[
             {
                 "panel_id": panel.panel_id,

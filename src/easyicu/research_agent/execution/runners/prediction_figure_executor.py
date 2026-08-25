@@ -262,10 +262,20 @@ def run_prediction_figure(
         source_files.append(filename)
 
     palette = apply_publication_style(font_size=7.0)
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
+    fig = plt.figure(figsize=(183 / 25.4, 150 / 25.4), constrained_layout=True)
+    grid = fig.add_gridspec(
+        3,
+        3,
+        width_ratios=(1.0, 1.0, 0.88),
+        height_ratios=(1.0, 1.0, 0.82),
+    )
+    ax_calibration = fig.add_subplot(grid[:2, :2])
+    ax_roc = fig.add_subplot(grid[0, 2])
+    ax_pr = fig.add_subplot(grid[1, 2])
+    ax_decision = fig.add_subplot(grid[2, :])
 
     fpr, tpr, _ = roc_curve(outcomes.to_numpy(dtype=int), probabilities.to_numpy())
-    ax = axes[0, 0]
+    ax = ax_roc
     ax.plot(fpr, tpr, color=palette["blue"], linewidth=1.6)
     ax.plot([0, 1], [0, 1], "--", color="#777777", linewidth=0.8)
     ax.set(xlabel="False-positive rate", ylabel="True-positive rate")
@@ -274,12 +284,12 @@ def run_prediction_figure(
         loc="left",
         pad=12,
     )
-    add_panel_label(ax, "A", x=-0.12, y=1.04)
+    add_panel_label(ax, "b", x=-0.18, y=1.04, fontsize=8.0)
 
     precision, recall, _ = precision_recall_curve(
         outcomes.to_numpy(dtype=int), probabilities.to_numpy()
     )
-    ax = axes[0, 1]
+    ax = ax_pr
     ax.plot(recall, precision, color=palette["orange"], linewidth=1.6)
     ax.axhline(float(outcomes.mean()), linestyle="--", color="#777777", linewidth=0.8)
     ax.set(xlabel="Recall", ylabel="Precision")
@@ -288,17 +298,38 @@ def run_prediction_figure(
         loc="left",
         pad=12,
     )
-    add_panel_label(ax, "B", x=-0.12, y=1.04)
+    add_panel_label(ax, "c", x=-0.18, y=1.04, fontsize=8.0)
 
     bins = calibration.loc[calibration["row_role"].astype(str).eq("calibration_bin")]
     if bins.empty:
         raise RuntimeError("calibration assessment has no calibration bins")
     predicted = _prediction_finite_series(bins, "mean_predicted_probability")
     observed = _prediction_finite_series(bins, "observed_event_rate")
-    ax = axes[1, 0]
-    ax.plot([0, 1], [0, 1], "--", color="#777777", linewidth=0.8)
+    ax = ax_calibration
+    calibration_limit = min(
+        1.0,
+        max(
+            0.2,
+            np.ceil(
+                10.0 * max(float(predicted.max()), float(observed.max()))
+            )
+            / 10.0,
+        ),
+    )
+    ax.plot(
+        [0, calibration_limit],
+        [0, calibration_limit],
+        "--",
+        color="#777777",
+        linewidth=0.8,
+    )
     ax.plot(predicted, observed, "o-", color=palette["blue"], linewidth=1.3)
-    ax.set(xlim=(0, 1), ylim=(0, 1), xlabel="Predicted risk", ylabel="Observed risk")
+    ax.set(
+        xlim=(0, calibration_limit),
+        ylim=(0, calibration_limit),
+        xlabel="Predicted risk",
+        ylabel="Observed risk",
+    )
     calibration_summary = calibration.loc[
         calibration["row_role"].astype(str).eq("summary")
     ]
@@ -316,7 +347,20 @@ def run_prediction_figure(
         loc="left",
         pad=12,
     )
-    add_panel_label(ax, "C", x=-0.12, y=1.04)
+    validation_n = int(performance.iloc[0]["validation_n"])
+    development_n = int(performance.iloc[0]["development_n"])
+    ax.text(
+        0.03,
+        0.97,
+        f"Development n={development_n:,}  |  Validation n={validation_n:,}\n"
+        "Patient overlap = 0; internal validation only",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=6.2,
+        color=palette["neutral"],
+    )
+    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=8.0)
 
     for column in (
         "threshold",
@@ -332,7 +376,7 @@ def run_prediction_figure(
         raise RuntimeError(
             "prediction clinical-utility thresholds must be unique and increasing"
         )
-    ax = axes[1, 1]
+    ax = ax_decision
     ax.plot(
         decision_curve["threshold"],
         decision_curve["net_benefit_model"],
@@ -360,25 +404,30 @@ def run_prediction_figure(
     ax.set_ylabel("Net benefit")
     ax.set_title("Decision-curve analysis", loc="left", pad=12)
     ax.legend(fontsize=6.0, frameon=False)
-    add_panel_label(ax, "D", x=-0.12, y=1.04)
+    add_panel_label(ax, "d", x=-0.055, y=1.04, fontsize=8.0)
 
     evidence = {key: item.evidence_id for key, item in bound.items()}
     panel_specs = (
         (
-            "A",
+            "b",
             "Discrimination",
             "model_performance",
             (PREDICTION_SCORES_PRODUCT, PREDICTION_PERFORMANCE_PRODUCT),
         ),
         (
-            "B",
+            "c",
             "Precision-recall",
             "model_performance",
             (PREDICTION_SCORES_PRODUCT, PREDICTION_PERFORMANCE_PRODUCT),
         ),
-        ("C", "Calibration", "calibration", (PREDICTION_CALIBRATION_PRODUCT,)),
         (
-            "D",
+            "a",
+            "Calibration",
+            "calibration",
+            (PREDICTION_CALIBRATION_PRODUCT,),
+        ),
+        (
+            "d",
             "Decision-curve analysis",
             "clinical_utility",
             (PREDICTION_CLINICAL_UTILITY_PRODUCT,),
@@ -392,7 +441,7 @@ def run_prediction_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=178.0,
+        height_mm=150.0,
         panels=[
             {
                 "panel_id": panel_id,
