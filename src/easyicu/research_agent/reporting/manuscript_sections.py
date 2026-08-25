@@ -177,7 +177,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "never use an unlabelled `point estimate`, `score`, or `range`.\n"
             "  When the machine digest supplies a host-authorized scientific "
             "claim, use its exact `{claim:<step>.<claim>}` token as a standalone "
-            "sentence instead of independently wording the direction.\n"
+            "sentence instead of independently wording the direction. Emit only "
+            "the token for that sentence; do not copy, paraphrase, prefix, or "
+            "append the internal claim text shown in the digest.\n"
             "### Sensitivity and subgroup analyses\n"
             "  Multiple-testing result, subgroup heterogeneity, E-value if "
             "available. When the machine digest supplies a "
@@ -202,7 +204,10 @@ MANUSCRIPT_SECTION_SPECS = (
             "Target: 400-600 words. Every numeric claim MUST have an "
             "{evidence:id} citation. Use reader-facing clinical labels; do not "
             "expose raw snake_case identifiers, internal reason codes, or "
-            "host/runtime terminology."
+            "host/runtime terminology. Use publication-scale precision: whole "
+            "numbers for counts, two decimal places for percentages, and no more "
+            "than three decimal places for effect estimates and confidence "
+            "limits."
         ),
         max_tokens=2048,
         required_subsections=(
@@ -543,7 +548,12 @@ def repair_existing_manuscript_sections(
                 + "results, change executed methods, repeat excerpts, expose raw ids, "
                 + "or mention this repair. Use clinical concepts and analysis windows. "
                 + "Name the exact digest metric instead of `point estimate` or numeric "
-                + "`robustness`; omit unsupported sentences. Preserve required headings."
+                + "`robustness`; omit unsupported sentences. Preserve required headings "
+                + "and every expected Table/Figure callout supported by the evidence. "
+                + "Use whole numbers for counts, two decimals for percentages, and no "
+                + "more than three decimals for effect estimates and confidence limits. "
+                + "For a `{claim:<step>.<claim>}` sentence, emit only the token and never "
+                + "copy or paraphrase the internal claim text from the digest."
                 + (
                     " This is the final bounded repair attempt; verify every "
                     "offending term is absent before returning."
