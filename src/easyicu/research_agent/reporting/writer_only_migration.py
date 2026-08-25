@@ -102,6 +102,8 @@ class WriterOnlyMigrationResult:
     deterministic_literature_repairs: tuple[Mapping[str, Any], ...]
     authority_repaired_section_keys: tuple[str, ...]
     authority_filtered_section_keys: tuple[str, ...]
+    removed_unresolved_evidence_refs: tuple[str, ...]
+    removed_unresolved_evidence_token_count: int
 
 
 @dataclass(frozen=True)
@@ -231,6 +233,31 @@ def _claim_policy_projection(
     return filtered.scaffold, {
         key: tuple(values) for key, values in by_section.items()
     }
+
+
+def _remove_unresolved_evidence_tokens(
+    run_dir: Path,
+    manuscript: str,
+) -> tuple[str, tuple[str, ...], int]:
+    """Remove unresolved tokens before sentence-level authority filtering."""
+
+    authority = _read_only_authority(run_dir)
+    records_by_id = {record.evidence_id for record in authority.records}
+    removed: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        ref = match.group(1)
+        evidence_id = authority.aliases.get(ref, ref)
+        if evidence_id in records_by_id:
+            return match.group(0)
+        removed.append(ref)
+        return ""
+
+    cleaned = _EVIDENCE_TOKEN.sub(replace, manuscript)
+    cleaned = re.sub(r"[ \t]+(?=\n)", "", cleaned)
+    cleaned = re.sub(r" {2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([.,;:!?])", r"\1", cleaned)
+    return cleaned, tuple(dict.fromkeys(removed)), len(removed)
 
 
 def prepare_writer_only_migration(
@@ -425,6 +452,14 @@ def repair_writer_only(
         deterministic_literature_repairs.append(
             {"kind": "methods_reporting_citation", **method_repair}
         )
+    (
+        manuscript,
+        removed_unresolved_evidence_refs,
+        removed_unresolved_evidence_token_count,
+    ) = _remove_unresolved_evidence_tokens(
+        prepared.source_run_dir,
+        manuscript,
+    )
     authority_repaired: list[str] = []
     authority_filtered: list[str] = []
     for _attempt in range(2):
@@ -510,6 +545,10 @@ def repair_writer_only(
         deterministic_literature_repairs=tuple(deterministic_literature_repairs),
         authority_repaired_section_keys=tuple(authority_repaired),
         authority_filtered_section_keys=tuple(authority_filtered),
+        removed_unresolved_evidence_refs=removed_unresolved_evidence_refs,
+        removed_unresolved_evidence_token_count=(
+            removed_unresolved_evidence_token_count
+        ),
     )
 
 
@@ -698,6 +737,12 @@ def publish_writer_only_result(
         ),
         "authority_filtered_section_keys": list(
             result.authority_filtered_section_keys
+        ),
+        "removed_unresolved_evidence_refs": list(
+            result.removed_unresolved_evidence_refs
+        ),
+        "removed_unresolved_evidence_token_count": (
+            result.removed_unresolved_evidence_token_count
         ),
         "removed_unknown_literature_keys": list(
             prepared.removed_unknown_literature_keys
