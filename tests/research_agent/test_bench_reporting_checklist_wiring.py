@@ -131,6 +131,9 @@ def test_planner_only_human_review_pause_is_a_completed_planning_outcome(
     assert score["execution_complete"] is False
     assert bench._score_execution_failures({"aware": score}) == []
 
+    hard_stop = SimpleNamespace(finish=lambda **kwargs: pytest.fail("must stay paused"))
+    bench._finish_task_on_execution_outcome(hard_stop, {"aware": score})
+
 
 def test_scientific_contract_binds_primary_cohort_mode(monkeypatch, tmp_path):
     captured = _run_and_capture(

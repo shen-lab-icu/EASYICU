@@ -1350,6 +1350,16 @@ def _score_planner_only_pending(
 def _finish_task_on_execution_outcome(task_hard_stop: Any, score: Any) -> None:
     """Close the ledger task on what the run did, not on the call returning."""
 
+    scored_arms = [
+        score.get(label)
+        for label in ("aware", "naive")
+        if isinstance(score, Mapping) and isinstance(score.get(label), Mapping)
+    ]
+    if scored_arms and all(arm.get("planner_only_complete") for arm in scored_arms):
+        # The pipeline has already paused the ledger at the durable human-review
+        # checkpoint. Preserve that state; a pause is neither failure nor a
+        # completed execution and must not be terminalized by the bench wrapper.
+        return
     failures = _score_execution_failures(score)
     if failures:
         task_hard_stop.finish(score=score, error="; ".join(failures)[:1800])
