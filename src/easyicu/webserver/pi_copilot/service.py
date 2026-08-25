@@ -1833,23 +1833,13 @@ class PiCopilotService:
             return [PiCopilotService._browser_artifact_payload(item) for item in value]
         return value
 
-    def get_research_artifact(
-        self,
-        *,
-        project_id: str,
-        run_id: str,
-        artifact_name: str,
-    ) -> Dict[str, Any]:
-        """Resolve a run artefact through project authority without exposing paths."""
+    def _research_run_row(self, project_id: str, run_id: str) -> Mapping[str, Any]:
+        """Resolve one run through the project binding authority."""
 
         clean_project = self._assert_project_initialized(project_id)
         study_context_id = self.project_store.resolve(clean_project)
         clean_run = str(run_id or "").strip()
-        clean_artifact = str(artifact_name or "").strip()
-        history = agent_runs.list_run_history(
-            study_id=study_context_id,
-            limit=200,
-        )
+        history = agent_runs.list_run_history(study_id=study_context_id, limit=200)
         row = next(
             (
                 item
@@ -1865,6 +1855,20 @@ class PiCopilotService:
                 status_code=404,
                 details={"run_id": clean_run},
             )
+        return row
+
+    def get_research_artifact(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        artifact_name: str,
+    ) -> Dict[str, Any]:
+        """Resolve a run artefact through project authority without exposing paths."""
+
+        clean_run = str(run_id or "").strip()
+        clean_artifact = str(artifact_name or "").strip()
+        row = self._research_run_row(project_id, clean_run)
         loaded = agent_runs.read_run_artifact(
             str(row.get("project_dir") or ""),
             clean_artifact,
@@ -1939,6 +1943,79 @@ class PiCopilotService:
             },
         }
 
+    def get_research_evidence_preview(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        evidence_id: str,
+        expected_sha256: str,
+    ) -> Dict[str, Any]:
+        """Return one digest-pinned evidence preview without exposing host paths."""
+
+        clean_run = str(run_id or "").strip()
+        clean_evidence = str(evidence_id or "").strip()
+        clean_sha = str(expected_sha256 or "").strip().lower()
+        row = self._research_run_row(project_id, clean_run)
+        project_dir = str(row.get("project_dir") or "")
+        loaded = agent_runs.read_run_evidence_preview(
+            project_dir, clean_evidence, clean_sha
+        )
+        if not loaded.get("ok"):
+            code = str(loaded.get("error") or "evidence_preview_unavailable")
+            raise PiCopilotError(
+                code,
+                str(loaded.get("message") or "The evidence preview is unavailable."),
+                status_code=404 if code == "evidence_preview_not_found" else 409,
+                details={"evidence_id": clean_evidence},
+            )
+        privacy_scan = loaded.get("privacy_scan") or {}
+        if not privacy_scan.get("passed"):
+            raise PiCopilotError(
+                "pi_research_evidence_privacy_blocked",
+                "The evidence preview was withheld by the EasyICU privacy scan.",
+                status_code=409,
+                details={"evidence_id": clean_evidence},
+            )
+        payload = self._browser_artifact_payload(loaded.get("payload") or {})
+        encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        if len(encoded) > MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES:
+            raise PiCopilotError(
+                "pi_research_evidence_preview_too_large",
+                "The evidence projection exceeds the bounded browser contract.",
+                status_code=413,
+                details={"evidence_id": clean_evidence, "bytes": len(encoded)},
+            )
+        review = agent_runs.read_run_review(project_dir)
+        if not review.get("ok"):
+            raise PiCopilotError(
+                str(
+                    review.get("error") or "pi_research_evidence_governance_unavailable"
+                ),
+                "The run governance state is unavailable for this evidence.",
+                status_code=409,
+                details={"evidence_id": clean_evidence},
+            )
+        governance = agent_runs.project_artifact_governance(review)
+        if not governance.get("ok"):
+            raise PiCopilotError(
+                str(
+                    governance.get("error") or "pi_research_evidence_governance_invalid"
+                ),
+                "The run governance state is invalid for this evidence.",
+                status_code=409,
+                details={"evidence_id": clean_evidence},
+            )
+        return {
+            "ok": True,
+            "run_id": clean_run,
+            "payload": payload,
+            "privacy": {"passed": True},
+            "governance": {
+                key: value for key, value in governance.items() if key != "ok"
+            },
+        }
+
     def get_research_document(
         self,
         *,
@@ -1948,26 +2025,9 @@ class PiCopilotService:
     ) -> Dict[str, Any]:
         """Return one fixed, receipt-bound manuscript document for preview."""
 
-        clean_project = self._assert_project_initialized(project_id)
-        study_context_id = self.project_store.resolve(clean_project)
         clean_run = str(run_id or "").strip()
         clean_name = str(document_name or "").strip()
-        history = agent_runs.list_run_history(study_id=study_context_id, limit=200)
-        row = next(
-            (
-                item
-                for item in (history.get("runs") or [])
-                if isinstance(item, Mapping) and item.get("run_id") == clean_run
-            ),
-            None,
-        )
-        if row is None:
-            raise PiCopilotError(
-                "pi_research_run_not_found",
-                "The requested EasyICU run does not belong to this research project.",
-                status_code=404,
-                details={"run_id": clean_run},
-            )
+        row = self._research_run_row(project_id, clean_run)
         project_dir = str(row.get("project_dir") or "")
         loaded = agent_runs.read_run_artifact_bytes(project_dir, clean_name)
         if not loaded.get("ok"):

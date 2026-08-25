@@ -355,3 +355,22 @@ def test_prior_writer_failure_stays_active_without_current_bound_manuscript() ->
 
     assert active == [finding]
     assert superseded == []
+
+
+def test_current_numeric_audit_supersedes_prior_manuscript_numeric_error() -> None:
+    finding = ValidationFinding(
+        validator="manuscript_numeric_auditor",
+        severity="error",
+        message=(
+            "Manuscript AUROC claim 0.772 is footnoted to an obsolete owner."
+        ),
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids=set(),
+        gate_state={"manuscript_numeric_audit_clean": True},
+    )
+
+    assert active == []
+    assert superseded == [finding]

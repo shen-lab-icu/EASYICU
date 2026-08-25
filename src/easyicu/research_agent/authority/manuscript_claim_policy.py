@@ -381,7 +381,7 @@ def missing_scientific_claims_in_results(
     return tuple(
         claim.claim_ref
         for claim in claims
-        if " ".join(claim.render_text().split()) not in normalized_results
+        if " ".join(claim.render_reader_text().split()) not in normalized_results
     )
 
 
@@ -563,7 +563,7 @@ def expand_scientific_claim_tokens(
             out.append(f"{structure_prefix}[scientific claim missing: {claim_ref}]")
             continue
         out.append(
-            f"{structure_prefix}{claim.render_text()} "
+            f"{structure_prefix}{claim.render_reader_text()} "
             f"{{evidence:{claim.evidence_id}}}"
         )
     return ScientificClaimExpansion(
