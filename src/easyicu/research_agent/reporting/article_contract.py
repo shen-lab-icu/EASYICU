@@ -258,9 +258,12 @@ def build_article_analysis_contract(
             and module.module_id != "distribution_prevalence"
         ]
     for module in display_modules:
-        if module.tier == "supplementary":
+        # Data-quality evidence remains mandatory even when its visual
+        # placement is supplementary. Other supplementary suggestions stay
+        # outside the executable article contract as before.
+        if module.tier == "supplementary" and module.role != "data_quality":
             continue
-        required = module.tier in _REQUIRED_TIERS
+        required = module.tier in _REQUIRED_TIERS or module.role == "data_quality"
         requirement = ArticleDisplayRequirement(
             module_id=module.module_id,
             role=module.role,
@@ -592,8 +595,9 @@ def roles_covered_by_plan(
             or step_id in primary_lineage_ids
             for role in roles
         }
-        if requirement.role in eligible_runtime_roles or _plan_outputs_match_requirement(
-            candidate_outputs, requirement
+        if (
+            requirement.role in eligible_runtime_roles
+            or _plan_outputs_match_requirement(candidate_outputs, requirement)
         ):
             covered.add(requirement.role)
     return covered

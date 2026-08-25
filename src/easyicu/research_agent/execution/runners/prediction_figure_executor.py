@@ -54,6 +54,13 @@ _REQUIRED_COLUMNS = {
             "auroc",
             "average_precision",
             "brier_score",
+            "repeated_split_n",
+            "repeated_split_auroc_mean",
+            "repeated_split_auroc_sd",
+            "repeated_split_average_precision_mean",
+            "repeated_split_average_precision_sd",
+            "repeated_split_brier_mean",
+            "repeated_split_brier_sd",
         }
     ),
     PREDICTION_INTERNAL_VALIDATION_PRODUCT: frozenset(
@@ -272,7 +279,7 @@ def run_prediction_figure(
     ax_calibration = fig.add_subplot(grid[:2, :2])
     ax_roc = fig.add_subplot(grid[0, 2])
     ax_pr = fig.add_subplot(grid[1, 2])
-    ax_decision = fig.add_subplot(grid[2, :])
+    ax_variability = fig.add_subplot(grid[2, :])
 
     fpr, tpr, _ = roc_curve(outcomes.to_numpy(dtype=int), probabilities.to_numpy())
     ax = ax_roc
@@ -310,10 +317,7 @@ def run_prediction_figure(
         1.0,
         max(
             0.2,
-            np.ceil(
-                10.0 * max(float(predicted.max()), float(observed.max()))
-            )
-            / 10.0,
+            np.ceil(10.0 * max(float(predicted.max()), float(observed.max()))) / 10.0,
         ),
     )
     ax.plot(
@@ -376,7 +380,53 @@ def run_prediction_figure(
         raise RuntimeError(
             "prediction clinical-utility thresholds must be unique and increasing"
         )
-    ax = ax_decision
+    repeated_split_n = int(performance.iloc[0]["repeated_split_n"])
+    if repeated_split_n < 2:
+        raise RuntimeError("prediction figure requires repeated patient-level splits")
+    metric_labels = ("AUROC", "Average precision", "Brier score")
+    metric_means = np.asarray(
+        [
+            performance.iloc[0]["repeated_split_auroc_mean"],
+            performance.iloc[0]["repeated_split_average_precision_mean"],
+            performance.iloc[0]["repeated_split_brier_mean"],
+        ],
+        dtype=float,
+    )
+    metric_sds = np.asarray(
+        [
+            performance.iloc[0]["repeated_split_auroc_sd"],
+            performance.iloc[0]["repeated_split_average_precision_sd"],
+            performance.iloc[0]["repeated_split_brier_sd"],
+        ],
+        dtype=float,
+    )
+    if not np.isfinite(metric_means).all() or not np.isfinite(metric_sds).all():
+        raise RuntimeError("repeated-split performance summaries are not finite")
+    if (metric_sds < 0).any():
+        raise RuntimeError("repeated-split standard deviations must be non-negative")
+    ax = ax_variability
+    positions = np.arange(len(metric_labels))
+    ax.errorbar(
+        metric_means,
+        positions,
+        xerr=metric_sds,
+        fmt="o",
+        color=palette["blue"],
+        capsize=2.5,
+    )
+    ax.set_yticks(positions, metric_labels)
+    ax.invert_yaxis()
+    ax.set_xlabel("Mean performance (error bars: SD)")
+    ax.set_title(
+        f"Repeated patient-level split variability (n={repeated_split_n})",
+        loc="left",
+        pad=12,
+    )
+    add_panel_label(ax, "d", x=-0.055, y=1.04, fontsize=8.0)
+
+    decision_fig, ax = plt.subplots(
+        figsize=(183 / 25.4, 75 / 25.4), constrained_layout=True
+    )
     ax.plot(
         decision_curve["threshold"],
         decision_curve["net_benefit_model"],
@@ -404,7 +454,7 @@ def run_prediction_figure(
     ax.set_ylabel("Net benefit")
     ax.set_title("Decision-curve analysis", loc="left", pad=12)
     ax.legend(fontsize=6.0, frameon=False)
-    add_panel_label(ax, "d", x=-0.055, y=1.04, fontsize=8.0)
+    add_panel_label(ax, "a", x=-0.055, y=1.04, fontsize=8.0)
 
     evidence = {key: item.evidence_id for key, item in bound.items()}
     panel_specs = (
@@ -428,9 +478,9 @@ def run_prediction_figure(
         ),
         (
             "d",
-            "Decision-curve analysis",
-            "clinical_utility",
-            (PREDICTION_CLINICAL_UTILITY_PRODUCT,),
+            "Repeated split variability",
+            "validation",
+            (PREDICTION_PERFORMANCE_PRODUCT, PREDICTION_INTERNAL_VALIDATION_PRODUCT),
         ),
     )
     contract = make_figure_contract(
@@ -447,6 +497,16 @@ def run_prediction_figure(
                 "panel_id": panel_id,
                 "title": title,
                 "role": role,
+                "article_role": role,
+                "chart_type": (
+                    "calibration_curve"
+                    if role == "calibration"
+                    else "metric_dot_interval"
+                    if role == "validation"
+                    else "roc_curve"
+                    if panel_id == "b"
+                    else "precision_recall_curve"
+                ),
                 "claim": (
                     "This panel renders only the named validation products; it "
                     "does not establish external validity or clinical benefit."
@@ -464,11 +524,10 @@ def run_prediction_figure(
         ],
         source_data=source_files,
         statistics_note=(
-            "ROC, precision-recall and decision-curve coordinates are deterministic "
+            "ROC and precision-recall coordinates are deterministic "
             "projections of the sealed validation scores. Calibration bins, "
-            "intercept, slope, Brier score and split counts come from independently "
-            "registered tables. Net benefit is exploratory because no clinical "
-            "threshold was externally authorized. Results remain analysis_only and "
+            "intercept, slope, Brier score and repeated patient-level split summaries "
+            "come from independently registered tables. Results remain analysis_only and "
             "do not demonstrate transportability or clinical benefit."
         ),
     )
@@ -480,10 +539,59 @@ def run_prediction_figure(
         dpi=300,
     )
     plt.close(fig)
+    supplementary_product = f"{figure_product}_supplementary_decision_curve"
+    supplementary_contract = make_figure_contract(
+        figure_id=f"figure:{supplementary_product}",
+        core_claim=(
+            "Exploratory net benefit across candidate thresholds is shown as a "
+            "supporting diagnostic, not as evidence of clinical benefit."
+        ),
+        archetype="quantitative_grid",
+        width_mm=183.0,
+        height_mm=75.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Decision-curve analysis",
+                "role": "clinical_utility",
+                "article_role": "clinical_utility",
+                "chart_type": "decision_curve",
+                "claim": (
+                    "This panel renders the registered clinical-utility table; "
+                    "thresholds were not externally authorized."
+                ),
+                "evidence_ids": [evidence[PREDICTION_CLINICAL_UTILITY_PRODUCT]],
+                "metadata": {
+                    "placement": "supplementary",
+                    "source_products": [PREDICTION_CLINICAL_UTILITY_PRODUCT],
+                    "source_data": ["clinical_utility_source_data.csv"],
+                },
+            }
+        ],
+        source_data=["clinical_utility_source_data.csv"],
+        statistics_note=(
+            "Net-benefit coordinates come from the registered exploratory "
+            "clinical-utility table. This supporting figure does not establish "
+            "external validity, clinical benefit, or an authorized action threshold."
+        ),
+    )
+    supplementary_outputs = save_publication_figure(
+        decision_fig,
+        out_dir / supplementary_product,
+        contract=supplementary_contract,
+        formats=("png", "svg", "pdf", "tiff"),
+        dpi=300,
+    )
+    plt.close(decision_fig)
     for item in bound.values():
         if sha256_file(item.path) != item.sha256:
             raise RuntimeError(f"typed figure input changed: {item.input_key}")
-    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
+    figure_files = [
+        path.name
+        for output_group in (outputs, supplementary_outputs)
+        for key, path in output_group.items()
+        if key != "contract"
+    ]
     summary = {
         "step_id": step_id,
         "status": "ok",
@@ -509,7 +617,11 @@ def run_prediction_figure(
         "figure_files": figure_files,
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
-        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "contract_files": [
+            f"{figure_product}.figure_contract.json",
+            f"{supplementary_product}.figure_contract.json",
+        ],
+        "supplementary_figure_path": f"{supplementary_product}.png",
         "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
     }
     (out_dir / "step_summary.json").write_text(

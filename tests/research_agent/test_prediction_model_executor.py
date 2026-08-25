@@ -325,6 +325,9 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     assert summary["paper_authorization_allowed"] is False
     for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
         assert (figure_dir / f"prediction_figure.{suffix}").is_file()
+        assert (
+            figure_dir / f"prediction_figure_supplementary_decision_curve.{suffix}"
+        ).is_file()
     contract = json.loads(
         (figure_dir / "prediction_figure.figure_contract.json").read_text("utf-8")
     )
@@ -332,8 +335,19 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
         "model_performance",
         "model_performance",
         "calibration",
-        "clinical_utility",
+        "validation",
     ]
+    assert contract["panels"][-1]["metadata"]["chart_type"] == ("metric_dot_interval")
+    supplementary_contract = json.loads(
+        (
+            figure_dir
+            / "prediction_figure_supplementary_decision_curve.figure_contract.json"
+        ).read_text("utf-8")
+    )
+    assert supplementary_contract["panels"][0]["role"] == "clinical_utility"
+    assert supplementary_contract["panels"][0]["metadata"]["placement"] == (
+        "supplementary"
+    )
     decision_curve = pd.read_csv(figure_dir / "clinical_utility_source_data.csv")
     assert list(decision_curve.columns) == [
         "source_table",
@@ -395,9 +409,7 @@ def test_prediction_figure_shape_binds_registered_clinical_utility() -> None:
         *core_inputs,
         "table:clinical_utility",
     ]
-    assert findings[0].detail["reason"] == (
-        "prediction_figure_clinical_utility_bound"
-    )
+    assert findings[0].detail["reason"] == ("prediction_figure_clinical_utility_bound")
 
 
 def test_prediction_owner_executes_exact_complete_case_robustness_spec(
