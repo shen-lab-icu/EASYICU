@@ -516,7 +516,10 @@ def repair_existing_manuscript_sections(
 ) -> tuple[str, tuple[str, ...]]:
     """Regenerate only section owners named by deterministic quality errors."""
 
-    from .manuscript_quality import repair_reader_structure_from_existing_prose
+    from .manuscript_quality import (
+        repair_reader_structure_from_existing_prose,
+        repair_registered_display_callouts,
+    )
 
     manuscript, _structural_repairs = repair_reader_structure_from_existing_prose(
         manuscript
@@ -527,6 +530,11 @@ def repair_existing_manuscript_sections(
     display_labels = expected_manuscript_display_labels(
         tuple(common.get("evidence_ids") or ())
     )
+    manuscript, _display_repairs = repair_registered_display_callouts(
+        manuscript,
+        expected_display_labels=display_labels,
+    )
+    sections = _existing_scientific_sections(manuscript)
     repaired_keys: list[str] = []
     scientific = _assemble_scientific_sections(sections)
     for attempt in range(2):
@@ -649,13 +657,21 @@ def repair_named_manuscript_sections(
         sections[spec.key] = repaired
         repaired_keys.append(spec.key)
     scientific = _assemble_scientific_sections(sections)
-    from .manuscript_quality import expected_manuscript_display_labels
+    from .manuscript_quality import (
+        expected_manuscript_display_labels,
+        repair_registered_display_callouts,
+    )
 
+    display_labels = expected_manuscript_display_labels(
+        tuple(common.get("evidence_ids") or ())
+    )
+    scientific, _display_repairs = repair_registered_display_callouts(
+        scientific,
+        expected_display_labels=display_labels,
+    )
     remaining = _remaining_quality_errors(
         scientific,
-        expected_display_labels=expected_manuscript_display_labels(
-            tuple(common.get("evidence_ids") or ())
-        ),
+        expected_display_labels=display_labels,
     )
     if remaining:
         raise ManuscriptReaderQualityContractError(findings=remaining)
@@ -732,10 +748,17 @@ def render_manuscript_sections(
         sections[spec.key] = section
 
     scientific = _assemble_scientific_sections(sections)
-    from .manuscript_quality import repair_reader_structure_from_existing_prose
+    from .manuscript_quality import (
+        repair_reader_structure_from_existing_prose,
+        repair_registered_display_callouts,
+    )
 
     scientific, _structural_repairs = repair_reader_structure_from_existing_prose(
         scientific
+    )
+    scientific, _display_repairs = repair_registered_display_callouts(
+        scientific,
+        expected_display_labels=display_labels,
     )
     sections = _existing_scientific_sections(scientific)
     for spec, error_detail in _quality_repair_specs(
