@@ -102,3 +102,52 @@ decisions cite only reviewed card keys, the 2-4 candidates remain genuinely
 distinct, and the planner-only path stops without Execute. Because this canary
 already consumed six Provider calls, no same-turn rerun was made after the
 repair.
+
+## Final checkpoint closure on 2026-08-25
+
+The repaired canary is now closed on exact pushed HEAD
+`ea744a8a1b4b3fb4080c2f04c16dd8b853c1f274`. The source checkpoint remained
+`progressive_planner_checkpoint_007.json`, file SHA-256
+`95e8466bdceeaab360fe330a6b0a3de7cc7893ba1e7fdab9a127513279c50664`.
+The final resume completed both remaining progressive materializations on the
+host, made zero Provider calls, and stopped at the governed human-review gate
+in 1.2 seconds.
+
+- final run: `/Volumes/外置硬盘/easyicu_data/qualification12_planner_canary_ea744a8_hostfinish_20260825/MG04/aware/run_20260825T133047_b853d9`
+- progressive materializations: `8/8`; checkpoint sequence: `009`
+- final shaped AnalysisPlan: 11 steps; no missing or failed plan steps
+- candidates: 3; selected/rejected: 1/2; selected literature decisions: 7/7
+- selected reviewed cards: `pmc9362765_mg04`, `pmc8116825_mg04`
+- Execute/Coder/Writer/result activity: none
+- exact image: not built
+
+The deterministic association figure contract was revised from cohort/Table 1
+context to the article-grade evidence hierarchy required by the association
+figure strategy: absolute risk, primary adjusted estimate, robustness matrix,
+and robustness ranges. Cohort accounting, Table 1, and measurement quality
+remain separately planned. The synthetic renderer test exported source CSV,
+PNG, SVG, PDF, TIFF, and FigureContract; this test image is not a study result.
+The plan review now covers every required article role and six accepted chart
+families. Focused validation ended at `223 passed`; the adjacent context,
+hard-stop, and planner/bench matrices also passed in the preceding commits.
+
+The canary is a planning-contract success but not a scientific-readiness pass.
+`scientific_plan_review.json` scores 78 and remains `changes_required` with:
+
+1. blocker `OUTCOME_DEFINITION_UNRESOLVED`;
+2. `DIRECT_COMPARATOR_NOT_ESTABLISHED`;
+3. `ADJUSTMENT_SET_NOT_USER_CONFIRMED`;
+4. `CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED`;
+5. `NOVELTY_NOT_ESTABLISHED`.
+
+These are input/design-authority gaps, not reasons to add MG04-specific prompt
+logic. Qualification12 execution, an exact execution image, and Held-out27
+remain unopened until generic owner-issued endpoint, adjustment/time-role,
+functional-form sensitivity, screened comparator, and novelty-positioning
+contracts are present.
+
+Across the successful billed Planner segments after the original repair, 13
+completed calls reported 139,735 tokens at the frozen conservative estimate of
+`$1.87409`. The final exact-head replay reported zero tokens and `$0`. Separate
+timeout, HTTP 401, and pre-transport hard-stop attempts reported no usage and
+are not included in the billed total.
