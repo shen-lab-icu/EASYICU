@@ -12,6 +12,7 @@ author the scientific sentence.
 from __future__ import annotations
 
 import math
+import re
 from typing import Literal
 
 from pydantic import (
@@ -163,6 +164,100 @@ class ScientificClaim(ScientificClaimDraft):
             f"{adjustment}{self.exposure} {relation} {self.outcome} in "
             f"{self.population} ({estimate_text}; analysis role: "
             f"{self.analysis_role})."
+        )
+
+    def render_reader_text(self) -> str:
+        """Render the same claim as publication-scale reader-facing prose.
+
+        ``render_text`` remains the exact machine-authority representation used
+        to validate Writer claim tokens.  This projection deliberately omits
+        runtime roles, analysis-set identifiers, and raw variable names while
+        retaining the claim type, direction, estimate, interval, and causal
+        ceiling.  The immutable claim object and its evidence coordinates are
+        unchanged.
+        """
+
+        def display_number(value: float) -> str:
+            return f"{value:.3f}".rstrip("0").rstrip(".")
+
+        def estimand_interval() -> tuple[float, float, float] | None:
+            match = re.search(
+                r"\bwas\s+([-+]?\d+(?:\.\d+)?)\s+"
+                r"(?:percent|percentage points)\s+\("
+                r"[^)]*?\bCI,\s+([-+]?\d+(?:\.\d+)?)\s+to\s+"
+                r"([-+]?\d+(?:\.\d+)?)",
+                self.estimand,
+                flags=re.I,
+            )
+            if match is None:
+                return None
+            point, lower, upper = (float(value) for value in match.groups())
+            return point, lower, upper
+
+        if self.claim_type == "descriptive_absolute_risk":
+            values = (
+                (self.point_estimate, self.interval_lower, self.interval_upper)
+                if self.point_estimate is not None
+                else estimand_interval()
+            )
+            if values is None:
+                return (
+                    f"In the prespecified group, the {self.estimand}; this was "
+                    "a descriptive, unadjusted, noncausal estimate."
+                )
+            point, lower, upper = values
+            assert lower is not None
+            assert upper is not None
+            return (
+                "The observed absolute risk in the prespecified group was "
+                f"{display_number(point)}% (95% CI, "
+                f"{display_number(lower)}% to "
+                f"{display_number(upper)}%); this was a "
+                "descriptive, unadjusted, noncausal estimate."
+            )
+        if self.claim_type == "descriptive_risk_difference":
+            values = (
+                (self.point_estimate, self.interval_lower, self.interval_upper)
+                if self.point_estimate is not None
+                else estimand_interval()
+            )
+            if values is None:
+                return (
+                    f"The {self.estimand}; this was a descriptive, unadjusted, "
+                    "noncausal contrast."
+                )
+            point, lower, upper = values
+            assert lower is not None
+            assert upper is not None
+            return (
+                "The prespecified unadjusted risk difference between groups "
+                f"was {display_number(point)} percentage points "
+                f"(95% CI, {display_number(lower)} to "
+                f"{display_number(upper)}); this was a "
+                "descriptive, unadjusted, noncausal contrast."
+            )
+
+        if self.direction == "positive":
+            relation = "was positively associated with"
+        elif self.direction == "negative":
+            relation = "was negatively associated with"
+        else:
+            relation = "showed no clear association with"
+        estimate_text = self.estimand
+        if self.point_estimate is not None:
+            assert self.interval_lower is not None
+            assert self.interval_upper is not None
+            estimate_text = (
+                f"{self.estimand}, {display_number(self.point_estimate)}; "
+                f"95% CI, {display_number(self.interval_lower)} to "
+                f"{display_number(self.interval_upper)}"
+            )
+        model_prefix = (
+            "In the covariate-adjusted model, " if self.adjusted_for else ""
+        )
+        return (
+            f"{model_prefix}the prespecified exposure {relation} the study "
+            f"outcome in the prespecified analysis cohort ({estimate_text})."
         )
 
 
