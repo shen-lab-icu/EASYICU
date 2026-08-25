@@ -1908,6 +1908,65 @@ def test_resume_plan_skips_newest_revision_without_locked_cohort(
     assert selected_path == verified_run_evidence_path(run_dir, original_record)
 
 
+def test_resume_plan_accepts_implicit_primary_cohort_lock(tmp_path: Path) -> None:
+    from easyicu.research_agent.cohort.schema import write_locked_cohort_definition
+    from easyicu.research_agent.authority.plan_scope import (
+        _serializable_plan_scientific_scope_signature,
+    )
+
+    run_dir = tmp_path / "run_implicit_primary_cohort"
+    run_dir.mkdir()
+    step = AnalysisStep(
+        step_id="01_summary",
+        intent="Summarize the canonical implicit primary cohort.",
+        planned_analysis_role="auxiliary",
+        expected_outputs=["table:summary"],
+    )
+    plan = AnalysisPlan(
+        research_question="Resume the implicit primary cohort.",
+        cohort=None,
+        steps=[step],
+    )
+    plan_path = run_dir / "analysis_plan.json"
+    plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    evidence = EvidenceStore(run_dir)
+    plan_record = evidence.register_file(
+        kind="log",
+        description="Plan using the canonical implicit primary cohort.",
+        source_path=plan_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    write_locked_cohort_definition(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version=None,
+        llm_signature="test",
+    )
+
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=run_dir,
+        resume_state={
+            "per_step_records": [
+                {
+                    "step_id": step.step_id,
+                    "status": "ok",
+                    "planned_analysis_role": step.planned_analysis_role,
+                    "analysis_request": {"step": step.model_dump(mode="json")},
+                    "plan_scientific_signature": (
+                        _serializable_plan_scientific_scope_signature(plan)
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert selected == plan
+    assert selected_path == verified_run_evidence_path(run_dir, plan_record)
+
+
 def test_resume_plan_rejects_completed_role_mismatch(tmp_path: Path) -> None:
     from easyicu.research_agent.authority.plan_scope import (
         _serializable_plan_scientific_scope_signature,

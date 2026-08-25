@@ -56,6 +56,11 @@ def test_shadow_review_covers_canonical9_and_all_seven_dimensions() -> None:
     assert set(payload["dimensions"]) == EXPECTED_DIMENSIONS
     assert tuple(task["task_id"] for task in payload["tasks"]) == FIGURE2_TASK_IDS
     assert all(1 <= len(task["anchors"]) <= 2 for task in payload["tasks"])
+    assert payload["anchor_access_policy"] == {
+        "full_text_required_for_every_anchor": True,
+        "supplement_handling": "record_and_review_if_published",
+        "inaccessible_anchor_action": "replace_anchor",
+    }
 
 
 def test_shadow_review_cannot_become_a_numeric_answer_key() -> None:

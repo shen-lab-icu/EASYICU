@@ -2881,6 +2881,7 @@ def _provider_hard_stop_limits(
 ):
     from easyicu.research_agent.authority.provider_hard_stop import (
         ProviderHardStopLimits,
+        validate_provider_transport_reservation_capacity,
     )
 
     required = {
@@ -2899,7 +2900,7 @@ def _provider_hard_stop_limits(
     if present != required:
         missing = ", ".join(sorted(required - present))
         raise ValueError(f"Incomplete Provider hard-stop options: {missing}")
-    return ProviderHardStopLimits(
+    limits = ProviderHardStopLimits(
         max_provider_attempts_per_run=int(
             pipeline_options["max_provider_attempts_per_run"]
         ),
@@ -2921,6 +2922,8 @@ def _provider_hard_stop_limits(
             pipeline_options["provider_output_cost_usd_per_million_tokens"]
         ),
     )
+    validate_provider_transport_reservation_capacity(limits)
+    return limits
 
 
 def _bind_benchmark_cost_price_table(

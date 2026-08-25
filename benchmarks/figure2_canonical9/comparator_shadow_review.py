@@ -53,6 +53,16 @@ class AnchorSpec(BaseModel):
     url: str
 
 
+class AnchorAccessPolicy(BaseModel):
+    """Access requirements for evaluator-only comparison sources."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    full_text_required_for_every_anchor: bool
+    supplement_handling: Literal["record_and_review_if_published"]
+    inaccessible_anchor_action: Literal["replace_anchor"]
+
+
 class TaskAnchorProtocol(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -74,6 +84,7 @@ class ComparatorShadowReviewProtocol(BaseModel):
     review_states: tuple[str, ...]
     required_review_fields: tuple[str, ...]
     acceptance_rule: str
+    anchor_access_policy: AnchorAccessPolicy
     tasks: tuple[TaskAnchorProtocol, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -98,6 +109,8 @@ class ComparatorShadowReviewProtocol(BaseModel):
         }
         if not required_forbidden <= forbidden:
             raise ValueError("shadow-review policy does not forbid result leakage")
+        if not self.anchor_access_policy.full_text_required_for_every_anchor:
+            raise ValueError("every comparison anchor must require accessible full text")
         return self
 
     def task(self, task_id: str) -> TaskAnchorProtocol:
@@ -126,6 +139,7 @@ class AnchorSourceRecord(BaseModel):
     pmc_section_titles: tuple[str, ...] = ()
     figure_caption_count: int = Field(ge=0)
     table_count: int = Field(ge=0)
+    supplementary_material_count: int = Field(default=0, ge=0)
     abstract_sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     pmc_xml_sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     source_fingerprint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -181,6 +195,7 @@ class RunBoundShadowReview(BaseModel):
     protocol_ref: str
     protocol_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     anchor_pack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    supplement_review_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     task_id: str
     run_head: str = Field(min_length=7)
     run_image: str = Field(min_length=1)
@@ -346,6 +361,9 @@ def _parse_pmc(xml_text: str) -> dict[str, dict[str, Any]]:
             "section_titles": section_titles[:80],
             "figure_caption_count": len(article.findall(".//body//fig")),
             "table_count": len(article.findall(".//body//table-wrap")),
+            "supplementary_material_count": len(
+                article.findall(".//supplementary-material")
+            ),
             "xml_sha256": hashlib.sha256(
                 ET.tostring(article, encoding="utf-8")
             ).hexdigest(),
@@ -447,17 +465,32 @@ def hydrate_anchor_source_pack(
                 pmc_section_titles=tuple((pmc or {}).get("section_titles") or ()),
                 figure_caption_count=int((pmc or {}).get("figure_caption_count") or 0),
                 table_count=int((pmc or {}).get("table_count") or 0),
+                supplementary_material_count=int(
+                    (pmc or {}).get("supplementary_material_count") or 0
+                ),
                 abstract_sha256=source_payload["abstract_sha256"],
                 pmc_xml_sha256=source_payload["pmc_xml_sha256"],
                 source_fingerprint_sha256=canonical_json_sha256(source_payload),
             )
         )
-    return AnchorSourcePack(
+    pack = AnchorSourcePack(
         protocol_ref=protocol.protocol_ref,
         protocol_sha256=protocol_content_sha256(protocol),
         fetched_at=fetched_at or datetime.now(timezone.utc).isoformat(),
         records=tuple(records),
     )
+    if protocol.anchor_access_policy.full_text_required_for_every_anchor:
+        inaccessible = tuple(
+            record.citation_id
+            for record in pack.records
+            if not record.pmc_full_text_available
+        )
+        if inaccessible:
+            raise ComparatorShadowReviewError(
+                "comparison anchors lack accessible PMC full text and must be replaced: "
+                + ", ".join(inaccessible)
+            )
+    return pack
 
 
 def validate_run_bound_review(
@@ -485,6 +518,71 @@ def validate_run_bound_review(
     }
     if set(review.anchors) != hydrated:
         raise ComparatorShadowReviewError("review anchors are not fully hydrated")
+    validate_run_bound_review_artifacts(review)
+
+
+def validate_run_bound_review_artifacts(review: RunBoundShadowReview) -> None:
+    """Bind a review to one exact run and files that actually exist there."""
+
+    run_path = Path(review.run_path)
+    if not run_path.is_absolute() or not run_path.is_dir():
+        raise ComparatorShadowReviewError("review run_path is not an existing directory")
+    resolved_run = run_path.resolve(strict=True)
+    status_path = resolved_run / "run_status.json"
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise ComparatorShadowReviewError(
+            "review run_status.json is missing or invalid"
+        ) from exc
+    code_version = status.get("code_version")
+    actual_head = (
+        str(code_version.get("git_sha") or "")
+        if isinstance(code_version, dict)
+        else ""
+    )
+    if actual_head != review.run_head:
+        raise ComparatorShadowReviewError("review run_head differs from run_status")
+
+    lineage_path = resolved_run / "development_runtime_lineage.json"
+    if lineage_path.exists():
+        try:
+            lineage = json.loads(lineage_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            raise ComparatorShadowReviewError(
+                "review development runtime lineage is invalid"
+            ) from exc
+        image_ids = {
+            str(provenance.get("image_id") or "")
+            for step in lineage.get("steps", ())
+            if isinstance(step, dict)
+            for provenance in (step.get("provenance"),)
+            if isinstance(provenance, dict)
+        }
+        image_ids.discard("")
+        if image_ids and review.run_image not in image_ids:
+            raise ComparatorShadowReviewError(
+                "review run_image differs from development runtime lineage"
+            )
+
+    for dimension in review.dimensions:
+        for relative in dimension.run_evidence_paths:
+            candidate = Path(relative)
+            if candidate.is_absolute():
+                raise ComparatorShadowReviewError(
+                    "review evidence paths must be relative to run_path"
+                )
+            try:
+                resolved = (resolved_run / candidate).resolve(strict=True)
+                resolved.relative_to(resolved_run)
+            except (OSError, ValueError) as exc:
+                raise ComparatorShadowReviewError(
+                    f"review evidence path is missing or escapes run_path: {relative}"
+                ) from exc
+            if not resolved.is_file():
+                raise ComparatorShadowReviewError(
+                    f"review evidence path is not a file: {relative}"
+                )
 
 
 def _main() -> int:
@@ -506,6 +604,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "AnchorAccessPolicy",
     "AnchorSourcePack",
     "AnchorSourceRecord",
     "ComparatorShadowReviewError",
@@ -519,4 +618,5 @@ __all__ = [
     "load_shadow_review_protocol",
     "protocol_content_sha256",
     "validate_run_bound_review",
+    "validate_run_bound_review_artifacts",
 ]

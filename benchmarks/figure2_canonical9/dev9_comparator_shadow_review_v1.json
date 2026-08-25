@@ -1,6 +1,6 @@
 {
   "schema_version": "easyicu.dev9_comparator_shadow_review/1",
-  "protocol_ref": "easyicu.dev9_comparator_shadow_review/20260824-v1",
+  "protocol_ref": "easyicu.dev9_comparator_shadow_review/20260825-v2",
   "audience": "evaluator_only",
   "agent_visibility": "forbidden_before_execution",
   "purpose": "Use representative high-quality studies as external method and presentation anchors after each exact-head Dev9 run.",
@@ -49,12 +49,17 @@
     "cannot_prove"
   ],
   "acceptance_rule": "Every dimension must have run-bound evidence and no unowned actionable gap. A scientifically justified fail-closed result is acceptable and must not be converted into a synthetic estimate. Comparator agreement in magnitude or direction is never an acceptance condition.",
+  "anchor_access_policy": {
+    "full_text_required_for_every_anchor": true,
+    "supplement_handling": "record_and_review_if_published",
+    "inaccessible_anchor_action": "replace_anchor"
+  },
   "tasks": [
     {
       "task_id": "e1_sepsis3_prevalence_mortality",
       "anchors": [
         {"citation_id": "pmid_38905261", "url": "https://pubmed.ncbi.nlm.nih.gov/38905261/"},
-        {"citation_id": "pmid_29121281", "url": "https://pubmed.ncbi.nlm.nih.gov/29121281/"}
+        {"citation_id": "pmid_34259454", "url": "https://pubmed.ncbi.nlm.nih.gov/34259454/"}
       ],
       "focus": ["Sepsis-3 operationalization", "denominator and infection timing", "prevalence and mortality presentation"]
     },
@@ -68,7 +73,7 @@
     {
       "task_id": "e3_kdigo_gradient",
       "anchors": [
-        {"citation_id": "pmid_30819553", "url": "https://pubmed.ncbi.nlm.nih.gov/30819553/"}
+        {"citation_id": "pmid_35674748", "url": "https://pubmed.ncbi.nlm.nih.gov/35674748/"}
       ],
       "focus": ["stage gradient and trend", "length-of-stay distribution", "mortality risk and baseline renal definition"]
     },
@@ -84,7 +89,7 @@
       "task_id": "m2_mortality_prediction",
       "anchors": [
         {"citation_id": "pmid_31209213", "url": "https://pubmed.ncbi.nlm.nih.gov/31209213/"},
-        {"citation_id": "pmid_36378565", "url": "https://pubmed.ncbi.nlm.nih.gov/36378565/"}
+        {"citation_id": "pmid_32383124", "url": "https://pubmed.ncbi.nlm.nih.gov/32383124/"}
       ],
       "focus": ["patient-level split and leakage", "calibration and Brier score", "external validation and transportability"]
     },
@@ -107,7 +112,7 @@
       "task_id": "h2_vasopressor_causal",
       "anchors": [
         {"citation_id": "pmid_32059682", "url": "https://pubmed.ncbi.nlm.nih.gov/32059682/"},
-        {"citation_id": "pmid_35227959", "url": "https://pubmed.ncbi.nlm.nih.gov/35227959/"}
+        {"citation_id": "pmid_37073334", "url": "https://pubmed.ncbi.nlm.nih.gov/37073334/"}
       ],
       "focus": ["observable exposed and comparison groups", "propensity overlap and positivity", "confounding by indication and sensitivity"]
     },
