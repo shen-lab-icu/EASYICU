@@ -1426,6 +1426,54 @@ def test_writer_records_are_rebuilt_from_verified_envelope_authority(
         )
 
 
+def test_writer_binds_declared_artifact_stored_as_parquet_table(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    representation = tmp_path / "trajectory_representation.parquet"
+    representation.write_bytes(b"sealed parquet fixture")
+    envelope = normalize_step_result_shadow(
+        step_id=_UPSTREAM_STEP,
+        step_summary={
+            "status": "ok",
+            "output_files": {
+                "artifact:trajectory_representation": representation.name,
+            },
+        },
+        output_dir=tmp_path,
+        status="ok",
+    )
+    artifact_record = store.register_file(
+        kind="table",
+        description="Physical parquet backing a declared artifact product.",
+        source_path=representation,
+        produced_by_step=_UPSTREAM_STEP,
+        script_evidence_id="code_04_risk",
+        evidence_id="table_trajectory_representation_fixture",
+        producer="runner",
+        publish_aliases=False,
+    )
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    record["evidence_ids"] = [artifact_record.evidence_id, sidecar_id]
+    record["step_summary"] = {
+        "status": "ok",
+        "output_files": {
+            "artifact:trajectory_representation": representation.name,
+        },
+    }
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [record], evidence_store=store
+    )
+
+    binding = projected[0]["writer_artifact_bindings"][
+        "artifact:trajectory_representation"
+    ]
+    assert binding["kind"] == "artifact"
+    assert binding["evidence_id"] == artifact_record.evidence_id
+
+
 def test_writer_records_exclude_the_host_deterministic_probe(tmp_path: Path) -> None:
     store = EvidenceStore(tmp_path / "run")
     authority_ids = {}
