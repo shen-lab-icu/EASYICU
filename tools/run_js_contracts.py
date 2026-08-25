@@ -33,6 +33,7 @@ CONTRACTS: dict[str, list[str]] = {
     "crossdb_results_owner.test.js": ["screens-viz-crossdb-results.js"],
     "crossdb_setup_owner.test.js": ["screens-viz-crossdb-setup.js"],
     "crossdb_source_choice.test.js": ["screens-viz-crossdb-source.js"],
+    "evidence_preview_security.test.js": ["screens-guided-pi-evidence-preview.js"],
     "extraction_job_continuity.test.js": ["screens-extraction-job-continuity.js"],
     "guided_gate_state.test.js": ["screens-guided.js"],
     "guided_idea_flow.test.js": ["screens-guided-idea.js"],
