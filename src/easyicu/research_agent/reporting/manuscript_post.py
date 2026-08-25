@@ -2245,14 +2245,25 @@ def repair_single_variant_robustness_metric_prose(
     for paragraph_index in range(0, len(paragraph_parts), 2):
         sentences = re.split(r"(?<=[.!?])\s+", paragraph_parts[paragraph_index])
         for sentence_index, sentence in enumerate(sentences):
-            lowered = sentence.casefold()
+            trailing_citation = ""
+            if sentence_index + 1 < len(sentences) and re.fullmatch(
+                r"\{evidence:robustness_panel[^}]*\}",
+                sentences[sentence_index + 1].strip(),
+            ):
+                trailing_citation = sentences[sentence_index + 1].strip()
+            candidate_sentence = " ".join(
+                part for part in (sentence, trailing_citation) if part
+            )
+            lowered = candidate_sentence.casefold()
             if "{evidence:robustness_panel" not in lowered:
                 continue
             if metric_label.casefold() not in lowered and raw_metric not in lowered:
                 continue
-            if not _NUMERIC_IN_PROSE_RE.search(sentence):
+            if not _NUMERIC_IN_PROSE_RE.search(candidate_sentence):
                 continue
             sentences[sentence_index] = canonical
+            if trailing_citation:
+                sentences[sentence_index + 1] = ""
             repairs.append(
                 {
                     "source": "single_variant_robustness_panel",
@@ -2260,7 +2271,9 @@ def repair_single_variant_robustness_metric_prose(
                     "evidence_id": row.evidence_id,
                 }
             )
-        paragraph_parts[paragraph_index] = " ".join(sentences)
+        paragraph_parts[paragraph_index] = " ".join(
+            sentence for sentence in sentences if sentence
+        )
     return "".join(paragraph_parts), repairs
 
 

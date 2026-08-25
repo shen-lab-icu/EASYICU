@@ -527,17 +527,32 @@ def _all_summary_scalars(
     within a step, so a step that registers both ``auroc`` and ``test_auroc``
     contributes its primary value once.
     """
-    from ..scalar_utils import _first_present_scalar
+    from ..scalar_utils import _coerce_scalar, _flatten_scalar_dict
 
     values: List[float] = []
     for summary in summaries:
-        value = _first_present_scalar(summary, keys)
-        if value is None:
-            continue
-        try:
-            values.append(float(value))
-        except (TypeError, ValueError):
-            continue
+        flat = _flatten_scalar_dict(summary)
+        seen_paths: set[str] = set()
+        for key in keys:
+            candidates = []
+            if key in summary:
+                candidates.append((key, summary[key]))
+            candidates.extend(
+                (flat_key, flat_value)
+                for flat_key, flat_value in flat.items()
+                if flat_key.endswith(f".{key}")
+            )
+            for path, raw_value in candidates:
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                value = _coerce_scalar(raw_value)
+                if value is None:
+                    continue
+                try:
+                    values.append(float(value))
+                except (TypeError, ValueError):
+                    continue
     return values
 
 
