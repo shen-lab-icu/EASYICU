@@ -28,6 +28,15 @@ def test_manuscript_section_contract_has_fixed_publication_order() -> None:
         "limitations",
         "conclusion",
     ]
+
+
+def test_results_contract_requires_complete_non_ph_survival_reporting() -> None:
+    results = next(spec for spec in MANUSCRIPT_SECTION_SPECS if spec.key == "results")
+
+    assert "exposed and comparator RMST" in results.instruction
+    assert "signed RMST difference" in results.instruction
+    assert "every interval-specific adjusted estimate" in results.instruction
+    assert "Do not report an unauthorized constant hazard ratio" in results.instruction
     assert [spec.max_tokens for spec in MANUSCRIPT_SECTION_SPECS] == [
         256,
         1024,

@@ -183,6 +183,25 @@ def test_scaffold_to_latex_makes_bound_numbers_clickable(ra):
     )
 
 
+def test_scaffold_to_latex_repairs_bare_h1_spacing_and_scientific_notation(ra):
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+
+    rendered = scaffold_to_latex(
+        markdown=(
+            "#\n\n**Keywords:** ICU\n\n## Results\n\n"
+            "The estimate was 0.54 [result](evidence/result.json); p<1×10⁻⁵²."
+        ),
+        title="Host-owned draft title",
+    )
+
+    assert r"\title{Host-owned draft title}" in rendered
+    assert r"\paragraph{Body}" not in rendered
+    assert "\\#" not in rendered
+    assert "0.54;" in rendered
+    assert r"p\textless{}" in rendered
+    assert r"$1\times 10^{-52}$" in rendered
+
+
 def test_scaffold_to_latex_renders_grouped_citations(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
     from easyicu.research_agent.reporting.latex import scaffold_to_latex
