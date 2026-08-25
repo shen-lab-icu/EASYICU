@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from easyicu.research_agent.reporting.manuscript_quality import (
     audit_manuscript_quality,
+    repair_reader_structure_from_existing_prose,
     render_reader_manuscript,
 )
 from easyicu.research_agent.reporting.write_phase import (
@@ -181,6 +182,51 @@ def test_discussion_cannot_deny_a_reported_risk_difference() -> None:
     )
 
     assert "MANUSCRIPT_REPORTED_RESULT_DISCLAIMED" in _codes(text)
+
+
+def test_structure_repair_relabels_existing_abstract_prose() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Background:** Sepsis remains an important ICU syndrome.",
+        "Sepsis remains an important ICU syndrome {evidence:context}.",
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    assert (
+        "**Background:** Sepsis remains an important ICU syndrome "
+        "{evidence:context}." in repaired
+    )
+    assert [item["code"] for item in repairs] == ["MANUSCRIPT_ABSTRACT_LABEL_RESTORED"]
+
+
+def test_structure_repair_copies_results_evidence_to_empty_conclusion() -> None:
+    manuscript = _valid_manuscript().replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality "
+        "{evidence:primary}.",
+    )
+    manuscript = manuscript.replace(
+        "Sepsis status was associated with in-hospital mortality and requires external validation.",
+        "",
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    conclusion = repaired.split("## Conclusion", 1)[1]
+    assert "{evidence:primary}" in conclusion
+    assert [item["code"] for item in repairs] == ["MANUSCRIPT_CONCLUSION_RESTORED"]
+
+
+def test_structure_repair_does_not_invent_conclusion_without_evidence() -> None:
+    manuscript = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality and requires external validation.",
+        "",
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    assert repairs == ()
+    assert "## Conclusion\n\n" in repaired
 
 
 def test_reader_view_removes_audit_markup_but_preserves_scientific_text() -> None:
