@@ -2155,8 +2155,35 @@ class LiteratureAgent:
                 if seed_provenance is not None
                 else []
             )
-            bound_decisions = {
-                record.key: _screening_decision_for_record(
+            reviewed_cards = {
+                card.citation_key: card
+                for card in self.bound_seed.design_evidence_cards
+            }
+            reviewed_decisions = {
+                decision.citation_key: decision
+                for decision in self.bound_seed.screening_decisions
+                if decision.disposition == "include"
+                and decision.evidence_role
+                in {"direct_comparator", "design_analogue"}
+            }
+            exact_reviewed_seed = (
+                self.bound_seed.research_question.strip()
+                == context.research_question.strip()
+            )
+            bound_decisions: Dict[str, LiteratureScreeningDecision] = {}
+            for record in self.bound_seed.citations:
+                reviewed_decision = reviewed_decisions.get(record.key)
+                reviewed_card = reviewed_cards.get(record.key)
+                if (
+                    exact_reviewed_seed
+                    and reviewed_decision is not None
+                    and reviewed_card is not None
+                    and reviewed_card.evidence_role
+                    == reviewed_decision.evidence_role
+                ):
+                    bound_decisions[record.key] = reviewed_decision
+                    continue
+                bound_decisions[record.key] = _screening_decision_for_record(
                     context=context,
                     record=record,
                     source=source,
@@ -2165,8 +2192,6 @@ class LiteratureAgent:
                         or (source_queries[0] if source_queries else None)
                     ),
                 )
-                for record in self.bound_seed.citations
-            }
             screening_decisions.extend(bound_decisions.values())
             seed_identified = int(
                 (self.bound_seed.prisma or {}).get("identified")
