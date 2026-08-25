@@ -23,7 +23,7 @@ import pandas as pd
 
 from ..config import DataSourceConfig
 from ..datasource import (
-    FilterOp, FilterSpec, ICUDataSource,
+    DuckDBQueryInterrupted, FilterOp, FilterSpec, ICUDataSource,
     _duckdb_path, _enumerate_bucket_parquet_files,
 )
 from ..table import ICUTable, WinTbl
@@ -1430,6 +1430,8 @@ class ConceptResolver:
                         if verbose:
                             logger.info(f"✅ 宽表批量加载完成，加载了 {len(concepts_info_filtered)} 个概念")
                         
+                    except DuckDBQueryInterrupted:
+                        raise
                     except Exception as e:
                         logger.warning(f"宽表批量加载失败，回退到普通加载: {e}")
                         table_batch_results = {}
@@ -1603,6 +1605,8 @@ class ConceptResolver:
                                 len(covered_names),
                                 len(names),
                             )
+                except DuckDBQueryInterrupted:
+                    raise
                 except Exception as e:
                     logger.warning(f"长表批量加载失败，回退到普通加载: {e}")
                     import traceback

@@ -648,7 +648,7 @@
   function cancelExportJob() {
     if (!exportJobId || exportCancelRequested || !window.EU_API || !window.EU_API.postJSON) return;
     exportCancelRequested = true;
-    exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
+    exportProg = { phase: 'cancel', message: t('Cancel accepted. Stopping the current database query…', '已接受取消，正在停止当前数据库查询…') };
     repaint();
     window.EU_API.postJSON('/api/jobs/' + exportJobId + '/cancel', { reason: 'user_requested' })
       .catch(err => { exportErr = String(err && err.message || err); repaint(); });
@@ -1283,7 +1283,7 @@
         }
         else if (message.type === 'cancel_requested') {
           exportCancelRequested = true;
-          exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
+          exportProg = { phase: 'cancel', message: t('Cancel accepted. Stopping the current database query…', '已接受取消，正在停止当前数据库查询…') };
         } else if (message.type === 'end') {
           if (message.status === 'done') {
             exportResult = message.result && typeof message.result === 'object' ? message.result : {};
@@ -1771,7 +1771,7 @@
     <div class="card pad" style="max-width:680px;margin:0 auto;">
       <div class="load-strip">
         ${err ? `<span style="color:var(--bad,#c0392b);">${icon('alert', 18)}</span>` : `<span class="spin accent"></span>`}
-        <div class="grow"><div style="font-weight:600;font-size:13px;">${err ? t('Extraction failed', '抽取失败') : t('Extracting feature modules…', '正在抽取特征模块…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('local-only · writing to a timestamped export folder', '仅本地 · 写入带时间戳的导出文件夹')}</div></div>
+        <div class="grow"><div style="font-weight:600;font-size:13px;">${err ? t('Extraction failed', '抽取失败') : exportCancelRequested ? t('Stopping extraction…', '正在停止抽取…') : t('Extracting feature modules…', '正在抽取特征模块…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('local-only · writing to a timestamped export folder', '仅本地 · 写入带时间戳的导出文件夹')}</div></div>
         ${tot ? `<span class="mono" style="font-size:11px;color:var(--ink-3);">${cur}/${tot}</span>` : ''}
       </div>
       ${err

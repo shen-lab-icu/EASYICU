@@ -17,10 +17,14 @@ machine. State is intentionally in-memory — a job does not outlive the process
 from __future__ import annotations
 
 import re
+import logging
 import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 _SCIENTIFIC_ACTION_ID = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
@@ -102,6 +106,8 @@ class Job:
         self.error: Optional[str] = None
         self.cancel_requested = False
         self.cancel_reason: Optional[str] = None
+        self._cancel_callbacks: Dict[int, Callable[[], None]] = {}
+        self._next_cancel_callback_id = 0
         # Some runners return a terminal user-facing result while an
         # uninterruptible reader finishes cooperatively in the background.
         # Such a job remains a real local-capacity consumer until that reader
@@ -138,6 +144,7 @@ class Job:
             )
             self.finished = time.time()
             self.status = status
+            self._cancel_callbacks.clear()
             return True
 
     def complete_from_runner(self, result: Any = None) -> bool:
@@ -154,12 +161,8 @@ class Job:
             return self.finish("failed", result=result, error=error)
 
     def request_cancel(self, reason: Optional[str] = None) -> bool:
-        """Mark this job for cooperative cancellation.
-
-        Runners check ``cancel_requested`` between phases. We do not force-kill
-        Python threads because a runner may be inside a file/database read; the
-        request is still surfaced immediately over SSE so the UI is honest.
-        """
+        """Mark this job cancelled and notify registered interrupt owners."""
+        callbacks: List[Callable[[], None]] = []
         with self._lock:
             if self.status != "running":
                 return False
@@ -169,7 +172,47 @@ class Job:
                 self._append_event_locked(
                     {"type": "cancel_requested", "reason": self.cancel_reason}
                 )
-            return True
+                callbacks = list(self._cancel_callbacks.values())
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                logger.exception("Job %s cancellation callback failed", self.id)
+        return True
+
+    def register_cancel_callback(
+        self, callback: Callable[[], None]
+    ) -> Callable[[], None]:
+        """Register one owner-provided interrupt and return its unregister hook.
+
+        The callback runs at most once for the first accepted cancellation. If
+        cancellation won the race before registration, it runs immediately.
+        """
+        callback_id: Optional[int] = None
+        run_now = False
+        with self._lock:
+            if self.status == "running" and not self.cancel_requested:
+                callback_id = self._next_cancel_callback_id
+                self._next_cancel_callback_id += 1
+                self._cancel_callbacks[callback_id] = callback
+            elif self.status == "running" and self.cancel_requested:
+                run_now = True
+
+        if run_now:
+            try:
+                callback()
+            except Exception:
+                logger.exception(
+                    "Job %s late cancellation callback failed", self.id
+                )
+
+        def unregister() -> None:
+            if callback_id is None:
+                return
+            with self._lock:
+                self._cancel_callbacks.pop(callback_id, None)
+
+        return unregister
 
     def begin_draining(self) -> None:
         with self._lock:

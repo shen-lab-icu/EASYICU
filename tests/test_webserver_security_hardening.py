@@ -751,6 +751,38 @@ def test_job_cancel_and_terminal_transition_is_atomic() -> None:
     assert completed.snapshot()["status"] == "done"
 
 
+def test_job_cancel_callbacks_run_once_and_can_be_unregistered() -> None:
+    job = Job("cancel-callbacks", "test")
+    called: list[str] = []
+
+    unregister_first = job.register_cancel_callback(
+        lambda: called.append("first")
+    )
+    unregister_first()
+    job.register_cancel_callback(lambda: called.append("second"))
+
+    assert job.request_cancel("user_requested") is True
+    assert job.request_cancel("duplicate") is True
+    assert called == ["second"]
+
+    job.register_cancel_callback(lambda: called.append("late"))
+    assert called == ["second", "late"]
+
+
+def test_job_cancel_callback_failure_does_not_block_other_callbacks() -> None:
+    job = Job("cancel-callback-error", "test")
+    called: list[str] = []
+
+    def fail_callback() -> None:
+        raise RuntimeError("callback failed")
+
+    job.register_cancel_callback(fail_callback)
+    job.register_cancel_callback(lambda: called.append("healthy"))
+
+    assert job.request_cancel("user_requested") is True
+    assert called == ["healthy"]
+
+
 def test_source_registry_serializes_updates_and_writes_atomically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

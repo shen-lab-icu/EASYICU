@@ -165,6 +165,9 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "sendPageGuideMessage" not in dock_js
     assert "document.body.appendChild(dock)" not in dock_js
     assert "Start Guided Copilot" in extraction_js
+    assert "Cancel accepted. Stopping the current database query" in extraction_js
+    assert "Stopping extraction" in extraction_js
+    assert "当前数据库读取可能会先完成" not in extraction_js
     assert "Continue in Guided Copilot" in agent_js
     assert "Open EasyICU Copilot" in help_js
 
@@ -182,7 +185,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
-    assert "js/screens-extraction.js?v=20260824-local-open1" in index_html
+    assert "js/screens-extraction.js?v=20260824-query-cancel1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 

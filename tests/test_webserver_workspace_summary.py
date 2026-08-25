@@ -3988,6 +3988,67 @@ class _ExportJob:
         self.events.append(payload)
 
 
+def test_export_runner_interrupts_current_duckdb_module_on_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import contextmanager
+
+    import easyicu.api as api_module
+    import easyicu.datasource as datasource_module
+    from easyicu.webserver.jobs import Job
+
+    @contextmanager
+    def fake_keep_cache(**_: object):
+        yield None
+
+    job = Job("cancel-current-query", "extract")
+    loaded: list[list[str]] = []
+    interrupt_calls: list[str] = []
+
+    def fake_load_concepts(concepts, **kwargs):
+        loaded.append(list(concepts))
+        ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        if len(loaded) == 1:
+            return pd.DataFrame({"stay_id": ids, "age": [65] * len(ids)})
+        job.request_cancel("user_requested")
+        raise datasource_module.DuckDBQueryInterrupted(
+            "DuckDB query interrupted"
+        )
+
+    monkeypatch.setattr(api_module, "keep_cache", fake_keep_cache)
+    monkeypatch.setattr(api_module, "load_concepts", fake_load_concepts)
+    monkeypatch.setattr(
+        api_module,
+        "get_all_patient_ids",
+        lambda *_, **__: ([1, 2], "stay_id"),
+    )
+    monkeypatch.setattr(
+        datasource_module,
+        "get_duckdb_interrupt_callback",
+        lambda: lambda: interrupt_calls.append("interrupt"),
+    )
+
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["demographics", "vitals"],
+        concepts={"demographics": ["age"], "vitals": ["hr", "map"]},
+        export_format="csv",
+        out_dir=str(tmp_path / "out"),
+    )
+
+    result = runner(job)
+
+    assert interrupt_calls == ["interrupt"]
+    assert len(loaded) == 2
+    assert result["cancelled_at"] == "modules"
+    assert result["file_count"] == 1
+    assert result["files"][0]["module"] == "demographics"
+    assert result["manifest"] is None
+    assert not (tmp_path / "out" / "_manifest.json").exists()
+
+
 def _patch_export_api(
     monkeypatch: pytest.MonkeyPatch, loaded: list[dict[str, object]]
 ) -> None:

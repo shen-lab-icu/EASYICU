@@ -273,6 +273,20 @@ from .table import ICUTable
 DEBUG_MODE = False
 logger = logging.getLogger(__name__)
 
+
+class DuckDBQueryInterrupted(RuntimeError):
+    """Typed boundary for a user-requested interruption of a DuckDB query."""
+
+
+def _raise_if_duckdb_interrupted(error: BaseException) -> None:
+    """Translate only DuckDB's explicit interrupt signal; preserve real IO errors."""
+
+    import duckdb
+
+    interrupt_error = getattr(duckdb, "InterruptException", None)
+    if interrupt_error is not None and isinstance(error, interrupt_error):
+        raise DuckDBQueryInterrupted(str(error)) from error
+
 # 🚀 DuckDB 连接复用：每个线程维护一个 in-memory 连接，避免反复创建/销毁
 import threading as _threading
 _duckdb_local = _threading.local()
@@ -350,6 +364,12 @@ def _get_duckdb_connection():
                 pass
         _duckdb_local.con = con
     return con
+
+
+def get_duckdb_interrupt_callback() -> Callable[[], None]:
+    """Return the interrupt hook for this worker thread's reused connection."""
+
+    return _get_duckdb_connection().interrupt
 
 def _close_duckdb_connections():
     """关闭所有缓存的 DuckDB 连接"""
@@ -4246,8 +4266,13 @@ def load_bucketed_table_multi_aggregated(
         arrow_table = conn.execute(query).fetch_arrow_table()
         df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
         del arrow_table
-    except Exception:
-        df = conn.execute(query).fetchdf()
+    except Exception as error:
+        _raise_if_duckdb_interrupted(error)
+        try:
+            df = conn.execute(query).fetchdf()
+        except Exception as fallback_error:
+            _raise_if_duckdb_interrupted(fallback_error)
+            raise
     logger.info(
         "Bucketed multi-concept DuckDB aggregation complete: %s concepts=%d itemids=%d -> %d rows",
         table_name,
