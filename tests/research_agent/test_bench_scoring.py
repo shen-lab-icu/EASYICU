@@ -181,6 +181,9 @@ def test_bench_item_to_task_surfaces_finding_substrings_as_hazard_key():
 
 
 def test_external_protocol_adapter_preserves_structured_execution_and_rubric_fields():
+    import pandas as pd
+
+    from easyicu.research_agent.authority.run_input import build_scientific_identity
     from tools.run_research_agent_bench import (
         _bench_item_to_task,
         _external_item_from_row,
@@ -273,13 +276,45 @@ def test_external_protocol_adapter_preserves_structured_execution_and_rubric_fie
     assert item.exclusion_criteria == ["Prior event before the landmark."]
     assert item.time_columns == ["followup_hour"]
     assert item.outcome_columns == ["event"]
-    assert item.time_windows[0]["anchor"] == "icu_admission"
+    assert item.time_windows[0].anchor == "icu_admission"
     assert item.notes == "Derive patient groups from the bound row identifier."
     assert item.endpoint.name == "event"
     assert item.concept_descriptions == {
         "event": "Documented binary outcome during the declared follow-up."
     }
     assert item.user_preferences["covariate_selection"] == "exact"
+    identity = build_scientific_identity(
+        cohort=pd.DataFrame(
+            {
+                "patient_stay_id": [1],
+                "severity_signal_max": [3.0],
+                "followup_hour": [24.0],
+                "event": [0],
+            }
+        ),
+        question=item.research_question,
+        cohort_name=item.name,
+        database=item.database,
+        target_outcome=item.target_outcome,
+        endpoint=item.endpoint,
+        primary_exposure=item.operational_exposure,
+        cross_database_validation=None,
+        inclusion_criteria=item.inclusion_criteria,
+        exclusion_criteria=item.exclusion_criteria,
+        id_columns=item.id_columns,
+        time_columns=item.time_columns,
+        outcome_columns=item.outcome_columns,
+        time_windows=item.time_windows,
+        concept_descriptions=item.concept_descriptions,
+        user_preferences=item.user_preferences,
+        notes=item.notes,
+        skill_key=None,
+        experiment_spec=None,
+        source_files=None,
+        disable_icu_context=False,
+    )
+    assert identity["time_windows"][0]["anchor"] == "icu_admission"
+    assert identity["exclusion_criteria"] == ["Prior event before the landmark."]
     assert item.protocol_adapter["database"]["defaulted"] is False
     assert item.protocol_adapter["operational_exposure"] == {
         "value": "severity_signal_max",
