@@ -839,7 +839,12 @@ class ProgressivePlannerAgent:
                 "Record the estimand, time zero, observation window, method, "
                 "assumptions, novelty positioning, figure role, what each design "
                 "supports, and what it cannot prove. Never select using observed "
-                "results, significance, AIC/BIC, or predictive performance."
+                "results, significance, AIC/BIC, or predictive performance. "
+                "When reviewed comparator design cards are present in the sealed "
+                "context, add literature_design_decisions for every candidate. "
+                "The selected design must explicitly resolve all seven card "
+                "dimensions as adopt, adapt, diverge, or not_applicable, with "
+                "source keys and a question-specific rationale."
             ),
             "Candidate-specific host article role contracts:\n"
             + json.dumps(article_contracts, ensure_ascii=False, separators=(",", ":")),

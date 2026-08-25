@@ -291,6 +291,10 @@ class PipelineConfig:
     # the Guided Web Copilot enables this because its product contract is
     # plan -> user confirmation -> execution.
     require_human_plan_review: bool = False
+    # Opt-in next-stage contract: reviewed comparator full text/supplements
+    # must shape all seven design dimensions before Provider planning, and the
+    # selected design must record its exact adopt/adapt/diverge decisions.
+    require_literature_design_authority: bool = False
     # A diagnostic Planner-only run may persist and expose the exact review
     # checkpoint, but no caller may resume it into Execute.
     planner_only: bool = False
@@ -631,6 +635,20 @@ class PipelineConfig:
                 "require_reportable_scientific_capability requires "
                 "require_human_plan_review so the pre-execution gate cannot be skipped"
             )
+        if self.require_literature_design_authority:
+            if not self.enable_literature:
+                raise ValueError(
+                    "require_literature_design_authority requires enable_literature"
+                )
+            if not self.require_human_plan_review:
+                raise ValueError(
+                    "require_literature_design_authority requires "
+                    "require_human_plan_review"
+                )
+            if self.planner_strategy != "progressive_v2":
+                raise ValueError(
+                    "require_literature_design_authority requires progressive_v2"
+                )
         if self.planner_strategy not in {"monolithic_v1", "progressive_v2"}:
             raise ValueError(
                 "planner_strategy must be 'monolithic_v1' or 'progressive_v2'"
@@ -639,6 +657,7 @@ class PipelineConfig:
             is_paper_facing_profile,
             require_profile_planner_strategy,
             require_profile_pubmed_setting,
+            require_profile_literature_design_authority_setting,
         )
 
         require_profile_planner_strategy(
@@ -650,6 +669,11 @@ class PipelineConfig:
             name=self.submission_profile_name,
             version=self.submission_profile_version,
             enabled=self.enable_pubmed,
+        )
+        require_profile_literature_design_authority_setting(
+            name=self.submission_profile_name,
+            version=self.submission_profile_version,
+            enabled=self.require_literature_design_authority,
         )
         progressive_resume_values = (
             self.development_progressive_resume_checkpoint_path,

@@ -13,6 +13,8 @@ from typing import Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .literature_design_authority import CandidateLiteratureDesignDecision
+
 
 _POST_RESULT_SELECTION = re.compile(
     r"\b(?:p[ -]?value|statistically significant|significance|lowest aic|"
@@ -36,6 +38,10 @@ class ResearchDesignCandidate(BaseModel):
     required_variables: list[str] = Field(min_length=2, max_length=24)
     assumptions: list[str] = Field(min_length=1, max_length=8)
     literature_citation_keys: list[str] = Field(default_factory=list, max_length=8)
+    literature_design_decisions: list[CandidateLiteratureDesignDecision] = Field(
+        default_factory=list,
+        max_length=7,
+    )
     novelty_positioning: str = Field(min_length=8, max_length=600)
     figure_role: str = Field(min_length=8, max_length=400)
     supports: str = Field(min_length=8, max_length=500)
@@ -54,6 +60,16 @@ class ResearchDesignCandidate(BaseModel):
         if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
             raise ValueError("design candidate rosters must be unique and non-empty")
         return cleaned
+
+    @field_validator("literature_design_decisions")
+    @classmethod
+    def _unique_literature_dimensions(
+        cls, values: list[CandidateLiteratureDesignDecision]
+    ) -> list[CandidateLiteratureDesignDecision]:
+        dimensions = [value.dimension for value in values]
+        if len(dimensions) != len(set(dimensions)):
+            raise ValueError("candidate literature design dimensions must be unique")
+        return values
 
     @field_validator("decision_reason", "novelty_positioning")
     @classmethod
@@ -184,7 +200,14 @@ def validate_research_design_selection(
         {
             key
             for candidate in selection.candidates
-            for key in candidate.literature_citation_keys
+            for key in (
+                list(candidate.literature_citation_keys)
+                + [
+                    decision_key
+                    for decision in candidate.literature_design_decisions
+                    for decision_key in decision.citation_keys
+                ]
+            )
             if key not in allowed_keys
         }
     )
