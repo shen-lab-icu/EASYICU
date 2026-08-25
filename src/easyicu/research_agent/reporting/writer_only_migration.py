@@ -105,6 +105,7 @@ class WriterOnlyMigrationResult:
     removed_unresolved_evidence_refs: tuple[str, ...]
     removed_unresolved_evidence_token_count: int
     normalized_claim_token_count: int
+    abstract_conclusion_boundary_repaired: bool
 
 
 @dataclass(frozen=True)
@@ -278,6 +279,54 @@ def _normalize_claim_token_sentences(manuscript: str) -> tuple[str, int]:
     )
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
     return normalized.strip() + "\n", count
+
+
+def _repair_abstract_conclusion_boundary(
+    manuscript: str,
+    literature: LiteratureBundle,
+) -> tuple[str, bool]:
+    """Replace an unbound abstract conclusion with a cited neutral boundary."""
+
+    available = {record.key for record in literature.citations}
+    causal_key = next(
+        (key for key in ("strobe_2007", "record_2015") if key in available),
+        None,
+    )
+    validation_key = next(
+        (key for key in ("record_2015", "strobe_2007") if key in available),
+        None,
+    )
+    if causal_key is None or validation_key is None:
+        return manuscript, False
+    abstract_match = re.search(
+        r"(^##\s+Abstract\s*$)(.*?)(?=^##\s+|\Z)",
+        manuscript,
+        flags=re.M | re.S,
+    )
+    if abstract_match is None or "**Conclusions:**" not in abstract_match.group(2):
+        return manuscript, False
+    replacement = (
+        "**Conclusions:** Because this was an observational analysis, the "
+        f"estimates do not establish causation [@{causal_key}]. Independent "
+        "validation in other cohorts is required before broader interpretation "
+        f"[@{validation_key}]."
+    )
+    repaired_abstract = re.sub(
+        r"\*\*Conclusions:\*\*.*\Z",
+        replacement,
+        abstract_match.group(2).strip(),
+        count=1,
+        flags=re.S,
+    )
+    repaired = (
+        manuscript[: abstract_match.start()]
+        + abstract_match.group(1)
+        + "\n\n"
+        + repaired_abstract
+        + "\n\n"
+        + manuscript[abstract_match.end() :]
+    )
+    return repaired, repaired != manuscript
 
 
 def prepare_writer_only_migration(
@@ -483,6 +532,7 @@ def repair_writer_only(
     manuscript, normalized_claim_token_count = _normalize_claim_token_sentences(
         manuscript
     )
+    abstract_conclusion_boundary_repaired = False
     authority_repaired: list[str] = []
     authority_filtered: list[str] = []
     for _attempt in range(2):
@@ -493,6 +543,15 @@ def repair_writer_only(
         if not section_errors:
             manuscript = canonical
             break
+        if "abstract" in section_errors and not abstract_conclusion_boundary_repaired:
+            repaired_abstract, changed = _repair_abstract_conclusion_boundary(
+                manuscript,
+                prepared.literature,
+            )
+            if changed:
+                manuscript = repaired_abstract
+                abstract_conclusion_boundary_repaired = True
+                continue
         canonical_quality = audit_manuscript_quality(
             canonical,
             expected_display_labels=prepared.expected_display_labels,
@@ -573,6 +632,9 @@ def repair_writer_only(
             removed_unresolved_evidence_token_count
         ),
         normalized_claim_token_count=normalized_claim_token_count,
+        abstract_conclusion_boundary_repaired=(
+            abstract_conclusion_boundary_repaired
+        ),
     )
 
 
@@ -769,6 +831,9 @@ def publish_writer_only_result(
             result.removed_unresolved_evidence_token_count
         ),
         "normalized_claim_token_count": result.normalized_claim_token_count,
+        "abstract_conclusion_boundary_repaired": (
+            result.abstract_conclusion_boundary_repaired
+        ),
         "removed_unknown_literature_keys": list(
             prepared.removed_unknown_literature_keys
         ),
