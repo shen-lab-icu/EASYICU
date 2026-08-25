@@ -183,6 +183,27 @@ def test_scaffold_to_latex_makes_bound_numbers_clickable(ra):
     )
 
 
+def test_scaffold_to_latex_renders_grouped_citations(ra):
+    from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[
+            CitationRecord(key="source_a", title="A.", year="2024"),
+            CitationRecord(key="source_b", title="B.", year="2025"),
+        ],
+    )
+
+    rendered = scaffold_to_latex(
+        markdown="## Introduction\n\nPrior work [@source_a; @source_b].",
+        bibliography=bundle,
+    )
+
+    assert r"\cite{source_a,source_b}" in rendered
+    assert "[@source_a" not in rendered
+
+
 def test_scaffold_to_latex_emits_bibliography_directives(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
     from easyicu.research_agent.reporting.latex import scaffold_to_latex
