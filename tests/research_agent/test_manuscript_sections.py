@@ -6,6 +6,7 @@ from easyicu.research_agent.reporting.manuscript_sections import (
     MANUSCRIPT_SECTION_SPECS,
     ManuscriptReaderQualityContractError,
     ManuscriptSectionContractError,
+    repair_existing_manuscript_sections,
     render_manuscript_sections,
 )
 from easyicu.research_agent.reporting.administrative_authority import (
@@ -309,6 +310,31 @@ def test_reader_quality_fails_closed_when_targeted_retry_still_leaks_internal_te
         match="MANUSCRIPT_INTERNAL_TERM_EXPOSED",
     ):
         render_manuscript_sections(call_section=call_section, common={})
+
+
+def test_existing_manuscript_migration_repairs_only_error_owners() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace(
+        "Evidence-bound discussion prose.",
+        "The result remained host-bound.",
+    )
+    calls: list[str] = []
+
+    def call_section(**kwargs: object) -> str:
+        section_name = str(kwargs["section_name"])
+        calls.append(section_name)
+        return _minimal_valid_section(section_name)
+
+    repaired, repaired_keys = repair_existing_manuscript_sections(
+        manuscript,
+        call_section=call_section,
+        common={},
+    )
+
+    assert repaired_keys == ("discussion",)
+    assert calls == ["Discussion"]
+    assert "host-bound" not in repaired
 
 
 def test_verified_administrative_authority_is_rendered_exactly() -> None:
