@@ -1614,7 +1614,7 @@ def _run_one_arm(
             pipeline_options,
             runtime_projection,
         )
-        runtime_endpoint = None
+        runtime_endpoint = getattr(item, "endpoint", None)
         runtime_primary_exposure = None
         runtime_contrast_authorized = True
         current_case_authority = opts.get(
@@ -1631,7 +1631,13 @@ def _run_one_arm(
                 current_case_authority
             )
             if isinstance(sealed_current_case, LandmarkSurvivalRuntimeAuthority):
-                runtime_endpoint = sealed_current_case.research_context_endpoint()
+                sealed_endpoint = sealed_current_case.research_context_endpoint()
+                if runtime_endpoint is not None and runtime_endpoint != sealed_endpoint:
+                    raise ValueError(
+                        "external benchmark endpoint conflicts with current-case "
+                        "scientific runtime authority"
+                    )
+                runtime_endpoint = sealed_endpoint
                 runtime_primary_exposure = sealed_current_case.exposure_status_column
             elif isinstance(sealed_current_case, SourceFeasibilityRuntimeAuthority):
                 runtime_contrast_authorized = False
@@ -1695,13 +1701,20 @@ def _run_one_arm(
                 normalized_question,
             )
         )
-        concept_descriptions = (
-            {str(operational_exposure): str(exposure_display_name)}
-            if operational_exposure
+        concept_descriptions = dict(getattr(item, "concept_descriptions", None) or {})
+        if (
+            operational_exposure
             and exposure_display_name
             and display_name_is_question_exposed
-            else None
-        )
+        ):
+            concept_descriptions.setdefault(
+                str(operational_exposure), str(exposure_display_name)
+            )
+        protocol_preferences = task_protocol_preferences_for_item(item)
+        user_preferences = {
+            **dict(getattr(item, "user_preferences", None) or {}),
+            **protocol_preferences,
+        }
         result = pipeline.run(
             question=item.research_question,
             cohort=cohort,
@@ -1727,10 +1740,16 @@ def _run_one_arm(
                 if runtime_contrast_authorized
                 else None
             ),
-            concept_descriptions=concept_descriptions,
+            concept_descriptions=concept_descriptions or None,
             inclusion_criteria=item.inclusion_criteria,
+            exclusion_criteria=(
+                getattr(item, "exclusion_criteria", None) or None
+            ),
             id_columns=(getattr(item, "id_columns", None) or None),
-            user_preferences=task_protocol_preferences_for_item(item),
+            time_columns=(getattr(item, "time_columns", None) or None),
+            outcome_columns=(getattr(item, "outcome_columns", None) or None),
+            time_windows=(getattr(item, "time_windows", None) or None),
+            user_preferences=user_preferences,
             notes=task_protocol_note_for_item(item),
             resume_run_id=resolved_resume_run_id,
             resume_from_step_id=resume_from_step_id,
@@ -5210,6 +5229,23 @@ def _external_item_from_row(
 
     diagnostics: List[Dict[str, Any]] = []
 
+    cohort_column_names = {str(column) for column in cohort_columns}
+    id_columns = _external_string_list(row, "id_columns", diagnostics)
+    time_columns = _external_string_list(row, "time_columns", diagnostics)
+    outcome_columns = _external_string_list(row, "outcome_columns", diagnostics)
+    from easyicu.research_agent.intake.external_benchmark_authority import (
+        compile_external_benchmark_study_authority,
+    )
+
+    study_authority = compile_external_benchmark_study_authority(
+        row=row,
+        target_outcome=(str(target) if target is not None else None),
+        cohort_columns=cohort_columns,
+        id_columns=id_columns,
+        time_columns=time_columns,
+        outcome_columns=outcome_columns,
+    )
+
     database_source = "database" if str(row.get("database") or "").strip() else None
     database = str(row.get("database") or "").strip()
     if not database:
@@ -5278,7 +5314,6 @@ def _external_item_from_row(
                 "default": None,
             }
         )
-    cohort_column_names = {str(column) for column in cohort_columns}
     operational_column_present = (
         operational_exposure in cohort_column_names if operational_exposure else None
     )
@@ -5431,7 +5466,10 @@ def _external_item_from_row(
         inclusion_criteria=_external_string_list(
             row, "inclusion_criteria", diagnostics
         ),
-        id_columns=_external_string_list(row, "id_columns", diagnostics),
+        exclusion_criteria=_external_string_list(
+            row, "exclusion_criteria", diagnostics
+        ),
+        id_columns=list(study_authority.id_columns),
         candidate_variables=_external_string_list(
             row, "candidate_variables", diagnostics
         ),
@@ -5466,6 +5504,12 @@ def _external_item_from_row(
         runtime_scientific_projection_sha256=(
             str(row.get("runtime_scientific_projection_sha256") or "").strip() or None
         ),
+        endpoint=study_authority.endpoint,
+        user_preferences=study_authority.user_preferences,
+        concept_descriptions=study_authority.concept_descriptions,
+        time_windows=list(study_authority.time_windows),
+        time_columns=list(study_authority.time_columns),
+        outcome_columns=list(study_authority.outcome_columns),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
         cohort_columns=[str(column) for column in cohort_columns],
