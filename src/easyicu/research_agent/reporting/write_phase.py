@@ -1062,7 +1062,24 @@ def _verified_resume_writer_scaffold(
     current_digest = _writer_execution_checkpoint_sha256(current_records)
     if prior_digest != current_digest:
         return None
-    record = evidence.get("manuscript_scaffold_raw")
+    from .manuscript_sections import manuscript_writer_contract_sha256
+
+    current_contract_sha256 = manuscript_writer_contract_sha256()
+    records = [
+        record
+        for record in evidence.records()
+        if record.evidence_id == "manuscript_scaffold_raw"
+        or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
+    ]
+    record = next(
+        (
+            candidate
+            for candidate in reversed(records)
+            if (candidate.metadata or {}).get("writer_contract_sha256")
+            == current_contract_sha256
+        ),
+        None,
+    )
     if record is None:
         return None
     verified_path = verified_run_evidence_path(run_dir, record)
@@ -1080,6 +1097,7 @@ def _verified_resume_writer_scaffold(
         "source_sha256": str(record.sha256),
         "execution_checkpoint_sha256": current_digest,
         "source_relative_path": str(record.relative_path),
+        "writer_contract_sha256": current_contract_sha256,
     }
 
 
@@ -1528,6 +1546,8 @@ def _draft_manuscript(
     scaffold_path = run_dir / "manuscript_scaffold.md"
     scaffold_path.write_text(scaffold, encoding="utf-8")
     if evidence.get("manuscript_scaffold_raw") is None or scaffold.strip():
+        from .manuscript_sections import manuscript_writer_contract_sha256
+
         evidence.register_file(
             kind="log",
             description="Manuscript scaffold (raw, with {evidence:*} placeholders).",
@@ -1536,6 +1556,9 @@ def _draft_manuscript(
             producer="writer",
             generation_mode="llm",
             prompt_pack_version=prompt_version,
+            metadata={
+                "writer_contract_sha256": manuscript_writer_contract_sha256(),
+            },
             on_sha_change="new_id",
         )
     return _DraftStageResult(
