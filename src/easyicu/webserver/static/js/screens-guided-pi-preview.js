@@ -16,6 +16,8 @@
     loading: false,
     error: '',
     request: 0,
+    evidenceTabs: [],
+    activeEvidenceId: '',
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -198,6 +200,13 @@
   function dataPackageProvenance() {
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Registered export · Pre-analysis review', '已登记数据源 · 分析前审阅'))}</strong><span>${esc(tr('Aggregate denominator and availability only; event rates, comparisons, and effect estimates are withheld until the governed analysis.', '仅展示聚合分母与可用性；事件率、组间比较和效应量留待受治理分析。'))}</span></div>`;
   }
+  function activeEvidenceTab() {
+    return state.evidenceTabs.find(item => item.evidenceId === state.activeEvidenceId) || null;
+  }
+  function evidenceTabsView() {
+    if (!isResearchArtifact() || !state.evidenceTabs.length) return '';
+    return state.evidenceTabs.map(item => `<span class="gpi-evidence-tab-wrap"><button type="button" role="tab" data-gpi-evidence-tab="${esc(item.evidenceId)}" aria-selected="${state.mode === 'evidence' && state.activeEvidenceId === item.evidenceId}">${esc(item.kindLabel)} · ${esc(item.label)}</button><button type="button" class="gpi-evidence-tab-close" data-gpi-evidence-tab-close="${esc(item.evidenceId)}" aria-label="${esc(tr('Close evidence tab', '关闭证据标签页'))}">×</button></span>`).join('');
+  }
   function render() {
     if (!state.host || !state.resource) return;
     setAsideOpen(true);
@@ -206,6 +215,7 @@
         ${isDataPackageReview() ? `<button type="button" role="tab" data-gpi-preview-mode="workbench" aria-selected="${state.mode === 'workbench'}">${icon('grid', 14)} ${tr('Workbench', '数据工作台')}</button>` : ''}
         <button type="button" role="tab" data-gpi-preview-mode="structured" aria-selected="${state.mode === 'structured'}">${icon('list', 14)} ${tr('Readable', '可读视图')}</button>
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} JSON</button>
+        ${evidenceTabsView()}
       </div>` : state.resource.kind === 'webpage' && isHtml() ? `
       <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
         <button type="button" role="tab" data-gpi-preview-mode="code" aria-selected="${state.mode === 'code'}">${icon('file', 14)} ${tr('Code', '代码')}</button>
@@ -239,13 +249,26 @@
         : renderer && typeof renderer.artifactStructuredView === 'function'
           ? renderer.artifactStructuredView(state.resource.artifact, state.payload || {})
         : `<pre class="gpi-preview-code" tabindex="0"><code>${esc(JSON.stringify(state.payload || {}, null, 2))}</code></pre>`;
+    } else if (state.mode === 'evidence' && activeEvidenceTab()) {
+      const item = activeEvidenceTab();
+      const renderer = window.EU_GUIDED_PI_EVIDENCE_PREVIEW;
+      body = item.loading
+        ? `<div class="gpi-preview-state"><span class="gpi-preview-spinner"></span>${tr('Loading digest-pinned evidence…', '正在加载摘要锁定的证据…')}</div>`
+        : item.error
+          ? `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Evidence preview unavailable', '证据预览不可用')}</strong><span>${esc(item.error)}</span></div>`
+          : renderer && typeof renderer.render === 'function'
+            ? renderer.render(item.payload || {}, item.locator || {})
+            : `<div class="gpi-preview-state error">${esc(tr('Evidence renderer unavailable', '证据渲染器不可用'))}</div>`;
     } else {
       const text = isStructuredArtifact()
         ? JSON.stringify(state.payload || {}, null, 2)
         : (state.artifact && state.artifact.text != null ? state.artifact.text : '');
       body = `<pre class="gpi-preview-code" tabindex="0"><code>${esc(text)}</code></pre>`;
     }
-    const reference = isDataPackageReview()
+    const selectedEvidence = activeEvidenceTab();
+    const reference = state.mode === 'evidence' && selectedEvidence
+      ? `${state.resource.run_id} · ${selectedEvidence.evidenceId}`
+      : isDataPackageReview()
       ? `${state.resource.study_context_id} · rev ${state.resource.study_revision}`
       : isStructuredArtifact() || isDocument()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
@@ -272,6 +295,52 @@
       const owner = window.EU_GUIDED_PI_WORKBENCH_PREVIEW;
       const mount = state.host.querySelector('[data-gpi-workbench-mount]');
       if (owner && typeof owner.mount === 'function') owner.mount(mount, state.payload || {});
+    }
+  }
+  async function openEvidence(button) {
+    if (!isResearchArtifact() || !button) return;
+    const evidenceId = String(button.dataset.evidenceId || '').trim();
+    const sha256 = String(button.dataset.evidenceSha256 || '').trim().toLowerCase();
+    if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return;
+    const renderer = window.EU_GUIDED_PI_EVIDENCE_PREVIEW;
+    const label = String(button.dataset.evidenceLabel || evidenceId).slice(0, 160);
+    const kind = String(button.dataset.evidenceKind || 'artifact').slice(0, 80);
+    const locator = {
+      pointer: String(button.dataset.evidencePointer || '').slice(0, 500),
+      value: String(button.dataset.evidenceSourceValue || '').slice(0, 500),
+    };
+    let item = state.evidenceTabs.find(row => row.evidenceId === evidenceId);
+    if (!item) {
+      item = {
+        evidenceId, sha256, label, kind,
+        kindLabel: renderer && typeof renderer.kindLabel === 'function'
+          ? renderer.kindLabel({ renderer: kind === 'code' ? 'code' : kind === 'table' ? 'table' : kind === 'statistic' ? 'json' : 'metadata' })
+          : kind,
+        locator, loading: true, error: '', payload: null,
+      };
+      state.evidenceTabs.push(item);
+    } else {
+      item.locator = locator;
+    }
+    state.activeEvidenceId = evidenceId;
+    state.mode = 'evidence';
+    render();
+    if (item.payload || item.error || !item.loading) return;
+    try {
+      const api = window.EU_API || {};
+      if (!api.loadPiCopilotResearchEvidence) throw new Error(tr('The evidence preview API is unavailable.', '证据预览接口不可用。'));
+      const response = await api.loadPiCopilotResearchEvidence(
+        state.projectId, state.resource.run_id, evidenceId, sha256,
+      );
+      item.payload = response && response.payload ? response.payload : {};
+      item.kindLabel = renderer && typeof renderer.kindLabel === 'function'
+        ? renderer.kindLabel(item.payload) : kind;
+      item.error = '';
+    } catch (error) {
+      item.error = String(error && (error.message || error.code) || error);
+    } finally {
+      item.loading = false;
+      if (state.activeEvidenceId === evidenceId) render();
     }
   }
   async function loadResource() {
@@ -326,6 +395,8 @@
     state.artifact = null;
     state.payload = null;
     state.governance = null;
+    state.evidenceTabs = [];
+    state.activeEvidenceId = '';
     state.error = '';
     state.mode = safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
     render();
@@ -334,6 +405,7 @@
   function close() {
     state.request += 1;
     state.resource = null; state.artifact = null; state.payload = null; state.governance = null; state.error = ''; state.loading = false;
+    state.evidenceTabs = []; state.activeEvidenceId = '';
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }
@@ -343,6 +415,26 @@
     state.host = host;
     host.addEventListener('click', event => {
       if (event.target.closest('[data-gpi-preview-close]')) { close(); return; }
+      const evidenceClose = event.target.closest('[data-gpi-evidence-tab-close]');
+      if (evidenceClose) {
+        const evidenceId = String(evidenceClose.dataset.gpiEvidenceTabClose || '');
+        state.evidenceTabs = state.evidenceTabs.filter(item => item.evidenceId !== evidenceId);
+        if (state.activeEvidenceId === evidenceId) {
+          state.activeEvidenceId = '';
+          state.mode = 'structured';
+        }
+        render();
+        return;
+      }
+      const evidenceTab = event.target.closest('[data-gpi-evidence-tab]');
+      if (evidenceTab) {
+        state.activeEvidenceId = String(evidenceTab.dataset.gpiEvidenceTab || '');
+        state.mode = 'evidence';
+        render();
+        return;
+      }
+      const evidenceButton = event.target.closest('[data-gpi-evidence-open]');
+      if (evidenceButton) { openEvidence(evidenceButton); return; }
       const claimButton = event.target.closest('[data-gpi-claim]');
       if (claimButton) {
         const claimId = String(claimButton.dataset.gpiClaim || '');

@@ -145,6 +145,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "GET",
+        "/api/copilot/pi/projects/{project_id}/runs/{run_id}/evidence/{evidence_id}",
+        "get_pi_copilot_research_evidence_preview",
+    ),
+    (
+        "GET",
         "/api/copilot/pi/projects/{project_id}/data-package-review",
         "get_pi_copilot_data_package_review",
     ),

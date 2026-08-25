@@ -31,14 +31,17 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260817-visible-activity1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
-    assert "css/guided-pi-preview.css?v=20260825-manuscript-reader1" in index
+    assert "css/guided-pi-preview.css?v=20260825-evidence-preview1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
     assert "css/guided-pi-literature.css?v=20260812-literature3" in index
     assert "js/screens-guided-pi-literature.js?v=20260812-literature3" in index
     assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260825-manuscript-reader1" in index
+    assert (
+        "js/screens-guided-pi-evidence-preview.js?v=20260825-evidence-preview1" in index
+    )
+    assert "js/screens-guided-pi-preview.js?v=20260825-evidence-preview1" in index
     assert "js/screens-guided-pi-replay.js?v=20260815-mode-resume1" in index
     assert "js/screens-guided-pi-activity.js?v=20260817-visible-activity2" in index
     assert "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1" in index
@@ -60,6 +63,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-workbench-preview.js"
     )
     assert index.index("js/screens-guided-pi-workbench-preview.js") < index.index(
+        "js/screens-guided-pi-evidence-preview.js"
+    )
+    assert index.index("js/screens-guided-pi-evidence-preview.js") < index.index(
         "js/screens-guided-pi-preview.js"
     )
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
@@ -589,6 +595,7 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi-activity.js",
         "js/screens-guided-pi-provider.js",
         "js/screens-guided-pi.js",
+        "js/screens-guided-pi-evidence-preview.js",
         "js/screens-guided-pi-preview.js",
         "js/screens-guided-pi-workbench-preview.js",
         "js/screens-guided-pi-literature.js",
@@ -1054,6 +1061,7 @@ def test_research_artifact_renderer_rejects_attribute_xss_and_non_png_data_urls(
 def test_evidence_bound_manuscript_reader_stays_in_its_preview_owner() -> None:
     renderer = _read("js/screens-agent-render.js")
     preview = _read("js/screens-guided-pi-preview.js")
+    evidence_preview = _read("js/screens-guided-pi-evidence-preview.js")
     styles = _read("css/guided-pi-preview.css")
 
     assert "manuscriptProvenanceView" in renderer
@@ -1063,10 +1071,33 @@ def test_evidence_bound_manuscript_reader_stays_in_its_preview_owner() -> None:
     assert "related_artifacts" in renderer
     assert "data-gpi-claim-panel" in preview
     assert "data-gpi-claim-close" in preview
+    assert "loadPiCopilotResearchEvidence" in preview
+    assert "data-gpi-evidence-tab" in preview
+    assert "patient_level_rows_withheld" in evidence_preview
+    assert "Code is displayed, never executed" in evidence_preview
     assert ".gpi-bound-number" in styles
     assert ".gpi-claim-drawer" in styles
+    assert ".gpi-evidence-code" in styles
     for unrelated in ("css/app.css", "css/tweaks.css"):
         assert ".gpi-bound-number" not in _read(unrelated)
+
+
+def test_evidence_preview_renderer_escapes_code_json_and_table_content() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    subprocess.run(
+        [
+            node,
+            str(
+                STATIC.parents[3] / "tests" / "js" / "evidence_preview_security.test.js"
+            ),
+            str(STATIC / "js" / "screens-guided-pi-evidence-preview.js"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_system_validation_document_has_a_distinct_guided_preview_owner() -> None:
