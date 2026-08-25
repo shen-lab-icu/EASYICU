@@ -118,7 +118,7 @@ ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS = (
     "table:absolute_risk_context",
     "table:adjusted_association_estimates",
     "table:robustness_matrix",
-    "table:measurement_missingness",
+    "table:robustness_summary",
 )
 
 
@@ -152,10 +152,10 @@ def absolute_risk_association_composite_panels(
             source_products=("table:robustness_matrix",),
         ),
         DeterministicFigurePanelTemplate(
-            panel_id="measurement_missingness",
-            article_role="data_quality",
-            chart_type="availability_panel",
-            source_products=("table:measurement_missingness",),
+            panel_id="robustness_ranges",
+            article_role="robustness",
+            chart_type="specification_grid",
+            source_products=("table:robustness_summary",),
         ),
     )
 

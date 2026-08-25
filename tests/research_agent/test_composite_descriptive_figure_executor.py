@@ -599,12 +599,8 @@ def test_absolute_risk_association_profile_covers_article_roles(
 ) -> None:
     frames = _source_aware_association_frames()
     association = _association_frames()
-    frames.pop("table:robustness_summary")
     frames.pop("table:measurement_process_audit")
     frames["table:robustness_matrix"] = association["table:robustness_matrix"]
-    frames["table:measurement_missingness"] = association[
-        "table:measurement_missingness"
-    ]
     bindings = {}
     for key, frame in frames.items():
         path = tmp_path / f"{key.partition(':')[2]}.csv"
@@ -631,7 +627,7 @@ def test_absolute_risk_association_profile_covers_article_roles(
         "descriptive_result",
         "primary_estimand",
         "robustness",
-        "data_quality",
+        "robustness",
     ]
     assert any(
         finding.detail.get("reason") == "deterministic_figure_panels_bound"
@@ -660,7 +656,7 @@ def test_absolute_risk_association_profile_covers_article_roles(
         "descriptive_result",
         "primary_estimand",
         "robustness",
-        "data_quality",
+        "robustness",
     ]
     assert validate_step_planned_figure_contract_binding(
         step=step,
