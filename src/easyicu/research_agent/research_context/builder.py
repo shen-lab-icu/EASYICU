@@ -87,6 +87,17 @@ _observed_domain = observed_domain_for_series
 # ---------------------------------------------------------------------------
 
 
+def _logical_dtype(series: pd.Series) -> str:
+    """Return a stable logical dtype across pandas string-inference modes."""
+
+    observed = series.dropna()
+    if not observed.empty and pd.api.types.infer_dtype(
+        observed, skipna=True
+    ) == "string":
+        return "str"
+    return str(series.dtype)
+
+
 def _safe_get_concept_info(name: str) -> Optional[Dict[str, Any]]:
     """Best-effort fetch of EasyICU concept metadata. Returns None if unavailable."""
     try:
@@ -757,7 +768,8 @@ def _describe_column(
 ) -> ConceptDescriptor:
     series = df[col]
     sample = series.dropna().head(50).tolist() if len(series) else []
-    hint = classify_variable(col, str(series.dtype), sample)
+    logical_dtype = _logical_dtype(series)
+    hint = classify_variable(col, logical_dtype, sample)
 
     # role fix-ups: respect user-declared id/time/outcome
     role = hint.role
@@ -867,7 +879,7 @@ def _describe_column(
         name=col,
         description=description,
         role=role,
-        dtype=str(series.dtype),
+        dtype=logical_dtype,
         unit=hint.unit,
         valid_range=list(hint.valid_range) if hint.valid_range else None,
         observed_domain=observed_domain_for_series(series),
