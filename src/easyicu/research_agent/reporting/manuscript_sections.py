@@ -281,7 +281,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "2"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "3"
 
 
 def manuscript_writer_contract_sha256() -> str:
@@ -459,6 +459,11 @@ def repair_existing_manuscript_sections(
 ) -> tuple[str, tuple[str, ...]]:
     """Regenerate only section owners named by deterministic quality errors."""
 
+    from .manuscript_quality import repair_reader_structure_from_existing_prose
+
+    manuscript, _structural_repairs = repair_reader_structure_from_existing_prose(
+        manuscript
+    )
     sections = _existing_scientific_sections(manuscript)
     repaired_keys: list[str] = []
     scientific = _assemble_scientific_sections(sections)
@@ -574,6 +579,12 @@ def render_manuscript_sections(
         sections[spec.key] = section
 
     scientific = _assemble_scientific_sections(sections)
+    from .manuscript_quality import repair_reader_structure_from_existing_prose
+
+    scientific, _structural_repairs = repair_reader_structure_from_existing_prose(
+        scientific
+    )
+    sections = _existing_scientific_sections(scientific)
     for spec, error_detail in _quality_repair_specs(scientific):
         repair_instruction = (
             spec.instruction
