@@ -7,6 +7,7 @@ from pathlib import Path
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.reporting.write_phase import (
     _verified_resume_writer_scaffold,
+    _verified_resume_writer_scaffold_for_quality_migration,
 )
 from easyicu.research_agent.reporting.manuscript_post import (
     _remove_unregistered_evidence_placeholders,
@@ -90,6 +91,17 @@ def test_resume_does_not_reuse_writer_scaffold_from_an_older_contract(
     )
 
     assert reused is None
+
+    migration = _verified_resume_writer_scaffold_for_quality_migration(
+        resume_state={"per_step_records": records},
+        evidence=evidence,
+        run_dir=tmp_path,
+        per_step_records=records,
+    )
+    assert migration is not None
+    text, detail = migration
+    assert text == "## Results\n\nAUROC was 0.76 {evidence:model_result}.\n"
+    assert detail["reason_code"] == ("verified_prior_writer_scaffold_quality_migration")
 
 
 def test_resume_reuses_latest_matching_versioned_writer_scaffold(
