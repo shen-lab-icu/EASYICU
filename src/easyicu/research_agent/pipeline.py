@@ -2002,6 +2002,7 @@ class ResearchAgentPipeline:
         know_how_binding: PlannerKnowHowBinding,
         llm_signature: str,
         planning_contract_context: str,
+        preplan_literature: Optional[LiteratureBundle],
         planner_prompt_metrics: Optional[Dict[str, Any]],
         prompt_version: str,
         resume_from_step_id: Optional[str],
@@ -2236,6 +2237,25 @@ class ResearchAgentPipeline:
                     progress_callback=planner_progress,
                 )
                 if progressive:
+                    comparison_literature_keys = [
+                        decision.citation_key
+                        for decision in (
+                            preplan_literature.screening_decisions
+                            if preplan_literature is not None
+                            else []
+                        )
+                        if decision.disposition == "include"
+                        and decision.evidence_role
+                        in {"direct_comparator", "design_analogue"}
+                    ]
+                    planner_run_kwargs.update(
+                        literature_design_evidence_cards=(
+                            preplan_literature.design_evidence_cards
+                            if preplan_literature is not None
+                            else []
+                        ),
+                        comparison_literature_keys=comparison_literature_keys,
+                    )
                     planner_run_kwargs["required_primary_cohort_selection_mode"] = (
                         self._required_primary_cohort_selection_mode
                     )
@@ -3454,6 +3474,7 @@ class ResearchAgentPipeline:
             know_how_binding=know_how_binding,
             llm_signature=llm_signature,
             planning_contract_context=planning_contract_context,
+            preplan_literature=preplan_literature,
             planner_prompt_metrics=planner_prompt_metrics,
             prompt_version=prompt_version,
             resume_from_step_id=resume_from_step_id,

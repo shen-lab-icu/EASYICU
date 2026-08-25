@@ -28,6 +28,12 @@ from ..planning.literature_bindings import (
     missing_required_method_layers,
     validate_literature_citation_bindings,
 )
+from ..planning.literature_design_authority import (
+    LiteratureDesignAuthorityError,
+    LiteratureDesignEvidenceCard,
+    render_literature_design_cards_for_prompt,
+    validate_selected_design_against_literature,
+)
 from ..planning.method_literature import (
     reporting_method_source_keys_for_guidelines,
 )
@@ -779,6 +785,9 @@ class ProgressivePlannerAgent:
         variables: Sequence[str],
         action_rows: Sequence[Mapping[str, Any]],
         allowed_literature_citation_keys: Sequence[str] = (),
+        literature_design_evidence_cards: Sequence[
+            LiteratureDesignEvidenceCard
+        ] = (),
         know_how_context: str = "",
         planning_contract_context: str = "",
     ) -> str:
@@ -875,6 +884,12 @@ class ProgressivePlannerAgent:
                 separators=(",", ":"),
             ),
         ]
+        if literature_design_evidence_cards:
+            blocks.append(
+                render_literature_design_cards_for_prompt(
+                    literature_design_evidence_cards
+                )
+            )
         if planning_contract_context:
             blocks.append(
                 "Additional run-specific article/task contract (binding; never "
@@ -1036,6 +1051,10 @@ class ProgressivePlannerAgent:
         target_outcome: str | None = None,
         context_required_method_layers: Sequence[str] | None = None,
         require_design_selection: bool = False,
+        literature_design_evidence_cards: Sequence[
+            LiteratureDesignEvidenceCard
+        ] = (),
+        comparison_literature_keys: Sequence[str] = (),
     ) -> None:
         if outline.analysis_type not in set(analysis_types):
             raise ProgressivePlanCompileError(
@@ -1059,6 +1078,19 @@ class ProgressivePlannerAgent:
                 str(exc),
                 path=exc.path,
             ) from exc
+        if literature_design_evidence_cards:
+            try:
+                validate_selected_design_against_literature(
+                    outline.design_selection,
+                    design_evidence_cards=literature_design_evidence_cards,
+                    comparison_keys=comparison_literature_keys,
+                )
+            except LiteratureDesignAuthorityError as exc:
+                raise ProgressivePlanCompileError(
+                    f"progressive_{exc.reason_code}",
+                    str(exc),
+                    path=exc.path,
+                ) from exc
         allowed_actions, _rows = _action_catalog((outline.analysis_type,))
         allowed = set(allowed_actions)
         available_variables = set(variable_names)
@@ -1909,6 +1941,10 @@ class ProgressivePlannerAgent:
         allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
         allowed_literature_citation_keys: Sequence[str] | None = None,
         direct_comparator_literature_keys: Sequence[str] | None = None,
+        literature_design_evidence_cards: Sequence[
+            LiteratureDesignEvidenceCard
+        ] = (),
+        comparison_literature_keys: Sequence[str] = (),
         know_how_context: str = "",
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
@@ -1957,6 +1993,14 @@ class ProgressivePlannerAgent:
             dict.fromkeys(
                 str(value).strip()
                 for value in (direct_comparator_literature_keys or ())
+                if str(value).strip()
+            )
+        )
+        design_cards = tuple(literature_design_evidence_cards)
+        comparison_keys = tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in comparison_literature_keys
                 if str(value).strip()
             )
         )
@@ -2015,6 +2059,10 @@ class ProgressivePlannerAgent:
             "scientific_action_ids": list(action_ids),
             "allowed_literature_citation_keys": list(allowed_citations),
             "direct_comparator_literature_keys": list(direct_keys),
+            "literature_design_evidence_cards": [
+                card.model_dump(mode="json") for card in design_cards
+            ],
+            "comparison_literature_keys": list(comparison_keys),
             "allowed_know_how_decisions": dict(
                 allowed_know_how_decisions or {}
             ),
@@ -2060,6 +2108,7 @@ class ProgressivePlannerAgent:
             variables=variables,
             action_rows=action_rows,
             allowed_literature_citation_keys=allowed_citations,
+            literature_design_evidence_cards=design_cards,
             know_how_context=know_how_context,
             planning_contract_context=resolved_planning_contract_context,
         )
@@ -2070,6 +2119,7 @@ class ProgressivePlannerAgent:
             variables=variables,
             action_rows=action_rows,
             allowed_literature_citation_keys=allowed_citations,
+            literature_design_evidence_cards=design_cards,
             planning_contract_context=resolved_planning_contract_context,
         )
         messages = [
@@ -2161,6 +2211,8 @@ class ProgressivePlannerAgent:
                         required_method_layers_for_context(context)
                     ),
                     require_design_selection=True,
+                    literature_design_evidence_cards=design_cards,
+                    comparison_literature_keys=comparison_keys,
                 )
                 return parsed
 
@@ -2195,6 +2247,8 @@ class ProgressivePlannerAgent:
             target_outcome=context.target_outcome,
             context_required_method_layers=required_method_layers_for_context(context),
             require_design_selection=resume_checkpoint is None,
+            literature_design_evidence_cards=design_cards,
+            comparison_literature_keys=comparison_keys,
         )
         self.last_outline = outline
         self.last_foundation = None

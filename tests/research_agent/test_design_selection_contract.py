@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
@@ -14,6 +16,11 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanCompileError,
     ProgressivePlanOutline,
     ProgressivePlanSkeleton,
+)
+from easyicu.research_agent.planning.literature_design_authority import (
+    LITERATURE_DESIGN_DIMENSIONS,
+    LiteratureDesignEvidence,
+    LiteratureDesignEvidenceCard,
 )
 from easyicu.research_agent.schema import AnalysisPlan
 
@@ -159,4 +166,71 @@ def test_fresh_outline_requires_design_selection_but_legacy_models_omit_none() -
     assert (
         "design_selection"
         not in ProgressivePlanSkeleton.model_json_schema()["required"]
+    )
+
+
+def test_progressive_outline_rejects_generic_sources_before_materialization() -> None:
+    payload = _selection_payload()
+    payload["candidates"][0]["literature_design_decisions"] = [
+        {
+            "dimension": dimension,
+            "citation_keys": ["direct_comparator"],
+            "disposition": "adapt",
+            "rationale": f"Adapt the reviewed {dimension} design to this cohort.",
+        }
+        for dimension in LITERATURE_DESIGN_DIMENSIONS
+    ]
+    outline = ProgressivePlanOutline(
+        analysis_type="association_study",
+        cohort_objective="Use the sealed analysis cohort.",
+        design_selection=ResearchDesignSelection.model_validate(payload),
+        steps=[
+            ProgressiveOutlineStep(
+                step_id="primary",
+                planned_analysis_role="primary",
+                module_id="adjusted_association",
+                objective="Estimate the prespecified adjusted association.",
+                variable_names=["exposure", "outcome"],
+                literature_citation_keys=["direct_comparator"],
+                scientific_action_id="association.adjusted_association",
+            )
+        ],
+        rationale="Use the typed primary association owner.",
+    )
+    reviewed_card = LiteratureDesignEvidenceCard(
+        citation_key="reviewed_comparator",
+        evidence_role="design_analogue",
+        access_mode="open_access_fulltext",
+        full_text_locator="https://pmc.ncbi.nlm.nih.gov/articles/PMC1/",
+        full_text_sha256="a" * 64,
+        supplement_status="not_published",
+        reviewed_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        evidence=[
+            LiteratureDesignEvidence(
+                dimension=dimension,
+                source_backed_summary=f"Reviewed fact for {dimension} in the analogue.",
+                locator=f"section:{dimension}",
+            )
+            for dimension in LITERATURE_DESIGN_DIMENSIONS
+        ],
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=["association_study"],
+            variable_names=["exposure", "outcome"],
+            allowed_literature_citation_keys=[
+                "direct_comparator",
+                "reviewed_comparator",
+            ],
+            primary_exposure="exposure",
+            target_outcome="outcome",
+            require_design_selection=True,
+            literature_design_evidence_cards=[reviewed_card],
+            comparison_literature_keys=["reviewed_comparator"],
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_selected_design_comparator_not_bound"
     )
