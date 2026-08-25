@@ -404,25 +404,10 @@ from .plan_utils import (
     _step_produces_figure,
     effect_output_authorized,
 )
-from .planning.figure_plan_shaping import (
-    bind_deterministic_figure_panels,
-    close_empty_deterministic_figure_contracts,
-    ensure_cohort_accounting_figure_step,
-    ensure_descriptive_context_figure_step,
-    ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
-    ensure_primary_result_figure_step,
-)
-from .planning.sensitivity_plan_shaping import ensure_prespecified_sensitivity_steps
+from .planning import figure_plan_shaping as _figure_plan
 from .planning.final_plan_shape import validate_final_plan_shape
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
-from .orchestration.scientific_plan_review_gate import (
-    PreplanAbortContext,
-    append_literature_design_authority_finding,
-    fail_if_strict_prompt_compilation_failed,
-    prepare_scientific_plan_review_gate,
-    record_literature_authority_abort,
-    require_strict_planner_route,
-)
+from .orchestration import scientific_plan_review_gate as _scientific_plan_gate
 from .figures.skill import PublicationFigureSkill
 from .figures.prior_output_support import (
     figure_parent_candidate_step_dirs as _figure_parent_candidate_step_dirs,
@@ -438,10 +423,7 @@ from .literature import (
     render_hypothesis_blueprint_for_prompt,
 )
 from .planning.preplan_literature import prepare_preplan_literature
-from .planning.literature_design_authority import (
-    LiteratureDesignAuthorityError,
-    validate_preplan_literature_design_authority,
-)
+from .planning import literature_design_authority as _literature_design
 from .planning.preplan_know_how import (
     PlannerKnowHowBinding,
     prepare_preplan_know_how,
@@ -980,11 +962,13 @@ def _run_preplan_literature_and_hypothesis(
     llm: Any,
     resume_state: Any,
 ) -> Tuple[Optional[Any], Any, list[str], list[str], Any]:
-    require_strict_planner_route(self._config.require_literature_design_authority, skill_obj)
+    _scientific_plan_gate.require_strict_planner_route(
+        self._config.require_literature_design_authority, skill_obj
+    )
     allowed_literature_citation_keys: list[str] = []
     direct_comparator_literature_keys: list[str] = []
     preplan_literature: Optional[LiteratureBundle] = None
-    abort_context = PreplanAbortContext(
+    abort_context = _scientific_plan_gate.PreplanAbortContext(
         run_id, run_dir, context, context_path, agent_context, evidence, findings, llm, resume_state
     )
 
@@ -1009,7 +993,9 @@ def _run_preplan_literature_and_hypothesis(
                 bound_seed=self._bound_preplan_literature,
             )
             if self._config.require_literature_design_authority:
-                validate_preplan_literature_design_authority(preplan_literature)
+                _literature_design.validate_preplan_literature_design_authority(
+                    preplan_literature
+                )
             allowed_literature_citation_keys = [
                 citation.key for citation in preplan_literature.citations
             ]
@@ -1137,8 +1123,10 @@ def _run_preplan_literature_and_hypothesis(
                 f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
             )
             agent_context = agent_context.model_copy(update={"notes": agent_notes})
-        except LiteratureDesignAuthorityError as exc:
-            record_literature_authority_abort(findings, emit_progress, run_id, exc)
+        except _literature_design.LiteratureDesignAuthorityError as exc:
+            _scientific_plan_gate.record_literature_authority_abort(
+                findings, emit_progress, run_id, exc
+            )
             return (
                 abort_context.finish(self, reason=exc.reason_code),
                 agent_context,
@@ -1147,7 +1135,7 @@ def _run_preplan_literature_and_hypothesis(
                 preplan_literature,
             )
         except Exception as exc:
-            fail_if_strict_prompt_compilation_failed(
+            _scientific_plan_gate.fail_if_strict_prompt_compilation_failed(
                 self._config.require_literature_design_authority, exc
             )
             findings.append(
@@ -1990,6 +1978,12 @@ class ResearchAgentPipeline:
         set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
         return frozen_snapshot
 
+    def _clear_validated_runtime(self) -> None:
+        """Remove capabilities published by an earlier run on this instance."""
+
+        self._validated_runtime_capabilities = ()
+        self._validated_runtime_bundle = None
+
     def _generate_or_resume_plan(
         self,
         *,
@@ -2068,9 +2062,7 @@ class ResearchAgentPipeline:
                     locked_plan_path.read_text(encoding="utf-8")
                 )
             except Exception as exc:
-                raise ValueError(
-                    "development locked analysis plan is invalid"
-                ) from exc
+                raise ValueError("development locked analysis plan is invalid") from exc
             if plan.research_question != agent_context.research_question:
                 raise ValueError(
                     "development locked analysis plan research question mismatch"
@@ -2091,9 +2083,7 @@ class ResearchAgentPipeline:
                 declared_capability = get_capability_by_id(
                     primary_steps[0].scientific_capability
                 )
-                expected_capability = get_capability_by_id(
-                    current_type.capability_id
-                )
+                expected_capability = get_capability_by_id(current_type.capability_id)
                 rebound_type = None
                 if (
                     declared_capability is not None
@@ -2222,10 +2212,6 @@ class ResearchAgentPipeline:
                 )
             )
 
-            planner_progress = planner_retry_progress_callback(
-                emit_progress, run_id=run_id
-            )
-
             try:
                 planner_run_kwargs = dict(
                     know_how_binding.planner_kwargs,
@@ -2236,27 +2222,15 @@ class ResearchAgentPipeline:
                     enforce_article_contract=True,
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
-                    progress_callback=planner_progress,
+                    progress_callback=planner_retry_progress_callback(
+                        emit_progress, run_id=run_id
+                    ),
                 )
                 if progressive:
-                    comparison_literature_keys = [
-                        decision.citation_key
-                        for decision in (
-                            preplan_literature.screening_decisions
-                            if preplan_literature is not None
-                            else []
+                    planner_run_kwargs |= (
+                        _literature_design.progressive_literature_design_kwargs(
+                            preplan_literature
                         )
-                        if decision.disposition == "include"
-                        and decision.evidence_role
-                        in {"direct_comparator", "design_analogue"}
-                    ]
-                    planner_run_kwargs.update(
-                        literature_design_evidence_cards=(
-                            preplan_literature.design_evidence_cards
-                            if preplan_literature is not None
-                            else []
-                        ),
-                        comparison_literature_keys=comparison_literature_keys,
                     )
                     planner_run_kwargs["required_primary_cohort_selection_mode"] = (
                         self._required_primary_cohort_selection_mode
@@ -2513,11 +2487,7 @@ class ResearchAgentPipeline:
             findings.extend(plan_contract_findings)
             plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
             findings.extend(split_findings)
-            plan, sensitivity_step_findings = ensure_prespecified_sensitivity_steps(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(sensitivity_step_findings)
+            plan = _figure_plan.apply_required_plan_obligations(plan, context, findings)
             plan, report_input_findings = _augment_report_typed_product_inputs(
                 plan=plan
             )
@@ -2531,37 +2501,34 @@ class ResearchAgentPipeline:
             # ensure a declared audit/robustness panel, since that evidence is
             # produced (locked robustness specs, data-quality summaries) but the
             # plan often never presents it.
-            plan, primary_figure_findings = ensure_primary_result_figure_step(
-                plan=plan,
+            plan, primary_figure_findings = (
+                _figure_plan.ensure_primary_result_figure_step(
+                    plan=plan,
+                )
             )
             findings.extend(primary_figure_findings)
-            plan, descriptive_figure_findings = (
-                ensure_descriptive_context_figure_step(plan=plan)
-            )
-            findings.extend(descriptive_figure_findings)
             plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
                 plan=plan,
                 context=context,
                 force=self._enable_publication_figure_skill,
             )
             findings.extend(figure_guard_findings)
-            plan, cohort_figure_findings = ensure_cohort_accounting_figure_step(
-                plan=plan,
+            plan, cohort_figure_findings = (
+                _figure_plan.ensure_cohort_accounting_figure_step(
+                    plan=plan,
+                )
             )
             findings.extend(cohort_figure_findings)
-            plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
+            plan, audit_panel_findings = _figure_plan.ensure_data_quality_figure_step(
                 plan=plan,
                 context=context,
             )
             findings.extend(audit_panel_findings)
-            plan, empty_figure_findings = close_empty_deterministic_figure_contracts(
-                plan=plan
+            plan, empty_figure_findings = (
+                _figure_plan.close_empty_deterministic_figure_contracts(plan=plan)
             )
             findings.extend(empty_figure_findings)
-            plan, deterministic_panel_findings = bind_deterministic_figure_panels(
-                plan=plan
-            )
-            findings.extend(deterministic_panel_findings)
+            plan = _figure_plan.apply_deterministic_figure_panels(plan, findings)
             # Measurement provenance companions are public Coder inputs. Close
             # them before lifecycle sealing and human review so Execute cannot
             # change the exact Plan payload that the decision approved.
@@ -2771,8 +2738,10 @@ class ResearchAgentPipeline:
             )
         if self._config.require_human_plan_review:
             if self._config.require_literature_design_authority:
-                append_literature_design_authority_finding(findings, plan, preplan_literature)
-            review_gate = prepare_scientific_plan_review_gate(
+                _scientific_plan_gate.append_literature_design_authority_finding(
+                    findings, plan, preplan_literature
+                )
+            review_gate = _scientific_plan_gate.prepare_scientific_plan_review_gate(
                 context=context,
                 plan=plan,
                 literature=preplan_literature,
@@ -3472,7 +3441,6 @@ class ResearchAgentPipeline:
             )
         else:
             role_resolver = stopped_role_resolver
-
         generation = self._generate_or_resume_plan(
             agent_context=agent_context,
             allowed_literature_citation_keys=allowed_literature_citation_keys,
@@ -4639,31 +4607,12 @@ class ResearchAgentPipeline:
                 return cached
 
         if self._config.planner_only:
-            # A planner-only authority cannot cross the human-review boundary
-            # into Execute. Requiring an execution image here couples design
-            # review to code-runtime readiness and prevents the intended cheap
-            # planning canary from running at all.
+            self._clear_validated_runtime()
             runtime_capabilities = ()
-            self._validated_runtime_capabilities = ()
-            self._validated_runtime_bundle = None
-            _emit_progress(
-                "runtime",
-                "Execution runtime preflight skipped for planner-only authority.",
-                run_id=run_id,
-                method_capabilities=[],
-            )
+            _emit_progress("runtime", "Execution runtime preflight skipped for planner-only authority.", run_id=run_id, method_capabilities=[])
         else:
-            runtime_capabilities = self._preflight_execution_runtime(
-                run_dir=run_dir,
-                cohort_path=cohort_path,
-                target_outcome=target_outcome,
-            )
-            _emit_progress(
-                "runtime",
-                "Execution runtime validated before planning.",
-                run_id=run_id,
-                method_capabilities=list(runtime_capabilities),
-            )
+            runtime_capabilities = self._preflight_execution_runtime(run_dir=run_dir, cohort_path=cohort_path, target_outcome=target_outcome)
+            _emit_progress("runtime", "Execution runtime validated before planning.", run_id=run_id, method_capabilities=list(runtime_capabilities))
 
         def _plan_invoker():
             return _pipeline_run___plan_invoker(

@@ -66,3 +66,18 @@ M3 retains stability and alternative-algorithm agreement, but low agreement
 prevents phenotype naming. These are correct non-results, not gaps to fill with
 question-specific logic. Dev9 remains a development split and cannot enter the
 paper denominator.
+
+## Exact-head architecture closure
+
+The first remote freeze attempt exposed six architecture-ratchet failures that
+already existed at the branch's incoming `04e5a60` baseline. They were closed
+without increasing the LOC ratchet: reviewed literature projection, required
+plan obligations, deterministic panel finding propagation, and planner-only
+runtime handling now live behind their existing owner contracts. Final
+architecture measurements are `pipeline.py` 8,414 versus baseline 8,419;
+`run` 778 versus 782; `_generate_or_resume_plan` 449 versus 449; and
+`_run_plan_phase` 618 versus 618. The module graph explicitly seals the three
+new typed owners (`external_benchmark_authority`, `time_varying_cox`, and
+`sensitivity_plan_shaping`) with 594 modules, 2,425 directed edges and zero
+cycles. The combined focused freeze suite is 182 passed; the independent M3/H3
+fail-closed adjacency suite is 66 passed.

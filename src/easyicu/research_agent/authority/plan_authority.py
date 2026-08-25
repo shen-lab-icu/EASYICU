@@ -15,11 +15,7 @@ from ..plan_utils import (
     _cap_plan_preserving_figure_steps,
     _preserve_figure_steps_after_replan,
 )
-from ..planning.figure_plan_shaping import (
-    bind_deterministic_figure_panels,
-    ensure_descriptive_context_figure_step,
-)
-from ..planning.sensitivity_plan_shaping import ensure_prespecified_sensitivity_steps
+from ..planning.figure_plan_shaping import apply_required_plan_obligations, bind_deterministic_figure_panels
 from ..robustness.panel import (
     RobustnessSpec,
     robustness_specs_for_execution,
@@ -40,7 +36,6 @@ __all__ = [
     "_preserve_locked_robustness_specs_after_replan",
     "normalize_replan_candidate",
 ]
-
 
 @dataclass(frozen=True)
 class NormalizedPlanCandidate:
@@ -314,15 +309,7 @@ def normalize_replan_candidate(
         revised=revised,
     )
     findings.extend(figure_findings)
-    revised, sensitivity_step_findings = ensure_prespecified_sensitivity_steps(
-        plan=revised,
-        context=context,
-    )
-    findings.extend(sensitivity_step_findings)
-    revised, descriptive_figure_findings = ensure_descriptive_context_figure_step(
-        plan=revised,
-    )
-    findings.extend(descriptive_figure_findings)
+    revised = apply_required_plan_obligations(revised, context, findings)
     revised, report_input_findings = _augment_report_typed_product_inputs(plan=revised)
     findings.extend(report_input_findings)
 

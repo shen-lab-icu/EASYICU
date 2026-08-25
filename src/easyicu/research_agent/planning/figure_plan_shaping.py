@@ -51,6 +51,7 @@ from .figure_strategy import (
     DATA_QUALITY_FIGURE_PRODUCT,
     DATA_QUALITY_FIGURE_REQUIRED_INPUTS,
 )
+from .sensitivity_plan_shaping import ensure_prespecified_sensitivity_steps
 
 _AUDIT_PANEL_TOKENS = (
     "audit",
@@ -527,9 +528,7 @@ def bind_deterministic_figure_panels(
         ),
         frozenset(DATA_QUALITY_FIGURE_REQUIRED_INPUTS): DATA_QUALITY_FIGURE_PANELS,
         frozenset(BALANCE_ASSOCIATION_COMPOSITE_INPUTS): (
-            balance_association_composite_panels(
-                BALANCE_ASSOCIATION_COMPOSITE_INPUTS
-            )
+            balance_association_composite_panels(BALANCE_ASSOCIATION_COMPOSITE_INPUTS)
         ),
     }
     data_quality_sources, _candidates, _missing, _ambiguous = (
@@ -623,7 +622,9 @@ def bind_deterministic_figure_panels(
                     "input_consumption_contracts": [
                         *step.input_consumption_contracts,
                         *(
-                            ArtifactConsumptionContract(input_key=value, mode="all_rows")
+                            ArtifactConsumptionContract(
+                                input_key=value, mode="all_rows"
+                            )
                             for value in additions
                         ),
                     ],
@@ -763,6 +764,33 @@ def bind_deterministic_figure_panels(
     return (plan.model_copy(update={"steps": steps}) if changed else plan), findings
 
 
+def apply_deterministic_figure_panels(
+    plan: AnalysisPlan,
+    findings: list[ValidationFinding],
+) -> AnalysisPlan:
+    """Bind deterministic panels and retain owner-attributable findings."""
+
+    shaped, panel_findings = bind_deterministic_figure_panels(plan=plan)
+    findings.extend(panel_findings)
+    return shaped
+
+
+def apply_required_plan_obligations(
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    findings: list[ValidationFinding],
+) -> AnalysisPlan:
+    """Close paired typed sensitivity and descriptive-context obligations."""
+
+    shaped, sensitivity_findings = ensure_prespecified_sensitivity_steps(
+        plan=plan,
+        context=context,
+    )
+    shaped, figure_findings = ensure_descriptive_context_figure_step(plan=shaped)
+    findings.extend([*sensitivity_findings, *figure_findings])
+    return shaped
+
+
 def close_empty_deterministic_figure_contracts(
     *,
     plan: AnalysisPlan,
@@ -878,6 +906,8 @@ def close_empty_deterministic_figure_contracts(
 
 
 __all__ = [
+    "apply_deterministic_figure_panels",
+    "apply_required_plan_obligations",
     "bind_deterministic_figure_panels",
     "close_empty_deterministic_figure_contracts",
     "dedicated_renderer_consumes_typed_source",
