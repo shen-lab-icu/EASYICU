@@ -21,6 +21,7 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...figures.display_labels import display_label, label_lookup, scoped_label_lookup
 from .typed_input_binding import BoundTypedInput, sha256_file
 
 
@@ -91,6 +92,7 @@ def _forest(
     label_column: str,
     title: str,
     color: str,
+    label_formatter: Any | None = None,
 ) -> None:
     positions = np.arange(len(frame))
     estimates = frame[estimate_column].to_numpy(dtype=float)
@@ -101,9 +103,8 @@ def _forest(
         ]
     )
     ax.errorbar(estimates, positions, xerr=errors, fmt="o", color=color, capsize=2.5)
-    ax.set_yticks(
-        positions, [_label(value) for value in frame[label_column]], fontsize=5.8
-    )
+    formatter = label_formatter or (lambda value: display_label(value))
+    ax.set_yticks(positions, [formatter(value) for value in frame[label_column]], fontsize=6.3)
     ax.invert_yaxis()
     scales = {str(value).strip().lower() for value in frame["effect_scale"]}
     if scales and scales <= {
@@ -118,7 +119,56 @@ def _forest(
             raise ValueError("ratio-scale estimates and intervals must be positive")
         ax.axvline(1.0, color="#777777", linewidth=0.8, linestyle="--")
     ax.set_xlabel(_label(next(iter(scales), "estimate")))
-    ax.set_title(title, loc="left", pad=12)
+    ax.set_title(title, loc="left", pad=7)
+
+
+def _reader_contrast_labels(
+    frame: pd.DataFrame,
+    *,
+    exposure_name: str | None,
+    display_labels: Mapping[str, str],
+) -> pd.Series | None:
+    """Build reader-facing contrasts from typed levels without changing rows."""
+
+    if not exposure_name or not {"exposure_level", "reference_level"} <= set(frame.columns):
+        return None
+    labels: list[str] = []
+    ordinal_scope = re.sub(r"_(max|min|first|last)$", "", exposure_name)
+    for row in frame.itertuples(index=False):
+        comparison_value = getattr(row, "exposure_level")
+        reference_value = getattr(row, "reference_level")
+        comparison = scoped_label_lookup(exposure_name, comparison_value, display_labels)
+        reference = scoped_label_lookup(exposure_name, reference_value, display_labels)
+        for value, current, side in (
+            (comparison_value, comparison, "comparison"),
+            (reference_value, reference, "reference"),
+        ):
+            numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+            level_token = str(int(numeric)) if pd.notna(numeric) and float(numeric).is_integer() else str(value)
+            declared = label_lookup(f"{ordinal_scope}_{level_token}", display_labels)
+            if declared:
+                concise = declared.split(":", 1)[0].strip()
+                if side == "comparison":
+                    comparison = concise
+                else:
+                    reference = concise
+        scope = display_label(exposure_name, display_labels)
+        if comparison is None:
+            comparison_token = (
+                f"{comparison_value:g}"
+                if isinstance(comparison_value, (int, float, np.number))
+                else str(comparison_value)
+            )
+            comparison = f"{scope} {comparison_token}"
+        if reference is None:
+            reference_token = (
+                f"{reference_value:g}"
+                if isinstance(reference_value, (int, float, np.number))
+                else str(reference_value)
+            )
+            reference = f"{scope} {reference_token}"
+        labels.append(f"{comparison} vs {reference}")
+    return pd.Series(labels, index=frame.index, dtype="string")
 
 
 def _robustness_ranges(ax: Any, frame: pd.DataFrame, *, color: str) -> None:
@@ -249,7 +299,7 @@ def _draw_missingness(ax: Any, frame: pd.DataFrame, *, color: str) -> None:
     ax.barh(positions, quality["missing_pct"], color=color)
     ax.set_yticks(
         positions,
-        [_label(value) for value in quality[label_column]],
+        [display_label(value) for value in quality[label_column]],
         fontsize=5.5,
     )
     ax.set_xlim(0, 100)
@@ -278,14 +328,14 @@ def _draw_component_completeness(ax: Any, frame: pd.DataFrame) -> None:
     )
     ax.set_xticks(
         np.arange(len(categories)),
-        [_label(value) for value in categories],
+        [display_label(value) for value in categories],
         rotation=25,
         ha="right",
         fontsize=5.5,
     )
     ax.set_yticks(
         np.arange(len(concepts)),
-        [_label(value) for value in concepts],
+        [display_label(value) for value in concepts],
         fontsize=5.2,
     )
     for row_index in range(len(concepts)):
@@ -362,7 +412,13 @@ def _render_cohort_balance_association_figure(
     palette = apply_publication_style(font_size=7.0)
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(183 / 25.4, 132 / 25.4),
+        gridspec_kw={"width_ratios": (1.18, 1.0), "height_ratios": (1.12, 0.88)},
+        constrained_layout=True,
+    )
 
     positions = np.arange(len(flow))
     axes[0, 0].barh(positions, flow["n_remaining"], color=palette["blue_soft"])
@@ -939,7 +995,14 @@ def render_association_publication_figure(
                 if pd.notna(numeric) and float(numeric).is_integer()
                 else str(value)
             )
-            level_labels.append(labels.get(f"{exposure_name}={raw}", _label(value)))
+            ordinal_scope = re.sub(r"_(max|min|first|last)$", "", exposure_name)
+            declared_level = label_lookup(f"{ordinal_scope}_{raw}", labels)
+            level_labels.append(
+                labels.get(
+                    f"{exposure_name}={raw}",
+                    declared_level.split(":", 1)[0] if declared_level else _label(value),
+                )
+            )
         absolute_title = "Exposure prevalence and observed outcome risk"
     else:
         values = 100.0 * levels["estimate"].to_numpy(dtype=float)
@@ -977,10 +1040,17 @@ def render_association_publication_figure(
         ax.legend(frameon=False, fontsize=5.8)
     else:
         ax.bar(x, values, color=palette["orange"], yerr=yerr, capsize=2.5)
-    ax.set_xticks(x, level_labels)
+    rotate_levels = len(level_labels) > 3 or max(map(len, level_labels), default=0) > 18
+    ax.set_xticks(
+        x,
+        level_labels,
+        rotation=20 if rotate_levels else 0,
+        ha="right" if rotate_levels else "center",
+        fontsize=6.2 if rotate_levels else None,
+    )
     ax.set_ylabel("Percent" if distribution is not None else "Observed outcome risk (%)")
-    ax.set_title(absolute_title, loc="left", pad=12)
-    add_panel_label(ax, "A", x=-0.12, y=1.04)
+    ax.set_title(absolute_title, loc="left", pad=7)
+    add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
 
     adjusted_label = "model_id"
     for candidate in ("contrast", "exposure", "model_id"):
@@ -991,6 +1061,16 @@ def render_association_publication_figure(
         ):
             adjusted_label = candidate
             break
+    exposure_name = None
+    if distribution is not None and "exposure_column" in levels.columns:
+        exposure_name = str(levels.iloc[0]["exposure_column"])
+    reader_contrasts = _reader_contrast_labels(
+        adjusted, exposure_name=exposure_name, display_labels=labels
+    )
+    if reader_contrasts is not None:
+        adjusted = adjusted.copy()
+        adjusted["_reader_contrast"] = reader_contrasts
+        adjusted_label = "_reader_contrast"
     _forest(
         axes[0, 1],
         adjusted,
@@ -998,8 +1078,9 @@ def render_association_publication_figure(
         label_column=adjusted_label,
         title="Primary adjusted association",
         color=palette["blue"],
+        label_formatter=(lambda value: str(value)) if adjusted_label == "_reader_contrast" else None,
     )
-    add_panel_label(axes[0, 1], "B", x=-0.12, y=1.04)
+    add_panel_label(axes[0, 1], "b", x=-0.12, y=1.04, fontsize=8.0)
 
     if scientific_sensitivity is not None and scientific_sensitivity_key is not None:
         _forest(
@@ -1042,7 +1123,7 @@ def render_association_publication_figure(
         panel_c = ("Measurement missingness", "data_quality", missingness_key)
     else:  # pragma: no cover - guarded by exact typed profiles
         raise ValueError("association composite has no third-panel source")
-    add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
+    add_panel_label(axes[1, 0], "c", x=-0.12, y=1.04, fontsize=8.0)
 
     if completeness is not None:
         _draw_component_completeness(axes[1, 1], completeness)
@@ -1063,12 +1144,12 @@ def render_association_publication_figure(
         )
         axes[1, 1].set_yticks(
             positions,
-            [_label(value) for value in quality[label_column]],
+            [display_label(value) for value in quality[label_column]],
             fontsize=5.5,
         )
         axes[1, 1].set_xlim(0, 100)
         axes[1, 1].set_xlabel("Available among eligible (%)")
-        axes[1, 1].set_title("Measurement availability", loc="left", pad=12)
+        axes[1, 1].set_title("Measurement availability", loc="left", pad=7)
         panel_d = (
             "Measurement availability",
             "data_quality",
@@ -1083,7 +1164,7 @@ def render_association_publication_figure(
         panel_d = ("Robustness ranges", "robustness", "table:robustness_summary")
     else:  # pragma: no cover - guarded by exact typed profiles
         raise ValueError("association composite has no fourth-panel source")
-    add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
+    add_panel_label(axes[1, 1], "d", x=-0.12, y=1.04, fontsize=8.0)
 
     if scientific_sensitivity is not None:
         panel_specs = (
@@ -1181,7 +1262,7 @@ def render_association_publication_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=178.0,
+        height_mm=132.0,
         panels=[
             {
                 "panel_id": panel_id,
