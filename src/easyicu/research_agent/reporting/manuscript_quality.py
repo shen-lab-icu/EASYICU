@@ -160,6 +160,91 @@ def render_reader_manuscript(bound_text: str) -> str:
     return cleaned.strip() + "\n"
 
 
+def _replace_section_body(text: str, section: str, body: str) -> str:
+    pattern = re.compile(
+        rf"(^##\s+{re.escape(section)}\s*$)(.*?)(?=^##\s+|\Z)",
+        flags=re.M | re.S,
+    )
+    return pattern.sub(
+        lambda match: f"{match.group(1)}\n\n{body.strip()}\n\n",
+        text,
+        count=1,
+    )
+
+
+def repair_reader_structure_from_existing_prose(
+    manuscript: str,
+) -> tuple[str, tuple[Mapping[str, str], ...]]:
+    """Restore required wrappers using only prose already in the draft."""
+
+    repaired = str(manuscript or "")
+    repairs: list[Mapping[str, str]] = []
+    section_map = _sections(repaired)
+    abstract = section_map.get("Abstract")
+    if abstract is not None and not re.search(
+        r"\*\*Background:\*\*\s+\S+", abstract, flags=re.I
+    ):
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
+        candidate_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if _has_prose(paragraph)
+                and not re.match(
+                    r"\*\*(?:Methods|Results|Conclusions):\*\*",
+                    paragraph,
+                    flags=re.I,
+                )
+                and not paragraph.startswith("#")
+            ),
+            None,
+        )
+        if candidate_index is not None:
+            paragraphs[candidate_index] = (
+                "**Background:** " + paragraphs[candidate_index]
+            )
+            repaired = _replace_section_body(
+                repaired,
+                "Abstract",
+                "\n\n".join(paragraphs),
+            )
+            repairs.append(
+                {
+                    "code": "MANUSCRIPT_ABSTRACT_LABEL_RESTORED",
+                    "source": "existing_abstract_prose",
+                }
+            )
+
+    section_map = _sections(repaired)
+    conclusion = section_map.get("Conclusion")
+    if conclusion is not None and not _has_prose(conclusion):
+        results = section_map.get("Results", "")
+        primary = _subsections(results).get("Primary association", "")
+        source = primary or results
+        candidate = next(
+            (
+                sentence.strip()
+                for sentence in re.split(r"(?<=[.!?])\s+", source)
+                if _has_prose(sentence)
+                and (
+                    "{evidence:" in sentence
+                    or "{claim:" in sentence
+                    or _EVIDENCE_LINK_RE.search(sentence) is not None
+                )
+            ),
+            None,
+        )
+        if candidate is not None:
+            repaired = _replace_section_body(repaired, "Conclusion", candidate)
+            repairs.append(
+                {
+                    "code": "MANUSCRIPT_CONCLUSION_RESTORED",
+                    "source": "existing_results_evidence_sentence",
+                }
+            )
+    return repaired, tuple(repairs)
+
+
 def _normalise_adjustment_set(raw: str) -> tuple[str, ...]:
     cleaned = _strip_audit_markup(raw).replace("`", "")
     cleaned = re.sub(r"\[@[^\]]+\]", "", cleaned)
@@ -423,5 +508,6 @@ __all__ = [
     "ManuscriptQualityAudit",
     "ManuscriptQualityFinding",
     "audit_manuscript_quality",
+    "repair_reader_structure_from_existing_prose",
     "render_reader_manuscript",
 ]
