@@ -1101,6 +1101,64 @@ def _verified_resume_writer_scaffold(
     }
 
 
+def _verified_resume_writer_scaffold_for_quality_migration(
+    *,
+    resume_state: Optional[Dict[str, Any]],
+    evidence: Any,
+    run_dir: Path,
+    per_step_records: Sequence[Dict[str, Any]],
+) -> Optional[tuple[str, Dict[str, Any]]]:
+    """Return the newest verified older-contract scaffold for targeted repair."""
+
+    if not isinstance(resume_state, dict):
+        return None
+    prior_records = resume_state.get("per_step_records")
+    if not isinstance(prior_records, list) or not prior_records:
+        return None
+    current_records = list(per_step_records)
+    if not current_records:
+        return None
+    prior_digest = _writer_execution_checkpoint_sha256(prior_records)
+    current_digest = _writer_execution_checkpoint_sha256(current_records)
+    if prior_digest != current_digest:
+        return None
+
+    from .manuscript_sections import manuscript_writer_contract_sha256
+
+    current_contract_sha256 = manuscript_writer_contract_sha256()
+    candidates = [
+        record
+        for record in evidence.records()
+        if record.evidence_id == "manuscript_scaffold_raw"
+        or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
+    ]
+    for record in reversed(candidates):
+        prior_contract = str(
+            (record.metadata or {}).get("writer_contract_sha256") or ""
+        )
+        if prior_contract == current_contract_sha256:
+            continue
+        verified_path = verified_run_evidence_path(run_dir, record)
+        if verified_path is None:
+            continue
+        try:
+            scaffold = verified_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if not scaffold.strip():
+            continue
+        return scaffold, {
+            "reason_code": "verified_prior_writer_scaffold_quality_migration",
+            "source_evidence_id": str(record.evidence_id),
+            "source_sha256": str(record.sha256),
+            "execution_checkpoint_sha256": current_digest,
+            "source_relative_path": str(record.relative_path),
+            "source_writer_contract_sha256": prior_contract or None,
+            "target_writer_contract_sha256": current_contract_sha256,
+        }
+    return None
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -1273,15 +1331,48 @@ def _draft_manuscript(
                 )
             )
         else:
-            scaffold = writer.run(
-                context=agent_context,
-                evidence_ids=preferred_writer_evidence_names,
-                evidence_digest=writer_evidence_digest,
-                literature_digest=render_writer_literature_digest(
-                    literature,
-                    plan=execute_result.plan,
-                ),
+            literature_digest = render_writer_literature_digest(
+                literature,
+                plan=execute_result.plan,
             )
+            migration_scaffold = _verified_resume_writer_scaffold_for_quality_migration(
+                resume_state=resume_state,
+                evidence=evidence,
+                run_dir=run_dir,
+                per_step_records=per_step_records,
+            )
+            if migration_scaffold is not None:
+                prior_scaffold, migration_detail = migration_scaffold
+                scaffold, repaired_section_keys = writer.repair_existing(
+                    prior_scaffold,
+                    context=agent_context,
+                    evidence_ids=preferred_writer_evidence_names,
+                    evidence_digest=writer_evidence_digest,
+                    literature_digest=literature_digest,
+                )
+                findings.append(
+                    ValidationFinding(
+                        validator="writer_resume",
+                        severity="warning",
+                        message=(
+                            "Migrated the digest-verified prior Writer scaffold "
+                            "by regenerating only deterministic error-owning "
+                            "sections under the current Writer contract."
+                        ),
+                        evidence_ids=[migration_detail["source_evidence_id"]],
+                        detail={
+                            **migration_detail,
+                            "repaired_section_keys": list(repaired_section_keys),
+                        },
+                    )
+                )
+            else:
+                scaffold = writer.run(
+                    context=agent_context,
+                    evidence_ids=preferred_writer_evidence_names,
+                    evidence_digest=writer_evidence_digest,
+                    literature_digest=literature_digest,
+                )
     except Exception as exc:
         writer_error_message = f"{type(exc).__name__}: {exc}"
         scaffold = ""
