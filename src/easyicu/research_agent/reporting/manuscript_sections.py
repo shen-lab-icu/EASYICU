@@ -439,6 +439,27 @@ def _quality_repair_specs(
     )
 
 
+def quality_repair_section_keys(
+    manuscript: str,
+    *,
+    expected_display_labels: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Return the Writer section owners selected by the quality contract.
+
+    This read-only projection lets report-only migration tools explain which
+    sections would be regenerated without duplicating the finding-to-owner
+    policy or issuing a Provider request.
+    """
+
+    return tuple(
+        spec.key
+        for spec, _detail in _quality_repair_specs(
+            manuscript,
+            expected_display_labels=expected_display_labels,
+        )
+    )
+
+
 def _remaining_quality_errors(
     scientific: str,
     *,
@@ -689,6 +710,7 @@ __all__ = [
     "ManuscriptSectionContractError",
     "ManuscriptSectionSpec",
     "manuscript_writer_contract_sha256",
+    "quality_repair_section_keys",
     "repair_existing_manuscript_sections",
     "render_manuscript_sections",
 ]
