@@ -414,8 +414,12 @@ from .planning.figure_plan_shaping import (
 from .planning.final_plan_shape import validate_final_plan_shape
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
 from .orchestration.scientific_plan_review_gate import (
-    literature_design_authority_finding,
+    PreplanAbortContext,
+    append_literature_design_authority_finding,
+    fail_if_strict_prompt_compilation_failed,
     prepare_scientific_plan_review_gate,
+    record_literature_authority_abort,
+    require_strict_planner_route,
 )
 from .figures.skill import PublicationFigureSkill
 from .figures.prior_output_support import (
@@ -974,45 +978,13 @@ def _run_preplan_literature_and_hypothesis(
     llm: Any,
     resume_state: Any,
 ) -> Tuple[Optional[Any], Any, list[str], list[str], Any]:
-    if self._config.require_literature_design_authority and skill_obj is not None:
-        raise LiteratureDesignAuthorityError(
-            "literature_design_authority_requires_planner",
-            "strict literature-to-design authority cannot be bypassed by a fixed skill plan",
-            path="pipeline.skill",
-        )
+    require_strict_planner_route(self._config.require_literature_design_authority, skill_obj)
     allowed_literature_citation_keys: list[str] = []
     direct_comparator_literature_keys: list[str] = []
     preplan_literature: Optional[LiteratureBundle] = None
-
-    def aborted_plan_phase(reason: str) -> _PlanPhaseResult:
-        aborted = self._finalise_aborted(
-            run_id=run_id,
-            run_dir=run_dir,
-            context=context,
-            context_path=context_path,
-            evidence=evidence,
-            findings=findings,
-            reason=reason,
-        )
-        return _PlanPhaseResult(
-            context=context,
-            agent_context=agent_context,
-            context_path=context_path,
-            evidence=evidence,
-            findings=findings,
-            plan=AnalysisPlan(research_question=context.research_question, steps=[]),
-            plan_path=run_dir / "analysis_plan.json",
-            llm_signature=self._llm_signature(llm),
-            used_mock_llm=any(True for _ in self._iter_mock_clients(llm)),
-            prompt_version=PROMPT_PACK_VERSION,
-            prompt_files=prompt_pack_files(),
-            role_resolver=lambda _role: resolve_role_client(llm, _role),
-            cost_meter=None,
-            repro_envelope=None,
-            started_at=datetime.now(timezone.utc),
-            resume_state=resume_state,
-            aborted_result=aborted,
-        )
+    abort_context = PreplanAbortContext(
+        run_id, run_dir, context, context_path, agent_context, evidence, findings, llm, resume_state
+    )
 
     if self._enable_literature and skill_obj is None:
         try:
@@ -1149,7 +1121,7 @@ def _run_preplan_literature_and_hypothesis(
                     run_id=run_id,
                 )
                 return (
-                    aborted_plan_phase("hypothesis_blueprint_blocked"),
+                    abort_context.finish(self, reason="hypothesis_blueprint_blocked"),
                     agent_context,
                     allowed_literature_citation_keys,
                     direct_comparator_literature_keys,
@@ -1164,43 +1136,18 @@ def _run_preplan_literature_and_hypothesis(
             )
             agent_context = agent_context.model_copy(update={"notes": agent_notes})
         except LiteratureDesignAuthorityError as exc:
-            findings.append(
-                ValidationFinding(
-                    validator="literature_design_authority",
-                    severity="error",
-                    message=(
-                        "Reviewed literature is not design-ready; stopped before "
-                        f"Planner Provider use: {exc}"
-                    ),
-                    evidence_ids=["preplan_literature_bundle"],
-                    detail={
-                        "reason": exc.reason_code,
-                        "path": exc.path,
-                        "human_review_required": True,
-                        "approval_allowed": False,
-                    },
-                )
-            )
-            emit_progress(
-                "hypothesis",
-                "Literature-to-design authority is incomplete; aborting before Planner.",
-                status="error",
-                run_id=run_id,
-            )
+            record_literature_authority_abort(findings, emit_progress, run_id, exc)
             return (
-                aborted_plan_phase(exc.reason_code),
+                abort_context.finish(self, reason=exc.reason_code),
                 agent_context,
                 allowed_literature_citation_keys,
                 direct_comparator_literature_keys,
                 preplan_literature,
             )
         except Exception as exc:
-            if self._config.require_literature_design_authority:
-                raise LiteratureDesignAuthorityError(
-                    "literature_design_prompt_compilation_failed",
-                    "reviewed literature could not be compiled into the Planner context",
-                    path="hypothesis_blueprint",
-                ) from exc
+            fail_if_strict_prompt_compilation_failed(
+                self._config.require_literature_design_authority, exc
+            )
             findings.append(
                 ValidationFinding(
                     validator="hypothesis_blueprint",
@@ -2793,12 +2740,7 @@ class ResearchAgentPipeline:
             )
         if self._config.require_human_plan_review:
             if self._config.require_literature_design_authority:
-                literature_finding = literature_design_authority_finding(
-                    plan=plan,
-                    literature=preplan_literature,
-                )
-                if literature_finding is not None:
-                    findings.append(literature_finding)
+                append_literature_design_authority_finding(findings, plan, preplan_literature)
             review_gate = prepare_scientific_plan_review_gate(
                 context=context,
                 plan=plan,

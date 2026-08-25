@@ -45,6 +45,13 @@ published comparison set.
 - Full exact-head CI was intentionally not run during this scoped development
   iteration; project policy reserves it for the frozen formal checkpoint.
 
+After the first push, Research-Agent CI run `32838056577` correctly rejected a
+57-line `pipeline.py` growth. The follow-up owner refactor moved pre/post-plan
+gate mechanics into the scientific-plan-review orchestration boundary:
+`pipeline.py` is now 8,418 LOC versus the 8,419 baseline, the intentional new
+planning owner is recorded in the module-graph baseline, cyclic SCC count
+remains zero, and the architecture suite passes `50/50`.
+
 ## Dev9 zero-Provider shadow audit
 
 Input root:
