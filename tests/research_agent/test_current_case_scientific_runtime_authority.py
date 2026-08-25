@@ -600,6 +600,18 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     exposure_intervals = time_varying.loc[time_varying["is_exposure"]]
     assert exposure_intervals["interval_start_days"].tolist() == [0.0, 7.0, 14.0]
     assert exposure_intervals["interval_end_days"].tolist() == [7.0, 14.0, 27.0]
+    reporting = summary["reportable_survival_results"]
+    assert reporting["schema_version"] == "easyicu.survival_reporting/1"
+    assert reporting["constant_hazard_ratio_authorized"] is (
+        not summary["proportional_hazards_status"].startswith("violation_")
+    )
+    assert reporting["rmst"]["difference_days"] == pytest.approx(
+        rmst.loc[0, "rmst_difference_days"]
+    )
+    assert [
+        row["hazard_ratio"]
+        for row in reporting["time_varying_adjusted_association"]["intervals"]
+    ] == pytest.approx(exposure_intervals["hazard_ratio"].tolist())
     assert not (tmp_path / "landmark_survival_suite.svg").exists()
     risk = pd.read_csv(tmp_path / "landmark_risk_set_flow.csv")
     final_count = risk.loc[

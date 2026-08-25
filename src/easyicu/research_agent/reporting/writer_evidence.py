@@ -372,6 +372,7 @@ _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT = {
 _REPORTABLE_NUMERIC_PREFIXES = (
     "reportable_descriptive_results.",
     "reportable_secondary_results.",
+    "reportable_survival_results.",
 )
 _REPORTABLE_NUMERIC_CAP_PER_STEP = 50
 
@@ -466,6 +467,44 @@ def _secondary_reporting_is_authorized(
         == "ordered_stratified_analysis"
         and summary.get("analysis_family") == "association"
         and summary.get("analysis_role") == "secondary"
+    )
+    return bool(raw_owner_authority or envelope_owner_authority)
+
+
+def _survival_reporting_is_authorized(
+    *,
+    record: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    payload: Any,
+    evidence: EvidenceStore | None,
+) -> bool:
+    """Authorize the deterministic non-PH survival projection for Writer."""
+
+    if not isinstance(payload, Mapping):
+        return False
+    rmst = payload.get("rmst")
+    time_varying = payload.get("time_varying_adjusted_association")
+    if not isinstance(rmst, Mapping) or not isinstance(time_varying, Mapping):
+        return False
+    intervals = time_varying.get("intervals")
+    if not isinstance(intervals, list) or not intervals:
+        return False
+    if payload.get("constant_hazard_ratio_authorized") is not False:
+        return False
+    if not str(payload.get("proportional_hazards_status") or "").startswith(
+        "violation_"
+    ):
+        return False
+    raw_owner_authority = (
+        payload.get("schema_version") == "easyicu.survival_reporting/1"
+        and payload.get("execution_owner") == "landmark_survival_executor_v1"
+    )
+    envelope_owner_authority = (
+        _has_envelope_writer_authority(record, evidence=evidence)
+        and record.get("deterministic_standard_analysis")
+        == "signed_landmark_survival_suite"
+        and summary.get("analysis_family") == "survival"
+        and summary.get("analysis_role") == "primary"
     )
     return bool(raw_owner_authority or envelope_owner_authority)
 
@@ -615,6 +654,18 @@ def _render_writer_evidence_digest(
             digest_row["reportable_secondary_results"] = dict(
                 reportable_secondary
             )
+        reportable_survival = summary.get("reportable_survival_results")
+        if _survival_reporting_is_authorized(
+            record=record,
+            summary=summary,
+            payload=reportable_survival,
+            evidence=evidence,
+        ):
+            # Non-proportional hazards make the constant Cox coefficient an
+            # invalid headline. Keep the owner-issued absolute-time and
+            # interval-specific alternatives together and ahead of the
+            # diagnostic-leaf cap.
+            digest_row["reportable_survival_results"] = dict(reportable_survival)
         artifact_bindings = record.get("writer_artifact_bindings")
         primary_candidate = summary.get("primary_association_path")
         declared_primary_candidate = bool(primary_candidate)

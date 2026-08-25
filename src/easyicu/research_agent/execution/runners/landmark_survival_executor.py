@@ -996,6 +996,7 @@ def run_landmark_survival_suite(
         )
 
     time_varying_table = None
+    exposure_intervals = None
     if sealed.time_varying_effect_method is not None:
         time_varying_table = fit_piecewise_time_varying_cox(
             model_frame,
@@ -1012,6 +1013,43 @@ def run_landmark_survival_suite(
             raise ValueError(
                 "landmark survival time-varying result lacks every exposure interval"
             )
+
+    reportable_survival_results = None
+    if rmst_table is not None and exposure_intervals is not None:
+        rmst_row = rmst_table.iloc[0]
+        reportable_survival_results = {
+            "schema_version": "easyicu.survival_reporting/1",
+            "execution_owner": "landmark_survival_executor_v1",
+            "interpretation_ceiling": "descriptive_prognostic_association_not_causal",
+            "contrast": str(rmst_row["contrast"]),
+            "constant_hazard_ratio_authorized": not ph_violation,
+            "proportional_hazards_status": ph_status,
+            "rmst": {
+                "method": str(rmst_row["adjustment"]),
+                "tau_days_from_landmark": float(rmst_row["tau_days_from_landmark"]),
+                "exposed_rmst_days": float(rmst_row["exposed_rmst_days"]),
+                "comparator_rmst_days": float(rmst_row["comparator_rmst_days"]),
+                "difference_days": float(rmst_row["rmst_difference_days"]),
+                "ci_low": float(rmst_row["ci_low"]),
+                "ci_high": float(rmst_row["ci_high"]),
+                "p_value": float(rmst_row["p_value"]),
+            },
+            "time_varying_adjusted_association": {
+                "method": str(sealed.time_varying_effect_method),
+                "adjustment_columns": list(sealed.adjustment_columns),
+                "intervals": [
+                    {
+                        "start_days": float(row.interval_start_days),
+                        "end_days": float(row.interval_end_days),
+                        "hazard_ratio": float(row.hazard_ratio),
+                        "ci_low": float(row.ci_low),
+                        "ci_high": float(row.ci_high),
+                        "p_value": float(row.p_value),
+                    }
+                    for row in exposure_intervals.itertuples(index=False)
+                ],
+            },
+        }
 
     out_dir.mkdir(parents=True, exist_ok=True)
     table_one_path = out_dir / "landmark_table_one.csv"
@@ -1125,6 +1163,11 @@ def run_landmark_survival_suite(
             None
             if rmst_table is None
             else float(rmst_table.loc[0, "rmst_difference_days"])
+        ),
+        **(
+            {"reportable_survival_results": reportable_survival_results}
+            if reportable_survival_results is not None
+            else {}
         ),
         "paper_authorization_allowed": False,
         "analysis_only": True,
