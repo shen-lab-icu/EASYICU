@@ -1108,6 +1108,11 @@ def _is_gate_state_superseded(
     """
     validator = finding.validator or ""
     message = (finding.message or "").lower()
+    if (
+        validator == "manuscript_numeric_auditor"
+        and gate_state.get("manuscript_numeric_audit_clean")
+    ):
+        return True
     for v_match, msg_substr, gate_key in _GATE_STATE_SUPERSESSION_PATTERNS:
         if v_match == validator and msg_substr.lower() in message:
             if gate_state.get(gate_key):
@@ -1834,6 +1839,7 @@ def _compute_readiness_gates(
             and not stop_after_analysis
             and not writer_probe_mode
         ),
+        "manuscript_numeric_audit_clean": False,
         "manuscript_manifest_caveats_clean": bool(
             manuscript_text
             and "Manuscript scaffold not generated" not in manuscript_text[:300]
@@ -1845,6 +1851,16 @@ def _compute_readiness_gates(
         "manuscript_literature_complete": False,
         "robustness_panel_complete": False,
     }
+    if manuscript_text and not writer_probe_mode and not stop_after_analysis:
+        from ..audits.manuscript_claims import audit_manuscript_numeric_claims
+
+        current_numeric_findings = audit_manuscript_numeric_claims(
+            manuscript_text,
+            per_step_records=per_step_records,
+        )
+        current_gate_state["manuscript_numeric_audit_clean"] = not any(
+            finding.severity == "error" for finding in current_numeric_findings
+        )
     current_robustness_panel = load_robustness_panel(
         Path(run_dir) / "robustness_panel.json"
     )
