@@ -290,7 +290,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "6"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "7"
 
 
 def manuscript_writer_contract_sha256() -> str:
@@ -522,8 +522,12 @@ def repair_existing_manuscript_sections(
                 + "Regenerate the complete section from the same machine evidence. "
                 + "Resolve every listed error without adding an unsupported result, "
                 + "changing the executed method, exposing runtime identifiers, or "
-                + "mentioning this migration. Preserve all required headings and "
-                + "labels."
+                + "mentioning this migration. Remove every offending text excerpt "
+                + "listed above verbatim; do not repeat it while explaining the "
+                + "method. Describe implementation identifiers only by their "
+                + "reader-facing clinical concept and analysis window (for example, "
+                + "state that the unit of analysis was an ICU stay without naming "
+                + "its database column). Preserve all required headings and labels."
                 + (
                     " This is the final bounded repair attempt; verify every "
                     "offending term is absent before returning."
