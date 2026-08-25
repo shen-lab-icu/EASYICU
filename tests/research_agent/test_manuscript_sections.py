@@ -153,6 +153,8 @@ def test_section_specs_keep_literature_and_evidence_boundaries() -> None:
     assert "released alongside this manuscript" not in instructions["methods"]
     assert "Copy the executed adjustment set" in instructions["methods"]
     assert "Name the exact metric" in instructions["results"]
+    assert "`Table 1`" in instructions["results"]
+    assert "`Figure 1`" in instructions["results"]
     assert "Do not list artifacts or praise the pipeline" in instructions["discussion"]
     for key in ("abstract", "introduction", "results", "discussion", "conclusion"):
         assert "raw snake_case" in instructions[key]
@@ -338,6 +340,47 @@ def test_existing_manuscript_migration_repairs_only_error_owners() -> None:
     assert repaired_keys == ("discussion",)
     assert calls == ["Discussion"]
     assert "host-bound" not in repaired
+    assert "## Data and code availability" in repaired
+    assert "## Funding" in repaired
+
+
+def test_existing_manuscript_migration_repairs_missing_display_callouts() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    )
+    calls: list[str] = []
+
+    def call_section(**kwargs: object) -> str:
+        section_name = str(kwargs["section_name"])
+        calls.append(section_name)
+        assert section_name == "Results"
+        return (
+            _minimal_valid_section(section_name)
+            .replace(
+                "Evidence-bound cohort prose.",
+                "Evidence-bound cohort prose (Table 1).",
+            )
+            .replace(
+                "Evidence-bound association prose.",
+                "Evidence-bound association prose (Figure 1).",
+            )
+        )
+
+    repaired, repaired_keys = repair_existing_manuscript_sections(
+        manuscript,
+        call_section=call_section,
+        common={
+            "evidence_ids": ("table_one", "publication_figure_contract"),
+        },
+    )
+
+    assert repaired_keys == ("results",)
+    assert calls == ["Results"]
+    audit = audit_manuscript_quality(
+        repaired,
+        expected_display_labels=("Table 1", "Figure 1"),
+    )
+    assert audit.status == "pass"
 
 
 def test_existing_manuscript_migration_retries_only_persistent_owner() -> None:

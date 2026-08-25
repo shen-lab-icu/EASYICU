@@ -166,7 +166,8 @@ MANUSCRIPT_SECTION_SPECS = (
         instruction=(
             "Write `## Results` with sub-sections:\n"
             "### Cohort characteristics\n"
-            "  N, key demographics, cite {evidence:table_one} if available.\n"
+            "  N, key demographics. When `table_one` is available, call the "
+            "display `Table 1` in prose and cite {evidence:table_one}.\n"
             "### Primary outcome\n"
             "  Incidence, cite {evidence:outcome_rate}.\n"
             "### Primary association\n"
@@ -194,6 +195,10 @@ MANUSCRIPT_SECTION_SPECS = (
             "collapsed to a degenerate value, a missingness pattern that "
             "violated an aggregation rule). Cite the corresponding registered "
             "evidence id. Omit this subsection if no such finding was produced.\n"
+            "When `publication_figure_contract` is available, call the canonical "
+            "result display `Figure 1` at least once in the Results subsection "
+            "whose claim it supports. Do not invent a table or figure callout "
+            "when its evidence id is absent.\n"
             "Target: 400-600 words. Every numeric claim MUST have an "
             "{evidence:id} citation. Use reader-facing clinical labels; do not "
             "expose raw snake_case identifiers, internal reason codes, or "
@@ -281,7 +286,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "3"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "4"
 
 
 def manuscript_writer_contract_sha256() -> str:
@@ -385,6 +390,8 @@ def _assemble_scientific_sections(sections: Mapping[str, str]) -> str:
 
 def _quality_repair_specs(
     scientific: str,
+    *,
+    expected_display_labels: tuple[str, ...] = (),
 ) -> tuple[tuple[ManuscriptSectionSpec, str], ...]:
     """Map deterministic manuscript findings to their section owners."""
 
@@ -403,7 +410,11 @@ def _quality_repair_specs(
         "Methods/Results": ("methods", "results"),
     }
     messages: dict[str, list[str]] = {}
-    for finding in audit_manuscript_quality(scientific).findings:
+    for finding in audit_manuscript_quality(
+        scientific,
+        expected_display_labels=expected_display_labels,
+        require_administrative_sections=False,
+    ).findings:
         if finding.severity != "error":
             continue
         owner_keys = section_keys.get(finding.section, ())
@@ -424,12 +435,20 @@ def _quality_repair_specs(
     )
 
 
-def _remaining_quality_errors(scientific: str) -> tuple[tuple[str, str, str], ...]:
+def _remaining_quality_errors(
+    scientific: str,
+    *,
+    expected_display_labels: tuple[str, ...] = (),
+) -> tuple[tuple[str, str, str], ...]:
     from .manuscript_quality import audit_manuscript_quality
 
     return tuple(
         (finding.code, finding.section, finding.message)
-        for finding in audit_manuscript_quality(scientific).findings
+        for finding in audit_manuscript_quality(
+            scientific,
+            expected_display_labels=expected_display_labels,
+            require_administrative_sections=False,
+        ).findings
         if finding.severity == "error"
     )
 
@@ -463,6 +482,7 @@ def repair_existing_manuscript_sections(
     *,
     call_section: Callable[..., str],
     common: Mapping[str, Any],
+    administrative_authority: ManuscriptAdministrativeAuthority | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Regenerate only section owners named by deterministic quality errors."""
 
@@ -472,12 +492,23 @@ def repair_existing_manuscript_sections(
         manuscript
     )
     sections = _existing_scientific_sections(manuscript)
+    from .manuscript_quality import expected_manuscript_display_labels
+
+    display_labels = expected_manuscript_display_labels(
+        tuple(common.get("evidence_ids") or ())
+    )
     repaired_keys: list[str] = []
     scientific = _assemble_scientific_sections(sections)
     for attempt in range(2):
-        repair_specs = _quality_repair_specs(scientific)
+        repair_specs = _quality_repair_specs(
+            scientific,
+            expected_display_labels=display_labels,
+        )
         if not repair_specs:
-            return scientific, tuple(repaired_keys)
+            administrative = render_manuscript_administrative_sections(
+                administrative_authority
+            )
+            return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
         for spec, error_detail in repair_specs:
             repair_instruction = (
                 spec.instruction
@@ -516,10 +547,14 @@ def repair_existing_manuscript_sections(
                 repaired_keys.append(spec.key)
         scientific = _assemble_scientific_sections(sections)
 
-    remaining = _remaining_quality_errors(scientific)
+    remaining = _remaining_quality_errors(
+        scientific,
+        expected_display_labels=display_labels,
+    )
     if remaining:
         raise ManuscriptReaderQualityContractError(findings=remaining)
-    return scientific, tuple(repaired_keys)
+    administrative = render_manuscript_administrative_sections(administrative_authority)
+    return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
 
 
 def render_manuscript_sections(
@@ -539,6 +574,11 @@ def render_manuscript_sections(
     """
 
     sections: dict[str, str] = {}
+    from .manuscript_quality import expected_manuscript_display_labels
+
+    display_labels = expected_manuscript_display_labels(
+        tuple(common.get("evidence_ids") or ())
+    )
     for spec in MANUSCRIPT_SECTION_SPECS:
         section = _ensure_section_heading(
             spec,
@@ -592,7 +632,10 @@ def render_manuscript_sections(
         scientific
     )
     sections = _existing_scientific_sections(scientific)
-    for spec, error_detail in _quality_repair_specs(scientific):
+    for spec, error_detail in _quality_repair_specs(
+        scientific,
+        expected_display_labels=display_labels,
+    ):
         repair_instruction = (
             spec.instruction
             + "\n\nREADER-QUALITY CONTRACT REPAIR:\n"
@@ -621,7 +664,10 @@ def render_manuscript_sections(
         sections[spec.key] = repaired
 
     scientific = _assemble_scientific_sections(sections)
-    remaining = _remaining_quality_errors(scientific)
+    remaining = _remaining_quality_errors(
+        scientific,
+        expected_display_labels=display_labels,
+    )
     if remaining:
         raise ManuscriptReaderQualityContractError(findings=remaining)
     administrative = render_manuscript_administrative_sections(administrative_authority)

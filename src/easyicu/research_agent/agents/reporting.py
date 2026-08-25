@@ -23,6 +23,7 @@ from ..reporting.manuscript_sections import (
     repair_existing_manuscript_sections,
     render_manuscript_sections,
 )
+from ..reporting.administrative_authority import ManuscriptAdministrativeAuthority
 
 from ._support import (
     _NATURE_WRITING_GUIDE,
@@ -346,6 +347,7 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> str:
         return render_manuscript_sections(
             call_section=self._call_section,
@@ -355,6 +357,7 @@ class WriterAgent:
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
             },
+            administrative_authority=administrative_authority,
         )
 
     def repair_existing(
@@ -365,6 +368,7 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         return repair_existing_manuscript_sections(
             manuscript,
@@ -375,6 +379,7 @@ class WriterAgent:
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
             },
+            administrative_authority=administrative_authority,
         )
 
 
