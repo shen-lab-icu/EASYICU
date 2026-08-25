@@ -203,6 +203,16 @@ def test_empty_conclusion_fails_closed() -> None:
     assert any(finding.section == "Conclusion" for finding in audit.findings)
 
 
+def test_abstract_rejects_duplicated_conclusion() -> None:
+    text = _valid_manuscript().replace(
+        "**Conclusions:** The association requires external validation.",
+        "**Conclusions:** Sepsis status was associated with in-hospital mortality.",
+    )
+
+    codes = _codes(text)
+    assert "MANUSCRIPT_ABSTRACT_CONCLUSION_DUPLICATES_RESULTS" in codes
+
+
 def test_methods_results_adjustment_conflict_is_reported() -> None:
     text = _valid_manuscript().replace(
         "After adjustment for age and sex, Sepsis-3 status was associated",
