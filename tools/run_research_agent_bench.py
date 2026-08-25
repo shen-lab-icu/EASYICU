@@ -1347,6 +1347,92 @@ def _score_planner_only_pending(
     }
 
 
+def _score_planner_design_canary(
+    *, result: Any, item: Any, label: str, elapsed_seconds: float
+) -> Dict[str, Any]:
+    """Verify and score a terminal design outline without execution claims."""
+
+    from easyicu.research_agent.authority.evidence_store import sha256_of_file
+    from easyicu.research_agent.planning.progressive_artifacts import (
+        ProgressiveDesignCanaryReceipt,
+    )
+
+    run_dir = Path(result.run_dir)
+    receipt_path = Path(result.receipt_path)
+    if receipt_path.parent.resolve() != run_dir.resolve():
+        raise RuntimeError("design canary receipt is outside its run directory")
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise RuntimeError("design canary receipt is absent or not a regular file")
+    observed_sha256 = sha256_of_file(receipt_path)
+    if observed_sha256 != result.receipt_sha256:
+        raise RuntimeError("design canary receipt SHA-256 mismatch")
+    receipt = ProgressiveDesignCanaryReceipt.model_validate_json(
+        receipt_path.read_text(encoding="utf-8")
+    )
+    checkpoint_path = run_dir / (
+        f"progressive_planner_checkpoint_{receipt.checkpoint_sequence:03d}.json"
+    )
+    if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
+        raise RuntimeError("design canary outline checkpoint is absent")
+    if receipt.selected_literature_dimension_count != 7:
+        raise RuntimeError(
+            "design canary selected design did not resolve all seven dimensions"
+        )
+    forbidden = (run_dir / "analysis_plan.json", run_dir / "human_review_checkpoint.json")
+    unexpected = [path.name for path in forbidden if path.exists()]
+    if unexpected:
+        raise RuntimeError(
+            "outline-only design canary emitted downstream artifacts: "
+            + ", ".join(unexpected)
+        )
+    return {
+        "arm": label,
+        "run_id": result.run_id,
+        "workdir": str(run_dir),
+        "status": receipt.status,
+        "planner_only_complete": True,
+        "human_review_pending": False,
+        "design_canary_complete": True,
+        "reason_code": receipt.reason_code,
+        "candidate_design_count": receipt.candidate_design_count,
+        "selected_design_count": len(receipt.selected_design_ids),
+        "rejected_design_count": len(receipt.rejected_design_ids),
+        "selected_literature_dimension_count": (
+            receipt.selected_literature_dimension_count
+        ),
+        "primary_or": None,
+        "direction_match": None,
+        "expected_direction": getattr(item, "expected_or_direction", None),
+        "icu_findings": {},
+        "workflow_hits": {},
+        "artifact_hits": {},
+        "n_findings": 0,
+        "n_warnings": 0,
+        "n_errors": 0,
+        "n_historical_errors": 0,
+        "gate_status": "design_outline_complete",
+        "execution_complete": False,
+        "step_scientific_requirements_complete": False,
+        "required_step_count": 0,
+        "completed_step_count": 0,
+        "failed_step_ids": [],
+        "missing_step_ids": [],
+        "manuscript_ready": False,
+        "publication_ready": False,
+        "publication_artifacts_ready": False,
+        "execution_paper_eligible": False,
+        "paper_authorized": False,
+        "writer_attempts": 0,
+        "superseded_error_count": 0,
+        "evidence_count": 0,
+        "evidence_kinds": {"complete": False},
+        "evidence_missing_in_manuscript": -1,
+        "five_dim_scorecard": {},
+        "cost_summary": dict(receipt.cost_summary),
+        "elapsed_seconds": round(elapsed_seconds, 2),
+    }
+
+
 def _finish_task_on_execution_outcome(task_hard_stop: Any, score: Any) -> None:
     """Close the ledger task on what the run did, not on the call returning."""
 
@@ -1757,7 +1843,23 @@ def _run_one_arm(
             force_writer_probe=bool(force_writer_probe),
         )
         elapsed = time.monotonic() - started
-        from easyicu.research_agent.orchestration.workflow import HumanReviewPending
+        from easyicu.research_agent.orchestration.workflow import (
+            HumanReviewPending,
+            PlannerDesignCanaryComplete,
+        )
+
+        if isinstance(result, PlannerDesignCanaryComplete):
+            if not opts.get("planner_only"):
+                raise RuntimeError(
+                    "benchmark received design-canary completion outside "
+                    "planner-only mode"
+                )
+            return _score_planner_design_canary(
+                result=result,
+                item=item,
+                label=label,
+                elapsed_seconds=elapsed,
+            )
 
         if isinstance(result, HumanReviewPending):
             if not opts.get("planner_only"):
