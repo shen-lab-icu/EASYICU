@@ -309,6 +309,35 @@ def test_structure_repair_restores_background_from_existing_evidence_prose() -> 
     ]
 
 
+def test_structure_repair_restores_existing_results_prose_slots() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Results:** Sepsis status was associated with in-hospital mortality.",
+        "Sepsis status was associated with in-hospital mortality {evidence:primary}.",
+    ).replace(
+        "### Primary outcome\nThe primary outcome was in-hospital death.",
+        "### Primary outcome\n",
+    ).replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality "
+        "{evidence:primary}.",
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    assert (
+        "**Results:** Sepsis status was associated with in-hospital mortality "
+        "{evidence:primary}." in repaired
+    )
+    primary_outcome = repaired.split("### Primary outcome", 1)[1].split(
+        "### Primary association", 1
+    )[0]
+    assert "{evidence:primary}" in primary_outcome
+    assert [item["code"] for item in repairs] == [
+        "MANUSCRIPT_PRIMARY_OUTCOME_RESTORED",
+        "MANUSCRIPT_ABSTRACT_RESULTS_RELABELED",
+    ]
+
+
 def test_structure_repair_copies_results_evidence_to_empty_conclusion() -> None:
     manuscript = _valid_manuscript().replace(
         "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
