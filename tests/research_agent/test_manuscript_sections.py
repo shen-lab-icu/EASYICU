@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from easyicu.research_agent.reporting.manuscript_quality import (
+    audit_manuscript_quality,
+)
 from easyicu.research_agent.reporting.manuscript_sections import (
     MANUSCRIPT_SECTION_SPECS,
     ManuscriptReaderQualityContractError,
@@ -264,7 +267,7 @@ def test_reader_quality_retries_only_abstract_with_missing_label() -> None:
     assert "**Conclusions:** Independent validation remains required." in rendered
 
 
-def test_reader_quality_retries_methods_and_results_for_adjustment_conflict() -> None:
+def test_reader_quality_repairs_methods_to_executed_results_adjustment() -> None:
     methods_calls = 0
     results_calls = 0
 
@@ -292,7 +295,7 @@ def test_reader_quality_retries_methods_and_results_for_adjustment_conflict() ->
     rendered = render_manuscript_sections(call_section=call_section, common={})
 
     assert methods_calls == 2
-    assert results_calls == 2
+    assert results_calls == 1
     assert "The adjustment set comprised age and Charlson score." in rendered
 
 
@@ -362,6 +365,39 @@ def test_existing_manuscript_migration_retries_only_persistent_owner() -> None:
     assert repaired_keys == ("discussion",)
     assert calls == 2
     assert "host-bound" not in repaired
+
+
+def test_adjustment_conflict_repairs_methods_owner_only() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace(
+        "Evidence-bound analysis prose.",
+        "The adjustment set comprised age and sex.",
+    ).replace(
+        "Evidence-bound association prose.",
+        "The adjusted odds ratio was 1.61, after adjustment for age and "
+        "Charlson comorbidity score.",
+    )
+    calls: list[str] = []
+
+    def call_section(**kwargs: object) -> str:
+        calls.append(str(kwargs["section_name"]))
+        return _minimal_valid_section(str(kwargs["section_name"])).replace(
+            "Evidence-bound analysis prose.",
+            "The adjustment set comprised age and Charlson comorbidity score.",
+        )
+
+    repaired, repaired_keys = repair_existing_manuscript_sections(
+        manuscript,
+        call_section=call_section,
+        common={},
+    )
+
+    assert repaired_keys == ("methods",)
+    assert calls == ["Methods"]
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
+        finding.code for finding in audit_manuscript_quality(repaired).findings
+    }
 
 
 def test_verified_administrative_authority_is_rendered_exactly() -> None:
