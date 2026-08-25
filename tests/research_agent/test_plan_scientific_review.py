@@ -20,12 +20,15 @@ from easyicu.research_agent.literature import (
 from easyicu.research_agent.planning.figure_strategy import (
     build_article_figure_strategy,
 )
+from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
 from easyicu.research_agent.planning.dependence_authority import (
     DependenceAuthorityError,
     bind_context_dependence_authority,
     context_dependence_authority,
 )
 from easyicu.research_agent.planning.scientific_review import (
+    _endpoint_resolved,
+    _sensitivity_facts,
     build_plan_scientific_review,
     repeated_unit_design_closed,
     render_agent_plan_revision_contract,
@@ -99,6 +102,85 @@ def test_guardrails_accept_a_context_without_optional_user_preferences() -> None
     rendered = render_plan_scientific_guardrails(context)
 
     assert "PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS" in rendered
+
+
+def test_explicit_endpoint_description_is_not_vetoed_by_source_placeholder() -> None:
+    context = _context()
+    variables = [
+        variable.model_copy(
+            update={
+                "description": (
+                    "Binary in-hospital death indicator; 0 means no documented "
+                    "death before hospital discharge."
+                ),
+                "source_concept": "declared_primary_outcome",
+            }
+        )
+        if variable.name == "death"
+        else variable
+        for variable in context.variables
+    ]
+
+    assert _endpoint_resolved(context.model_copy(update={"variables": variables}))
+
+
+def test_locked_complete_case_replay_credits_exact_typed_sensitivity_id() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                sensitivity_specs=[
+                    {
+                        "spec_id": "complete_case_primary",
+                        "axis": "missing_data",
+                        "strategy": "complete_case",
+                        "execution_variables": ["exposure", "death", "age"],
+                    }
+                ],
+            )
+        }
+    )
+    replay = AnalysisStep.model_validate(
+        {
+            "step_id": "complete_case_replay",
+            "planned_analysis_role": "sensitivity",
+            "intent": "Replay the locked complete-case specification.",
+            "method": "robustness_sensitivity",
+            "inputs": ["table:adjusted_association_estimates"],
+            "expected_outputs": ["table:robustness_matrix"],
+            "sensitivity_spec_ids": ["complete_case_primary"],
+            "robustness_replay_spec": {
+                "products": [
+                    {
+                        "product_id": "robustness_matrix",
+                        "output": "robustness_matrix",
+                    }
+                ]
+            },
+        }
+    )
+    plan = _plan().model_copy(
+        update={
+            "steps": [*_plan().steps, replay],
+            "robustness_specs": [
+                RobustnessSpec(
+                    spec_id="complete_case_primary",
+                    axis="missing",
+                    description="Locked complete-case replay.",
+                    missing_override={
+                        "strategy": "complete_case",
+                        "variables": ["exposure", "death", "age"],
+                    },
+                )
+            ],
+        }
+    )
+
+    facts = _sensitivity_facts(context, plan)
+
+    assert facts["executed_spec_ids"] == ["complete_case_primary"]
+    assert facts["missing_spec_ids"] == []
+    assert facts["typed_executable"] == ["missing"]
 
 
 def _binding(key: str, element: str, application: str) -> LiteratureDesignBinding:

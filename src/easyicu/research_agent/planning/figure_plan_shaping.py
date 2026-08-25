@@ -14,6 +14,7 @@ from typing import Sequence
 from ..contracts.declared_product import typed_product
 from ..contracts.figure_plan import (
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS,
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     COHORT_FLOW_FIGURE_PANELS,
@@ -32,6 +33,7 @@ from ..contracts.figure_plan import (
     ROBUSTNESS_FIGURE_KNOWN_INPUTS,
     association_sensitivity_composite_panels,
     absolute_risk_association_composite_panels,
+    balance_association_composite_panels,
     cohort_balance_association_composite_panels,
     data_quality_audit_source_candidates,
     landmark_association_composite_panels,
@@ -296,6 +298,67 @@ def ensure_primary_result_figure_step(
     ]
 
 
+def ensure_descriptive_context_figure_step(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Append the deterministic exposure/outcome context renderer if unique.
+
+    In an adjusted association study the primary model owns the estimand, while
+    the separately declared exposure/outcome table owns the absolute observed
+    context.  A single-source rendering child is presentation plumbing only;
+    it does not promote that descriptive table to the primary analysis.
+    """
+
+    source = EXPOSURE_OUTCOME_DISTRIBUTION_INPUT
+    owners = [
+        str(step.step_id)
+        for step in plan.steps
+        if source in {str(output) for output in step.expected_outputs}
+    ]
+    if len(owners) != 1 or dedicated_renderer_consumes_typed_source(
+        plan.steps,
+        source=source,
+    ):
+        return plan, []
+    steps = list(plan.steps)
+    step_id = _next_step_id(steps, "descriptive_context_figure")
+    figure_output = _next_figure_output(steps, "figure:descriptive_context")
+    figure_step = AnalysisStep(
+        step_id=step_id,
+        planned_analysis_role="auxiliary",
+        intent=(
+            "Render the exact exposure/outcome distribution table using its "
+            "registered deterministic descriptive-result contract. Do not "
+            "refit a model, change denominators, or scan run files."
+        ),
+        method="visualization",
+        inputs=[source],
+        expected_outputs=[figure_output],
+        icu_rule_refs=["visualization_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=source, mode="all_rows")
+        ],
+    )
+    return plan.model_copy(update={"steps": [*steps, figure_step]}), [
+        ValidationFinding(
+            validator="descriptive_context_figure_contract",
+            severity="warning",
+            message=(
+                "Bound a rendering-only descriptive-result figure to the "
+                f"unique typed source {source!r}."
+            ),
+            detail={
+                "reason": "descriptive_context_figure_bound_to_typed_source",
+                "step_id": step_id,
+                "source_step_id": owners[0],
+                "source_product": source,
+                "figure_output": figure_output,
+            },
+        )
+    ]
+
+
 def ensure_cohort_accounting_figure_step(
     *,
     plan: AnalysisPlan,
@@ -463,6 +526,11 @@ def bind_deterministic_figure_panels(
             measurement_availability_figure_panels(MISSINGNESS_MEASUREMENT_AUDIT_INPUT)
         ),
         frozenset(DATA_QUALITY_FIGURE_REQUIRED_INPUTS): DATA_QUALITY_FIGURE_PANELS,
+        frozenset(BALANCE_ASSOCIATION_COMPOSITE_INPUTS): (
+            balance_association_composite_panels(
+                BALANCE_ASSOCIATION_COMPOSITE_INPUTS
+            )
+        ),
     }
     data_quality_sources, _candidates, _missing, _ambiguous = (
         _closed_data_quality_sources(plan.steps)
@@ -813,6 +881,7 @@ __all__ = [
     "bind_deterministic_figure_panels",
     "close_empty_deterministic_figure_contracts",
     "dedicated_renderer_consumes_typed_source",
+    "ensure_descriptive_context_figure_step",
     "ensure_cohort_accounting_figure_step",
     "ensure_data_quality_figure_step",
     "ensure_primary_result_figure_step",

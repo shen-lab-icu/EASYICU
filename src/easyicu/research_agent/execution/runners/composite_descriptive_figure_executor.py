@@ -20,6 +20,7 @@ import pandas as pd
 
 from ...contracts.figure_plan import (
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
 )
 from ...figures.publication import (
@@ -105,6 +106,13 @@ _REQUIRED_COLUMNS = {
             "standardized_difference_status",
         }
     ),
+    "table:balance_positivity_context": frozenset(
+        {
+            "variable",
+            "absolute_standardized_mean_difference",
+            "standardized_difference_status",
+        }
+    ),
     "table:exposure_outcome_distribution": frozenset(
         {
             "row_role",
@@ -174,6 +182,7 @@ _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES = (
     COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
     COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+    BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
 )
 _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES = tuple(
@@ -434,6 +443,7 @@ def run_composite_descriptive_figure(
         COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
         COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
         COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+        BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
         ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
     } or sensitivity_key is not None:
         from .association_publication_figure_renderer import (
