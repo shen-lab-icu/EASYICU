@@ -35,9 +35,18 @@ _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
 }
 _ABSTRACT_LABELS = ("Background", "Methods", "Results", "Conclusions")
 _READER_FACING_SECTIONS = frozenset(
-    {"Abstract", "Introduction", "Results", "Discussion", "Conclusion"}
+    {
+        "Abstract",
+        "Introduction",
+        "Methods",
+        "Results",
+        "Discussion",
+        "Limitations",
+        "Conclusion",
+    }
 )
 _EVIDENCE_LINK_RE = re.compile(r"\[[^\]]+\]\(evidence/[^\n)]*(?:\"[^\"]*\")?\)")
+_EVIDENCE_PLACEHOLDER_RE = re.compile(r"\{evidence:[^}\n]+\}")
 _CLAIM_MARKER_RE = re.compile(r"\[\^claim_\d+\]")
 _CLAIM_DEFINITION_RE = re.compile(r"^\[\^claim_\d+\]:.*$", flags=re.M)
 _INTERNAL_PHRASES = (
@@ -143,6 +152,7 @@ def _words(text: str) -> int:
 
 def _strip_audit_markup(text: str) -> str:
     cleaned = _EVIDENCE_LINK_RE.sub("", text)
+    cleaned = _EVIDENCE_PLACEHOLDER_RE.sub("", cleaned)
     cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
     cleaned = _CLAIM_DEFINITION_RE.sub("", cleaned)
     cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
@@ -242,6 +252,45 @@ def repair_reader_structure_from_existing_prose(
                     "source": "existing_results_evidence_sentence",
                 }
             )
+
+    section_map = _sections(repaired)
+    abstract = section_map.get("Abstract")
+    if abstract is not None and not re.search(
+        r"\*\*Conclusions:\*\*\s+\S+", abstract, flags=re.I
+    ):
+        conclusion = section_map.get("Conclusion", "")
+        results = section_map.get("Results", "")
+        primary = _subsections(results).get("Primary association", "")
+        source = conclusion or primary or results
+        candidate = next(
+            (
+                sentence.strip()
+                for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", source)
+                if _has_prose(sentence)
+                and (
+                    "{evidence:" in sentence
+                    or "{claim:" in sentence
+                    or _EVIDENCE_LINK_RE.search(sentence) is not None
+                )
+            ),
+            None,
+        )
+        if candidate is not None:
+            populated = re.sub(
+                r"(\*\*Conclusions:\*\*)\s*(?=\n\s*\n|\Z)",
+                lambda match: f"{match.group(1)}\n\n{candidate}",
+                abstract,
+                count=1,
+                flags=re.I,
+            )
+            if populated != abstract:
+                repaired = _replace_section_body(repaired, "Abstract", populated)
+                repairs.append(
+                    {
+                        "code": "MANUSCRIPT_ABSTRACT_CONCLUSIONS_RESTORED",
+                        "source": "existing_conclusion_or_results_evidence_sentence",
+                    }
+                )
     return repaired, tuple(repairs)
 
 
@@ -285,6 +334,14 @@ def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
             flags=re.I,
         )
     }
+    result_sets.update(
+        _normalise_adjustment_set(match.group(1))
+        for match in re.finditer(
+            r",\s+after adjustment for\s+([^.;]+)",
+            results,
+            flags=re.I,
+        )
+    )
     result_sets.discard(())
     if len(result_sets) == 1:
         found["Results"] = next(iter(result_sets))
@@ -471,9 +528,19 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
                 )
             )
 
-    results_text = _strip_audit_markup(section_map.get("Results", "")).casefold()
+    raw_results_text = section_map.get("Results", "")
+    results_text = _strip_audit_markup(raw_results_text).casefold()
     discussion_text = _strip_audit_markup(section_map.get("Discussion", "")).casefold()
-    if "risk difference" in results_text and re.search(
+    reports_risk_difference = (
+        "risk difference" in results_text
+        or re.search(
+            r"\{claim:[^}\n]*risk_difference[^}\n]*\}",
+            raw_results_text,
+            flags=re.I,
+        )
+        is not None
+    )
+    if reports_risk_difference and re.search(
         r"(?:no|not|does not|did not).{0,80}basis.{0,80}(?:absolute )?risk difference",
         discussion_text,
     ):
