@@ -787,6 +787,51 @@ def test_strict_numeric_sentence_filter_drops_wrong_owner_not_valid_prose(
     assert untraced == []
 
 
+def test_numeric_sentence_filter_merges_overlapping_rejected_link_spans(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import (
+        bind_numeric_values,
+        drop_untraceable_numeric_sentences,
+    )
+
+    store = ra.EvidenceStore(tmp_path, enforcement_mode="strict")
+    for evidence_id in ("cohort_owner", "metric_owner", "wrong_owner"):
+        store.register_text(
+            kind="log",
+            description=evidence_id,
+            text=evidence_id,
+            filename=f"{evidence_id}.json",
+            evidence_id=evidence_id,
+        )
+    store.register_numeric_claim(
+        value="94458",
+        canonical=94458.0,
+        evidence_id="cohort_owner",
+        step_id="cohort_owner",
+        source_field="n_stays",
+    )
+    rendered = store.bind_manuscript(
+        "The cohort comprised 94,458 stays {evidence:wrong_owner}. "
+        "{evidence:metric_owner} The reported value was 0.763 "
+        "{evidence:wrong_owner}. The qualitative limitation remains."
+    )
+
+    filtered, removed = drop_untraceable_numeric_sentences(
+        rendered,
+        evidence=store,
+    )
+
+    assert removed
+    assert "94,458" not in filtered
+    assert "0.763" not in filtered
+    assert "The qualitative limitation remains." in filtered
+    assert '.json "sha256=' not in filtered
+    _bound, _binding_map, untraced = bind_numeric_values(filtered, evidence=store)
+    assert untraced == []
+
+
 def test_conflicting_declared_and_source_effect_scales_fail_closed() -> None:
     from easyicu.research_agent.authority.numeric_claim_identity import NumericClaim
 
