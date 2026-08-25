@@ -343,6 +343,33 @@
     state.host = host;
     host.addEventListener('click', event => {
       if (event.target.closest('[data-gpi-preview-close]')) { close(); return; }
+      const claimButton = event.target.closest('[data-gpi-claim]');
+      if (claimButton) {
+        const claimId = String(claimButton.dataset.gpiClaim || '');
+        host.querySelectorAll('[data-gpi-claim]').forEach(button => {
+          button.setAttribute('aria-expanded', String(button === claimButton));
+        });
+        host.querySelectorAll('[data-gpi-claim-panel]').forEach(panel => {
+          panel.hidden = panel.dataset.gpiClaimPanel !== claimId;
+        });
+        const empty = host.querySelector('[data-gpi-claim-empty]');
+        if (empty) empty.hidden = true;
+        const drawer = host.querySelector('.gpi-claim-drawer');
+        if (drawer) drawer.classList.add('is-active');
+        const panel = Array.from(host.querySelectorAll('[data-gpi-claim-panel]'))
+          .find(item => item.dataset.gpiClaimPanel === claimId);
+        if (panel) panel.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (event.target.closest('[data-gpi-claim-close]')) {
+        host.querySelectorAll('[data-gpi-claim]').forEach(button => button.setAttribute('aria-expanded', 'false'));
+        host.querySelectorAll('[data-gpi-claim-panel]').forEach(panel => { panel.hidden = true; });
+        const empty = host.querySelector('[data-gpi-claim-empty]');
+        if (empty) empty.hidden = false;
+        const drawer = host.querySelector('.gpi-claim-drawer');
+        if (drawer) drawer.classList.remove('is-active');
+        return;
+      }
       const tab = event.target.closest('[data-gpi-preview-mode]');
       if (!tab || !state.resource) return;
       const requested = tab.dataset.gpiPreviewMode;

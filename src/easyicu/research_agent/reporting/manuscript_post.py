@@ -519,7 +519,9 @@ def _apply_writer_evidence_repair_decisions(
                 raise ValueError("drop decision cannot include evidence ids")
             replacement = ""
         else:
-            raise ValueError("writer evidence repair action must be cite, claim, or drop")
+            raise ValueError(
+                "writer evidence repair action must be cite, claim, or drop"
+            )
         rewritten = rewritten[:target_start] + replacement + rewritten[target_end:]
         seen.add(index)
         applied.append(
@@ -1105,6 +1107,18 @@ def _contextual_source_score(context: str, claim: NumericClaim) -> int:
 
     if "missingness" in text and ".missingness." in source:
         score += 3
+
+    # A rounded display value can legitimately match several registered
+    # numbers.  For example, ``0.5`` may be both an exact spline-knot
+    # quantile and the one-decimal rendering of a 0.46 missingness fraction.
+    # The scientific role named in the prose must outrank a merely nearby
+    # value from another field; otherwise the binder creates a real hash for
+    # the wrong fact.  Keep this rule vocabulary-based and case-neutral.
+    if re.search(r"\b(?:spline[-\s]+)?knots?\b", text):
+        if re.search(r"(?:^|[._-])spline[_-]?knot[_-]?quantiles?(?:\[|$)", source):
+            score += 10
+        elif ".missingness." in source:
+            score -= 6
     return score
 
 
@@ -1452,10 +1466,7 @@ def _select_numeric_claim(
             prose_effect_scale is not None
             and claim.effect_scale is not prose_effect_scale
         )
-        and not (
-            prose_estimand is not None
-            and claim.estimand is not prose_estimand
-        )
+        and not (prose_estimand is not None and claim.estimand is not prose_estimand)
     ]
     if not candidates:
         return None, False
@@ -1643,7 +1654,9 @@ def _prose_effect_scale(
     if not mentions:
         return None
 
-    following = sorted((item for item in mentions if item[0] >= end), key=lambda x: x[0])
+    following = sorted(
+        (item for item in mentions if item[0] >= end), key=lambda x: x[0]
+    )
     if following:
         label_start, _label_end, scale = following[0]
         between = text[end:label_start]
@@ -1657,7 +1670,9 @@ def _prose_effect_scale(
     return next(iter(scales)) if len(scales) == 1 else None
 
 
-def _prose_numeric_estimand(text: str, *, start: int, end: int) -> Optional[NumericEstimand]:
+def _prose_numeric_estimand(
+    text: str, *, start: int, end: int
+) -> Optional[NumericEstimand]:
     """Classify an explicitly labelled point estimate or ordered CI endpoint."""
 
     prefix = text[max(0, start - 180) : start]
@@ -1667,12 +1682,7 @@ def _prose_numeric_estimand(text: str, *, start: int, end: int) -> Optional[Nume
         if re.match(r"\s*" + separator + r"\s*" + _PLAIN_PROSE_NUMBER, suffix):
             return NumericEstimand.CONFIDENCE_INTERVAL_LOWER
     if re.search(
-        _CI_MARKER
-        + r".{0,80}?"
-        + _PLAIN_PROSE_NUMBER
-        + r"\s*"
-        + separator
-        + r"\s*$",
+        _CI_MARKER + r".{0,80}?" + _PLAIN_PROSE_NUMBER + r"\s*" + separator + r"\s*$",
         prefix,
         flags=re.I | re.S,
     ):
@@ -2063,11 +2073,10 @@ def bind_numeric_values(
                 # The one refusal that names its own fix. Reported beside the
                 # value list so the reader is not left to guess which sentence
                 # cited what.
-                f" Miscited: {miscited[:3]}"
-                if miscited
-                else ""
+                f" Miscited: {miscited[:3]}" if miscited else ""
             ),
-            detail={"untraced": untraced, "miscited": miscited} if miscited
+            detail={"untraced": untraced, "miscited": miscited}
+            if miscited
             else {"untraced": untraced},
         )
 

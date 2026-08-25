@@ -191,6 +191,7 @@
       'literature_evidence.json': t('Literature evidence', '文献证据'),
       'scientific_plan_review.json': t('Scientific plan review', '科学计划审阅'),
       'manuscript_draft.json': t('Locked manuscript draft', '锁定论文草稿'),
+      'manuscript_provenance.json': t('Evidence-bound manuscript reader', '证据绑定论文阅读器'),
       'benchmark_scorecard.json': t('Evaluation scorecard', '评估记分卡'),
       'workflow_graph.json': t('Workflow graph', '工作流图谱'),
       'figure_gallery.json': t('Figure gallery', '图件画廊'),
@@ -235,6 +236,7 @@
       'literature_evidence.json': t('Search provenance, article metadata, and exact plan-step citation bindings.', '检索溯源、文章元数据以及计划步骤的精确文献绑定。'),
       'scientific_plan_review.json': t('Digest-bound multi-dimensional review before the plan can be approved.', '计划批准前的摘要绑定多维科学审阅。'),
       'manuscript_draft.json': t('Locked claims and evidence ids; not a reportable manuscript.', '锁定论断及其证据 ID；不是可报告论文草稿。'),
+      'manuscript_provenance.json': t('Click any bound number to inspect its exact JSON field, step, and registered code/data lineage.', '点击正文中的任一绑定数字，可查看准确 JSON 字段、分析步骤及已登记的代码/数据链路。'),
       'run_context.json': t('Question, cohort, source run, and local project metadata.', '研究问题、队列、原始运行与本地项目元数据。'),
       'cohort_summary.json': t('Denominator, cohort basis, and outcome availability.', '分母、队列依据与结局可用性。'),
       'source_run_manifest.json': t('Original completed run provenance and import manifest.', '原始完成运行的溯源与导入清单。'),
@@ -253,6 +255,7 @@
       'agent_plan.json',
       'scientific_plan_review.json',
       'literature_evidence.json',
+      'manuscript_provenance.json',
       'manuscript_draft.json',
       'run_context.json',
       'cohort_summary.json',
@@ -407,10 +410,58 @@
       ];
     });
   }
+  function manuscriptProvenanceView(payload) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const claims = Array.isArray(p.claims) ? p.claims.slice(0, 240) : [];
+    const blocks = Array.isArray(p.article_blocks) ? p.article_blocks.slice(0, 240) : [];
+    const claimMap = new Map(claims.map(row => [String(row && row.claim_id || ''), row || {}]));
+    const renderSegments = value => (Array.isArray(value) ? value : []).map(segment => {
+      const text = esc(String(segment && segment.text || ''));
+      const claimId = String(segment && segment.claim_id || '');
+      if (!segment || segment.kind !== 'claim' || !claimMap.has(claimId)) return text;
+      return `<button type="button" class="gpi-bound-number" id="claim-${escAttr(claimId)}" data-gpi-claim="${escAttr(claimId)}" aria-controls="gpi-claim-detail-${escAttr(claimId)}" aria-expanded="false" title="${escAttr(t('Open evidence lineage', '查看证据链路'))}">${text}</button>`;
+    }).join('');
+    const article = blocks.map(block => {
+      const content = renderSegments(block && block.segments);
+      if (block && block.kind === 'heading') {
+        const level = Math.max(2, Math.min(4, Number(block.level || 2)));
+        return `<h${level}>${content}</h${level}>`;
+      }
+      return `<p>${content}</p>`;
+    }).join('');
+    const panels = claims.map(claim => {
+      const claimId = String(claim && claim.claim_id || '');
+      const evidence = claim && claim.evidence && typeof claim.evidence === 'object' ? claim.evidence : {};
+      const artifacts = Array.isArray(claim && claim.related_artifacts) ? claim.related_artifacts : [];
+      const rows = artifacts.map(row => [
+        row.role || '', row.kind || '', row.evidence_id || '', row.sha256 || '',
+      ]);
+      return `<section class="gpi-claim-panel" id="gpi-claim-detail-${escAttr(claimId)}" data-gpi-claim-panel="${escAttr(claimId)}" hidden>
+        <div class="gpi-claim-panel-head"><div><span>${esc(t('Bound number', '绑定数字'))}</span><strong>${esc(claim.display_value || '')}</strong></div><button type="button" data-gpi-claim-close aria-label="${escAttr(t('Close evidence detail', '关闭证据详情'))}">${esc(t('Close', '关闭'))}</button></div>
+        ${artifactTable(t('Exact result source', '准确结果来源'), [t('Item', '项目'), t('Value', '值')], [
+          [t('JSON field', 'JSON 字段'), claim.source_field || ''],
+          [t('JSON pointer', 'JSON 指针'), claim.source_json_pointer || ''],
+          [t('Source value', '源数值'), claim.source_value || ''],
+          [t('Analysis step', '分析步骤'), claim.step_id || ''],
+          [t('Evidence ID', '证据 ID'), evidence.evidence_id || ''],
+          ['SHA-256', evidence.sha256 || ''],
+        ])}
+        ${artifactTable(t('Code and data lineage', '代码与数据链路'), [t('Role', '角色'), t('Kind', '类型'), t('Evidence ID', '证据 ID'), 'SHA-256'], rows, t('No related artifacts were registered.', '没有登记关联产物。'))}
+        <p class="gpi-claim-boundary">${esc(t('This view exposes immutable IDs and digests, not patient rows or host file paths. Scientific authority remains analysis-only until Host gates and human review permit more.', '此视图只显示不可变 ID 与摘要，不暴露患者行或主机文件路径。除非 Host 闸门与人工审阅另行许可，科学权限仍为 analysis-only。'))}</p>
+      </section>`;
+    }).join('');
+    return `<div class="ag-artifact-readable ag-manuscript-reader">
+      <div class="ag-artifact-readable-head"><div><div class="eyebrow">${esc(t('Evidence-bound article', '证据绑定文章'))}</div><div class="ag-artifact-readable-title">${esc(t('Every highlighted number opens its JSON field and registered execution lineage.', '每个高亮数字都可展开其 JSON 字段及已登记执行链路。'))}</div></div><span class="pill warn">analysis-only</span></div>
+      <div class="gpi-manuscript-layout"><article class="gpi-manuscript-article">${article || `<p>${esc(t('No reader blocks are available.', '没有可用的文章阅读内容。'))}</p>`}</article><aside class="gpi-claim-drawer" aria-live="polite"><div class="gpi-claim-empty" data-gpi-claim-empty>${esc(t('Click a highlighted number in the article to inspect its exact source.', '点击正文中高亮的数字，查看其准确来源。'))}</div>${panels}</aside></div>
+    </div>`;
+  }
   function artifactStructuredView(name, payload) {
     const n = String(name || '').toLowerCase();
     const p = payload && typeof payload === 'object' ? payload : {};
     const gate = p.gate && typeof p.gate === 'object' ? p.gate : p;
+    if (String(p.schema_version || '') === 'easyicu.manuscript-provenance/1') {
+      return manuscriptProvenanceView(p);
+    }
     const sections = [];
     const summary = artifactSummaryRows(
       p,
@@ -649,6 +700,6 @@
     runStatusLabel, runStatusHint, gateCheckLabel, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
     thumb, scrubDataUrls, figureGallery, artifactScalar, artifactKeyLabel,
-    artifactSummaryRows, artifactTable, objectArrayRows, firstObjectArray, stepRowsFrom, artifactStructuredView,
+    artifactSummaryRows, artifactTable, objectArrayRows, firstObjectArray, stepRowsFrom, manuscriptProvenanceView, artifactStructuredView,
   };
 })();
