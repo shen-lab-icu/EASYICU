@@ -27,9 +27,13 @@ from pathlib import Path
 
 def test_sanitise_bibtex_key_strips_unsafe_chars(ra):
     from easyicu.research_agent.reporting.bibtex import sanitise_bibtex_key
+
     assert sanitise_bibtex_key("vincent_sofa_1996") == "vincent_sofa_1996"
-    assert sanitise_bibtex_key("Vincent JL — 1996") == "vincent_jl___1996" or \
-           sanitise_bibtex_key("Vincent JL — 1996").startswith("vincent_jl")
+    assert sanitise_bibtex_key(
+        "Vincent JL — 1996"
+    ) == "vincent_jl___1996" or sanitise_bibtex_key("Vincent JL — 1996").startswith(
+        "vincent_jl"
+    )
     # Hyphen is replaced (biber dislikes inside \cite{}).
     assert "-" not in sanitise_bibtex_key("foo-bar")
     # Empty / whitespace → "ref".
@@ -40,20 +44,24 @@ def test_sanitise_bibtex_key_strips_unsafe_chars(ra):
 def test_render_bibtex_basic(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
     from easyicu.research_agent.reporting.bibtex import render_bibtex
+
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
             CitationRecord(
                 key="vincent_sofa_1996",
                 title="The SOFA score to describe organ dysfunction/failure.",
-                year="1996", venue="Intensive Care Medicine",
+                year="1996",
+                venue="Intensive Care Medicine",
                 pmid="8844239",
                 doi="10.1007/BF01709751",
                 relevance="Foundational SOFA reference.",
             ),
             CitationRecord(
-                key="ricu_2023", title="ricu: R's interface to intensive care data.",
-                year="2023", venue="Software",
+                key="ricu_2023",
+                title="ricu: R's interface to intensive care data.",
+                year="2023",
+                venue="Software",
                 url="https://github.com/eth-mds/ricu",
             ),
         ],
@@ -83,6 +91,7 @@ def test_render_bibtex_basic(ra):
 def test_render_bibtex_disambiguates_duplicate_keys(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
     from easyicu.research_agent.reporting.bibtex import render_bibtex
+
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
@@ -98,20 +107,25 @@ def test_render_bibtex_disambiguates_duplicate_keys(ra):
 
 def test_render_bibtex_empty(ra):
     from easyicu.research_agent.reporting.bibtex import render_bibtex
+
     assert render_bibtex(None) == ""
     from easyicu.research_agent.literature import LiteratureBundle
+
     assert render_bibtex(LiteratureBundle(research_question="x", citations=[])) == ""
 
 
 def test_render_bibtex_escapes_field_specials(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
     from easyicu.research_agent.reporting.bibtex import render_bibtex
+
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
             CitationRecord(
-                key="tricky_2024", title="100% certain & sound",
-                year="2024", venue="Journal of $tuff",
+                key="tricky_2024",
+                title="100% certain & sound",
+                year="2024",
+                venue="Journal of $tuff",
             ),
         ],
     )
@@ -124,12 +138,16 @@ def test_render_bibtex_escapes_field_specials(ra):
 def test_thebibliography_block(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
     from easyicu.research_agent.reporting.bibtex import render_thebibliography_block
+
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
             CitationRecord(
-                key="vincent_sofa_1996", title="SOFA score.",
-                year="1996", venue="Intensive Care Medicine", pmid="8844239",
+                key="vincent_sofa_1996",
+                title="SOFA score.",
+                year="1996",
+                venue="Intensive Care Medicine",
+                pmid="8844239",
             ),
         ],
     )
@@ -144,6 +162,27 @@ def test_thebibliography_block(ra):
 # ---------------------------------------------------------------------------
 
 
+def test_scaffold_to_latex_makes_bound_numbers_clickable(ra):
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+
+    markdown = (
+        "# Draft\n\nThe adjusted estimate was 1.42[^claim_1].\n\n"
+        "[^claim_1]: value=1.42; step=primary; field=primary_or; evidence=summary\n"
+    )
+    internal = scaffold_to_latex(markdown=markdown, draft_watermark=True)
+    web = scaffold_to_latex(
+        markdown=markdown,
+        claim_base_url="https://reader.easyicu.example/runs/run_1/manuscript",
+    )
+
+    assert r"\hyperlink{claim-claim-1}{1.42}" in internal
+    assert r"\hypertarget{claim-claim-1}{}" in internal
+    assert (
+        r"\href{https://reader.easyicu.example/runs/run_1/manuscript\#claim-claim_1}{1.42}"
+        in web
+    )
+
+
 def test_scaffold_to_latex_emits_bibliography_directives(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
     from easyicu.research_agent.reporting.latex import scaffold_to_latex
@@ -151,8 +190,13 @@ def test_scaffold_to_latex_emits_bibliography_directives(ra):
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
-            CitationRecord(key="vincent_sofa_1996", title="SOFA.", year="1996",
-                           venue="Intensive Care Medicine", pmid="8844239"),
+            CitationRecord(
+                key="vincent_sofa_1996",
+                title="SOFA.",
+                year="1996",
+                venue="Intensive Care Medicine",
+                pmid="8844239",
+            ),
         ],
     )
     md = (
@@ -179,13 +223,15 @@ def test_scaffold_to_latex_inline_bibliography_fallback(ra):
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
-            CitationRecord(key="ricu_2023", title="ricu.", year="2023",
-                           venue="Software"),
+            CitationRecord(
+                key="ricu_2023", title="ricu.", year="2023", venue="Software"
+            ),
         ],
     )
     tex = scaffold_to_latex(
         markdown="# Methods\n\nbody\n",
-        bibliography=bundle, inline_bibliography=True,
+        bibliography=bundle,
+        inline_bibliography=True,
     )
     assert r"\begin{thebibliography}" in tex
     assert r"\bibitem{ricu_2023}" in tex
@@ -196,6 +242,7 @@ def test_scaffold_to_latex_inline_bibliography_fallback(ra):
 def test_scaffold_to_latex_no_bibliography(ra):
     """Without a bundle, no References section / nocite is emitted."""
     from easyicu.research_agent.reporting.latex import scaffold_to_latex
+
     tex = scaffold_to_latex(markdown="# Methods\n\nbody\n", bibliography=None)
     assert r"\bibliography{" not in tex
     assert r"\nocite{" not in tex
@@ -203,7 +250,10 @@ def test_scaffold_to_latex_no_bibliography(ra):
 
 
 def test_latex_template_preamble_supports_venues(ra):
-    from easyicu.research_agent.reporting.latex import latex_template_preamble, scaffold_to_latex
+    from easyicu.research_agent.reporting.latex import (
+        latex_template_preamble,
+        scaffold_to_latex,
+    )
 
     assert r"\documentclass{nature}" in latex_template_preamble("nature")
     assert "sn-jnl" in latex_template_preamble("npj")
@@ -249,7 +299,9 @@ def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path)
     tex = run_dir / "manuscript_scaffold.tex"
     bib = run_dir / "manuscript_scaffold.bib"
     assert tex.exists(), "manuscript_scaffold.tex must be written"
-    assert bib.exists(), "manuscript_scaffold.bib must be written when literature is present"
+    assert bib.exists(), (
+        "manuscript_scaffold.bib must be written when literature is present"
+    )
 
     tex_text = tex.read_text(encoding="utf-8")
     bib_text = bib.read_text(encoding="utf-8")

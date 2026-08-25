@@ -20,6 +20,7 @@ NODE_APP = STATIC.parent / "pi_copilot" / "node_app"
 def _read(relative: str) -> str:
     return (STATIC / relative).read_text(encoding="utf-8")
 
+
 # The screen modules destructure `esc` from window.EU_HTML at the top of their
 # IIFE, so these Node harnesses have to install the shared escaping owner into
 # the stub window before evaluating a module — the same order index.html uses.
@@ -30,20 +31,17 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260817-visible-activity1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
-    assert "css/guided-pi-preview.css?v=20260811-research-docs1" in index
+    assert "css/guided-pi-preview.css?v=20260825-manuscript-reader1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
     assert "css/guided-pi-literature.css?v=20260812-literature3" in index
     assert "js/screens-guided-pi-literature.js?v=20260812-literature3" in index
     assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260815-real-render2" in index
+    assert "js/screens-guided-pi-preview.js?v=20260825-manuscript-reader1" in index
     assert "js/screens-guided-pi-replay.js?v=20260815-mode-resume1" in index
     assert "js/screens-guided-pi-activity.js?v=20260817-visible-activity2" in index
-    assert (
-        "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"
-        in index
-    )
+    assert "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1" in index
     assert "js/screens-guided-pi-project.js?v=20260823-project-owner1" in index
     assert "js/screens-guided-pi.js?v=20260817-visible-activity2" in index
     assert (
@@ -107,7 +105,9 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     )[0]
 
     assert 'class="gpi-error" role="alert"' in panel
-    assert "state.projectInitialization && state.projectInitialization.required" in create
+    assert (
+        "state.projectInitialization && state.projectInitialization.required" in create
+    )
     assert "confirm_initialization: true" in create
     assert create.index("confirm_initialization: true") < create.index(
         "createPiCopilotSession"
@@ -119,8 +119,8 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     assert "当前项目保存的研究配置已不存在" in owner
     assert "关联的研究配置已经失效" in panel
     assert "EasyICU 不会静默创建或绑定另一份配置" in panel
-    assert 'data-newstudy' in panel
-    assert 'data-refreshdrafts' in panel
+    assert "data-newstudy" in panel
+    assert "data-refreshdrafts" in panel
     assert "state.projectIssue === 'pi_project_study_context_missing'" in panel
     assert "state.projectIssue = error.code" in project_owner
     assert "confirm_initialization: false" in project_owner
@@ -131,9 +131,7 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     panel_selection = render.split("state.host.innerHTML", 1)[1]
     assert panel_selection.index(
         "state.projectIssue === 'pi_project_study_context_missing'"
-    ) < (
-        panel_selection.index("state.showSetup || !connectionReady()")
-    )
+    ) < (panel_selection.index("state.showSetup || !connectionReady()"))
 
 
 def test_get_requests_preserve_typed_backend_error_codes() -> None:
@@ -223,7 +221,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     )
     assert "Conversation memory" not in guided
     assert "对话记忆" not in guided
-    assert "Study setup, runs, evidence, and conversation history stay here." in projects_owner
+    assert (
+        "Study setup, runs, evidence, and conversation history stay here."
+        in projects_owner
+    )
     assert "function renderShellRail(ctx)" in projects_owner
     assert 'class="gd-rail"' in projects_owner
     assert 'class="gd-rail"' not in guided
@@ -303,10 +304,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
     assert "event.type === 'run_end'" in pi_owner
-    assert (
-        "workspace file contents may be sent to this service"
-        in provider_owner
-    )
+    assert "workspace file contents may be sent to this service" in provider_owner
     assert "PHI-safe summaries" in provider_owner
     assert "patient rows, credentials, or arbitrary host files" in pi_owner
     assert "data-gpi-confirm-action" in pi_owner
@@ -826,7 +824,9 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "human_review_required" in pi_owner
 
 
-def test_reviewer_demo_contract_completes_all_stages_without_upgrading_authority() -> None:
+def test_reviewer_demo_contract_completes_all_stages_without_upgrading_authority() -> (
+    None
+):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
@@ -982,7 +982,9 @@ def test_complete_research_demo_reuses_the_unchanged_agent_figure() -> None:
     )
 
 
-def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures() -> None:
+def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures() -> (
+    None
+):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
@@ -1049,6 +1051,24 @@ def test_research_artifact_renderer_rejects_attribute_xss_and_non_png_data_urls(
     )
 
 
+def test_evidence_bound_manuscript_reader_stays_in_its_preview_owner() -> None:
+    renderer = _read("js/screens-agent-render.js")
+    preview = _read("js/screens-guided-pi-preview.js")
+    styles = _read("css/guided-pi-preview.css")
+
+    assert "manuscriptProvenanceView" in renderer
+    assert "manuscript_provenance.json" in renderer
+    assert "data-gpi-claim" in renderer
+    assert "source_json_pointer" in renderer
+    assert "related_artifacts" in renderer
+    assert "data-gpi-claim-panel" in preview
+    assert "data-gpi-claim-close" in preview
+    assert ".gpi-bound-number" in styles
+    assert ".gpi-claim-drawer" in styles
+    for unrelated in ("css/app.css", "css/tweaks.css"):
+        assert ".gpi-bound-number" not in _read(unrelated)
+
+
 def test_system_validation_document_has_a_distinct_guided_preview_owner() -> None:
     preview = _read("js/screens-guided-pi-preview.js")
     guided = _read("js/screens-guided-pi.js")
@@ -1062,10 +1082,12 @@ def test_system_validation_document_has_a_distinct_guided_preview_owner() -> Non
     assert "kind: 'demo_document'" in preview
     assert "/assets/demo/${state.resource.artifact}" in preview
     assert "system-validation-report.html" in _read("js/screens-guided-pi-demo.js")
-    report_html = (STATIC / "assets" / "demo" / "system-validation-report.html").read_text(
-        encoding="utf-8"
-    )
-    report_pdf = (STATIC / "assets" / "demo" / "system-validation-report.pdf").read_bytes()
+    report_html = (
+        STATIC / "assets" / "demo" / "system-validation-report.html"
+    ).read_text(encoding="utf-8")
+    report_pdf = (
+        STATIC / "assets" / "demo" / "system-validation-report.pdf"
+    ).read_bytes()
     assert "NOT A CLINICAL MANUSCRIPT" in report_html
     assert "REVIEWER DEMONSTRATION COMPLETE" in report_html
     assert "WITHHELD AS DESIGNED" in report_html
