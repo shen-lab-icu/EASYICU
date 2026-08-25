@@ -302,6 +302,13 @@ def _normalise_adjustment_set(raw: str) -> tuple[str, ...]:
     for part in cleaned.split(","):
         value = re.sub(r"^(?:the\s+)?", "", part.strip(), flags=re.I)
         value = re.sub(r"\s+", " ", value).strip(" .;:").casefold()
+        value = re.sub(r"_(?:first|last|max|mean|median|min)$", "", value)
+        value = re.sub(
+            r"\b(?:comorbidity|index|patient|score)\b",
+            "",
+            value,
+        )
+        value = re.sub(r"\s+", " ", value).strip()
         if value and value not in values:
             values.append(value)
     return tuple(sorted(values))
