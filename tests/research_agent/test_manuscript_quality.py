@@ -292,6 +292,12 @@ def test_unnamed_robustness_number_is_rejected() -> None:
     )
     assert "MANUSCRIPT_METRIC_UNNAMED" in _codes(substring_false_positive)
 
+    unrelated_prior_number = text.replace(
+        "The robustness values ranged from 0.61 to 0.64.",
+        "Table 1 and the robustness panel were generated.",
+    )
+    assert "MANUSCRIPT_METRIC_UNNAMED" not in _codes(unrelated_prior_number)
+
 
 def test_truncated_section_ending_is_rejected() -> None:
     text = _valid_manuscript().replace(

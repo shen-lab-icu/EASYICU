@@ -599,8 +599,11 @@ def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
         has_unlabelled_numeric_summary = (
             "point estimate" in lowered
             or (
-                "robustness" in lowered
-                and re.search(r"[-+]?\d+(?:\.\d+)?", lowered) is not None
+                re.search(
+                    r"\brobustness\b[^.!?]*[-+]?\d+(?:\.\d+)?",
+                    lowered,
+                )
+                is not None
             )
         )
         if not has_unlabelled_numeric_summary:
@@ -787,8 +790,8 @@ def audit_manuscript_quality(
                     severity="error",
                     section=section,
                     message=(
-                        "A reader-facing numeric result is called a point estimate "
-                        "without naming its statistical metric."
+                        "A reader-facing numeric result is reported without naming "
+                        "its exact statistical metric."
                     ),
                     excerpts=unnamed_metrics[:8],
                 )
