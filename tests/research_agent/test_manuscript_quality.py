@@ -287,6 +287,28 @@ def test_structure_repair_relabels_existing_abstract_prose() -> None:
     assert [item["code"] for item in repairs] == ["MANUSCRIPT_ABSTRACT_LABEL_RESTORED"]
 
 
+def test_structure_repair_restores_background_from_existing_evidence_prose() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Background:** Sepsis remains an important ICU syndrome.",
+        "",
+    ).replace(
+        "Sepsis definitions and transparent cohort accounting matter for reproducible ICU research.",
+        "Sepsis definitions and transparent cohort accounting matter "
+        "for reproducible ICU research {evidence:context}.",
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    abstract = repaired.split("## Abstract", 1)[1].split("## Introduction", 1)[0]
+    assert (
+        "**Background:** Sepsis definitions and transparent cohort accounting matter "
+        "for reproducible ICU research {evidence:context}." in abstract
+    )
+    assert [item["code"] for item in repairs] == [
+        "MANUSCRIPT_ABSTRACT_BACKGROUND_RESTORED"
+    ]
+
+
 def test_structure_repair_copies_results_evidence_to_empty_conclusion() -> None:
     manuscript = _valid_manuscript().replace(
         "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
