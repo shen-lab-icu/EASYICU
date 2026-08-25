@@ -74,6 +74,8 @@ class PreparedWriterOnlyMigration:
     source_run_dir: Path
     original_source_manuscript: str
     source_manuscript: str
+    migration_draft_path: Optional[Path]
+    migration_draft_sha256: str
     context: ResearchContextAuthority
     plan: AnalysisPlan
     literature: LiteratureBundle
@@ -230,7 +232,11 @@ def _claim_policy_projection(
     }
 
 
-def prepare_writer_only_migration(run_dir: Path) -> PreparedWriterOnlyMigration:
+def prepare_writer_only_migration(
+    run_dir: Path,
+    *,
+    migration_draft: Optional[Path] = None,
+) -> PreparedWriterOnlyMigration:
     """Load and audit one sealed run without changing it."""
 
     source = Path(run_dir).expanduser().resolve(strict=True)
@@ -243,6 +249,20 @@ def prepare_writer_only_migration(run_dir: Path) -> PreparedWriterOnlyMigration:
     original_manuscript = (source / "manuscript_scaffold.md").read_text(
         encoding="utf-8"
     )
+    draft_path: Optional[Path] = None
+    manuscript = original_manuscript
+    if migration_draft is not None:
+        draft_path = Path(migration_draft).expanduser().resolve(strict=True)
+        try:
+            draft_path.relative_to(source)
+        except ValueError:
+            pass
+        else:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_MIGRATION_DRAFT_INSIDE_SOURCE",
+                detail=str(draft_path),
+            )
+        manuscript = _read_regular(draft_path).decode("utf-8")
     evidence_digest = (source / "writer_evidence_digest.md").read_text(
         encoding="utf-8"
     )
@@ -263,7 +283,7 @@ def prepare_writer_only_migration(run_dir: Path) -> PreparedWriterOnlyMigration:
         ) from exc
     manuscript, unknown_keys, removed_sentences = (
         remove_sentences_with_unknown_literature_keys(
-            original_manuscript,
+            manuscript,
             literature,
         )
     )
@@ -287,6 +307,8 @@ def prepare_writer_only_migration(run_dir: Path) -> PreparedWriterOnlyMigration:
         source_run_dir=source,
         original_source_manuscript=original_manuscript,
         source_manuscript=manuscript,
+        migration_draft_path=draft_path,
+        migration_draft_sha256=_sha256(manuscript.encode("utf-8")),
         context=context,
         plan=plan,
         literature=literature,
@@ -317,6 +339,12 @@ def writer_only_preflight_payload(
         "mode": "preflight",
         "source_run_dir": str(prepared.source_run_dir),
         "source_hashes": dict(prepared.source_hashes),
+        "migration_draft_path": (
+            str(prepared.migration_draft_path)
+            if prepared.migration_draft_path is not None
+            else None
+        ),
+        "migration_draft_sha256": prepared.migration_draft_sha256,
         "source_quality_status": prepared.source_quality_audit.status,
         "source_quality_findings": [
             asdict(finding)
@@ -633,6 +661,11 @@ def publish_writer_only_result(
         ),
         "migration_input_manuscript_sha256": _sha256(
             prepared.source_manuscript.encode("utf-8")
+        ),
+        "migration_draft_path": (
+            str(prepared.migration_draft_path)
+            if prepared.migration_draft_path is not None
+            else None
         ),
         "output_manuscript_sha256": _sha256(result.manuscript.encode("utf-8")),
         "output_bound_manuscript_sha256": _sha256(

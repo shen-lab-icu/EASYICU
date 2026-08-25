@@ -143,6 +143,8 @@ def _prepared(tmp_path: Path, manuscript: str) -> PreparedWriterOnlyMigration:
         source_run_dir=run,
         original_source_manuscript=manuscript,
         source_manuscript=manuscript,
+        migration_draft_path=None,
+        migration_draft_sha256=hashlib.sha256(manuscript.encode()).hexdigest(),
         context=None,  # type: ignore[arg-type]
         plan=None,  # type: ignore[arg-type]
         literature=literature,

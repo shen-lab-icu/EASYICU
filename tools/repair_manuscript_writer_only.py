@@ -75,6 +75,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-run", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--migration-draft", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--provider", default="codex")
     parser.add_argument("--model", default="gpt-5.6-luna")
@@ -90,7 +91,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
-    prepared = prepare_writer_only_migration(args.source_run)
+    prepared = prepare_writer_only_migration(
+        args.source_run,
+        migration_draft=args.migration_draft,
+    )
     output = args.output_dir.expanduser().resolve()
     if args.dry_run:
         payload = writer_only_preflight_payload(prepared)
