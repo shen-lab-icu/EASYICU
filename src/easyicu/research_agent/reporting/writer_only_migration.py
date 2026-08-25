@@ -44,6 +44,8 @@ from .manuscript_quality import (
     ManuscriptQualityAudit,
     audit_manuscript_quality,
     expected_manuscript_display_labels,
+    repair_reader_structure_from_existing_prose,
+    repair_registered_display_callouts,
     render_reader_manuscript,
 )
 from .manuscript_sections import quality_repair_section_keys
@@ -77,7 +79,7 @@ class PreparedWriterOnlyMigration:
     migration_draft_path: Optional[Path]
     migration_draft_sha256: str
     context: ResearchContextAuthority
-    plan: AnalysisPlan
+    plan: Optional[AnalysisPlan]
     literature: LiteratureBundle
     literature_digest: str
     evidence_digest: str
@@ -90,6 +92,8 @@ class PreparedWriterOnlyMigration:
     planned_section_keys: tuple[str, ...]
     removed_unknown_literature_keys: tuple[str, ...]
     removed_unknown_literature_sentences: int
+    plan_validation_status: str = "validated"
+    plan_validation_error_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -367,9 +371,6 @@ def prepare_writer_only_migration(
         context = parse_research_context_json(
             (source / "research_context.json").read_bytes()
         )
-        plan = AnalysisPlan.model_validate_json(
-            (source / "analysis_plan.json").read_text(encoding="utf-8")
-        )
         literature = LiteratureBundle.model_validate_json(
             (source / "preplan_literature_bundle.json").read_text(encoding="utf-8")
         )
@@ -378,6 +379,29 @@ def prepare_writer_only_migration(
             code="WRITER_ONLY_TYPED_INPUT_INVALID",
             detail=f"{type(exc).__name__}: {exc}",
         ) from exc
+    raw_plan = (source / "analysis_plan.json").read_text(encoding="utf-8")
+    plan_validation_status = "validated"
+    plan_validation_error_sha256 = ""
+    try:
+        plan: Optional[AnalysisPlan] = AnalysisPlan.model_validate_json(raw_plan)
+    except Exception as exc:
+        try:
+            raw_plan_payload = json.loads(raw_plan)
+        except json.JSONDecodeError as parse_exc:
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_TYPED_INPUT_INVALID",
+                detail=f"{type(parse_exc).__name__}: {parse_exc}",
+            ) from parse_exc
+        if not isinstance(raw_plan_payload, dict):
+            raise WriterOnlyMigrationError(
+                code="WRITER_ONLY_TYPED_INPUT_INVALID",
+                detail="analysis_plan.json must contain a JSON object",
+            ) from exc
+        plan = None
+        plan_validation_status = "legacy_schema_incompatible_report_only"
+        plan_validation_error_sha256 = _sha256(
+            f"{type(exc).__name__}: {exc}".encode("utf-8")
+        )
     manuscript, unknown_keys, removed_sentences = (
         remove_sentences_with_unknown_literature_keys(
             manuscript,
@@ -395,6 +419,13 @@ def prepare_writer_only_migration(
     )
     ids = _evidence_ids(source, manuscript, evidence_digest)
     labels = expected_manuscript_display_labels(ids)
+    manuscript, _structural_repairs = repair_reader_structure_from_existing_prose(
+        manuscript
+    )
+    manuscript, _display_repairs = repair_registered_display_callouts(
+        manuscript,
+        expected_display_labels=labels,
+    )
     source_quality = audit_manuscript_quality(
         manuscript,
         expected_display_labels=labels,
@@ -423,6 +454,8 @@ def prepare_writer_only_migration(
         ),
         removed_unknown_literature_keys=tuple(unknown_keys),
         removed_unknown_literature_sentences=int(removed_sentences),
+        plan_validation_status=plan_validation_status,
+        plan_validation_error_sha256=plan_validation_error_sha256,
     )
 
 
@@ -448,6 +481,8 @@ def writer_only_preflight_payload(
             for finding in prepared.source_quality_audit.findings
         ],
         "source_literature_status": prepared.source_literature_audit.status,
+        "plan_validation_status": prepared.plan_validation_status,
+        "plan_validation_error_sha256": prepared.plan_validation_error_sha256,
         "planned_section_keys": list(prepared.planned_section_keys),
         "removed_unknown_literature_keys": list(
             prepared.removed_unknown_literature_keys
@@ -469,6 +504,17 @@ def repair_writer_only(
     writer: Any,
 ) -> WriterOnlyMigrationResult:
     """Repair only deterministic Writer section owners in memory."""
+
+    if (
+        prepared.plan is None
+        and prepared.plan_validation_status
+        == "legacy_schema_incompatible_report_only"
+        and prepared.planned_section_keys
+    ):
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_LEGACY_PLAN_REPAIR_FORBIDDEN",
+            detail=", ".join(prepared.planned_section_keys),
+        )
 
     try:
         manuscript, repaired_keys = writer.repair_existing(
@@ -801,6 +847,8 @@ def publish_writer_only_result(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_run_dir": str(prepared.source_run_dir),
         "source_hashes": dict(prepared.source_hashes),
+        "plan_validation_status": prepared.plan_validation_status,
+        "plan_validation_error_sha256": prepared.plan_validation_error_sha256,
         "source_manuscript_sha256": _sha256(
             prepared.original_source_manuscript.encode("utf-8")
         ),
