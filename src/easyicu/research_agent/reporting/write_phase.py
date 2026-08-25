@@ -1543,6 +1543,23 @@ def _draft_manuscript(
                 detail={"missing_claim_refs": list(claim_placement.missing_claim_refs)},
             )
         )
+    from .manuscript_quality import repair_reader_structure_from_existing_prose
+
+    scaffold, structural_repairs = repair_reader_structure_from_existing_prose(scaffold)
+    if structural_repairs:
+        if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
+            evidence.enforce_evidence_bound_scaffold(scaffold)
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_quality",
+                severity="warning",
+                message=(
+                    "Restored reader structure using only existing "
+                    "evidence-bound manuscript prose."
+                ),
+                detail={"repairs": list(structural_repairs)},
+            )
+        )
     scaffold_path = run_dir / "manuscript_scaffold.md"
     scaffold_path.write_text(scaffold, encoding="utf-8")
     if evidence.get("manuscript_scaffold_raw") is None or scaffold.strip():
@@ -1725,6 +1742,23 @@ def _bind_and_review_manuscript(
                 ),
                 evidence_ids=["manuscript_scaffold_numeric_filtered"],
                 detail={"removed_sentences": removed_numeric_sentences},
+            )
+        )
+    from .manuscript_quality import repair_reader_structure_from_existing_prose
+
+    bound, post_filter_structural_repairs = repair_reader_structure_from_existing_prose(
+        bound
+    )
+    if post_filter_structural_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_quality",
+                severity="warning",
+                message=(
+                    "Restored post-filter reader structure using only prose "
+                    "that already survived the evidence and numeric gates."
+                ),
+                detail={"repairs": list(post_filter_structural_repairs)},
             )
         )
     authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
