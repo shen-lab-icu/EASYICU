@@ -2040,7 +2040,8 @@ class ProgressivePlannerAgent:
         resume_checkpoint: ProgressivePlannerCheckpoint | None = None,
         resume_dependency_context: Mapping[str, Any] | None = None,
         required_primary_cohort_selection_mode: str | None = None,
-    ) -> AnalysisPlan:
+        stop_after_outline: bool = False,
+    ) -> AnalysisPlan | ProgressivePlanOutline:
         self.last_resume_validated = False
         self.last_compile_failure_attempts = []
         if bool(allowed_know_how_decisions) != bool(know_how_context):
@@ -2360,6 +2361,13 @@ class ProgressivePlannerAgent:
                 materializations=self.last_materializations,
                 prompt_metrics=self.last_prompt_metrics,
             )
+        if stop_after_outline:
+            # Dependency and request authority were validated above.  A
+            # resumed outline can therefore be accepted for this deliberately
+            # narrower canary without materializing its executable suffix.
+            self.last_resume_validated = resume_checkpoint is not None
+            self.capture_efficiency_metrics()
+            return outline
 
         foundation_schema = None
         if llm_supports_strict_json_schema(self.llm):
