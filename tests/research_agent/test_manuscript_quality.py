@@ -286,6 +286,27 @@ def test_unnamed_robustness_number_is_rejected() -> None:
     )
     assert "MANUSCRIPT_METRIC_UNNAMED" not in _codes(named)
 
+    substring_false_positive = text.replace(
+        "The robustness values ranged from 0.61 to 0.64.",
+        "The robustness panel reported 0.61 across variants.",
+    )
+    assert "MANUSCRIPT_METRIC_UNNAMED" in _codes(substring_false_positive)
+
+
+def test_truncated_section_ending_is_rejected() -> None:
+    text = _valid_manuscript().replace(
+        "Analyses were executed with versioned software and registered artifacts.",
+        "The analysis record included the robustness panel",
+    )
+
+    audit = audit_manuscript_quality(text)
+    finding = next(
+        item
+        for item in audit.findings
+        if item.code == "MANUSCRIPT_SECTION_TRUNCATED"
+    )
+    assert finding.section == "Methods"
+
 
 def test_machine_precision_is_rejected_in_reader_facing_sections() -> None:
     text = _valid_manuscript().replace(

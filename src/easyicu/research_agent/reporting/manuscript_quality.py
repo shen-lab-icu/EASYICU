@@ -605,10 +605,20 @@ def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
         )
         if not has_unlabelled_numeric_summary:
             continue
-        if any(term in lowered for term in _NAMED_METRIC_TERMS):
+        if any(
+            re.search(rf"\b{re.escape(term)}\b", lowered) is not None
+            for term in _NAMED_METRIC_TERMS
+        ):
             continue
         excerpts.append(sentence[:300])
     return tuple(excerpts)
+
+
+def _section_has_truncated_ending(section_text: str) -> bool:
+    prose = _strip_audit_markup(section_text).rstrip()
+    if not prose:
+        return False
+    return prose[-1] not in ".!?)]}"
 
 
 def expected_manuscript_display_labels(
@@ -741,6 +751,19 @@ def audit_manuscript_quality(
 
     for section in _READER_FACING_SECTIONS:
         section_text = section_map.get(section, "")
+        if section_text and _section_has_truncated_ending(section_text):
+            findings.append(
+                ManuscriptQualityFinding(
+                    code="MANUSCRIPT_SECTION_TRUNCATED",
+                    severity="error",
+                    section=section,
+                    message=(
+                        "The section ends without terminal punctuation and may be "
+                        "truncated. Regenerate the complete section."
+                    ),
+                    excerpts=(_strip_audit_markup(section_text).rstrip()[-160:],),
+                )
+            )
         excerpts = _internal_excerpts(section_text)
         if excerpts:
             findings.append(
