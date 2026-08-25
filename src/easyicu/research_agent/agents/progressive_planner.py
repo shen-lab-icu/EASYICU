@@ -62,6 +62,7 @@ from ..planning.progressive_contract import (
 )
 from ..planning.progressive_host_materialization import (
     host_materialize_progressive_step,
+    normalize_progressive_cohort_identity,
 )
 from ..planning.progressive_artifacts import (
     ProgressiveCompileReplayAttempt,
@@ -1479,6 +1480,30 @@ class ProgressivePlannerAgent:
                     separators=(",", ":"),
                 )
             )
+        if outline_step.module_id == "cohort_definition":
+            provenance = context.cohort.provenance
+            blocks.append(
+                "Cohort row-identity contract (binding): raw_inputs must contain "
+                "exactly one stable row identity from the declared cohort ID "
+                "columns. A patient identifier used for patient counts is not a "
+                "second row identity. When analysis_unit='icu_stay' and exactly "
+                "one stay_id_columns value is available, use that stay identity "
+                "and omit all other cohort ID columns from raw_inputs. If the "
+                "host compiler observation names an allowed ID roster, satisfy "
+                "that exact-one requirement before changing unrelated fields.\n"
+                + json.dumps(
+                    {
+                        "id_columns": context.cohort.id_columns,
+                        "analysis_unit": provenance.get("analysis_unit"),
+                        "stay_id_columns": provenance.get("stay_id_columns", []),
+                        "patient_id_columns": provenance.get(
+                            "patient_id_columns", []
+                        ),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         if outline_step.module_id == "visualization":
             action_by_id = {
                 str(row.get("action_id")): row
@@ -1826,6 +1851,10 @@ class ProgressivePlannerAgent:
                         "Return exactly one ProgressiveStepMaterialization for "
                         "the current outline coordinate. Never return other steps."
                     ),
+                )
+                materialization = normalize_progressive_cohort_identity(
+                    materialization,
+                    context=context,
                 )
                 self.capture_efficiency_metrics()
                 try:

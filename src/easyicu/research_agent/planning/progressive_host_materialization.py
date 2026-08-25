@@ -128,6 +128,58 @@ def _common_step(
     )
 
 
+def normalize_progressive_cohort_identity(
+    materialization: ProgressiveStepMaterialization,
+    *,
+    context: ResearchContext,
+) -> ProgressiveStepMaterialization:
+    """Project a uniquely proven row identity into a Planner cohort step."""
+
+    step = materialization.step
+    if step.module_id != "cohort_definition":
+        return materialization
+    identity = _cohort_row_identity(context, step.raw_inputs)
+    declared_ids = {name for name in step.raw_inputs if name in context.cohort.id_columns}
+    if len(declared_ids) <= 1 or identity is None:
+        return materialization
+    normalized_step = step.model_copy(
+        update={
+            "raw_inputs": [
+                name
+                for name in step.raw_inputs
+                if name not in declared_ids or name == identity
+            ]
+        }
+    )
+    return materialization.model_copy(update={"step": normalized_step})
+
+
+def _cohort_row_identity(
+    context: ResearchContext,
+    raw_inputs: Sequence[str],
+) -> str | None:
+    """Resolve one host-proven row identity without guessing among IDs."""
+
+    declared_ids = tuple(
+        name for name in raw_inputs if name in context.cohort.id_columns
+    )
+    if len(declared_ids) <= 1:
+        return declared_ids[0] if declared_ids else None
+
+    provenance = context.cohort.provenance
+    if provenance.get("analysis_unit") != "icu_stay":
+        return None
+    stay_ids = provenance.get("stay_id_columns")
+    if not isinstance(stay_ids, list):
+        return None
+    proven_stay_ids = tuple(
+        name
+        for name in stay_ids
+        if isinstance(name, str) and name in declared_ids
+    )
+    return proven_stay_ids[0] if len(proven_stay_ids) == 1 else None
+
+
 def host_materialize_progressive_step(
     *,
     context: ResearchContext,
@@ -141,6 +193,12 @@ def host_materialize_progressive_step(
     module = outline_step.module_id
     variables = {item.name: item for item in context.variables}
     raw = [name for name in outline_step.variable_names if name in variables]
+    if {
+        binding.citation_key for binding in _bindings(outline_step)
+    } != set(outline_step.literature_citation_keys):
+        # Dynamic design-analogue cards carry question-specific applications
+        # that this mechanical owner cannot reconstruct from a citation key.
+        return None
     action = None
     if outline_step.scientific_action_id:
         action = scientific_action_for_id(
@@ -151,7 +209,16 @@ def host_materialize_progressive_step(
             return None
 
     if module == "cohort_definition":
-        skeleton = _common_step(outline_step, raw_inputs=raw)
+        identity = _cohort_row_identity(context, raw)
+        declared_ids = {name for name in raw if name in context.cohort.id_columns}
+        if len(declared_ids) > 1 and identity is None:
+            return None
+        cohort_raw = [
+            name
+            for name in raw
+            if name not in declared_ids or name == identity
+        ]
+        skeleton = _common_step(outline_step, raw_inputs=cohort_raw)
     elif module == "table_one":
         exposure = context.primary_exposure
         if not exposure or exposure not in raw:
