@@ -326,6 +326,19 @@ def test_unnamed_robustness_number_is_rejected() -> None:
     assert "MANUSCRIPT_METRIC_UNNAMED" not in _codes(unrelated_prior_number)
 
 
+def test_robustness_sample_and_convergence_counts_are_not_metrics() -> None:
+    text = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality.",
+        (
+            "The robustness analysis included 94,425 ICU stays and yielded "
+            "one converged specification."
+        ),
+        1,
+    )
+
+    assert "MANUSCRIPT_METRIC_UNNAMED" not in _codes(text)
+
+
 def test_truncated_section_ending_is_rejected() -> None:
     text = _valid_manuscript().replace(
         "Analyses were executed with versioned software and registered artifacts.",

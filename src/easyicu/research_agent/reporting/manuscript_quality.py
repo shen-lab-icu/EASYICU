@@ -604,7 +604,9 @@ def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
             "point estimate" in lowered
             or (
                 re.search(
-                    r"\brobustness\b[^.!?]*[-+]?\d+(?:\.\d+)?",
+                    r"\brobustness\b[^.!?]*"
+                    r"(?:value|estimate|score|metric|range|ranged|reported)"
+                    r"[^.!?]*[-+]?\d+(?:\.\d+)?",
                     lowered,
                 )
                 is not None
