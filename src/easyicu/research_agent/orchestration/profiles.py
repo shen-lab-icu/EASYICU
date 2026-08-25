@@ -8,7 +8,7 @@ part of the evaluation/submission scaffold defined in
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, Literal, Optional
 
 
@@ -672,6 +672,21 @@ CURRENT_QUALIFICATION12_LITERATURE_DESIGN_PROFILE_REF = (
     QUALIFICATION12_LITERATURE_DESIGN_2026_08_25.ref
 )
 
+QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25 = replace(
+    QUALIFICATION12_LITERATURE_DESIGN_2026_08_25,
+    name="npj_dm_qualification12_design_canary_dev",
+    locked_at="2026-08-25T12:00:00-04:00",
+    planner_only=True,
+    # The canary consumes the reviewed, digest-bound seed pack. Repeating a
+    # live search here could introduce comparison sources without full-text
+    # cards and would test retrieval drift instead of literature-to-design use.
+    enable_pubmed=False,
+)
+
+CURRENT_QUALIFICATION12_LITERATURE_DESIGN_CANARY_PROFILE_REF = (
+    QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25.ref
+)
+
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
     name="npj_dm_know_how_dev",
     version="20260721",
@@ -794,6 +809,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     DEV9_AI_REVIEWED_DEMO_2026_08_24.ref: DEV9_AI_REVIEWED_DEMO_2026_08_24,
     QUALIFICATION12_LITERATURE_DESIGN_2026_08_25.ref: (
         QUALIFICATION12_LITERATURE_DESIGN_2026_08_25
+    ),
+    QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25.ref: (
+        QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25
     ),
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
@@ -1042,6 +1060,8 @@ __all__ = [
     "CURRENT_DEV9_AI_REVIEWED_DEMO_PROFILE_REF",
     "QUALIFICATION12_LITERATURE_DESIGN_2026_08_25",
     "CURRENT_QUALIFICATION12_LITERATURE_DESIGN_PROFILE_REF",
+    "QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25",
+    "CURRENT_QUALIFICATION12_LITERATURE_DESIGN_CANARY_PROFILE_REF",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",

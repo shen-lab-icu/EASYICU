@@ -5996,6 +5996,34 @@ def _run_ehrflowbench_jsonl(
                 }
             )
         row_pipeline_options = dict(pipeline_options or {})
+        raw_bound_literature = row.get("bound_preplan_literature")
+        if raw_bound_literature is not None:
+            from easyicu.research_agent.literature import LiteratureBundle
+
+            try:
+                bound_literature = LiteratureBundle.model_validate(
+                    raw_bound_literature
+                )
+            except (TypeError, ValueError) as exc:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "invalid_bound_preplan_literature",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            if bound_literature.research_question.strip() != str(question).strip():
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "bound_preplan_literature_question_mismatch",
+                    }
+                )
+                continue
+            row_pipeline_options["bound_preplan_literature"] = (
+                bound_literature.model_dump(mode="json")
+            )
         if frozen_input_authority_by_task and key in frozen_input_authority_by_task:
             # Bind THIS task's frozen input digest so _bind_benchmark_execution_input
             # fails closed if the runtime cohort differs from the authorized input.

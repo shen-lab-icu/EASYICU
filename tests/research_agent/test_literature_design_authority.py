@@ -13,7 +13,9 @@ from easyicu.research_agent.literature import (
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.profiles import (
     DEV9_AI_REVIEWED_DEMO_2026_08_24,
+    QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25,
     QUALIFICATION12_LITERATURE_DESIGN_2026_08_25,
+    get_submission_profile,
 )
 from easyicu.research_agent.planning.design_selection import (
     ResearchDesignCandidate,
@@ -235,6 +237,22 @@ def test_qualification_profile_enables_strict_gate_without_changing_dev9() -> No
             workdir="/tmp/easyicu-literature-design-test",
             **dev9_options,
         )
+
+
+def test_qualification_canary_is_planner_only_and_reuses_reviewed_search() -> None:
+    profile = QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25
+    config = PipelineConfig(
+        workdir="/tmp/easyicu-literature-design-canary-test",
+        **profile.pipeline_options(),
+    )
+
+    assert profile.ref == "npj_dm_qualification12_design_canary_dev/20260825"
+    assert config.planner_only is True
+    assert config.enable_pubmed is False
+    assert config.require_human_plan_review is True
+    assert config.require_literature_design_authority is True
+    assert config.planner_strategy == "progressive_v2"
+    assert get_submission_profile(profile.ref) is profile
 
 
 @pytest.mark.parametrize(

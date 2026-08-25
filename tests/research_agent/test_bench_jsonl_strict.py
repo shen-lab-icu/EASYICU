@@ -221,6 +221,114 @@ def test_longitudinal_jsonl_can_run_without_invented_target_outcome(
     assert seen["item"].kind == "longitudinal_trajectory_analysis"
 
 
+def test_external_jsonl_binds_exact_question_reviewed_literature(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import tools.run_research_agent_bench as bench
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "outcome": [0]}).to_parquet(cohort, index=False)
+    question = "Does the declared exposure predict the outcome?"
+    bound_literature = {
+        "research_question": question,
+        "citations": [],
+    }
+    jsonl = tmp_path / "items.jsonl"
+    jsonl.write_text(
+        json.dumps(
+            {
+                "key": "literature-bound-item",
+                "question": question,
+                "cohort_path": str(cohort),
+                "target_outcome": "outcome",
+                "bound_preplan_literature": bound_literature,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake_run_one(**kwargs):
+        seen.update(kwargs)
+        return _completed_score("literature-bound-item")
+
+    monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run_one)
+    monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
+    monkeypatch.setattr(bench, "_render_markdown", lambda **_kwargs: "ok")
+
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl,
+            out_root=tmp_path / "out",
+            seed=7,
+            arms=["aware"],
+            provider="openai",
+            model="model",
+        )
+        == 0
+    )
+    bound = seen["pipeline_options"]["bound_preplan_literature"]
+    assert bound["research_question"] == question
+    assert bound["citations"] == []
+
+
+def test_external_jsonl_rejects_literature_for_a_different_question(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import tools.run_research_agent_bench as bench
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "outcome": [0]}).to_parquet(cohort, index=False)
+    jsonl = tmp_path / "items.jsonl"
+    jsonl.write_text(
+        json.dumps(
+            {
+                "key": "mismatched-literature-item",
+                "question": "Question A",
+                "cohort_path": str(cohort),
+                "target_outcome": "outcome",
+                "bound_preplan_literature": {
+                    "research_question": "Question B",
+                    "citations": [],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        bench,
+        "_run_one_item_from_cohort",
+        lambda **_kwargs: pytest.fail("mismatched literature must not execute"),
+    )
+
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl,
+            out_root=tmp_path / "out",
+            seed=7,
+            arms=["aware"],
+            provider="openai",
+            model="model",
+        )
+        == bench._PENDING_ITEMS_EXIT_CODE
+    )
+    payload = json.loads(
+        (tmp_path / "out" / "ehrflowbench_results.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["pending"] == [
+        {
+            "key": "mismatched-literature-item",
+            "status": "bound_preplan_literature_question_mismatch",
+        }
+    ]
+
+
 def test_explicit_resume_reopens_existing_hard_stop_ledger(
     tmp_path,
     monkeypatch,
