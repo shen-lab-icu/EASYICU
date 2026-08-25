@@ -84,16 +84,25 @@ untouched. The replay produced:
 | E2 | pass | none; three overprecise display values rounded |
 | E3 | changes required | abstract label and internal terms |
 | M1 | changes required | one internal-term error after three structural repairs |
-| M2 | changes required in old replay; fresh section migration passes | no current errors; one Methods warning retained for reproducibility |
+| M2 | changes required | unnamed metric and internal terms |
 | M3 | changes required | unnamed metric and internal terms |
 | H1 | changes required | internal terms; manuscript also needs rebinding to the later time-varying-Cox package |
 | H2 | changes required | internal terms; scientific conclusion must remain a terminal non-solution |
 | H3 | pass | abstract wrappers restored without inventing a phenotype claim |
 
-E2 and H3 passed with 0 Provider calls. A separately completed fresh M2 Writer
-resume passed the current deterministic audit after owner-scoped section
-migration; it used 127,027 tokens and an estimated USD 1.60901. M2 remains
-`diagnostic_only` and does not gain deployment or publication authority.
+E2 and H3 passed the provider-free replay with 0 Provider calls. The subsequent
+official reporting resumes produced current quality-audit passes for E2, E3,
+M1, M2, M3, H1, H2, and H3: 8/9 manuscripts. Their incremental reporting cost
+was 284,944 tokens and an estimated USD 3.19588; the resumed run directories
+contain 998,987 cumulative tokens and USD 12.35109 including prior Writer work.
+All eight post-readiness three-role reviews still recommend `major_revision`.
+
+E1 remains `changes_required`. Its Methods say age and sex, whereas the executed
+primary-model evidence and design columns say age and `charlson_max`; five section
+owners also require migration. The source run has already consumed 92,811 tokens,
+the transport requires a minimum 132,096-token reservation, and the routine E1
+iteration ceiling is 100,000 tokens. Another E1 resume was therefore not started.
+This is a safety and evidence-consistency stop, not an unfinished copy-edit.
 
 ## 🧑‍⚕️ Simulated reviewer 1: clinical design and interpretation
 
@@ -144,9 +153,13 @@ exact released system.
 The next iteration is owner-scoped:
 
 1. **No-model repairs:** retain E2 and H3 repaired candidates; keep the new
-   provider-free replay as the first triage stage.
-2. **Writer-only repairs:** regenerate only error-owning sections for E3, M1,
-   M3, and H2; preserve H2/H3 negative boundaries.
+   provider-free replay as the first triage stage. In this iteration, the E2
+   pipeline resume added 134,635 tokens although the current deterministic
+   replay can close its display-precision error without a Provider call.
+2. **E1 evidence adjudication:** confirm the authorized adjustment set from the
+   executed primary-model contract, then migrate only its five failing sections
+   under a newly approved budget. Do not silently choose age/sex or
+   age/Charlson in prose.
 3. **Evidence rebinding:** regenerate H1 reporting from the later
    `de6403a` time-varying-Cox package before any prose polishing.
 4. **Scientific-owner work:** do not ask Writer to close external validation,
