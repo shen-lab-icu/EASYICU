@@ -10,6 +10,8 @@ model-facing class from also becoming a manuscript workflow coordinator.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 import re
 from typing import Any, Callable, Mapping
 
@@ -39,6 +41,20 @@ class ManuscriptSectionContractError(RuntimeError):
         super().__init__(
             f"Writer section {section_name!r} has missing or empty required "
             f"subsections after one targeted retry: {', '.join(missing_subsections)}"
+        )
+
+
+class ManuscriptReaderQualityContractError(RuntimeError):
+    """A targeted section retry did not close deterministic reader errors."""
+
+    def __init__(self, *, findings: tuple[tuple[str, str, str], ...]):
+        self.findings = findings
+        detail = "; ".join(
+            f"{code} ({section}): {message}" for code, section, message in findings
+        )
+        super().__init__(
+            "Writer sections still fail deterministic reader-quality checks "
+            f"after one targeted retry: {detail}"
         )
 
 
@@ -156,6 +172,8 @@ MANUSCRIPT_SECTION_SPECS = (
             "### Primary association\n"
             "  Effect size, 95% CI, p-value, cite "
             "{evidence:primary_association} or {evidence:model_performance}.\n"
+            "  Name the exact metric and contrast for every reported value; "
+            "never use an unlabelled `point estimate`, `score`, or `range`.\n"
             "  When the machine digest supplies a host-authorized scientific "
             "claim, use its exact `{claim:<step>.<claim>}` token as a standalone "
             "sentence instead of independently wording the direction.\n"
@@ -203,8 +221,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "explanation').\n"
             "- Para 4: Clinical implications, limits to generalisability, and why "
             "the result should not be over-interpreted.\n"
-            "- Para 5: Strengths of the pipeline, evidence traceability, "
-            "ICU-aware rules, and reproducibility.\n"
+            "- Para 5: Methodological strengths, evidence traceability, ICU-aware "
+            "rules, and the reproducibility conditions that materially affect "
+            "interpretation. Do not list artifacts or praise the pipeline.\n"
             "Requirements: full prose only, no bullets, no recommendations or "
             "causal claims, and at least one evidence citation or literature "
             "citation in each paragraph when available. Do not collapse the "
@@ -213,7 +232,8 @@ MANUSCRIPT_SECTION_SPECS = (
             "time-zero, estimand, or analysis difference instead of claiming "
             "novelty from database choice alone. Use reader-facing clinical "
             "labels; do not expose raw snake_case identifiers, internal reason "
-            "codes, or host/runtime terminology."
+            "codes, or host/runtime terminology. Avoid generic prose that could "
+            "be copied unchanged into an unrelated ICU study."
         ),
         max_tokens=4096,
     ),
@@ -261,6 +281,40 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "2"
+
+
+def manuscript_writer_contract_sha256() -> str:
+    """Return the stable identity of the reader-facing Writer contract.
+
+    Report-only resume may reuse a prior free-form scaffold only while both
+    the executed analysis ledger and this contract remain unchanged.  The
+    explicit version covers shared Writer policy outside the section specs;
+    it must be bumped whenever that policy changes.
+    """
+
+    payload = {
+        "contract_version": MANUSCRIPT_WRITER_CONTRACT_VERSION,
+        "sections": [
+            {
+                "key": spec.key,
+                "section_name": spec.section_name,
+                "instruction": spec.instruction,
+                "max_tokens": spec.max_tokens,
+                "required_subsections": list(spec.required_subsections),
+            }
+            for spec in MANUSCRIPT_SECTION_SPECS
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _ensure_section_heading(spec: ManuscriptSectionSpec, text: str) -> str:
     """Restore only the mechanical heading owned by the section contract."""
 
@@ -288,9 +342,7 @@ def _missing_required_subsections(
     missing: list[str] = []
     if spec.key != "title":
         prose = "\n".join(
-            line
-            for line in lines
-            if not line.lstrip().startswith("#") and line.strip()
+            line for line in lines if not line.lstrip().startswith("#") and line.strip()
         )
         prose = re.sub(r"<!--.*?-->", "", prose, flags=re.S)
         if not re.search(r"[A-Za-z]{2,}", prose):
@@ -323,6 +375,58 @@ def _missing_required_subsections(
     return tuple(missing)
 
 
+def _assemble_scientific_sections(sections: Mapping[str, str]) -> str:
+    return "\n\n".join(
+        sections[spec.key].strip()
+        for spec in MANUSCRIPT_SECTION_SPECS
+        if sections.get(spec.key, "").strip()
+    )
+
+
+def _quality_repair_specs(
+    scientific: str,
+) -> tuple[tuple[ManuscriptSectionSpec, str], ...]:
+    """Map deterministic manuscript findings to their section owners."""
+
+    from .manuscript_quality import audit_manuscript_quality
+
+    by_key = {spec.key: spec for spec in MANUSCRIPT_SECTION_SPECS}
+    section_keys = {
+        "Title": ("title",),
+        "Abstract": ("abstract",),
+        "Introduction": ("introduction",),
+        "Methods": ("methods",),
+        "Results": ("results",),
+        "Discussion": ("discussion",),
+        "Limitations": ("limitations",),
+        "Conclusion": ("conclusion",),
+        "Methods/Results": ("methods", "results"),
+    }
+    messages: dict[str, list[str]] = {}
+    for finding in audit_manuscript_quality(scientific).findings:
+        if finding.severity != "error":
+            continue
+        for key in section_keys.get(finding.section, ()):
+            detail = f"{finding.code}: {finding.message}"
+            if finding.excerpts:
+                detail += " Offending text: " + "; ".join(finding.excerpts)
+            messages.setdefault(key, []).append(detail)
+    return tuple(
+        (by_key[key], "\n".join(f"- {message}" for message in values))
+        for key, values in messages.items()
+    )
+
+
+def _remaining_quality_errors(scientific: str) -> tuple[tuple[str, str, str], ...]:
+    from .manuscript_quality import audit_manuscript_quality
+
+    return tuple(
+        (finding.code, finding.section, finding.message)
+        for finding in audit_manuscript_quality(scientific).findings
+        if finding.severity == "error"
+    )
+
+
 def render_manuscript_sections(
     *,
     call_section: Callable[..., str],
@@ -339,7 +443,7 @@ def render_manuscript_sections(
     one reservation in flight and stops immediately on the first failure.
     """
 
-    sections: list[str] = []
+    sections: dict[str, str] = {}
     for spec in MANUSCRIPT_SECTION_SPECS:
         section = _ensure_section_heading(
             spec,
@@ -384,19 +488,51 @@ def render_manuscript_sections(
                 section_name=spec.section_name,
                 missing_subsections=missing_subsections,
             )
-        sections.append(section)
-    scientific = "\n\n".join(
-        section.strip() for section in sections if section.strip()
-    )
-    administrative = render_manuscript_administrative_sections(
-        administrative_authority
-    )
+        sections[spec.key] = section
+
+    scientific = _assemble_scientific_sections(sections)
+    for spec, error_detail in _quality_repair_specs(scientific):
+        repair_instruction = (
+            spec.instruction
+            + "\n\nREADER-QUALITY CONTRACT REPAIR:\n"
+            + "The assembled draft failed these deterministic checks owned by "
+            + f"this section:\n{error_detail}\n"
+            + "Regenerate the complete section from the same machine evidence. "
+            + "Resolve every listed error without adding an unsupported result, "
+            + "changing the executed method, exposing runtime identifiers, or "
+            + "mentioning this repair. Preserve all required headings and labels."
+        )
+        repaired = _ensure_section_heading(
+            spec,
+            call_section(
+                section_name=spec.section_name,
+                instruction=repair_instruction,
+                max_tokens=spec.max_tokens,
+                **common,
+            ),
+        )
+        missing_subsections = _missing_required_subsections(spec, repaired)
+        if missing_subsections:
+            raise ManuscriptSectionContractError(
+                section_name=spec.section_name,
+                missing_subsections=missing_subsections,
+            )
+        sections[spec.key] = repaired
+
+    scientific = _assemble_scientific_sections(sections)
+    remaining = _remaining_quality_errors(scientific)
+    if remaining:
+        raise ManuscriptReaderQualityContractError(findings=remaining)
+    administrative = render_manuscript_administrative_sections(administrative_authority)
     return "\n\n".join(part for part in (scientific, administrative) if part)
 
 
 __all__ = [
     "MANUSCRIPT_SECTION_SPECS",
+    "MANUSCRIPT_WRITER_CONTRACT_VERSION",
+    "ManuscriptReaderQualityContractError",
     "ManuscriptSectionContractError",
     "ManuscriptSectionSpec",
+    "manuscript_writer_contract_sha256",
     "render_manuscript_sections",
 ]
