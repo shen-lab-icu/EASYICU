@@ -18,6 +18,7 @@ from easyicu.research_agent.reporting.manuscript_sections import (
 from easyicu.research_agent.reporting.writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
+    _remove_unresolved_evidence_tokens,
     publish_writer_only_result,
     repair_writer_only,
 )
@@ -267,3 +268,30 @@ def test_writer_only_owner_has_no_scientific_execution_imports() -> None:
         "authority.evidence_store",
     ):
         assert forbidden not in source
+
+
+def test_unresolved_evidence_tokens_are_removed_before_claim_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manuscript = (
+        "Prior work supports this statement [@strobe_2007] "
+        "{evidence:missing_alias}."
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.reporting.writer_only_migration._read_only_authority",
+        lambda _run: type(
+            "Authority",
+            (),
+            {"records": (), "aliases": {}, "claims_by_ref": {}},
+        )(),
+    )
+
+    cleaned, refs, count = _remove_unresolved_evidence_tokens(
+        tmp_path,
+        manuscript,
+    )
+
+    assert cleaned == "Prior work supports this statement [@strobe_2007]."
+    assert refs == ("missing_alias",)
+    assert count == 1
