@@ -48,6 +48,8 @@ global.window = {
         data_file_count: 1,
         support_file_count: 5,
         total_rows: 42,
+        receipt_kind: 'extraction_result',
+        study_revision: 8,
       };
     },
   },
@@ -69,7 +71,8 @@ vm.runInThisContext(fs.readFileSync(ownerPath, 'utf8'), { filename: ownerPath })
   assert.equal(rebindCalls, 1);
   assert.equal(receivedReceipt.id, 'extract-job-1');
   assert.match(html, /Synced to Copilot/);
-  assert.match(html, /workflow receipt was added to the conversation/);
+  assert.match(html, /StudyContext revision 8 now contains this extraction result/);
+  assert.match(html, /The next Copilot turn reads that typed state/);
   console.log('extraction embedded handoff contract passed');
 })().catch(error => {
   console.error(error);

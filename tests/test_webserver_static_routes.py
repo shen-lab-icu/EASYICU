@@ -185,7 +185,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260824-single-copilot1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
-    assert "js/screens-extraction.js?v=20260824-user-selection1" in index_html
+    assert "js/screens-extraction.js?v=20260824-extraction-roundtrip1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
@@ -1271,6 +1271,8 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     assert "css/extraction.css?v=20260630-gate-first-ia" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
+    assert "function copilotPrefillSummary()" in extraction_js
+    assert "Loaded from Copilot" in extraction_js
     assert "Select the ICU data folder" in extraction_js
     assert "function pathNeedsFolderChoice(path)" in extraction_js
     assert "if (pathNeedsFolderChoice(exPath))" in extraction_js
@@ -3473,8 +3475,8 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
-    assert "js/screens-extraction-embedded.js?v=20260824-user-selection1" in index_html
-    assert "js/screens-guided-pi.js?v=20260824-extraction-receipt1" in index_html
+    assert "js/screens-extraction-embedded.js?v=20260824-extraction-roundtrip1" in index_html
+    assert "js/screens-guided-pi.js?v=20260824-extraction-roundtrip1" in index_html
     assert "/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output" in api_js
     assert "window.EU_API.openExtractionOutput = openExtractionOutput" in api_js
     assert "data-ex-open-output" in extraction_js
@@ -3482,6 +3484,10 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     assert "syncToCopilot: syncExtractionToCopilot" in extraction_js
     assert "notifyExtractionHandoff" in embedded_js
     assert "role: 'workflow_receipt'" in guided_js
+    assert "row.receipt_kind === 'extraction_result'" in guided_js
+    assert "Extraction setup saved" in guided_js
+    assert "No extraction has been claimed yet." in guided_js
+    assert "StudyContext" in guided_js
     assert "This is EasyICU state, not a model reply." in guided_js
     assert ".ex-output-path" in output_css
     assert ".ex-output-file" in output_css

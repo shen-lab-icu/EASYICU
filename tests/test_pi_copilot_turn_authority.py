@@ -15,7 +15,9 @@ from easyicu.webserver.pi_copilot.turn_authority import (
         "确认，授权你在本轮准备并注册官方演示数据。",
         "我确认当前研究配置，请开始数据提取和质量审阅。",
         "确认授权本轮打开本地数据选择与扫描流程。",
+        "继续打开本机 MIMIC-IV 3.1 数据提取工作区。",
         "I confirm and authorize data extraction for this turn.",
+        "Continue opening the local data extraction workspace.",
         "I approve preparing and registering the demo data now.",
     ],
 )

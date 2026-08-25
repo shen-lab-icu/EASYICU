@@ -55,6 +55,14 @@ assert.deepEqual(window.EUIcd.contract(), {
   exclude_diagnoses: ['C'],
 });
 
+window.EUIcd.apply({ include_diagnoses: ['A41'], exclude_diagnoses: [] });
+assert.deepEqual(window.EUIcd.contract(), {
+  icd_include: 'A41',
+  icd_exclude: '',
+  include_diagnoses: ['A41'],
+  exclude_diagnoses: [],
+});
+
 const selected = window.EUIcd.block({ database: 'miiv', databaseLabel: '<MIMIC-IV>', real: true });
 assert.match(selected, /&lt;MIMIC-IV&gt;/);
 assert.doesNotMatch(selected, /<MIMIC-IV>/);

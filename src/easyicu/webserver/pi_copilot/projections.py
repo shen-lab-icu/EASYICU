@@ -468,6 +468,8 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
         state = stable_code(value.get("state"))
         job_id = stable_code(value.get("job_id"))
         source_id = stable_code(value.get("source_id"))
+        expected_database = stable_code(value.get("expected_database"))
+        allowed_databases = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
         if (
             route != "extraction"
             or not study_id
@@ -475,6 +477,7 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             or revision < 0
             or state not in {"setup", "running", "review"}
             or (source_id and not re.fullmatch(r"src_[a-f0-9]{12}", source_id))
+            or (expected_database and expected_database not in allowed_databases)
         ):
             return None
         return {
@@ -487,6 +490,11 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "media_type": "application/vnd.easyicu.native-workspace",
             **({"job_id": job_id} if job_id else {}),
             **({"source_id": source_id} if source_id else {}),
+            **(
+                {"expected_database": expected_database}
+                if expected_database
+                else {}
+            ),
         }
     if kind in {"file", "webpage"}:
         file_name = _bounded_text(value.get("file"), 240).replace("\\", "/")

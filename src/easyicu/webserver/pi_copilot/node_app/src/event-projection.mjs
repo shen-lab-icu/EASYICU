@@ -178,6 +178,8 @@ function projectedResource(value) {
     const state = boundedText(value.state, 40).trim();
     const jobId = safeJobId(value.job_id);
     const sourceId = safeStableId(value.source_id);
+    const expectedDatabase = boundedText(value.expected_database, 40).trim().toLowerCase();
+    const allowedDatabases = new Set(["miiv", "mimic", "eicu", "aumc", "hirid", "sic"]);
     if (
       route !== "extraction"
       || !studyContextId
@@ -185,6 +187,7 @@ function projectedResource(value) {
       || studyRevision < 0
       || !["setup", "running", "review"].includes(state)
       || (sourceId && !/^src_[a-f0-9]{12}$/.test(sourceId))
+      || (expectedDatabase && !allowedDatabases.has(expectedDatabase))
     ) return undefined;
     return {
       kind: "native_workspace",
@@ -196,6 +199,7 @@ function projectedResource(value) {
       media_type: "application/vnd.easyicu.native-workspace",
       ...(jobId ? { job_id: jobId } : {}),
       ...(sourceId ? { source_id: sourceId } : {}),
+      ...(expectedDatabase ? { expected_database: expectedDatabase } : {}),
     };
   }
   const file = safeRelativeFile(value.file);

@@ -449,17 +449,23 @@
       const rows = row.total_rows == null ? Number.NaN : Number(row.total_rows);
       const files = Number(row.data_file_count);
       const supports = Number(row.support_file_count);
+      const isResult = row.receipt_kind === 'extraction_result';
       return `<article class="gpi-message assistant gpi-workflow-receipt" role="status">
         <div class="gpi-message-body">
-          <div class="gpi-workflow-receipt-head">${iconHtml('check', 15)}<div><strong>${tr('Local workflow receipt · extraction synced', '本地工作流回执 · 数据抽取已同步')}</strong><span>${tr('This is EasyICU state, not a model reply.', '这是 EasyICU 本地状态，不是模型回复。')}</span></div></div>
+          <div class="gpi-workflow-receipt-head">${iconHtml('check', 15)}<div><strong>${isResult ? tr('Extraction result synchronized', '抽取结果已同步') : tr('Extraction setup saved', '抽取配置已保存')}</strong><span>${tr('This is EasyICU state, not a model reply.', '这是 EasyICU 本地状态，不是模型回复。')}</span></div></div>
           <div class="gpi-workflow-receipt-grid">
             <span>${tr('Database', '数据库')}<b>${esc(row.database || row.source_label || '—')}</b></span>
-            <span>${tr('Output', '产物')}<b>${Number.isFinite(files) ? files : 0} + ${Number.isFinite(supports) ? supports : 0} ${tr('files', '个文件')}</b></span>
-            <span>${tr('Rows', '行数')}<b>${Number.isFinite(rows) ? rows.toLocaleString() : '—'}</b></span>
+            ${isResult ? `<span>${tr('Output', '产物')}<b>${Number.isFinite(files) ? files : 0} + ${Number.isFinite(supports) ? supports : 0} ${tr('files', '个文件')}</b></span>` : ''}
+            ${isResult ? `<span>${tr('Rows', '行数')}<b>${Number.isFinite(rows) ? rows.toLocaleString() : '—'}</b></span>` : ''}
             <span>${tr('Cohort', '队列')}<b>${esc(row.cohort_summary || tr('Current confirmed cohort', '当前确认队列'))}</b></span>
+            <span>${tr('Modules', '模块')}<b>${esc((row.modules || []).join(', ') || '—')}</b></span>
+            <span>${tr('Format', '格式')}<b>${esc(String(row.export_format || '—').toUpperCase())}</b></span>
+            <span>StudyContext<b>${esc(row.study_context_id || '—')} · rev ${Number(row.study_revision || 0)}</b></span>
           </div>
           ${row.output_dir ? `<div class="gpi-workflow-receipt-path"><span>${tr('Local output folder', '本机输出文件夹')}</span><code>${esc(row.output_dir)}</code></div>` : ''}
-          <p>${tr('Copilot is now rebound to the updated database, cohort, feature modules, and export format. The absolute local path is shown only in this host UI and is not inserted as model-authored text.', 'Copilot 已重新绑定到更新后的数据库、队列、特征模块和导出格式。本机绝对路径只显示在当前宿主界面，不会被伪装成模型生成的文字。')}</p>
+          <p>${isResult
+            ? tr('Copilot now reads this completed local extraction result. The absolute local path is shown only in this host UI and is not inserted as model-authored text.', 'Copilot 现在可以读取这次已完成的本地抽取结果。本机绝对路径只显示在当前宿主界面，不会被伪装成模型生成的文字。')
+            : tr('Copilot now reads this database, cohort, feature-module, time-window, and export-format setup from the saved StudyContext. No extraction has been claimed yet.', 'Copilot 现在会从已保存的 StudyContext 读取数据库、队列、特征模块、时间窗和导出格式；此时尚未声称已经完成抽取。')}</p>
         </div>
       </article>`;
     }
@@ -1655,6 +1661,11 @@
       support_file_count: Number(receipt.support_file_count || 0),
       total_rows: receipt.total_rows == null ? null : Number(receipt.total_rows),
       cohort_summary: String(receipt.cohort_summary || '').slice(0, 240),
+      modules: Array.isArray(receipt.modules) ? receipt.modules.slice(0, 30).map(value => String(value).slice(0, 80)) : [],
+      export_format: String(receipt.export_format || '').slice(0, 40),
+      receipt_kind: receipt.receipt_kind === 'extraction_result' ? 'extraction_result' : 'extraction_setup',
+      study_context_id: String(receipt.study_context_id || '').slice(0, 160),
+      study_revision: Number(receipt.study_revision || 0),
     };
     state.workflowReceipts = state.workflowReceipts.filter(row => row.id !== id).concat([projected]).slice(-3);
     render();
