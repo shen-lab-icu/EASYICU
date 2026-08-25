@@ -48,6 +48,27 @@ _INTERNAL_PHRASES = (
     "machine digest",
     "source aware analysis set",
 )
+_NAMED_METRIC_TERMS = (
+    "adjusted rand index",
+    "ari",
+    "area under the receiver operating characteristic curve",
+    "auroc",
+    "auc",
+    "bayesian information criterion",
+    "bic",
+    "brier score",
+    "calibration intercept",
+    "calibration slope",
+    "c-index",
+    "coefficient",
+    "hazard ratio",
+    "mean difference",
+    "odds ratio",
+    "risk difference",
+    "risk ratio",
+    "silhouette",
+)
+_OVERPRECISE_DECIMAL_RE = re.compile(r"(?<![A-Za-z0-9_])[-+]?\d+\.\d{7,}(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -87,7 +108,9 @@ def _sections(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"^##\s+([^\n]+?)\s*$", text, flags=re.M))
     return {
         match.group(1).strip(): text[
-            match.end() : matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            match.end() : matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(text)
         ].strip()
         for index, match in enumerate(matches)
     }
@@ -97,7 +120,9 @@ def _subsections(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"^###\s+([^\n]+?)\s*$", text, flags=re.M))
     return {
         match.group(1).strip(): text[
-            match.end() : matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            match.end() : matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(text)
         ].strip()
         for index, match in enumerate(matches)
     }
@@ -192,6 +217,27 @@ def _internal_excerpts(section_text: str) -> tuple[str, ...]:
         if phrase in lowered:
             excerpts.append(phrase)
     return tuple(dict.fromkeys(excerpts))
+
+
+def _sentences(text: str) -> tuple[str, ...]:
+    cleaned = _strip_audit_markup(text)
+    return tuple(
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", cleaned)
+        if sentence.strip()
+    )
+
+
+def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
+    excerpts: list[str] = []
+    for sentence in _sentences(section_text):
+        lowered = sentence.casefold()
+        if "point estimate" not in lowered:
+            continue
+        if any(term in lowered for term in _NAMED_METRIC_TERMS):
+            continue
+        excerpts.append(sentence[:300])
+    return tuple(excerpts)
 
 
 def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
@@ -294,7 +340,8 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
         )
 
     for section in _READER_FACING_SECTIONS:
-        excerpts = _internal_excerpts(section_map.get(section, ""))
+        section_text = section_map.get(section, "")
+        excerpts = _internal_excerpts(section_text)
         if excerpts:
             findings.append(
                 ManuscriptQualityFinding(
@@ -308,10 +355,60 @@ def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
                     excerpts=excerpts[:12],
                 )
             )
+        unnamed_metrics = _unnamed_metric_excerpts(section_text)
+        if unnamed_metrics:
+            findings.append(
+                ManuscriptQualityFinding(
+                    code="MANUSCRIPT_METRIC_UNNAMED",
+                    severity="error",
+                    section=section,
+                    message=(
+                        "A reader-facing numeric result is called a point estimate "
+                        "without naming its statistical metric."
+                    ),
+                    excerpts=unnamed_metrics[:8],
+                )
+            )
+        overprecise = tuple(
+            dict.fromkeys(_OVERPRECISE_DECIMAL_RE.findall(section_text))
+        )
+        if overprecise:
+            findings.append(
+                ManuscriptQualityFinding(
+                    code="MANUSCRIPT_NUMERIC_OVERPRECISION",
+                    severity="error",
+                    section=section,
+                    message=(
+                        "Reader-facing prose exposes machine precision rather than "
+                        "a publication-scale display value."
+                    ),
+                    excerpts=overprecise[:12],
+                )
+            )
+
+    results_text = _strip_audit_markup(section_map.get("Results", "")).casefold()
+    discussion_text = _strip_audit_markup(section_map.get("Discussion", "")).casefold()
+    if "risk difference" in results_text and re.search(
+        r"(?:no|not|does not|did not).{0,80}basis.{0,80}(?:absolute )?risk difference",
+        discussion_text,
+    ):
+        findings.append(
+            ManuscriptQualityFinding(
+                code="MANUSCRIPT_REPORTED_RESULT_DISCLAIMED",
+                severity="error",
+                section="Discussion",
+                message=(
+                    "Discussion says a risk difference is unavailable although "
+                    "Results reports one."
+                ),
+            )
+        )
 
     return ManuscriptQualityAudit(
-        schema_version="manuscript-quality-audit-v1",
-        status="pass" if not any(item.severity == "error" for item in findings) else "changes_required",
+        schema_version="manuscript-quality-audit-v2",
+        status="pass"
+        if not any(item.severity == "error" for item in findings)
+        else "changes_required",
         source_sha256=_sha256(text),
         reader_sha256=_sha256(reader),
         section_word_counts={name: _words(body) for name, body in section_map.items()},
