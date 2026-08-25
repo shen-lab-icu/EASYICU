@@ -52,6 +52,14 @@ gate mechanics into the scientific-plan-review orchestration boundary:
 planning owner is recorded in the module-graph baseline, cyclic SCC count
 remains zero, and the architecture suite passes `50/50`.
 
+The next exact-head Research-Agent CI run `32838861640` passed architecture,
+runner, and Anthropic checks, then exposed one transport-budget regression:
+the legacy monolithic Planner schema retained an orphan definition for the new
+progressive-only decision object (`30,205 > 30,000` bytes). The owner fix now
+removes that unreachable definition from the monolithic transport without
+changing the public/load schema. The exact structured-output regression suite
+passes `164/164`; the existing 30 KB budget was not weakened.
+
 ## Dev9 zero-Provider shadow audit
 
 Input root:
