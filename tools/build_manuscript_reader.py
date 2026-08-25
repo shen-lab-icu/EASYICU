@@ -44,6 +44,34 @@ def _load_literature(run_dir: Path) -> LiteratureBundle | None:
         return None
 
 
+def _load_reader_title(run_dir: Path) -> str:
+    """Use the host-owned manuscript packet when Writer's H1 was filtered."""
+
+    path = run_dir / "manuscript_packet.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+        return "EasyICU analysis-only manuscript draft"
+    title = str(payload.get("title") or "").strip().lstrip("#").strip()
+    return title or "EasyICU analysis-only manuscript draft"
+
+
+def _publication_figure_exclusion_reason(run_dir: Path) -> str | None:
+    """Fail closed when the source run has not cleared publication figure QA."""
+
+    path = run_dir / "manifest.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+        return None
+    readiness = payload.get("readiness")
+    if not isinstance(readiness, dict):
+        return None
+    if readiness.get("publication_figure_visual_qa_passed") is False:
+        return "source_run_publication_figure_visual_qa_failed"
+    return None
+
+
 def _prepare_reader_manuscript(
     source_bound: str,
 ) -> tuple[str, tuple[dict[str, str], ...]]:
@@ -122,11 +150,15 @@ def build_bundle(
     )
 
     literature = _load_literature(run_dir)
-    figure_paths = _copy_figures(
-        run_dir=run_dir, output_dir=output_dir, evidence=evidence
+    figure_exclusion_reason = _publication_figure_exclusion_reason(run_dir)
+    figure_paths = (
+        []
+        if figure_exclusion_reason
+        else _copy_figures(run_dir=run_dir, output_dir=output_dir, evidence=evidence)
     )
     tex = scaffold_to_latex(
         markdown=corrected,
+        title=_load_reader_title(run_dir),
         bibliography=literature,
         bibliography_basename="manuscript_scaffold",
         figure_paths=figure_paths or None,
@@ -158,6 +190,7 @@ def build_bundle(
         "pdf_sha256": _sha256(pdf_result.pdf_path),
         "claim_count": provenance["claim_count"],
         "figure_count": len(figure_paths),
+        "figure_exclusion_reason": figure_exclusion_reason,
         "provider_calls": 0,
         "claim_ceiling": "analysis_only",
         "publication_authorized": False,

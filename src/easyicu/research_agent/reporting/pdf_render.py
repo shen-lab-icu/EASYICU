@@ -289,7 +289,9 @@ def render_pdf_for_run(
     bibtex = shutil.which("bibtex")
     log_lines: List[str] = []
     successful = True
-    for pass_idx in range(2):
+    # One engine pass creates the citation inventory, BibTeX writes the .bbl,
+    # and two further passes resolve citation labels and cross-references.
+    for pass_idx in range(3):
         rc, log = _run_with_log(
             [
                 engine,

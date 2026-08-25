@@ -57,6 +57,10 @@ _LITERATURE_CITATION_PATTERN = re.compile(
     r"\[(?P<keys>@[A-Za-z0-9_.:-]+"
     r"(?:\s*;\s*@[A-Za-z0-9_.:-]+)*)\]"
 )
+_UNICODE_SCIENTIFIC_NOTATION_PATTERN = re.compile(
+    r"(?P<coefficient>\d+(?:\.\d+)?)\s*[×x]\s*10(?P<exponent>[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)"
+)
+_SUPERSCRIPT_TRANSLATION = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _STANDARD_SECTION_HEADINGS = frozenset(
     {
         "abstract",
@@ -90,6 +94,8 @@ _LATEX_SPECIAL = {
     "~": r"\textasciitilde{}",
     "^": r"\textasciicircum{}",
     "\\": r"\textbackslash{}",
+    "<": r"\textless{}",
+    ">": r"\textgreater{}",
 }
 
 
@@ -206,7 +212,19 @@ def _md_inline_to_latex(line: str, *, claim_base_url: Optional[str] = None) -> s
         placeholders.append(r"\cite{" + ",".join(keys) + "}")
         return f"\x00{len(placeholders) - 1}\x00"
 
+    def _scientific_notation(match: "re.Match[str]") -> str:
+        exponent = match.group("exponent").translate(_SUPERSCRIPT_TRANSLATION)
+        placeholders.append(
+            "$"
+            + _escape_latex(match.group("coefficient"))
+            + r"\times 10^{"
+            + _escape_latex(exponent)
+            + "}$"
+        )
+        return f"\x00{len(placeholders) - 1}\x00"
+
     line = _LITERATURE_CITATION_PATTERN.sub(_literature_citation, line)
+    line = _UNICODE_SCIENTIFIC_NOTATION_PATTERN.sub(_scientific_notation, line)
     line = _BOUND_NUMERIC_MARKER_PATTERN.sub(_bound_numeric_marker, line)
     line = _NUMERIC_FOOTNOTE_MARKER_PATTERN.sub(_numeric_marker, line)
     line = _MD_LINK_PATTERN.sub(_link, line)
@@ -220,6 +238,10 @@ def _md_inline_to_latex(line: str, *, claim_base_url: Optional[str] = None) -> s
 
     # Restore placeholders from the literal NUL markers inserted above.
     line = re.sub("\x00(\\d+)\x00", _restore, line)
+    # Internal evidence links deliberately render as empty strings in the PDF.
+    # Remove the space they leave before punctuation instead of producing
+    # visible ``word .`` artefacts throughout the manuscript.
+    line = re.sub(r"[ \t]+([,.;:!?])", r"\1", line)
     return line
 
 
@@ -255,6 +277,10 @@ def scaffold_to_latex(
     # when evidence ids are unresolved. pdflatex would otherwise emit
     # raw ``<!`` text into the rendered PDF.
     markdown = _HTML_COMMENT_PATTERN.sub("", markdown)
+    # A strict evidence filter can remove an unsupported generated title while
+    # preserving the Markdown H1 marker. Treat a bare leading H1 as absent
+    # metadata; the caller-supplied host title remains authoritative.
+    markdown = re.sub(r"\A\s*#\s*(?:\n|\Z)", "", markdown, count=1)
 
     if bibliography is not None:
         allowed_citation_keys = {record.key for record in bibliography.citations}
@@ -343,6 +369,11 @@ def scaffold_to_latex(
         parts.append("")
 
     for level, title_text, body in body_sections:
+        if level == 0 and title_text.strip().casefold() == "body":
+            if body:
+                parts.append(_render_body(body, claim_base_url=claim_base_url))
+                parts.append("")
+            continue
         cmd = section_cmd.get(level, r"\paragraph")
         if title_text.strip().lower() in {"title"}:
             continue  # already in \maketitle
