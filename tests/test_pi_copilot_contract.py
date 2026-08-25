@@ -3504,6 +3504,97 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
     assert privacy_blocked.value.code == "pi_research_artifact_privacy_blocked"
 
 
+def test_project_evidence_preview_is_project_scoped_digest_pinned_and_governed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-a", "study-a")
+    digest = "d" * 64
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **kwargs: {
+            "runs": [{"run_id": "run_1", "project_dir": "/private/run-a"}]
+            if kwargs.get("study_id") == "study-a"
+            else []
+        },
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_evidence_preview",
+        lambda project_dir, evidence_id, expected_sha256: {
+            "ok": True,
+            "payload": {
+                "schema_version": "easyicu.web-evidence-preview/1",
+                "evidence_id": evidence_id,
+                "sha256": expected_sha256,
+                "display_name": "analysis.py",
+                "renderer": "code",
+                "previewable": True,
+                "text": "estimate = 1.25\n",
+            },
+            "privacy_scan": {"passed": True},
+        },
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_review",
+        lambda project_dir: {
+            "ok": True,
+            "gate": {"status": "analysis_only"},
+            "readiness": {
+                "status": "awaiting_human_signoff",
+                "signed": False,
+                "signoff_stale": False,
+                "reportable": False,
+            },
+        },
+    )
+
+    payload = service.get_research_evidence_preview(
+        project_id="project-a",
+        run_id="run_1",
+        evidence_id="code_analysis_1",
+        expected_sha256=digest,
+    )
+    encoded = json.dumps(payload)
+    assert payload["payload"]["text"] == "estimate = 1.25\n"
+    assert payload["payload"]["sha256"] == digest
+    assert payload["governance"]["claim_ceiling"] == "analysis_only"
+    assert "project_dir" not in encoded and "/private/" not in encoded
+
+    with pytest.raises(PiCopilotError) as wrong_project:
+        service.get_research_evidence_preview(
+            project_id="project-b",
+            run_id="run_1",
+            evidence_id="code_analysis_1",
+            expected_sha256=digest,
+        )
+    assert wrong_project.value.code == "pi_project_not_initialized"
+
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_evidence_preview",
+        lambda *args: {
+            "ok": True,
+            "payload": {},
+            "privacy_scan": {"passed": False},
+        },
+    )
+    with pytest.raises(PiCopilotError) as blocked:
+        service.get_research_evidence_preview(
+            project_id="project-a",
+            run_id="run_1",
+            evidence_id="code_analysis_1",
+            expected_sha256=digest,
+        )
+    assert blocked.value.code == "pi_research_evidence_privacy_blocked"
+
+
 def test_project_document_preview_requires_the_current_ledger_digest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
