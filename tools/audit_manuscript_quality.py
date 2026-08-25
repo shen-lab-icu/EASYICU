@@ -4,13 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from easyicu.research_agent.reporting.manuscript_quality import (
     audit_manuscript_quality,
+    repair_reader_structure_from_existing_prose,
     render_reader_manuscript,
 )
 
@@ -35,15 +37,16 @@ def _render_summary(rows: list[dict[str, Any]]) -> str:
         "",
         "This is a deterministic, provider-free writing audit. It does not grant publication authority.",
         "",
-        "| Manuscript | Status | Errors | Main codes |",
-        "|---|---:|---:|---|",
+        "| Manuscript | Status | Errors | Deterministic repairs | Main codes |",
+        "|---|---:|---:|---:|---|",
     ]
     for row in rows:
         lines.append(
-            "| {label} | {status} | {error_count} | {codes} |".format(
+            "| {label} | {status} | {error_count} | {repair_count} | {codes} |".format(
                 label=row["label"],
                 status=row["status"],
                 error_count=row["error_count"],
+                repair_count=len(row["deterministic_repairs"]),
                 codes=", ".join(row["error_codes"]) or "none",
             )
         )
@@ -59,6 +62,15 @@ def main() -> int:
         help="Manuscript file/run directory, optionally LABEL=PATH.",
     )
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--repair-existing-structure",
+        action="store_true",
+        help=(
+            "Audit a provider-free candidate after restoring required wrappers "
+            "and display precision from prose already present in the draft. "
+            "The source run is never modified."
+        ),
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir.expanduser().resolve()
@@ -66,7 +78,15 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for raw in args.inputs:
         label, source = _resolve_source(raw)
-        text = source.read_text(encoding="utf-8")
+        source_text = source.read_text(encoding="utf-8")
+        source_sha256 = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+        text = source_text
+        repairs: tuple[Mapping[str, str], ...] = ()
+        candidate_path: Path | None = None
+        if args.repair_existing_structure:
+            text, repairs = repair_reader_structure_from_existing_prose(text)
+            candidate_path = output_dir / f"{label}_manuscript_repaired.md"
+            candidate_path.write_text(text, encoding="utf-8")
         audit = audit_manuscript_quality(text)
         audit_path = output_dir / f"{label}_manuscript_quality_audit.json"
         reader_path = output_dir / f"{label}_manuscript_reader.md"
@@ -80,13 +100,16 @@ def main() -> int:
             {
                 "label": label,
                 "source": str(source),
-                "source_sha256": audit.source_sha256,
+                "source_sha256": source_sha256,
+                "audit_source_sha256": audit.source_sha256,
                 "reader_sha256": audit.reader_sha256,
                 "status": audit.status,
                 "error_count": len(errors),
                 "error_codes": sorted({finding.code for finding in errors}),
                 "audit": str(audit_path),
                 "reader": str(reader_path),
+                "candidate": str(candidate_path) if candidate_path else None,
+                "deterministic_repairs": [dict(repair) for repair in repairs],
             }
         )
 
@@ -94,6 +117,7 @@ def main() -> int:
         "schema_version": "manuscript-quality-replay-v1",
         "provider_calls": 0,
         "publication_authority": False,
+        "repair_existing_structure": bool(args.repair_existing_structure),
         "manuscripts": rows,
     }
     (output_dir / "summary.json").write_text(
