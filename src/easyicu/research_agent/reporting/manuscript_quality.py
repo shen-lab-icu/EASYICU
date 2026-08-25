@@ -1,0 +1,330 @@
+"""Deterministic reader-facing quality audit for bound manuscripts.
+
+The evidence-bound manuscript remains the authoritative audit surface.  This
+module derives a cleaner reader view without rewriting scientific prose and
+checks a small set of structural and cross-section contracts that do not need
+another model call.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+import hashlib
+import re
+from typing import Any, Mapping
+
+
+_REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
+    "Abstract": (),
+    "Introduction": (),
+    "Methods": (
+        "Study design and cohort",
+        "Variables",
+        "Statistical analysis",
+        "Software and reproducibility",
+    ),
+    "Results": (
+        "Cohort characteristics",
+        "Primary outcome",
+        "Primary association",
+        "Sensitivity and subgroup analyses",
+    ),
+    "Discussion": (),
+    "Limitations": (),
+    "Conclusion": (),
+}
+_ABSTRACT_LABELS = ("Background", "Methods", "Results", "Conclusions")
+_READER_FACING_SECTIONS = frozenset(
+    {"Abstract", "Introduction", "Results", "Discussion", "Conclusion"}
+)
+_EVIDENCE_LINK_RE = re.compile(r"\[[^\]]+\]\(evidence/[^\n)]*(?:\"[^\"]*\")?\)")
+_CLAIM_MARKER_RE = re.compile(r"\[\^claim_\d+\]")
+_CLAIM_DEFINITION_RE = re.compile(r"^\[\^claim_\d+\]:.*$", flags=re.M)
+_INTERNAL_PHRASES = (
+    "analysis role:",
+    "bound typed cohort",
+    "host-bound",
+    "host-materialized",
+    "machine digest",
+    "source aware analysis set",
+)
+
+
+@dataclass(frozen=True)
+class ManuscriptQualityFinding:
+    """One stable, owner-attributable writing-quality finding."""
+
+    code: str
+    severity: str
+    section: str
+    message: str
+    excerpts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ManuscriptQualityAudit:
+    """Serializable result of the deterministic manuscript audit."""
+
+    schema_version: str
+    status: str
+    source_sha256: str
+    reader_sha256: str
+    section_word_counts: Mapping[str, int]
+    adjustment_sets: Mapping[str, tuple[str, ...]]
+    internal_evidence_link_count: int
+    numeric_claim_marker_count: int
+    findings: tuple[ManuscriptQualityFinding, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _sections(text: str) -> dict[str, str]:
+    matches = list(re.finditer(r"^##\s+([^\n]+?)\s*$", text, flags=re.M))
+    return {
+        match.group(1).strip(): text[
+            match.end() : matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        ].strip()
+        for index, match in enumerate(matches)
+    }
+
+
+def _subsections(text: str) -> dict[str, str]:
+    matches = list(re.finditer(r"^###\s+([^\n]+?)\s*$", text, flags=re.M))
+    return {
+        match.group(1).strip(): text[
+            match.end() : matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        ].strip()
+        for index, match in enumerate(matches)
+    }
+
+
+def _has_prose(text: str) -> bool:
+    cleaned = _CLAIM_DEFINITION_RE.sub("", text)
+    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
+    cleaned = re.sub(r"^#{1,6}\s+.*$", "", cleaned, flags=re.M)
+    cleaned = _EVIDENCE_LINK_RE.sub("", cleaned)
+    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
+    return bool(re.search(r"[A-Za-z]{2,}", cleaned))
+
+
+def _words(text: str) -> int:
+    return len(re.findall(r"[A-Za-z][A-Za-z0-9'-]*", text))
+
+
+def _strip_audit_markup(text: str) -> str:
+    cleaned = _EVIDENCE_LINK_RE.sub("", text)
+    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
+    cleaned = _CLAIM_DEFINITION_RE.sub("", cleaned)
+    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
+    return cleaned
+
+
+def render_reader_manuscript(bound_text: str) -> str:
+    """Remove audit-only markup without changing claims, numbers, or citations."""
+
+    cleaned = _strip_audit_markup(str(bound_text or ""))
+    cleaned = re.sub(r"[ \t]+([,.;:])", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip() + "\n"
+
+
+def _normalise_adjustment_set(raw: str) -> tuple[str, ...]:
+    cleaned = _strip_audit_markup(raw).replace("`", "")
+    cleaned = re.sub(r"\[@[^\]]+\]", "", cleaned)
+    cleaned = re.sub(r"\band\b", ",", cleaned, flags=re.I)
+    values: list[str] = []
+    for part in cleaned.split(","):
+        value = re.sub(r"^(?:the\s+)?", "", part.strip(), flags=re.I)
+        value = re.sub(r"\s+", " ", value).strip(" .;:").casefold()
+        if value and value not in values:
+            values.append(value)
+    return tuple(sorted(values))
+
+
+def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
+    found: dict[str, tuple[str, ...]] = {}
+    methods = _strip_audit_markup(sections.get("Methods", ""))
+    method_patterns = (
+        r"adjustment covariates were\s+([^.;]+)",
+        r"adjustment set (?:comprised|included|was)\s+([^.;]+)",
+        r"model was adjusted for\s+([^.;]+)",
+    )
+    method_sets = {
+        _normalise_adjustment_set(match.group(1))
+        for pattern in method_patterns
+        for match in re.finditer(pattern, methods, flags=re.I)
+    }
+    method_sets.discard(())
+    if len(method_sets) == 1:
+        found["Methods"] = next(iter(method_sets))
+
+    results = _strip_audit_markup(sections.get("Results", ""))
+    result_sets = {
+        _normalise_adjustment_set(match.group(1))
+        for match in re.finditer(
+            r"after adjustment for\s+(.+),\s+[^,.\n]+?\s+"
+            r"(?:was|were|had|showed)\b",
+            results,
+            flags=re.I,
+        )
+    }
+    result_sets.discard(())
+    if len(result_sets) == 1:
+        found["Results"] = next(iter(result_sets))
+    return found
+
+
+def _internal_excerpts(section_text: str) -> tuple[str, ...]:
+    excerpts: list[str] = []
+    for match in re.finditer(r"`([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)`", section_text):
+        excerpts.append(match.group(0))
+    for match in re.finditer(r"\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}\b", section_text):
+        excerpts.append(match.group(0))
+    lowered = section_text.casefold()
+    for phrase in _INTERNAL_PHRASES:
+        if phrase in lowered:
+            excerpts.append(phrase)
+    return tuple(dict.fromkeys(excerpts))
+
+
+def audit_manuscript_quality(bound_text: str) -> ManuscriptQualityAudit:
+    """Audit structure, terminology, and one high-confidence consistency rule."""
+
+    text = str(bound_text or "")
+    reader = render_reader_manuscript(text)
+    section_map = _sections(text)
+    findings: list[ManuscriptQualityFinding] = []
+
+    if not re.search(r"^#\s+\S+", text, flags=re.M):
+        findings.append(
+            ManuscriptQualityFinding(
+                code="MANUSCRIPT_TITLE_MISSING",
+                severity="error",
+                section="Title",
+                message="The manuscript has no level-one title.",
+            )
+        )
+    if not re.search(r"^\*\*Keywords:\*\*\s+\S+", text, flags=re.M | re.I):
+        findings.append(
+            ManuscriptQualityFinding(
+                code="MANUSCRIPT_KEYWORDS_MISSING",
+                severity="error",
+                section="Title",
+                message="The manuscript has no populated Keywords line.",
+            )
+        )
+
+    for section, required_subsections in _REQUIRED_SECTIONS.items():
+        body = section_map.get(section)
+        if body is None:
+            findings.append(
+                ManuscriptQualityFinding(
+                    code="MANUSCRIPT_SECTION_MISSING",
+                    severity="error",
+                    section=section,
+                    message=f"Required section {section!r} is missing.",
+                )
+            )
+            continue
+        if not _has_prose(body):
+            findings.append(
+                ManuscriptQualityFinding(
+                    code="MANUSCRIPT_SECTION_EMPTY",
+                    severity="error",
+                    section=section,
+                    message=f"Required section {section!r} has no substantive prose.",
+                )
+            )
+        subsection_map = _subsections(body)
+        for subsection in required_subsections:
+            subsection_body = subsection_map.get(subsection)
+            if subsection_body is None or not _has_prose(subsection_body):
+                findings.append(
+                    ManuscriptQualityFinding(
+                        code="MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY",
+                        severity="error",
+                        section=section,
+                        message=(
+                            f"Required subsection {subsection!r} is missing or empty."
+                        ),
+                        excerpts=(subsection,),
+                    )
+                )
+
+    abstract = section_map.get("Abstract")
+    if abstract is not None:
+        for label in _ABSTRACT_LABELS:
+            if not re.search(
+                rf"\*\*{re.escape(label)}:\*\*\s+\S+", abstract, flags=re.I
+            ):
+                findings.append(
+                    ManuscriptQualityFinding(
+                        code="MANUSCRIPT_ABSTRACT_LABEL_MISSING_OR_EMPTY",
+                        severity="error",
+                        section="Abstract",
+                        message=f"Abstract label {label!r} is missing or empty.",
+                        excerpts=(label,),
+                    )
+                )
+
+    adjustments = _adjustment_sets(section_map)
+    if (
+        "Methods" in adjustments
+        and "Results" in adjustments
+        and adjustments["Methods"] != adjustments["Results"]
+    ):
+        findings.append(
+            ManuscriptQualityFinding(
+                code="MANUSCRIPT_ADJUSTMENT_SET_CONFLICT",
+                severity="error",
+                section="Methods/Results",
+                message="Methods and Results report different adjustment sets.",
+                excerpts=(
+                    "Methods: " + ", ".join(adjustments["Methods"]),
+                    "Results: " + ", ".join(adjustments["Results"]),
+                ),
+            )
+        )
+
+    for section in _READER_FACING_SECTIONS:
+        excerpts = _internal_excerpts(section_map.get(section, ""))
+        if excerpts:
+            findings.append(
+                ManuscriptQualityFinding(
+                    code="MANUSCRIPT_INTERNAL_TERM_EXPOSED",
+                    severity="error",
+                    section=section,
+                    message=(
+                        "Reader-facing prose exposes raw runtime identifiers or "
+                        "engineering terminology."
+                    ),
+                    excerpts=excerpts[:12],
+                )
+            )
+
+    return ManuscriptQualityAudit(
+        schema_version="manuscript-quality-audit-v1",
+        status="pass" if not any(item.severity == "error" for item in findings) else "changes_required",
+        source_sha256=_sha256(text),
+        reader_sha256=_sha256(reader),
+        section_word_counts={name: _words(body) for name, body in section_map.items()},
+        adjustment_sets=adjustments,
+        internal_evidence_link_count=len(_EVIDENCE_LINK_RE.findall(text)),
+        numeric_claim_marker_count=len(_CLAIM_MARKER_RE.findall(text)),
+        findings=tuple(findings),
+    )
+
+
+__all__ = [
+    "ManuscriptQualityAudit",
+    "ManuscriptQualityFinding",
+    "audit_manuscript_quality",
+    "render_reader_manuscript",
+]

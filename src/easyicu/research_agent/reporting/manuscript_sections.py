@@ -10,6 +10,7 @@ model-facing class from also becoming a manuscript workflow coordinator.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Callable, Mapping
 
 from .administrative_authority import (
@@ -72,6 +73,8 @@ MANUSCRIPT_SECTION_SPECS = (
             "Use an exact standalone `{claim:<step>.<claim>}` sentence for any "
             "current-study qualitative direction or comparison when the machine "
             "digest supplies one; do not paraphrase it.\n"
+            "Use reader-facing clinical labels; do not expose raw snake_case "
+            "identifiers, internal reason codes, or host/runtime terminology.\n"
             "Target: 200-300 words total."
         ),
         max_tokens=1024,
@@ -97,7 +100,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "and include at least one evidence citation or literature citation "
             "in each paragraph when evidence is available. Do not collapse the "
             "introduction into two sentences. Cite at least one exact "
-            "direct-comparator key when the literature digest provides one."
+            "direct-comparator key when the literature digest provides one. "
+            "Use reader-facing clinical labels; do not expose raw snake_case "
+            "identifiers, internal reason codes, or host/runtime terminology."
         ),
         max_tokens=4096,
     ),
@@ -119,6 +124,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "set, sensitivity analyses (multiple-testing correction, subgroup "
             "analysis, ICU-rule-specific strata or missingness-pattern audits "
             "raised by the research context).\n"
+            "  Copy the executed adjustment set from the machine digest exactly "
+            "and keep that same set in Results; do not infer or substitute a "
+            "different covariate.\n"
             "### Software and reproducibility\n"
             "  State that analyses were conducted through the EasyICU "
             "research-agent pipeline and describe only run artifacts named in "
@@ -169,7 +177,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "violated an aggregation rule). Cite the corresponding registered "
             "evidence id. Omit this subsection if no such finding was produced.\n"
             "Target: 400-600 words. Every numeric claim MUST have an "
-            "{evidence:id} citation."
+            "{evidence:id} citation. Use reader-facing clinical labels; do not "
+            "expose raw snake_case identifiers, internal reason codes, or "
+            "host/runtime terminology."
         ),
         max_tokens=2048,
         required_subsections=(
@@ -201,7 +211,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "discussion into a two-sentence stub. Cite a screened direct "
             "comparator when available, and state the specific population, "
             "time-zero, estimand, or analysis difference instead of claiming "
-            "novelty from database choice alone."
+            "novelty from database choice alone. Use reader-facing clinical "
+            "labels; do not expose raw snake_case identifiers, internal reason "
+            "codes, or host/runtime terminology."
         ),
         max_tokens=4096,
     ),
@@ -240,7 +252,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "standalone `{claim:<step>.<claim>}` token for the current-study "
             "conclusion; the host will render and cite it. Do not write funding, "
             "ethics, conflicts, data/code availability, or release statements; "
-            "the host owns those administrative facts."
+            "the host owns those administrative facts. Use reader-facing "
+            "clinical labels; do not expose raw snake_case identifiers, internal "
+            "reason codes, or host/runtime terminology."
         ),
         max_tokens=512,
     ),
@@ -270,10 +284,17 @@ def _missing_required_subsections(
 ) -> tuple[str, ...]:
     """Return required level-three headings that are absent or have no prose."""
 
-    if not spec.required_subsections:
-        return ()
     lines = str(text or "").splitlines()
     missing: list[str] = []
+    if spec.key != "title":
+        prose = "\n".join(
+            line
+            for line in lines
+            if not line.lstrip().startswith("#") and line.strip()
+        )
+        prose = re.sub(r"<!--.*?-->", "", prose, flags=re.S)
+        if not re.search(r"[A-Za-z]{2,}", prose):
+            missing.append("section body")
     for subsection in spec.required_subsections:
         expected = f"### {subsection}".casefold()
         heading_index = next(
@@ -337,7 +358,12 @@ def render_manuscript_sections(
                 + "The previous draft omitted or left empty these required "
                 + "subsections: "
                 + ", ".join(
-                    f"`### {subsection}`" for subsection in missing_subsections
+                    (
+                        "the main section body"
+                        if subsection == "section body"
+                        else f"`### {subsection}`"
+                    )
+                    for subsection in missing_subsections
                 )
                 + ". Regenerate the complete section. Every listed subsection "
                 + "must contain evidence-bound manuscript prose. Do not mention "
