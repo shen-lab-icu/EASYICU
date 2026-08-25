@@ -832,6 +832,45 @@ def test_numeric_sentence_filter_merges_overlapping_rejected_link_spans(
     assert untraced == []
 
 
+def test_single_variant_robustness_prose_uses_point_and_interval_owner() -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.reporting.manuscript_post import (
+        repair_single_variant_robustness_metric_prose,
+    )
+
+    row = SimpleNamespace(
+        spec_id="complete_case",
+        converged=True,
+        point_estimate=0.772091,
+        ci_low=0.750295,
+        ci_high=0.792510,
+        evidence_id="primary_discrimination",
+        notes="metric=AUROC; deterministic DeLong interval",
+    )
+    panel = SimpleNamespace(
+        primary_spec_id="primary",
+        n_variants=1,
+        rows=(row,),
+    )
+    scaffold = (
+        "The robustness panel reported AUROC values ranging from 0.750 to "
+        "0.793, with a point estimate of 0.772 {evidence:robustness_panel}."
+    )
+
+    repaired, repairs = repair_single_variant_robustness_metric_prose(
+        scaffold,
+        panel=panel,
+    )
+
+    assert (
+        "AUROC of 0.772091 (95% CI, 0.750295–0.79251) "
+        "{evidence:primary_discrimination}" in repaired
+    )
+    assert "ranging from" not in repaired
+    assert repairs[0]["source"] == "single_variant_robustness_panel"
+
+
 def test_conflicting_declared_and_source_effect_scales_fail_closed() -> None:
     from easyicu.research_agent.authority.numeric_claim_identity import NumericClaim
 
