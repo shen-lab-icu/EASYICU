@@ -269,12 +269,12 @@ def run_prediction_figure(
         source_files.append(filename)
 
     palette = apply_publication_style(font_size=7.0)
-    fig = plt.figure(figsize=(183 / 25.4, 150 / 25.4), constrained_layout=True)
+    fig = plt.figure(figsize=(183 / 25.4, 132 / 25.4), constrained_layout=True)
     grid = fig.add_gridspec(
         3,
         3,
         width_ratios=(1.0, 1.0, 0.88),
-        height_ratios=(1.0, 1.0, 0.82),
+        height_ratios=(1.0, 1.0, 0.42),
     )
     ax_calibration = fig.add_subplot(grid[:2, :2])
     ax_roc = fig.add_subplot(grid[0, 2])
@@ -491,7 +491,7 @@ def run_prediction_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=150.0,
+        height_mm=132.0,
         panels=[
             {
                 "panel_id": panel_id,

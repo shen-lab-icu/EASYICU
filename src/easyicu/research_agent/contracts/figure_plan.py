@@ -23,10 +23,11 @@ class PlannedFigurePanelSpec(BaseModel):
     schema_version: Literal["easyicu.planned_figure_panel/1"] = (
         "easyicu.planned_figure_panel/1"
     )
-    panel_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    panel_id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
     figure_output: str = Field(pattern=r"^figure:[a-z][a-z0-9_]{0,79}$")
     article_role: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     chart_type: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    placement: Literal["main", "supplementary"] = "main"
     source_products: List[str] = Field(min_length=1, max_length=16)
 
     @field_validator("source_products")
@@ -47,9 +48,10 @@ class DeterministicFigurePanelTemplate(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    panel_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    panel_id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
     article_role: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     chart_type: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    placement: Literal["main", "supplementary"] = "main"
     source_products: Tuple[str, ...] = Field(min_length=1, max_length=16)
 
     @field_validator("source_products")
@@ -72,6 +74,7 @@ class DeterministicFigurePanelTemplate(BaseModel):
             figure_output=figure_output,
             article_role=self.article_role,
             chart_type=self.chart_type,
+            placement=self.placement,
             source_products=list(self.source_products),
         )
 
@@ -126,6 +129,48 @@ ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS = (
     "table:robustness_matrix",
     "table:robustness_summary",
 )
+ASSOCIATION_SUMMARY_COMPOSITE_INPUTS = (
+    "table:exposure_outcome_distribution",
+    "table:adjusted_association_estimates",
+    "table:robustness_summary",
+    "table:measurement_missingness",
+)
+
+
+def association_summary_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind the standard association summary and routine quality panel."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    if set(cleaned) != set(ASSOCIATION_SUMMARY_COMPOSITE_INPUTS) or len(cleaned) != 4:
+        raise ValueError("association summary composite requires its four exact tables")
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="A",
+            article_role="descriptive_result",
+            chart_type="event_rate_panel",
+            source_products=("table:exposure_outcome_distribution",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="B",
+            article_role="primary_estimand",
+            chart_type="forest",
+            source_products=("table:adjusted_association_estimates",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="C",
+            article_role="robustness",
+            chart_type="specification_grid",
+            source_products=("table:robustness_summary",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="D",
+            article_role="data_quality",
+            chart_type="availability_panel",
+            source_products=("table:measurement_missingness",),
+        ),
+    )
 
 
 def balance_association_composite_panels(
@@ -135,9 +180,7 @@ def balance_association_composite_panels(
 
     cleaned = tuple(str(value or "").strip() for value in source_products)
     if cleaned != BALANCE_ASSOCIATION_COMPOSITE_INPUTS:
-        raise ValueError(
-            "balance association composite requires its four exact tables"
-        )
+        raise ValueError("balance association composite requires its four exact tables")
     return (
         DeterministicFigurePanelTemplate(
             panel_id="baseline_balance",
@@ -314,7 +357,8 @@ def _measurement_process_product(source_products: Sequence[str]) -> str | None:
         value
         for value in source_products
         if value.startswith("table:")
-        and value.partition(":")[2] in {"measurement_process", "measurement_process_audit"}
+        and value.partition(":")[2]
+        in {"measurement_process", "measurement_process_audit"}
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -540,6 +584,8 @@ def robustness_figure_panels(
 
 
 __all__ = [
+    "ASSOCIATION_SUMMARY_COMPOSITE_INPUTS",
+    "association_summary_composite_panels",
     "ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS",
     "BALANCE_ASSOCIATION_COMPOSITE_INPUTS",
     "COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS",

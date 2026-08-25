@@ -104,7 +104,9 @@ def _forest(
     )
     ax.errorbar(estimates, positions, xerr=errors, fmt="o", color=color, capsize=2.5)
     formatter = label_formatter or (lambda value: display_label(value))
-    ax.set_yticks(positions, [formatter(value) for value in frame[label_column]], fontsize=6.3)
+    ax.set_yticks(
+        positions, [formatter(value) for value in frame[label_column]], fontsize=6.3
+    )
     ax.invert_yaxis()
     scales = {str(value).strip().lower() for value in frame["effect_scale"]}
     if scales and scales <= {
@@ -130,21 +132,29 @@ def _reader_contrast_labels(
 ) -> pd.Series | None:
     """Build reader-facing contrasts from typed levels without changing rows."""
 
-    if not exposure_name or not {"exposure_level", "reference_level"} <= set(frame.columns):
+    if not exposure_name or not {"exposure_level", "reference_level"} <= set(
+        frame.columns
+    ):
         return None
     labels: list[str] = []
     ordinal_scope = re.sub(r"_(max|min|first|last)$", "", exposure_name)
     for row in frame.itertuples(index=False):
         comparison_value = getattr(row, "exposure_level")
         reference_value = getattr(row, "reference_level")
-        comparison = scoped_label_lookup(exposure_name, comparison_value, display_labels)
+        comparison = scoped_label_lookup(
+            exposure_name, comparison_value, display_labels
+        )
         reference = scoped_label_lookup(exposure_name, reference_value, display_labels)
         for value, current, side in (
             (comparison_value, comparison, "comparison"),
             (reference_value, reference, "reference"),
         ):
             numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-            level_token = str(int(numeric)) if pd.notna(numeric) and float(numeric).is_integer() else str(value)
+            level_token = (
+                str(int(numeric))
+                if pd.notna(numeric) and float(numeric).is_integer()
+                else str(value)
+            )
             declared = label_lookup(f"{ordinal_scope}_{level_token}", display_labels)
             if declared:
                 concise = declared.split(":", 1)[0].strip()
@@ -257,9 +267,7 @@ def _measurement_missingness(frame: pd.DataFrame) -> pd.DataFrame:
     ).any():
         raise ValueError("missingness counts do not nest within positive denominators")
     expected = 100.0 * result["missing_n"] / result["n_total"]
-    if not np.isclose(
-        result["missing_pct"], expected, rtol=0.0, atol=5e-6
-    ).all():
+    if not np.isclose(result["missing_pct"], expected, rtol=0.0, atol=5e-6).all():
         raise ValueError("missingness percentage does not reconcile to counts")
     return result
 
@@ -278,9 +286,7 @@ def _component_completeness(frame: pd.DataFrame) -> pd.DataFrame:
             "component-completeness counts do not nest within positive denominators"
         )
     expected = 100.0 * result["measured_n"] / result["n_stratum"]
-    if not np.isclose(
-        result["measured_pct"], expected, rtol=0.0, atol=5e-6
-    ).all():
+    if not np.isclose(result["measured_pct"], expected, rtol=0.0, atol=5e-6).all():
         raise ValueError(
             "component-completeness percentage does not reconcile to counts"
         )
@@ -381,12 +387,12 @@ def _render_cohort_balance_association_figure(
     ].copy()
     if computed.empty:
         raise ValueError("Table 1 has no computed standardized differences")
-    if (
-        computed["absolute_standardized_mean_difference"] < 0
-    ).any() or not np.isfinite(
+    if (computed["absolute_standardized_mean_difference"] < 0).any() or not np.isfinite(
         computed["absolute_standardized_mean_difference"].to_numpy(dtype=float)
     ).all():
-        raise ValueError("Table 1 standardized differences must be finite and non-negative")
+        raise ValueError(
+            "Table 1 standardized differences must be finite and non-negative"
+        )
     balance = (
         computed.groupby("variable", as_index=False)[
             "absolute_standardized_mean_difference"
@@ -483,8 +489,20 @@ def _render_cohort_balance_association_figure(
 
     panel_rows = (
         ("A", "Cohort accounting", "cohort_accounting", "cohort_flow", input_keys[0]),
-        ("B", "Baseline balance", "descriptive_result", "standardized_difference", input_keys[1]),
-        ("C", "Primary adjusted association", "primary_estimand", "forest_plot", input_keys[2]),
+        (
+            "B",
+            "Baseline balance",
+            "descriptive_result",
+            "standardized_difference",
+            input_keys[1],
+        ),
+        (
+            "C",
+            "Primary adjusted association",
+            "primary_estimand",
+            "forest_plot",
+            input_keys[2],
+        ),
         ("D", "Robustness estimates", "robustness", "forest_plot", input_keys[3]),
     )
     contract = make_figure_contract(
@@ -541,7 +559,9 @@ def _render_cohort_balance_association_figure(
         "rendering_only": True,
         "source_inputs": list(input_keys),
         "source_data_files": source_files,
-        "figure_files": [path.name for key, path in outputs.items() if key != "contract"],
+        "figure_files": [
+            path.name for key, path in outputs.items() if key != "contract"
+        ],
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
         "contract_files": [f"{figure_product}.figure_contract.json"],
@@ -576,9 +596,7 @@ def _render_balance_association_figure(
     ].copy()
     if balance.empty:
         raise ValueError("balance context has no computed standardized differences")
-    if (
-        balance["absolute_standardized_mean_difference"] < 0
-    ).any() or not np.isfinite(
+    if (balance["absolute_standardized_mean_difference"] < 0).any() or not np.isfinite(
         balance["absolute_standardized_mean_difference"].to_numpy(dtype=float)
     ).all():
         raise ValueError(
@@ -711,9 +729,7 @@ def _render_balance_association_figure(
                 "evidence_ids": [evidence[source]],
                 "metadata": {
                     "source_products": [source],
-                    "source_data": [
-                        f"{source.partition(':')[2]}_source_data.csv"
-                    ],
+                    "source_data": [f"{source.partition(':')[2]}_source_data.csv"],
                 },
             }
             for panel_id, title, role, chart_type, source in panels
@@ -752,9 +768,7 @@ def _render_balance_association_figure(
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
         "contract_files": [f"{figure_product}.figure_contract.json"],
-        "output_files": {
-            f"figure:{figure_product}": f"{figure_product}.png"
-        },
+        "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
     }
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -771,6 +785,7 @@ def render_association_publication_figure(
     figure_product: str,
     input_keys: tuple[str, ...],
     display_labels: Mapping[str, str] | None = None,
+    panel_placements: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Render all four bound products without fitting or selecting a model."""
 
@@ -906,9 +921,7 @@ def render_association_publication_figure(
             "outcome_denominator",
         ):
             levels[column] = _integers(levels, column)
-        levels["exposure_pct"] = _association_finite_series(
-            levels, "exposure_pct"
-        )
+        levels["exposure_pct"] = _association_finite_series(levels, "exposure_pct")
         levels["outcome_rate_pct"] = _association_finite_series(
             levels, "outcome_rate_pct"
         )
@@ -918,25 +931,26 @@ def render_association_publication_figure(
             or (levels["outcome_denominator"] <= 0).any()
             or (levels["outcome_events"] > levels["outcome_denominator"]).any()
         ):
-            raise ValueError("distribution counts do not nest within positive denominators")
-        expected_prevalence = (
-            100.0 * levels["n_rows"] / levels["exposure_denominator"]
-        )
+            raise ValueError(
+                "distribution counts do not nest within positive denominators"
+            )
+        expected_prevalence = 100.0 * levels["n_rows"] / levels["exposure_denominator"]
         expected_rates = (
             100.0 * levels["outcome_events"] / levels["outcome_denominator"]
         )
-        if not np.isclose(
-            levels["exposure_pct"], expected_prevalence, rtol=0.0, atol=5e-6
-        ).all() or not np.isclose(
-            levels["outcome_rate_pct"], expected_rates, rtol=0.0, atol=5e-6
-        ).all():
+        if (
+            not np.isclose(
+                levels["exposure_pct"], expected_prevalence, rtol=0.0, atol=5e-6
+            ).all()
+            or not np.isclose(
+                levels["outcome_rate_pct"], expected_rates, rtol=0.0, atol=5e-6
+            ).all()
+        ):
             raise ValueError("distribution percentages do not reconcile to counts")
         has_risk_ci = {"ci_low_pct", "ci_high_pct"} <= set(levels.columns)
         if has_risk_ci:
             levels["ci_low_pct"] = _association_finite_series(levels, "ci_low_pct")
-            levels["ci_high_pct"] = _association_finite_series(
-                levels, "ci_high_pct"
-            )
+            levels["ci_high_pct"] = _association_finite_series(levels, "ci_high_pct")
             if (levels["ci_low_pct"] > levels["outcome_rate_pct"]).any() or (
                 levels["outcome_rate_pct"] > levels["ci_high_pct"]
             ).any():
@@ -958,7 +972,18 @@ def render_association_publication_figure(
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
     labels = dict(display_labels or {})
     palette = apply_publication_style(font_size=7.0)
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
+    placements = dict(panel_placements or {})
+    show_panel_d = placements.get("D", "main") == "main"
+    if show_panel_d:
+        fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
+    else:
+        fig = plt.figure(figsize=(7.2, 5.0), constrained_layout=True)
+        grid = fig.add_gridspec(2, 2, height_ratios=(1.0, 0.28))
+        axes = np.empty((2, 2), dtype=object)
+        axes[0, 0] = fig.add_subplot(grid[0, 0])
+        axes[0, 1] = fig.add_subplot(grid[0, 1])
+        axes[1, 0] = fig.add_subplot(grid[1, :])
+        axes[1, 1] = None
 
     ax = axes[0, 0]
     x = np.arange(len(levels))
@@ -1000,7 +1025,9 @@ def render_association_publication_figure(
             level_labels.append(
                 labels.get(
                     f"{exposure_name}={raw}",
-                    declared_level.split(":", 1)[0] if declared_level else _label(value),
+                    declared_level.split(":", 1)[0]
+                    if declared_level
+                    else _label(value),
                 )
             )
         absolute_title = "Exposure prevalence and observed outcome risk"
@@ -1048,7 +1075,9 @@ def render_association_publication_figure(
         ha="right" if rotate_levels else "center",
         fontsize=6.2 if rotate_levels else None,
     )
-    ax.set_ylabel("Percent" if distribution is not None else "Observed outcome risk (%)")
+    ax.set_ylabel(
+        "Percent" if distribution is not None else "Observed outcome risk (%)"
+    )
     ax.set_title(absolute_title, loc="left", pad=7)
     add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
 
@@ -1078,7 +1107,9 @@ def render_association_publication_figure(
         label_column=adjusted_label,
         title="Primary adjusted association",
         color=palette["blue"],
-        label_formatter=(lambda value: str(value)) if adjusted_label == "_reader_contrast" else None,
+        label_formatter=(lambda value: str(value))
+        if adjusted_label == "_reader_contrast"
+        else None,
     )
     add_panel_label(axes[0, 1], "b", x=-0.12, y=1.04, fontsize=8.0)
 
@@ -1125,7 +1156,9 @@ def render_association_publication_figure(
         raise ValueError("association composite has no third-panel source")
     add_panel_label(axes[1, 0], "c", x=-0.12, y=1.04, fontsize=8.0)
 
-    if completeness is not None:
+    if not show_panel_d:
+        panel_d = None
+    elif completeness is not None:
         _draw_component_completeness(axes[1, 1], completeness)
         panel_d = (
             "Component completeness",
@@ -1139,9 +1172,7 @@ def render_association_publication_figure(
         quality = availability.sort_values("availability_pct", ascending=True)
         label_column = "concept" if "concept" in quality.columns else "variable"
         positions = np.arange(len(quality))
-        axes[1, 1].barh(
-            positions, quality["availability_pct"], color=palette["orange"]
-        )
+        axes[1, 1].barh(positions, quality["availability_pct"], color=palette["orange"])
         axes[1, 1].set_yticks(
             positions,
             [display_label(value) for value in quality[label_column]],
@@ -1164,7 +1195,8 @@ def render_association_publication_figure(
         panel_d = ("Robustness ranges", "robustness", "table:robustness_summary")
     else:  # pragma: no cover - guarded by exact typed profiles
         raise ValueError("association composite has no fourth-panel source")
-    add_panel_label(axes[1, 1], "d", x=-0.12, y=1.04, fontsize=8.0)
+    if show_panel_d:
+        add_panel_label(axes[1, 1], "d", x=-0.12, y=1.04, fontsize=8.0)
 
     if scientific_sensitivity is not None:
         panel_specs = (
@@ -1197,6 +1229,8 @@ def render_association_publication_figure(
                 "table:exposure_component_completeness_audit",
             ),
         )
+        if not show_panel_d:
+            panel_specs = panel_specs[:3]
     else:
         panel_specs = (
             (
@@ -1228,18 +1262,22 @@ def render_association_publication_figure(
                 "sensitivity_forest" if panel_c[1] == "robustness" else "bar",
                 panel_c[2],
             ),
-            (
-                "D",
-                panel_d[0],
-                panel_d[1],
-                (
-                    "specification_grid"
-                    if panel_d[1] == "robustness"
-                    else "availability_panel"
-                ),
-                panel_d[2],
-            ),
         )
+        if show_panel_d and panel_d is not None:
+            panel_specs = (
+                *panel_specs,
+                (
+                    "D",
+                    panel_d[0],
+                    panel_d[1],
+                    (
+                        "specification_grid"
+                        if panel_d[1] == "robustness"
+                        else "availability_panel"
+                    ),
+                    panel_d[2],
+                ),
+            )
         if tuple(input_keys) == ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS:
             panel_specs = tuple(
                 (panel_id, *spec[1:])
@@ -1317,6 +1355,11 @@ def render_association_publication_figure(
             for key, item in bound.items()
         ],
         "source_data_files": source_files,
+        "supplementary_panel_ids": sorted(
+            panel_id
+            for panel_id, placement in placements.items()
+            if placement == "supplementary"
+        ),
         "figure_files": [
             path.name for key, path in outputs.items() if key != "contract"
         ],

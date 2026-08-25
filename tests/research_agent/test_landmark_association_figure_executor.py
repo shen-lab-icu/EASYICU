@@ -202,8 +202,70 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
             for panel in landmark_association_composite_panels(INPUTS)
         ],
     )
-    assert validate_step_planned_figure_contract_binding(
-        step=step,
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=step,
+            out_dir=tmp_path / "outputs",
+            step_summary=summary,
+        )
+        == []
+    )
+
+
+def test_renderer_moves_routine_measurement_panel_out_of_main_figure(
+    tmp_path: Path,
+) -> None:
+    bindings = {}
+    for key, frame in _frames().items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    summary = run_landmark_association_figure(
         out_dir=tmp_path / "outputs",
-        step_summary=summary,
-    ) == []
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": "display_suite", "inputs": bindings},
+        step_id="display_suite",
+        figure_product="display_suite",
+        input_keys=INPUTS,
+        panel_placements={"measurement_process": "supplementary"},
+    )
+
+    contract = pd.read_json(
+        tmp_path / "outputs" / "display_suite.figure_contract.json", typ="series"
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+    ]
+    assert summary["supplementary_panel_ids"] == ["measurement_process"]
+    assert len(summary["source_data_files"]) == 4
+    step = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render typed sources with routine measurement detail in supplement.",
+        inputs=list(INPUTS),
+        expected_outputs=["figure:display_suite"],
+        method="visualization",
+        figure_panels=[
+            panel.bind(figure_output="figure:display_suite").model_copy(
+                update={
+                    "placement": (
+                        "supplementary"
+                        if panel.panel_id == "measurement_process"
+                        else "main"
+                    )
+                }
+            )
+            for panel in landmark_association_composite_panels(INPUTS)
+        ],
+    )
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=step,
+            out_dir=tmp_path / "outputs",
+            step_summary=summary,
+        )
+        == []
+    )

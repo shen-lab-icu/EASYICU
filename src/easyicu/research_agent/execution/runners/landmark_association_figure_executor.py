@@ -41,9 +41,7 @@ _REQUIRED_COLUMNS = {
     "table:robustness_summary": frozenset(
         {"axis", "total_specs", "converged_specs", "range_low", "range_high"}
     ),
-    "measurement_process": frozenset(
-        {"concept", "n_total", "measured_one_n"}
-    ),
+    "measurement_process": frozenset({"concept", "n_total", "measured_one_n"}),
 }
 
 
@@ -79,7 +77,8 @@ def _measurement_input(inputs: list[str] | tuple[str, ...]) -> str | None:
         value
         for value in inputs
         if value.startswith("table:")
-        and value.partition(":")[2] in {"measurement_process", "measurement_process_audit"}
+        and value.partition(":")[2]
+        in {"measurement_process", "measurement_process_audit"}
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -150,7 +149,11 @@ def landmark_association_figure_executor_owns_step(
         _binding_has_columns(
             resolved_bindings.get(key),
             _REQUIRED_COLUMNS[
-                "curve" if key == curve else "measurement_process" if key == measurement else key
+                "curve"
+                if key == curve
+                else "measurement_process"
+                if key == measurement
+                else key
             ],
         )
         for key in profile
@@ -179,6 +182,7 @@ def landmark_association_figure_executor_code(step: AnalysisStep) -> str:
             step_id={step.step_id!r},
             figure_product={product!r},
             input_keys={profile!r},
+            panel_placements={{{", ".join(f"{panel.panel_id!r}: {panel.placement!r}" for panel in step.figure_panels)}}},
         )
         """
     ).strip()
@@ -256,6 +260,7 @@ def run_landmark_association_figure(
     step_id: str,
     figure_product: str,
     input_keys: tuple[str, ...],
+    panel_placements: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Render four exact source tables without fitting or filtering a model."""
 
@@ -286,7 +291,11 @@ def run_landmark_association_figure(
         (measurement_key, process),
     ):
         required = _REQUIRED_COLUMNS[
-            "curve" if key == curve_key else "measurement_process" if key == measurement_key else key
+            "curve"
+            if key == curve_key
+            else "measurement_process"
+            if key == measurement_key
+            else key
         ]
         missing = required - set(frame.columns)
         if missing:
@@ -320,17 +329,23 @@ def run_landmark_association_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
+    placements = dict(panel_placements or {})
+    show_process = placements.get("measurement_process", "main") == "main"
     fig = plt.figure(figsize=(183 / 25.4, 132 / 25.4), constrained_layout=True)
-    grid = fig.add_gridspec(
-        2,
-        3,
-        width_ratios=(1.0, 1.0, 0.86),
-        height_ratios=(1.12, 0.88),
-    )
-    ax_curve = fig.add_subplot(grid[0, :2])
-    ax_context = fig.add_subplot(grid[0, 2])
-    ax_robustness = fig.add_subplot(grid[1, :2])
-    ax_process = fig.add_subplot(grid[1, 2])
+    if show_process:
+        grid = fig.add_gridspec(
+            2, 3, width_ratios=(1.0, 1.0, 0.86), height_ratios=(1.12, 0.88)
+        )
+        ax_curve = fig.add_subplot(grid[0, :2])
+        ax_context = fig.add_subplot(grid[0, 2])
+        ax_robustness = fig.add_subplot(grid[1, :2])
+        ax_process = fig.add_subplot(grid[1, 2])
+    else:
+        grid = fig.add_gridspec(2, 2, height_ratios=(1.12, 0.88))
+        ax_curve = fig.add_subplot(grid[0, :])
+        ax_context = fig.add_subplot(grid[1, 0])
+        ax_robustness = fig.add_subplot(grid[1, 1])
+        ax_process = None
 
     ax = ax_curve
     display_curve = curve.sort_values(exposure_column, kind="stable")
@@ -433,9 +448,7 @@ def run_landmark_association_figure(
 
     ax = ax_robustness
     total_specs = pd.to_numeric(robustness["total_specs"]).to_numpy(dtype=float)
-    converged_specs = pd.to_numeric(robustness["converged_specs"]).to_numpy(
-        dtype=float
-    )
+    converged_specs = pd.to_numeric(robustness["converged_specs"]).to_numpy(dtype=float)
     if (
         (total_specs <= 0).any()
         or (converged_specs < 0).any()
@@ -480,28 +493,35 @@ def run_landmark_association_figure(
     ax.set_title("Prespecified sensitivity analyses", loc="left", pad=7)
     add_panel_label(ax, "c", x=-0.08, y=1.04, fontsize=8.0)
 
-    ax = ax_process
-    denominator = pd.to_numeric(process["n_total"])
-    numerator = pd.to_numeric(process["measured_one_n"])
-    if (
-        (denominator <= 0).any()
-        or (numerator < 0).any()
-        or (numerator > denominator).any()
-    ):
-        raise ValueError("measurement-process counts do not nest")
-    pct = 100.0 * numerator / denominator
-    positions = np.arange(len(process))
-    ax.barh(positions, pct, color=palette["blue_soft"])
-    ax.set_yticks(
-        positions, [display_label(value) for value in process["concept"]], fontsize=5.8
-    )
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Measured at least once (%)")
-    ax.set_title("Measurement availability", loc="left", pad=7)
-    add_panel_label(ax, "d", x=-0.15, y=1.04, fontsize=8.0)
+    if ax_process is not None:
+        ax = ax_process
+        denominator = pd.to_numeric(process["n_total"])
+        numerator = pd.to_numeric(process["measured_one_n"])
+        if (
+            (denominator <= 0).any()
+            or (numerator < 0).any()
+            or (numerator > denominator).any()
+        ):
+            raise ValueError("measurement-process counts do not nest")
+        pct = 100.0 * numerator / denominator
+        positions = np.arange(len(process))
+        ax.barh(positions, pct, color=palette["blue_soft"])
+        ax.set_yticks(
+            positions,
+            [display_label(value) for value in process["concept"]],
+            fontsize=5.8,
+        )
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("Measured at least once (%)")
+        ax.set_title("Measurement availability", loc="left", pad=7)
+        add_panel_label(ax, "d", x=-0.15, y=1.04, fontsize=8.0)
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
-    panels = landmark_association_composite_panels(profile)
+    panels = tuple(
+        panel
+        for panel in landmark_association_composite_panels(profile)
+        if placements.get(panel.panel_id, "main") == "main"
+    )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
@@ -567,6 +587,11 @@ def run_landmark_association_figure(
             for key, item in bound.items()
         ],
         "source_data_files": source_files,
+        "supplementary_panel_ids": sorted(
+            panel_id
+            for panel_id, placement in placements.items()
+            if placement == "supplementary"
+        ),
         "figure_files": [
             path.name for key, path in outputs.items() if key != "contract"
         ],

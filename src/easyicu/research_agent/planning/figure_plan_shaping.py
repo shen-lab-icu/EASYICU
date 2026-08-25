@@ -9,11 +9,12 @@ analysis.
 from __future__ import annotations
 
 import re
-from typing import Sequence
+from typing import Any, Sequence
 
 from ..contracts.declared_product import typed_product
 from ..contracts.figure_plan import (
     ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    ASSOCIATION_SUMMARY_COMPOSITE_INPUTS,
     BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS,
     COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
@@ -32,6 +33,7 @@ from ..contracts.figure_plan import (
     ROBUSTNESS_FIGURE_INPUT,
     ROBUSTNESS_FIGURE_KNOWN_INPUTS,
     association_sensitivity_composite_panels,
+    association_summary_composite_panels,
     absolute_risk_association_composite_panels,
     balance_association_composite_panels,
     cohort_balance_association_composite_panels,
@@ -530,6 +532,9 @@ def bind_deterministic_figure_panels(
         frozenset(BALANCE_ASSOCIATION_COMPOSITE_INPUTS): (
             balance_association_composite_panels(BALANCE_ASSOCIATION_COMPOSITE_INPUTS)
         ),
+        frozenset(ASSOCIATION_SUMMARY_COMPOSITE_INPUTS): (
+            association_summary_composite_panels(ASSOCIATION_SUMMARY_COMPOSITE_INPUTS)
+        ),
     }
     data_quality_sources, _candidates, _missing, _ambiguous = (
         _closed_data_quality_sources(plan.steps)
@@ -775,6 +780,39 @@ def apply_deterministic_figure_panels(
     return shaped
 
 
+def apply_article_figure_strategy_placements(
+    *, plan: AnalysisPlan, strategy: Any
+) -> AnalysisPlan:
+    """Project the final article strategy onto exact planned panels.
+
+    Panel geometry belongs to the deterministic renderer, while main versus
+    supplementary placement belongs to the Planner-final article strategy.
+    Compile the latter once before the plan digest is sealed so renderers do
+    not infer publication hierarchy from variable names or benchmark cases.
+    """
+
+    placements = {
+        str(role.role): str(role.placement)
+        for role in getattr(strategy, "role_strategies", ())
+    }
+    changed = False
+    steps: list[AnalysisStep] = []
+    for step in plan.steps:
+        panels = [
+            panel.model_copy(
+                update={
+                    "placement": placements.get(panel.article_role, panel.placement)
+                }
+            )
+            for panel in step.figure_panels
+        ]
+        if panels != step.figure_panels:
+            changed = True
+            step = step.model_copy(update={"figure_panels": panels})
+        steps.append(step)
+    return plan.model_copy(update={"steps": steps}) if changed else plan
+
+
 def apply_required_plan_obligations(
     plan: AnalysisPlan,
     context: ResearchContext,
@@ -906,6 +944,7 @@ def close_empty_deterministic_figure_contracts(
 
 
 __all__ = [
+    "apply_article_figure_strategy_placements",
     "apply_deterministic_figure_panels",
     "apply_required_plan_obligations",
     "bind_deterministic_figure_panels",
