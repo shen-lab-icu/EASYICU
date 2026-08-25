@@ -52,7 +52,10 @@ from ..intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
 )
-from ..cohort.artifact_facts import observed_domain_for_series
+from ..cohort.artifact_facts import (
+    logical_dtype_for_series,
+    observed_domain_for_series,
+)
 from ..intake.legacy_materialization import (
     load_verified_legacy_materialization_provenance,
 )
@@ -87,15 +90,10 @@ _observed_domain = observed_domain_for_series
 # ---------------------------------------------------------------------------
 
 
-def _logical_dtype(series: pd.Series) -> str:
-    """Return a stable logical dtype across pandas string-inference modes."""
-
-    observed = series.dropna()
-    if not observed.empty and pd.api.types.infer_dtype(
-        observed, skipna=True
-    ) == "string":
-        return "str"
-    return str(series.dtype)
+# Archived callers may still import this historical private helper. Keep it as
+# an identity alias while the interpretation-free artifact-facts leaf owns the
+# physical-to-logical dtype contract used by both context creation and sealing.
+_logical_dtype = logical_dtype_for_series
 
 
 def _safe_get_concept_info(name: str) -> Optional[Dict[str, Any]]:
