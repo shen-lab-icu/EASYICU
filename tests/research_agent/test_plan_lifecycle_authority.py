@@ -16,6 +16,7 @@ from easyicu.research_agent.authority.plan_lifecycle import (
     load_normalized_plan,
     persist_approved_executable_plan,
     persist_normalized_plan,
+    _plan_payload_matches_current_or_legacy_empty_decisions,
 )
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.cohort.schema import (
@@ -217,6 +218,35 @@ def test_transformation_receipt_names_exact_changed_fields_and_semantics() -> No
     assert receipt.changed_fields == ("/steps/0/intent",)
     assert receipt.scientific_semantics_changed is True
     assert receipt.input_sha256 != receipt.output_sha256
+
+
+def test_lifecycle_accepts_only_legacy_missing_empty_design_decisions() -> None:
+    legacy = {"design_selection": {"candidates": [{"design_id": "a"}]}}
+    current = {
+        "design_selection": {
+            "candidates": [
+                {"design_id": "a", "literature_design_decisions": []}
+            ]
+        }
+    }
+    nonempty = {
+        "design_selection": {
+            "candidates": [
+                {
+                    "design_id": "a",
+                    "literature_design_decisions": [
+                        {"dimension": "missing_data"}
+                    ],
+                }
+            ]
+        }
+    }
+
+    assert _plan_payload_matches_current_or_legacy_empty_decisions(legacy, current)
+    assert not _plan_payload_matches_current_or_legacy_empty_decisions(
+        nonempty,
+        current,
+    )
 
 
 def test_normalized_plan_rejects_a_noncontiguous_or_tampered_chain() -> None:
