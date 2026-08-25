@@ -148,6 +148,33 @@ def test_registered_display_callouts_are_recorded() -> None:
     assert audit.observed_display_labels == ("Table 1", "Figure 1")
 
 
+def test_literature_year_does_not_create_unnamed_robustness_metric() -> None:
+    text = _valid_manuscript().replace(
+        "We used logistic regression.",
+        "Flexible forms were assessed as robustness analyses [@splines_1989].",
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    assert "MANUSCRIPT_METRIC_UNNAMED" not in {
+        finding.code for finding in audit.findings
+    }
+
+
+def test_five_decimal_effect_estimate_is_overprecise() -> None:
+    text = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality.",
+        "The adjusted odds ratio was 1.60587.",
+        1,
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    assert "MANUSCRIPT_NUMERIC_OVERPRECISION" in {
+        finding.code for finding in audit.findings
+    }
+
+
 def test_empty_conclusion_fails_closed() -> None:
     text = _valid_manuscript().replace(
         "Sepsis status was associated with in-hospital mortality and requires external validation.\n",

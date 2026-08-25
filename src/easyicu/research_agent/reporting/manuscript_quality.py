@@ -82,7 +82,7 @@ _NAMED_METRIC_TERMS = (
     "risk ratio",
     "silhouette",
 )
-_OVERPRECISE_DECIMAL_RE = re.compile(r"(?<![A-Za-z0-9_])[-+]?\d+\.\d{7,}(?!\d)")
+_OVERPRECISE_DECIMAL_RE = re.compile(r"(?<![A-Za-z0-9_])[-+]?\d+\.\d{5,}(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -595,7 +595,11 @@ def _sentences(text: str) -> tuple[str, ...]:
 def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
     excerpts: list[str] = []
     for sentence in _sentences(section_text):
-        lowered = sentence.casefold()
+        lowered = re.sub(
+            r"\[[^\[\]]*@[A-Za-z0-9_.:-]+[^\[\]]*\]",
+            "",
+            sentence,
+        ).casefold()
         has_unlabelled_numeric_summary = (
             "point estimate" in lowered
             or (
