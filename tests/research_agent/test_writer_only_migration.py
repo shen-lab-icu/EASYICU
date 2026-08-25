@@ -18,6 +18,7 @@ from easyicu.research_agent.reporting.manuscript_sections import (
 from easyicu.research_agent.reporting.writer_only_migration import (
     PreparedWriterOnlyMigration,
     WriterOnlyMigrationError,
+    _normalize_claim_token_sentences,
     _remove_unresolved_evidence_tokens,
     publish_writer_only_result,
     repair_writer_only,
@@ -295,3 +296,19 @@ def test_unresolved_evidence_tokens_are_removed_before_claim_filter(
     assert cleaned == "Prior work supports this statement [@strobe_2007]."
     assert refs == ("missing_alias",)
     assert count == 1
+
+
+def test_claim_tokens_are_normalized_to_standalone_paragraphs() -> None:
+    raw = (
+        "**Results:** The cohort included 10 stays. "
+        "{claim:step.first} {claim:step.second}\n\n"
+        "**Conclusions:** Validation is required [@record_2015]."
+    )
+
+    normalized, count = _normalize_claim_token_sentences(raw)
+
+    assert count == 2
+    assert (
+        "The cohort included 10 stays.\n\n{claim:step.first}\n\n"
+        "{claim:step.second}"
+    ) in normalized
