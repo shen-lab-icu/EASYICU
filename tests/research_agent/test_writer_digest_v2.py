@@ -730,7 +730,7 @@ def test_writer_digest_preferred_keys_is_tuple_and_nonempty() -> None:
     assert "auroc" in WRITER_DIGEST_PREFERRED_KEYS
 
 
-def test_primary_digest_does_not_flatten_nested_p_value_beside_effect(
+def test_primary_digest_flattens_unique_nested_p_value_beside_effect(
     tmp_path: Path,
 ) -> None:
     digest = _render_writer_evidence_digest(
@@ -751,4 +751,4 @@ def test_primary_digest_does_not_flatten_nested_p_value_beside_effect(
     )
 
     assert '"primary_or": 1.96' in digest
-    assert '"p_value": 0.619' not in digest
+    assert '"p_value": 0.619' in digest
