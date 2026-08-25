@@ -63,6 +63,45 @@ Bundle: `output/pdf/e2_evidence_bound_reader/`
   no horizontal body overflow at the reviewed desktop width.
 - Visual PDF review covered pages 1, 7, 8, and 9; no clipping or overlap was observed.
 
+## Registered evidence preview extension
+
+The original reader exposed evidence ids and SHA-256 values as plain text. The
+drawer was traceable but not inspectable: all 12 visible lineage rows had zero
+links or buttons, so a reader could not see the registered code, JSON result,
+or aggregate table in context.
+
+The isolated branch now adds one owner contract,
+`easyicu.web-evidence-preview/1`:
+
+- the request is path-free and requires project id, run id, evidence id, and
+  the SHA-256 already displayed by the manuscript;
+- the Host resolves the id only through `evidence/evidence_index.json`, rejects
+  path escape/symlink/digest drift, and rehashes the current file;
+- registered UTF-8 code, statistic JSON, and result-owned aggregate CSV use
+  separate bounded read-only renderers;
+- patient-level Parquet/Arrow data, non-result tables, direct identifier
+  columns, host paths, unsupported encodings, and oversize files are
+  metadata-only or fail closed;
+- the Copilot preview keeps the article, provenance JSON, code, JSON result,
+  and table in closable tabs; code is displayed with line numbers and is never
+  executed;
+- readable Web prose renders simple emphasis and literature markers while
+  hiding internal evidence-token labels; number-to-evidence bindings remain
+  clickable.
+
+Real E2 owner probes passed for `code_analysis_5fffd51d0caf54ca`,
+`statistic_step_summary_82cea19c9cc974b2`,
+`table_step_artifact_dd21196470854acf`, and
+`analysis_cohort_execute_repair`. The first three dispatched to code/JSON/table;
+the raw cohort dispatched to metadata-only with
+`patient_level_rows_withheld`. All four retained the registered digest and the
+privacy scan passed. Focused Python/Web contracts: `162 passed`; hostile-input
+JavaScript: `12 + 3` cases. Browser QA opened a number, code tab, and aggregate
+table tab, retained the JSON pointer/source value, closed the tab back to the
+article, and confirmed raw internal evidence tokens were absent from readable
+prose. No Planner, Provider, analysis, Qualification12, or Held-out27 call was
+made.
+
 ## Boundary
 
 This closes the generic number-to-evidence reader path and one E2 vertical

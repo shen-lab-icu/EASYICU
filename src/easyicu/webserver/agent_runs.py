@@ -29,6 +29,10 @@ from easyicu.webserver import dataio
 from easyicu.webserver import numeric_evidence_audit
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import provider_gate
+from easyicu.webserver.research_evidence_preview import (
+    EvidencePreviewError,
+    build_evidence_preview,
+)
 from easyicu.webserver import study_contexts as context_store
 
 
@@ -809,6 +813,31 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
         "project_dir": str(run_dir),
         "artifact": _artifact_from_raw(artifact_path, run_dir, raw),
         "payload": _public_single_artifact_payload(artifact_path.name, payload),
+        "privacy_scan": privacy_scan,
+    }
+
+
+def read_run_evidence_preview(
+    project_dir: str, evidence_id: str, expected_sha256: str
+) -> Dict[str, Any]:
+    """Return one registry-resolved, digest-pinned evidence preview."""
+
+    run_dir = _resolve_run_dir(project_dir)
+    if run_dir is None:
+        return {"ok": False, "error": "project_dir_required"}
+    try:
+        payload = build_evidence_preview(run_dir, evidence_id, expected_sha256)
+    except EvidencePreviewError as exc:
+        return {
+            "ok": False,
+            "error": exc.code,
+            "message": exc.message,
+            "evidence_id": str(evidence_id or ""),
+        }
+    privacy_scan = _scan_artifact_payloads({"evidence_preview": payload})
+    return {
+        "ok": True,
+        "payload": payload,
         "privacy_scan": privacy_scan,
     }
 
