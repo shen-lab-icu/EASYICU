@@ -406,7 +406,14 @@ def _quality_repair_specs(
     for finding in audit_manuscript_quality(scientific).findings:
         if finding.severity != "error":
             continue
-        for key in section_keys.get(finding.section, ()):
+        owner_keys = section_keys.get(finding.section, ())
+        if finding.code == "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT":
+            # Results are the executed-result reporting surface.  When the two
+            # sections disagree, repair the Methods description to the exact
+            # machine digest instead of paying for a second free-form Results
+            # rewrite that could move the reported estimate.
+            owner_keys = ("methods",)
+        for key in owner_keys:
             detail = f"{finding.code}: {finding.message}"
             if finding.excerpts:
                 detail += " Offending text: " + "; ".join(finding.excerpts)
