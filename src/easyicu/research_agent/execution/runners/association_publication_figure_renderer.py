@@ -949,7 +949,7 @@ def render_association_publication_figure(
                         "absolute_risk_context",
                         "primary_adjusted_association",
                         "robustness_estimates",
-                        "measurement_missingness",
+                        "robustness_ranges",
                     ),
                     panel_specs,
                 )
