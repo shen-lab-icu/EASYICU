@@ -32,9 +32,7 @@ _PREFERRED_METHOD_BY_STRATEGY = {
     "categorical": "categorical_functional_form_sensitivity",
     "complete_case": "complete_case_sensitivity",
     "multiple_imputation": "multiple_imputation_sensitivity",
-    "inverse_probability_weighting": (
-        "inverse_probability_weighting_sensitivity"
-    ),
+    "inverse_probability_weighting": ("inverse_probability_weighting_sensitivity"),
 }
 
 
@@ -67,9 +65,7 @@ def _locked_complete_case_spec_ids(plan: AnalysisPlan) -> set[str]:
         for spec in plan.robustness_specs
         if spec.spec_id in replay_ids
         and spec.axis == "missing"
-        and str((spec.missing_override or {}).get("strategy") or "")
-        .strip()
-        .casefold()
+        and str((spec.missing_override or {}).get("strategy") or "").strip().casefold()
         == "complete_case"
     }
 
@@ -113,8 +109,7 @@ def ensure_prespecified_sensitivity_steps(
         for step in plan.steps
         if step.planned_analysis_role == "primary"
         and _method_head(step) == "adjusted_association_models"
-        and ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT
-        in set(step.expected_outputs)
+        and ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT in set(step.expected_outputs)
         and len(step.model_requirements) == 1
         and step.model_requirements[0].outcome_type == "binary"
     ]

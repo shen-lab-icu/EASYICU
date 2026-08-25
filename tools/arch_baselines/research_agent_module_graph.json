@@ -813,6 +813,10 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.planning.method_literature"
     ],
     [
@@ -4217,7 +4221,15 @@
     ],
     [
       "easyicu.research_agent.execution.runners.association_publication_figure_renderer",
+      "easyicu.research_agent.contracts.figure_plan"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.association_publication_figure_renderer",
       "easyicu.research_agent.execution.runners.typed_input_binding"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.association_publication_figure_renderer",
+      "easyicu.research_agent.figures.display_labels"
     ],
     [
       "easyicu.research_agent.execution.runners.association_publication_figure_renderer",
@@ -4266,6 +4278,10 @@
     [
       "easyicu.research_agent.execution.runners.cohort_summary_executor",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.composite_descriptive_figure_executor",
+      "easyicu.research_agent.contracts.figure_plan"
     ],
     [
       "easyicu.research_agent.execution.runners.composite_descriptive_figure_executor",
@@ -4322,6 +4338,10 @@
     [
       "easyicu.research_agent.execution.runners.cross_sectional_phenotyping_figure_executor",
       "easyicu.research_agent.execution.runners.typed_input_binding"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.cross_sectional_phenotyping_figure_executor",
+      "easyicu.research_agent.figures.display_labels"
     ],
     [
       "easyicu.research_agent.execution.runners.cross_sectional_phenotyping_figure_executor",
@@ -4597,6 +4617,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_association_figure_executor",
+      "easyicu.research_agent.figures.display_labels"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_association_figure_executor",
       "easyicu.research_agent.figures.publication"
     ],
     [
@@ -4701,6 +4725,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
+      "easyicu.research_agent.figures.display_labels"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_survival_executor",
       "easyicu.research_agent.figures.publication"
     ],
     [
@@ -4710,6 +4738,10 @@
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
       "easyicu.research_agent.methods.rmst"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_survival_executor",
+      "easyicu.research_agent.methods.time_varying_cox"
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
@@ -5226,6 +5258,10 @@
     [
       "easyicu.research_agent.execution.runners.trajectory_selection_figure_executor",
       "easyicu.research_agent.execution.runners.typed_input_binding"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_selection_figure_executor",
+      "easyicu.research_agent.figures.display_labels"
     ],
     [
       "easyicu.research_agent.execution.runners.trajectory_selection_figure_executor",
@@ -6146,6 +6182,14 @@
     [
       "easyicu.research_agent.intake",
       "easyicu.research_agent.intake.export_package"
+    ],
+    [
+      "easyicu.research_agent.intake.external_benchmark_authority",
+      "easyicu.research_agent.contracts.endpoint"
+    ],
+    [
+      "easyicu.research_agent.intake.external_benchmark_authority",
+      "easyicu.research_agent.schema"
     ],
     [
       "easyicu.research_agent.intake.legacy_materialization",
@@ -7433,6 +7477,10 @@
     ],
     [
       "easyicu.research_agent.planning.figure_plan_shaping",
+      "easyicu.research_agent.planning.sensitivity_plan_shaping"
+    ],
+    [
+      "easyicu.research_agent.planning.figure_plan_shaping",
       "easyicu.research_agent.schema"
     ],
     [
@@ -7677,6 +7725,10 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_host_materialization",
+      "easyicu.research_agent.contracts.figure_plan"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_host_materialization",
       "easyicu.research_agent.planning.method_literature"
     ],
     [
@@ -7853,6 +7905,18 @@
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.sensitivity_plan_shaping",
+      "easyicu.research_agent.contracts.association_execution"
+    ],
+    [
+      "easyicu.research_agent.planning.sensitivity_plan_shaping",
+      "easyicu.research_agent.planning.sensitivity_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.sensitivity_plan_shaping",
       "easyicu.research_agent.schema"
     ],
     [
@@ -9668,9 +9732,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2409,
+    "edge_count": 2425,
     "largest_scc_size": 0,
-    "module_count": 591,
+    "module_count": 594,
     "package_count": 32,
     "top_level_module_count": 34
   },
@@ -10010,6 +10074,7 @@
     "easyicu.research_agent.icu_rules": "icu_rules.py",
     "easyicu.research_agent.intake": "intake/__init__.py",
     "easyicu.research_agent.intake.export_package": "intake/export_package.py",
+    "easyicu.research_agent.intake.external_benchmark_authority": "intake/external_benchmark_authority.py",
     "easyicu.research_agent.intake.legacy_materialization": "intake/legacy_materialization.py",
     "easyicu.research_agent.intake.materialized_metadata": "intake/materialized_metadata.py",
     "easyicu.research_agent.intake.materialized_trajectory": "intake/materialized_trajectory.py",
@@ -10045,6 +10110,7 @@
     "easyicu.research_agent.methods.survival_inputs": "methods/survival_inputs.py",
     "easyicu.research_agent.methods.table_one": "methods/table_one.py",
     "easyicu.research_agent.methods.temporal_features": "methods/temporal_features.py",
+    "easyicu.research_agent.methods.time_varying_cox": "methods/time_varying_cox.py",
     "easyicu.research_agent.numeric_scalars": "numeric_scalars.py",
     "easyicu.research_agent.orchestration": "orchestration/__init__.py",
     "easyicu.research_agent.orchestration.config": "orchestration/config.py",
@@ -10104,6 +10170,7 @@
     "easyicu.research_agent.planning.scientific_action_catalog": "planning/scientific_action_catalog.py",
     "easyicu.research_agent.planning.scientific_review": "planning/scientific_review.py",
     "easyicu.research_agent.planning.sensitivity_authority": "planning/sensitivity_authority.py",
+    "easyicu.research_agent.planning.sensitivity_plan_shaping": "planning/sensitivity_plan_shaping.py",
     "easyicu.research_agent.planning.study_design": "planning/study_design.py",
     "easyicu.research_agent.planning.study_design_playbook": "planning/study_design_playbook.py",
     "easyicu.research_agent.prediction_model_fit_owner": "prediction_model_fit_owner.py",
