@@ -65,6 +65,15 @@ ArtifactNameText = Annotated[
         pattern=r"^[A-Za-z0-9_.-]+\.json$",
     ),
 ]
+EvidenceIdText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9_.-]{1,160}$",
+    ),
+]
 ResearchDocumentNameText = Annotated[
     str,
     StringConstraints(
@@ -411,6 +420,26 @@ def get_pi_copilot_research_artifact(
             project_id=project_id,
             run_id=run_id,
             artifact_name=artifact_name,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.get(
+    "/api/copilot/pi/projects/{project_id}/runs/{run_id}/evidence/{evidence_id}"
+)
+def get_pi_copilot_research_evidence_preview(
+    project_id: ShortText,
+    run_id: RunIdText,
+    evidence_id: EvidenceIdText,
+    expected_sha256: Sha256Text,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_research_evidence_preview(
+            project_id=project_id,
+            run_id=run_id,
+            evidence_id=evidence_id,
+            expected_sha256=expected_sha256,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

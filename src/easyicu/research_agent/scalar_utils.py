@@ -71,6 +71,9 @@ def _flatten_scalar_dict(
             flat.update(_flatten_scalar_dict(value, prefix=child_prefix))
         return flat
     if isinstance(payload, list):
+        for index, value in enumerate(payload):
+            child_prefix = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            flat.update(_flatten_scalar_dict(value, prefix=child_prefix))
         return flat
     scalar = _coerce_scalar(payload)
     if scalar is not None and prefix:

@@ -78,6 +78,7 @@ from easyicu.webserver.literature_projection import (
 from easyicu.webserver.scientific_readiness_projection import (
     build_scientific_readiness_projection,
 )
+from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     WebReviewRecoveryRecord,
@@ -93,9 +94,7 @@ from easyicu.webserver.agent_review_recovery import (
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
-_DEVELOPMENT_RESUME_JOB_ENV = (
-    "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
-)
+_DEVELOPMENT_RESUME_JOB_ENV = "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
 _DEVELOPMENT_RESUME_SEQUENCE_ENV = (
     "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_CHECKPOINT_SEQUENCE"
 )
@@ -219,9 +218,9 @@ def _acquisition_recovery_projection(acquisition: Any) -> Dict[str, Any]:
     selection = getattr(acquisition, "selection", None)
     coverage = getattr(acquisition, "coverage", None)
     return {
-        "selected_concepts": list(
-            getattr(selection, "selected_concepts", ()) or ()
-        )[:64],
+        "selected_concepts": list(getattr(selection, "selected_concepts", ()) or ())[
+            :64
+        ],
         "materialized_concepts": list(
             getattr(acquisition, "materialized_concepts", ()) or ()
         )[:128],
@@ -235,9 +234,7 @@ def _rehydrate_acquisition_projection(payload: Mapping[str, Any]) -> Any:
             selected_concepts=list(payload.get("selected_concepts") or ())
         ),
         materialized_concepts=list(payload.get("materialized_concepts") or ()),
-        coverage=SimpleNamespace(
-            sufficient=bool(payload.get("coverage_sufficient"))
-        ),
+        coverage=SimpleNamespace(sufficient=bool(payload.get("coverage_sufficient"))),
     )
 
 
@@ -487,7 +484,10 @@ def _load_pending_scientific_review(
     path = run_dir / "scientific_plan_review.json"
     try:
         raw = path.read_bytes()
-        if len(raw) > _MAX_JSON_BYTES or hashlib.sha256(raw).hexdigest() != expected_sha:
+        if (
+            len(raw) > _MAX_JSON_BYTES
+            or hashlib.sha256(raw).hexdigest() != expected_sha
+        ):
             return {}
         review = PlanScientificReview.model_validate_json(raw)
     except (FileNotFoundError, OSError, ValueError):
@@ -502,19 +502,17 @@ def _pipeline_failure_code(exc: BaseException) -> str:
     if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
         return "research_pipeline_plan_contract_exhausted"
     typed_failure = _safe_pipeline_typed_failure(exc)
-    if typed_failure.get("owner") == (
-        "easyicu.providers.planner_efficiency_budget_v1"
-    ):
+    if typed_failure.get("owner") == ("easyicu.providers.planner_efficiency_budget_v1"):
         return "research_pipeline_planner_efficiency_budget_exhausted"
-    if (
-        typed_failure.get("owner") == "easyicu.providers.codex_app_server_v1"
-        and typed_failure.get("reason_code")
-        in {
-            "codex_auth_app_server_timeout",
-            "codex_auth_notification_hard_timeout",
-            "codex_auth_notification_timeout",
-        }
-    ):
+    if typed_failure.get(
+        "owner"
+    ) == "easyicu.providers.codex_app_server_v1" and typed_failure.get(
+        "reason_code"
+    ) in {
+        "codex_auth_app_server_timeout",
+        "codex_auth_notification_hard_timeout",
+        "codex_auth_notification_timeout",
+    }:
         return "research_pipeline_provider_timeout"
     if typed_failure.get("owner") == "easyicu.planning.progressive_compiler_v1":
         return "research_pipeline_progressive_compile_failed"
@@ -598,9 +596,7 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             ):
                 projected["step_index"] = step_index
             path = raw.get("path")
-            if isinstance(path, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(
-                path
-            ):
+            if isinstance(path, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(path):
                 projected["path"] = path
             return projected
         if owner == "easyicu.providers.planner_efficiency_budget_v1":
@@ -669,9 +665,10 @@ def _pipeline_failure_category(exc: BaseException) -> str:
     """Return a closed diagnostic category for one bounded exception chain."""
 
     typed_failure = _safe_pipeline_typed_failure(exc)
-    if (
-        typed_failure.get("owner") == "easyicu.providers.codex_app_server_v1"
-        and "timeout" in str(typed_failure.get("reason_code") or "")
+    if typed_failure.get(
+        "owner"
+    ) == "easyicu.providers.codex_app_server_v1" and "timeout" in str(
+        typed_failure.get("reason_code") or ""
     ):
         return "timeout"
     categories = [
@@ -776,10 +773,13 @@ def _target_outcome(study: Mapping[str, Any]) -> Optional[str]:
 def _primary_exposure(study: Mapping[str, Any]) -> Optional[str]:
     execution = study.get("execution_concepts")
     execution = execution if isinstance(execution, Mapping) else {}
-    return _clean_text(
-        execution.get("primary_exposure") or study.get("primary_exposure"),
-        160,
-    ) or None
+    return (
+        _clean_text(
+            execution.get("primary_exposure") or study.get("primary_exposure"),
+            160,
+        )
+        or None
+    )
 
 
 def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
@@ -804,9 +804,7 @@ def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
 def _configured_covariate_selection(study: Mapping[str, Any]) -> str:
     """Return the one validated owner coordinate for adjustment authority."""
 
-    selection = str(
-        study.get("covariate_selection") or "planner_selectable"
-    ).strip()
+    selection = str(study.get("covariate_selection") or "planner_selectable").strip()
     if selection not in {"planner_selectable", "exact"}:
         raise ResearchPipelineRunError(
             "research_pipeline_covariate_selection_invalid",
@@ -1101,9 +1099,7 @@ def _cohort_window(study: Mapping[str, Any]) -> tuple[float, float]:
                 "outer materialization coordinate for this pipeline."
             ),
             details={
-                key: value
-                for key, value in window_finding.items()
-                if key != "error"
+                key: value for key, value in window_finding.items() if key != "error"
             },
         )
     if isinstance(value, bool):
@@ -1252,9 +1248,7 @@ def _data_foundation_profile(
                 "primary_exposure"
                 if concept_id == primary_exposure
                 else (
-                    "covariate"
-                    if concept_id in covariates
-                    else "sensitivity_variable"
+                    "covariate" if concept_id in covariates else "sensitivity_variable"
                 )
             )
             raise ResearchPipelineRunError(
@@ -1362,9 +1356,7 @@ def _compile_data_constraints(constraints: Mapping[str, Any]) -> str:
             "limit_chars": _MAX_DATA_CONSTRAINTS_CHARS,
             "serialized_chars": len(payload),
             "section_chars": {
-                str(key): len(
-                    json.dumps(value, ensure_ascii=False, sort_keys=True)
-                )
+                str(key): len(json.dumps(value, ensure_ascii=False, sort_keys=True))
                 for key, value in constraints.items()
             },
         },
@@ -1470,7 +1462,10 @@ def _research_user_preferences(
             raise ResearchPipelineRunError(
                 "research_pipeline_landmark_authority_ambiguous",
                 "The configured sensitivities declare more than one landmark origin.",
-                details={"field": "sensitivity_specs", "landmark_hours": sorted(landmarks)},
+                details={
+                    "field": "sensitivity_specs",
+                    "landmark_hours": sorted(landmarks),
+                },
             )
         if landmarks:
             preferences["landmark_hours"] = next(iter(landmarks))
@@ -1602,6 +1597,40 @@ def _safe_claims(run_dir: Path) -> List[Dict[str, Any]]:
     return claims
 
 
+def _manuscript_provenance_projection(run_dir: Path) -> Dict[str, Any]:
+    """Load only the host-generated, digest-bound reader projection."""
+
+    path = run_dir / "manuscript_provenance.json"
+    manuscript_path = run_dir / "manuscript_scaffold_bound.md"
+    try:
+        raw = path.read_bytes()
+        manuscript_raw = manuscript_path.read_bytes()
+        if len(raw) > _MAX_JSON_BYTES or len(manuscript_raw) > _MAX_JSON_BYTES:
+            return {}
+        payload = json.loads(raw.decode("utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("schema_version") != "easyicu.manuscript-provenance/1":
+        return {}
+    if payload.get("manuscript_sha256") != hashlib.sha256(manuscript_raw).hexdigest():
+        return {}
+    integrity = payload.get("integrity")
+    if not isinstance(integrity, Mapping):
+        return {}
+    if any(
+        integrity.get(key) is not False
+        for key in (
+            "path_values_returned",
+            "patient_rows_returned",
+            "raw_data_returned",
+        )
+    ):
+        return {}
+    return payload
+
+
 def _figure_projection(run_dir: Path) -> Dict[str, Any]:
     source = _read_json(run_dir / "figure_gallery.json", {})
     figures = source.get("figures") if isinstance(source, Mapping) else []
@@ -1658,19 +1687,6 @@ def _figure_projection(run_dir: Path) -> Dict[str, Any]:
         if isinstance(source, Mapping)
         else len(public),
         "embedded_count": sum(1 for row in public if row.get("data_url")),
-    }
-
-
-def _identifier_column(name: Any) -> bool:
-    token = re.sub(r"[^a-z0-9]+", "", str(name or "").lower())
-    return token in {
-        "stayid",
-        "subjectid",
-        "patientid",
-        "hadmid",
-        "icustayid",
-        "patientunitstayid",
-        "recordid",
     }
 
 
@@ -1736,7 +1752,7 @@ def _table_projection(run_dir: Path) -> Dict[str, Any]:
                 source_headers = next(reader, [])
                 # Scan the complete header before bounding the preview. An
                 # identifier beyond the visible column cap is still sensitive.
-                if any(_identifier_column(value) for value in source_headers):
+                if any(is_identifier_column(value) for value in source_headers):
                     skipped_sensitive += 1
                     continue
                 column_indices = _table_preview_indices(source_headers)
@@ -2017,9 +2033,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
     limits = {
         "report": _MAX_JSON_BYTES,
         "receipt": _MAX_JSON_BYTES,
-        "html": _SYSTEM_VALIDATION_DOCUMENT_SPECS[
-            "system_validation_report.html"
-        ][1],
+        "html": _SYSTEM_VALIDATION_DOCUMENT_SPECS["system_validation_report.html"][1],
         "pdf": _SYSTEM_VALIDATION_DOCUMENT_SPECS["system_validation_report.pdf"][1],
     }
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -2032,9 +2046,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
         ) from exc
     try:
         file_flags = (
-            os.O_RDONLY
-            | getattr(os, "O_BINARY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         )
         for key, path in paths.items():
             descriptor = -1
@@ -2111,8 +2123,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
         )
     report_payload_digest = projection_payload_sha256(report_payload)
     html_binding = (
-        f'<meta name="easyicu-report-payload-sha256" '
-        f'content="{report_payload_digest}">'
+        f'<meta name="easyicu-report-payload-sha256" content="{report_payload_digest}">'
     )
     compact_pdf_text = re.sub(r"\s+", "", pdf_privacy_text)
     normalized_pdf_text = re.sub(r"\s+", " ", pdf_privacy_text).strip()
@@ -2560,6 +2571,9 @@ def _write_projection(
         except (FileNotFoundError, OSError, UnicodeDecodeError):
             manuscript_text = ""
     claims = _safe_claims(run_dir) if run_dir else []
+    manuscript_provenance = (
+        _manuscript_provenance_projection(run_dir) if run_dir else {}
+    )
     figure_gallery = (
         _figure_projection(run_dir)
         if run_dir
@@ -2641,8 +2655,7 @@ def _write_projection(
         "figure_count": len(figure_gallery.get("figures") or []),
         "manuscript_document_count": len(manuscript_documents),
         "draft_pdf_available": any(
-            row.get("name") == "manuscript_scaffold.pdf"
-            for row in manuscript_documents
+            row.get("name") == "manuscript_scaffold.pdf" for row in manuscript_documents
         ),
         "system_validation_report_available": bool(
             run_dir is not None and axes.get("execution_complete")
@@ -2684,6 +2697,11 @@ def _write_projection(
             "markdown_preview": manuscript_text,
             "source": "research_agent_manuscript_scaffold_bound",
         },
+        **(
+            {"manuscript_provenance.json": manuscript_provenance}
+            if manuscript_provenance
+            else {}
+        ),
         "figure_gallery.json": figure_gallery,
         "result_tables.json": result_tables,
         "source_run_manifest.json": source_manifest,
@@ -2702,7 +2720,11 @@ def _write_projection(
         payloads["manuscript_pdf_receipt.json"] = pdf_receipt
     system_validation_html: Optional[str] = None
     privacy_scan = _projection_privacy_scan(payloads)
-    if privacy_scan["passed"] and run_dir is not None and axes.get("execution_complete"):
+    if (
+        privacy_scan["passed"]
+        and run_dir is not None
+        and axes.get("execution_complete")
+    ):
         system_report = build_system_validation_report(
             run_id=run_id,
             projections=payloads,
@@ -2723,9 +2745,7 @@ def _write_projection(
             html_bytes=system_validation_html.encode("utf-8"),
         )
         payloads["system_validation_report.json"] = system_report_payload
-        payloads["system_validation_report_receipt.json"] = (
-            system_validation_receipt
-        )
+        payloads["system_validation_report_receipt.json"] = system_validation_receipt
         privacy_scan = _projection_privacy_scan(
             {
                 **payloads,
@@ -2907,58 +2927,58 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         budget_mode = entry.budget_mode
         provider_name = _clean_text(entry.provider.get("provider"), 64)
     return {
-            "run_id": pending.run_id,
-            "study_id": _clean_text(study.get("id"), 160),
-            "scientific_configuration_sha256": (
-                study_context_owner.scientific_configuration_sha256(study)
-            ),
-            "resume_scope": pending.resume_scope,
-            "credential_source": credential_source,
-            "provider": provider_name,
-            "budget_mode": budget_mode,
-            "resumable_here": bool(pending.resumable_here),
-            "requests": [
-                {
-                    "review_id": request.review_id,
-                    "kind": request.kind,
-                    "summary": request.summary,
-                    "authority_sha256": request.authority_sha256,
-                    "reason_code": _clean_text(
-                        request.payload.get("reason")
-                        if isinstance(request.payload, Mapping)
-                        else None,
-                        160,
-                    ),
-                    "approval_allowed": (
-                        request.payload.get("approval_allowed", True)
-                        if isinstance(request.payload, Mapping)
-                        else True
-                    ),
-                    "review_score": (
-                        request.payload.get("review_score")
-                        if isinstance(request.payload, Mapping)
-                        else None
-                    ),
-                    "finding_codes": (
-                        list(request.payload.get("finding_codes") or ())[:40]
-                        if isinstance(request.payload, Mapping)
-                        else []
-                    ),
-                }
-                for request in pending.requests
-            ],
-            "plan_approval_allowed": all(
-                (
+        "run_id": pending.run_id,
+        "study_id": _clean_text(study.get("id"), 160),
+        "scientific_configuration_sha256": (
+            study_context_owner.scientific_configuration_sha256(study)
+        ),
+        "resume_scope": pending.resume_scope,
+        "credential_source": credential_source,
+        "provider": provider_name,
+        "budget_mode": budget_mode,
+        "resumable_here": bool(pending.resumable_here),
+        "requests": [
+            {
+                "review_id": request.review_id,
+                "kind": request.kind,
+                "summary": request.summary,
+                "authority_sha256": request.authority_sha256,
+                "reason_code": _clean_text(
+                    request.payload.get("reason")
+                    if isinstance(request.payload, Mapping)
+                    else None,
+                    160,
+                ),
+                "approval_allowed": (
                     request.payload.get("approval_allowed", True)
                     if isinstance(request.payload, Mapping)
                     else True
-                )
-                for request in pending.requests
-            ),
-            "scientific_plan_review": _load_pending_scientific_review(
-                Path(pending.run_dir), pending
-            ),
-        }
+                ),
+                "review_score": (
+                    request.payload.get("review_score")
+                    if isinstance(request.payload, Mapping)
+                    else None
+                ),
+                "finding_codes": (
+                    list(request.payload.get("finding_codes") or ())[:40]
+                    if isinstance(request.payload, Mapping)
+                    else []
+                ),
+            }
+            for request in pending.requests
+        ],
+        "plan_approval_allowed": all(
+            (
+                request.payload.get("approval_allowed", True)
+                if isinstance(request.payload, Mapping)
+                else True
+            )
+            for request in pending.requests
+        ),
+        "scientific_plan_review": _load_pending_scientific_review(
+            Path(pending.run_dir), pending
+        ),
+    }
 
 
 def _recover_pending_run(
@@ -3067,9 +3087,7 @@ def _recover_pending_run(
         wrapper_dir=wrapper_dir,
         study=dict(record.study),
         provider=dict(provider_public),
-        acquisition=_rehydrate_acquisition_projection(
-            record.acquisition_projection
-        ),
+        acquisition=_rehydrate_acquisition_projection(record.acquisition_projection),
         created_at=record.created_at,
         credential_source=record.credential_source,
         budget_mode=record.budget_mode,
@@ -3118,9 +3136,7 @@ def _compile_plan_revision_contract(
             "plan_revision_source_configuration_superseded",
             "The scientific setup changed after the reviewed plan; its repair contract cannot be reused.",
         )
-    source_review = agent_runs.read_run_review(
-        str(source_row.get("project_dir") or "")
-    )
+    source_review = agent_runs.read_run_review(str(source_row.get("project_dir") or ""))
     review_payload = (
         (source_review.get("artifact_payloads") or {}).get(
             "scientific_plan_review.json"
@@ -3246,9 +3262,7 @@ def make_research_pipeline_run_runner(
         raise ResearchPipelineRunError(
             str(exc.detail.get("error") or "research_pipeline_source_invalid"),
             "The Research Agent requires a manifest-backed prepared data package.",
-            details={
-                key: value for key, value in exc.detail.items() if key != "error"
-            },
+            details={key: value for key, value in exc.detail.items() if key != "error"},
         ) from exc
     prepared_package_binding = dict(package_receipt["binding"])
     selected_budget_mode = str(budget_mode or "").strip().lower()
@@ -3279,8 +3293,7 @@ def make_research_pipeline_run_runner(
         )
     development_resume_binding: tuple[Path, str] | None = None
     selected_resume_source = _clean_text(
-        development_resume_source_job_id
-        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV),
+        development_resume_source_job_id or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV),
         80,
     )
     if selected_resume_source:
@@ -3289,14 +3302,10 @@ def make_research_pipeline_run_runner(
             study_id=str(study.get("id") or ""),
             source_job_id=selected_resume_source,
             budget_mode=selected_budget_mode,
-            checkpoint_sequence=os.environ.get(
-                _DEVELOPMENT_RESUME_SEQUENCE_ENV
-            ),
+            checkpoint_sequence=os.environ.get(_DEVELOPMENT_RESUME_SEQUENCE_ENV),
         )
     capability_settings = capability_policy.capability_settings()
-    publication_skill_flags = publication_skill_flags_from_settings(
-        capability_settings
-    )
+    publication_skill_flags = publication_skill_flags_from_settings(capability_settings)
     try:
         extension_registry = ExtensionRegistry()
         extension_snapshot = extension_registry.snapshot()
@@ -3310,7 +3319,9 @@ def make_research_pipeline_run_runner(
             extension_snapshot
         )
     except ExtensionRegistryError as exc:
-        raise ResearchPipelineRunError(exc.code, exc.message, details=exc.details) from exc
+        raise ResearchPipelineRunError(
+            exc.code, exc.message, details=exc.details
+        ) from exc
     research_provider_environment = dict(provider_environment)
     source_run_id = _clean_text(plan_revision_source_run_id, 160)
     environment_runner_image = os.environ.get(_RUNNER_IMAGE_ENV)
@@ -3497,8 +3508,7 @@ def make_research_pipeline_run_runner(
                 except literature_authority.LiteratureAuthorityError as exc:
                     raise ResearchPipelineRunError(exc.code, exc.message) from exc
             live_pubmed_requested = (
-                bool(literature_search_authorized)
-                and bound_preplan_literature is None
+                bool(literature_search_authorized) and bound_preplan_literature is None
             )
             if selected_budget_mode == "full_reviewed":
                 submission_profile_ref = (
@@ -3555,9 +3565,7 @@ def make_research_pipeline_run_runner(
                 enable_pdf_render=True,
                 latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,
-                bound_plan_revision_contract=(
-                    bound_plan_revision_contract or None
-                ),
+                bound_plan_revision_contract=(bound_plan_revision_contract or None),
                 # Live PubMed is frozen by the selected additive profile, not
                 # passed as an ad-hoc override. When an accepted Idea handoff
                 # already supplies a digest-bound receipt, the no-search
@@ -3591,14 +3599,10 @@ def make_research_pipeline_run_runner(
                     6 if selected_budget_mode != "full_reviewed" else None
                 ),
                 development_planner_efficiency_max_reported_tokens=(
-                    100_000
-                    if selected_budget_mode != "full_reviewed"
-                    else None
+                    100_000 if selected_budget_mode != "full_reviewed" else None
                 ),
                 development_planner_efficiency_max_wall_seconds=(
-                    600.0
-                    if selected_budget_mode != "full_reviewed"
-                    else None
+                    600.0 if selected_budget_mode != "full_reviewed" else None
                 ),
                 **profile_options,
             )
@@ -3703,9 +3707,7 @@ def make_research_pipeline_run_runner(
             )
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
-                put_review_recovery_record(
-                    recovery_seed.record(str(outcome.run_id))
-                )
+                put_review_recovery_record(recovery_seed.record(str(outcome.run_id)))
                 entry = _PendingRun(
                     pipeline=pipeline,
                     pending=outcome,

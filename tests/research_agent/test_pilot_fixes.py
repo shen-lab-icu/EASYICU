@@ -152,6 +152,54 @@ def test_numeric_claim_cap_keeps_headline_fields_ahead_of_nested_diagnostics(
     assert overflows[0].canonical == 24.0
 
 
+def test_numeric_claim_cap_keeps_nested_prediction_metrics(ra, tmp_path: Path):
+    store = ra.EvidenceStore(tmp_path)
+    summary = {
+        "prediction_validation_receipt": {
+            "result": {
+                "calibration_bins": [
+                    {f"diagnostic_{index}": float(index) for index in range(120)}
+                ],
+                "summary": {
+                    "auroc": 0.763,
+                    "brier_score": 0.072,
+                    "calibration_intercept": -0.068,
+                    "calibration_slope": 0.981,
+                },
+            }
+        }
+    }
+
+    claims = store.register_step_summary_numerics(
+        step_id="prediction",
+        evidence_id="prediction_summary",
+        summary=summary,
+        max_leaves=10,
+    )
+
+    fields = {claim.source_field for claim in claims}
+    assert {
+        "prediction_validation_receipt.result.summary.auroc",
+        "prediction_validation_receipt.result.summary.brier_score",
+        "prediction_validation_receipt.result.summary.calibration_intercept",
+        "prediction_validation_receipt.result.summary.calibration_slope",
+    } <= fields
+
+
+def test_scalar_lookup_reads_metrics_inside_list_rows() -> None:
+    from easyicu.research_agent.scalar_utils import _first_present_scalar
+
+    payload = {
+        "prediction_robustness_results": [
+            {"auroc": 0.772, "auroc_ci_low": 0.750, "auroc_ci_high": 0.793}
+        ]
+    }
+
+    assert _first_present_scalar(payload, ("auroc",)) == 0.772
+    assert _first_present_scalar(payload, ("auroc_ci_low",)) == 0.750
+    assert _first_present_scalar(payload, ("auroc_ci_high",)) == 0.793
+
+
 def test_register_step_summary_numerics_no_cap_when_none(ra, tmp_path: Path):
     store = ra.EvidenceStore(tmp_path)
     summary = {f"x_{i}": float(i) for i in range(10)}

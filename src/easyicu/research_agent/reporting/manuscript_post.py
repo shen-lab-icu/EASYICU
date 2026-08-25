@@ -519,7 +519,9 @@ def _apply_writer_evidence_repair_decisions(
                 raise ValueError("drop decision cannot include evidence ids")
             replacement = ""
         else:
-            raise ValueError("writer evidence repair action must be cite, claim, or drop")
+            raise ValueError(
+                "writer evidence repair action must be cite, claim, or drop"
+            )
         rewritten = rewritten[:target_start] + replacement + rewritten[target_end:]
         seen.add(index)
         applied.append(
@@ -1105,6 +1107,18 @@ def _contextual_source_score(context: str, claim: NumericClaim) -> int:
 
     if "missingness" in text and ".missingness." in source:
         score += 3
+
+    # A rounded display value can legitimately match several registered
+    # numbers.  For example, ``0.5`` may be both an exact spline-knot
+    # quantile and the one-decimal rendering of a 0.46 missingness fraction.
+    # The scientific role named in the prose must outrank a merely nearby
+    # value from another field; otherwise the binder creates a real hash for
+    # the wrong fact.  Keep this rule vocabulary-based and case-neutral.
+    if re.search(r"\b(?:spline[-\s]+)?knots?\b", text):
+        if re.search(r"(?:^|[._-])spline[_-]?knot[_-]?quantiles?(?:\[|$)", source):
+            score += 10
+        elif ".missingness." in source:
+            score -= 6
     return score
 
 
@@ -1452,10 +1466,7 @@ def _select_numeric_claim(
             prose_effect_scale is not None
             and claim.effect_scale is not prose_effect_scale
         )
-        and not (
-            prose_estimand is not None
-            and claim.estimand is not prose_estimand
-        )
+        and not (prose_estimand is not None and claim.estimand is not prose_estimand)
     ]
     if not candidates:
         return None, False
@@ -1643,7 +1654,9 @@ def _prose_effect_scale(
     if not mentions:
         return None
 
-    following = sorted((item for item in mentions if item[0] >= end), key=lambda x: x[0])
+    following = sorted(
+        (item for item in mentions if item[0] >= end), key=lambda x: x[0]
+    )
     if following:
         label_start, _label_end, scale = following[0]
         between = text[end:label_start]
@@ -1657,7 +1670,9 @@ def _prose_effect_scale(
     return next(iter(scales)) if len(scales) == 1 else None
 
 
-def _prose_numeric_estimand(text: str, *, start: int, end: int) -> Optional[NumericEstimand]:
+def _prose_numeric_estimand(
+    text: str, *, start: int, end: int
+) -> Optional[NumericEstimand]:
     """Classify an explicitly labelled point estimate or ordered CI endpoint."""
 
     prefix = text[max(0, start - 180) : start]
@@ -1667,12 +1682,7 @@ def _prose_numeric_estimand(text: str, *, start: int, end: int) -> Optional[Nume
         if re.match(r"\s*" + separator + r"\s*" + _PLAIN_PROSE_NUMBER, suffix):
             return NumericEstimand.CONFIDENCE_INTERVAL_LOWER
     if re.search(
-        _CI_MARKER
-        + r".{0,80}?"
-        + _PLAIN_PROSE_NUMBER
-        + r"\s*"
-        + separator
-        + r"\s*$",
+        _CI_MARKER + r".{0,80}?" + _PLAIN_PROSE_NUMBER + r"\s*" + separator + r"\s*$",
         prefix,
         flags=re.I | re.S,
     ):
@@ -1841,20 +1851,36 @@ def repair_miscited_numeric_citations(
         if detail is None:
             continue
         distinct_candidates = {
-            (claim.step_id, claim.evidence_id, claim.source_field)
+            (claim.step_id, claim.evidence_id, claim.source_field): claim
             for claim, _distance in candidates
         }
-        if len(distinct_candidates) != 1:
-            continue
-        citable_candidates = [
-            claim
-            for claim, _distance in candidates
-            if claim.step_id in resolvable or claim.evidence_id in resolvable
-        ]
-        if len(citable_candidates) != 1:
+        selected_claim: Optional[NumericClaim] = None
+        if len(distinct_candidates) == 1:
+            selected_claim = next(iter(distinct_candidates.values()))
+        elif re.search(r"\b(?:icu\s+)?stays?\b", context, flags=re.I):
+            canonical_stay_claims = {
+                (claim.step_id, claim.evidence_id, claim.source_field): claim
+                for claim, _distance in candidates
+                if claim.source_field == "cohort.n_stays"
+            }
+            if len(canonical_stay_claims) == 1:
+                selected_claim = next(iter(canonical_stay_claims.values()))
+        elif re.search(r"\bpatients?\b", context, flags=re.I):
+            canonical_patient_claims = {
+                (claim.step_id, claim.evidence_id, claim.source_field): claim
+                for claim, _distance in candidates
+                if claim.source_field == "cohort.n_patients"
+            }
+            if len(canonical_patient_claims) == 1:
+                selected_claim = next(iter(canonical_patient_claims.values()))
+        if selected_claim is None:
             continue
         owner = next(
-            (item for item in sorted(detail["owned_by"]) if item in resolvable),
+            (
+                item
+                for item in (selected_claim.evidence_id, selected_claim.step_id)
+                if item in resolvable
+            ),
             None,
         )
         if owner is None:
@@ -2063,11 +2089,10 @@ def bind_numeric_values(
                 # The one refusal that names its own fix. Reported beside the
                 # value list so the reader is not left to guess which sentence
                 # cited what.
-                f" Miscited: {miscited[:3]}"
-                if miscited
-                else ""
+                f" Miscited: {miscited[:3]}" if miscited else ""
             ),
-            detail={"untraced": untraced, "miscited": miscited} if miscited
+            detail={"untraced": untraced, "miscited": miscited}
+            if miscited
             else {"untraced": untraced},
         )
 
@@ -2127,21 +2152,129 @@ def drop_untraceable_numeric_sentences(
 
     if not rejected_by_span:
         return manuscript, []
+    merged: List[Tuple[int, int, List[Dict[str, Any]]]] = []
+    for (start, end), detail in sorted(rejected_by_span.items()):
+        if merged and start <= merged[-1][1]:
+            previous_start, previous_end, previous_details = merged[-1]
+            merged[-1] = (
+                previous_start,
+                max(previous_end, end),
+                [*previous_details, detail],
+            )
+        else:
+            merged.append((start, end, [detail]))
     filtered = manuscript
-    for (start, end), _detail in sorted(
-        rejected_by_span.items(),
-        key=lambda item: item[0][0],
-        reverse=True,
-    ):
+    for start, end, _details in reversed(merged):
         filtered = filtered[:start] + filtered[end:]
-    removed = [
-        detail
-        for _span, detail in sorted(
-            rejected_by_span.items(),
-            key=lambda item: item[0][0],
+    removed: List[Dict[str, Any]] = []
+    for start, end, details in merged:
+        if len(details) == 1:
+            removed.append(details[0])
+            continue
+        removed.append(
+            {
+                "sentence": manuscript[start:end].strip(),
+                "untraced": list(
+                    dict.fromkeys(
+                        value
+                        for detail in details
+                        for value in detail.get("untraced", [])
+                    )
+                ),
+                "miscited": [
+                    item
+                    for detail in details
+                    for item in detail.get("miscited", [])
+                ],
+            }
         )
-    ]
     return filtered, removed
+
+
+def repair_single_variant_robustness_metric_prose(
+    scaffold: str,
+    *,
+    panel: Any,
+) -> tuple[str, List[Dict[str, str]]]:
+    """Render one converged metric variant as point estimate plus its CI.
+
+    A panel envelope is not a range of point estimates when only one variant
+    exists. Replace only numeric sentences that explicitly cite the panel and
+    label the metric, using the row's own evidence owner and registered values.
+    """
+
+    if not scaffold or panel is None or int(getattr(panel, "n_variants", 0)) != 1:
+        return scaffold, []
+    variants = [
+        row
+        for row in getattr(panel, "rows", ())
+        if row.spec_id != panel.primary_spec_id
+        and row.converged
+        and row.point_estimate is not None
+        and row.ci_low is not None
+        and row.ci_high is not None
+        and row.evidence_id
+    ]
+    if len(variants) != 1:
+        return scaffold, []
+    row = variants[0]
+    metric_match = re.search(r"\bmetric=([A-Za-z0-9_+-]+)", row.notes or "")
+    if metric_match is None:
+        return scaffold, []
+    raw_metric = metric_match.group(1).casefold()
+    metric_labels = {
+        "auroc": "AUROC",
+        "auc": "AUROC",
+        "brier": "Brier score",
+        "brier_score": "Brier score",
+    }
+    metric_label = metric_labels.get(raw_metric)
+    if metric_label is None:
+        return scaffold, []
+    canonical = (
+        f"The evaluated robustness specification had an {metric_label} of "
+        f"{row.point_estimate:.12g} (95% CI, {row.ci_low:.12g}–"
+        f"{row.ci_high:.12g}) {{evidence:{row.evidence_id}}}."
+        if metric_label == "AUROC"
+        else f"The evaluated robustness specification had a {metric_label} of "
+        f"{row.point_estimate:.12g} (95% CI, {row.ci_low:.12g}–"
+        f"{row.ci_high:.12g}) {{evidence:{row.evidence_id}}}."
+    )
+    paragraph_parts = re.split(r"(\n\s*\n)", scaffold)
+    repairs: List[Dict[str, str]] = []
+    for paragraph_index in range(0, len(paragraph_parts), 2):
+        sentences = re.split(r"(?<=[.!?])\s+", paragraph_parts[paragraph_index])
+        for sentence_index, sentence in enumerate(sentences):
+            trailing_citation = ""
+            if sentence_index + 1 < len(sentences) and re.fullmatch(
+                r"\{evidence:robustness_panel[^}]*\}",
+                sentences[sentence_index + 1].strip(),
+            ):
+                trailing_citation = sentences[sentence_index + 1].strip()
+            candidate_sentence = " ".join(
+                part for part in (sentence, trailing_citation) if part
+            )
+            lowered = candidate_sentence.casefold()
+            if "{evidence:robustness_panel" not in lowered:
+                continue
+            if metric_label.casefold() not in lowered and raw_metric not in lowered:
+                continue
+            if not _NUMERIC_IN_PROSE_RE.search(candidate_sentence):
+                continue
+            sentences[sentence_index] = canonical
+            if trailing_citation:
+                sentences[sentence_index + 1] = ""
+            repairs.append(
+                {
+                    "source": "single_variant_robustness_panel",
+                    "metric": metric_label,
+                    "evidence_id": row.evidence_id,
+                }
+            )
+        paragraph_parts[paragraph_index] = " ".join(
+            sentence for sentence in sentences if sentence
+        )
+    return "".join(paragraph_parts), repairs
 
 
 def enforce_writer_claim_language(
