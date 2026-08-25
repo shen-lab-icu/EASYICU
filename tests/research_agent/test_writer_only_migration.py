@@ -219,6 +219,42 @@ def test_writer_only_failure_never_publishes_replacement(tmp_path: Path) -> None
     assert not (tmp_path / "output" / "manuscript_scaffold.md").exists()
 
 
+def test_writer_only_accepts_fail_closed_filter_when_contracts_remain_valid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unsupported = "An unsupported current-study statement."
+    manuscript = _manuscript().replace(
+        "The association does not establish causation [@strobe_2007].",
+        (
+            "The association does not establish causation [@strobe_2007]. "
+            + unsupported
+        ),
+    )
+    prepared = _prepared(tmp_path, manuscript)
+    canonical = manuscript.replace(" " + unsupported, "")
+    monkeypatch.setattr(
+        "easyicu.research_agent.reporting.writer_only_migration._claim_policy_projection",
+        lambda _run, _manuscript: (
+            canonical,
+            {"discussion": (unsupported,)},
+        ),
+    )
+
+    class FakeWriter:
+        def repair_existing(self, value: str, **_kwargs: object):
+            return value, ()
+
+        def repair_sections(self, *_args: object, **_kwargs: object):
+            raise AssertionError("valid fail-closed projection should not use Provider")
+
+    result = repair_writer_only(prepared, writer=FakeWriter())
+
+    assert unsupported not in result.manuscript
+    assert result.authority_filtered_section_keys == ("discussion",)
+    assert result.authority_repaired_section_keys == ()
+
+
 def test_writer_only_owner_has_no_scientific_execution_imports() -> None:
     source = Path(
         "src/easyicu/research_agent/reporting/writer_only_migration.py"
