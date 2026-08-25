@@ -250,6 +250,43 @@ def repair_reader_structure_from_existing_prose(
             )
 
     section_map = _sections(repaired)
+    abstract = section_map.get("Abstract")
+    if abstract is not None and not re.search(
+        r"\*\*Background:\*\*\s+\S+", abstract, flags=re.I
+    ):
+        introduction = section_map.get("Introduction", "")
+        candidate = next(
+            (
+                sentence.strip()
+                for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", introduction)
+                if _has_prose(sentence)
+                and (
+                    "{evidence:" in sentence
+                    or "{claim:" in sentence
+                    or _EVIDENCE_LINK_RE.search(sentence) is not None
+                )
+            ),
+            None,
+        )
+        if candidate is not None:
+            populated = re.sub(
+                r"(\*\*Background:\*\*)\s*(?=\n\s*\n|\Z)",
+                lambda match: f"{match.group(1)} {candidate}",
+                abstract,
+                count=1,
+                flags=re.I,
+            )
+            if populated == abstract:
+                populated = f"**Background:** {candidate}\n\n{abstract.lstrip()}"
+            repaired = _replace_section_body(repaired, "Abstract", populated)
+            repairs.append(
+                {
+                    "code": "MANUSCRIPT_ABSTRACT_BACKGROUND_RESTORED",
+                    "source": "existing_introduction_evidence_sentence",
+                }
+            )
+
+    section_map = _sections(repaired)
     conclusion = section_map.get("Conclusion")
     if conclusion is not None and not _has_prose(conclusion):
         results = section_map.get("Results", "")
