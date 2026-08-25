@@ -101,6 +101,7 @@ class WriterOnlyMigrationResult:
     literature_audit: ManuscriptLiteratureAudit
     deterministic_literature_repairs: tuple[Mapping[str, Any], ...]
     authority_repaired_section_keys: tuple[str, ...]
+    authority_filtered_section_keys: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -425,6 +426,7 @@ def repair_writer_only(
             {"kind": "methods_reporting_citation", **method_repair}
         )
     authority_repaired: list[str] = []
+    authority_filtered: list[str] = []
     for _attempt in range(2):
         canonical, section_errors = _claim_policy_projection(
             prepared.source_run_dir,
@@ -432,6 +434,23 @@ def repair_writer_only(
         )
         if not section_errors:
             manuscript = canonical
+            break
+        canonical_quality = audit_manuscript_quality(
+            canonical,
+            expected_display_labels=prepared.expected_display_labels,
+        )
+        canonical_literature = audit_manuscript_literature(
+            canonical,
+            prepared.literature,
+        )
+        if (
+            canonical_quality.status == "pass"
+            and canonical_literature.status == "pass"
+        ):
+            manuscript = canonical
+            authority_filtered.extend(
+                key for key in section_errors if key not in authority_filtered
+            )
             break
         repair_sections = getattr(writer, "repair_sections", None)
         if not callable(repair_sections):
@@ -490,6 +509,7 @@ def repair_writer_only(
         literature_audit=literature,
         deterministic_literature_repairs=tuple(deterministic_literature_repairs),
         authority_repaired_section_keys=tuple(authority_repaired),
+        authority_filtered_section_keys=tuple(authority_filtered),
     )
 
 
@@ -675,6 +695,9 @@ def publish_writer_only_result(
         "repaired_section_keys": list(result.repaired_section_keys),
         "authority_repaired_section_keys": list(
             result.authority_repaired_section_keys
+        ),
+        "authority_filtered_section_keys": list(
+            result.authority_filtered_section_keys
         ),
         "removed_unknown_literature_keys": list(
             prepared.removed_unknown_literature_keys
