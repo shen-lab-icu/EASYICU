@@ -531,12 +531,14 @@ from .audits.validators import (
 )
 from .gates.figure_egress import FigureEgressPolicy
 from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
-
-
 from .orchestration.finalize import (
     _concept_dictionary_manifest_fields,  # noqa: F401
     _render_cost_summary,  # noqa: F401
 )
+
+# Compatibility seam for callers and tests that patch the historical pipeline
+# symbol while the implementation remains owned by figure_plan_shaping.
+_ensure_audit_panel_step_in_plan = _figure_plan.ensure_data_quality_figure_step
 
 
 def _one_capability_job(method: Callable[..., Any]) -> Callable[..., Any]:
