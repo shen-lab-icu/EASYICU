@@ -33,6 +33,9 @@ from easyicu.research_agent.reporting.writer_only_migration import (  # noqa: E4
     repair_writer_only,
     writer_only_preflight_payload,
 )
+from easyicu.research_agent.reporting.manuscript_quality import (  # noqa: E402
+    audit_manuscript_quality,
+)
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -41,6 +44,31 @@ def _write_json(path: Path, payload: Any) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+class _RecordingWriterAgent(WriterAgent):
+    """Persist aggregate-only candidate sections for failed-call diagnosis."""
+
+    def __init__(self, *args: Any, runtime_dir: Path, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._runtime_dir = runtime_dir
+        self._attempt = 0
+
+    def _call_section(self, **kwargs: Any) -> str:
+        section = super()._call_section(**kwargs)
+        self._attempt += 1
+        stem = f"writer_candidate_{self._attempt:02d}_{str(kwargs['section_name']).lower()}"
+        path = self._runtime_dir / "writer_candidates" / f"{stem}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(section, encoding="utf-8")
+        _write_json(
+            path.with_suffix(".quality.json"),
+            audit_manuscript_quality(
+                section,
+                require_administrative_sections=False,
+            ).to_dict(),
+        )
+        return section
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -118,7 +146,12 @@ def main() -> int:
         meter=meter,
         model_override=args.model,
     )
-    writer = WriterAgent(metered, language="en", nature_writing_enabled=True)
+    writer = _RecordingWriterAgent(
+        metered,
+        language="en",
+        nature_writing_enabled=True,
+        runtime_dir=runtime,
+    )
     try:
         result = repair_writer_only(prepared, writer=writer)
     except BaseException as exc:
