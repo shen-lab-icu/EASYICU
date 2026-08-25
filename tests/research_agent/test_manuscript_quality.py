@@ -79,6 +79,7 @@ def test_complete_reader_facing_manuscript_passes() -> None:
     audit = audit_manuscript_quality(_valid_manuscript())
 
     assert audit.status == "pass"
+    assert audit.schema_version == "manuscript-quality-audit-v2"
     assert audit.adjustment_sets == {
         "Methods": ("age", "sex"),
         "Results": ("age", "sex"),
@@ -130,12 +131,67 @@ def test_internal_runtime_terms_are_rejected_in_reader_facing_prose() -> None:
     assert "`sep3_sofa2_max`" in abstract_finding.excerpts
 
 
-def test_reader_view_removes_audit_markup_but_preserves_scientific_text() -> None:
+def test_unnamed_point_estimate_is_rejected() -> None:
     text = _valid_manuscript().replace(
-        "eligible ICU stays.",
-        "94,458[^claim_1] eligible ICU stays "
-        "[cohort](evidence/cohort.json \"sha256=abc\").",
-    ) + "\n[^claim_1]: value=94458; evidence=cohort\n"
+        "Sepsis status was associated with in-hospital mortality.",
+        "The discrimination point estimate was 0.772.",
+        1,
+    )
+
+    assert "MANUSCRIPT_METRIC_UNNAMED" in _codes(text)
+
+    named = text.replace(
+        "The discrimination point estimate was 0.772.",
+        "The area under the receiver operating characteristic curve was 0.772.",
+    )
+    assert "MANUSCRIPT_METRIC_UNNAMED" not in _codes(named)
+
+
+def test_machine_precision_is_rejected_in_reader_facing_sections() -> None:
+    text = _valid_manuscript().replace(
+        "Sepsis status was associated with in-hospital mortality.",
+        "The odds ratio was 1.9600187955893984.",
+        1,
+    )
+
+    audit = audit_manuscript_quality(text)
+
+    assert "MANUSCRIPT_NUMERIC_OVERPRECISION" in _codes(text)
+    finding = next(
+        item
+        for item in audit.findings
+        if item.code == "MANUSCRIPT_NUMERIC_OVERPRECISION"
+    )
+    assert "1.9600187955893984" in finding.excerpts
+
+
+def test_discussion_cannot_deny_a_reported_risk_difference() -> None:
+    text = (
+        _valid_manuscript()
+        .replace(
+            "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+            "After adjustment for age and sex, Sepsis-3 status was associated with mortality. "
+            "The risk difference was 4.9 percentage points.",
+        )
+        .replace(
+            "The findings support an association but do not establish causation [@strobe_2007].",
+            "The findings support an association, but the evidence does not provide a basis "
+            "for an absolute risk difference [@strobe_2007].",
+        )
+    )
+
+    assert "MANUSCRIPT_REPORTED_RESULT_DISCLAIMED" in _codes(text)
+
+
+def test_reader_view_removes_audit_markup_but_preserves_scientific_text() -> None:
+    text = (
+        _valid_manuscript().replace(
+            "eligible ICU stays.",
+            "94,458[^claim_1] eligible ICU stays "
+            '[cohort](evidence/cohort.json "sha256=abc").',
+        )
+        + "\n[^claim_1]: value=94458; evidence=cohort\n"
+    )
 
     reader = render_reader_manuscript(text)
 

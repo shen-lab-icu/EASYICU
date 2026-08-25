@@ -21,7 +21,13 @@ from ..schema import (
 )
 from ..reporting.manuscript_sections import render_manuscript_sections
 
-from ._support import _NATURE_WRITING_GUIDE, _SYSTEM_GUIDE, _WRITER_GUIDE, _format_context, _strip_code_fence
+from ._support import (
+    _NATURE_WRITING_GUIDE,
+    _SYSTEM_GUIDE,
+    _WRITER_GUIDE,
+    _format_context,
+    _strip_code_fence,
+)
 from .coder import _coder_prompt_payload_bytes
 
 # ---------------------------------------------------------------------------
@@ -216,9 +222,17 @@ class WriterAgent:
                     "- Copy a current-study number only when that exact literal value "
                     "appears in the MACHINE EVIDENCE DIGEST, and use the exact "
                     "`{evidence:<id>}` citation shown for its owning fact.\n"
-                    "- Do not calculate, infer, transform, round, or reconstruct a new "
-                    "count, rate, difference, interval, or other numeric value from "
-                    "values in the digest or RESEARCH CONTEXT.\n"
+                    "- Do not calculate, infer, transform, or reconstruct a new count, "
+                    "rate, difference, interval, or other numeric value from values in "
+                    "the digest or RESEARCH CONTEXT. Standard display rounding is "
+                    "allowed because the Host verifies the displayed literal against "
+                    "the canonical claim: use integer counts, normally one decimal for "
+                    "percentages, and normally two or three decimals for estimates and "
+                    "confidence limits. Never print machine-precision tails.\n"
+                    "- Name every reported statistic in the same sentence (for example, "
+                    "odds ratio, AUROC, Brier score, calibration slope, adjusted Rand "
+                    "index, or Bayesian information criterion). Never write only "
+                    "`point estimate`, `score`, or `range` when the metric is known.\n"
                     "- RESEARCH CONTEXT supplies study semantics only; it never "
                     "authorizes a numeric claim. A derived value is usable only when "
                     "the host has registered it explicitly in the evidence digest.\n"
@@ -285,6 +299,14 @@ class WriterAgent:
                     "that restate the digest.\n"
                     "- If you cannot support a sentence from the listed evidence, omit it "
                     "silently; do not narrate the gap.\n\n"
+                    "PROBLEM-SPECIFIC NARRATIVE RULE:\n"
+                    "- Organize the section around this research question's population, "
+                    "time zero, exposure or representation, estimand, and failure modes. "
+                    "Do not pad the section with generic pipeline praise or sentences "
+                    "that could be transplanted unchanged into an unrelated ICU study.\n"
+                    "- When the primary clinical contrast is unavailable or blocked, "
+                    "state the scientific boundary once, explain its consequence, and "
+                    "do not repeat the same refusal throughout the section.\n\n"
                     "LANGUAGE POLICY:\n"
                     "- Use ONLY associational phrasing. Forbidden: 'caused by', 'causal', "
                     "'attributable to', 'effect of', 'due to', 'leads to', 'drives'.\n"
