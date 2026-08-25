@@ -228,6 +228,16 @@ def test_machine_precision_is_rejected_in_reader_facing_sections() -> None:
     )
     assert "1.9600187955893984" in finding.excerpts
 
+    repaired, repairs = repair_reader_structure_from_existing_prose(text)
+    assert "1.960" not in repaired
+    assert "1.96" in repaired
+    assert "MANUSCRIPT_NUMERIC_OVERPRECISION" not in _codes(repaired)
+    assert repairs[0] == {
+        "code": "MANUSCRIPT_NUMERIC_DISPLAY_ROUNDED",
+        "source": "existing_evidence_bound_numeric_prose",
+        "count": "1",
+    }
+
 
 def test_discussion_cannot_deny_a_reported_risk_difference() -> None:
     text = (
@@ -303,6 +313,20 @@ def test_structure_repair_populates_empty_abstract_conclusions_from_claim() -> N
     )
     assert [item["code"] for item in repairs] == [
         "MANUSCRIPT_ABSTRACT_CONCLUSIONS_RESTORED"
+    ]
+
+
+def test_structure_repair_relabels_existing_post_results_abstract_prose() -> None:
+    manuscript = _valid_manuscript().replace(
+        "**Conclusions:** The association requires external validation.",
+        "The association requires external validation.",
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(manuscript)
+
+    assert "**Conclusions:** The association requires external validation." in repaired
+    assert [item["code"] for item in repairs] == [
+        "MANUSCRIPT_ABSTRACT_CONCLUSIONS_RELABELED"
     ]
 
 
