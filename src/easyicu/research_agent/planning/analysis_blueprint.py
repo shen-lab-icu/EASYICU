@@ -71,6 +71,7 @@ class BlueprintVisualRole(BaseModel):
 
     role: str
     required: bool = True
+    placement: str = "main"
     rationale: str = ""
     acceptable_chart_types: List[str] = Field(default_factory=list)
     required_text_terms: List[str] = Field(default_factory=list)
@@ -207,6 +208,7 @@ def _visual_role(role: FigureRoleStrategy) -> BlueprintVisualRole:
     return BlueprintVisualRole(
         role=role.role,
         required=role.required,
+        placement=role.placement,
         rationale=role.rationale,
         acceptable_chart_types=list(role.acceptable_chart_types),
         required_text_terms=list(role.required_text_terms),
@@ -245,10 +247,10 @@ def build_analysis_blueprint(
         "Classify the scientific question and estimand before choosing methods.",
         "Review the prior-art design brief for article and supplement structure.",
         "Plan cohort/denominator accounting before primary modelling.",
-        "Plan required data-quality and missingness displays before interpreting results.",
+        "Plan required data-quality and missingness displays before interpreting results, placing routine audit detail in supplementary material.",
         "Plan the primary analysis and uncertainty definition.",
         "Plan robustness or sensitivity modules required by the study family.",
-        "Plan one primary publication figure strategy and separate supporting artifacts.",
+        "Plan a coherent article-level display package, usually 2-4 complementary main figures plus 2-3 main tables, with detailed diagnostics and routine missingness in supplementary material; treat these counts as planning targets rather than fixed gates.",
     ]
     validation_gates = [
         "study_design_brief",
@@ -340,7 +342,7 @@ def render_analysis_blueprint_for_prompt(blueprint: AnalysisBlueprint) -> str:
     for role in required_visual:
         lines.append(
             "  - "
-            f"{role.role} (acceptable_chart_types={', '.join(role.acceptable_chart_types[:5])}; "
+            f"{role.role} (placement={role.placement}; acceptable_chart_types={', '.join(role.acceptable_chart_types[:5])}; "
             f"rationale={role.rationale})"
         )
     lines.extend(
@@ -348,7 +350,8 @@ def render_analysis_blueprint_for_prompt(blueprint: AnalysisBlueprint) -> str:
             "- anti_patterns: " + "; ".join(blueprint.anti_patterns),
             "- validation_gates: " + "; ".join(blueprint.validation_gates),
             "- rule: every required article role must be owned by an explicit analysis step whose expected_outputs include its typed_example (or an equally explicit typed product using an acceptable term); Intent-only prose does not count.",
-            "- rule: executable steps must map outputs to article roles; a single technically valid figure is not article-grade unless the primary figure and supporting artifacts satisfy this blueprint.",
+            "- rule: executable steps must map outputs to article roles; a single technically valid composite is one figure, not an article package. Use separate numbered figures when evidence roles answer different reader questions.",
+            "- rule: routine missingness and measurement-process audits belong in supplementary material unless missingness is the research question or materially changes the interpretation of the primary result.",
         ]
     )
     return "\n".join(lines)
