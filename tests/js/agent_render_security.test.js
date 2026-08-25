@@ -86,7 +86,7 @@ const manuscriptReader = renderer.manuscriptProvenanceView({
   article_blocks: [{
     kind: 'paragraph',
     segments: [
-      { kind: 'text', text: '<img src=x onerror="globalThis.pwned=4">' },
+      { kind: 'text', text: '**Results:** <img src=x onerror="globalThis.pwned=4"> [research_context] [@paper_key]' },
       { kind: 'claim', text: '0.5', claim_id: 'claim_1" onclick="globalThis.pwned=5' },
     ],
   }],
@@ -103,7 +103,11 @@ const manuscriptReader = renderer.manuscriptProvenanceView({
 });
 assert.ok(manuscriptReader.includes('data-gpi-claim='), 'bound numbers must be interactive');
 assert.ok(manuscriptReader.includes('JSON field'), 'reader must expose the exact JSON field');
-assert.ok(manuscriptReader.includes('Code and data lineage'), 'reader must expose execution lineage');
+assert.ok(manuscriptReader.includes('Open registered evidence'), 'reader must expose execution lineage');
+assert.ok(manuscriptReader.includes('data-gpi-evidence-open'), 'registered evidence must be actionable');
+assert.ok(manuscriptReader.includes('<strong>Results:</strong>'), 'readable prose must render basic emphasis');
+assert.ok(manuscriptReader.includes('class="gpi-reader-citation"'), 'literature bindings need a readable citation marker');
+assert.ok(!manuscriptReader.includes('[research_context]'), 'internal evidence ids must stay out of readable prose');
 assert.ok(!manuscriptReader.includes('<img src=x'), 'article text must be escaped');
 assert.ok(!manuscriptReader.includes('onclick="globalThis.pwned=5'), 'claim ids must not create handlers');
 
