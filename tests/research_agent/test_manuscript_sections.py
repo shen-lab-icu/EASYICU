@@ -65,7 +65,7 @@ Evidence-bound association prose.
 
 ### Sensitivity and subgroup analyses
 Evidence-bound sensitivity prose."""
-    return f"## {name}"
+    return f"## {name}\n\nEvidence-bound {name.lower()} prose."
 
 
 def test_manuscript_section_assembly_is_ordered_and_forwards_common_context() -> None:
@@ -101,7 +101,7 @@ def test_manuscript_section_failure_stops_before_later_provider_calls() -> None:
         seen.append(section_name)
         if section_name == "Methods":
             raise RuntimeError("provider stop-loss")
-        return f"## {section_name}"
+        return _minimal_valid_section(section_name)
 
     with pytest.raises(RuntimeError, match="provider stop-loss"):
         render_manuscript_sections(call_section=call_section, common={})
@@ -132,6 +132,9 @@ def test_section_specs_keep_literature_and_evidence_boundaries() -> None:
     assert "specific population" in instructions["discussion"]
     assert "host owns those administrative facts" in instructions["conclusion"]
     assert "released alongside this manuscript" not in instructions["methods"]
+    assert "Copy the executed adjustment set" in instructions["methods"]
+    for key in ("abstract", "introduction", "results", "discussion", "conclusion"):
+        assert "raw snake_case" in instructions[key]
 
 
 def test_incomplete_required_subsection_gets_one_targeted_retry() -> None:
@@ -188,6 +191,25 @@ def test_incomplete_required_subsection_fails_closed_after_retry() -> None:
         "Methods",
         "Methods",
     ]
+
+
+def test_empty_section_body_gets_one_targeted_retry() -> None:
+    conclusion_calls = 0
+
+    def call_section(**kwargs: object) -> str:
+        nonlocal conclusion_calls
+        if kwargs["section_name"] != "Conclusion":
+            return _minimal_valid_section(kwargs["section_name"])
+        conclusion_calls += 1
+        if conclusion_calls == 1:
+            return "## Conclusion"
+        assert "the main section body" in str(kwargs["instruction"])
+        return "## Conclusion\n\nEvidence-bound conclusion prose."
+
+    rendered = render_manuscript_sections(call_section=call_section, common={})
+
+    assert conclusion_calls == 2
+    assert "## Conclusion\n\nEvidence-bound conclusion prose." in rendered
 
 
 def test_verified_administrative_authority_is_rendered_exactly() -> None:
