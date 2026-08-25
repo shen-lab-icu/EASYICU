@@ -182,6 +182,29 @@ def _replace_section_body(text: str, section: str, body: str) -> str:
     )
 
 
+def _replace_subsection_body(
+    text: str,
+    section: str,
+    subsection: str,
+    body: str,
+) -> str:
+    section_body = _sections(text).get(section)
+    if section_body is None:
+        return text
+    pattern = re.compile(
+        rf"(^###\s+{re.escape(subsection)}\s*$)(.*?)(?=^###\s+|\Z)",
+        flags=re.M | re.S,
+    )
+    replaced = pattern.sub(
+        lambda match: f"{match.group(1)}\n\n{body.strip()}\n\n",
+        section_body,
+        count=1,
+    )
+    if replaced == section_body:
+        return text
+    return _replace_section_body(text, section, replaced)
+
+
 def repair_reader_structure_from_existing_prose(
     manuscript: str,
 ) -> tuple[str, tuple[Mapping[str, str], ...]]:
@@ -283,6 +306,89 @@ def repair_reader_structure_from_existing_prose(
                 {
                     "code": "MANUSCRIPT_ABSTRACT_BACKGROUND_RESTORED",
                     "source": "existing_introduction_evidence_sentence",
+                }
+            )
+
+    section_map = _sections(repaired)
+    results = section_map.get("Results")
+    if results is not None:
+        subsections = _subsections(results)
+        primary_outcome = subsections.get("Primary outcome")
+        primary_association = subsections.get("Primary association", "")
+        if primary_outcome is not None and not _has_prose(primary_outcome):
+            candidate = next(
+                (
+                    sentence.strip()
+                    for sentence in re.split(
+                        r"(?<=[.!?])\s+|\n\s*\n", primary_association
+                    )
+                    if _has_prose(sentence)
+                    and (
+                        "{evidence:" in sentence
+                        or "{claim:" in sentence
+                        or _EVIDENCE_LINK_RE.search(sentence) is not None
+                    )
+                ),
+                None,
+            )
+            if candidate is not None:
+                repaired = _replace_subsection_body(
+                    repaired,
+                    "Results",
+                    "Primary outcome",
+                    candidate,
+                )
+                repairs.append(
+                    {
+                        "code": "MANUSCRIPT_PRIMARY_OUTCOME_RESTORED",
+                        "source": "existing_primary_association_evidence_sentence",
+                    }
+                )
+
+    section_map = _sections(repaired)
+    abstract = section_map.get("Abstract")
+    if abstract is not None and not re.search(
+        r"\*\*Results:\*\*\s+\S+", abstract, flags=re.I
+    ):
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
+        methods_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if paragraph.casefold().startswith("**methods:**")
+            ),
+            None,
+        )
+        conclusions_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if paragraph.casefold().startswith("**conclusions:**")
+            ),
+            len(paragraphs),
+        )
+        unlabeled_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if methods_index is not None
+                and methods_index < index < conclusions_index
+                and _has_prose(paragraph)
+                and not re.match(r"\*\*[A-Za-z ]+:\*\*", paragraph)
+            ),
+            None,
+        )
+        if unlabeled_index is not None:
+            paragraphs[unlabeled_index] = "**Results:** " + paragraphs[unlabeled_index]
+            repaired = _replace_section_body(
+                repaired,
+                "Abstract",
+                "\n\n".join(paragraphs),
+            )
+            repairs.append(
+                {
+                    "code": "MANUSCRIPT_ABSTRACT_RESULTS_RELABELED",
+                    "source": "existing_post_methods_abstract_prose",
                 }
             )
 
