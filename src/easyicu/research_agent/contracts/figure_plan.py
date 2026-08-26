@@ -161,7 +161,7 @@ def association_summary_composite_panels(
         DeterministicFigurePanelTemplate(
             panel_id="C",
             article_role="robustness",
-            chart_type="specification_grid",
+            chart_type="sensitivity_coverage_matrix",
             source_products=("table:robustness_summary",),
         ),
         DeterministicFigurePanelTemplate(
@@ -195,15 +195,15 @@ def balance_association_composite_panels(
             source_products=("table:adjusted_association_estimates",),
         ),
         DeterministicFigurePanelTemplate(
-            panel_id="robustness_estimates",
+            panel_id="robustness_specification_status",
             article_role="robustness",
-            chart_type="sensitivity_forest",
+            chart_type="sensitivity_specification_status",
             source_products=("table:robustness_matrix",),
         ),
         DeterministicFigurePanelTemplate(
-            panel_id="robustness_ranges",
+            panel_id="robustness_coverage",
             article_role="robustness",
-            chart_type="specification_grid",
+            chart_type="sensitivity_coverage_matrix",
             source_products=("table:robustness_summary",),
         ),
     )
@@ -233,15 +233,15 @@ def absolute_risk_association_composite_panels(
             source_products=("table:adjusted_association_estimates",),
         ),
         DeterministicFigurePanelTemplate(
-            panel_id="robustness_estimates",
+            panel_id="robustness_specification_status",
             article_role="robustness",
-            chart_type="sensitivity_forest",
+            chart_type="sensitivity_specification_status",
             source_products=("table:robustness_matrix",),
         ),
         DeterministicFigurePanelTemplate(
-            panel_id="robustness_ranges",
+            panel_id="robustness_coverage",
             article_role="robustness",
-            chart_type="specification_grid",
+            chart_type="sensitivity_coverage_matrix",
             source_products=("table:robustness_summary",),
         ),
     )
@@ -277,9 +277,9 @@ def cohort_balance_association_composite_panels(
             source_products=("table:adjusted_association_estimates",),
         ),
         DeterministicFigurePanelTemplate(
-            panel_id="robustness_estimates",
+            panel_id="robustness_specification_status",
             article_role="robustness",
-            chart_type="forest_plot",
+            chart_type="sensitivity_specification_status",
             source_products=("table:robustness_matrix",),
         ),
     )
@@ -395,7 +395,7 @@ def landmark_association_composite_panels(
         DeterministicFigurePanelTemplate(
             panel_id="robustness_summary",
             article_role="robustness",
-            chart_type="specification_grid",
+            chart_type="sensitivity_coverage_matrix",
             source_products=("table:robustness_summary",),
         ),
         DeterministicFigurePanelTemplate(

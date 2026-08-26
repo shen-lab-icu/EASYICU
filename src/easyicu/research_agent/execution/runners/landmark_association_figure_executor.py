@@ -22,6 +22,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...figures.display_labels import display_label
+from ...figures.robustness import draw_robustness_coverage
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
@@ -38,9 +39,7 @@ _REQUIRED_COLUMNS = {
     "table:absolute_risk_context": frozenset(
         {"label", "estimate_type", "estimate", "ci_low", "ci_high"}
     ),
-    "table:robustness_summary": frozenset(
-        {"axis", "total_specs", "converged_specs", "range_low", "range_high"}
-    ),
+    "table:robustness_summary": frozenset({"axis", "total_specs", "converged_specs"}),
     "measurement_process": frozenset({"concept", "n_total", "measured_one_n"}),
 }
 
@@ -311,7 +310,6 @@ def run_landmark_association_figure(
     if shown_risk.empty:
         raise ValueError("absolute-risk context has no displayable estimate rows")
     _require_finite_columns(shown_risk, ("estimate", "ci_low", "ci_high"))
-    _require_finite_columns(robustness, ("range_low", "range_high"))
     _require_finite_columns(process, ("n_total", "measured_one_n"))
 
     source_files: list[str] = []
@@ -447,50 +445,12 @@ def run_landmark_association_figure(
     add_panel_label(ax, "b", x=-0.15, y=1.04, fontsize=8.0)
 
     ax = ax_robustness
-    total_specs = pd.to_numeric(robustness["total_specs"]).to_numpy(dtype=float)
-    converged_specs = pd.to_numeric(robustness["converged_specs"]).to_numpy(dtype=float)
-    if (
-        (total_specs <= 0).any()
-        or (converged_specs < 0).any()
-        or (converged_specs > total_specs).any()
-    ):
-        raise ValueError("robustness specification counts do not nest")
-    positions = np.arange(len(robustness))
-    for position, total, converged, low_value, high_value in zip(
-        positions,
-        total_specs,
-        converged_specs,
-        pd.to_numeric(robustness["range_low"]),
-        pd.to_numeric(robustness["range_high"]),
-        strict=True,
-    ):
-        ax.plot(
-            [float(low_value), float(high_value)],
-            [position, position],
-            color=palette["blue"],
-            linewidth=2.2,
-            solid_capstyle="round",
-        )
-        ax.scatter(
-            [(float(low_value) + float(high_value)) / 2.0],
-            [position],
-            color=palette["blue"],
-            s=14,
-            zorder=3,
-        )
-        ax.text(
-            float(high_value),
-            position,
-            f"  {int(converged)}/{int(total)} fitted",
-            va="center",
-            ha="left",
-            fontsize=5.7,
-        )
-    ax.set_yticks(positions, [display_label(value) for value in robustness["axis"]])
-    if (robustness[["range_low", "range_high"]] > 0).all().all():
-        ax.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-    ax.set_xlabel("Reported estimate range")
-    ax.set_title("Prespecified sensitivity analyses", loc="left", pad=7)
+    robustness_display = draw_robustness_coverage(
+        ax,
+        robustness,
+        color=palette["blue"],
+        label_formatter=lambda value: display_label(value),
+    )
     add_panel_label(ax, "c", x=-0.08, y=1.04, fontsize=8.0)
 
     if ax_process is not None:
@@ -533,12 +493,24 @@ def run_landmark_association_figure(
         panels=[
             {
                 "panel_id": panel.panel_id,
-                "title": _label(panel.panel_id),
+                "title": (
+                    "Sensitivity-analysis coverage"
+                    if panel.panel_id == "robustness_summary"
+                    else _label(panel.panel_id)
+                ),
                 "role": panel.article_role,
-                "claim": "This panel renders the complete registered source table without model refitting.",
+                "claim": (
+                    "This audit panel reports registered, converged, and independent specification counts without comparing heterogeneous effects."
+                    if panel.panel_id == "robustness_summary"
+                    else "This panel renders the complete registered source table without model refitting."
+                ),
                 "evidence_ids": [evidence[source] for source in panel.source_products],
                 "metadata": {
-                    "chart_type": panel.chart_type,
+                    "chart_type": (
+                        robustness_display["chart_type"]
+                        if panel.panel_id == "robustness_summary"
+                        else panel.chart_type
+                    ),
                     "source_products": list(panel.source_products),
                     "estimate_geometry": (
                         "continuous_fitted_curve_with_95ci"
@@ -549,12 +521,20 @@ def run_landmark_association_figure(
                         f"{source.partition(':')[2]}_source_data.csv"
                         for source in panel.source_products
                     ],
+                    **(
+                        robustness_display
+                        if panel.panel_id == "robustness_summary"
+                        else {}
+                    ),
                 },
             }
             for panel in panels
         ],
         source_data=source_files,
-        statistics_note="All plotted values are direct projections of registered source rows; no model is fit by the renderer.",
+        statistics_note=(
+            "All plotted values are direct projections of registered source rows; no model is fit by the renderer. "
+            "Robustness summaries are audit-only counts. Their source envelope columns are not displayed as confidence intervals or comparable effects."
+        ),
     )
     outputs = save_publication_figure(
         fig,

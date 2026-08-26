@@ -22,6 +22,12 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...figures.display_labels import display_label, label_lookup, scoped_label_lookup
+from ...figures.robustness import (
+    ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED,
+    assess_robustness_effect_comparability,
+    draw_robustness_coverage,
+    robustness_matrix_to_coverage,
+)
 from .typed_input_binding import BoundTypedInput, sha256_file
 
 
@@ -181,41 +187,53 @@ def _reader_contrast_labels(
     return pd.Series(labels, index=frame.index, dtype="string")
 
 
-def _robustness_ranges(ax: Any, frame: pd.DataFrame, *, color: str) -> None:
-    """Render reported robustness ranges without inventing point estimates."""
+def _robustness_coverage(ax: Any, frame: pd.DataFrame, *, color: str) -> dict[str, Any]:
+    """Render robustness summaries as audit coverage, never effect geometry."""
 
-    result = frame.copy()
-    for column in ("total_specs", "converged_specs", "non_independent_specs"):
-        result[column] = _integers(result, column)
-    result["range_low"] = _association_finite_series(result, "range_low")
-    result["range_high"] = _association_finite_series(result, "range_high")
-    if (result["total_specs"] <= 0).any():
-        raise ValueError("robustness summary total_specs must be positive")
-    if (
-        (result["converged_specs"] < 0).any()
-        or (result["converged_specs"] > result["total_specs"]).any()
-        or (result["non_independent_specs"] < 0).any()
-        or (result["non_independent_specs"] > result["total_specs"]).any()
-    ):
-        raise ValueError("robustness summary counts do not nest within total_specs")
-    if (result["range_low"] > result["range_high"]).any():
-        raise ValueError("robustness summary ranges are reversed")
+    return draw_robustness_coverage(
+        ax,
+        frame,
+        color=color,
+        label_formatter=lambda value: _label(value),
+    )
 
-    positions = np.arange(len(result))
-    for position, (_, row) in zip(positions, result.iterrows()):
-        ax.plot(
-            [float(row["range_low"]), float(row["range_high"])],
-            [position, position],
-            color=color,
-            linewidth=2.2,
-            solid_capstyle="round",
-        )
-    ax.set_yticks(positions, [_label(value) for value in result["axis"]], fontsize=5.8)
-    ax.invert_yaxis()
-    if (result[["range_low", "range_high"]] > 0).all().all():
-        ax.axvline(1.0, color="#777777", linewidth=0.8, linestyle="--")
-    ax.set_xlabel("Reported estimate range")
-    ax.set_title("Robustness ranges", loc="left", pad=12)
+
+def _robustness_audit_metadata(source: str) -> dict[str, Any]:
+    if source not in {"table:robustness_summary", "table:robustness_matrix"}:
+        return {}
+    return {
+        "effect_comparison_authorized": False,
+        "display_authority": (
+            "audit_only"
+            if source == "table:robustness_summary"
+            else "specification_status_only"
+        ),
+        "reason_code": ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED,
+    }
+
+
+def _robustness_matrix_status(
+    ax: Any, frame: pd.DataFrame, *, color: str
+) -> dict[str, Any]:
+    """Show specification status when a generic matrix lacks display identity."""
+
+    assessment = assess_robustness_effect_comparability(frame)
+    metadata = draw_robustness_coverage(
+        ax,
+        robustness_matrix_to_coverage(frame),
+        color=color,
+        title="Sensitivity-specification status",
+        label_formatter=lambda value: _label(value),
+    )
+    metadata.update(
+        {
+            "chart_type": "sensitivity_specification_status",
+            "reason_code": assessment.reason_code,
+            "comparability_message": assessment.message,
+            "missing_identity_columns": list(assessment.missing_columns),
+        }
+    )
+    return metadata
 
 
 def _absolute_risk_context(frame: pd.DataFrame) -> pd.DataFrame:
@@ -476,13 +494,9 @@ def _render_cohort_balance_association_figure(
     )
     add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
 
-    robustness_label = "spec_id" if "spec_id" in robustness.columns else "axis"
-    _forest(
+    _robustness_matrix_status(
         axes[1, 1],
         robustness,
-        estimate_column="point_estimate",
-        label_column=robustness_label,
-        title="Robustness estimates",
         color=palette["blue_soft"],
     )
     add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
@@ -503,7 +517,13 @@ def _render_cohort_balance_association_figure(
             "forest_plot",
             input_keys[2],
         ),
-        ("D", "Robustness estimates", "robustness", "forest_plot", input_keys[3]),
+        (
+            "D",
+            "Sensitivity-specification status",
+            "robustness",
+            "sensitivity_specification_status",
+            input_keys[3],
+        ),
     )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
@@ -526,6 +546,7 @@ def _render_cohort_balance_association_figure(
                 "metadata": {
                     "source_products": [source],
                     "source_data": [f"{source.partition(':')[2]}_source_data.csv"],
+                    **_robustness_audit_metadata(source),
                 },
             }
             for panel_id, title, role, chart_type, source in panel_rows
@@ -665,18 +686,14 @@ def _render_balance_association_figure(
     )
     add_panel_label(axes[0, 1], "B", x=-0.12, y=1.04)
 
-    robustness_label = "spec_id" if "spec_id" in robustness.columns else "axis"
-    _forest(
+    _robustness_matrix_status(
         axes[1, 0],
         robustness,
-        estimate_column="point_estimate",
-        label_column=robustness_label,
-        title="Robustness estimates",
         color=palette["blue_soft"],
     )
     add_panel_label(axes[1, 0], "C", x=-0.12, y=1.04)
 
-    _robustness_ranges(axes[1, 1], robustness_summary, color=palette["orange"])
+    _robustness_coverage(axes[1, 1], robustness_summary, color=palette["orange"])
     add_panel_label(axes[1, 1], "D", x=-0.12, y=1.04)
 
     panels = (
@@ -695,17 +712,17 @@ def _render_balance_association_figure(
             input_keys[1],
         ),
         (
-            "robustness_estimates",
-            "Robustness estimates",
+            "robustness_specification_status",
+            "Sensitivity-specification status",
             "robustness",
-            "sensitivity_forest",
+            "sensitivity_specification_status",
             input_keys[2],
         ),
         (
-            "robustness_ranges",
-            "Robustness ranges",
+            "robustness_coverage",
+            "Sensitivity-analysis coverage",
             "robustness",
-            "specification_grid",
+            "sensitivity_coverage_matrix",
             input_keys[3],
         ),
     )
@@ -730,6 +747,7 @@ def _render_balance_association_figure(
                 "metadata": {
                     "source_products": [source],
                     "source_data": [f"{source.partition(':')[2]}_source_data.csv"],
+                    **_robustness_audit_metadata(source),
                 },
             }
             for panel_id, title, role, chart_type, source in panels
@@ -1128,24 +1146,20 @@ def render_association_publication_figure(
             scientific_sensitivity_key,
         )
     elif robustness_key == "table:robustness_matrix" and robustness is not None:
-        robustness_labels = "spec_id" if "spec_id" in robustness.columns else "axis"
-        _forest(
+        _robustness_matrix_status(
             axes[1, 0],
             robustness,
-            estimate_column="point_estimate",
-            label_column=robustness_labels,
-            title="Robustness estimates",
             color=palette["blue_soft"],
         )
         panel_c = (
-            "Robustness estimates",
+            "Sensitivity-specification status",
             "robustness",
             "table:robustness_matrix",
         )
     elif robustness_key == "table:robustness_summary" and robustness is not None:
-        _robustness_ranges(axes[1, 0], robustness, color=palette["blue_soft"])
+        _robustness_coverage(axes[1, 0], robustness, color=palette["blue_soft"])
         panel_c = (
-            "Robustness ranges",
+            "Sensitivity-analysis coverage",
             "robustness",
             "table:robustness_summary",
         )
@@ -1187,12 +1201,16 @@ def render_association_publication_figure(
             "table:measurement_process_audit",
         )
     elif robustness_summary is not None:
-        _robustness_ranges(
+        _robustness_coverage(
             axes[1, 1],
             robustness_summary,
             color=palette["orange"],
         )
-        panel_d = ("Robustness ranges", "robustness", "table:robustness_summary")
+        panel_d = (
+            "Sensitivity-analysis coverage",
+            "robustness",
+            "table:robustness_summary",
+        )
     else:  # pragma: no cover - guarded by exact typed profiles
         raise ValueError("association composite has no fourth-panel source")
     if show_panel_d:
@@ -1259,7 +1277,13 @@ def render_association_publication_figure(
                 "C",
                 panel_c[0],
                 panel_c[1],
-                "sensitivity_forest" if panel_c[1] == "robustness" else "bar",
+                (
+                    "sensitivity_coverage_matrix"
+                    if panel_c[2] == "table:robustness_summary"
+                    else "sensitivity_specification_status"
+                )
+                if panel_c[1] == "robustness"
+                else "bar",
                 panel_c[2],
             ),
         )
@@ -1271,7 +1295,7 @@ def render_association_publication_figure(
                     panel_d[0],
                     panel_d[1],
                     (
-                        "specification_grid"
+                        "sensitivity_coverage_matrix"
                         if panel_d[1] == "robustness"
                         else "availability_panel"
                     ),
@@ -1285,8 +1309,8 @@ def render_association_publication_figure(
                     (
                         "absolute_risk_context",
                         "primary_adjusted_association",
-                        "robustness_estimates",
-                        "robustness_ranges",
+                        "robustness_specification_status",
+                        "robustness_coverage",
                     ),
                     panel_specs,
                 )
@@ -1313,6 +1337,7 @@ def render_association_publication_figure(
                 "metadata": {
                     "source_products": [source],
                     "source_data": [f"{source.partition(':')[2]}_source_data.csv"],
+                    **_robustness_audit_metadata(source),
                 },
             }
             for panel_id, title, role, chart_type, source in panel_specs

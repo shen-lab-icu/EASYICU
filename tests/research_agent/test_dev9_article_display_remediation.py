@@ -251,3 +251,85 @@ def test_h1_renderer_adds_prespecified_time_varying_main_figure(
     assert contract["panels"][0]["metadata"]["chart_type"] == (
         "time_varying_hazard_ratio_forest"
     )
+
+
+def test_landmark_article_figure_uses_comparable_contrasts_not_robustness_ranges(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "visual"
+    source.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "group_value": group,
+                "estimate_type": estimate_type,
+                "prevalence_pct": value if estimate_type == "prevalence" else None,
+                "outcome_risk_pct": value if estimate_type == "outcome_risk" else None,
+                "estimate": value / 100.0,
+                "ci_low": value / 100.0 - 0.005,
+                "ci_high": value / 100.0 + 0.005,
+            }
+            for group, prevalence, outcome in (
+                ("observed", 54.0, 14.0),
+                ("no_source", 46.0, 6.0),
+            )
+            for estimate_type, value in (
+                ("prevalence", prevalence),
+                ("outcome_risk", outcome),
+            )
+        ]
+    ).to_csv(source / "absolute_risk_context_source_data.csv", index=False)
+    pd.DataFrame(
+        {
+            "exposure_value": [1.0, 2.1, 5.0],
+            "reference_exposure_value": [2.1, 2.1, 2.1],
+            "adjusted_odds_ratio": [0.76, 1.0, 1.96],
+            "ci_low": [0.72, 1.0, 1.89],
+            "ci_high": [0.81, 1.0, 2.03],
+        }
+    ).to_csv(source / "curve.csv", index=False)
+    pd.DataFrame(
+        {
+            "concept": ["lactate"],
+            "n_total": [100],
+            "measured_one_n": [54],
+            "repeat_measured_n": [21],
+        }
+    ).to_csv(source / "measurement.csv", index=False)
+    contrasts = tmp_path / "contrasts.csv"
+    pd.DataFrame(
+        {
+            "exposure_value": [1.0, 5.0],
+            "reference_exposure_value": [2.1, 2.1],
+            "adjusted_odds_ratio": [0.76, 1.96],
+            "ci_low": [0.72, 1.89],
+            "ci_high": [0.81, 2.03],
+        }
+    ).to_csv(contrasts, index=False)
+
+    summary = renderer._render_landmark_association(
+        task_id="generic",
+        source_dir=source,
+        out_dir=tmp_path / "out",
+        exposure_label="Maximum biomarker (mmol/L)",
+        curve_file="curve.csv",
+        contrast_path=contrasts,
+        measurement_file="measurement.csv",
+        measurement_is_main=False,
+    )
+
+    figure_name = "generic_main_figure_2_continuous_association_and_contrasts"
+    assert summary["main_figure_count"] == 2
+    contract = json.loads(
+        (tmp_path / "out" / f"{figure_name}.figure_contract.json").read_text()
+    )
+    assert contract["panels"][1]["metadata"]["chart_type"] == "contrast_forest"
+    assert contract["panels"][1]["metadata"]["effect_comparison_authorized"]
+    assert all(
+        "robustness" not in source.casefold() for source in contract["source_data"]
+    )
+    svg = (
+        tmp_path / "out" / "generic_main_figure_1_source_state_and_absolute_risk.svg"
+    ).read_text(encoding="utf-8")
+    assert "Not measured" in svg
+    assert "No recorded source" not in svg
