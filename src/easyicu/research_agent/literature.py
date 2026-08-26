@@ -75,6 +75,14 @@ class CitationRecord(BaseModel):
             "an observational design."
         ),
     )
+    bibliographic_notices: List[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "Source-issued corrections, retractions, expressions of concern, "
+            "or other notices discovered during bibliographic verification."
+        ),
+    )
 
 
 class LiteratureSearchProvenance(BaseModel):
@@ -477,6 +485,8 @@ _CURATED: List[CitationRecord] = [
         year="1996",
         venue="Intensive Care Medicine",
         relevance="Defines SOFA components (0-4 ordinal); foundational for any SOFA-based analysis.",
+        doi="10.1007/BF01709751",
+        url="https://pubmed.ncbi.nlm.nih.gov/8844239/",
         pmid="8844239",
     ),
     CitationRecord(
@@ -485,6 +495,8 @@ _CURATED: List[CitationRecord] = [
         year="2016",
         venue="JAMA",
         relevance="Sepsis-3 reframes sepsis around SOFA-defined organ dysfunction.",
+        doi="10.1001/jama.2016.0287",
+        url="https://pubmed.ncbi.nlm.nih.gov/26903338/",
         pmid="26903338",
     ),
     CitationRecord(
@@ -498,9 +510,14 @@ _CURATED: List[CitationRecord] = [
         key="ricu_2023",
         title="ricu: R's interface to intensive care data.",
         year="2023",
-        venue="Software",
+        venue="GigaScience",
         relevance="Conceptual ancestor of EasyICU's concept dictionary and table model.",
-        url="https://github.com/eth-mds/ricu",
+        doi="10.1093/gigascience/giad041",
+        url=(
+            "https://academic.oup.com/gigascience/article/doi/"
+            "10.1093/gigascience/giad041/7198370"
+        ),
+        pmid="37318234",
     ),
     CitationRecord(
         key="pollard_eicu_2018",
@@ -516,6 +533,13 @@ _CURATED: List[CitationRecord] = [
         year="2023",
         venue="Scientific Data",
         relevance="Primary source database used by EasyICU.",
+        doi="10.1038/s41597-022-01899-x",
+        url="https://pubmed.ncbi.nlm.nih.gov/36596836/",
+        pmid="36596836",
+        bibliographic_notices=[
+            "Author correction: 10.1038/s41597-023-01945-2.",
+            "Author correction: 10.1038/s41597-023-02136-9.",
+        ],
     ),
     CitationRecord(
         key="hyland_hirid_2020",

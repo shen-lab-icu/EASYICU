@@ -120,6 +120,17 @@ def test_writer_digest_exposes_exact_key_and_relevance() -> None:
     assert "design_elements=reporting" in digest
 
 
+def test_writer_digest_exposes_bibliographic_notices() -> None:
+    bundle = _bundle()
+    bundle.citations[0].bibliographic_notices = [
+        "Author correction: 10.1234/correction."
+    ]
+
+    digest = render_writer_literature_digest(bundle)
+
+    assert "bibliographic_notice=Author correction: 10.1234/correction." in digest
+
+
 def test_excluded_candidate_is_not_writer_or_manuscript_citation_authority() -> None:
     bundle = _bundle_with_excluded_candidate()
 

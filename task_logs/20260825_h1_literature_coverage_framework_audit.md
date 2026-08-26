@@ -60,6 +60,37 @@ This was a targeted authority audit, not a systematic review. It does not
 create PRISMA authority and must not be copied into a run as though the
 pipeline performed the search.
 
+## Citation-existence and metadata audit
+
+The 12 records in the revised provider-free H1 pack were rechecked on
+2026-08-25 using PubMed/NCBI ESummary and EFetch, Crossref DOI metadata, and
+official publisher pages. All 12 resolve to real sources, but the shared
+registry contained metadata defects that a title-only search would not catch:
+
+- `anderson_landmark_1983` used an expanded title that is not the source title;
+  the verified title is `Analysis of survival by tumor response.`
+- `ricu_2023` was represented as generic `Software` with only a GitHub URL. It
+  is a GigaScience journal article (2023, DOI
+  `10.1093/gigascience/giad041`, PMID `37318234`).
+- `vincent_sofa_1996`, `singer_sepsis3_2016`, and
+  `johnson_mimiciv_2023` were real but lacked verified DOI and/or PMID fields in
+  the offline registry.
+
+The citation schema now carries source-issued bibliographic notices. The
+verified STROBE record exposes its 2008 Annals of Internal Medicine erratum;
+the MIMIC-IV record exposes both Scientific Data author corrections
+(`10.1038/s41597-023-01945-2` and `10.1038/s41597-023-02136-9`). Writer digest
+and BibTeX export preserve those notices. No checked record carried a PubMed
+retraction or expression-of-concern relation at the audit date; this is a
+dated metadata result, not a permanent guarantee.
+
+The methodology pack is now schema v5 because the exact Anderson title and
+bibliographic-notice contract change its frozen content. The public demo
+literature rows were corrected from the same sources so the demonstration no
+longer teaches stale metadata. Combined literature/method/plan/maturity/Copilot
+static regression: 213 passed, 2 deselected; Node syntax, Ruff, and
+`git diff --check` pass.
+
 ## Verified comparison and method matrix
 
 | Source | Verified identifier | Role for this study | What it supports | Why it is not an exact direct comparator |

@@ -842,6 +842,9 @@ def test_literature_agent_merges_pubmed_with_curated(ra):
             schema.ConceptDescriptor(
                 name="sofa2", role="composite_score", dtype="int64"
             ),
+            schema.ConceptDescriptor(
+                name="sep3", role="composite_score", dtype="int64"
+            ),
             schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
         ],
         target_outcome="death",
@@ -872,6 +875,50 @@ def test_literature_agent_merges_pubmed_with_curated(ra):
     pmids2 = [c.pmid for c in bundle.citations if c.pmid == "26903338"]
     assert len(pmids2) <= 1
     assert all(decision.citation_key in keys for decision in bundle.screening_decisions)
+    curated_by_key = {record.key: record for record in bundle.citations}
+    assert {
+        key: (
+            curated_by_key[key].venue,
+            curated_by_key[key].pmid,
+            curated_by_key[key].doi,
+            curated_by_key[key].url,
+        )
+        for key in (
+            "vincent_sofa_1996",
+            "singer_sepsis3_2016",
+            "ricu_2023",
+            "johnson_mimiciv_2023",
+        )
+    } == {
+        "vincent_sofa_1996": (
+            "Intensive Care Medicine",
+            "8844239",
+            "10.1007/BF01709751",
+            "https://pubmed.ncbi.nlm.nih.gov/8844239/",
+        ),
+        "singer_sepsis3_2016": (
+            "JAMA",
+            "26903338",
+            "10.1001/jama.2016.0287",
+            "https://pubmed.ncbi.nlm.nih.gov/26903338/",
+        ),
+        "ricu_2023": (
+            "GigaScience",
+            "37318234",
+            "10.1093/gigascience/giad041",
+            "https://academic.oup.com/gigascience/article/doi/10.1093/gigascience/giad041/7198370",
+        ),
+        "johnson_mimiciv_2023": (
+            "Scientific Data",
+            "36596836",
+            "10.1038/s41597-022-01899-x",
+            "https://pubmed.ncbi.nlm.nih.gov/36596836/",
+        ),
+    }
+    assert curated_by_key["johnson_mimiciv_2023"].bibliographic_notices == [
+        "Author correction: 10.1038/s41597-023-01945-2.",
+        "Author correction: 10.1038/s41597-023-02136-9.",
+    ]
 
 
 def test_literature_agent_pubmed_failure_is_silent(ra):

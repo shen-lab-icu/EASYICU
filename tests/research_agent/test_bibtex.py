@@ -56,6 +56,7 @@ def test_render_bibtex_basic(ra):
                 pmid="8844239",
                 doi="10.1007/BF01709751",
                 relevance="Foundational SOFA reference.",
+                bibliographic_notices=["Erratum: verified correction."],
             ),
             CitationRecord(
                 key="ricu_2023",
@@ -81,7 +82,8 @@ def test_render_bibtex_basic(ra):
     assert _has_field(bib, "year", "1996")
     assert _has_field(bib, "journal", "Intensive Care Medicine")
     assert _has_field(bib, "doi", "10.1007/BF01709751")
-    assert _has_field(bib, "note", "PMID: 8844239")
+    assert "PMID: 8844239" in bib
+    assert "Erratum: verified correction." in bib
     # Software entry uses howpublished, not journal.
     assert _has_field(bib, "howpublished", "Software")
     # The annotation field carries the agent's relevance note.

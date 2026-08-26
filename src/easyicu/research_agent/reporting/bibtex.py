@@ -222,6 +222,7 @@ def render_bibtex(bundle: Optional[LiteratureBundle]) -> str:
             note_pieces.append(f"PMID: {rec.pmid}")
         if rec.url and not rec.doi:
             note_pieces.append(rec.url)
+        note_pieces.extend(rec.bibliographic_notices)
         note = "; ".join(note_pieces) if note_pieces else None
 
         fields: List[Optional[str]] = [

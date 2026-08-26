@@ -205,9 +205,11 @@ def render_writer_literature_digest(
         else:
             role = "curated_context"
         relevance = " ".join(str(record.relevance or "").split())[:320]
+        notices = " ".join(record.bibliographic_notices)[:320]
         lines.append(
             f"- [@{record.key}] | {record.year} | {role} | "
             f"{record.title} | {relevance or 'no relevance note'}"
+            + (f" | bibliographic_notice={notices}" if notices else "")
         )
     allowed = set(manuscript_citable_keys(literature))
     method_keys = {card.source_key for card in METHOD_CARDS}
