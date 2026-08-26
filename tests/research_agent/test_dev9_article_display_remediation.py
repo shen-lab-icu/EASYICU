@@ -104,7 +104,7 @@ def test_article_table_packaging_preserves_frozen_digest_and_placement(
     assert contract["paper_authorization_allowed"] is False
 
 
-def test_h2_renderer_emits_only_supplementary_fail_closed_figure(
+def test_h2_renderer_emits_main_diagnostic_without_an_effect(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "run"
@@ -112,19 +112,23 @@ def test_h2_renderer_emits_only_supplementary_fail_closed_figure(
 
     summary = renderer._render_h2(run_dir, tmp_path / "out")
 
-    assert summary["main_figure_count"] == 0
-    assert summary["supplementary_figure_count"] == 1
+    assert summary["main_figure_count"] == 1
+    assert summary["supplementary_figure_count"] == 0
     assert summary["scientific_status"] == "failed_closed"
     contract_path = (
         tmp_path
         / "out"
-        / "h2_supplementary_figure_s1_fail_closed_feasibility.figure_contract.json"
+        / "h2_main_figure_1_causal_identifiability_diagnostic.figure_contract.json"
     )
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    assert contract["panels"][0]["metadata"]["placement"] == "supplementary"
+    assert contract["panels"][0]["metadata"]["placement"] == "main"
+    assert contract["panels"][0]["metadata"]["display_purpose"] == "diagnostic"
     assert "No effect estimate" in contract["statistics_note"] or contract["panels"][0][
         "claim"
     ].endswith("no effect estimate exists.")
+    table_id, placement, *_ = renderer.ARTICLE_TABLE_SPECS["h2"][0]
+    assert (table_id, placement) == ("table_1_causal_identifiability", "main")
+    assert renderer.ARTICLE_TABLE_DISPLAY_PURPOSES[("h2", table_id)] == "diagnostic"
 
 
 def test_h2_renderer_rejects_an_effect_estimate(tmp_path: Path) -> None:
@@ -133,6 +137,71 @@ def test_h2_renderer_rejects_an_effect_estimate(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unauthorized causal result"):
         renderer._render_h2(run_dir, tmp_path / "out")
+
+
+def test_h3_renderer_separates_main_selection_diagnostic_from_missingness_audit(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "n_clusters": n_clusters,
+                "bic": float(1_000 - n_clusters * 100),
+                "aic": float(950 - n_clusters * 100),
+                "selected": n_clusters == 6,
+                "upper_boundary": n_clusters == 6,
+                "scientific_status": "failed_closed",
+            }
+            for n_clusters in range(2, 7)
+        ]
+    ).to_csv(source / "trajectory_selection_bic_source_data.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "feature": f"sofa2_resp__h{start}_{start + 12}",
+                "observed_n": 80 - start,
+                "missing_n": 20 + start,
+                "missing_fraction": (20 + start) / 100,
+            }
+            for start in (0, 12, 24)
+        ]
+    ).to_csv(source / "trajectory_selection_availability_source_data.csv", index=False)
+
+    summary = renderer._render_h3(source, tmp_path / "out")
+
+    assert summary["main_figure_count"] == 1
+    assert summary["supplementary_figure_count"] == 1
+    assert summary["scientific_status"] == "failed_closed"
+    main_contract = json.loads(
+        (
+            tmp_path
+            / "out"
+            / "h3_main_figure_1_candidate_selection_diagnostic.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    supplementary_contract = json.loads(
+        (
+            tmp_path
+            / "out"
+            / "h3_supplementary_figure_s1_feature_availability.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    main_metadata = main_contract["panels"][0]["metadata"]
+    assert main_metadata["placement"] == "main"
+    assert main_metadata["display_purpose"] == "diagnostic"
+    assert main_metadata["source_data"] == ["h3_selection_source_data.csv"]
+    assert supplementary_contract["panels"][0]["metadata"]["placement"] == (
+        "supplementary"
+    )
+    assert supplementary_contract["panels"][0]["metadata"]["display_purpose"] == (
+        "audit"
+    )
+    assert "no class is selected" in main_contract["statistics_note"].casefold()
+    table_id, placement, *_ = renderer.ARTICLE_TABLE_SPECS["h3"][0]
+    assert (table_id, placement) == ("table_1_candidate_selection", "main")
+    assert renderer.ARTICLE_TABLE_DISPLAY_PURPOSES[("h3", table_id)] == "diagnostic"
 
 
 def test_h1_renderer_adds_prespecified_time_varying_main_figure(

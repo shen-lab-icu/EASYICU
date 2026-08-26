@@ -292,29 +292,35 @@ ARTICLE_TABLE_SPECS = {
     ),
     "h2": (
         (
-            "table_s1_fail_closed_feasibility",
-            "supplementary",
+            "table_1_causal_identifiability",
+            "main",
             "00_authority_compiled_source_feasibility",
             "h2_source_feasibility.csv",
-            "Fail-closed causal-feasibility audit",
+            "Causal-contrast identifiability assessment",
         ),
     ),
     "h3": (
         (
-            "table_s1_candidate_selection",
-            "supplementary",
+            "table_1_candidate_selection",
+            "main",
             "01_authority_compiled_trajectory_candidates",
             "trajectory_candidate_selection.csv",
             "Candidate-grid selection diagnostics",
         ),
         (
-            "table_s2_feature_availability",
+            "table_s1_feature_availability",
             "supplementary",
             "00_authority_compiled_trajectory_representation",
             "feature_availability.csv",
             "Trajectory-feature availability",
         ),
     ),
+}
+
+ARTICLE_TABLE_DISPLAY_PURPOSES = {
+    ("h2", "table_1_causal_identifiability"): "diagnostic",
+    ("h3", "table_1_candidate_selection"): "diagnostic",
+    ("h3", "table_s1_feature_availability"): "audit",
 }
 
 
@@ -432,6 +438,14 @@ def _package_article_tables(
                     "validity, causality, or clinical utility beyond its declared analysis."
                 ),
             }
+            display_purpose = ARTICLE_TABLE_DISPLAY_PURPOSES.get((task_id, table_id))
+            if display_purpose is not None:
+                contract["display_purpose"] = display_purpose
+            if display_purpose == "diagnostic":
+                contract["cannot_prove"] = (
+                    "This diagnostic table does not provide an effect estimate, an "
+                    "authorized causal contrast, or a selected trajectory-class solution."
+                )
             contract_path = task_out / f"{table_id}.table_contract.json"
             contract_path.write_text(
                 json.dumps(contract, indent=2, ensure_ascii=False, sort_keys=True)
@@ -1964,11 +1978,11 @@ def _render_h2(source_run: Path, out_dir: Path) -> dict[str, Any]:
     ax.set_xticks(positions, labels)
     ax.set_yticks([])
     ax.set_ylim(-0.35, 0.35)
-    ax.set_title("Source-authority feasibility gate", loc="left", pad=10)
+    ax.set_title("Causal-contrast identifiability", loc="left", pad=10)
     ax.text(
         0.0,
         -0.26,
-        "No effect estimate was generated",
+        "Not estimable from the current source",
         color=palette["red"],
         fontweight="bold",
     )
@@ -1976,19 +1990,20 @@ def _render_h2(source_run: Path, out_dir: Path) -> dict[str, Any]:
     figure_files = _save(
         fig,
         out_dir=out_dir,
-        product="h2_supplementary_figure_s1_fail_closed_feasibility",
+        product="h2_main_figure_1_causal_identifiability_diagnostic",
         height_mm=70.0,
         panels=[
             {
                 "panel_id": "a",
-                "title": "Source-authority feasibility gate",
-                "role": "data_quality",
-                "article_role": "data_quality",
+                "title": "Causal-contrast identifiability",
+                "role": "causal_protocol",
+                "article_role": "causal_protocol",
                 "chart_type": "fail_closed_gate",
                 "claim": "Verified non-use, a binary control arm and a causal contrast are all unauthorized; no effect estimate exists.",
                 "evidence_ids": [_sha256(path)],
                 "metadata": {
-                    "placement": "supplementary",
+                    "placement": "main",
+                    "display_purpose": "diagnostic",
                     "source_data": [source_file],
                 },
             }
@@ -2001,8 +2016,8 @@ def _render_h2(source_run: Path, out_dir: Path) -> dict[str, Any]:
         source=source_run,
         paths={"feasibility": path},
         figure_files=figure_files,
-        main_figure_count=0,
-        supplementary_figure_count=1,
+        main_figure_count=1,
+        supplementary_figure_count=0,
         scientific_status="failed_closed",
         reason_code=str(frame.iloc[0]["reason_code"]),
     )
@@ -2030,28 +2045,22 @@ def _render_h3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
         out_dir=out_dir, task_id="h3", paths=paths, frames=frames
     )
     palette = apply_publication_style(font_size=7.0)
-    fig, axes = plt.subplots(
-        1,
-        2,
-        figsize=(183 / 25.4, 102 / 25.4),
-        constrained_layout=True,
-        gridspec_kw={"width_ratios": [1.0, 1.35]},
-    )
-    axes[0].plot(
+    fig, ax = plt.subplots(figsize=(89 / 25.4, 70 / 25.4), constrained_layout=True)
+    ax.plot(
         selection["n_clusters"],
         selection["bic"],
         "o-",
         color=palette["blue"],
         label="BIC",
     )
-    axes[0].plot(
+    ax.plot(
         selection["n_clusters"],
         selection["aic"],
         "o--",
         color=palette["neutral"],
         label="AIC diagnostic",
     )
-    axes[0].scatter(
+    ax.scatter(
         [selection.iloc[-1]["n_clusters"]],
         [selection.iloc[-1]["bic"]],
         s=80,
@@ -2059,11 +2068,47 @@ def _render_h3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
         edgecolors=palette["red"],
         linewidths=1.2,
     )
-    axes[0].set_xlabel("Candidate number of trajectory classes")
-    axes[0].set_ylabel("Information criterion")
-    axes[0].set_title("Prespecified candidate-grid assessment", loc="left", pad=10)
-    axes[0].legend()
-    add_panel_label(axes[0], "a", x=-0.14, y=1.04, fontsize=8.0)
+    ax.set_xlabel("Candidate number of trajectory classes")
+    ax.set_ylabel("Information criterion")
+    ax.set_title("Prespecified candidate-grid assessment", loc="left", pad=10)
+    ax.legend()
+    ax.text(
+        0.98,
+        0.95,
+        "Minimum at upper boundary\nNo class solution authorized",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        color=palette["red"],
+        fontsize=6.5,
+    )
+    add_panel_label(ax, "a", x=-0.17, y=1.04, fontsize=8.0)
+    figure_files = _save(
+        fig,
+        out_dir=out_dir,
+        product="h3_main_figure_1_candidate_selection_diagnostic",
+        width_mm=89.0,
+        height_mm=70.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Prespecified candidate-grid assessment",
+                "role": "phenotype_structure",
+                "article_role": "phenotype_structure",
+                "chart_type": "information_criterion_trace",
+                "claim": "The minimum BIC occurs at the upper candidate boundary, so no interior solution is authorized.",
+                "evidence_ids": [_sha256(paths["selection"])],
+                "metadata": {
+                    "placement": "main",
+                    "display_purpose": "diagnostic",
+                    "source_data": [source_files["selection"]],
+                },
+            }
+        ],
+        source_data=[source_files["selection"]],
+        core_claim="The prespecified candidate grid did not establish an interior trajectory-class solution.",
+        statistics_note="BIC and AIC values are copied from every candidate row. The upper-boundary minimum is reported as a failed selection diagnostic; no class is selected, named, or related to an outcome.",
+    )
     parts = (
         availability["feature"]
         .astype(str)
@@ -2083,45 +2128,34 @@ def _render_h3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
         matrix.columns, key=lambda value: int(str(value).split("–")[0])
     )
     matrix = matrix[ordered_windows]
-    image = axes[1].imshow(
+    fig, ax = plt.subplots(figsize=(125 / 25.4, 92 / 25.4), constrained_layout=True)
+    image = ax.imshow(
         matrix.to_numpy(dtype=float) * 100.0,
         aspect="auto",
         vmin=0,
         vmax=100,
         cmap="Reds",
     )
-    axes[1].set_yticks(
+    ax.set_yticks(
         np.arange(len(matrix)),
         [str(value).replace("sofa2_", "") for value in matrix.index],
     )
-    axes[1].set_xticks(
+    ax.set_xticks(
         np.arange(len(matrix.columns)), matrix.columns, rotation=35, ha="right"
     )
-    axes[1].set_title("Trajectory-coordinate missingness", loc="left", pad=10)
-    colorbar = fig.colorbar(image, ax=axes[1], fraction=0.035, pad=0.02)
+    ax.set_title("Trajectory-coordinate missingness", loc="left", pad=10)
+    colorbar = fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02)
     colorbar.set_label("Missing (%)")
-    add_panel_label(axes[1], "b", x=-0.12, y=1.04, fontsize=8.0)
-    figure_files = _save(
+    add_panel_label(ax, "a", x=-0.15, y=1.04, fontsize=8.0)
+    figure_files += _save(
         fig,
         out_dir=out_dir,
-        product="h3_supplementary_figure_s1_fail_closed_selection_diagnostics",
-        height_mm=102.0,
+        product="h3_supplementary_figure_s1_feature_availability",
+        width_mm=125.0,
+        height_mm=92.0,
         panels=[
             {
                 "panel_id": "a",
-                "title": "Prespecified candidate-grid assessment",
-                "role": "phenotype_structure",
-                "article_role": "phenotype_structure",
-                "chart_type": "information_criterion_trace",
-                "claim": "The minimum BIC occurs at the upper candidate boundary, so no interior solution is authorized.",
-                "evidence_ids": [_sha256(paths["selection"])],
-                "metadata": {
-                    "placement": "supplementary",
-                    "source_data": [source_files["selection"]],
-                },
-            },
-            {
-                "panel_id": "b",
                 "title": "Trajectory-coordinate missingness",
                 "role": "data_quality",
                 "article_role": "data_quality",
@@ -2130,19 +2164,20 @@ def _render_h3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
                 "evidence_ids": [_sha256(paths["availability"])],
                 "metadata": {
                     "placement": "supplementary",
+                    "display_purpose": "audit",
                     "source_data": [source_files["availability"]],
                 },
             },
         ],
-        source_data=[source_files["selection"], source_files["availability"]],
-        core_claim="The prespecified grid did not establish a trajectory-class solution; only fail-closed diagnostics are displayed.",
-        statistics_note="BIC and AIC values are copied from all candidate rows. Missingness percentages are deterministic displays of every frozen component-window row; no class is named or selected.",
+        source_data=[source_files["availability"]],
+        core_claim="Trajectory-coordinate availability is disclosed as supplementary audit evidence.",
+        statistics_note="Missingness percentages are deterministic displays of every frozen component-window row; no class is named or selected.",
     )
     return _task_summary(
         source=source_dir,
         paths=paths,
         figure_files=figure_files,
-        main_figure_count=0,
+        main_figure_count=1,
         supplementary_figure_count=1,
         scientific_status="failed_closed",
         reason_code="H3_NO_INTERIOR_BIC_OPTIMUM",

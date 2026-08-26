@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Any, Literal, Mapping
 
 
-ARTICLE_DISPLAY_PACKAGE_SCHEMA_VERSION = "easyicu.article_display_package/1"
+ARTICLE_DISPLAY_PACKAGE_SCHEMA_VERSION = "easyicu.article_display_package/2"
 MAIN_FIGURE_PLANNING_TARGET = (2, 4)
 MAIN_TABLE_PLANNING_TARGET = (2, 3)
+DISPLAY_PURPOSES = frozenset({"scientific_result", "diagnostic", "context", "audit"})
 
 
 def _sha256(path: Path) -> str:
@@ -56,6 +57,24 @@ def _panel_placement(contract: Mapping[str, Any]) -> str:
     return "unresolved"
 
 
+def _panel_display_purpose(contract: Mapping[str, Any]) -> str:
+    purposes: set[str] = set()
+    for panel in contract.get("panels") or ():
+        if not isinstance(panel, Mapping):
+            continue
+        metadata = panel.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        purpose = str(metadata.get("display_purpose") or "").strip().casefold()
+        if purpose in DISPLAY_PURPOSES:
+            purposes.add(purpose)
+    if len(purposes) == 1:
+        return next(iter(purposes))
+    if len(purposes) > 1:
+        return "mixed"
+    return "unresolved"
+
+
 def _contract_stem(path: Path, suffix: str) -> str:
     return path.name[: -len(suffix)] if path.name.endswith(suffix) else path.stem
 
@@ -80,6 +99,7 @@ def _figure_row(contract_path: Path, package_dir: Path) -> dict[str, Any]:
         "display_id": str(contract.get("figure_id") or stem),
         "kind": "figure",
         "placement": placement,
+        "display_purpose": _panel_display_purpose(contract),
         "label": str(contract.get("title") or contract.get("core_claim") or stem),
         "supports": str(contract.get("core_claim") or ""),
         "cannot_prove": str(contract.get("cannot_prove") or ""),
@@ -108,6 +128,9 @@ def _table_row(contract_path: Path, package_dir: Path) -> dict[str, Any]:
     placement = str(contract.get("placement") or "unresolved").strip().casefold()
     if placement not in {"main", "supplementary"}:
         placement = "unresolved"
+    display_purpose = str(contract.get("display_purpose") or "").strip().casefold()
+    if display_purpose not in DISPLAY_PURPOSES:
+        display_purpose = "unresolved"
 
     def relative(path: Path) -> str:
         return str(path.relative_to(package_dir))
@@ -119,6 +142,7 @@ def _table_row(contract_path: Path, package_dir: Path) -> dict[str, Any]:
         "display_id": str(contract.get("table_id") or stem),
         "kind": "table",
         "placement": placement,
+        "display_purpose": display_purpose,
         "label": str(contract.get("title") or stem),
         "supports": str(contract.get("supports") or ""),
         "cannot_prove": str(contract.get("cannot_prove") or ""),
@@ -138,6 +162,18 @@ def _count(rows: list[dict[str, Any]], kind: str, placement: str) -> int:
         1
         for row in rows
         if row.get("kind") == kind and row.get("placement") == placement
+    )
+
+
+def _count_purpose(
+    rows: list[dict[str, Any]], kind: str, placement: str, display_purpose: str
+) -> int:
+    return sum(
+        1
+        for row in rows
+        if row.get("kind") == kind
+        and row.get("placement") == placement
+        and row.get("display_purpose") == display_purpose
     )
 
 
@@ -191,6 +227,18 @@ def inspect_article_display_package(package_dir: Path) -> dict[str, Any]:
         planning_gaps.append("main_table_count_outside_planning_target")
     if unresolved:
         planning_gaps.append("display_placement_unresolved")
+    failed_closed_main = [row for row in rows if row.get("placement") == "main"]
+    if scientific_status in {"failed_closed", "blocked"}:
+        if any(
+            row.get("display_purpose") == "scientific_result"
+            for row in failed_closed_main
+        ):
+            planning_gaps.append("failed_closed_main_scientific_result_forbidden")
+        if any(
+            row.get("display_purpose") in {"unresolved", "mixed"}
+            for row in failed_closed_main
+        ):
+            planning_gaps.append("failed_closed_main_display_purpose_unresolved")
     return {
         "schema_version": ARTICLE_DISPLAY_PACKAGE_SCHEMA_VERSION,
         "authority": "analysis_only_display_inventory",
@@ -201,6 +249,26 @@ def inspect_article_display_package(package_dir: Path) -> dict[str, Any]:
             "supplementary_figures": supplementary_figures,
             "main_tables": main_tables,
             "supplementary_tables": supplementary_tables,
+            "main_scientific_result_figures": _count_purpose(
+                rows, "figure", "main", "scientific_result"
+            ),
+            "main_scientific_result_tables": _count_purpose(
+                rows, "table", "main", "scientific_result"
+            ),
+            "main_diagnostic_figures": _count_purpose(
+                rows, "figure", "main", "diagnostic"
+            ),
+            "main_diagnostic_tables": _count_purpose(
+                rows, "table", "main", "diagnostic"
+            ),
+            "main_unresolved_purpose_figures": _count_purpose(
+                rows, "figure", "main", "unresolved"
+            )
+            + _count_purpose(rows, "figure", "main", "mixed"),
+            "main_unresolved_purpose_tables": _count_purpose(
+                rows, "table", "main", "unresolved"
+            )
+            + _count_purpose(rows, "table", "main", "mixed"),
             "unresolved_placements": len(unresolved),
         },
         "planning_targets": {
@@ -215,8 +283,9 @@ def inspect_article_display_package(package_dir: Path) -> dict[str, Any]:
         "displays": rows,
         "claim_boundary": (
             "This inventory proves which digest-bound display contracts and exports "
-            "exist. It does not prove scientific adequacy, publication readiness, "
-            "external validity, or that planning-target counts are mandatory."
+            "exist and whether a main display is a scientific result or a diagnostic. "
+            "A main diagnostic does not become an effect estimate, a selected class "
+            "solution, proof of publication readiness, or a mandatory display count."
         ),
     }
 
