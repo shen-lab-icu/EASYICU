@@ -30,6 +30,7 @@ from easyicu.research_agent.execution.runners.prediction_figure_executor import 
 from easyicu.research_agent.figures.publication import (
     add_panel_label,
     apply_publication_style,
+    configure_ratio_axis,
     make_figure_contract,
     save_publication_figure,
 )
@@ -682,7 +683,7 @@ def _forest(
         capsize=2.5,
     )
     ax.axvline(1.0, color="#777777", linestyle="--", linewidth=0.8)
-    ax.set_xscale("log")
+    configure_ratio_axis(ax, lows=lows, highs=highs, null_value=1.0)
     lower = min(1.0, float(np.min(lows)))
     upper = max(1.0, float(np.max(highs)))
     ax.set_xlim(max(lower / 1.15, np.finfo(float).tiny), upper * 1.15)
@@ -1313,14 +1314,22 @@ def _render_landmark_association(
         _finite(flow, ("n", "excluded_from_previous"))
         if flow["n"].tolist() != sorted(flow["n"].tolist(), reverse=True):
             raise ValueError(f"{task_id} landmark population flow is not nested")
+        flow_display = decide_article_display(
+            ArticleDisplayPolicyRequest(
+                article_role="cohort_accounting",
+                requested_placement="main",
+                scientific_status="analysis_only",
+                central_to_question=True,
+            )
+        )
         flow_contract = {
             "schema_version": "easyicu.article_table_contract/1",
             "table_id": f"table:{task_id}:table_1b_landmark_population_flow",
             "title": "Landmark analysis-population accounting",
             "article_role": "cohort_accounting",
-            "placement": "main",
-            "display_purpose": "context",
-            "display_policy_reason_code": "ARTICLE_DISPLAY_MAIN_CONTEXT",
+            "placement": flow_display.placement,
+            "display_purpose": flow_display.display_purpose,
+            "display_policy_reason_code": flow_display.reason_code,
             "authority_scope": "analysis_only",
             "paper_authorization_allowed": False,
             "source_path": source_files["population_flow"],
@@ -1342,14 +1351,21 @@ def _render_landmark_association(
             sensitivity,
             ("adjusted_odds_ratio", "ci_low", "ci_high", "n", "events"),
         )
+        sensitivity_display = decide_article_display(
+            ArticleDisplayPolicyRequest(
+                article_role="robustness",
+                requested_placement="supplementary",
+                scientific_status="analysis_only",
+            )
+        )
         sensitivity_contract = {
             "schema_version": "easyicu.article_table_contract/1",
             "table_id": f"table:{task_id}:table_s3_variable_opportunity_sensitivity",
             "title": "Secondary variable-opportunity sensitivity",
             "article_role": "robustness",
-            "placement": "supplementary",
-            "display_purpose": "scientific_result",
-            "display_policy_reason_code": "ARTICLE_DISPLAY_SUPPORTING_RESULT",
+            "placement": sensitivity_display.placement,
+            "display_purpose": sensitivity_display.display_purpose,
+            "display_policy_reason_code": sensitivity_display.reason_code,
             "authority_scope": "analysis_only",
             "paper_authorization_allowed": False,
             "source_path": source_files["variable_opportunity"],
@@ -1485,7 +1501,12 @@ def _render_landmark_association(
     axes[contrast_axis_index].axvline(
         1.0, color=palette["neutral"], linestyle="--", linewidth=0.8
     )
-    axes[contrast_axis_index].set_xscale("log")
+    configure_ratio_axis(
+        axes[contrast_axis_index],
+        lows=contrast_low,
+        highs=contrast_high,
+        null_value=1.0,
+    )
     axes[contrast_axis_index].set_xlim(
         max(0.85 * min(1.0, float(contrast_low.min())), np.finfo(float).tiny),
         1.12 * max(1.0, float(contrast_high.max())),
@@ -1503,7 +1524,7 @@ def _render_landmark_association(
             for value in contrasts["exposure_value"]
         ],
     )
-    axes[contrast_axis_index].invert_yaxis()
+    axes[contrast_axis_index].set_ylim(len(contrasts) - 0.5, -0.5)
     axes[contrast_axis_index].set_xlabel("Adjusted mortality odds ratio (95% CI)")
     axes[contrast_axis_index].set_title(
         "Selected contrasts vs reference", loc="left", pad=10

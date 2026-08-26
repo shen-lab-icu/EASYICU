@@ -5,8 +5,10 @@ module owns the adjacent, submission-facing question: how are separately
 rendered main and supplementary displays distributed across an article?
 
 Counts are planning signals, not scientific acceptance gates. A package may
-legitimately contain fewer displays, but a single composite is reported
-explicitly instead of being silently described as a complete article suite.
+legitimately contain fewer displays. A single main figure is therefore
+reported explicitly, while a multi-panel scientific figure with more than one
+bound source is not mechanically treated as missing merely because it is one
+file.
 """
 
 from __future__ import annotations
@@ -183,6 +185,38 @@ def _count_purpose(
     )
 
 
+def _single_composite_has_scientific_coverage(
+    rows: list[dict[str, Any]],
+) -> bool:
+    """Return whether one main figure carries real multi-panel result coverage.
+
+    Figure-file count is a poor proxy for scientific completeness: journals
+    routinely accept one multi-panel primary figure for a narrow estimand.  To
+    avoid blessing a decorative or diagnostic composite, coverage requires at
+    least two panels, a scientific-result purpose, and at least two separately
+    declared source-data bindings.
+    """
+
+    main_figure_rows = [
+        row
+        for row in rows
+        if row.get("kind") == "figure" and row.get("placement") == "main"
+    ]
+    if len(main_figure_rows) != 1:
+        return False
+    figure = main_figure_rows[0]
+    sources = {
+        str(source).strip()
+        for source in figure.get("source_data") or ()
+        if str(source).strip()
+    }
+    return (
+        figure.get("display_purpose") == "scientific_result"
+        and int(figure.get("panel_count") or 0) >= 2
+        and len(sources) >= 2
+    )
+
+
 def inspect_article_display_package(package_dir: Path) -> dict[str, Any]:
     """Return a digest-bound inventory for one article display directory."""
 
@@ -216,13 +250,23 @@ def inspect_article_display_package(package_dir: Path) -> dict[str, Any]:
         for row in rows
         if row.get("placement") in {"unresolved", "mixed"}
     ]
+    single_composite_scientific_coverage = (
+        planning_targets_applicable
+        and _single_composite_has_scientific_coverage(rows)
+    )
     planning_gaps: list[str] = []
-    if planning_targets_applicable and main_figures == 1:
+    if (
+        planning_targets_applicable
+        and main_figures == 1
+        and not single_composite_scientific_coverage
+    ):
         planning_gaps.append("single_composite_only")
     if planning_targets_applicable and (
-        not MAIN_FIGURE_PLANNING_TARGET[0]
-        <= main_figures
-        <= MAIN_FIGURE_PLANNING_TARGET[1]
+        main_figures > MAIN_FIGURE_PLANNING_TARGET[1]
+        or (
+            main_figures < MAIN_FIGURE_PLANNING_TARGET[0]
+            and not single_composite_scientific_coverage
+        )
     ):
         planning_gaps.append("main_figure_count_outside_planning_target")
     if planning_targets_applicable and (
@@ -291,6 +335,9 @@ def inspect_article_display_package(package_dir: Path) -> dict[str, Any]:
             "applicable_to_scientific_status": planning_targets_applicable,
         },
         "single_composite_only": planning_targets_applicable and main_figures == 1,
+        "single_composite_scientific_coverage": (
+            single_composite_scientific_coverage
+        ),
         "planning_target_gaps": list(dict.fromkeys(planning_gaps)),
         "unresolved_contract_paths": unresolved,
         "unresolved_purpose_contract_paths": unresolved_purpose,

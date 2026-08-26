@@ -52,6 +52,7 @@ import pandas as pd
 from ...figures.publication import (
     add_panel_label,
     apply_publication_style,
+    configure_ratio_axis,
     make_figure_contract,
     save_publication_figure,
 )
@@ -506,67 +507,6 @@ def _reader_label(value: str) -> str:
     return str(value).replace("_", " ").strip()
 
 
-#: Round multipliers a reader can hold in their head. A ratio axis is labelled
-#: with whichever of these the data actually spans, never with the powers of ten
-#: matplotlib defaults to -- over a 1.0-1.5 odds-ratio span those render as
-#: overlapping "1.2 x 10^0" strings that no journal would take.
-_RATIO_TICK_CANDIDATES = (
-    0.1,
-    0.125,
-    0.2,
-    0.25,
-    0.33,
-    0.5,
-    0.67,
-    0.8,
-    0.9,
-    1.0,
-    1.1,
-    1.25,
-    1.5,
-    2.0,
-    2.5,
-    3.0,
-    4.0,
-    5.0,
-    8.0,
-    10.0,
-    20.0,
-    50.0,
-)
-
-
-def _plain_number(value: float, _position: int = 0) -> str:
-    """Format a ratio tick the way a clinician reads it: 1.5, not 1.5x10^0."""
-
-    text = f"{value:.2f}".rstrip("0").rstrip(".")
-    return text or "0"
-
-
-def _ratio_ticks(lows: list[float], highs: list[float], scale: Any) -> list[float]:
-    """Round ratio ticks spanning the drawn intervals and the null.
-
-    Always includes the null when the scale has one, so a reader can see which
-    side of no-effect an interval sits on without measuring against a gridline
-    that was never labelled.
-    """
-
-    span_low = min([*lows, *(v for v in [scale.null_value] if v)])
-    span_high = max([*highs, *(v for v in [scale.null_value] if v)])
-    ticks = [
-        value
-        for value in _RATIO_TICK_CANDIDATES
-        if span_low * 0.97 <= value <= span_high * 1.03
-    ]
-    if scale.null_value is not None and scale.null_value not in ticks:
-        ticks.append(scale.null_value)
-    # Two ticks cannot show a reader the shape of an axis; falling back to the
-    # observed endpoints is honest -- they are values that exist in the data.
-    if len(ticks) < 2:
-        ticks = sorted({round(span_low, 2), round(span_high, 2)})
-    return sorted(set(ticks))
-
-
 def _adjustment_note(covariates: Any) -> str:
     """Say what the model adjusted for, including when the answer is nothing.
 
@@ -731,13 +671,9 @@ def run_association_overview_figure(
     if scale.null_value is not None:
         ax.axvline(scale.null_value, color=palette["neutral"], linestyle="--", linewidth=0.8)
     if scale.multiplicative and all(value > 0 for value in lows):
-        from matplotlib.ticker import FixedLocator, NullFormatter
-
-        ax.set_xscale("log")
-        ax.xaxis.set_major_locator(FixedLocator(_ratio_ticks(lows, highs, scale)))
-        ax.xaxis.set_major_formatter(_plain_number)
-        ax.xaxis.set_minor_locator(FixedLocator([]))
-        ax.xaxis.set_minor_formatter(NullFormatter())
+        configure_ratio_axis(
+            ax, lows=lows, highs=highs, null_value=scale.null_value
+        )
     ax.set_yticks(y, [_reader_label(rows["__label"].iloc[index]) for index in drawable])
     ax.set_xlabel(_reader_label(scale.name))
     ax.set_title("Adjusted association", loc="left", pad=8)
@@ -908,17 +844,9 @@ def run_adjusted_association_figure(
     # scale gets this; an unrecognised one keeps a linear axis rather than a
     # transform nobody declared.
     if scale.multiplicative and all(value > 0 for value in lows):
-        from matplotlib.ticker import FixedLocator, NullFormatter
-
-        ax.set_xscale("log")
-        # Matplotlib's default log formatter writes 1.2 as "1.2 x 10^0", which
-        # over a typical odds-ratio span is both unreadable and overlapping.
-        # A clinical reader wants plain multipliers, so the ticks are the round
-        # ratios that fall inside the span the data actually occupies.
-        ax.xaxis.set_major_locator(FixedLocator(_ratio_ticks(lows, highs, scale)))
-        ax.xaxis.set_major_formatter(_plain_number)
-        ax.xaxis.set_minor_locator(FixedLocator([]))
-        ax.xaxis.set_minor_formatter(NullFormatter())
+        configure_ratio_axis(
+            ax, lows=lows, highs=highs, null_value=scale.null_value
+        )
 
     ax.set_yticks(list(range(len(rows))))
     ax.set_yticklabels([_reader_label(label) for label in rows["__label"]])
