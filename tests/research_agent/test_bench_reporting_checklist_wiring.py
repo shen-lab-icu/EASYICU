@@ -12,6 +12,7 @@ pin that wiring without a full (~40 min) run.
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -133,6 +134,79 @@ def test_planner_only_human_review_pause_is_a_completed_planning_outcome(
 
     hard_stop = SimpleNamespace(finish=lambda **kwargs: pytest.fail("must stay paused"))
     bench._finish_task_on_execution_outcome(hard_stop, {"aware": score})
+
+
+def test_outline_only_design_canary_is_completed_without_plan_or_execution(
+    monkeypatch, tmp_path
+):
+    import easyicu.research_agent as rapkg
+    from easyicu.research_agent.orchestration.workflow import (
+        PlannerDesignCanaryComplete,
+    )
+    from easyicu.research_agent.planning.progressive_artifacts import (
+        ProgressiveDesignCanaryReceipt,
+    )
+    import tools.run_research_agent_bench as bench
+
+    run_dir = tmp_path / "run_design_canary"
+    run_dir.mkdir()
+    checkpoint_path = run_dir / "progressive_planner_checkpoint_000.json"
+    checkpoint_path.write_text("{}\n", encoding="utf-8")
+    receipt = ProgressiveDesignCanaryReceipt(
+        request_authority_sha256="a" * 64,
+        checkpoint_sequence=0,
+        checkpoint_sha256="b" * 64,
+        outline_sha256="c" * 64,
+        outline_step_count=5,
+        candidate_design_count=3,
+        selected_design_ids=["selected_design"],
+        rejected_design_ids=["alternative_one", "alternative_two"],
+        selected_literature_dimension_count=7,
+        selected_literature_citation_keys=["reviewed_card"],
+        planner_efficiency={"calls": 1, "reported_tokens": 1200},
+        cost_summary={"total_tokens": 1200, "total_cost_usd": 0.02},
+    )
+    receipt_path = run_dir / "progressive_design_canary_receipt.json"
+    receipt_path.write_text(receipt.model_dump_json(indent=2), encoding="utf-8")
+    receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+
+    class DesignCanaryPipeline:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, **kwargs):
+            return PlannerDesignCanaryComplete(
+                run_id="run_design_canary",
+                run_dir=str(run_dir),
+                receipt_path=str(receipt_path),
+                receipt_sha256=receipt_sha256,
+                candidate_design_count=3,
+                rejected_design_count=2,
+                selected_literature_dimension_count=7,
+                provider_calls=1,
+                reported_tokens=1200,
+                estimated_cost_usd=0.02,
+            )
+
+    monkeypatch.setattr(rapkg, "ResearchAgentPipeline", DesignCanaryPipeline)
+
+    score = bench._run_one_arm(
+        item=_item("descriptive_association"),
+        cohort=SimpleNamespace(columns=["age", "death"]),
+        workdir=tmp_path,
+        disable_icu_context=False,
+        label="aware",
+        llm=object(),
+        pipeline_options={"planner_only": True},
+    )
+
+    assert score["status"] == "design_outline_complete"
+    assert score["candidate_design_count"] == 3
+    assert score["selected_literature_dimension_count"] == 7
+    assert score["execution_complete"] is False
+    assert score["paper_authorized"] is False
+    assert bench._score_execution_failures({"aware": score}) == []
+    assert bench._aggregate([{"aware": score}])["aware"]["n_items"] == 1
 
 
 def test_scientific_contract_binds_primary_cohort_mode(monkeypatch, tmp_path):

@@ -62,6 +62,7 @@ __all__ = [
     "HumanReviewAuthorityError",
     "HumanReviewDecision",
     "HumanReviewPending",
+    "PlannerDesignCanaryComplete",
     "HumanReviewRejected",
     "HumanReviewRequest",
     "HumanReviewStateDrift",
@@ -231,6 +232,33 @@ class HumanReviewPending(BaseModel):
         )
 
 
+class PlannerDesignCanaryComplete(BaseModel):
+    """Terminal outline-only result; it is neither a plan nor an execution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.planner_design_canary_complete/1"] = (
+        "easyicu.planner_design_canary_complete/1"
+    )
+    run_id: str
+    run_dir: str
+    receipt_path: str
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["design_outline_complete"] = "design_outline_complete"
+    reason_code: Literal["progressive_design_canary_complete"] = (
+        "progressive_design_canary_complete"
+    )
+    claim_ceiling: Literal["analysis_only"] = "analysis_only"
+    paper_authority: Literal[False] = False
+    candidate_design_count: int = Field(ge=2, le=4)
+    selected_design_count: Literal[1] = 1
+    rejected_design_count: int = Field(ge=1, le=3)
+    selected_literature_dimension_count: int = Field(ge=0, le=7)
+    provider_calls: int = Field(ge=0)
+    reported_tokens: int = Field(ge=0)
+    estimated_cost_usd: float | None = Field(default=None, ge=0)
+
+
 #: What :meth:`ResearchAgentPipeline.run` and its wrappers actually return.
 #:
 #: Annotating those entry points as ``PipelineResult`` alone was a promise the
@@ -239,7 +267,11 @@ class HumanReviewPending(BaseModel):
 #: produced a result to return. A caller typed against the narrower annotation
 #: reads ``.manuscript`` off the pause and fails at runtime with an attribute
 #: error rather than being told at the type level to handle the pause.
-PipelineRunOutcome = Union[PipelineResult, HumanReviewPending]
+PipelineRunOutcome = Union[
+    PipelineResult,
+    HumanReviewPending,
+    PlannerDesignCanaryComplete,
+]
 
 
 #: Plan-phase finding reasons that must not be walked past unattended, mapped
@@ -531,7 +563,7 @@ def orchestration_runtime_receipt() -> OrchestrationRuntimeReceipt:
 class WorkflowCompleted:
     """Terminal workflow outcome."""
 
-    final_result: PipelineResult
+    final_result: PipelineResult | PlannerDesignCanaryComplete
     human_review_decisions: tuple[dict[str, Any], ...] = ()
 
 
@@ -580,7 +612,9 @@ class PipelineWorkflow:
     def __init__(
         self,
         *,
-        plan_invoker: Callable[[], _PlanPhaseResult],
+        plan_invoker: Callable[
+            [], _PlanPhaseResult | PlannerDesignCanaryComplete
+        ],
         execute_invoker: Callable[[_PlanPhaseResult], _ExecutePhaseResult],
         write_invoker: Callable[
             [_PlanPhaseResult, _ExecutePhaseResult], _WritePhaseResult
@@ -707,6 +741,9 @@ class PipelineWorkflow:
             )
         try:
             plan_result = self._plan_invoker()
+            if isinstance(plan_result, PlannerDesignCanaryComplete):
+                self._state = "completed"
+                return WorkflowCompleted(final_result=plan_result)
             aborted_result = (
                 plan_result.get("aborted_result")
                 if isinstance(plan_result, Mapping)
@@ -1208,7 +1245,7 @@ class PipelineWorkflow:
 
 def build_pipeline_workflow(
     *,
-    plan_invoker: Callable[[], _PlanPhaseResult],
+    plan_invoker: Callable[[], _PlanPhaseResult | PlannerDesignCanaryComplete],
     execute_invoker: Callable[[_PlanPhaseResult], _ExecutePhaseResult],
     write_invoker: Callable[[_PlanPhaseResult, _ExecutePhaseResult], _WritePhaseResult],
     finalise_invoker: Callable[

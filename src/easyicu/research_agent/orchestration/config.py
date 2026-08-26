@@ -399,6 +399,10 @@ class PipelineConfig:
     development_planner_efficiency_max_calls: Optional[int] = None
     development_planner_efficiency_max_reported_tokens: Optional[int] = None
     development_planner_efficiency_max_wall_seconds: Optional[float] = None
+    # Development literature-design canaries may stop after the validated
+    # Progressive outline.  This is a terminal planning receipt, not an
+    # AnalysisPlan or a human-review checkpoint, and can never enter Execute.
+    development_stop_after_planner_outline: bool = False
     enable_deterministic_runner_repair: bool = True
     # --- literature search backends -------------------------------------
     enable_pubmed: bool = False
@@ -799,6 +803,54 @@ class PipelineConfig:
                     self.development_planner_efficiency_max_wall_seconds or 0.0
                 ),
             )
+        if self.development_stop_after_planner_outline:
+            profile_is_development_only = bool(
+                self.submission_profile_name
+                and not is_paper_facing_profile(self.submission_profile_name)
+            )
+            if not self.development_diagnostic and not profile_is_development_only:
+                raise ValueError(
+                    "development outline-only Planner termination requires either "
+                    "development_diagnostic=True or a registered development-only "
+                    "profile"
+                )
+            if self.planner_strategy != "progressive_v2":
+                raise ValueError(
+                    "development outline-only Planner termination requires "
+                    "planner_strategy='progressive_v2'"
+                )
+            if not self.planner_only:
+                raise ValueError(
+                    "development outline-only Planner termination requires "
+                    "planner_only=True"
+                )
+            if not self.require_literature_design_authority:
+                raise ValueError(
+                    "development outline-only Planner termination requires "
+                    "require_literature_design_authority=True"
+                )
+            if is_paper_facing_profile(self.submission_profile_name):
+                raise ValueError(
+                    "development outline-only Planner termination cannot be "
+                    "combined with a paper-facing submission profile"
+                )
+        if self.submission_profile_name:
+            from .profiles import get_submission_profile
+
+            profile = get_submission_profile(
+                f"{self.submission_profile_name}/{self.submission_profile_version}"
+            )
+            expected_outline_stop = bool(
+                profile.development_stop_after_planner_outline
+            )
+            if (
+                self.development_stop_after_planner_outline
+                != expected_outline_stop
+            ):
+                raise ValueError(
+                    "development outline-only Planner termination must match "
+                    f"submission profile {profile.ref!r}"
+                )
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self.max_step_provider_calls,
             max_code_repair_attempts=self.max_code_repair_attempts,

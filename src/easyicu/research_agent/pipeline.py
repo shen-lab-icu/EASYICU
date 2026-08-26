@@ -190,7 +190,7 @@ from .planning.final_article_design import (
     materialize_final_article_design_authority,
 )
 from .planning.progressive_artifacts import persist_progressive_planning_authority
-from .orchestration.progressive_planning import run_progressive_planner
+from .orchestration import progressive_planning as _progressive_planning
 from .planning.scientific_review import (
     render_plan_scientific_guardrails,
 )
@@ -225,7 +225,7 @@ from .orchestration.progress import (
     planner_retry_progress_callback,
 )
 from .orchestration.scientific_runtime import ScientificRuntimeAuthorities
-from .orchestration.workflow import PipelineRunOutcome
+from .orchestration.workflow import PipelineRunOutcome, PlannerDesignCanaryComplete
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
     RunResult,
@@ -2016,7 +2016,7 @@ class ResearchAgentPipeline:
         run_id: str,
         skill_obj: Optional[ClinicalSkill],
         used_mock_llm: bool,
-    ) -> _PlanGenerationResult:
+    ) -> _PlanGenerationResult | _progressive_planning.ProgressiveDesignCanaryDraft:
         """Resume or generate one plan without shaping or persisting it."""
         # Resume: reuse the locked plan from the prior run instead of
         # re-planning. A non-deterministic planner would otherwise emit a
@@ -2231,33 +2231,26 @@ class ResearchAgentPipeline:
                     ),
                 )
                 if progressive:
-                    planner_run_kwargs |= (
-                        _literature_design.progressive_literature_design_kwargs(
-                            preplan_literature
-                        )
-                    )
-                    planner_run_kwargs["required_primary_cohort_selection_mode"] = (
-                        self._required_primary_cohort_selection_mode
-                    )
-                    progressive_result = run_progressive_planner(
+                    progressive_result = _progressive_planning.run_pipeline_progressive_planner(
                         planner=planner,
                         context=agent_context,
                         run_dir=run_dir,
                         evidence=evidence,
                         prompt_pack_version=prompt_version,
-                        resume_checkpoint_path=(
-                            self._config.development_progressive_resume_checkpoint_path
-                        ),
-                        resume_checkpoint_sha256=(
-                            self._config.development_progressive_resume_checkpoint_sha256
-                        ),
+                        resume_checkpoint_path=self._config.development_progressive_resume_checkpoint_path,
+                        resume_checkpoint_sha256=self._config.development_progressive_resume_checkpoint_sha256,
+                        stop_after_outline=self._config.development_stop_after_planner_outline,
                         cohort_path=cohort_path,
                         llm_signature=llm_signature,
                         planner_kwargs=planner_run_kwargs,
+                        preplan_literature=preplan_literature,
+                        required_primary_cohort_selection_mode=self._required_primary_cohort_selection_mode,
                         know_how_binding=know_how_binding,
                         planning_contract_context=planning_contract_context,
                         finding_sink=findings.append,
                     )
+                    if isinstance(progressive_result, _progressive_planning.ProgressiveDesignCanaryDraft):
+                        return progressive_result
                     plan = progressive_result.plan
                     plan_generation_mode = progressive_result.generation_mode
                     planner_prompt_metrics = dict(progressive_result.prompt_metrics)
@@ -2441,7 +2434,7 @@ class ResearchAgentPipeline:
     def _validate_and_persist_plan(
         self,
         *,
-        generation: _PlanGenerationResult,
+        generation: _PlanGenerationResult | _progressive_planning.ProgressiveDesignCanaryDraft,
         agent_context: Any,
         allowed_literature_citation_keys: Sequence[str],
         analysis_blueprint: Any,
@@ -2468,8 +2461,13 @@ class ResearchAgentPipeline:
         run_id: str,
         skill_obj: Optional[ClinicalSkill],
         study_design_brief: Any,
-    ) -> _PlanPhaseResult:
+    ) -> _PlanPhaseResult | PlannerDesignCanaryComplete:
         """Shape, validate, bind, and persist the generated analysis plan."""
+        if isinstance(generation, _progressive_planning.ProgressiveDesignCanaryDraft):
+            return _progressive_planning.finalize_progressive_design_canary(
+                generation, run_id, run_dir, evidence, cost_meter,
+                self._provider_hard_stop, prompt_version, emit_progress,
+            )
         plan = generation.plan
         reused_prior_plan = generation.reused_prior_plan
         reused_plan_path = generation.reused_plan_path

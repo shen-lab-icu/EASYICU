@@ -14,6 +14,7 @@ from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.profiles import (
     DEV9_AI_REVIEWED_DEMO_2026_08_24,
     QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25,
+    QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25,
     QUALIFICATION12_LITERATURE_DESIGN_2026_08_25,
     get_submission_profile,
 )
@@ -252,7 +253,19 @@ def test_qualification_canary_is_planner_only_and_reuses_reviewed_search() -> No
     assert config.require_human_plan_review is True
     assert config.require_literature_design_authority is True
     assert config.planner_strategy == "progressive_v2"
+    assert config.development_stop_after_planner_outline is False
     assert get_submission_profile(profile.ref) is profile
+
+    outline_profile = QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25
+    outline_config = PipelineConfig(
+        workdir="/tmp/easyicu-literature-design-outline-canary-test",
+        **outline_profile.pipeline_options(),
+    )
+    assert outline_profile.ref == (
+        "npj_dm_qualification12_design_outline_canary_dev/20260825"
+    )
+    assert outline_config.development_stop_after_planner_outline is True
+    assert get_submission_profile(outline_profile.ref) is outline_profile
 
 
 @pytest.mark.parametrize(
