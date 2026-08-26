@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+import sys
+
 from easyicu.research_agent.reporting.manuscript_quality import (
     audit_manuscript_quality,
     repair_registered_display_callouts,
@@ -10,6 +15,7 @@ from easyicu.research_agent.reporting.write_phase import (
     _persist_manuscript_quality_artifacts,
 )
 from easyicu.research_agent.reporting.readiness import _MANUSCRIPT_ERROR_VALIDATORS
+from tools.audit_manuscript_quality import main as audit_manuscript_quality_main
 
 
 def _valid_manuscript() -> str:
@@ -604,6 +610,48 @@ def test_structure_repair_does_not_invent_conclusion_without_evidence() -> None:
 
     assert repairs == ()
     assert "## Conclusion\n\n" in repaired
+
+
+def test_audit_tool_can_emit_provider_free_repaired_candidate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "draft.md"
+    source_text = _valid_manuscript().replace(
+        "**Background:** Sepsis remains an important ICU syndrome.",
+        "Sepsis remains an important ICU syndrome {evidence:context}.",
+    )
+    source.write_text(source_text, encoding="utf-8")
+    output_dir = tmp_path / "audit"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit_manuscript_quality.py",
+            f"E1={source}",
+            "--output-dir",
+            str(output_dir),
+            "--repair-existing-structure",
+        ],
+    )
+
+    assert audit_manuscript_quality_main() == 0
+
+    summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    row = summary["manuscripts"][0]
+    candidate = Path(row["candidate"])
+    assert summary["provider_calls"] == 0
+    assert summary["repair_existing_structure"] is True
+    assert row["source_sha256"] == hashlib.sha256(source_text.encode()).hexdigest()
+    assert row["status"] == "pass"
+    assert row["deterministic_repairs"] == [
+        {
+            "code": "MANUSCRIPT_ABSTRACT_LABEL_RESTORED",
+            "source": "existing_abstract_prose",
+        }
+    ]
+    assert "**Background:**" in candidate.read_text(encoding="utf-8")
+    assert source.read_text(encoding="utf-8") == source_text
 
 
 def test_reader_view_removes_audit_markup_but_preserves_scientific_text() -> None:
