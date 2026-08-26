@@ -38,6 +38,24 @@ def test_configure_ratio_axis_uses_plain_nonoverlapping_clinical_ticks():
     assert all("10" not in label for label in labels)
 
 
+def test_configure_ratio_axis_caps_tick_density_for_wide_forest_panel():
+    import matplotlib.pyplot as plt
+
+    figure, axis = plt.subplots()
+    ticks = configure_ratio_axis(
+        axis,
+        lows=[0.75, 1.9],
+        highs=[0.85, 2.1],
+        null_value=1.0,
+    )
+    figure.canvas.draw()
+    labels = [label.get_text() for label in axis.get_xticklabels()]
+    plt.close(figure)
+
+    assert ticks == [0.8, 1.0, 1.5, 2.0]
+    assert labels == ["0.8", "1", "1.5", "2"]
+
+
 def _prepare_robustness_authority(ra, run_dir: Path, evidence, rows) -> None:
     """Give panel fixtures the same lock + digest-bound row authority as runs."""
     from easyicu.research_agent.cohort.schema import CohortDefinition

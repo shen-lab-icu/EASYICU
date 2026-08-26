@@ -17,6 +17,7 @@ dashboards with no reviewable scientific logic.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 import zipfile
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
@@ -99,6 +100,27 @@ def configure_ratio_axis(
     if len(ticks) < 2:
         ticks = [round(span_low, 2), round(span_high, 2)]
     ticks = sorted(set(ticks))
+    if len(ticks) > 4:
+        selected = {ticks[0], ticks[-1]}
+        if null_value is not None:
+            selected.add(float(null_value))
+        while len(selected) < 4:
+            ordered = sorted(selected)
+            gaps = list(zip(ordered, ordered[1:]))
+            gap_low, gap_high = max(
+                gaps,
+                key=lambda bounds: math.log(bounds[1]) - math.log(bounds[0]),
+            )
+            candidates = [
+                value for value in ticks if gap_low < value < gap_high
+            ]
+            if not candidates:
+                break
+            midpoint = (math.log(gap_low) + math.log(gap_high)) / 2.0
+            selected.add(
+                min(candidates, key=lambda value: abs(math.log(value) - midpoint))
+            )
+        ticks = sorted(selected)
 
     from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
 
