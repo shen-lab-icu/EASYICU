@@ -3335,6 +3335,7 @@ _PRIMARY_COHORT_FLOW_OUTPUTS = frozenset(
 )
 _EFFECT_ASSOCIATION_METHOD_TOKENS = frozenset(
     {
+        "adjusted",
         "association",
         "causal",
         "cox",
