@@ -19,8 +19,14 @@ import numpy as np
 import pandas as pd
 
 from easyicu.research_agent.agents.core import _format_observed_domain
-from easyicu.research_agent.cohort.artifact_facts import observed_domain_for_series
-from easyicu.research_agent.research_context.builder import _observed_domain
+from easyicu.research_agent.cohort.artifact_facts import (
+    logical_dtype_for_series,
+    observed_domain_for_series,
+)
+from easyicu.research_agent.research_context.builder import (
+    _logical_dtype,
+    _observed_domain,
+)
 from easyicu.research_agent.research_context.prompt_variables import (
     project_observed_domain,
 )
@@ -28,6 +34,25 @@ from easyicu.research_agent.research_context.prompt_variables import (
 
 def test_legacy_observed_domain_name_is_canonical_object() -> None:
     assert _observed_domain is observed_domain_for_series
+
+
+def test_logical_dtype_normalizes_physical_object_strings() -> None:
+    values = pd.Series(["Female", "Male"], dtype="object")
+
+    assert logical_dtype_for_series(values) == "str"
+    assert _logical_dtype is logical_dtype_for_series
+
+
+def test_logical_dtype_does_not_launder_mixed_object_values() -> None:
+    values = pd.Series(["1", 2], dtype="object")
+
+    assert logical_dtype_for_series(values) == "object"
+
+
+def test_logical_dtype_preserves_numeric_storage_type() -> None:
+    values = pd.Series([1.0, 2.0], dtype="float64")
+
+    assert logical_dtype_for_series(values) == "float64"
 
 
 def test_binary_criterion_flagged_binary():

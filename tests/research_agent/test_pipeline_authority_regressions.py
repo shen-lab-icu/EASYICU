@@ -565,6 +565,136 @@ def test_p0_3_the_cited_step_own_value_still_binds(ra, tmp_path):
     assert claim.step_id == "01_primary"
 
 
+def test_p0_3_scientific_notation_near_zero_does_not_bind_to_zero(ra, tmp_path):
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    (tmp_path / "audit.json").write_text(
+        json.dumps({"out_of_range_n": 0}), encoding="utf-8"
+    )
+    store.register_file(
+        kind="statistic",
+        description="plausibility audit",
+        source_path=tmp_path / "audit.json",
+        evidence_id="plausibility_audit",
+        producer="coder",
+        generation_mode="llm",
+    )
+    store.register_step_summary_numerics(
+        step_id="01_audit",
+        evidence_id="plausibility_audit",
+        summary={"out_of_range_n": 0},
+    )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        "The association test yielded p = 1e-52 "
+        "{evidence:plausibility_audit}.",
+        evidence=store,
+    )
+
+    assert untraced == ["1e-52"]
+    assert binding_map == {}
+    assert "UNTRACED:1e-52" in bound
+
+
+def test_p0_3_exact_scientific_notation_claim_still_binds(ra, tmp_path):
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    (tmp_path / "model.json").write_text(
+        json.dumps({"p_value": 1.64711e-52}), encoding="utf-8"
+    )
+    store.register_file(
+        kind="statistic",
+        description="model result",
+        source_path=tmp_path / "model.json",
+        evidence_id="model_result",
+        producer="coder",
+        generation_mode="llm",
+    )
+    store.register_step_summary_numerics(
+        step_id="01_model",
+        evidence_id="model_result",
+        summary={"p_value": 1.64711e-52},
+    )
+
+    _bound, binding_map, untraced = bind_numeric_values(
+        "The association test yielded p = 1.64711e-52 "
+        "{evidence:model_result}.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    claim = next(iter(binding_map.values()))
+    assert claim.source_field == "p_value"
+    assert claim.canonical == pytest.approx(1.64711e-52)
+
+
+def test_p0_3_unicode_scientific_notation_is_not_invisible_to_the_binder(
+    ra, tmp_path
+):
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    (tmp_path / "audit.json").write_text(
+        json.dumps({"out_of_range_n": 0}), encoding="utf-8"
+    )
+    store.register_file(
+        kind="statistic",
+        description="plausibility audit",
+        source_path=tmp_path / "audit.json",
+        evidence_id="plausibility_audit",
+        producer="coder",
+        generation_mode="llm",
+    )
+    store.register_step_summary_numerics(
+        step_id="01_audit",
+        evidence_id="plausibility_audit",
+        summary={"out_of_range_n": 0},
+    )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        "The association test yielded p = 1 × 10⁻⁵² "
+        "{evidence:plausibility_audit}.",
+        evidence=store,
+    )
+
+    assert untraced == ["1 × 10⁻⁵²"]
+    assert binding_map == {}
+    assert "UNTRACED:1 × 10⁻⁵²" in bound
+
+
+def test_p0_3_exact_unicode_scientific_notation_claim_binds(ra, tmp_path):
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    (tmp_path / "model.json").write_text(
+        json.dumps({"p_value": 1e-52}), encoding="utf-8"
+    )
+    store.register_file(
+        kind="statistic",
+        description="model result",
+        source_path=tmp_path / "model.json",
+        evidence_id="model_result",
+        producer="coder",
+        generation_mode="llm",
+    )
+    store.register_step_summary_numerics(
+        step_id="01_model",
+        evidence_id="model_result",
+        summary={"p_value": 1e-52},
+    )
+
+    _bound, binding_map, untraced = bind_numeric_values(
+        "The association test yielded p = 1 × 10⁻⁵² "
+        "{evidence:model_result}.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert next(iter(binding_map.values())).source_field == "p_value"
+
+
 def test_p0_3_lineage_lets_a_sentence_cite_a_derived_record(ra, tmp_path):
     from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 

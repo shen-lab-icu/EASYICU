@@ -26,7 +26,7 @@ from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
-from ..literature import LiteratureBundle
+from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
     window_extends_after_anchor,
@@ -442,6 +442,40 @@ def required_method_layers_for_plan(
         for step in steps
     ):
         required.add("missing_data")
+    plan_tokens = " ".join(
+        [
+            str(plan.analysis_type or ""),
+            *(
+                token
+                for step in steps
+                for token in (
+                    str(step.method or ""),
+                    str(step.intent or ""),
+                    *(str(output or "") for output in step.expected_outputs),
+                )
+            ),
+        ]
+    ).casefold()
+    if str(plan.analysis_type or "").casefold() == "survival":
+        if any(
+            marker in plan_tokens
+            for marker in (
+                "cox",
+                "proportional hazard",
+                "ph_diagnostic",
+                "ph diagnostic",
+            )
+        ):
+            required.add("survival_assumption")
+        if any(
+            marker in plan_tokens
+            for marker in (
+                "rmst",
+                "restricted mean survival",
+                "restricted_mean_survival",
+            )
+        ):
+            required.add("survival_estimand")
     return tuple(sorted(required))
 
 
@@ -579,11 +613,9 @@ def _literature_design_bindings(
 ) -> dict[str, Any]:
     """Join typed Planner adoption claims to sealed source evidence."""
 
-    citations = (
-        {item.key: item for item in literature.citations}
-        if literature is not None
-        else {}
-    )
+    citations = {
+        item.key: item for item in manuscript_citable_records(literature)
+    }
     screening = (
         {item.citation_key: item for item in literature.screening_decisions}
         if literature is not None

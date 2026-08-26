@@ -613,6 +613,56 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     exposure_intervals = time_varying.loc[time_varying["is_exposure"]]
     assert exposure_intervals["interval_start_days"].tolist() == [0.0, 7.0, 14.0]
     assert exposure_intervals["interval_end_days"].tolist() == [7.0, 14.0, 27.0]
+    reporting = summary["reportable_survival_results"]
+    assert reporting["schema_version"] == "easyicu.survival_reporting/1"
+    assert reporting["constant_hazard_ratio_authorized"] is (
+        not summary["proportional_hazards_status"].startswith("violation_")
+    )
+    assert reporting["rmst"]["difference_days"] == pytest.approx(
+        rmst.loc[0, "rmst_difference_days"]
+    )
+    assert [
+        row["hazard_ratio"]
+        for row in reporting["time_varying_adjusted_association"]["intervals"]
+    ] == pytest.approx(exposure_intervals["hazard_ratio"].tolist())
+    projection = reporting["manuscript_projection"]
+    assert projection["schema_version"] == "easyicu.manuscript_projection/1"
+    assert [claim["claim_id"] for claim in projection["claims"]] == [
+        "primary_rmst_contrast",
+        "time_varying_association_intervals",
+    ]
+    from easyicu.research_agent.reporting.manuscript_projection import (
+        project_owner_issued_manuscript_claims,
+    )
+
+    projected, repairs = project_owner_issued_manuscript_claims(
+        """## Abstract
+
+**Results:** Owner values omitted.
+
+## Results
+
+### Primary association
+
+Owner values omitted.
+
+### Sensitivity and subgroup analyses
+
+Owner values omitted.
+""",
+        per_step_records=[
+            {
+                "step_id": "01_survival",
+                "generation_mode": "deterministic_standard",
+                "step_summary_evidence_id": "survival_summary",
+                "step_summary": summary,
+            }
+        ],
+    )
+    assert len(repairs) == 4
+    assert f"{reporting['rmst']['p_value']:.6g}" in projected
+    for row in reporting["time_varying_adjusted_association"]["intervals"]:
+        assert f"{row['p_value']:.6g}" in projected
     assert not (tmp_path / "landmark_survival_suite.svg").exists()
     risk = pd.read_csv(tmp_path / "landmark_risk_set_flow.csv")
     final_count = risk.loc[

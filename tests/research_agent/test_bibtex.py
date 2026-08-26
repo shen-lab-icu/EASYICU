@@ -56,6 +56,7 @@ def test_render_bibtex_basic(ra):
                 pmid="8844239",
                 doi="10.1007/BF01709751",
                 relevance="Foundational SOFA reference.",
+                bibliographic_notices=["Erratum: verified correction."],
             ),
             CitationRecord(
                 key="ricu_2023",
@@ -81,7 +82,8 @@ def test_render_bibtex_basic(ra):
     assert _has_field(bib, "year", "1996")
     assert _has_field(bib, "journal", "Intensive Care Medicine")
     assert _has_field(bib, "doi", "10.1007/BF01709751")
-    assert _has_field(bib, "note", "PMID: 8844239")
+    assert "PMID: 8844239" in bib
+    assert "Erratum: verified correction." in bib
     # Software entry uses howpublished, not journal.
     assert _has_field(bib, "howpublished", "Software")
     # The annotation field carries the agent's relevance note.
@@ -112,6 +114,59 @@ def test_render_bibtex_empty(ra):
     from easyicu.research_agent.literature import LiteratureBundle
 
     assert render_bibtex(LiteratureBundle(research_question="x", citations=[])) == ""
+
+
+def test_bibliography_omits_explicitly_excluded_candidates(ra):
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        LiteratureBundle,
+        LiteratureScreeningDecision,
+    )
+    from easyicu.research_agent.reporting.bibtex import (
+        render_bibtex,
+        render_thebibliography_block,
+    )
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[
+            CitationRecord(key="curated_2020", title="Curated.", year="2020"),
+            CitationRecord(key="included_2024", title="Included.", year="2024"),
+            CitationRecord(key="excluded_2025", title="Excluded.", year="2025"),
+        ],
+        screening_decisions=[
+            LiteratureScreeningDecision(
+                citation_key="included_2024",
+                source="pubmed",
+                disposition="include",
+                evidence_role="direct_comparator",
+                rationale="Eligible.",
+            ),
+            LiteratureScreeningDecision(
+                citation_key="excluded_2025",
+                source="pubmed",
+                disposition="exclude",
+                evidence_role="related_context",
+                rationale="Ineligible.",
+            ),
+        ],
+    )
+
+    assert "curated_2020" in render_bibtex(bundle)
+    assert "included_2024" in render_bibtex(bundle)
+    assert "excluded_2025" not in render_bibtex(bundle)
+    assert "excluded_2025" not in render_thebibliography_block(bundle)
+
+    try:
+        scaffold_to_latex(
+            markdown="## Discussion\n\nUnsupported [@excluded_2025].",
+            bibliography=bundle,
+        )
+    except ValueError as exc:
+        assert "excluded_2025" in str(exc)
+    else:
+        raise AssertionError("excluded citation should fail closed")
 
 
 def test_render_bibtex_escapes_field_specials(ra):
@@ -181,6 +236,28 @@ def test_scaffold_to_latex_makes_bound_numbers_clickable(ra):
         r"\href{https://reader.easyicu.example/runs/run_1/manuscript\#claim-claim_1}{1.42}"
         in web
     )
+
+
+def test_scaffold_to_latex_repairs_bare_h1_spacing_and_scientific_notation(ra):
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+
+    rendered = scaffold_to_latex(
+        markdown=(
+            "#\n\n**Keywords:** ICU\n\n## Results\n\n"
+            "The estimate was 0.54 [result](evidence/result.json); "
+            "p<1×10⁻⁵² and p=2.80e-08[^claim_1].\n\n"
+            "[^claim_1]: value=2.79869e-08; display=2.80e-08"
+        ),
+        title="Host-owned draft title",
+    )
+
+    assert r"\title{Host-owned draft title}" in rendered
+    assert r"\paragraph{Body}" not in rendered
+    assert "\\#" not in rendered
+    assert "0.54;" in rendered
+    assert r"p\textless{}" in rendered
+    assert r"$1\times 10^{-52}$" in rendered
+    assert r"\hyperlink{claim-claim-1}{$2.80\times 10^{-8}$}" in rendered
 
 
 def test_scaffold_to_latex_renders_grouped_citations(ra):

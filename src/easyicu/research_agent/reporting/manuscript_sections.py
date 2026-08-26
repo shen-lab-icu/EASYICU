@@ -185,6 +185,11 @@ MANUSCRIPT_SECTION_SPECS = (
             "claim, use its exact `{claim:<step>.<claim>}` token as a standalone "
             "sentence instead of independently wording the direction. Emit only "
             "the token; never reproduce its digest prose.\n"
+            "  When the machine digest supplies a `reportable_survival_results` "
+            "block, report the RMST horizon, exposed and comparator RMST, signed "
+            "RMST difference, confidence interval, and p-value here. Preserve its "
+            "declared adjustment and interpretation ceiling. Do not report an "
+            "unauthorized constant hazard ratio.\n"
             "### Sensitivity and subgroup analyses\n"
             "  Multiple-testing result, subgroup heterogeneity, E-value if "
             "available. When the machine digest supplies a "
@@ -195,7 +200,11 @@ MANUSCRIPT_SECTION_SPECS = (
             "`reportable_secondary_results` block, report its level-specific "
             "continuous-outcome medians and IQRs plus the named adjusted trend "
             "test here. Preserve its interpretation ceiling; do not calculate "
-            "or infer an unsupported direction.\n"
+            "or infer an unsupported direction. When the machine digest supplies "
+            "a `reportable_survival_results` block, report every interval-specific "
+            "adjusted estimate with the supplied confidence interval, p-value, "
+            "method, adjustment set, contrast, and interpretation ceiling. Do not "
+            "infer a new summary across intervals.\n"
             "### ICU-specific quality control\n"
             "  Report any ICU-rule-specific finding raised by the "
             "research-context validators (e.g. a stratum where a derived score "
@@ -299,7 +308,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "7"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "8"
 
 
 def manuscript_writer_contract_sha256() -> str:

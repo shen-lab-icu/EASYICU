@@ -15,6 +15,10 @@ from easyicu.research_agent.reporting.write_phase import (
     _persist_manuscript_quality_artifacts,
 )
 from easyicu.research_agent.reporting.readiness import _MANUSCRIPT_ERROR_VALIDATORS
+from tools.build_manuscript_reader import (
+    _load_reader_title,
+    _publication_figure_exclusion_reason,
+)
 from tools.audit_manuscript_quality import main as audit_manuscript_quality_main
 
 
@@ -101,6 +105,31 @@ The supplementary release inventory requires author verification before submissi
 
 def _codes(text: str) -> set[str]:
     return {finding.code for finding in audit_manuscript_quality(text).findings}
+
+
+def test_reader_title_uses_host_packet_and_fails_to_draft_label(tmp_path) -> None:
+    assert _load_reader_title(tmp_path) == "EasyICU analysis-only manuscript draft"
+    (tmp_path / "manuscript_packet.json").write_text(
+        '{"title": "Host-bound research question"}', encoding="utf-8"
+    )
+    assert _load_reader_title(tmp_path) == "Host-bound research question"
+
+
+def test_reader_excludes_figures_when_source_visual_qa_failed(tmp_path) -> None:
+    assert _publication_figure_exclusion_reason(tmp_path) is None
+    (tmp_path / "manifest.json").write_text(
+        '{"readiness": {"publication_figure_visual_qa_passed": false}}',
+        encoding="utf-8",
+    )
+    assert (
+        _publication_figure_exclusion_reason(tmp_path)
+        == "source_run_publication_figure_visual_qa_failed"
+    )
+    (tmp_path / "manifest.json").write_text(
+        '{"readiness": {"publication_figure_visual_qa_passed": true}}',
+        encoding="utf-8",
+    )
+    assert _publication_figure_exclusion_reason(tmp_path) is None
 
 
 def test_complete_reader_facing_manuscript_passes() -> None:

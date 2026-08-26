@@ -599,6 +599,11 @@ _ZH_COUNTED_PATTERN = (
 _NUMERIC_IN_PROSE_RE = re.compile(
     r"(?<![A-Za-z_\d.])"  # avoid mid-identifier digits
     r"(?P<value>"
+    r"(?:"  # --- Unicode scientific notation: 1 × 10⁻⁵² ---
+    r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)\s*[×x]\s*"
+    r"10[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+"
+    r")"
+    r"|"
     r"(?:"  # --- general numeric form ---
     r"[-+]?"
     r"(?:"
@@ -913,23 +918,53 @@ def _walk_numeric_leaves_with_effect_scale(
     prefix: str = "",
     inherited_effect_scale: Any = None,
 ) -> List[Tuple[str, str, float, Any]]:
-    """Walk numeric leaves while carrying a row-local effect-measure label."""
+    """Walk numeric leaves while carrying a row-local effect-measure label.
+
+    An effect scale is scoped to the mapping that declares it.  It may flow
+    through a list of homogeneous rows, but it does not flow through an
+    arbitrary nested mapping: nested result blocks can contain a different
+    estimand and must declare or expose their own scale.  A row that contains
+    an explicit ratio field (for example ``hazard_ratio`` beside ``ci_low``)
+    exposes enough local identity for its generic interval fields.
+    """
 
     out: List[Tuple[str, str, float, Any]] = []
     local_effect_scale = inherited_effect_scale
     if isinstance(obj, dict):
+        declared_here = None
         for key in ("effect_scale", "effect_measure"):
             candidate = obj.get(key)
             if candidate not in (None, ""):
-                local_effect_scale = candidate
+                declared_here = candidate
                 break
+        if declared_here is None:
+            sibling_scales = [
+                scale
+                for field, scale in (
+                    ("odds_ratio", "odds_ratio"),
+                    ("hazard_ratio", "hazard_ratio"),
+                    ("risk_ratio", "risk_ratio"),
+                    ("relative_risk", "risk_ratio"),
+                )
+                if obj.get(field) not in (None, "")
+            ]
+            if len(set(sibling_scales)) == 1:
+                declared_here = sibling_scales[0]
+        if declared_here is not None:
+            local_effect_scale = declared_here
         for key, value in obj.items():
             child = f"{prefix}.{key}" if prefix else str(key)
+            # Mapping boundaries are estimand boundaries.  Lists retain the
+            # current scale because they commonly encode homogeneous rows or
+            # a two-element interval owned by this mapping.
+            child_effect_scale = (
+                None if isinstance(value, dict) else local_effect_scale
+            )
             out.extend(
                 _walk_numeric_leaves_with_effect_scale(
                     value,
                     child,
-                    local_effect_scale,
+                    child_effect_scale,
                 )
             )
     elif isinstance(obj, (list, tuple)):
@@ -2912,7 +2947,7 @@ class EvidenceStore:
                 if abs(candidate) > 1e-9:
                     rel = abs(candidate - canonical) / abs(candidate)
                 else:
-                    rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
+                    rel = float("inf")
                 abs_window = max(
                     display_abs_tol, window * max(abs(candidate), abs(canonical))
                 )
@@ -3081,6 +3116,20 @@ class EvidenceStore:
             record.evidence_id: record
             for record in self.current_verified_records(per_step_records)
         }
+        current_identity_scales: Dict[Tuple[str, str, str], Any] = {}
+        for raw in per_step_records:
+            step_id = str(raw.get("step_id") or "").strip()
+            evidence_id = str(raw.get("step_summary_evidence_id") or "").strip()
+            summary = raw.get("step_summary")
+            if not step_id or not evidence_id or not isinstance(summary, Mapping):
+                continue
+            for path, _literal, _canonical, effect_scale in (
+                _walk_numeric_leaves_with_effect_scale(
+                    summary,
+                    inherited_effect_scale=summary.get("effect_scale"),
+                )
+            ):
+                current_identity_scales[(step_id, evidence_id, path)] = effect_scale
         active_ids_by_step = active_step_evidence_ids_by_step(per_step_records)
         run_level_contracts = {
             "research_context": ("log", "pipeline"),
@@ -3098,6 +3147,18 @@ class EvidenceStore:
                     record_step == claim_step
                     and claim.evidence_id in active_ids_by_step.get(record_step, set())
                 ):
+                    identity_key = (
+                        claim_step,
+                        claim.evidence_id,
+                        claim.source_field,
+                    )
+                    if identity_key in current_identity_scales:
+                        payload = claim.to_dict()
+                        payload.pop("effect_scale", None)
+                        current_scale = current_identity_scales[identity_key]
+                        if current_scale not in (None, ""):
+                            payload["effect_scale"] = current_scale
+                        claim = NumericClaim.from_dict(payload)
                     authoritative.append(claim)
                 continue
 
