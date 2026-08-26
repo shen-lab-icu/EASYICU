@@ -342,6 +342,41 @@ def _finite(frame: pd.DataFrame, columns: tuple[str, ...]) -> None:
             raise ValueError(f"{column} contains non-finite values")
 
 
+def _measurement_state_label(value: Any) -> str:
+    token = str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    if token in {"observed", "measured", "source_present", "with_source"}:
+        return "Measured"
+    if token in {"no_source", "not_measured", "unmeasured", "source_absent"}:
+        return "Not measured"
+    return str(value or "").strip().replace("_", " ").title()
+
+
+def _evidence_table(
+    *, run_dir: Path, step_id: str, basename: str
+) -> tuple[dict[str, Any], Path]:
+    index_path = run_dir / "evidence/evidence_index.json"
+    rows = json.loads(index_path.read_text(encoding="utf-8"))
+    if not isinstance(rows, list):
+        raise ValueError(f"Evidence index must be a list: {index_path}")
+    matches = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("kind") == "table"
+        and row.get("produced_by_step") == step_id
+        and Path(str(row.get("relative_path") or "")).name.endswith(f"__{basename}")
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected one frozen {step_id}/{basename}; found {len(matches)}"
+        )
+    row = matches[0]
+    source_path = run_dir / str(row["relative_path"])
+    if _sha256(source_path) != row.get("sha256"):
+        raise ValueError(f"Evidence digest mismatch: {source_path}")
+    return row, source_path
+
+
 def _copy_source(frame: pd.DataFrame, path: Path, output: Path) -> str:
     copied = frame.copy()
     for column in ("source_row_index", "source_file", "source_sha256"):
@@ -365,34 +400,14 @@ def _package_article_tables(
     summaries: dict[str, dict[str, Any]] = {}
     for task_id, specs in ARTICLE_TABLE_SPECS.items():
         run_dir = source_root / RUN_RELATIVES[task_id]
-        index_path = run_dir / "evidence/evidence_index.json"
-        rows = json.loads(index_path.read_text(encoding="utf-8"))
-        if not isinstance(rows, list):
-            raise ValueError(f"Evidence index must be a list: {index_path}")
         task_out = output_root / task_id
         task_out.mkdir(parents=True, exist_ok=True)
         placements = {"main": 0, "supplementary": 0}
         contracts: list[str] = []
         for table_id, placement, step_id, basename, title in specs:
-            matches = [
-                row
-                for row in rows
-                if isinstance(row, dict)
-                and row.get("kind") == "table"
-                and row.get("produced_by_step") == step_id
-                and Path(str(row.get("relative_path") or "")).name.endswith(
-                    f"__{basename}"
-                )
-            ]
-            if len(matches) != 1:
-                raise ValueError(
-                    f"{task_id}:{table_id} expected one {step_id}/{basename}; "
-                    f"found {len(matches)}"
-                )
-            row = matches[0]
-            source_path = run_dir / str(row["relative_path"])
-            if _sha256(source_path) != row.get("sha256"):
-                raise ValueError(f"Evidence digest mismatch: {source_path}")
+            row, source_path = _evidence_table(
+                run_dir=run_dir, step_id=step_id, basename=basename
+            )
             packaged_name = f"{table_id}{source_path.suffix.lower()}"
             packaged_path = task_out / packaged_name
             shutil.copy2(source_path, packaged_path)
@@ -1020,6 +1035,7 @@ def _render_landmark_association(
     out_dir: Path,
     exposure_label: str,
     curve_file: str,
+    contrast_path: Path,
     measurement_file: str,
     measurement_is_main: bool,
 ) -> dict[str, Any]:
@@ -1028,10 +1044,13 @@ def _render_landmark_association(
         {
             "absolute_risk": "absolute_risk_context_source_data.csv",
             "curve": curve_file,
-            "robustness": "robustness_summary_source_data.csv",
             "measurement": measurement_file,
         },
     )
+    if not contrast_path.is_file():
+        raise FileNotFoundError(f"Frozen contrast source is missing: {contrast_path}")
+    paths["contrasts"] = contrast_path
+    frames["contrasts"] = pd.read_csv(contrast_path)
     source_files = _copy_frozen_tables(
         out_dir=out_dir, task_id=task_id, paths=paths, frames=frames
     )
@@ -1047,7 +1066,9 @@ def _render_landmark_association(
         )
     _finite(prevalence, ("prevalence_pct", "estimate", "ci_low", "ci_high"))
     _finite(outcomes, ("outcome_risk_pct", "estimate", "ci_low", "ci_high"))
-    labels = ["Measured", "No recorded source"]
+    prevalence = prevalence.reset_index(drop=True)
+    outcomes = outcomes.reset_index(drop=True)
+    labels = [_measurement_state_label(value) for value in prevalence["group_value"]]
     colors = [palette["blue"], palette["neutral"]]
     fig, axes = plt.subplots(
         1, 2, figsize=(183 / 25.4, 82 / 25.4), constrained_layout=True
@@ -1056,7 +1077,7 @@ def _render_landmark_association(
     axes[0].bar(positions, prevalence["prevalence_pct"], color=colors)
     axes[0].set_xticks(positions, labels)
     axes[0].set_ylabel("Cohort share (%)")
-    axes[0].set_title(f"{exposure_label} source state", loc="left", pad=10)
+    axes[0].set_title(f"{exposure_label} measurement status", loc="left", pad=10)
     add_panel_label(axes[0], "a", x=-0.12, y=1.04, fontsize=8.0)
     risk = outcomes["outcome_risk_pct"].to_numpy(dtype=float)
     low = 100.0 * outcomes["ci_low"].to_numpy(dtype=float)
@@ -1081,11 +1102,11 @@ def _render_landmark_association(
         panels=[
             {
                 "panel_id": "a",
-                "title": f"{exposure_label} source state",
+                "title": f"{exposure_label} measurement status",
                 "role": "cohort_accounting",
                 "article_role": "cohort_accounting",
                 "chart_type": "source_state_bar",
-                "claim": "Measured and no-recorded-source states exhaust the frozen denominator.",
+                "claim": "Measured and not-measured states exhaust the frozen denominator; this is measurement availability, not structural source absence.",
                 "evidence_ids": [_sha256(paths["absolute_risk"])],
                 "metadata": {
                     "placement": "main",
@@ -1107,14 +1128,23 @@ def _render_landmark_association(
             },
         ],
         source_data=[source_files["absolute_risk"]],
-        core_claim=f"{exposure_label} availability and observed outcome risk are shown before the continuous association.",
+        core_claim=f"{exposure_label} measurement availability and observed outcome risk are shown before the continuous association.",
         statistics_note="Source-state prevalence, mortality risk and 95% confidence intervals are copied from the frozen absolute-risk context table.",
     )
 
     curve = frames["curve"].copy().sort_values("exposure_value")
-    robustness = frames["robustness"].copy()
+    contrasts = frames["contrasts"].copy().sort_values("exposure_value")
     _finite(curve, ("exposure_value", "adjusted_odds_ratio", "ci_low", "ci_high"))
-    _finite(robustness, ("range_low", "range_high", "total_specs", "converged_specs"))
+    _finite(
+        contrasts,
+        (
+            "exposure_value",
+            "reference_exposure_value",
+            "adjusted_odds_ratio",
+            "ci_low",
+            "ci_high",
+        ),
+    )
     if (
         not (curve["ci_low"] <= curve["adjusted_odds_ratio"]).all()
         or not (curve["adjusted_odds_ratio"] <= curve["ci_high"]).all()
@@ -1146,40 +1176,54 @@ def _render_landmark_association(
     axes[0].set_ylabel("Adjusted mortality odds ratio (95% CI)")
     axes[0].set_title("Continuous dose-response", loc="left", pad=10)
     add_panel_label(axes[0], "a", x=-0.12, y=1.04, fontsize=8.0)
-    positions = np.arange(len(robustness))
-    axes[1].hlines(
+    if contrasts["reference_exposure_value"].nunique() != 1:
+        raise ValueError(f"{task_id} contrast rows do not share one reference")
+    if (
+        not (contrasts["ci_low"] <= contrasts["adjusted_odds_ratio"]).all()
+        or not (contrasts["adjusted_odds_ratio"] <= contrasts["ci_high"]).all()
+    ):
+        raise ValueError(f"{task_id} contrast intervals are reversed")
+    positions = np.arange(len(contrasts))
+    contrast_estimates = contrasts["adjusted_odds_ratio"].to_numpy(dtype=float)
+    contrast_low = contrasts["ci_low"].to_numpy(dtype=float)
+    contrast_high = contrasts["ci_high"].to_numpy(dtype=float)
+    axes[1].errorbar(
+        contrast_estimates,
         positions,
-        robustness["range_low"],
-        robustness["range_high"],
+        xerr=np.vstack(
+            (contrast_estimates - contrast_low, contrast_high - contrast_estimates)
+        ),
+        fmt="o",
         color=palette["orange"],
-        linewidth=2,
-    )
-    axes[1].plot(
-        robustness["range_low"], positions, "|", color=palette["orange"], markersize=8
-    )
-    axes[1].plot(
-        robustness["range_high"], positions, "|", color=palette["orange"], markersize=8
+        capsize=2.5,
     )
     axes[1].axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
     axes[1].set_xscale("log")
     axes[1].set_xlim(
-        max(
-            0.85 * min(1.0, float(robustness["range_low"].min())),
-            np.finfo(float).tiny,
-        ),
-        1.12 * max(1.0, float(robustness["range_high"].max())),
+        max(0.85 * min(1.0, float(contrast_low.min())), np.finfo(float).tiny),
+        1.12 * max(1.0, float(contrast_high.max())),
+    )
+    reference = float(contrasts["reference_exposure_value"].iloc[0])
+    exposure_unit = (
+        exposure_label.rsplit("(", 1)[1].rstrip(")")
+        if "(" in exposure_label and exposure_label.endswith(")")
+        else "exposure units"
     )
     axes[1].set_yticks(
-        positions, [str(value).replace("_", " ") for value in robustness["axis"]]
+        positions,
+        [
+            f"{float(value):g} vs {reference:g} {exposure_unit}"
+            for value in contrasts["exposure_value"]
+        ],
     )
     axes[1].invert_yaxis()
-    axes[1].set_xlabel("Registered odds-ratio range")
-    axes[1].set_title("Robustness axes", loc="left", pad=10)
+    axes[1].set_xlabel("Adjusted mortality odds ratio (95% CI)")
+    axes[1].set_title("Selected contrasts vs reference", loc="left", pad=10)
     add_panel_label(axes[1], "b", x=-0.14, y=1.04, fontsize=8.0)
     figure_files += _save(
         fig,
         out_dir=out_dir,
-        product=f"{task_id}_main_figure_2_continuous_association_and_robustness",
+        product=f"{task_id}_main_figure_2_continuous_association_and_contrasts",
         height_mm=90.0,
         panels=[
             {
@@ -1197,21 +1241,23 @@ def _render_landmark_association(
             },
             {
                 "panel_id": "b",
-                "title": "Robustness axes",
-                "role": "robustness",
-                "article_role": "robustness",
-                "chart_type": "specification_range",
-                "claim": "The full source ranges for every registered robustness axis are shown without inventing a midpoint estimate.",
-                "evidence_ids": [_sha256(paths["robustness"])],
+                "title": "Selected contrasts vs reference",
+                "role": "primary_estimand",
+                "article_role": "primary_estimand",
+                "chart_type": "contrast_forest",
+                "claim": "All displayed contrasts use the same fitted curve, effect scale and frozen reference value.",
+                "evidence_ids": [_sha256(paths["contrasts"])],
                 "metadata": {
                     "placement": "main",
-                    "source_data": [source_files["robustness"]],
+                    "source_data": [source_files["contrasts"]],
+                    "effect_comparison_authorized": True,
+                    "contrast_reference": reference,
                 },
             },
         ],
-        source_data=[source_files["curve"], source_files["robustness"]],
-        core_claim=f"The continuous {exposure_label.lower()} association and registered robustness ranges are displayed as distinct evidence.",
-        statistics_note="The curve and confidence band use every frozen grid row. Robustness bars show source minima and maxima, not newly calculated effect estimates.",
+        source_data=[source_files["curve"], source_files["contrasts"]],
+        core_claim=f"The continuous {exposure_label.lower()} association and two prespecified contrasts sharing one reference are displayed as primary evidence.",
+        statistics_note="The curve and confidence band use every frozen grid row. Contrast points and 95% confidence intervals are copied from the frozen registered contrast table; no robustness-summary envelope is plotted as an effect interval.",
     )
 
     measurement = frames["measurement"].copy()
@@ -1228,6 +1274,11 @@ def _render_landmark_association(
         out_dir / f"{task_id}_measurement_display_source_data.csv",
     )
     ordered = measurement.sort_values("measured_pct_display")
+    measurement_label_column = (
+        "variable" if "variable" in ordered.columns else "concept"
+    )
+    if measurement_label_column not in ordered.columns:
+        raise ValueError(f"{task_id} measurement audit has no variable label column")
     fig, ax = plt.subplots(figsize=(183 / 25.4, 105 / 25.4), constrained_layout=True)
     positions = np.arange(len(ordered))
     ax.barh(
@@ -1243,7 +1294,8 @@ def _render_landmark_association(
         label="Repeated measurement",
     )
     ax.set_yticks(
-        positions, [str(value).replace("_", " ") for value in ordered["variable"]]
+        positions,
+        [str(value).replace("_", " ") for value in ordered[measurement_label_column]],
     )
     ax.set_xlim(0, 100)
     ax.set_xlabel("Eligible records (%)")
@@ -2112,24 +2164,36 @@ def main() -> int:
     output_root.mkdir(parents=True, exist_ok=True)
 
     e1 = _render_e1(visual_source_root / "e1", output_root / "e1")
+    _, e2_contrast_path = _evidence_table(
+        run_dir=source_root / RUN_RELATIVES["e2"],
+        step_id="primary_adjusted_association",
+        basename="e2_landmark_rcs_contrasts.csv",
+    )
     e2 = _render_landmark_association(
         task_id="e2",
         source_dir=visual_source_root / "e2",
         out_dir=output_root / "e2",
         exposure_label="Maximum lactate (mmol/L)",
         curve_file="e2_landmark_rcs_curve_source_data.csv",
+        contrast_path=e2_contrast_path,
         measurement_file="measurement_process_source_data.csv",
         measurement_is_main=False,
     )
     e3_run = source_root / E3_RUN_RELATIVE
     m2_run = source_root / M2_RUN_RELATIVE
     e3 = _render_e3(e3_run, output_root / "e3")
+    _, m1_contrast_path = _evidence_table(
+        run_dir=source_root / RUN_RELATIVES["m1"],
+        step_id="primary_adjusted_estimate",
+        basename="m1_landmark_bilirubin_contrasts.csv",
+    )
     m1 = _render_landmark_association(
         task_id="m1",
         source_dir=visual_source_root / "m1",
         out_dir=output_root / "m1",
         exposure_label="Maximum bilirubin (mg/dL)",
         curve_file="m1_landmark_bilirubin_curve_source_data.csv",
+        contrast_path=m1_contrast_path,
         measurement_file="measurement_process_audit_source_data.csv",
         measurement_is_main=True,
     )

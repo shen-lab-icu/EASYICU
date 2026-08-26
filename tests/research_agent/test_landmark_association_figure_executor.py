@@ -187,9 +187,14 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     assert [panel["metadata"]["chart_type"] for panel in contract["panels"]] == [
         "marginal_effect_panel",
         "dot_interval_absolute_risk",
-        "specification_grid",
+        "sensitivity_coverage_matrix",
         "availability_panel",
     ]
+    robustness_panel = contract["panels"][2]
+    assert robustness_panel["metadata"]["effect_comparison_authorized"] is False
+    assert robustness_panel["metadata"]["reason_code"] == (
+        "ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED"
+    )
     step = AnalysisStep(
         step_id="display_suite",
         planned_analysis_role="auxiliary",

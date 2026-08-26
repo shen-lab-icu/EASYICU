@@ -536,11 +536,14 @@ def test_association_scientific_sensitivity_contract_shapes_and_renders(
     assert panels["scientific_sensitivity"]["metadata"]["source_products"] == [
         "table:scientific_sensitivity"
     ]
-    assert validate_step_planned_figure_contract_binding(
-        step=shaped_figure,
-        out_dir=out_dir,
-        step_summary=summary,
-    ) == []
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=shaped_figure,
+            out_dir=out_dir,
+            step_summary=summary,
+        )
+        == []
+    )
 
 
 def test_cohort_balance_association_profile_selects_and_renders(
@@ -668,9 +671,7 @@ def test_balance_association_profile_shapes_selects_and_renders(
         figure_product="primary_figure_suite",
         input_keys=BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     )
-    assert summary["deterministic_standard_analysis"] == (
-        "balance_association_figure"
-    )
+    assert summary["deterministic_standard_analysis"] == ("balance_association_figure")
     contract = json.loads(
         (out_dir / "primary_figure_suite.figure_contract.json").read_text()
     )
@@ -680,11 +681,14 @@ def test_balance_association_profile_shapes_selects_and_renders(
         "robustness",
         "robustness",
     ]
-    assert validate_step_planned_figure_contract_binding(
-        step=step,
-        out_dir=out_dir,
-        step_summary=summary,
-    ) == []
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=step,
+            out_dir=out_dir,
+            step_summary=summary,
+        )
+        == []
+    )
 
 
 def test_absolute_risk_association_profile_covers_article_roles(
@@ -751,11 +755,14 @@ def test_absolute_risk_association_profile_covers_article_roles(
         "robustness",
         "robustness",
     ]
-    assert validate_step_planned_figure_contract_binding(
-        step=step,
-        out_dir=out_dir,
-        step_summary=summary,
-    ) == []
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=step,
+            out_dir=out_dir,
+            step_summary=summary,
+        )
+        == []
+    )
 
 
 def test_association_summary_contract_renders_ranges_without_point_estimates(
@@ -805,8 +812,9 @@ def test_association_summary_contract_renders_ranges_without_point_estimates(
         (out_dir / "publication_figure_suite.figure_contract.json").read_text()
     )
     panel_c = next(panel for panel in contract["panels"] if panel["panel_id"] == "C")
-    assert panel_c["title"] == "Robustness ranges"
+    assert panel_c["title"] == "Sensitivity-analysis coverage"
     assert panel_c["role"] == "robustness"
+    assert panel_c["metadata"]["chart_type"] == "sensitivity_coverage_matrix"
     assert panel_c["metadata"]["source_products"] == ["table:robustness_summary"]
 
 
@@ -815,9 +823,7 @@ def test_association_matrix_and_summary_contract_has_two_robustness_panels(
 ) -> None:
     frames = _association_frames()
     summary_frames = _association_summary_frames()
-    frames["table:robustness_summary"] = summary_frames[
-        "table:robustness_summary"
-    ]
+    frames["table:robustness_summary"] = summary_frames["table:robustness_summary"]
     frames.pop("table:measurement_missingness")
     bindings = {}
     for key, frame in frames.items():
@@ -862,20 +868,14 @@ def test_association_matrix_and_summary_contract_has_two_robustness_panels(
         (out_dir / "publication_figure_suite.figure_contract.json").read_text()
     )
     panels = {panel["panel_id"]: panel for panel in contract["panels"]}
-    assert panels["A"]["title"] == (
-        "Exposure prevalence and observed outcome risk"
-    )
+    assert panels["A"]["title"] == ("Exposure prevalence and observed outcome risk")
     assert panels["A"]["metadata"]["source_products"] == [
         "table:exposure_outcome_distribution"
     ]
     assert panels["C"]["role"] == "robustness"
     assert panels["D"]["role"] == "robustness"
-    assert panels["C"]["metadata"]["source_products"] == [
-        "table:robustness_matrix"
-    ]
-    assert panels["D"]["metadata"]["source_products"] == [
-        "table:robustness_summary"
-    ]
+    assert panels["C"]["metadata"]["source_products"] == ["table:robustness_matrix"]
+    assert panels["D"]["metadata"]["source_products"] == ["table:robustness_summary"]
 
 
 def test_association_measurement_contract_selects_and_renders_all_four_tables(
@@ -891,9 +891,7 @@ def test_association_measurement_contract_selects_and_renders_all_four_tables(
         {
             **_step().model_dump(mode="json"),
             "step_id": "publication_figure_suite",
-            "inputs": list(
-                COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS
-            ),
+            "inputs": list(COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS),
             "expected_outputs": ["figure:publication_figure_suite"],
             "input_consumption_contracts": [
                 {"input_key": key, "mode": "all_rows"}
@@ -954,9 +952,7 @@ def test_association_measurement_contract_fails_closed_on_bad_component_schema(
     step = AnalysisStep.model_validate(
         {
             **_step().model_dump(mode="json"),
-            "inputs": list(
-                COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS
-            ),
+            "inputs": list(COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS),
             "input_consumption_contracts": [
                 {"input_key": key, "mode": "all_rows"}
                 for key in COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS
