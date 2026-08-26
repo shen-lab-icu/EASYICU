@@ -83,6 +83,20 @@ class _AuthorityBase(BaseModel):
         observed = hashlib.sha256(_canonical_bytes(body)).hexdigest()
         if (
             observed != self.execution_contract_sha256
+            and body.get("authority_kind") == "landmark_spline_association"
+            and body.get("schema_version")
+            == "easyicu.landmark_spline_runtime_authority/1"
+            and body.get("adjusted_absolute_risk_product") is None
+            and body.get("population_flow_product") is None
+            and body.get("variable_opportunity_sensitivity_product") is None
+        ):
+            legacy = dict(body)
+            legacy.pop("adjusted_absolute_risk_product", None)
+            legacy.pop("population_flow_product", None)
+            legacy.pop("variable_opportunity_sensitivity_product", None)
+            observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
+        if (
+            observed != self.execution_contract_sha256
             and body.get("authority_kind") == "landmark_survival_suite"
             and body.get("time_varying_effect_method") is None
             and body.get("time_varying_interval_cutpoints_days") == []
@@ -561,7 +575,10 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
 
 
 class LandmarkSplineRuntimeAuthority(_AuthorityBase):
-    schema_version: Literal["easyicu.landmark_spline_runtime_authority/1"]
+    schema_version: Literal[
+        "easyicu.landmark_spline_runtime_authority/1",
+        "easyicu.landmark_spline_runtime_authority/2",
+    ]
     authority_kind: Literal["landmark_spline_association"]
     plan_method: Literal["signed_landmark_restricted_cubic_spline"]
     plan_intent: str
@@ -575,6 +592,9 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     required_adjustment_columns: tuple[str, ...]
     categorical_adjustment_columns: tuple[str, ...]
     alternative_exposure_columns: tuple[str, ...] = ()
+    adjusted_absolute_risk_product: str | None = None
+    population_flow_product: str | None = None
+    variable_opportunity_sensitivity_product: str | None = None
     spline_knot_quantiles: tuple[float, float, float]
     spline_reference: Literal["median_in_primary_population"]
     curve_quantile_range: tuple[float, float]
@@ -637,6 +657,42 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             raise ValueError(
                 "landmark spline authority permits one definition-sensitivity table"
             )
+        reporting_products = (
+            self.adjusted_absolute_risk_product,
+            self.population_flow_product,
+            self.variable_opportunity_sensitivity_product,
+        )
+        if self.schema_version.endswith("/1"):
+            if any(value is not None for value in reporting_products):
+                raise ValueError(
+                    "landmark spline v1 authority cannot declare v2 reporting products"
+                )
+        else:
+            if (
+                self.adjusted_absolute_risk_product is None
+                or self.population_flow_product is None
+            ):
+                raise ValueError(
+                    "landmark spline v2 authority requires adjusted-risk and population-flow products"
+                )
+            declared = set(self.plan_outputs)
+            missing_reporting = sorted(
+                value for value in reporting_products if value is not None and value not in declared
+            )
+            if missing_reporting:
+                raise ValueError(
+                    "landmark spline reporting products must be declared in plan_outputs"
+                )
+            if any(
+                value is not None and not value.startswith("table:")
+                for value in reporting_products
+            ):
+                raise ValueError(
+                    "landmark spline reporting products must be typed tables"
+                )
+            values = [value for value in reporting_products if value is not None]
+            if len(values) != len(set(values)):
+                raise ValueError("landmark spline reporting products must be unique")
         self._verify_digest()
         return self
 

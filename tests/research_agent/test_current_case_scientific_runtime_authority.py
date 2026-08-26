@@ -289,6 +289,19 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     assert int(sensitivity.loc[0, "additional_spline_parameters"]) > 0
     assert 0.0 <= sensitivity.loc[0, "nonlinearity_p_value"] <= 1.0
     assert sensitivity.loc[0, "likelihood_ratio_statistic"] >= 0.0
+    absolute_risk = pd.read_csv(tmp_path / "e2_adjusted_absolute_risk.csv")
+    assert len(absolute_risk) == authority.curve_points
+    assert absolute_risk["adjusted_absolute_risk"].between(0.0, 1.0).all()
+    assert (absolute_risk["ci_low"] <= absolute_risk["adjusted_absolute_risk"]).all()
+    assert (absolute_risk["adjusted_absolute_risk"] <= absolute_risk["ci_high"]).all()
+    assert absolute_risk["standardization_n"].eq(n - 1).all()
+    population_flow = pd.read_csv(tmp_path / "e2_landmark_population_flow.csv")
+    assert population_flow["n"].tolist() == [n, n, n, n - 1]
+    variable_opportunity = pd.read_csv(
+        tmp_path / "e2_variable_opportunity_sensitivity.csv"
+    )
+    assert int(variable_opportunity.loc[0, "n"]) == n - 1
+    assert variable_opportunity.loc[0, "adjusted_odds_ratio"] > 0
 
 
 def test_m1_reuses_generic_landmark_spline_with_definition_sensitivity(

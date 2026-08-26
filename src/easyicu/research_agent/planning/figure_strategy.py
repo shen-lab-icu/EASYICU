@@ -252,7 +252,12 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "validation",
                 "The figure suite must distinguish development, temporal, site, or external validation.",
-                ("split_diagram", "validation_panel", "database_small_multiples"),
+                (
+                    "split_diagram",
+                    "validation_panel",
+                    "database_small_multiples",
+                    "metric_dot_interval",
+                ),
                 search_terms=("validation", "external", "temporal", "test set"),
             ),
             _role(
@@ -604,6 +609,22 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
         # caught by the distinct-chart-family minimum below.
         return True
     accepted = {item.replace(" ", "_") for item in role.acceptable_chart_types}
+    # Deterministic renderers predate the article-strategy vocabulary and a
+    # few of their precise chart names carry harmless geometry suffixes.  Keep
+    # this translation in the strategy owner so a renderer does not have to
+    # lie about its actual geometry and the audit does not fail a valid panel
+    # merely because one side says ``forest`` and the other ``forest_plot``.
+    # This is intentionally a small, one-way map: a selection-criterion curve,
+    # for example, must not masquerade as a phenotype profile or stability
+    # analysis.
+    renderer_chart_aliases = {
+        "grouped_absolute_risk": "dot_interval_absolute_risk",
+        "forest_plot": "forest",
+        "sensitivity_forest_plot": "sensitivity_forest",
+        "availability_heatmap": "coverage_heatmap",
+        "rmst_difference_forest": "risk_difference_panel",
+    }
+    chart_type = renderer_chart_aliases.get(chart_type, chart_type)
     if chart_type in accepted:
         return True
     # Inferred chart types are coarse families; map each family onto every

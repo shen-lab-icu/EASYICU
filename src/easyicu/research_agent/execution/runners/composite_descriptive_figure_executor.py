@@ -220,7 +220,9 @@ def _binding_carries_required_columns(binding: Any, input_key: str) -> bool:
 
 def _association_sensitivity_input(inputs: tuple[str, ...]) -> str | None:
     values = tuple(str(value) for value in inputs)
-    extra = [value for value in values if value not in _ASSOCIATION_SENSITIVITY_FIXED_INPUTS]
+    extra = [
+        value for value in values if value not in _ASSOCIATION_SENSITIVITY_FIXED_INPUTS
+    ]
     if (
         len(values) == 4
         and len(values) == len(set(values))
@@ -269,7 +271,9 @@ def composite_descriptive_figure_executor_owns_step(
             if not _binding_carries_required_columns(resolved_bindings.get(key), key):
                 return False
         binding = resolved_bindings.get(dynamic_sensitivity_input)
-        contract = binding.get("product_contract") if isinstance(binding, Mapping) else None
+        contract = (
+            binding.get("product_contract") if isinstance(binding, Mapping) else None
+        )
         columns = contract.get("columns") if isinstance(contract, Mapping) else None
         return bool(
             isinstance(columns, list)
@@ -323,6 +327,7 @@ def composite_descriptive_figure_executor_code(
             figure_product={product!r},
             input_keys={composite_descriptive_figure_consumed_input_keys(step)!r},
             display_labels={dict(display_labels or {})!r},
+            panel_placements={{{", ".join(f"{panel.panel_id!r}: {panel.placement!r}" for panel in step.figure_panels)}}},
         )
         """
     ).strip()
@@ -407,6 +412,7 @@ def run_composite_descriptive_figure(
     figure_product: str,
     input_keys: tuple[str, ...] = COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS,
     display_labels: Mapping[str, str] | None = None,
+    panel_placements: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Render four source-bound descriptive panels without model-authored code."""
 
@@ -436,16 +442,20 @@ def run_composite_descriptive_figure(
         if missing:
             raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
 
-    if tuple(input_keys) in {
-        COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
-        COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
-        COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
-        COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
-        COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
-        COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
-        BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
-        ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
-    } or sensitivity_key is not None:
+    if (
+        tuple(input_keys)
+        in {
+            COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS,
+            COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+            COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
+            COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
+            COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
+            COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+            BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+            ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+        }
+        or sensitivity_key is not None
+    ):
         from .association_publication_figure_renderer import (
             render_association_publication_figure,
         )
@@ -457,6 +467,7 @@ def run_composite_descriptive_figure(
             figure_product=figure_product,
             input_keys=input_keys,
             display_labels=display_labels,
+            panel_placements=panel_placements,
         )
 
     flow = bound["table:cohort_flow"].frame.copy()

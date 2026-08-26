@@ -22,6 +22,7 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...figures.display_labels import display_label
+from ...figures.robustness import draw_robustness_coverage
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
@@ -38,12 +39,8 @@ _REQUIRED_COLUMNS = {
     "table:absolute_risk_context": frozenset(
         {"label", "estimate_type", "estimate", "ci_low", "ci_high"}
     ),
-    "table:robustness_summary": frozenset(
-        {"axis", "total_specs", "converged_specs", "range_low", "range_high"}
-    ),
-    "measurement_process": frozenset(
-        {"concept", "n_total", "measured_one_n"}
-    ),
+    "table:robustness_summary": frozenset({"axis", "total_specs", "converged_specs"}),
+    "measurement_process": frozenset({"concept", "n_total", "measured_one_n"}),
 }
 
 
@@ -79,7 +76,8 @@ def _measurement_input(inputs: list[str] | tuple[str, ...]) -> str | None:
         value
         for value in inputs
         if value.startswith("table:")
-        and value.partition(":")[2] in {"measurement_process", "measurement_process_audit"}
+        and value.partition(":")[2]
+        in {"measurement_process", "measurement_process_audit"}
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -150,7 +148,11 @@ def landmark_association_figure_executor_owns_step(
         _binding_has_columns(
             resolved_bindings.get(key),
             _REQUIRED_COLUMNS[
-                "curve" if key == curve else "measurement_process" if key == measurement else key
+                "curve"
+                if key == curve
+                else "measurement_process"
+                if key == measurement
+                else key
             ],
         )
         for key in profile
@@ -179,6 +181,7 @@ def landmark_association_figure_executor_code(step: AnalysisStep) -> str:
             step_id={step.step_id!r},
             figure_product={product!r},
             input_keys={profile!r},
+            panel_placements={{{", ".join(f"{panel.panel_id!r}: {panel.placement!r}" for panel in step.figure_panels)}}},
         )
         """
     ).strip()
@@ -256,6 +259,7 @@ def run_landmark_association_figure(
     step_id: str,
     figure_product: str,
     input_keys: tuple[str, ...],
+    panel_placements: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Render four exact source tables without fitting or filtering a model."""
 
@@ -286,7 +290,11 @@ def run_landmark_association_figure(
         (measurement_key, process),
     ):
         required = _REQUIRED_COLUMNS[
-            "curve" if key == curve_key else "measurement_process" if key == measurement_key else key
+            "curve"
+            if key == curve_key
+            else "measurement_process"
+            if key == measurement_key
+            else key
         ]
         missing = required - set(frame.columns)
         if missing:
@@ -302,7 +310,6 @@ def run_landmark_association_figure(
     if shown_risk.empty:
         raise ValueError("absolute-risk context has no displayable estimate rows")
     _require_finite_columns(shown_risk, ("estimate", "ci_low", "ci_high"))
-    _require_finite_columns(robustness, ("range_low", "range_high"))
     _require_finite_columns(process, ("n_total", "measured_one_n"))
 
     source_files: list[str] = []
@@ -320,17 +327,23 @@ def run_landmark_association_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
+    placements = dict(panel_placements or {})
+    show_process = placements.get("measurement_process", "main") == "main"
     fig = plt.figure(figsize=(183 / 25.4, 132 / 25.4), constrained_layout=True)
-    grid = fig.add_gridspec(
-        2,
-        3,
-        width_ratios=(1.0, 1.0, 0.86),
-        height_ratios=(1.12, 0.88),
-    )
-    ax_curve = fig.add_subplot(grid[0, :2])
-    ax_context = fig.add_subplot(grid[0, 2])
-    ax_robustness = fig.add_subplot(grid[1, :2])
-    ax_process = fig.add_subplot(grid[1, 2])
+    if show_process:
+        grid = fig.add_gridspec(
+            2, 3, width_ratios=(1.0, 1.0, 0.86), height_ratios=(1.12, 0.88)
+        )
+        ax_curve = fig.add_subplot(grid[0, :2])
+        ax_context = fig.add_subplot(grid[0, 2])
+        ax_robustness = fig.add_subplot(grid[1, :2])
+        ax_process = fig.add_subplot(grid[1, 2])
+    else:
+        grid = fig.add_gridspec(2, 2, height_ratios=(1.12, 0.88))
+        ax_curve = fig.add_subplot(grid[0, :])
+        ax_context = fig.add_subplot(grid[1, 0])
+        ax_robustness = fig.add_subplot(grid[1, 1])
+        ax_process = None
 
     ax = ax_curve
     display_curve = curve.sort_values(exposure_column, kind="stable")
@@ -432,76 +445,43 @@ def run_landmark_association_figure(
     add_panel_label(ax, "b", x=-0.15, y=1.04, fontsize=8.0)
 
     ax = ax_robustness
-    total_specs = pd.to_numeric(robustness["total_specs"]).to_numpy(dtype=float)
-    converged_specs = pd.to_numeric(robustness["converged_specs"]).to_numpy(
-        dtype=float
+    robustness_display = draw_robustness_coverage(
+        ax,
+        robustness,
+        color=palette["blue"],
+        label_formatter=lambda value: display_label(value),
     )
-    if (
-        (total_specs <= 0).any()
-        or (converged_specs < 0).any()
-        or (converged_specs > total_specs).any()
-    ):
-        raise ValueError("robustness specification counts do not nest")
-    positions = np.arange(len(robustness))
-    for position, total, converged, low_value, high_value in zip(
-        positions,
-        total_specs,
-        converged_specs,
-        pd.to_numeric(robustness["range_low"]),
-        pd.to_numeric(robustness["range_high"]),
-        strict=True,
-    ):
-        ax.plot(
-            [float(low_value), float(high_value)],
-            [position, position],
-            color=palette["blue"],
-            linewidth=2.2,
-            solid_capstyle="round",
-        )
-        ax.scatter(
-            [(float(low_value) + float(high_value)) / 2.0],
-            [position],
-            color=palette["blue"],
-            s=14,
-            zorder=3,
-        )
-        ax.text(
-            float(high_value),
-            position,
-            f"  {int(converged)}/{int(total)} fitted",
-            va="center",
-            ha="left",
-            fontsize=5.7,
-        )
-    ax.set_yticks(positions, [display_label(value) for value in robustness["axis"]])
-    if (robustness[["range_low", "range_high"]] > 0).all().all():
-        ax.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-    ax.set_xlabel("Reported estimate range")
-    ax.set_title("Prespecified sensitivity analyses", loc="left", pad=7)
     add_panel_label(ax, "c", x=-0.08, y=1.04, fontsize=8.0)
 
-    ax = ax_process
-    denominator = pd.to_numeric(process["n_total"])
-    numerator = pd.to_numeric(process["measured_one_n"])
-    if (
-        (denominator <= 0).any()
-        or (numerator < 0).any()
-        or (numerator > denominator).any()
-    ):
-        raise ValueError("measurement-process counts do not nest")
-    pct = 100.0 * numerator / denominator
-    positions = np.arange(len(process))
-    ax.barh(positions, pct, color=palette["blue_soft"])
-    ax.set_yticks(
-        positions, [display_label(value) for value in process["concept"]], fontsize=5.8
-    )
-    ax.set_xlim(0, 100)
-    ax.set_xlabel("Measured at least once (%)")
-    ax.set_title("Measurement availability", loc="left", pad=7)
-    add_panel_label(ax, "d", x=-0.15, y=1.04, fontsize=8.0)
+    if ax_process is not None:
+        ax = ax_process
+        denominator = pd.to_numeric(process["n_total"])
+        numerator = pd.to_numeric(process["measured_one_n"])
+        if (
+            (denominator <= 0).any()
+            or (numerator < 0).any()
+            or (numerator > denominator).any()
+        ):
+            raise ValueError("measurement-process counts do not nest")
+        pct = 100.0 * numerator / denominator
+        positions = np.arange(len(process))
+        ax.barh(positions, pct, color=palette["blue_soft"])
+        ax.set_yticks(
+            positions,
+            [display_label(value) for value in process["concept"]],
+            fontsize=5.8,
+        )
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("Measured at least once (%)")
+        ax.set_title("Measurement availability", loc="left", pad=7)
+        add_panel_label(ax, "d", x=-0.15, y=1.04, fontsize=8.0)
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
-    panels = landmark_association_composite_panels(profile)
+    panels = tuple(
+        panel
+        for panel in landmark_association_composite_panels(profile)
+        if placements.get(panel.panel_id, "main") == "main"
+    )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
@@ -513,12 +493,24 @@ def run_landmark_association_figure(
         panels=[
             {
                 "panel_id": panel.panel_id,
-                "title": _label(panel.panel_id),
+                "title": (
+                    "Sensitivity-analysis coverage"
+                    if panel.panel_id == "robustness_summary"
+                    else _label(panel.panel_id)
+                ),
                 "role": panel.article_role,
-                "claim": "This panel renders the complete registered source table without model refitting.",
+                "claim": (
+                    "This audit panel reports registered, converged, and independent specification counts without comparing heterogeneous effects."
+                    if panel.panel_id == "robustness_summary"
+                    else "This panel renders the complete registered source table without model refitting."
+                ),
                 "evidence_ids": [evidence[source] for source in panel.source_products],
                 "metadata": {
-                    "chart_type": panel.chart_type,
+                    "chart_type": (
+                        robustness_display["chart_type"]
+                        if panel.panel_id == "robustness_summary"
+                        else panel.chart_type
+                    ),
                     "source_products": list(panel.source_products),
                     "estimate_geometry": (
                         "continuous_fitted_curve_with_95ci"
@@ -529,12 +521,20 @@ def run_landmark_association_figure(
                         f"{source.partition(':')[2]}_source_data.csv"
                         for source in panel.source_products
                     ],
+                    **(
+                        robustness_display
+                        if panel.panel_id == "robustness_summary"
+                        else {}
+                    ),
                 },
             }
             for panel in panels
         ],
         source_data=source_files,
-        statistics_note="All plotted values are direct projections of registered source rows; no model is fit by the renderer.",
+        statistics_note=(
+            "All plotted values are direct projections of registered source rows; no model is fit by the renderer. "
+            "Robustness summaries are audit-only counts. Their source envelope columns are not displayed as confidence intervals or comparable effects."
+        ),
     )
     outputs = save_publication_figure(
         fig,
@@ -567,6 +567,11 @@ def run_landmark_association_figure(
             for key, item in bound.items()
         ],
         "source_data_files": source_files,
+        "supplementary_panel_ids": sorted(
+            panel_id
+            for panel_id, placement in placements.items()
+            if placement == "supplementary"
+        ),
         "figure_files": [
             path.name for key, path in outputs.items() if key != "contract"
         ],

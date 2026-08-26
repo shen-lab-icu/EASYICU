@@ -497,10 +497,10 @@ class RuntimeScientificProjection(_StrictFrozenModel):
             "e1_sepsis3_prevalence_mortality": (
                 "easyicu.association_model_grid_runtime_authority/1"
             ),
-            "e2_lactate_mortality": "easyicu.landmark_spline_runtime_authority/1",
+            "e2_lactate_mortality": "easyicu.landmark_spline_runtime_authority/2",
             "e3_kdigo_gradient": ("easyicu.association_model_grid_runtime_authority/1"),
             "m1_hepatobiliary_missingness": (
-                "easyicu.landmark_spline_runtime_authority/1"
+                "easyicu.landmark_spline_runtime_authority/2"
             ),
             "h1_ventilation_survival": (
                 "easyicu.landmark_survival_runtime_authority/1"
@@ -688,7 +688,7 @@ def _e2_deterministic_execution_contract(
     model = protocol.primary_model
     return build_current_case_scientific_runtime_authority(
         {
-            "schema_version": "easyicu.landmark_spline_runtime_authority/1",
+            "schema_version": "easyicu.landmark_spline_runtime_authority/2",
             "authority_kind": "landmark_spline_association",
             "protocol_content_sha256": case_protocol_content_sha256(protocol),
             "plan_method": "signed_landmark_restricted_cubic_spline",
@@ -700,6 +700,9 @@ def _e2_deterministic_execution_contract(
                 "table:e2_landmark_rcs_curve",
                 "table:e2_landmark_rcs_contrasts",
                 "table:e2_linear_sensitivity",
+                "table:e2_adjusted_absolute_risk",
+                "table:e2_landmark_population_flow",
+                "table:e2_variable_opportunity_sensitivity",
                 "log:e2_scientific_runtime_receipt",
             ],
             "exposure_column": "lact_max",
@@ -711,6 +714,11 @@ def _e2_deterministic_execution_contract(
             "required_adjustment_columns": ["age", "sex", "charlson_first"],
             "categorical_adjustment_columns": ["sex"],
             "alternative_exposure_columns": [],
+            "adjusted_absolute_risk_product": "table:e2_adjusted_absolute_risk",
+            "population_flow_product": "table:e2_landmark_population_flow",
+            "variable_opportunity_sensitivity_product": (
+                "table:e2_variable_opportunity_sensitivity"
+            ),
             "spline_knot_quantiles": list(model.knot_quantiles),
             "spline_reference": "median_in_primary_population",
             "curve_quantile_range": [
@@ -850,7 +858,7 @@ def _m1_deterministic_execution_contract(
 ) -> dict[str, Any]:
     return build_current_case_scientific_runtime_authority(
         {
-            "schema_version": "easyicu.landmark_spline_runtime_authority/1",
+            "schema_version": "easyicu.landmark_spline_runtime_authority/2",
             "authority_kind": "landmark_spline_association",
             "protocol_content_sha256": case_protocol_content_sha256(protocol),
             "plan_method": "signed_landmark_restricted_cubic_spline",
@@ -863,6 +871,8 @@ def _m1_deterministic_execution_contract(
                 "table:m1_landmark_bilirubin_contrasts",
                 "table:m1_linear_sensitivity",
                 "table:m1_exposure_definition_sensitivity",
+                "table:m1_adjusted_absolute_risk",
+                "table:m1_landmark_population_flow",
                 "log:m1_scientific_runtime_receipt",
             ],
             "exposure_column": protocol.primary_exposure_column,
@@ -874,6 +884,9 @@ def _m1_deterministic_execution_contract(
             "required_adjustment_columns": list(protocol.adjustment_set),
             "categorical_adjustment_columns": ["sex"],
             "alternative_exposure_columns": [protocol.alternative_exposure_column],
+            "adjusted_absolute_risk_product": "table:m1_adjusted_absolute_risk",
+            "population_flow_product": "table:m1_landmark_population_flow",
+            "variable_opportunity_sensitivity_product": None,
             "spline_knot_quantiles": [0.10, 0.50, 0.90],
             "spline_reference": "median_in_primary_population",
             "curve_quantile_range": [0.10, 0.90],

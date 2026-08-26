@@ -462,9 +462,7 @@ def test_survival_rescue_from_prior_outputs_builds_compliant_figure(ra, tmp_path
     ]
 
 
-def test_survival_split_figure_never_borrows_an_older_cox_table(
-    ra, tmp_path: Path
-):
+def test_survival_split_figure_never_borrows_an_older_cox_table(ra, tmp_path: Path):
     from easyicu.research_agent.figures.survival import (
         render_survival_bundle_from_prior_outputs,
     )
@@ -692,7 +690,41 @@ def test_prediction_data_quality_accepts_deterministic_audit_chart_types(
 
     assert "data_quality" in status["article_figure_strategy_covered_roles"]
     assert not any(
-        "Figure role data_quality is present but uses unsupported chart type"
-        in error
+        "Figure role data_quality is present but uses unsupported chart type" in error
         for error in status["article_figure_strategy_errors"]
     )
+
+
+@pytest.mark.parametrize(
+    ("family", "role", "chart_type"),
+    [
+        ("association", "descriptive_result", "grouped_absolute_risk"),
+        ("association", "primary_estimand", "forest_plot"),
+        ("association", "robustness", "sensitivity_forest_plot"),
+        ("association", "data_quality", "availability_heatmap"),
+        ("prediction", "validation", "metric_dot_interval"),
+        ("time_to_event", "survival_effect", "rmst_difference_forest"),
+    ],
+)
+def test_strategy_accepts_precise_deterministic_renderer_chart_names(
+    ra, tmp_path: Path, family: str, role: str, chart_type: str
+) -> None:
+    from easyicu.research_agent.planning.figure_strategy import (
+        build_article_figure_strategy,
+        figure_panel_covers_role,
+    )
+
+    context = _context(
+        ra,
+        "Estimate the association between an ICU exposure and mortality.",
+        exposure="exposure",
+    )
+    strategy = build_article_figure_strategy(context, analysis_family=family)
+    expected = next(item for item in strategy.role_strategies if item.role == role)
+    panel = type(
+        "Panel",
+        (),
+        {"article_role": role, "chart_type": chart_type},
+    )()
+
+    assert figure_panel_covers_role(panel, expected)

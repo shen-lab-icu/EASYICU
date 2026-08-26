@@ -15,6 +15,10 @@ from easyicu.research_agent.authority.evidence_store import (
     EvidenceStore,
 )
 from easyicu.research_agent.literature import LiteratureBundle
+from easyicu.research_agent.reporting.article_display_package import (
+    inspect_article_display_package,
+    reader_figure_rows,
+)
 from easyicu.research_agent.reporting.bibtex import render_bibtex
 from easyicu.research_agent.reporting.latex import scaffold_to_latex
 from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
@@ -76,13 +80,53 @@ def _copy_figures(
     return copied
 
 
+def _copy_article_display_figures(
+    *, package_dir: Path, output_dir: Path
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], dict[str, Any]]:
+    """Copy a typed article package into separate reader figure groups."""
+
+    inventory = inspect_article_display_package(package_dir)
+    copied: dict[str, list[tuple[str, str]]] = {"main": [], "supplementary": []}
+    for placement in ("main", "supplementary"):
+        target_dir = output_dir / "figures" / placement
+        for index, row in enumerate(
+            reader_figure_rows(inventory, placement=placement), start=1
+        ):
+            source = package_dir / str(row["preferred_preview_path"])
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / f"{index:02d}_{source.name}"
+            shutil.copy2(source, target)
+            copied[placement].append(
+                (
+                    str(row.get("label") or row.get("display_id") or target.stem),
+                    str(target.relative_to(output_dir)),
+                )
+            )
+    (output_dir / "article_display_inventory.json").write_text(
+        json.dumps(inventory, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return copied["main"], copied["supplementary"], inventory
+
+
 def build_bundle(
-    *, run_dir: Path, output_dir: Path, claim_base_url: str | None = None
+    *,
+    run_dir: Path,
+    output_dir: Path,
+    claim_base_url: str | None = None,
+    article_display_package: Path | None = None,
+    manuscript_source: Path | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError(f"output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    source_path = run_dir / "manuscript_scaffold_bound.md"
+    source_path = (
+        manuscript_source.expanduser().resolve(strict=True)
+        if manuscript_source is not None
+        else run_dir / "manuscript_scaffold_bound.md"
+    )
+    if not source_path.is_file():
+        raise ValueError(f"manuscript source is not a file: {source_path}")
     source_bound = source_path.read_text(encoding="utf-8")
     evidence = EvidenceStore(run_dir, enforcement_mode=EvidenceEnforcementMode.STRICT)
 
@@ -109,9 +153,20 @@ def build_bundle(
     )
 
     literature = _load_literature(run_dir)
-    figure_paths = _copy_figures(
-        run_dir=run_dir, output_dir=output_dir, evidence=evidence
-    )
+    supplementary_figure_paths: list[tuple[str, str]] = []
+    display_inventory: dict[str, Any] | None = None
+    if article_display_package is not None:
+        package_dir = article_display_package.expanduser().resolve(strict=True)
+        figure_paths, supplementary_figure_paths, display_inventory = (
+            _copy_article_display_figures(
+                package_dir=package_dir,
+                output_dir=output_dir,
+            )
+        )
+    else:
+        figure_paths = _copy_figures(
+            run_dir=run_dir, output_dir=output_dir, evidence=evidence
+        )
     tex = scaffold_to_latex(
         markdown=corrected,
         bibliography=literature,
@@ -119,6 +174,7 @@ def build_bundle(
         figure_paths=figure_paths or None,
         draft_watermark=True,
         claim_base_url=claim_base_url,
+        supplementary_figure_paths=supplementary_figure_paths or None,
     )
     tex_path = output_dir / "manuscript_scaffold.tex"
     tex_path.write_text(tex, encoding="utf-8")
@@ -139,12 +195,18 @@ def build_bundle(
     receipt = {
         "schema_version": "easyicu.manuscript-reader-build/1",
         "source_run_id": run_dir.name,
+        "source_manuscript_path": str(source_path),
         "source_manuscript_sha256": _sha256(source_path),
         "corrected_manuscript_sha256": _sha256(markdown_path),
         "provenance_sha256": _sha256(provenance_path),
         "pdf_sha256": _sha256(pdf_result.pdf_path),
         "claim_count": provenance["claim_count"],
-        "figure_count": len(figure_paths),
+        "figure_count": len(figure_paths) + len(supplementary_figure_paths),
+        "main_figure_count": len(figure_paths),
+        "supplementary_figure_count": len(supplementary_figure_paths),
+        "article_display_inventory": (
+            "article_display_inventory.json" if display_inventory is not None else None
+        ),
         "provider_calls": 0,
         "claim_ceiling": "analysis_only",
         "publication_authorized": False,
@@ -168,11 +230,23 @@ def main() -> int:
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--claim-base-url")
+    parser.add_argument(
+        "--article-display-package",
+        type=Path,
+        help="Optional digest-inventoried article figure/table package.",
+    )
+    parser.add_argument(
+        "--manuscript-source",
+        type=Path,
+        help="Optional evidence-bound manuscript projection to rebind against the run.",
+    )
     args = parser.parse_args()
     receipt = build_bundle(
         run_dir=args.run_dir.expanduser().resolve(),
         output_dir=args.output_dir.expanduser().resolve(),
         claim_base_url=args.claim_base_url,
+        article_display_package=args.article_display_package,
+        manuscript_source=args.manuscript_source,
     )
     print(json.dumps(receipt, ensure_ascii=False, indent=2))
     return 0

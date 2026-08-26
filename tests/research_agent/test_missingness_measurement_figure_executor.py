@@ -1057,6 +1057,9 @@ def test_typed_measurement_alias_selects_and_renders_the_single_panel_owner(
     assert contract["panels"][0]["metadata"] == {
         "article_role": "data_quality",
         "chart_type": "availability_panel",
+        "display_policy_reason_code": "ROUTINE_DATA_AUDIT_SUPPLEMENTARY",
+        "display_purpose": "audit",
+        "placement": "supplementary",
         "source_data": ["missingness_data_quality_source_data.csv"],
         "source_products": [input_key],
     }

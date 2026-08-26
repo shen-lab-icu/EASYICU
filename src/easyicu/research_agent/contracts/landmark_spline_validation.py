@@ -35,12 +35,68 @@ class LandmarkSplineFunctionalFormReceipt(BaseModel):
         return self
 
 
+class LandmarkSplinePopulationFlowRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage: Literal[
+        "source_cohort",
+        "alive_and_under_observation_at_landmark",
+        "valid_exposure_primary_population",
+        "complete_case_model_population",
+    ]
+    n: int = Field(ge=0)
+    excluded_from_previous: int = Field(ge=0)
+    population_rule: str = Field(min_length=1)
+
+
+class LandmarkSplineAbsoluteRiskReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal[
+        "marginal_standardization_over_primary_complete_case_covariates"
+    ]
+    interval: Literal[
+        "delta_method_logit_scale_95_percent_confidence_interval"
+    ]
+    grid_rows: int = Field(ge=5)
+
+
+class LandmarkSplineVariableOpportunityReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    population_rule: Literal[
+        "all_rows_with_observed_exposure_and_complete_model_terms"
+    ]
+    interpretation: Literal[
+        "secondary_variable_opportunity_association_not_landmark_equivalent"
+    ]
+    exposure_increment: float = Field(gt=0)
+    adjusted_odds_ratio: float = Field(gt=0)
+    ci_low: float = Field(gt=0)
+    ci_high: float = Field(gt=0)
+    n: int = Field(ge=30)
+    events: int = Field(ge=1)
+    early_event_at_or_before_landmark_n: int = Field(ge=0)
+    icu_observation_shorter_than_landmark_n: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _coherent_interval(self) -> "LandmarkSplineVariableOpportunityReceipt":
+        if not self.ci_low <= self.adjusted_odds_ratio <= self.ci_high:
+            raise ValueError("variable-opportunity interval does not contain estimate")
+        if self.events >= self.n:
+            raise ValueError("variable-opportunity population lacks non-events")
+        return self
+
+
 class LandmarkSplineRuntimeReceipt(BaseModel):
     """Evidence that the signed host owner fitted the declared landmark model."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["easyicu.landmark_spline_runtime_receipt/1"]
+    schema_version: Literal[
+        "easyicu.landmark_spline_runtime_receipt/1",
+        "easyicu.landmark_spline_runtime_receipt/2",
+    ]
     protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     runtime_projection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -53,6 +109,11 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
     complete_case_n: int = Field(ge=30)
     events: int = Field(ge=1)
     functional_form_comparison: LandmarkSplineFunctionalFormReceipt
+    population_flow: tuple[LandmarkSplinePopulationFlowRow, ...] | None = None
+    adjusted_absolute_risk: LandmarkSplineAbsoluteRiskReceipt | None = None
+    variable_opportunity_sensitivity: (
+        LandmarkSplineVariableOpportunityReceipt | None
+    ) = None
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
 
     @model_validator(mode="after")
@@ -77,6 +138,25 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
             self.observed_knots[0] < self.observed_knots[1] < self.observed_knots[2]
         ):
             raise ValueError("observed landmark knots must be strictly increasing")
+        if self.schema_version.endswith("/1"):
+            if (
+                self.population_flow is not None
+                or self.adjusted_absolute_risk is not None
+                or self.variable_opportunity_sensitivity is not None
+            ):
+                raise ValueError("landmark receipt v1 cannot carry v2 reporting fields")
+        else:
+            if self.population_flow is None or self.adjusted_absolute_risk is None:
+                raise ValueError(
+                    "landmark receipt v2 requires population flow and adjusted risk"
+                )
+            counts = [row.n for row in self.population_flow]
+            if len(counts) != 4 or any(
+                later > earlier for earlier, later in zip(counts, counts[1:])
+            ):
+                raise ValueError("landmark population flow must be four nested stages")
+            if counts[-2] != self.primary_population_n or counts[-1] != self.complete_case_n:
+                raise ValueError("landmark population flow disagrees with model receipt")
         return self
 
 
