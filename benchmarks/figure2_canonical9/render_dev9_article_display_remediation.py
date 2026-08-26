@@ -40,6 +40,9 @@ from easyicu.research_agent.reporting.article_display_policy import (
     ArticleDisplayPolicyRequest,
     decide_article_display,
 )
+from easyicu.research_agent.reporting.article_population_alignment import (
+    assess_article_population_alignment,
+)
 
 
 E3_RUN_RELATIVE = Path("e3/e3_kdigo_gradient/aware/run_20260825T024928_3b8fef")
@@ -69,7 +72,7 @@ ARTICLE_TABLE_SPECS = {
             "main",
             "baseline_context",
             "table_one.csv",
-            "Cohort characteristics",
+            "Eligible-cohort characteristics",
         ),
         (
             "table_2_adjusted_association",
@@ -99,7 +102,7 @@ ARTICLE_TABLE_SPECS = {
             "main",
             "table_one",
             "table_one.csv",
-            "Cohort characteristics",
+            "Source-cohort characteristics before landmark selection",
         ),
         (
             "table_2_lactate_contrasts",
@@ -129,7 +132,7 @@ ARTICLE_TABLE_SPECS = {
             "main",
             "table_one_01",
             "table_one.csv",
-            "Cohort characteristics",
+            "Source-cohort characteristics before model-specific restriction",
         ),
         (
             "table_2_stage_outcomes",
@@ -159,7 +162,7 @@ ARTICLE_TABLE_SPECS = {
             "main",
             "baseline_table",
             "table_one.csv",
-            "Cohort characteristics",
+            "Source-cohort characteristics before landmark selection",
         ),
         (
             "table_2_bilirubin_contrasts",
@@ -433,6 +436,53 @@ def _copy_source(frame: pd.DataFrame, path: Path, output: Path) -> str:
     return output.name
 
 
+def _table_population_n(frame: pd.DataFrame) -> int | None:
+    if "denominator_n" in frame.columns:
+        values = pd.to_numeric(frame["denominator_n"], errors="coerce").dropna()
+        return int(values.max()) if len(values) else None
+    if {"unexposed_denominator", "exposed_denominator"}.issubset(frame.columns):
+        unexposed = pd.to_numeric(
+            frame["unexposed_denominator"], errors="coerce"
+        ).dropna()
+        exposed = pd.to_numeric(frame["exposed_denominator"], errors="coerce").dropna()
+        if len(unexposed) and len(exposed):
+            return int(unexposed.max() + exposed.max())
+    return None
+
+
+def _primary_analysis_population_n(run_dir: Path) -> int | None:
+    plan_path = run_dir / "analysis_plan.json"
+    if not plan_path.is_file():
+        return None
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    primary = [
+        step
+        for step in plan.get("steps") or []
+        if step.get("planned_analysis_role") == "primary"
+    ]
+    for step in primary:
+        summary_path = (
+            run_dir / "steps" / str(step.get("step_id")) / "outputs/step_summary.json"
+        )
+        if not summary_path.is_file():
+            continue
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        receipt = summary.get("scientific_runtime_receipt")
+        candidates = [
+            summary.get("n_complete_case"),
+            summary.get("complete_case_n"),
+            receipt.get("complete_case_n") if isinstance(receipt, dict) else None,
+            summary.get("n_primary_population"),
+            summary.get("n_total"),
+            summary.get("n"),
+        ]
+        for value in candidates:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if np.isfinite(float(value)) and float(value) >= 0:
+                    return int(value)
+    return None
+
+
 def _package_article_tables(
     *, source_root: Path, output_root: Path
 ) -> dict[str, dict[str, Any]]:
@@ -453,6 +503,25 @@ def _package_article_tables(
             packaged_path = task_out / packaged_name
             shutil.copy2(source_path, packaged_path)
             article_role = ARTICLE_TABLE_ROLES[(task_id, table_id)]
+            table_frame = pd.read_csv(source_path)
+            population_alignment = None
+            if article_role == "baseline_context":
+                population_alignment = assess_article_population_alignment(
+                    table_population_n=_table_population_n(table_frame),
+                    primary_analysis_population_n=_primary_analysis_population_n(
+                        run_dir
+                    ),
+                    table_scope_explicit=any(
+                        token in title.casefold()
+                        for token in (
+                            "source-cohort",
+                            "before ",
+                            "eligible-cohort",
+                            "landmark cohort",
+                            "full cohort",
+                        )
+                    ),
+                )
             terminal_diagnostic = task_id in {"h2", "h3"} and placement == "main"
             display_decision = decide_article_display(
                 ArticleDisplayPolicyRequest(
@@ -493,6 +562,10 @@ def _package_article_tables(
                 contract["cannot_prove"] = (
                     "This diagnostic table does not provide an effect estimate, an "
                     "authorized causal contrast, or a selected trajectory-class solution."
+                )
+            if population_alignment is not None:
+                contract["population_alignment"] = population_alignment.model_dump(
+                    mode="json"
                 )
             contract_path = task_out / f"{table_id}.table_contract.json"
             contract_path.write_text(
@@ -1100,6 +1173,7 @@ def _render_landmark_association(
     contrast_path: Path,
     measurement_file: str,
     measurement_is_main: bool,
+    reporting_dir: Path | None = None,
 ) -> dict[str, Any]:
     paths, frames = _load_frozen_tables(
         source_dir,
@@ -1113,11 +1187,32 @@ def _render_landmark_association(
         raise FileNotFoundError(f"Frozen contrast source is missing: {contrast_path}")
     paths["contrasts"] = contrast_path
     frames["contrasts"] = pd.read_csv(contrast_path)
+    if reporting_dir is not None:
+        reporting_files = {
+            "adjusted_risk": reporting_dir / f"{task_id}_adjusted_absolute_risk.csv",
+            "population_flow": reporting_dir / f"{task_id}_landmark_population_flow.csv",
+        }
+        if task_id == "e2":
+            reporting_files["variable_opportunity"] = (
+                reporting_dir / "e2_variable_opportunity_sensitivity.csv"
+            )
+        missing_reporting = [
+            str(path) for path in reporting_files.values() if not path.is_file()
+        ]
+        if missing_reporting:
+            raise FileNotFoundError(
+                f"{task_id} reporting replay is incomplete: {missing_reporting}"
+            )
+        for key, path in reporting_files.items():
+            paths[key] = path
+            frames[key] = pd.read_csv(path)
     source_files = _copy_frozen_tables(
         out_dir=out_dir, task_id=task_id, paths=paths, frames=frames
     )
     palette = apply_publication_style(font_size=7.0)
     figure_files: list[str] = []
+    additional_main_table_count = 0
+    additional_supplementary_table_count = 0
 
     context = frames["absolute_risk"].copy()
     prevalence = context[context["prevalence_pct"].notna()].copy()
@@ -1213,37 +1308,159 @@ def _render_landmark_association(
             "ci_high",
         ),
     )
+    if "population_flow" in frames:
+        flow = frames["population_flow"]
+        _finite(flow, ("n", "excluded_from_previous"))
+        if flow["n"].tolist() != sorted(flow["n"].tolist(), reverse=True):
+            raise ValueError(f"{task_id} landmark population flow is not nested")
+        flow_contract = {
+            "schema_version": "easyicu.article_table_contract/1",
+            "table_id": f"table:{task_id}:table_1b_landmark_population_flow",
+            "title": "Landmark analysis-population accounting",
+            "article_role": "cohort_accounting",
+            "placement": "main",
+            "display_purpose": "context",
+            "display_policy_reason_code": "ARTICLE_DISPLAY_MAIN_CONTEXT",
+            "authority_scope": "analysis_only",
+            "paper_authorization_allowed": False,
+            "source_path": source_files["population_flow"],
+            "source_sha256": _sha256(out_dir / source_files["population_flow"]),
+            "upstream_sha256": _sha256(paths["population_flow"]),
+            "produced_by_step": "signed_landmark_reporting_contract",
+            "supports": "This table identifies the nested source, landmark, exposure-valid and complete-case model populations.",
+            "cannot_prove": "This accounting table does not establish external validity or remove selection induced by the landmark design.",
+        }
+        (out_dir / "table_1b_landmark_population_flow.table_contract.json").write_text(
+            json.dumps(flow_contract, indent=2, ensure_ascii=False, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        additional_main_table_count += 1
+    if "variable_opportunity" in frames:
+        sensitivity = frames["variable_opportunity"]
+        _finite(
+            sensitivity,
+            ("adjusted_odds_ratio", "ci_low", "ci_high", "n", "events"),
+        )
+        sensitivity_contract = {
+            "schema_version": "easyicu.article_table_contract/1",
+            "table_id": f"table:{task_id}:table_s3_variable_opportunity_sensitivity",
+            "title": "Secondary variable-opportunity sensitivity",
+            "article_role": "robustness",
+            "placement": "supplementary",
+            "display_purpose": "scientific_result",
+            "display_policy_reason_code": "ARTICLE_DISPLAY_SUPPORTING_RESULT",
+            "authority_scope": "analysis_only",
+            "paper_authorization_allowed": False,
+            "source_path": source_files["variable_opportunity"],
+            "source_sha256": _sha256(out_dir / source_files["variable_opportunity"]),
+            "upstream_sha256": _sha256(paths["variable_opportunity"]),
+            "produced_by_step": "signed_landmark_reporting_contract",
+            "supports": "This prespecified sensitivity reports the measured-subset association and its different denominator.",
+            "cannot_prove": "This variable-opportunity result is not landmark-equivalent and remains vulnerable to unequal exposure opportunity and informative measurement.",
+        }
+        (
+            out_dir
+            / "table_s3_variable_opportunity_sensitivity.table_contract.json"
+        ).write_text(
+            json.dumps(
+                sensitivity_contract, indent=2, ensure_ascii=False, sort_keys=True
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        additional_supplementary_table_count += 1
     if (
         not (curve["ci_low"] <= curve["adjusted_odds_ratio"]).all()
         or not (curve["adjusted_odds_ratio"] <= curve["ci_high"]).all()
     ):
         raise ValueError(f"{task_id} curve intervals are reversed")
+    has_adjusted_risk = "adjusted_risk" in frames
+    panel_count = 3 if has_adjusted_risk else 2
     fig, axes = plt.subplots(
         1,
-        2,
-        figsize=(183 / 25.4, 90 / 25.4),
+        panel_count,
+        figsize=(183 / 25.4, 92 / 25.4),
         constrained_layout=True,
-        gridspec_kw={"width_ratios": [1.55, 1.0]},
+        gridspec_kw={
+            "width_ratios": [1.45, 1.45, 1.0]
+            if has_adjusted_risk
+            else [1.55, 1.0]
+        },
     )
+    curve_axis_index = 1 if has_adjusted_risk else 0
+    contrast_axis_index = 2 if has_adjusted_risk else 1
+    result_panels: list[dict[str, Any]] = []
+    result_sources: list[str] = []
+    if has_adjusted_risk:
+        adjusted_risk = frames["adjusted_risk"].copy().sort_values(
+            "exposure_value"
+        )
+        _finite(
+            adjusted_risk,
+            ("exposure_value", "adjusted_absolute_risk", "ci_low", "ci_high"),
+        )
+        risk_x = adjusted_risk["exposure_value"].to_numpy(dtype=float)
+        risk = 100.0 * adjusted_risk["adjusted_absolute_risk"].to_numpy(dtype=float)
+        risk_low = 100.0 * adjusted_risk["ci_low"].to_numpy(dtype=float)
+        risk_high = 100.0 * adjusted_risk["ci_high"].to_numpy(dtype=float)
+        axes[0].plot(risk_x, risk, color=palette["blue"], linewidth=1.4)
+        axes[0].fill_between(
+            risk_x,
+            risk_low,
+            risk_high,
+            color=palette["blue_soft"],
+            alpha=0.75,
+            linewidth=0,
+        )
+        axes[0].set_xlabel(exposure_label)
+        axes[0].set_ylabel("Adjusted mortality risk (%, 95% CI)")
+        axes[0].set_title("Standardised absolute risk", loc="left", pad=10)
+        add_panel_label(axes[0], "a", x=-0.12, y=1.04, fontsize=8.0)
+        result_sources.append(source_files["adjusted_risk"])
+        result_panels.append(
+            {
+                "panel_id": "a",
+                "title": "Standardised absolute risk",
+                "role": "absolute_risk",
+                "article_role": "absolute_risk",
+                "chart_type": "adjusted_absolute_risk_curve",
+                "claim": "Adjusted post-landmark mortality risk is marginally standardised over the primary complete-case covariate distribution.",
+                "evidence_ids": [_sha256(paths["adjusted_risk"])],
+                "metadata": {
+                    "placement": "main",
+                    "source_data": [source_files["adjusted_risk"]],
+                    "uncertainty": "delta-method 95% CI on the logit scale",
+                },
+            }
+        )
     x = curve["exposure_value"].to_numpy(dtype=float)
     estimate = curve["adjusted_odds_ratio"].to_numpy(dtype=float)
     low = curve["ci_low"].to_numpy(dtype=float)
     high = curve["ci_high"].to_numpy(dtype=float)
-    axes[0].plot(x, estimate, color=palette["blue"], linewidth=1.4)
-    axes[0].fill_between(
+    axes[curve_axis_index].plot(x, estimate, color=palette["blue"], linewidth=1.4)
+    axes[curve_axis_index].fill_between(
         x, low, high, color=palette["blue_soft"], alpha=0.75, linewidth=0
     )
-    axes[0].axhline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-    axes[0].axvline(
+    axes[curve_axis_index].axhline(
+        1.0, color=palette["neutral"], linestyle="--", linewidth=0.8
+    )
+    axes[curve_axis_index].axvline(
         float(curve.iloc[0]["reference_exposure_value"]),
         color=palette["neutral"],
         linestyle=":",
         linewidth=0.8,
     )
-    axes[0].set_xlabel(exposure_label)
-    axes[0].set_ylabel("Adjusted mortality odds ratio (95% CI)")
-    axes[0].set_title("Continuous dose-response", loc="left", pad=10)
-    add_panel_label(axes[0], "a", x=-0.12, y=1.04, fontsize=8.0)
+    axes[curve_axis_index].set_xlabel(exposure_label)
+    axes[curve_axis_index].set_ylabel("Adjusted mortality odds ratio (95% CI)")
+    axes[curve_axis_index].set_title("Continuous dose-response", loc="left", pad=10)
+    add_panel_label(
+        axes[curve_axis_index],
+        "b" if has_adjusted_risk else "a",
+        x=-0.12,
+        y=1.04,
+        fontsize=8.0,
+    )
     if contrasts["reference_exposure_value"].nunique() != 1:
         raise ValueError(f"{task_id} contrast rows do not share one reference")
     if (
@@ -1255,7 +1472,7 @@ def _render_landmark_association(
     contrast_estimates = contrasts["adjusted_odds_ratio"].to_numpy(dtype=float)
     contrast_low = contrasts["ci_low"].to_numpy(dtype=float)
     contrast_high = contrasts["ci_high"].to_numpy(dtype=float)
-    axes[1].errorbar(
+    axes[contrast_axis_index].errorbar(
         contrast_estimates,
         positions,
         xerr=np.vstack(
@@ -1265,9 +1482,11 @@ def _render_landmark_association(
         color=palette["orange"],
         capsize=2.5,
     )
-    axes[1].axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-    axes[1].set_xscale("log")
-    axes[1].set_xlim(
+    axes[contrast_axis_index].axvline(
+        1.0, color=palette["neutral"], linestyle="--", linewidth=0.8
+    )
+    axes[contrast_axis_index].set_xscale("log")
+    axes[contrast_axis_index].set_xlim(
         max(0.85 * min(1.0, float(contrast_low.min())), np.finfo(float).tiny),
         1.12 * max(1.0, float(contrast_high.max())),
     )
@@ -1277,25 +1496,30 @@ def _render_landmark_association(
         if "(" in exposure_label and exposure_label.endswith(")")
         else "exposure units"
     )
-    axes[1].set_yticks(
+    axes[contrast_axis_index].set_yticks(
         positions,
         [
             f"{float(value):g} vs {reference:g} {exposure_unit}"
             for value in contrasts["exposure_value"]
         ],
     )
-    axes[1].invert_yaxis()
-    axes[1].set_xlabel("Adjusted mortality odds ratio (95% CI)")
-    axes[1].set_title("Selected contrasts vs reference", loc="left", pad=10)
-    add_panel_label(axes[1], "b", x=-0.14, y=1.04, fontsize=8.0)
-    figure_files += _save(
-        fig,
-        out_dir=out_dir,
-        product=f"{task_id}_main_figure_2_continuous_association_and_contrasts",
-        height_mm=90.0,
-        panels=[
+    axes[contrast_axis_index].invert_yaxis()
+    axes[contrast_axis_index].set_xlabel("Adjusted mortality odds ratio (95% CI)")
+    axes[contrast_axis_index].set_title(
+        "Selected contrasts vs reference", loc="left", pad=10
+    )
+    add_panel_label(
+        axes[contrast_axis_index],
+        "c" if has_adjusted_risk else "b",
+        x=-0.14,
+        y=1.04,
+        fontsize=8.0,
+    )
+    result_sources.extend([source_files["curve"], source_files["contrasts"]])
+    result_panels.extend(
+        [
             {
-                "panel_id": "a",
+                "panel_id": "b" if has_adjusted_risk else "a",
                 "title": "Continuous dose-response",
                 "role": "primary_estimand",
                 "article_role": "primary_estimand",
@@ -1308,7 +1532,7 @@ def _render_landmark_association(
                 },
             },
             {
-                "panel_id": "b",
+                "panel_id": "c" if has_adjusted_risk else "b",
                 "title": "Selected contrasts vs reference",
                 "role": "primary_estimand",
                 "article_role": "primary_estimand",
@@ -1322,10 +1546,25 @@ def _render_landmark_association(
                     "contrast_reference": reference,
                 },
             },
-        ],
-        source_data=[source_files["curve"], source_files["contrasts"]],
-        core_claim=f"The continuous {exposure_label.lower()} association and two prespecified contrasts sharing one reference are displayed as primary evidence.",
-        statistics_note="The curve and confidence band use every frozen grid row. Contrast points and 95% confidence intervals are copied from the frozen registered contrast table; no robustness-summary envelope is plotted as an effect interval.",
+        ]
+    )
+    figure_files += _save(
+        fig,
+        out_dir=out_dir,
+        product=f"{task_id}_main_figure_2_continuous_association_and_contrasts",
+        height_mm=90.0,
+        panels=result_panels,
+        source_data=result_sources,
+        core_claim=(
+            f"Adjusted absolute risk, the continuous {exposure_label.lower()} association, and prespecified contrasts sharing one reference are displayed as primary evidence."
+            if has_adjusted_risk
+            else f"The continuous {exposure_label.lower()} association and two prespecified contrasts sharing one reference are displayed as primary evidence."
+        ),
+        statistics_note=(
+            "Absolute risk is marginally standardised over the primary complete-case covariate distribution with delta-method 95% intervals. The relative curve and contrasts retain every signed model-grid row."
+            if has_adjusted_risk
+            else "The curve and confidence band use every frozen grid row. Contrast points and 95% confidence intervals are copied from the frozen registered contrast table; no robustness-summary envelope is plotted as an effect interval."
+        ),
     )
 
     measurement = frames["measurement"].copy()
@@ -1405,13 +1644,18 @@ def _render_landmark_association(
         ),
         statistics_note="Percentages are deterministic display calculations from frozen total, measured and repeat-measured counts; all registered variables are shown.",
     )
-    return _task_summary(
+    summary = _task_summary(
         source=source_dir,
         paths=paths,
         figure_files=figure_files,
         main_figure_count=3 if measurement_is_main else 1,
         supplementary_figure_count=0 if measurement_is_main else 2,
     )
+    summary["additional_main_table_count"] = additional_main_table_count
+    summary["additional_supplementary_table_count"] = (
+        additional_supplementary_table_count
+    )
+    return summary
 
 
 def _render_m3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
@@ -2267,6 +2511,7 @@ def main() -> int:
     parser.add_argument("--visual-source-root", type=Path, required=True)
     parser.add_argument("--h1-source-dir", type=Path)
     parser.add_argument("--h2-run", type=Path, required=True)
+    parser.add_argument("--landmark-replay-root", type=Path)
     parser.add_argument("--output-root", type=Path, required=True)
     args = parser.parse_args()
     source_root = args.source_root.resolve()
@@ -2277,6 +2522,11 @@ def main() -> int:
         else visual_source_root / "h1"
     )
     h2_run = args.h2_run.resolve()
+    landmark_replay_root = (
+        args.landmark_replay_root.resolve(strict=True)
+        if args.landmark_replay_root is not None
+        else None
+    )
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -2295,6 +2545,9 @@ def main() -> int:
         contrast_path=e2_contrast_path,
         measurement_file="measurement_process_source_data.csv",
         measurement_is_main=False,
+        reporting_dir=(
+            landmark_replay_root / "e2" if landmark_replay_root is not None else None
+        ),
     )
     e3_run = source_root / E3_RUN_RELATIVE
     m2_run = source_root / M2_RUN_RELATIVE
@@ -2313,6 +2566,9 @@ def main() -> int:
         contrast_path=m1_contrast_path,
         measurement_file="measurement_process_audit_source_data.csv",
         measurement_is_main=True,
+        reporting_dir=(
+            landmark_replay_root / "m1" if landmark_replay_root is not None else None
+        ),
     )
     m2_summary = run_prediction_figure(
         out_dir=output_root / "m2",
@@ -2348,7 +2604,14 @@ def main() -> int:
         "h3": h3,
     }
     for task_id, table_summary in table_summaries.items():
-        task_summaries[task_id].update(table_summary)
+        summary = task_summaries[task_id]
+        summary.update(table_summary)
+        summary["main_table_count"] += int(
+            summary.pop("additional_main_table_count", 0)
+        )
+        summary["supplementary_table_count"] += int(
+            summary.pop("additional_supplementary_table_count", 0)
+        )
     for task_id, summary in task_summaries.items():
         status_contract = {
             "schema_version": "easyicu.article_display_status/1",
@@ -2394,6 +2657,9 @@ def main() -> int:
         "code_head": code_head,
         "source_root": str(source_root),
         "visual_source_root": str(visual_source_root),
+        "landmark_replay_root": (
+            str(landmark_replay_root) if landmark_replay_root is not None else None
+        ),
         "h2_run": str(h2_run),
         "authority_scope": "analysis_only",
         "paper_authorization_allowed": False,

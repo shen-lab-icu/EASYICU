@@ -29,6 +29,7 @@ ARTICLE_DISPLAY_PURPOSE_CONFLICT = "ARTICLE_DISPLAY_PURPOSE_CONFLICT"
 _SCIENTIFIC_RESULT_ROLES = frozenset(
     {
         "relationship",
+        "absolute_risk",
         "validation",
         "descriptive_result",
         "primary_estimand",
