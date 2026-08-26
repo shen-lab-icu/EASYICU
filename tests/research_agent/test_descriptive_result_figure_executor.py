@@ -404,6 +404,9 @@ def test_e1_wide_grouped_summary_is_rendered_by_the_same_owner(
     assert contract["panels"][0]["metadata"] == {
         "article_role": "distribution",
         "chart_type": "point_range",
+        "display_policy_reason_code": "SCIENTIFIC_RESULT_DISPLAY",
+        "display_purpose": "scientific_result",
+        "placement": "main",
         "source_data": ["age_distribution_source_data.csv"],
         "source_products": ["table:distribution_prevalence"],
     }

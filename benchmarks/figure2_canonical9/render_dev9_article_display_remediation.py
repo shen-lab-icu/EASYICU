@@ -36,6 +36,10 @@ from easyicu.research_agent.figures.publication import (
 from easyicu.research_agent.reporting.article_display_package import (
     inspect_article_display_package,
 )
+from easyicu.research_agent.reporting.article_display_policy import (
+    ArticleDisplayPolicyRequest,
+    decide_article_display,
+)
 
 
 E3_RUN_RELATIVE = Path("e3/e3_kdigo_gradient/aware/run_20260825T024928_3b8fef")
@@ -317,10 +321,41 @@ ARTICLE_TABLE_SPECS = {
     ),
 }
 
-ARTICLE_TABLE_DISPLAY_PURPOSES = {
-    ("h2", "table_1_causal_identifiability"): "diagnostic",
-    ("h3", "table_1_candidate_selection"): "diagnostic",
-    ("h3", "table_s1_feature_availability"): "audit",
+ARTICLE_TABLE_ROLES = {
+    ("e1", "table_1_cohort_characteristics"): "baseline_context",
+    ("e1", "table_2_adjusted_association"): "primary_estimand",
+    ("e1", "table_s1_component_completeness"): "data_quality",
+    ("e1", "table_s2_definition_sensitivity"): "robustness",
+    ("e2", "table_1_cohort_characteristics"): "baseline_context",
+    ("e2", "table_2_lactate_contrasts"): "primary_estimand",
+    ("e2", "table_s1_measurement_process"): "data_quality",
+    ("e2", "table_s2_robustness"): "robustness",
+    ("e3", "table_1_cohort_characteristics"): "baseline_context",
+    ("e3", "table_2_stage_outcomes"): "descriptive_result",
+    ("e3", "table_s1_missingness"): "data_quality",
+    ("e3", "table_s2_stage_sensitivity"): "robustness",
+    ("m1", "table_1_cohort_characteristics"): "baseline_context",
+    ("m1", "table_2_bilirubin_contrasts"): "primary_estimand",
+    ("m1", "table_s1_measurement_process"): "data_quality",
+    ("m1", "table_s2_robustness"): "robustness",
+    ("m2", "table_1_cohort_characteristics"): "baseline_context",
+    ("m2", "table_2_model_performance"): "model_performance",
+    ("m2", "table_3_calibration"): "calibration",
+    ("m2", "table_s1_internal_validation"): "validation",
+    ("m2", "table_s2_clinical_utility"): "clinical_utility",
+    ("m3", "table_1_cohort_characteristics"): "baseline_context",
+    ("m3", "table_2_candidate_profiles"): "phenotype_profile",
+    ("m3", "table_3_stability"): "stability",
+    ("m3", "table_s1_complete_case"): "robustness",
+    ("m3", "table_s2_measurement_process"): "data_quality",
+    ("h1", "table_1_landmark_cohort"): "baseline_context",
+    ("h1", "table_2_time_to_event_model"): "survival_effect",
+    ("h1", "table_3_rmst"): "survival_effect",
+    ("h1", "table_s1_ph_diagnostics"): "diagnostics",
+    ("h1", "table_s2_risk_set"): "cohort_accounting",
+    ("h2", "table_1_causal_identifiability"): "diagnostics",
+    ("h3", "table_1_candidate_selection"): "cluster_selection",
+    ("h3", "table_s1_feature_availability"): "data_quality",
 }
 
 
@@ -417,11 +452,27 @@ def _package_article_tables(
             packaged_name = f"{table_id}{source_path.suffix.lower()}"
             packaged_path = task_out / packaged_name
             shutil.copy2(source_path, packaged_path)
+            article_role = ARTICLE_TABLE_ROLES[(task_id, table_id)]
+            terminal_diagnostic = task_id in {"h2", "h3"} and placement == "main"
+            display_decision = decide_article_display(
+                ArticleDisplayPolicyRequest(
+                    article_role=article_role,
+                    requested_placement=placement,
+                    scientific_status=(
+                        "failed_closed" if task_id in {"h2", "h3"} else "analysis_only"
+                    ),
+                    central_to_question=terminal_diagnostic,
+                    terminal_diagnostic=terminal_diagnostic,
+                )
+            )
             contract = {
                 "schema_version": "easyicu.article_table_contract/1",
                 "table_id": f"table:{task_id}:{table_id}",
                 "title": title,
-                "placement": placement,
+                "article_role": article_role,
+                "placement": display_decision.placement,
+                "display_purpose": display_decision.display_purpose,
+                "display_policy_reason_code": display_decision.reason_code,
                 "authority_scope": "analysis_only",
                 "paper_authorization_allowed": False,
                 "source_path": packaged_name,
@@ -438,10 +489,7 @@ def _package_article_tables(
                     "validity, causality, or clinical utility beyond its declared analysis."
                 ),
             }
-            display_purpose = ARTICLE_TABLE_DISPLAY_PURPOSES.get((task_id, table_id))
-            if display_purpose is not None:
-                contract["display_purpose"] = display_purpose
-            if display_purpose == "diagnostic":
+            if display_decision.display_purpose == "diagnostic":
                 contract["cannot_prove"] = (
                     "This diagnostic table does not provide an effect estimate, an "
                     "authorized causal contrast, or a selected trajectory-class solution."
@@ -453,7 +501,7 @@ def _package_article_tables(
                 encoding="utf-8",
             )
             contracts.append(contract_path.name)
-            placements[placement] += 1
+            placements[display_decision.placement] += 1
         summaries[task_id] = {
             "main_table_count": placements["main"],
             "supplementary_table_count": placements["supplementary"],
@@ -1344,6 +1392,7 @@ def _render_landmark_association(
                 "evidence_ids": [_sha256(paths["measurement"])],
                 "metadata": {
                     "placement": placement,
+                    "central_to_question": measurement_is_main,
                     "source_data": [measurement_source],
                 },
             }
@@ -2024,6 +2073,9 @@ def _render_h2(source_run: Path, out_dir: Path) -> dict[str, Any]:
                 "metadata": {
                     "placement": "main",
                     "display_purpose": "diagnostic",
+                    "scientific_status": "failed_closed",
+                    "terminal_diagnostic": True,
+                    "central_to_question": True,
                     "source_data": [source_file],
                 },
             }
@@ -2121,6 +2173,9 @@ def _render_h3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
                 "metadata": {
                     "placement": "main",
                     "display_purpose": "diagnostic",
+                    "scientific_status": "failed_closed",
+                    "terminal_diagnostic": True,
+                    "central_to_question": True,
                     "source_data": [source_files["selection"]],
                 },
             }
@@ -2185,6 +2240,7 @@ def _render_h3(source_dir: Path, out_dir: Path) -> dict[str, Any]:
                 "metadata": {
                     "placement": "supplementary",
                     "display_purpose": "audit",
+                    "scientific_status": "failed_closed",
                     "source_data": [source_files["availability"]],
                 },
             },
