@@ -679,6 +679,101 @@ def _render_figure(
     return outputs
 
 
+def build_survival_manuscript_projection(*, interval_count: int) -> dict[str, object]:
+    """Build the reporting projection owned by the signed survival executor."""
+
+    if interval_count <= 0:
+        raise ValueError("survival manuscript projection requires intervals")
+    rmst_fragments = [
+        {"text": "Through "},
+        {"numeric_path": "rmst.tau_days_from_landmark", "format_spec": ".0f"},
+        {
+            "text": (
+                " days after the landmark, the unadjusted Kaplan–Meier plug-in "
+                "restricted mean survival time was "
+            )
+        },
+        {"numeric_path": "rmst.exposed_rmst_days", "format_spec": ".3f"},
+        {"text": " days in the exposed group and "},
+        {"numeric_path": "rmst.comparator_rmst_days", "format_spec": ".3f"},
+        {
+            "text": (
+                " days in the comparator group, an exposed-minus-comparator "
+                "difference of "
+            )
+        },
+        {"numeric_path": "rmst.difference_days", "format_spec": ".3f"},
+        {"text": " days (95% CI, "},
+        {"numeric_path": "rmst.ci_low", "format_spec": ".3f"},
+        {"text": " to "},
+        {"numeric_path": "rmst.ci_high", "format_spec": ".3f"},
+        {"text": "; p = "},
+        {"numeric_path": "rmst.p_value", "format_spec": ".6g"},
+        {"text": ")."},
+    ]
+    interval_fragments = [
+        {
+            "text": (
+                "The adjusted piecewise time-varying association estimates "
+                "for the exposed-versus-comparator contrast were "
+            )
+        }
+    ]
+    for index in range(interval_count):
+        prefix = f"time_varying_adjusted_association.intervals[{index}]"
+        if index:
+            interval_fragments.append({"text": "; "})
+        interval_fragments.extend(
+            [
+                {"text": "days "},
+                {"numeric_path": f"{prefix}.start_days", "format_spec": ".0f"},
+                {"text": "–"},
+                {"numeric_path": f"{prefix}.end_days", "format_spec": ".0f"},
+                {"text": ": hazard ratio "},
+                {"numeric_path": f"{prefix}.hazard_ratio", "format_spec": ".3f"},
+                {"text": " (95% CI, "},
+                {"numeric_path": f"{prefix}.ci_low", "format_spec": ".3f"},
+                {"text": " to "},
+                {"numeric_path": f"{prefix}.ci_high", "format_spec": ".3f"},
+                {"text": "; p = "},
+                {"numeric_path": f"{prefix}.p_value", "format_spec": ".6g"},
+                {"text": ")"},
+            ]
+        )
+    interval_fragments.append(
+        {
+            "text": (
+                ". These interval-specific estimates were retained because "
+                "the proportional-hazards assumption was rejected."
+            )
+        }
+    )
+    return {
+        "schema_version": "easyicu.manuscript_projection/1",
+        "claims": [
+            {
+                "claim_id": "primary_rmst_contrast",
+                "targets": [
+                    {"kind": "abstract_label", "label": "Results"},
+                    {"kind": "markdown_heading", "label": "Primary association"},
+                ],
+                "fragments": rmst_fragments,
+            },
+            {
+                "claim_id": "time_varying_association_intervals",
+                "targets": [
+                    {"kind": "abstract_label", "label": "Results"},
+                    {
+                        "kind": "markdown_heading",
+                        "label": "Sensitivity and subgroup analyses",
+                    },
+                ],
+                "fragments": interval_fragments,
+            },
+        ],
+    }
+
+
 def run_landmark_survival_suite(
     *,
     frame: Any,
@@ -996,6 +1091,7 @@ def run_landmark_survival_suite(
         )
 
     time_varying_table = None
+    exposure_intervals = None
     if sealed.time_varying_effect_method is not None:
         time_varying_table = fit_piecewise_time_varying_cox(
             model_frame,
@@ -1012,6 +1108,46 @@ def run_landmark_survival_suite(
             raise ValueError(
                 "landmark survival time-varying result lacks every exposure interval"
             )
+
+    reportable_survival_results = None
+    if rmst_table is not None and exposure_intervals is not None:
+        rmst_row = rmst_table.iloc[0]
+        reportable_survival_results = {
+            "schema_version": "easyicu.survival_reporting/1",
+            "execution_owner": "landmark_survival_executor_v1",
+            "interpretation_ceiling": "descriptive_prognostic_association_not_causal",
+            "contrast": str(rmst_row["contrast"]),
+            "constant_hazard_ratio_authorized": not ph_violation,
+            "proportional_hazards_status": ph_status,
+            "rmst": {
+                "method": str(rmst_row["adjustment"]),
+                "tau_days_from_landmark": float(rmst_row["tau_days_from_landmark"]),
+                "exposed_rmst_days": float(rmst_row["exposed_rmst_days"]),
+                "comparator_rmst_days": float(rmst_row["comparator_rmst_days"]),
+                "difference_days": float(rmst_row["rmst_difference_days"]),
+                "ci_low": float(rmst_row["ci_low"]),
+                "ci_high": float(rmst_row["ci_high"]),
+                "p_value": float(rmst_row["p_value"]),
+            },
+            "time_varying_adjusted_association": {
+                "method": str(sealed.time_varying_effect_method),
+                "adjustment_columns": list(sealed.adjustment_columns),
+                "intervals": [
+                    {
+                        "start_days": float(row.interval_start_days),
+                        "end_days": float(row.interval_end_days),
+                        "hazard_ratio": float(row.hazard_ratio),
+                        "ci_low": float(row.ci_low),
+                        "ci_high": float(row.ci_high),
+                        "p_value": float(row.p_value),
+                    }
+                    for row in exposure_intervals.itertuples(index=False)
+                ],
+            },
+            "manuscript_projection": build_survival_manuscript_projection(
+                interval_count=len(exposure_intervals)
+            ),
+        }
 
     out_dir.mkdir(parents=True, exist_ok=True)
     table_one_path = out_dir / "landmark_table_one.csv"
@@ -1125,6 +1261,11 @@ def run_landmark_survival_suite(
             None
             if rmst_table is None
             else float(rmst_table.loc[0, "rmst_difference_days"])
+        ),
+        **(
+            {"reportable_survival_results": reportable_survival_results}
+            if reportable_survival_results is not None
+            else {}
         ),
         "paper_authorization_allowed": False,
         "analysis_only": True,

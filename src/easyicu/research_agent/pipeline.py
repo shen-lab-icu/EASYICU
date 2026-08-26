@@ -420,6 +420,8 @@ from .literature import (
     HypothesisBlueprintAgent,
     LiteratureAgent,
     LiteratureBundle,
+    manuscript_citable_keys,
+    manuscript_citable_records,
     render_hypothesis_blueprint_for_prompt,
 )
 from .planning.preplan_literature import prepare_preplan_literature
@@ -1004,9 +1006,9 @@ def _run_preplan_literature_and_hypothesis(
                 _literature_design.validate_preplan_literature_design_authority(
                     preplan_literature
                 )
-            allowed_literature_citation_keys = [
-                citation.key for citation in preplan_literature.citations
-            ]
+            allowed_literature_citation_keys = list(
+                manuscript_citable_keys(preplan_literature)
+            )
             direct_comparator_literature_keys = [
                 decision.citation_key
                 for decision in preplan_literature.screening_decisions
@@ -1021,7 +1023,7 @@ def _run_preplan_literature_and_hypothesis(
                 try:
                     hg_result = generate_hypotheses(
                         context=agent_context,
-                        citations=list(preplan_literature.citations),
+                        citations=list(manuscript_citable_records(preplan_literature)),
                         top_k=self._hypothesis_generator_top_k,
                     )
                     hg_json = run_dir / "hypothesis_candidates.json"

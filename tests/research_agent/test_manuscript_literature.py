@@ -47,6 +47,37 @@ def _bundle() -> LiteratureBundle:
     )
 
 
+def _bundle_with_excluded_candidate() -> LiteratureBundle:
+    bundle = _bundle()
+    return bundle.model_copy(
+        update={
+            "citations": [
+                *bundle.citations,
+                CitationRecord(
+                    key="screened_out_2025",
+                    title="A retrieved but ineligible candidate",
+                    year="2025",
+                    relevance="Source excerpt: outcome did not match.",
+                ),
+            ],
+            "screening_decisions": [
+                *bundle.screening_decisions,
+                LiteratureScreeningDecision(
+                    citation_key="screened_out_2025",
+                    source="pubmed",
+                    disposition="exclude",
+                    evidence_role="related_context",
+                    rationale="Outcome and time zero did not match.",
+                    population_match=True,
+                    exposure_match=True,
+                    outcome_match=False,
+                    design_excerpt_available=True,
+                ),
+            ],
+        }
+    )
+
+
 def _plan_with_reporting_binding() -> AnalysisPlan:
     return AnalysisPlan(
         research_question="Describe an ICU cohort.",
@@ -87,6 +118,40 @@ def test_writer_digest_exposes_exact_key_and_relevance() -> None:
     assert "not evidence that the method was executed" in digest
     assert "step=01_primary_description" in digest
     assert "design_elements=reporting" in digest
+
+
+def test_writer_digest_exposes_bibliographic_notices() -> None:
+    bundle = _bundle()
+    bundle.citations[0].bibliographic_notices = [
+        "Author correction: 10.1234/correction."
+    ]
+
+    digest = render_writer_literature_digest(bundle)
+
+    assert "bibliographic_notice=Author correction: 10.1234/correction." in digest
+
+
+def test_excluded_candidate_is_not_writer_or_manuscript_citation_authority() -> None:
+    bundle = _bundle_with_excluded_candidate()
+
+    digest = render_writer_literature_digest(bundle)
+    audit = audit_manuscript_literature(
+        """## Introduction
+Prior work [@paper_2024].
+
+## Methods
+Reporting followed STROBE [@strobe_2007].
+
+## Discussion
+The excluded candidate was cited [@screened_out_2025].
+""",
+        bundle,
+    )
+
+    assert "screened_out_2025" not in digest
+    assert "screened_out_2025" not in audit.allowed_keys
+    assert audit.unknown_keys == ["screened_out_2025"]
+    assert audit.status == "blocked"
 
 
 def test_unknown_literature_sentence_is_deleted_without_source_substitution() -> None:

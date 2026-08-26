@@ -66,8 +66,9 @@ from .manuscript_provenance import (
     ManuscriptProvenanceError,
     build_manuscript_provenance,
 )
+from .manuscript_projection import project_owner_issued_manuscript_claims
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
-from ..literature import LiteratureAgent, LiteratureBundle
+from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_keys
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
 from ..providers.structured_retry import StructuredResponseFailure
@@ -1355,6 +1356,33 @@ def _repair_robustness_reader_prose(
     return repaired
 
 
+def _project_and_report_owner_manuscript_claims(
+    scaffold: str,
+    per_step_records: Sequence[Dict[str, Any]],
+    findings: List[ValidationFinding],
+) -> str:
+    """Project typed owner claims before the unchanged STRICT gates rerun."""
+
+    projected, repairs = project_owner_issued_manuscript_claims(
+        scaffold,
+        per_step_records=current_step_records(per_step_records),
+    )
+    if repairs:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    "Projected deterministic owner-issued manuscript claim(s) "
+                    "omitted by Writer; the unchanged STRICT numeric and evidence "
+                    "gates revalidate them."
+                ),
+                detail={"repairs": repairs},
+            )
+        )
+    return projected
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -1566,6 +1594,11 @@ def _draft_manuscript(
                 },
             )
         )
+    scaffold = _project_and_report_owner_manuscript_claims(
+        scaffold,
+        per_step_records,
+        findings,
+    )
     scaffold, removed_unregistered_placeholders = (
         _remove_unregistered_evidence_placeholders(
             scaffold,
@@ -2379,7 +2412,7 @@ def _publish_and_audit_manuscript(
                     producer="pipeline",
                     generation_mode="system",
                 )
-            if literature is not None and getattr(literature, "citations", None):
+            if manuscript_citable_keys(literature):
                 bib = render_bibtex(literature)
                 bib_path = run_dir / f"{bib_basename}.bib"
                 bib_path.write_text(bib, encoding="utf-8")

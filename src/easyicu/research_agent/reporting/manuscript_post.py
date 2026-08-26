@@ -72,8 +72,6 @@ _MANUSCRIPT_METADATA_LINE_RE = re.compile(
     r"\s*(?:\*\*)?\s*[:：]?",
     re.I,
 )
-
-
 def _first_resolvable_name(
     resolvable: set[str], candidates: Sequence[str]
 ) -> Optional[str]:
@@ -860,6 +858,21 @@ def _parsed_numeric_literal(value_str: str) -> tuple[float, bool] | None:
     raw = value_str.strip()
     has_percent = raw.endswith("%")
     stripped = raw.rstrip("%").replace(",", "")
+    unicode_scientific = re.fullmatch(
+        r"(?P<coefficient>[-+]?(?:\d+(?:\.\d+)?|\.\d+))\s*[×x]\s*"
+        r"10(?P<exponent>[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+)",
+        stripped,
+    )
+    if unicode_scientific is not None:
+        superscript_digits = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
+        try:
+            coefficient = float(unicode_scientific.group("coefficient"))
+            exponent = int(
+                unicode_scientific.group("exponent").translate(superscript_digits)
+            )
+            return coefficient * (10.0**exponent), False
+        except (OverflowError, ValueError):
+            return None
     try:
         return float(stripped), has_percent
     except ValueError:
@@ -917,7 +930,13 @@ def _claim_numeric_distance(
         if abs(candidate) > 1e-9:
             rel = abs(candidate - canonical) / abs(candidate)
         else:
-            rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
+            # Relative tolerance is undefined at zero.  Treating every
+            # manuscript value below 1e-12 as relatively identical to zero
+            # lets scientific-notation p-values bind to unrelated zero-count
+            # audit fields.  Exact equality was handled above; near-zero
+            # values may now match only through display-aware absolute
+            # rounding below.
+            rel = float("inf")
         abs_window = max(
             display_abs_tol,
             window * max(abs(candidate), abs(canonical)),

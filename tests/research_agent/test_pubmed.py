@@ -226,6 +226,47 @@ def test_protocol_queries_remove_operational_window_suffix(ra):
     assert any('"mechanical ventilation"[Title/Abstract]' in query for query in queries)
 
 
+def test_survival_protocol_adds_broad_time_varying_design_stratum(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Estimate the association between mechanical ventilation and "
+            "28-day mortality with time-to-event methods."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="mech_vent_max",
+                description="mechanical ventilation",
+                source_concept="mech_vent",
+                role="intervention",
+                dtype="int64",
+            ),
+            schema.ConceptDescriptor(
+                name="mort_28d",
+                description="28-day mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="mech_vent_max",
+        target_outcome="mort_28d",
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    dynamics = [query for query in queries if '"time-varying"' in query]
+    assert len(dynamics) == 1
+    assert '"mechanical ventilation"[Title/Abstract]' in dynamics[0]
+    assert "mortality[Title/Abstract] OR death[Title/Abstract]" in dynamics[0]
+    assert '"28-day mortality"' not in dynamics[0]
+
+
 def test_protocol_query_uses_question_topic_and_intent_without_exposure(ra):
     schema = ra.schema
     context = schema.ResearchContext(
@@ -693,6 +734,78 @@ def test_context_strata_preserve_queries_returning_each_record(ra):
     assert paths.count("efetch.fcgi") == 1
 
 
+def test_context_strata_retain_complementary_query_coverage(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Estimate the association between mechanical ventilation and "
+            "28-day mortality with time-to-event methods."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="mech_vent",
+                description="mechanical ventilation",
+                source_concept="mech_vent",
+                role="intervention",
+                dtype="int64",
+            ),
+            schema.ConceptDescriptor(
+                name="mort_28d",
+                description="28-day mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="mech_vent",
+        target_outcome="mort_28d",
+    )
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        PubMedLiteratureClient,
+    )
+
+    client = PubMedLiteratureClient()
+
+    def _esearch(query, *, retmax):
+        if '"time-varying"' in query:
+            return ["4"]
+        if "NOT (Review[Publication Type]" in query:
+            return ["2"]
+        if "survival[Title/Abstract] OR hazard[Title/Abstract]" in query:
+            return ["3"]
+        return ["1"]
+
+    records = {
+        "1": CitationRecord(
+            key="strict", title="Mechanical ventilation and 28-day mortality", year="2026", pmid="1"
+        ),
+        "2": CitationRecord(
+            key="observational", title="Mechanical ventilation cohort", year="2026", pmid="2"
+        ),
+        "3": CitationRecord(
+            key="survival", title="Mechanical ventilation survival", year="2026", pmid="3"
+        ),
+        "4": CitationRecord(
+            key="dynamics", title="Time-varying mechanical ventilation and mortality", year="2020", pmid="4"
+        ),
+    }
+
+    client._esearch = _esearch  # type: ignore[method-assign]
+    client._hydrate_ids = (  # type: ignore[method-assign]
+        lambda pmids, **kwargs: [records[pmid] for pmid in pmids]
+    )
+
+    result = client.search_context_strata(context, retmax=4)
+
+    assert {record.pmid for record in result.records} == {"1", "2", "3", "4"}
+    assert result.record_queries["dynamics"] == [
+        next(query for query in result.search_queries if '"time-varying"' in query)
+    ]
+
+
 def test_client_search_returns_empty_on_no_hits(ra):
     stub = _StubClient(ra, esearch_ids=[], esummary_payload={})
     out = stub.client.search("query", retmax=5)
@@ -729,6 +842,9 @@ def test_literature_agent_merges_pubmed_with_curated(ra):
             schema.ConceptDescriptor(
                 name="sofa2", role="composite_score", dtype="int64"
             ),
+            schema.ConceptDescriptor(
+                name="sep3", role="composite_score", dtype="int64"
+            ),
             schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
         ],
         target_outcome="death",
@@ -759,6 +875,50 @@ def test_literature_agent_merges_pubmed_with_curated(ra):
     pmids2 = [c.pmid for c in bundle.citations if c.pmid == "26903338"]
     assert len(pmids2) <= 1
     assert all(decision.citation_key in keys for decision in bundle.screening_decisions)
+    curated_by_key = {record.key: record for record in bundle.citations}
+    assert {
+        key: (
+            curated_by_key[key].venue,
+            curated_by_key[key].pmid,
+            curated_by_key[key].doi,
+            curated_by_key[key].url,
+        )
+        for key in (
+            "vincent_sofa_1996",
+            "singer_sepsis3_2016",
+            "ricu_2023",
+            "johnson_mimiciv_2023",
+        )
+    } == {
+        "vincent_sofa_1996": (
+            "Intensive Care Medicine",
+            "8844239",
+            "10.1007/BF01709751",
+            "https://pubmed.ncbi.nlm.nih.gov/8844239/",
+        ),
+        "singer_sepsis3_2016": (
+            "JAMA",
+            "26903338",
+            "10.1001/jama.2016.0287",
+            "https://pubmed.ncbi.nlm.nih.gov/26903338/",
+        ),
+        "ricu_2023": (
+            "GigaScience",
+            "37318234",
+            "10.1093/gigascience/giad041",
+            "https://academic.oup.com/gigascience/article/doi/10.1093/gigascience/giad041/7198370",
+        ),
+        "johnson_mimiciv_2023": (
+            "Scientific Data",
+            "36596836",
+            "10.1038/s41597-022-01899-x",
+            "https://pubmed.ncbi.nlm.nih.gov/36596836/",
+        ),
+    }
+    assert curated_by_key["johnson_mimiciv_2023"].bibliographic_notices == [
+        "Author correction: 10.1038/s41597-023-01945-2.",
+        "Author correction: 10.1038/s41597-023-02136-9.",
+    ]
 
 
 def test_literature_agent_pubmed_failure_is_silent(ra):

@@ -782,6 +782,66 @@ def test_numeric_and_alias_publication_share_root_commit_failure_boundary(
     assert reopened.get("primary_association") is None
 
 
+def test_effect_scale_is_scoped_to_its_own_estimand_mapping(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    record = _register_candidate(store, evidence_id="survival_summary")
+
+    store.register_step_summary_numerics(
+        step_id="01_model",
+        evidence_id=record.evidence_id,
+        summary={
+            "effect_scale": "hazard_ratio",
+            "hazard_ratio": 0.8,
+            "ci_low": 0.7,
+            "ci_high": 0.9,
+            "alternative_estimands": {
+                "restricted_mean_difference": {
+                    "estimate": -0.3,
+                    "ci_low": -0.4,
+                    "ci_high": -0.2,
+                },
+                "time_varying": {
+                    "intervals": [
+                        {
+                            "hazard_ratio": 0.6,
+                            "ci_low": 0.5,
+                            "ci_high": 0.7,
+                        }
+                    ]
+                },
+            },
+        },
+    )
+
+    claims = {claim.source_field: claim for claim in store.numeric_claims()}
+    assert claims["ci_low"].effect_scale.value == "hazard_ratio"
+    assert claims["ci_high"].effect_scale.value == "hazard_ratio"
+    assert (
+        claims[
+            "alternative_estimands.restricted_mean_difference.ci_low"
+        ].effect_scale
+        is None
+    )
+    assert (
+        claims[
+            "alternative_estimands.restricted_mean_difference.ci_high"
+        ].effect_scale
+        is None
+    )
+    assert (
+        claims[
+            "alternative_estimands.time_varying.intervals[0].ci_low"
+        ].effect_scale.value
+        == "hazard_ratio"
+    )
+    assert (
+        claims[
+            "alternative_estimands.time_varying.intervals[0].ci_high"
+        ].effect_scale.value
+        == "hazard_ratio"
+    )
+
+
 def test_post_replace_staging_root_error_does_not_publish_failed_attempt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

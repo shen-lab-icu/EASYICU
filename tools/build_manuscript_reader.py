@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import shutil
@@ -14,6 +15,13 @@ from easyicu.research_agent.authority.evidence_store import (
     EvidenceEnforcementMode,
     EvidenceStore,
 )
+from easyicu.research_agent.authority.runtime_artifacts import (
+    current_step_records,
+    verified_run_evidence_path,
+)
+from easyicu.research_agent.execution.runners.landmark_survival_executor import (
+    build_survival_manuscript_projection,
+)
 from easyicu.research_agent.literature import LiteratureBundle
 from easyicu.research_agent.reporting.article_display_package import (
     inspect_article_display_package,
@@ -21,7 +29,13 @@ from easyicu.research_agent.reporting.article_display_package import (
 )
 from easyicu.research_agent.reporting.bibtex import render_bibtex
 from easyicu.research_agent.reporting.latex import scaffold_to_latex
-from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+from easyicu.research_agent.reporting.manuscript_post import (
+    bind_numeric_values,
+    drop_untraceable_numeric_sentences,
+)
+from easyicu.research_agent.reporting.manuscript_projection import (
+    project_owner_issued_manuscript_claims,
+)
 from easyicu.research_agent.reporting.manuscript_quality import (
     repair_reader_structure_from_existing_prose,
 )
@@ -48,13 +62,122 @@ def _load_literature(run_dir: Path) -> LiteratureBundle | None:
         return None
 
 
+def _load_reader_title(run_dir: Path) -> str:
+    """Use the host-owned manuscript packet when Writer's title was filtered."""
+
+    path = run_dir / "manuscript_packet.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+        return "EasyICU analysis-only manuscript draft"
+    title = str(payload.get("title") or "").strip().lstrip("#").strip()
+    return title or "EasyICU analysis-only manuscript draft"
+
+
+def _publication_figure_exclusion_reason(run_dir: Path) -> str | None:
+    """Fail closed when the source run has not cleared publication figure QA."""
+
+    path = run_dir / "manifest.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+        return None
+    readiness = payload.get("readiness")
+    if not isinstance(readiness, dict):
+        return None
+    if readiness.get("publication_figure_visual_qa_passed") is False:
+        return "source_run_publication_figure_visual_qa_failed"
+    return None
+
+
 def _prepare_reader_manuscript(
     source_bound: str,
-) -> tuple[str, tuple[dict[str, str], ...]]:
+    *,
+    per_step_records: list[dict[str, Any]] | None = None,
+) -> tuple[str, tuple[dict[str, Any], ...]]:
     """Apply provider-free reader repairs before provenance is projected."""
 
+    migrated_records = copy.deepcopy(per_step_records or [])
+    migration_repairs: list[dict[str, Any]] = []
+    for record in migrated_records:
+        summary = record.get("step_summary")
+        if not isinstance(summary, dict):
+            continue
+        reporting = summary.get("reportable_survival_results")
+        if not isinstance(reporting, dict) or "manuscript_projection" in reporting:
+            continue
+        association = reporting.get("time_varying_adjusted_association")
+        intervals = (
+            association.get("intervals") if isinstance(association, dict) else None
+        )
+        if (
+            record.get("generation_mode") != "deterministic_standard"
+            or record.get("deterministic_standard_analysis")
+            != "signed_landmark_survival_suite"
+            or reporting.get("schema_version") != "easyicu.survival_reporting/1"
+            or reporting.get("execution_owner") != "landmark_survival_executor_v1"
+            or not isinstance(intervals, list)
+            or not intervals
+        ):
+            continue
+        reporting["manuscript_projection"] = build_survival_manuscript_projection(
+            interval_count=len(intervals)
+        )
+        migration_repairs.append(
+            {
+                "reason_code": "legacy_owner_projection_contract_migrated",
+                "step_id": str(record.get("step_id") or ""),
+                "from_schema_version": "easyicu.survival_reporting/1",
+                "projection_schema_version": "easyicu.manuscript_projection/1",
+            }
+        )
     repaired, repairs = repair_reader_structure_from_existing_prose(source_bound)
-    return repaired, tuple(dict(item) for item in repairs)
+    repaired, projection_repairs = project_owner_issued_manuscript_claims(
+        repaired,
+        per_step_records=migrated_records,
+    )
+    return repaired, tuple(
+        [
+            *(dict(item) for item in repairs),
+            *migration_repairs,
+            *(dict(item) for item in projection_repairs),
+        ]
+    )
+
+
+def _load_verified_current_step_records(
+    run_dir: Path, evidence: EvidenceStore
+) -> list[dict[str, Any]]:
+    """Rehydrate current step summaries only from digest-verified evidence."""
+
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+        return []
+    records = manifest.get("per_step_records")
+    if not isinstance(records, list):
+        return []
+    verified: list[dict[str, Any]] = []
+    for raw in current_step_records(records):
+        if not isinstance(raw, dict):
+            continue
+        evidence_id = str(raw.get("step_summary_evidence_id") or "").strip()
+        evidence_record = evidence.get(evidence_id) if evidence_id else None
+        if evidence_record is None:
+            continue
+        source = verified_run_evidence_path(run_dir, evidence_record)
+        if source is None:
+            continue
+        try:
+            summary = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(summary, dict):
+            continue
+        item = dict(raw)
+        item["step_summary"] = summary
+        verified.append(item)
+    return verified
 
 
 def _copy_figures(
@@ -140,14 +263,40 @@ def build_bundle(
     if not source_path.is_file():
         raise ValueError(f"manuscript source is not a file: {source_path}")
     source_bound = source_path.read_text(encoding="utf-8")
-    prepared_bound, deterministic_repairs = _prepare_reader_manuscript(source_bound)
     evidence = EvidenceStore(run_dir, enforcement_mode=EvidenceEnforcementMode.STRICT)
+    verified_step_records = _load_verified_current_step_records(run_dir, evidence)
+    prepared_bound, deterministic_repairs = _prepare_reader_manuscript(
+        source_bound,
+        per_step_records=verified_step_records,
+    )
+    prepared_bound = evidence.bind_manuscript(
+        prepared_bound,
+        per_step_records=verified_step_records,
+    )
 
     unbound = strip_numeric_provenance(prepared_bound)
+    unbound, removed_numeric_sentences = drop_untraceable_numeric_sentences(
+        unbound,
+        evidence=evidence,
+        per_step_records=verified_step_records,
+    )
+    deterministic_repairs = tuple(
+        [
+            *deterministic_repairs,
+            *(
+                {
+                    "reason_code": "strict_untraceable_numeric_sentence_removed",
+                    **dict(item),
+                }
+                for item in removed_numeric_sentences
+            ),
+        ]
+    )
     corrected, binding_map, untraced = bind_numeric_values(
         unbound,
         evidence=evidence,
         enforcement_mode=EvidenceEnforcementMode.STRICT,
+        per_step_records=verified_step_records,
     )
     if untraced:
         raise ValueError(f"unexpected untraced numeric values: {untraced[:8]}")
@@ -166,6 +315,7 @@ def build_bundle(
     )
 
     literature = _load_literature(run_dir)
+    figure_exclusion_reason: str | None = None
     supplementary_figure_paths: list[tuple[str, str]] = []
     display_inventory: dict[str, Any] | None = None
     if article_display_package is not None:
@@ -177,11 +327,17 @@ def build_bundle(
             )
         )
     else:
-        figure_paths = _copy_figures(
-            run_dir=run_dir, output_dir=output_dir, evidence=evidence
+        figure_exclusion_reason = _publication_figure_exclusion_reason(run_dir)
+        figure_paths = (
+            []
+            if figure_exclusion_reason
+            else _copy_figures(
+                run_dir=run_dir, output_dir=output_dir, evidence=evidence
+            )
         )
     tex = scaffold_to_latex(
         markdown=corrected,
+        title=_load_reader_title(run_dir),
         bibliography=literature,
         bibliography_basename="manuscript_scaffold",
         figure_paths=figure_paths or None,
@@ -220,6 +376,7 @@ def build_bundle(
         "article_display_inventory": (
             "article_display_inventory.json" if display_inventory is not None else None
         ),
+        "figure_exclusion_reason": figure_exclusion_reason,
         "provider_calls": 0,
         "claim_ceiling": "analysis_only",
         "publication_authorized": False,

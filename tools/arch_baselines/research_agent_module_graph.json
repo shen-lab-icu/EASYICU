@@ -6649,11 +6649,23 @@
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.orchestration.workflow"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.preplan_know_how"
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.progressive_artifacts"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.progressive_contract"
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
@@ -8760,8 +8772,24 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.reporting.manuscript_provenance",
+      "easyicu.research_agent.authority.evidence_store"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_provenance",
+      "easyicu.research_agent.authority.numeric_claim_identity"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_provenance",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.reporting.manuscript_sections",
       "easyicu.research_agent.reporting.administrative_authority"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_sections",
+      "easyicu.research_agent.reporting.manuscript_quality"
     ],
     [
       "easyicu.research_agent.reporting.novelty_positioning",
@@ -8802,6 +8830,10 @@
     [
       "easyicu.research_agent.reporting.publication_bundles",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.reporting.readiness",
+      "easyicu.research_agent.audits.manuscript_claims"
     ],
     [
       "easyicu.research_agent.reporting.readiness",
@@ -9085,6 +9117,22 @@
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.manuscript_projection"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.manuscript_provenance"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.manuscript_quality"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.manuscript_sections"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.reporting.novelty_positioning"
     ],
     [
@@ -9122,6 +9170,10 @@
     [
       "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.review.methodological_rigor"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.robustness.panel"
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
@@ -9732,9 +9784,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2425,
+    "edge_count": 2438,
     "largest_scc_size": 0,
-    "module_count": 594,
+    "module_count": 597,
     "package_count": 32,
     "top_level_module_count": 34
   },
@@ -10263,6 +10315,9 @@
     "easyicu.research_agent.reporting.latex": "reporting/latex.py",
     "easyicu.research_agent.reporting.manuscript_literature": "reporting/manuscript_literature.py",
     "easyicu.research_agent.reporting.manuscript_post": "reporting/manuscript_post.py",
+    "easyicu.research_agent.reporting.manuscript_projection": "reporting/manuscript_projection.py",
+    "easyicu.research_agent.reporting.manuscript_provenance": "reporting/manuscript_provenance.py",
+    "easyicu.research_agent.reporting.manuscript_quality": "reporting/manuscript_quality.py",
     "easyicu.research_agent.reporting.manuscript_sections": "reporting/manuscript_sections.py",
     "easyicu.research_agent.reporting.novelty_positioning": "reporting/novelty_positioning.py",
     "easyicu.research_agent.reporting.p_values": "reporting/p_values.py",
