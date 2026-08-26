@@ -43,7 +43,7 @@
       },
       {
         key: 'anderson_landmark_1983', year: '1983', venue: 'Journal of Clinical Oncology', pmid: '6668489',
-        title: 'Analysis of survival by tumor response and other time-dependent outcome comparisons.',
+        title: 'Analysis of survival by tumor response.',
         relevance: tr('Frames the temporal limitation of a first-24-hour phenotype.', '界定入 ICU 后 24 小时表型的时间学局限。'),
         url: 'https://pubmed.ncbi.nlm.nih.gov/6668489/',
       },
@@ -72,16 +72,16 @@
         url: 'https://pubmed.ncbi.nlm.nih.gov/19564179/',
       },
       {
-        key: 'ricu_2023', year: '2023', venue: 'Software', pmid: '',
+        key: 'ricu_2023', year: '2023', venue: 'GigaScience', pmid: '37318234',
         title: "ricu: R's interface to intensive care data.",
         relevance: tr("Conceptual ancestor of EasyICU's concept dictionary and table model.", 'EasyICU 概念字典与表模型的概念先驱。'),
-        url: 'https://github.com/eth-mds/ricu',
+        url: 'https://academic.oup.com/gigascience/article/doi/10.1093/gigascience/giad041/7198370',
       },
       {
-        key: 'johnson_mimiciv_2023', year: '2023', venue: 'Scientific Data', pmid: '',
+        key: 'johnson_mimiciv_2023', year: '2023', venue: 'Scientific Data', pmid: '36596836',
         title: 'MIMIC-IV, a freely accessible electronic health record dataset.',
         relevance: tr('Primary source database used by this EasyICU run.', '本次 EasyICU 运行使用的主要来源数据库。'),
-        url: '',
+        url: 'https://pubmed.ncbi.nlm.nih.gov/36596836/',
       },
     ];
   }

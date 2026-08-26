@@ -460,6 +460,12 @@ def test_sources_expose_only_the_frozen_verified_identifiers() -> None:
             "https://pubmed.ncbi.nlm.nih.gov/21611958/",
         ),
     }
+    assert sources["anderson_landmark_1983"]["title"] == (
+        "Analysis of survival by tumor response."
+    )
+    assert sources["strobe_2007"]["bibliographic_notices"] == [
+        "Erratum: Ann Intern Med. 2008;148(2):168."
+    ]
 
 
 def test_survival_outputs_require_assumption_and_estimand_sources() -> None:

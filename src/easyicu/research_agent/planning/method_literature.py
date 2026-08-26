@@ -44,7 +44,7 @@ __all__ = [
     "reporting_method_source_keys_for_guidelines",
 ]
 
-METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/4"
+METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/5"
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,7 @@ class MethodCard:
     source_pmid: str = ""
     source_doi: str = ""
     source_url: str = ""
+    source_bibliographic_notices: tuple[str, ...] = field(default=())
     # Exact planner design elements this *card* can govern.  A source may own
     # several cards (STROBE currently owns reporting, repeated-unit dependence,
     # and absolute/relative interpretation), so source-key membership alone is
@@ -89,6 +90,9 @@ class MethodCard:
             "source_pmid": self.source_pmid,
             "source_doi": self.source_doi,
             "source_url": self.source_url,
+            "source_bibliographic_notices": list(
+                self.source_bibliographic_notices
+            ),
             "design_elements": list(self.design_elements),
             "also_see": list(self.also_see),
         }
@@ -116,6 +120,9 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         source_pmid="17938396",
         source_doi="10.7326/0003-4819-147-8-200710160-00010",
         source_url="https://pubmed.ncbi.nlm.nih.gov/17938396/",
+        source_bibliographic_notices=(
+            "Erratum: Ann Intern Med. 2008;148(2):168.",
+        ),
         design_elements=("reporting",),
     ),
     MethodCard(
@@ -176,10 +183,7 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
             "being described, so say which estimate is primary and why."
         ),
         source_key="anderson_landmark_1983",
-        source_title=(
-            "Analysis of survival by tumor response and other comparisons of "
-            "time-to-event by outcome variables."
-        ),
+        source_title="Analysis of survival by tumor response.",
         source_year="1983",
         source_venue="Journal of Clinical Oncology",
         source_pmid="6668489",
@@ -439,6 +443,7 @@ def method_literature_citations() -> tuple[dict[str, Any], ...]:
             "pmid": card.source_pmid or None,
             "doi": card.source_doi or None,
             "url": card.source_url or None,
+            "bibliographic_notices": list(card.source_bibliographic_notices),
         }
     return tuple(seen.values())
 
