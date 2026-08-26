@@ -10,7 +10,13 @@ from easyicu.research_agent.reporting.article_display_package import (
 
 
 def _write_figure(
-    root: Path, stem: str, placement: str, *, display_purpose: str | None = None
+    root: Path,
+    stem: str,
+    placement: str,
+    *,
+    display_purpose: str | None = None,
+    panel_count: int = 1,
+    source_count: int = 0,
 ) -> None:
     metadata = {"placement": placement}
     if display_purpose is not None:
@@ -23,9 +29,13 @@ def _write_figure(
                 "core_claim": f"{stem} supports its declared result.",
                 "panels": [
                     {
-                        "panel_id": "a",
+                        "panel_id": chr(ord("a") + index),
                         "metadata": metadata,
                     }
+                    for index in range(panel_count)
+                ],
+                "source_data": [
+                    f"source_{index + 1}.csv" for index in range(source_count)
                 ],
             }
         ),
@@ -72,9 +82,33 @@ def test_article_display_inventory_flags_single_composite_without_calling_it_inv
     inventory = inspect_article_display_package(tmp_path)
 
     assert inventory["single_composite_only"] is True
+    assert inventory["single_composite_scientific_coverage"] is False
     assert "single_composite_only" in inventory["planning_target_gaps"]
     assert inventory["planning_targets"]["are_acceptance_gates"] is False
     assert "publication readiness" in inventory["claim_boundary"]
+
+
+def test_article_display_inventory_accepts_one_bound_multipanel_scientific_figure(
+    tmp_path: Path,
+) -> None:
+    _write_figure(
+        tmp_path,
+        "narrow_primary_result",
+        "main",
+        display_purpose="scientific_result",
+        panel_count=3,
+        source_count=3,
+    )
+
+    inventory = inspect_article_display_package(tmp_path)
+
+    assert inventory["single_composite_only"] is True
+    assert inventory["single_composite_scientific_coverage"] is True
+    assert "single_composite_only" not in inventory["planning_target_gaps"]
+    assert (
+        "main_figure_count_outside_planning_target"
+        not in inventory["planning_target_gaps"]
+    )
 
 
 def test_article_display_inventory_allows_main_diagnostics_when_failed_closed(
