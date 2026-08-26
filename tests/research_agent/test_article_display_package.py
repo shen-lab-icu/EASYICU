@@ -9,7 +9,12 @@ from easyicu.research_agent.reporting.article_display_package import (
 )
 
 
-def _write_figure(root: Path, stem: str, placement: str) -> None:
+def _write_figure(
+    root: Path, stem: str, placement: str, *, display_purpose: str | None = None
+) -> None:
+    metadata = {"placement": placement}
+    if display_purpose is not None:
+        metadata["display_purpose"] = display_purpose
     (root / f"{stem}.png").write_bytes(b"\x89PNG\r\n\x1a\npreview")
     (root / f"{stem}.figure_contract.json").write_text(
         json.dumps(
@@ -19,7 +24,7 @@ def _write_figure(root: Path, stem: str, placement: str) -> None:
                 "panels": [
                     {
                         "panel_id": "a",
-                        "metadata": {"placement": placement},
+                        "metadata": metadata,
                     }
                 ],
             }
@@ -42,6 +47,12 @@ def test_article_display_inventory_separates_main_and_supplement(
         "supplementary_figures": 1,
         "main_tables": 0,
         "supplementary_tables": 0,
+        "main_scientific_result_figures": 0,
+        "main_scientific_result_tables": 0,
+        "main_diagnostic_figures": 0,
+        "main_diagnostic_tables": 0,
+        "main_unresolved_purpose_figures": 2,
+        "main_unresolved_purpose_tables": 0,
         "unresolved_placements": 0,
     }
     assert inventory["single_composite_only"] is False
@@ -66,18 +77,54 @@ def test_article_display_inventory_flags_single_composite_without_calling_it_inv
     assert "publication readiness" in inventory["claim_boundary"]
 
 
-def test_article_display_inventory_does_not_demand_main_results_when_failed_closed(
+def test_article_display_inventory_allows_main_diagnostics_when_failed_closed(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "article_display_status.json").write_text(
         json.dumps({"scientific_status": "failed_closed"}), encoding="utf-8"
     )
-    _write_figure(tmp_path, "supplementary_diagnostic", "supplementary")
+    _write_figure(
+        tmp_path,
+        "main_identifiability_diagnostic",
+        "main",
+        display_purpose="diagnostic",
+    )
+    _write_figure(
+        tmp_path,
+        "supplementary_audit",
+        "supplementary",
+        display_purpose="audit",
+    )
 
     inventory = inspect_article_display_package(tmp_path)
 
     assert inventory["scientific_status"] == "failed_closed"
-    assert inventory["counts"]["main_figures"] == 0
+    assert inventory["counts"]["main_figures"] == 1
     assert inventory["counts"]["main_tables"] == 0
+    assert inventory["counts"]["main_scientific_result_figures"] == 0
+    assert inventory["counts"]["main_diagnostic_figures"] == 1
+    assert inventory["counts"]["main_unresolved_purpose_figures"] == 0
     assert inventory["planning_target_gaps"] == []
     assert inventory["planning_targets"]["applicable_to_scientific_status"] is False
+
+
+def test_article_display_inventory_rejects_failed_closed_main_scientific_result(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "article_display_status.json").write_text(
+        json.dumps({"scientific_status": "failed_closed"}), encoding="utf-8"
+    )
+    _write_figure(
+        tmp_path,
+        "unauthorized_effect",
+        "main",
+        display_purpose="scientific_result",
+    )
+
+    inventory = inspect_article_display_package(tmp_path)
+
+    assert inventory["counts"]["main_scientific_result_figures"] == 1
+    assert (
+        "failed_closed_main_scientific_result_forbidden"
+        in inventory["planning_target_gaps"]
+    )
