@@ -17,6 +17,7 @@
     loading: false,
     error: '',
     request: 0,
+    recentResources: [],
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -125,6 +126,7 @@
       const jobId = String(value.job_id || '').trim();
       const sourceId = String(value.source_id || '').trim();
       const expectedDatabase = String(value.expected_database || '').trim();
+      const entryMode = String(value.entry_mode || '').trim();
       const supportedDatabases = new Set(['miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic']);
       if (route !== 'extraction' || !['setup', 'running', 'review'].includes(state)) return null;
       if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(studyContextId)) return null;
@@ -132,14 +134,18 @@
       if (jobId && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(jobId)) return null;
       if (sourceId && !/^src_[a-f0-9]{12}$/.test(sourceId)) return null;
       if (expectedDatabase && !supportedDatabases.has(expectedDatabase)) return null;
+      if (entryMode && entryMode !== 'source_binding') return null;
       return {
         kind: 'native_workspace', route, state,
         study_context_id: studyContextId, study_revision: studyRevision,
-        label: String(value.label || tr('Data Extraction', '数据提取')).slice(0, 160),
+        label: entryMode === 'source_binding'
+          ? tr('Data source setup', '数据来源设置')
+          : String(value.label || tr('Data Extraction', '数据提取')).slice(0, 160),
         media_type: 'application/vnd.easyicu.native-workspace',
         ...(jobId ? { job_id: jobId } : {}),
         ...(sourceId ? { source_id: sourceId.slice(0, 80) } : {}),
         ...(expectedDatabase ? { expected_database: expectedDatabase } : {}),
+        ...(entryMode ? { entry_mode: entryMode } : {}),
       };
     }
     const file = String(value.file || '').trim().replace(/\\/g, '/');
@@ -158,6 +164,20 @@
       validation_status: 'unvalidated',
       claim_ceiling: 'unsupported',
     };
+  }
+  function resourceKey(resource) {
+    const owner = window.EU_GUIDED_PI_RESOURCES;
+    if (owner && typeof owner.create === 'function') {
+      const identity = owner.create({ esc });
+      if (identity && typeof identity.key === 'function') return identity.key(resource);
+    }
+    return JSON.stringify(resource || {});
+  }
+  function rememberResource(resource) {
+    const key = resourceKey(resource);
+    state.recentResources = [resource]
+      .concat(state.recentResources.filter(item => resourceKey(item) !== key))
+      .slice(0, 6);
   }
   function isResearchArtifact() { return !!state.resource && state.resource.kind === 'research_artifact'; }
   function isResearchDocument() { return !!state.resource && (state.resource.kind === 'research_document' || state.resource.kind === 'system_validation_document'); }
@@ -292,7 +312,7 @@
     const reference = isDataPackageReview()
       ? `${state.resource.study_context_id} · rev ${state.resource.study_revision}`
       : isDataWorkbenchSnapshot() ? `${state.resource.view} · ${state.resource.snapshot_sha256.slice(0, 12)}`
-      : isNativeWorkspace() ? `${state.resource.route} · rev ${state.resource.study_revision}`
+      : isNativeWorkspace() ? `${state.resource.entry_mode === 'source_binding' ? tr('data source', '数据来源') : state.resource.route} · rev ${state.resource.study_revision}`
       : isStructuredArtifact() || isDocument()
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : isLiteratureSource() ? state.resource.url : state.resource.file;
@@ -306,12 +326,20 @@
         <strong>${tr('Workspace artifact · Unvalidated', '工作区产物 · 未验证')}</strong>
         <span>${tr('Not scientific evidence; unsupported for clinical or manuscript claims.', '不是科学证据；不支持临床或论文结论。')}</span>
       </div>`;
+    const currentKey = resourceKey(state.resource);
+    const recentPreviews = state.recentResources.length > 1 ? `
+      <nav class="gpi-preview-recent" aria-label="${tr('Recent previews', '最近预览')}">
+        <span>${tr('Recent', '回看')}</span>
+        <div>${state.recentResources.map((resource, index) => `
+          <button type="button" data-gpi-preview-recent="${index}" aria-current="${resourceKey(resource) === currentKey ? 'true' : 'false'}" title="${esc(resource.label)}">${esc(resource.label)}</button>`).join('')}</div>
+      </nav>` : '';
     state.host.innerHTML = `
       <header class="gpi-preview-head">
         <div class="gpi-preview-file-icon" aria-hidden="true">${icon(state.mode === 'web' ? 'globe' : 'file', 16)}</div>
         <div class="gpi-preview-ident"><strong>${esc(state.resource.label)}</strong><span>${esc(reference)}</span></div>
         <button class="gpi-preview-close" type="button" data-gpi-preview-close aria-label="${tr('Close preview', '关闭预览')}" title="${tr('Close preview', '关闭预览')}">${icon('close', 15)}</button>
       </header>
+      ${recentPreviews}
       ${provenance}
       ${tabs}
       <div class="gpi-preview-body">${body}</div>`;
@@ -397,8 +425,10 @@
     const safe = safeResource(resource);
     const project = String(projectId || '').trim();
     if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
+    if (state.projectId && project && state.projectId !== project) state.recentResources = [];
     state.resource = safe;
     state.projectId = project;
+    rememberResource(safe);
     state.artifact = null;
     state.payload = null;
     state.studyContext = null;
@@ -414,12 +444,18 @@
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }
-  function clearProject() { close(); state.projectId = ''; }
+  function clearProject() { close(); state.projectId = ''; state.recentResources = []; }
   function mount(host) {
     if (!host) return;
     state.host = host;
     host.addEventListener('click', event => {
       if (event.target.closest('[data-gpi-preview-close]')) { close(); return; }
+      const recent = event.target.closest('[data-gpi-preview-recent]');
+      if (recent) {
+        const resource = state.recentResources[Number(recent.dataset.gpiPreviewRecent)];
+        if (resource) open(resource, state.projectId);
+        return;
+      }
       const tab = event.target.closest('[data-gpi-preview-mode]');
       if (!tab || !state.resource) return;
       const requested = tab.dataset.gpiPreviewMode;

@@ -101,6 +101,11 @@ def _complete_study() -> dict[str, Any]:
             "variance_estimator": "model_based",
         },
         "time_window": {"hours": 24, "anchor": "ICU admission"},
+        "confirmations": {
+            "feature_time_window": True,
+            "export_format": True,
+            "extraction_completed": True,
+        },
         "export_format": "parquet",
         "analysis_goal": "Descriptive prognostic association",
     }
@@ -264,13 +269,39 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
         "question",
         "data_source",
         "cohort",
-        "modules",
         "outcome",
+        "analysis_goal",
         "time_window",
         "export_format",
-        "analysis_goal",
+        "modules",
     ]
     assert next(row for row in empty.stages if row.id == "idea").status == "blocked"
+
+    default_only_export = {
+        **_complete_study(),
+        "confirmations": {"feature_time_window": True},
+    }
+    default_only_snapshot = build_research_workflow_snapshot(
+        study=default_only_export,
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+    assert "export_format" in default_only_snapshot.missing_setup_fields
+
+    delegated_adjustment = {
+        **default_only_export,
+        "covariates": [],
+        "covariate_selection": "planner_selectable",
+    }
+    delegated_adjustment_snapshot = build_research_workflow_snapshot(
+        study=delegated_adjustment,
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+    assert "covariates" not in delegated_adjustment_snapshot.missing_setup_fields
+    assert "export_format" in delegated_adjustment_snapshot.missing_setup_fields
 
     accepted = build_research_workflow_snapshot(
         study={
@@ -439,6 +470,115 @@ def test_workflow_keeps_typed_execution_decisions_in_setup_gate() -> None:
         latest_run=None,
     )
     assert dependence_snapshot.missing_setup_fields == ["analysis_design.dependence"]
+
+
+def test_workflow_requires_named_clinical_definition_confirmation() -> None:
+    sepsis_study = {
+        **_complete_study(),
+        "question": "Estimate Sepsis-3 prevalence and ICU mortality association.",
+        "primary_exposure": "",
+        "analysis_goal": "",
+        "execution_concepts": {"outcome": "death"},
+        "analysis_design": {},
+        "cohort": {
+            **_complete_study()["cohort"],
+            "sepsis_definition": {"runtime_profile": "locked-v1"},
+        },
+    }
+
+    unconfirmed = build_research_workflow_snapshot(
+        study=sepsis_study,
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+    assert "confirmations.clinical_definition_sepsis" in (
+        unconfirmed.missing_setup_fields
+    )
+    assert "primary_exposure" in unconfirmed.missing_setup_fields
+    assert unconfirmed.missing_setup_fields.index("primary_exposure") < (
+        unconfirmed.missing_setup_fields.index("analysis_goal")
+    )
+    assert "covariates" not in unconfirmed.missing_setup_fields
+
+    confirmed = build_research_workflow_snapshot(
+        study={
+            **sepsis_study,
+            "confirmations": {"clinical_definition_sepsis": True},
+        },
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+    assert "confirmations.clinical_definition_sepsis" not in (
+        confirmed.missing_setup_fields
+    )
+
+
+def test_workflow_accepts_owner_locked_canonical_clinical_definition() -> None:
+    locked_study = {
+        **_complete_study(),
+        "question": "Estimate Sepsis-3 prevalence.",
+        "cohort": {
+            **_complete_study()["cohort"],
+            "sepsis_definition": {
+                "runtime_profile": "easyicu-locked-v1",
+                "implementation_profile": "standard-profile",
+                "definition_locked": True,
+                "locked_core": {
+                    "suspected_infection_windows": "owner validated",
+                    "sofa_window": "owner validated",
+                    "delta_rule": "owner validated",
+                    "sofa_threshold": "owner validated",
+                },
+            },
+        },
+        "confirmations": {"feature_time_window": True},
+    }
+
+    snapshot = build_research_workflow_snapshot(
+        study=locked_study,
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+
+    assert not any(
+        field.startswith("confirmations.clinical_definition_")
+        for field in snapshot.missing_setup_fields
+    )
+
+
+def test_workflow_requires_explicit_feature_time_window_confirmation() -> None:
+    unconfirmed = {
+        **_complete_study(),
+        "confirmations": {"export_format": True},
+    }
+
+    snapshot = build_research_workflow_snapshot(
+        study=unconfirmed,
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+
+    assert snapshot.missing_setup_fields == [
+        "confirmations.feature_time_window"
+    ]
+
+    confirmed = build_research_workflow_snapshot(
+        study={
+            **unconfirmed,
+            "confirmations": {
+                "feature_time_window": True,
+                "export_format": True,
+            },
+        },
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+    assert "confirmations.feature_time_window" not in confirmed.missing_setup_fields
 
 
 def test_pipeline_factory_rejects_missing_typed_analysis_design_before_job(
@@ -975,6 +1115,31 @@ def test_completed_preflight_advances_to_provider_plan_confirmation() -> None:
     assert plan.reason_code == "provider_ready_to_generate_plan"
 
 
+def test_completed_preflight_receipt_does_not_fall_back_to_extraction() -> None:
+    study = _complete_study()
+    study["confirmations"] = {
+        key: value
+        for key, value in study["confirmations"].items()
+        if key != "extraction_completed"
+    }
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=False,
+        active_job=None,
+        latest_run={
+            "run_type": "preflight",
+            "gate_status": "analysis_only",
+            "readiness_status": "awaiting_human_signoff",
+            "artifact_names": ["evidence_ledger.json"],
+        },
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert by_id["extraction"].status == "complete"
+    assert snapshot.current_stage == "plan"
+    assert snapshot.next_action_code == "provider_ready_to_generate_plan"
+
+
 def test_active_export_must_belong_to_the_bound_study() -> None:
     study = _complete_study()
     assert active_export_matches_study(study, "/private/prepared/source") is True
@@ -1006,6 +1171,22 @@ def test_project_bound_registered_export_does_not_depend_on_global_active_source
 
     assert registered_export_matches_study(study, registry) is True
     registry["sources"][0]["ok"] = False
+    assert registered_export_matches_study(study, registry) is False
+
+
+def test_bound_database_source_is_not_a_completed_feature_extraction() -> None:
+    study = _complete_study()
+    study["confirmations"] = {
+        key: value
+        for key, value in study["confirmations"].items()
+        if key != "extraction_completed"
+    }
+    registry = {
+        "sources": [
+            {"path": "/private/prepared/source", "ok": True, "modules": ["vitals"]}
+        ]
+    }
+
     assert registered_export_matches_study(study, registry) is False
 
 
@@ -1086,6 +1267,76 @@ def test_result_interpretation_card_reuses_agent_claims_without_new_numbers() ->
     assert card.human_review_required is True
 
 
+def test_result_interpretation_card_separates_validated_analysis_from_publication_gate() -> None:
+    card = build_result_interpretation_card(
+        run_id="run_analysis_only",
+        review={
+            "gate": {
+                "status": "blocked",
+                "reason": "publication_requirements_incomplete",
+                "checks": [
+                    {"id": "analysis_validated", "passed": True},
+                    {"id": "numeric_verified", "passed": True},
+                    {"id": "paper_authorized", "passed": False},
+                ],
+            },
+            "readiness": {"status": "blocked", "reportable": False},
+            "artifacts": [{"name": "result_tables.json"}],
+        },
+        manuscript=None,
+        result_tables={
+            "tables": [
+                {
+                    "name": "distribution.csv",
+                    "label": "Aggregate distribution",
+                    "evidence_id": "ev-distribution",
+                    "headers": [
+                        "n_rows",
+                        "exposure_denominator",
+                        "exposure_pct",
+                        "outcome_events",
+                        "outcome_denominator",
+                        "outcome_rate_pct",
+                    ],
+                    "rows": [["100", "100", "40", "8", "40", "20"]],
+                }
+            ]
+        },
+        scientific_readiness={
+            "status": "analysis_only",
+            "claim_ceiling": "analysis_only",
+            "facts": {"analysis": {"analysis_validated": True}},
+        },
+    )
+
+    assert card.status == "analysis_only"
+    assert card.claim_ceiling == "analysis_only"
+    assert card.result_tables[0].entries == [["100", "100", "40", "8", "40", "20"]]
+
+
+def test_result_interpretation_card_keeps_unverified_numbers_blocked() -> None:
+    card = build_result_interpretation_card(
+        run_id="run_unverified",
+        review={
+            "gate": {
+                "status": "blocked",
+                "checks": [{"id": "numeric_verified", "passed": False}],
+            },
+            "readiness": {"status": "blocked", "reportable": False},
+        },
+        manuscript=None,
+        result_tables=None,
+        scientific_readiness={
+            "status": "analysis_only",
+            "claim_ceiling": "analysis_only",
+            "facts": {"analysis": {"analysis_validated": True}},
+        },
+    )
+
+    assert card.status == "blocked"
+    assert card.claim_ceiling == "unsupported"
+
+
 def test_interpretation_and_manuscript_tools_bound_large_agent_drafts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1106,6 +1357,9 @@ def test_interpretation_and_manuscript_tools_bound_large_agent_drafts(
         ],
         "markdown_preview": "full manuscript " * 10_000,
     }
+    manuscript["claims"][0]["text"] = (
+        "Host-only grouping uses stay_id and must not enter the model projection."
+    )
     review = {
         "gate": {
             "status": "analysis_only",
@@ -1180,9 +1434,11 @@ def test_interpretation_and_manuscript_tools_bound_large_agent_drafts(
     assert interpretation["details"]["interpretation"]["result_tables"][0][
         "entries"
     ] == [["1.25", "1.10", "1.42", "odds_ratio"]]
-    assert len(interpretation["details"]["interpretation"]["claims"]) == 12
+    assert len(interpretation["details"]["interpretation"]["claims"]) == 11
+    assert interpretation["details"]["withheld_claim_count"] == 1
     assert draft["code"] == "easyicu_manuscript_projected"
-    assert len(draft["details"]["manuscript"]["review_claims"]) == 12
+    assert len(draft["details"]["manuscript"]["review_claims"]) == 11
+    assert draft["details"]["manuscript"]["withheld_review_claim_count"] == 1
     assert "markdown_preview" not in draft["details"]["manuscript"]
     assert len(json.dumps(interpretation).encode("utf-8")) < 32_768
     assert len(json.dumps(draft).encode("utf-8")) < 32_768
@@ -2828,6 +3084,33 @@ def _foundation_profile() -> dict[str, Any]:
     }
 
 
+def _write_development_resume_acquisition(
+    run_dir: Path,
+    *,
+    feature_concepts: tuple[str, ...] = (),
+) -> None:
+    pipeline_input = run_dir.parent.parent / "pipeline_input"
+    pipeline_input.mkdir(parents=True, exist_ok=True)
+    universe = pipeline_input / "web_research_universe.parquet"
+    universe.write_bytes(b"typed-development-resume-universe")
+    (pipeline_input / "web_research_universe_provenance.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.cohort_materializer/1",
+                "database": "miiv",
+                "cohort_window_hours": [0.0, 24.0],
+                "feature_concepts": list(feature_concepts),
+                "outcome_concepts": ["death"],
+                "static_concepts": ["age", "sex"],
+                "cohort_file_sha256": hashlib.sha256(
+                    universe.read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     tmp_path: Path,
 ) -> None:
@@ -3395,6 +3678,84 @@ def test_guided_project_rail_projects_real_mode_from_bound_study_setup(
 
     assert payload["drafts"][0]["data_mode"] == "real"
     assert rows[0]["data_mode"] == "demo", "projection mutated registry metadata"
+
+
+def test_guided_project_rail_projects_real_mode_from_authoritative_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import guided_sessions
+    from easyicu.webserver.pi_copilot import project_authority
+
+    rows = [
+        {
+            "id": "draft-context-source",
+            "title": "Bound source project",
+            "data_mode": "unbound",
+            "surface_visibility": "product",
+            "updated_at": "2026-08-25T10:00:00Z",
+        }
+    ]
+    monkeypatch.setattr(guided_sessions, "_read_raw", lambda: {"drafts": rows})
+    monkeypatch.setattr(guided_sessions, "read_project_study_setup", lambda _id: None)
+    monkeypatch.setattr(
+        project_authority,
+        "ProjectAuthorityStore",
+        lambda: SimpleNamespace(resolve=lambda _project_id: "study-context-source"),
+    )
+    monkeypatch.setattr(
+        study_context_owner,
+        "get_context",
+        lambda _study_id: {
+            "id": "study-context-source",
+            "data_source": {"database": "miiv", "label": "MIMIC-IV"},
+        },
+    )
+    monkeypatch.setattr(agent_runs, "list_run_history", lambda **_kwargs: {"runs": []})
+
+    payload = guided_sessions.list_guided_drafts(limit=20)
+
+    assert payload["drafts"][0]["data_mode"] == "real"
+    assert payload["drafts"][0]["workflow_status"] == "configured"
+    assert rows[0]["data_mode"] == "unbound", "projection mutated registry metadata"
+
+
+def test_guided_project_rail_projects_only_the_visible_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import guided_sessions
+    from easyicu.webserver.pi_copilot import project_authority
+
+    rows = [
+        {
+            "id": f"draft-{index}",
+            "title": f"Project {index}",
+            "surface_visibility": "product",
+            "updated_at": f"2026-08-25T10:0{index}:00Z",
+        }
+        for index in range(5)
+    ]
+    setup_calls: list[str] = []
+    resolve_calls: list[str] = []
+    monkeypatch.setattr(guided_sessions, "_read_raw", lambda: {"drafts": rows})
+    monkeypatch.setattr(
+        guided_sessions,
+        "read_project_study_setup",
+        lambda project_id: setup_calls.append(project_id) or None,
+    )
+    monkeypatch.setattr(
+        project_authority,
+        "ProjectAuthorityStore",
+        lambda: SimpleNamespace(
+            resolve=lambda project_id: resolve_calls.append(project_id) or None
+        ),
+    )
+
+    payload = guided_sessions.list_guided_drafts(limit=2)
+
+    assert payload["count"] == 5
+    assert [row["id"] for row in payload["drafts"]] == ["draft-4", "draft-3"]
+    assert setup_calls == ["draft-4", "draft-3"]
+    assert resolve_calls == ["draft-4", "draft-3"]
 
 
 def test_pipeline_projection_fails_closed_when_source_contains_a_host_path(
@@ -3987,6 +4348,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
         )
         expected_resume_path.parent.mkdir(parents=True)
         expected_resume_path.write_text("{}", encoding="utf-8")
+        _write_development_resume_acquisition(expected_resume_path.parent)
         monkeypatch.setattr(
             agent_pipeline_runs,
             "load_progressive_planner_checkpoint_chain",
@@ -4175,6 +4537,7 @@ def test_web_runner_allows_server_owned_resume_for_full_reviewed_development(
     )
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_text("{}", encoding="utf-8")
+    _write_development_resume_acquisition(checkpoint.parent)
     monkeypatch.setattr(
         agent_pipeline_runs,
         "load_progressive_planner_checkpoint_chain",
@@ -4258,6 +4621,62 @@ def test_development_resume_rejects_missing_server_checkpoint_sequence(
 
     assert exc_info.value.code == (
         "research_pipeline_development_resume_sequence_missing"
+    )
+
+
+def test_development_resume_restores_exact_typed_acquisition_roster(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run_prior" / "pipeline" / "run_pipeline"
+    run_dir.mkdir(parents=True)
+    checkpoint = run_dir / "progressive_planner_checkpoint_004.json"
+    checkpoint.write_text("{}", encoding="utf-8")
+    _write_development_resume_acquisition(
+        run_dir,
+        feature_concepts=("admission_type", "sepsis3"),
+    )
+
+    profile = agent_pipeline_runs._development_resume_acquisition_profile(
+        checkpoint_path=checkpoint,
+        database="miiv",
+        cohort_window=(0.0, 24.0),
+        outcome_concepts=("death",),
+        static_concepts=("age", "sex"),
+        required_feature_concepts=("sepsis3",),
+    )
+
+    assert profile == {
+        "feature_concepts": ("admission_type", "sepsis3"),
+        "outcome_concepts": ("death",),
+        "static_concepts": ("age", "sex"),
+    }
+
+
+def test_development_resume_rejects_changed_acquisition_bytes(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_prior" / "pipeline" / "run_pipeline"
+    run_dir.mkdir(parents=True)
+    checkpoint = run_dir / "progressive_planner_checkpoint_004.json"
+    checkpoint.write_text("{}", encoding="utf-8")
+    _write_development_resume_acquisition(run_dir)
+    universe = (
+        run_dir.parent.parent
+        / "pipeline_input"
+        / "web_research_universe.parquet"
+    )
+    universe.write_bytes(b"changed-after-receipt")
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc_info:
+        agent_pipeline_runs._development_resume_acquisition_profile(
+            checkpoint_path=checkpoint,
+            database="miiv",
+            cohort_window=(0.0, 24.0),
+            outcome_concepts=("death",),
+            static_concepts=("age", "sex"),
+            required_feature_concepts=(),
+        )
+
+    assert exc_info.value.code == (
+        "research_pipeline_development_resume_acquisition_digest_mismatch"
     )
 
 

@@ -137,6 +137,67 @@ def test_legacy_event_absence_is_not_misreported_as_missing(
     assert "event_rate_pct" not in encoded
 
 
+def test_registered_summary_avoids_full_cohort_module_scan(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = str(tmp_path / "registered")
+    registry = {
+        "sources": [
+            {
+                "id": "src_full",
+                "path": source_path,
+                "label": "MIMIC-IV v3.1",
+                "database": "miiv",
+                "ok": True,
+                "modules": ["outcome", "sepsis3_sofa2"],
+                "summary": {
+                    "stays": 94_458,
+                    "modules": 2,
+                    "file_count": 2,
+                    "total_rows": 99_120_515,
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        review_owner.cohort_review,
+        "cohort_review_summary",
+        lambda _body: pytest.fail("prepared exports must not rescan every module"),
+    )
+    monkeypatch.setattr(
+        review_owner,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source=source_path,
+            concepts=[
+                CatalogConcept(
+                    "sep3_sofa2",
+                    file_name="sepsis3_sofa2.parquet",
+                    column_role="event_status",
+                ),
+                CatalogConcept(
+                    "death",
+                    file_name="outcome.parquet",
+                    column_role="event_status",
+                ),
+            ],
+        ),
+    )
+
+    payload = review_owner.build_registered_data_package_review(
+        _study(source_path), registry=registry
+    )
+
+    assert payload["status"] == "ready_for_plan"
+    assert payload["denominator"]["count"] == 94_458
+    assert payload["source"] == {
+        "id": "src_full",
+        "label": "MIMIC-IV v3.1",
+        "database": "miiv",
+    }
+    assert "cohort_review_aggregate" not in payload["provenance"]["inputs"]
+
+
 def test_typed_sparse_event_without_receipt_blocks_plan(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

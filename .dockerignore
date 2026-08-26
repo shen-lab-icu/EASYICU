@@ -8,8 +8,13 @@
 .mypy_cache
 .playwright-cli
 .claude
+.codegraph
 .env
 .env.*
+desktop/.build
+desktop/node_modules
+desktop/src-tauri/target
+node_modules
 output
 baselines
 research_output

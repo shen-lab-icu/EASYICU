@@ -88,8 +88,11 @@
     const label = snapshot.preset_label || 'ICU cohort';
     return {
       title: existing.title || `${label} study`,
-      question: existing.question || `Analyze the selected ${label} using the prepared feature modules.`,
-      purpose: existing.purpose || 'Continue from Data Extraction to an auditable Agent analysis.',
+      // Selecting data authorizes the source and extraction setup only. A new
+      // Copilot project must still collect the research question and goal from
+      // the user instead of inheriting generic analysis prose as if confirmed.
+      question: existing.question || '',
+      purpose: existing.purpose || '',
       data_source: snapshot.data_source || existing.data_source || null,
       cohort: snapshot.cohort || existing.cohort || {},
       modules: snapshot.modules && snapshot.modules.length ? snapshot.modules : (existing.modules || []),
@@ -97,7 +100,7 @@
       time_window: Object.assign({}, existing.time_window || {}, { observation_hours: snapshot.observation_hours }),
       comparator: existing.comparator || '',
       export_format: snapshot.export_format || existing.export_format || '',
-      analysis_goal: existing.analysis_goal || 'Run an evidence-bound analysis of the prepared cohort.',
+      analysis_goal: existing.analysis_goal || '',
       confirmations: Object.assign({}, existing.confirmations || {}, { extraction_completed: !!snapshot.completed, crossdb_plan_only: false }),
       current_stage: snapshot.completed ? 'data_prepared' : 'study_setup',
     };

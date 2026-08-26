@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+from send2trash import send2trash as _send2trash
 
 from easyicu.webserver import state_paths
 
@@ -29,7 +30,7 @@ _PROJECTS_ROOT = state_paths.projects_root()
 
 _VALID_BRANCHES = {"predict", "crossdb", "quality"}
 _VALID_DEPTHS = {"extract", "review", "full"}
-_VALID_DATA_MODES = {"demo", "real"}
+_VALID_DATA_MODES = {"demo", "real", "unbound"}
 _ROW_LEVEL_KEYS = {"tableRows", "series", "patient", "stay_id", "subject_id", "hadm_id"}
 _MAX_DRAFTS = 80
 _MAX_SESSIONS = 80
@@ -103,6 +104,14 @@ class GuidedProjectMigrationError(ValueError):
             "field": field,
             "max_length": max_length,
         }
+
+
+class GuidedProjectTrashError(ValueError):
+    """Reject one unsafe or stale local project trash request."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class GuidedProjectStudySetup(BaseModel):
@@ -1408,6 +1417,12 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
         and row.get("id")
         and row.get("surface_visibility", "product") == "product"
     ]
+    drafts.sort(
+        key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
+        reverse=True,
+    )
+    cap = max(1, min(int(limit or 20), 100))
+    visible_drafts = drafts[:cap]
     # Old project folders can carry the default ``demo`` flag even after the
     # project is bound to a real registered export through StudyContext.  The
     # rail is a projection, so derive its data-mode label from the current
@@ -1415,13 +1430,15 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
     # patient rows or host paths are returned.
     projected_drafts: List[Dict[str, Any]] = []
     authority = ProjectAuthorityStore()
-    for row in drafts:
+    for row in visible_drafts:
         projected = dict(row)
         setup = read_project_study_setup(str(row.get("id") or ""))
         if setup is not None and setup.data_source:
             projected["data_mode"] = "real"
         study_id = authority.resolve(str(row.get("id") or ""))
         study = study_contexts.get_context(study_id) if study_id else None
+        if study and study.get("data_source"):
+            projected["data_mode"] = "real"
         history = agent_runs.list_run_history(study_id=study_id, limit=1) if study_id else {}
         runs = [item for item in (history.get("runs") or []) if isinstance(item, dict)]
         latest_run = runs[0] if runs else None
@@ -1440,18 +1457,71 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
         elif study and study.get("data_source"):
             projected["workflow_status"] = "configured"
         projected_drafts.append(projected)
-    projected_drafts.sort(
-        key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
-        reverse=True,
-    )
-    cap = max(1, min(int(limit or 20), 100))
     return {
         "ok": True,
-        "drafts": projected_drafts[:cap],
-        "count": len(projected_drafts),
+        "drafts": projected_drafts,
+        "count": len(drafts),
         "config_path": str(_CONFIG_PATH),
         "storage": "metadata_only",
     }
+
+
+def _trash_guided_project_folder(project_dir_value: Any, draft_id: str) -> None:
+    raw_path = Path(str(project_dir_value or "")).expanduser()
+    if not draft_id:
+        raise GuidedProjectTrashError(
+            "project_folder_trash_confirmation_required",
+            "A matching draft identifier is required before moving project files to the system trash.",
+        )
+    if raw_path.is_symlink():
+        raise GuidedProjectTrashError(
+            "project_folder_symlink_not_allowed",
+            "EasyICU will not move a symbolic-link project folder to the system trash.",
+        )
+    try:
+        project_dir = raw_path.resolve(strict=True)
+        projects_root = _PROJECTS_ROOT.expanduser().resolve()
+        home_dir = Path.home().resolve()
+    except OSError as exc:
+        raise GuidedProjectTrashError(
+            "project_folder_not_found",
+            "The registered local project folder no longer exists.",
+        ) from exc
+    if project_dir in {Path(project_dir.anchor), home_dir, projects_root}:
+        raise GuidedProjectTrashError(
+            "project_folder_scope_not_allowed",
+            "EasyICU will not move a filesystem root, home folder, or projects root to the system trash.",
+        )
+    if not project_dir.is_dir():
+        raise GuidedProjectTrashError(
+            "project_folder_not_found",
+            "The registered local project folder no longer exists.",
+        )
+    marker_path = project_dir / "guided_draft.json"
+    if marker_path.is_symlink():
+        raise GuidedProjectTrashError(
+            "project_folder_marker_invalid",
+            "The Guided project marker must be a regular file inside the project folder.",
+        )
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        raise GuidedProjectTrashError(
+            "project_folder_marker_invalid",
+            "The registered folder does not contain a readable Guided project marker.",
+        ) from exc
+    if not isinstance(marker, dict) or str(marker.get("id") or "") != draft_id:
+        raise GuidedProjectTrashError(
+            "project_folder_marker_mismatch",
+            "The project marker does not match the selected Guided project.",
+        )
+    try:
+        _send2trash(str(project_dir))
+    except OSError as exc:
+        raise GuidedProjectTrashError(
+            "project_folder_trash_failed",
+            "The local project folder could not be moved to the system trash.",
+        ) from exc
 
 
 def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -1493,6 +1563,30 @@ def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
             "storage": "metadata_only",
             "disk_deleted": False,
         }
+    trash_project_folder = payload.get("trash_project_folder") is True
+    if trash_project_folder:
+        if not draft_id or payload.get("trash_confirmation") != draft_id:
+            return {
+                "ok": False,
+                "blocked": True,
+                "error": "project_folder_trash_confirmation_required",
+                "reason": "Confirm the exact Guided project before moving its local folder to the system trash.",
+                "storage": "metadata_only",
+                "disk_deleted": False,
+                "project_folder_trashed": False,
+            }
+        try:
+            _trash_guided_project_folder(removed.get("project_dir"), draft_id)
+        except GuidedProjectTrashError as exc:
+            return {
+                "ok": False,
+                "blocked": True,
+                "error": exc.code,
+                "reason": str(exc),
+                "storage": "metadata_only",
+                "disk_deleted": False,
+                "project_folder_trashed": False,
+            }
     raw["schema_version"] = max(2, int(raw.get("schema_version") or 1))
     raw["updated_at"] = _now()
     raw["drafts"] = kept[:_MAX_DRAFTS]
@@ -1506,7 +1600,13 @@ def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
         "project_dir": removed.get("project_dir"),
         "storage": "metadata_only",
         "disk_deleted": False,
-        "reason": "Removed from the Guided draft list only; the local project folder was left untouched.",
+        "project_folder_trashed": trash_project_folder,
+        "recoverable_from_system_trash": trash_project_folder,
+        "reason": (
+            "Removed from the Guided draft list and moved the local project folder to the system trash."
+            if trash_project_folder
+            else "Removed from the Guided draft list only; the local project folder was left untouched."
+        ),
     }
 
 

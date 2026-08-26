@@ -249,6 +249,7 @@
   let pendingGuidedGoal = null;
   let guidedFrontdoorSeedText = null;
   let guidedFolderMenuOpen = false;
+  let guidedDraftRemoval = null;
   let guidedFolderDialogMode = null;
   let guidedFolderSeedTitle = 'New local study';
   let guidedDraftFolderSlug = '';
@@ -321,6 +322,7 @@
     pendingGuidedGoal = null;
     guidedFrontdoorSeedText = null;
     guidedFolderMenuOpen = false;
+    guidedDraftRemoval = null;
     guidedFolderDialogMode = null;
     guidedFolderSeedTitle = 'New local study';
     guidedDraftFolderSlug = '';
@@ -2658,11 +2660,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     return data && Array.isArray(data.drafts) ? data.drafts : [];
   }
   function loadGuidedDrafts(force) {
-    if (!window.EU_API || !window.EU_API.loadGuidedDrafts) return;
-    if (!force && (guidedDrafts.loading || guidedDrafts.data || guidedDrafts.error)) return;
+    if (!window.EU_API || !window.EU_API.loadGuidedDrafts) return Promise.resolve(null);
+    if (!force && (guidedDrafts.loading || guidedDrafts.data || guidedDrafts.error)) {
+      return Promise.resolve(guidedDrafts.data);
+    }
     guidedDrafts = { loading: true, error: null, data: guidedDrafts.data || null };
     renderSessions();
-    window.EU_API.loadGuidedDrafts({ limit: 20 }).then(data => {
+    return window.EU_API.loadGuidedDrafts({ limit: 20 }).then(async data => {
       guidedDrafts = { loading: false, error: null, data: data };
       renderSessions();
       if (guidedFolderDialogMode) renderGuidedFolderDialog();
@@ -2675,7 +2679,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (rememberedRow) {
           selectedGuidedDraft = rememberedRow;
           selectedGuidedRun = null;
-          openGuidedProjectMemory(rememberedRow, null, 'draft');
+          await openGuidedProjectMemory(rememberedRow, null, 'draft');
         } else if (continuity.forget) {
           continuity.forget(rememberedId);
         }
@@ -2684,23 +2688,46 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedDrafts = { loading: false, error: err.message || String(err), data: null };
       renderSessions();
       if (guidedFolderDialogMode) renderGuidedFolderDialog();
+      return null;
     });
+  }
+  document.addEventListener('easyicu:guided-projects-refresh', () => {
+    loadGuidedDrafts(true);
+  });
+  function renderGuidedDraftRemovalDialog() {
+    guidedProjectRenderer('renderDraftRemovalDialog');
+  }
+  function closeGuidedDraftRemovalDialog() {
+    if (guidedDraftRemoval && guidedDraftRemoval.busy) return;
+    guidedDraftRemoval = null;
+    renderGuidedDraftRemovalDialog();
   }
   function removeLocalGuidedDraft(row) {
     if (!row || !row.id || !window.EU_API || !window.EU_API.removeGuidedDraft) return;
-    const title = projectTitle(row.title, row.question || t('Guided draft', '引导草稿'));
-    const ok = window.confirm(t(
-      `Remove "${title}" from the Guided draft list? The local project folder will not be deleted.`,
-      `从研究引导草稿列表移除“${title}”？本地项目文件夹不会被删除。`,
-    ));
-    if (!ok) return;
+    guidedDraftRemoval = { row, trashProjectFolder: false, busy: false, error: null };
+    renderGuidedDraftRemovalDialog();
+  }
+  function confirmLocalGuidedDraftRemoval() {
+    if (!guidedDraftRemoval || guidedDraftRemoval.busy) return;
+    const row = guidedDraftRemoval.row;
+    if (!row || !row.id || !window.EU_API || !window.EU_API.removeGuidedDraft) return;
+    const title = projectTitle(row.title, row.question || t('Guided project', '研究项目'));
+    const trashProjectFolder = !!guidedDraftRemoval.trashProjectFolder;
+    guidedDraftRemoval.busy = true;
+    guidedDraftRemoval.error = null;
+    renderGuidedDraftRemovalDialog();
     window.EU_API.removeGuidedDraft({
       draft_id: row.id,
       project_dir: row.project_dir,
       delete_project_folder: false,
+      trash_project_folder: trashProjectFolder,
+      trash_confirmation: trashProjectFolder ? row.id : null,
     }).then(result => {
       if (!result || result.ok === false) {
         throw new Error((result && (result.reason || result.error)) || 'remove_failed');
+      }
+      if (trashProjectFolder && !result.project_folder_trashed) {
+        throw new Error('project_folder_trash_not_confirmed');
       }
       if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
         if (window.EU_GUIDED_PROJECT_CONTINUITY) {
@@ -2712,19 +2739,24 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
       }
       guidedDrafts = { loading: false, error: null, data: result.drafts ? { drafts: result.drafts } : null };
+      guidedDraftRemoval = null;
+      renderGuidedDraftRemovalDialog();
       loadGuidedDrafts(true);
       pushBot(
-        `Removed <strong>${esc(title)}</strong> from the Guided draft list. The project folder on disk was left untouched.`,
-        `已从研究引导草稿列表移除 <strong>${esc(title)}</strong>。磁盘上的项目文件夹没有被删除。`,
+        trashProjectFolder
+          ? `Removed <strong>${esc(title)}</strong> from EasyICU and moved its local project folder to the system trash.`
+          : `Removed <strong>${esc(title)}</strong> from the Guided project list. The project folder on disk was left untouched.`,
+        trashProjectFolder
+          ? `已从 EasyICU 移除 <strong>${esc(title)}</strong>，并将其本地项目文件夹移到系统废纸篓。`
+          : `已从研究项目列表移除 <strong>${esc(title)}</strong>。磁盘上的项目文件夹没有改动。`,
       );
       renderSessions();
       renderThread();
     }).catch(err => {
-      pushBot(
-        `I could not remove that draft: <span class="mono">${esc(err.message || String(err))}</span>`,
-        `无法移除这个草稿：<span class="mono">${esc(err.message || String(err))}</span>`,
-      );
-      renderThread();
+      if (!guidedDraftRemoval) return;
+      guidedDraftRemoval.busy = false;
+      guidedDraftRemoval.error = err.message || String(err);
+      renderGuidedDraftRemovalDialog();
     });
   }
   function guidedBackendContext() {
@@ -2960,7 +2992,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     renderChips();
     return true;
   }
-  function bindGuidedDraftMemory(draft) {
+  function bindGuidedDraftMemory(draft, blankProject) {
     if (!draft || !draft.project_dir || !window.EU_API || !window.EU_API.openGuidedProject) {
       return Promise.resolve(null);
     }
@@ -2969,7 +3001,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       draft_id: draft.id || null,
       title: draft.title || 'local study',
       mode: 'local',
-      context: guidedBackendContext(),
+      context: blankProject ? blankGuidedBackendContext() : guidedBackendContext(),
     }).then(result => {
       if (result && result.ok) {
         guidedCopilot = { loading: false, error: null, session: result.session || null, last: result };
@@ -2993,14 +3025,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       (session && session.project_title) || (row && row.title),
       (row && (row.question || row.study_id || row.run_label)) || projectId,
     );
+    let binding = null;
     if (projectId && window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
       if (window.EU_GUIDED_PROJECT_CONTINUITY) {
         window.EU_GUIDED_PROJECT_CONTINUITY.remember(projectId);
       }
-      window.EU_GUIDED_PI.bindProject({ id: projectId, title });
+      binding = window.EU_GUIDED_PI.bindProject({ id: projectId, title });
     }
     renderAside();
     renderSessions();
+    return binding;
   }
   function continuePendingGuidedGoal() {
     if (!pendingGuidedGoal) return false;
@@ -3147,7 +3181,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `这个本地项目暂时不能作为有范围的 Guided 记忆打开。`,
       );
       renderThread();
-      return;
+      return Promise.resolve(null);
     }
     document.querySelectorAll('.gd-sess').forEach(s => s.classList.toggle('active', s === el));
     const usePiSession = piProjectShellActive();
@@ -3157,7 +3191,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       chips = [];
       renderThread(); renderChips();
     }
-    window.EU_API.openGuidedProject({
+    return window.EU_API.openGuidedProject({
       project_dir: row.project_dir,
       draft_id: row.id || null,
       title: projectTitle(
@@ -3365,6 +3399,29 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       } : null,
     };
   }
+  function blankGuidedDraftPayload(label) {
+    const title = label || 'New local study';
+    return {
+      title,
+      folder_slug: slugifyDraftFolder(title),
+      branch: branch || 'predict',
+      depth: depth || 'full',
+      data_mode: 'unbound',
+      question: '',
+      cohort_hint: '',
+      module_hint: '',
+      source: null,
+    };
+  }
+  function blankGuidedBackendContext() {
+    return {
+      route: 'guided',
+      data_mode: 'unbound',
+      language: window.EU_LANG || 'en',
+      selected_source: null,
+      summary: null,
+    };
+  }
   function slugifyDraftFolder(text) {
     return String(text || 'guided-study').normalize('NFKC').trim().toLowerCase()
       .replace(/[^\p{L}\p{N}._-]+/gu, '-')
@@ -3384,6 +3441,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       branch,
       guidedDrafts,
       guidedFolderMenuOpen,
+      guidedDraftRemoval,
       guidedFolderDialogMode,
       guidedFolderSeedTitle,
       guidedDraftFolderSlug,
@@ -3682,7 +3740,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       `正在创建<strong>仅元数据的本地研究文件夹</strong>。这不会创建 Agent run、不会读取患者行，也不会解锁稿件草稿。`,
     );
     renderThread();
-    const payload = guidedDraftPayload(text);
+    const payload = blankGuidedDraftPayload(text);
     payload.folder_slug = folderSlug || payload.folder_slug;
     if (parent) payload.parent_dir = parent;
     window.EU_API.createGuidedDraft(payload).then(result => {
@@ -3691,7 +3749,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       }
       selectedGuidedDraft = result.draft || null;
       loadGuidedDrafts(true);
-      return bindGuidedDraftMemory(selectedGuidedDraft).then(opened => ({ result, opened }));
+      return bindGuidedDraftMemory(selectedGuidedDraft, true).then(opened => ({ result, opened }));
     }).then(({ result, opened }) => {
       const draft = (opened && opened.session) ? {
         id: opened.session.draft_id,
@@ -4030,7 +4088,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <div class="gd-main threecol">
           ${guidedProjectRenderer('renderShellRail')}
           <div class="gd-conv">
-            <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('EasyICU Copilot conversation', 'EasyICU 研究助手对话')}"></div>
+            <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('EasyICU Copilot conversation', 'EasyICU 研究助手对话')}">
+              <div class="gpi-activate gpi-restoring" role="status" aria-live="polite">
+                <div class="gpi-kicker">EASYICU COPILOT · ${t('RESTORING PROJECT', '正在恢复项目')}</div>
+                <h2>${t('Restoring your current research', '正在恢复当前研究')}</h2>
+                <p>${t('EasyICU is loading the saved project, model connection, and conversation together.', 'EasyICU 正在一起读取已保存的项目、模型连接和对话。')}</p>
+              </div>
+            </div>
             <div class="gd-legacy-shell" id="gdLegacyShell">
               <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
               <div class="gd-suggest" id="gdSuggest"></div>
@@ -4053,6 +4117,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           </aside>
         </div>
         <div id="gdFolderDialogHost"></div>
+        <div id="gdRemoveDraftDialogHost"></div>
       </div>`;
     },
     afterRender(root) {
@@ -4072,24 +4137,34 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       }
       renderGuidedFolderControls();
       renderGuidedFolderDialog();
+      renderGuidedDraftRemovalDialog();
       renderAside();
       if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.mount) {
         window.EU_GUIDED_PI_PREVIEW.mount(root.querySelector('#gdPreviewAside'));
       }
       renderSessions();
-      loadGuidedDrafts();
-      if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.mount) {
-        window.EU_GUIDED_PI.mount(root.querySelector('#gdPiShell'));
+      const piOwner = window.EU_GUIDED_PI;
+      if (piOwner && piOwner.mount) {
+        if (piOwner.setProjectDiscoveryLoading) piOwner.setProjectDiscoveryLoading(true);
+        piOwner.mount(root.querySelector('#gdPiShell'));
+      }
+      const draftsReady = loadGuidedDrafts();
+      Promise.resolve(draftsReady).finally(() => {
+        if (!piOwner || !piOwner.mount) return;
+        let projectReady = Promise.resolve();
         if (selectedGuidedDraft && window.EU_GUIDED_PI.bindProject) {
           const bindingReceipt = selectedGuidedDraft.binding_receipt || null;
-          window.EU_GUIDED_PI.bindProject({
+          projectReady = Promise.resolve(window.EU_GUIDED_PI.bindProject({
             id: selectedGuidedDraft.id,
             title: selectedGuidedDraft.title || selectedGuidedDraft.id,
             binding_receipt: bindingReceipt,
-          });
+          }));
           if (bindingReceipt) delete selectedGuidedDraft.binding_receipt;
         }
-      }
+        projectReady.finally(() => {
+          if (piOwner.setProjectDiscoveryLoading) piOwner.setProjectDiscoveryLoading(false);
+        });
+      });
       // The global topbar Demo/Real toggle is the source of truth on entry:
       // sync UP only (demo → real), so a Real-mode user never sees the aside
       // claim "Demo · local". The conversation may still opt into demo
@@ -4155,8 +4230,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           openGuidedFolderDialog(folderChoice.dataset.folderChoice, guidedFolderSeedTitle || 'New local study');
           return;
         }
+        if (guidedFolderMenuOpen && !e.target.closest('.gd-folder-picker')) {
+          guidedFolderMenuOpen = false;
+          renderGuidedFolderControls();
+        }
         if (e.target.closest('[data-folder-dialog-close]')) {
           closeGuidedFolderDialog();
+          return;
+        }
+        if (e.target.closest('[data-remove-draft-close]')) {
+          closeGuidedDraftRemovalDialog();
+          return;
+        }
+        if (e.target.closest('[data-confirm-remove-draft]')) {
+          confirmLocalGuidedDraftRemoval();
           return;
         }
         // open / close an artifact preview
@@ -4717,6 +4804,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
       });
 
+      shell.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (guidedDraftRemoval && !guidedDraftRemoval.busy) {
+          closeGuidedDraftRemovalDialog();
+          e.preventDefault();
+          return;
+        }
+        if (guidedFolderMenuOpen) {
+          guidedFolderMenuOpen = false;
+          renderGuidedFolderControls();
+          e.preventDefault();
+        }
+      });
+
       shell.addEventListener('input', (e) => {
         const gxPath = e.target.closest('[data-gx-path]');
         if (gxPath && guidedExtract) {
@@ -4797,6 +4898,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);
       });
       shell.addEventListener('change', (e) => {
+        const removeProjectFolder = e.target.closest('[data-remove-project-folder]');
+        if (removeProjectFolder && guidedDraftRemoval && !guidedDraftRemoval.busy) {
+          guidedDraftRemoval.trashProjectFolder = !!removeProjectFolder.checked;
+          guidedDraftRemoval.error = null;
+          renderGuidedDraftRemovalDialog();
+          return;
+        }
         const giPdfFile = e.target.closest('[data-gi-pdf-file]');
         if (giPdfFile && IDEA.state()) {
           const file = giPdfFile.files && giPdfFile.files[0];

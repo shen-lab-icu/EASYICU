@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from easyicu.extensions import (
     ExtensionActivationSnapshot,
@@ -398,6 +398,108 @@ def _development_progressive_resume_binding(
             details={"reason_code": exc.reason_code},
         ) from exc
     return terminal, artifact_sha256
+
+
+def _development_resume_acquisition_profile(
+    *,
+    checkpoint_path: Path,
+    database: str,
+    cohort_window: tuple[float, float],
+    outcome_concepts: Sequence[str],
+    static_concepts: Sequence[str],
+    required_feature_concepts: Sequence[str],
+) -> Dict[str, tuple[str, ...]]:
+    """Restore the exact server-owned concept roster behind a Dev checkpoint.
+
+    Progressive Planner replay binds the materialized cohort bytes and selected
+    variable roster. Re-running the agent-selectable acquisition step can pick
+    a different optional covariate and make an otherwise valid checkpoint
+    unreplayable. The Web host therefore restores only the prior materializer's
+    typed concept roster, then rematerializes it from the currently validated
+    export. It never accepts a client path or reuses patient rows blindly.
+    """
+
+    source_run_dir = checkpoint_path.parent.resolve()
+    wrapper_dir = source_run_dir.parent.parent.resolve()
+    pipeline_input = (wrapper_dir / "pipeline_input").resolve()
+    provenance_path = pipeline_input / "web_research_universe_provenance.json"
+    universe_path = pipeline_input / "web_research_universe.parquet"
+    try:
+        provenance_path.relative_to(wrapper_dir)
+        universe_path.relative_to(wrapper_dir)
+    except ValueError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_acquisition_invalid",
+            "The prior canary acquisition escaped its server-owned workspace.",
+        ) from exc
+    if any(
+        path.is_symlink() or not path.is_file()
+        for path in (provenance_path, universe_path)
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_acquisition_missing",
+            "The prior canary has no regular typed acquisition receipt.",
+        )
+    try:
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        universe_sha256 = hashlib.sha256(universe_path.read_bytes()).hexdigest()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_acquisition_unreadable",
+            "The prior canary acquisition receipt cannot be verified.",
+        ) from exc
+    if not isinstance(provenance, Mapping) or provenance.get("schema_version") != (
+        "easyicu.cohort_materializer/1"
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_acquisition_invalid",
+            "The prior canary acquisition receipt has an unsupported schema.",
+        )
+    if str(provenance.get("cohort_file_sha256") or "") != universe_sha256:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_acquisition_digest_mismatch",
+            "The prior canary acquisition no longer matches its typed receipt.",
+        )
+
+    def _concepts(key: str) -> tuple[str, ...]:
+        values = provenance.get(key)
+        if not isinstance(values, list) or not all(
+            isinstance(value, str) and value.strip() for value in values
+        ):
+            raise ResearchPipelineRunError(
+                "research_pipeline_development_resume_acquisition_invalid",
+                "The prior canary acquisition has an invalid concept roster.",
+                details={"field": key},
+            )
+        return tuple(dict.fromkeys(value.strip() for value in values))
+
+    restored = {
+        "feature_concepts": _concepts("feature_concepts"),
+        "outcome_concepts": _concepts("outcome_concepts"),
+        "static_concepts": _concepts("static_concepts"),
+    }
+    recorded_window = provenance.get("cohort_window_hours")
+    try:
+        normalized_recorded_window = tuple(float(value) for value in recorded_window)
+    except (TypeError, ValueError):
+        normalized_recorded_window = ()
+    expected_window = tuple(float(value) for value in cohort_window)
+    if (
+        str(provenance.get("database") or "").strip().lower() != database
+        or normalized_recorded_window != expected_window
+        or restored["outcome_concepts"]
+        != tuple(dict.fromkeys(str(value) for value in outcome_concepts))
+        or restored["static_concepts"]
+        != tuple(dict.fromkeys(str(value) for value in static_concepts))
+        or not set(required_feature_concepts).issubset(
+            restored["feature_concepts"]
+        )
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_acquisition_authority_mismatch",
+            "The prior canary acquisition does not match the current study authority.",
+        )
+    return restored
 
 
 def _clean_text(value: Any, limit: int = 1_200) -> str:
@@ -930,20 +1032,41 @@ def _primary_exposure(study: Mapping[str, Any]) -> Optional[str]:
 def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
     execution = study.get("execution_concepts")
     execution = execution if isinstance(execution, Mapping) else {}
+    declared_raw = study.get("covariates")
     raw = (
         execution.get("covariates")
         if "covariates" in execution
-        else study.get("covariates")
+        else declared_raw
     )
     if not isinstance(raw, (list, tuple)):
         return ()
-    return tuple(
+    resolved = tuple(
         dict.fromkeys(
             _clean_text(value, 160)
             for value in raw
             if isinstance(value, str) and _clean_text(value, 160)
         )
     )
+    if (
+        str(study.get("covariate_selection") or "planner_selectable").strip()
+        == "exact"
+        and isinstance(declared_raw, (list, tuple))
+        and "covariates" in execution
+    ):
+        declared = tuple(
+            dict.fromkeys(
+                _clean_text(value, 160)
+                for value in declared_raw
+                if isinstance(value, str) and _clean_text(value, 160)
+            )
+        )
+        if set(resolved) != set(declared):
+            raise ResearchPipelineRunError(
+                "research_pipeline_covariate_execution_binding_mismatch",
+                "The exact adjustment roster does not match its executable concept binding.",
+                details={"field": "execution_concepts.covariates"},
+            )
+    return resolved
 
 
 def _configured_covariate_selection(study: Mapping[str, Any]) -> str:
@@ -3463,6 +3586,20 @@ def make_research_pipeline_run_runner(
                 _DEVELOPMENT_RESUME_SEQUENCE_ENV
             ),
         )
+    development_resume_acquisition = (
+        _development_resume_acquisition_profile(
+            checkpoint_path=development_resume_binding[0],
+            database=database,
+            cohort_window=window,
+            outcome_concepts=foundation_profile["outcome_concepts"],
+            static_concepts=foundation_profile["static_concepts"],
+            required_feature_concepts=foundation_profile[
+                "required_feature_concepts"
+            ],
+        )
+        if development_resume_binding is not None
+        else None
+    )
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(
         capability_settings
@@ -3590,15 +3727,28 @@ def make_research_pipeline_run_runner(
                     foundation_profile.get("primary_exposure_source_concept")
                     or primary_exposure
                 ),
-                outcome_concepts=foundation_profile["outcome_concepts"],
-                required_feature_concepts=foundation_profile[
-                    "required_feature_concepts"
-                ],
-                static_concepts=foundation_profile["static_concepts"],
+                outcome_concepts=(
+                    development_resume_acquisition["outcome_concepts"]
+                    if development_resume_acquisition is not None
+                    else foundation_profile["outcome_concepts"]
+                ),
+                required_feature_concepts=(
+                    development_resume_acquisition["feature_concepts"]
+                    if development_resume_acquisition is not None
+                    else foundation_profile["required_feature_concepts"]
+                ),
+                static_concepts=(
+                    development_resume_acquisition["static_concepts"]
+                    if development_resume_acquisition is not None
+                    else foundation_profile["static_concepts"]
+                ),
                 allowed_modules=foundation_profile["allowed_modules"],
                 concept_selection_authority=(
                     "host_exact"
-                    if covariate_selection == "exact"
+                    if (
+                        covariate_selection == "exact"
+                        or development_resume_acquisition is not None
+                    )
                     else "agent_selectable"
                 ),
                 cohort_window=window,

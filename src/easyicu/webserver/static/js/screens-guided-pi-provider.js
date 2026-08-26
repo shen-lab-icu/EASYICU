@@ -69,8 +69,8 @@
         </div>
         ${state.availableModels.length ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Models reported by this service:', '该服务返回的可用模型：')} ${esc(state.availableModels.slice(0, 12).join(', '))}</div>` : ''}
         ${runtimeMissing.length ? `<div class="gpi-config-note warn gpi-blockers"><div class="gpi-blocker-lead">${tr('Fix these before the connection can open:', '连接开放前需要先解决：')}</div><ol class="gpi-blocker-list">${runtimeMissing.map(b => `<li><span class="gpi-blocker-title">${esc(b.title)}</span>${b.fix ? `<span class="gpi-blocker-fix">${esc(b.fix)}</span>` : ''}<span class="gpi-blocker-code mono" title="${esc(tr('Diagnostic code reported by the Copilot runtime', '研究助手运行环境上报的诊断码'))}">${esc(b.code)}</span></li>`).join('')}</ol></div>` : ''}
-        <label class="gpi-optin"><input name="enable_ai" type="checkbox" required> <span>${tr('I authorize this verification request and external AI use. Conversation text, PHI-safe summaries, and workspace file contents may be sent to this service; scientific runs remain separately gated.', '我授权本次连接验证和外部 AI 使用。对话文字、经 PHI 安全投影的摘要和工作区文件内容可能发送到该服务；科研运行仍有独立门禁。')}</span></label>
-        <button class="btn" type="submit" ${state.setupSaving || options.staticPreview ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify one model connection', '验证这一套模型连接')}</button>
+        <div class="gpi-consent">${tr('By verifying and saving, you authorize this connection check and allow EasyICU to use this service for later conversations. Conversation text, PHI-safe summaries, and workspace file contents may be sent to this service; scientific runs still require separate confirmation.', '点击“验证并保存连接”即授权本次连接检查，并允许 EasyICU 在后续对话中使用该服务。对话文字、经 PHI 安全投影的摘要和工作区文件内容可能发送到该服务；科研运行仍需另行确认。')}</div>
+        <button class="btn" type="submit" ${state.setupSaving || options.staticPreview ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify and save connection', '验证并保存连接')}</button>
         <div class="gpi-config-note ${options.apiResearchReady ? 'ok' : 'warn'}"><span class="gpi-dot"></span>${options.apiResearchReady ? tr('This verified connection is ready for both conversation and analysis.', '这套已验证连接已可同时用于对话和分析。') : tr('Choose the OpenAI Chat Completions protocol for one connection that supports both.', '请选择 OpenAI Chat Completions 协议，使这一套连接同时支持对话与分析。')}</div>
       </form>`;
   }
@@ -90,7 +90,7 @@
           <div class="gpi-setup-actions">
             ${canCancel ? `<button class="btn primary" type="button" data-gpi-provider-done>${tr('Finish connection setup', '完成连接设置')}</button>` : `<button class="gpi-link" type="button" data-gpi-legacy>${tr('Use local Guided workflow', '使用本地研究引导流程')}</button>`}
           </div>
-          <div class="gpi-consent">${tr('Choosing Continue with ChatGPT or Done authorizes external AI use. Account credentials stay in the browser-isolated Codex home; existing conversations never switch connection silently.', '选择“使用 ChatGPT 继续”或“完成”即授权使用外部 AI。账户凭据保留在浏览器隔离的 Codex 空间中；已有会话绝不会静默切换连接。')}</div>
+          <div class="gpi-consent">${tr('Connecting an account or verifying an API authorizes that model connection for EasyICU. Credentials stay in private local storage; existing conversations never switch connection silently.', '连接账户或验证 API，即授权 EasyICU 使用该模型连接。凭据保存在本机私密空间中；已有会话绝不会静默切换连接。')}</div>
         </div>
       </div>`;
   }

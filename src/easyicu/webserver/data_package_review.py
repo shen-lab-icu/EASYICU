@@ -276,6 +276,44 @@ def _safe_label(value: Any, *, database: Any) -> str:
     return label
 
 
+def _registered_metadata_aggregate(
+    registered: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Project a bounded aggregate from a validated source registry receipt.
+
+    The registry owner has already scanned the export and sealed its distinct
+    stay denominator, modules, files, and total row count.  Reusing that receipt
+    prevents a conversational pre-Plan review from synchronously reading the
+    entity column of every module in a large prepared export.  Concept-specific
+    semantic checks remain owned by the catalog and execution-readiness paths
+    below; this projection never claims per-concept completeness.
+    """
+
+    summary = registered.get("summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    stays = summary.get("stays")
+    if isinstance(stays, bool) or not isinstance(stays, int) or stays <= 0:
+        return None
+    database = str(registered.get("database") or "").strip()
+    return {
+        "source": {
+            "id": str(registered.get("id") or "").strip(),
+            "label": _safe_label(registered.get("label"), database=database),
+            "database": database,
+        },
+        "summary": {
+            "cohort_size": stays,
+            "modules": summary.get("modules"),
+            "file_count": summary.get("file_count"),
+            "total_records": summary.get("total_rows"),
+        },
+        # Per-concept coverage is deliberately not inferred from row counts.
+        # Event-status semantics and runtime capability are checked below.
+        "coverage": [],
+        "quality": {},
+    }
+
+
 def _execution_concepts(study: Mapping[str, Any]) -> list[tuple[str, str]]:
     raw = study.get("execution_concepts")
     raw = raw if isinstance(raw, Mapping) else {}
@@ -488,7 +526,14 @@ def build_registered_data_package_review(
         )
 
     try:
-        aggregate = cohort_review.cohort_review_summary({"source_path": source_path})
+        aggregate = _registered_metadata_aggregate(registered)
+        if aggregate is None:
+            # Compatibility path for older registry rows that predate the
+            # sealed aggregate summary.  Newly scanned sources use the bounded
+            # projection above and never scan all modules during chat.
+            aggregate = cohort_review.cohort_review_summary(
+                {"source_path": source_path}
+            )
         catalog = build_available_catalog(source_path)
     except cohort_review.CohortReviewError as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -693,7 +738,7 @@ def build_registered_data_package_review(
             "inputs": [
                 "registered_source_registry",
                 "available_concept_catalog",
-                "cohort_review_aggregate",
+                "registered_source_aggregate",
                 "typed_study_context",
             ],
         },

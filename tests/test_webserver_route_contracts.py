@@ -167,6 +167,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "POST",
+        "/api/copilot/pi/sessions/{session_id}/data-source-authorization",
+        "post_pi_copilot_data_source_authorization",
+    ),
+    (
+        "POST",
         "/api/copilot/pi/sessions/{session_id}/rebind",
         "post_pi_copilot_rebind",
     ),

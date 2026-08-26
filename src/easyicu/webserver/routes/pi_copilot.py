@@ -130,6 +130,17 @@ class PiMessageRequest(BaseModel):
     )
 
 
+class PiDataSourceAuthorizationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    action: Literal[
+        "reuse_project_source",
+        "begin_local_selection",
+        "confirm_selected_source",
+    ]
+
+
 class PiAbortRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -528,6 +539,21 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
             project_id=body.project_id,
             message=body.message,
             allowed_actions=body.allowed_actions,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/data-source-authorization")
+def post_pi_copilot_data_source_authorization(
+    session_id: ShortText,
+    body: PiDataSourceAuthorizationRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().authorize_data_source(
+            session_id,
+            project_id=body.project_id,
+            action=body.action,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

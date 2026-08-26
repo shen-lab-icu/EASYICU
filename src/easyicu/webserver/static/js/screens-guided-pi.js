@@ -4,6 +4,7 @@
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
+  const DATA_CONSENT = window.EU_GUIDED_PI_DATA_CONSENT;
 
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
@@ -13,9 +14,11 @@
     researchProvider: 'codex', researchModel: '', codexAuth: null,
     codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
     projectInitialization: null, projectIssue: '', workflow: null,
+    projectLoading: false, projectDiscoveryLoading: false,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
-    workflowReceipts: [],
+    workflowReceipts: [], editingMessageId: '', sessionSelectionRevision: 0,
+    pendingLanguageReload: false,
   };
 
   const ACCESS_MODE_GRANTS = Object.freeze({
@@ -25,6 +28,23 @@
   });
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
+  function publicAssistantText(value) {
+    return String(value || '')
+      .replace(/\b(?:one[-\s]time\s+)?extraction grant\b/gi, tr(
+        'one-time data preparation authorization',
+        '本轮一次性数据准备授权',
+      ))
+      .replace(/\beasyicu_prepare_demo_source\b/gi, tr(
+        'the official demo preparation workflow',
+        '官方 Demo 准备流程',
+      ))
+      .replace(/\bpi_action_authorization_required\b/gi, tr(
+        'the required EasyICU data authorization is not active for this turn',
+        '本轮数据准备授权尚未生效',
+      ))
+      .replace(/\bpi_[a-z0-9_]+\b/gi, tr('an EasyICU internal status', 'EasyICU 内部状态'))
+      .replace(/\beasyicu\.webserver\.pi_copilot(?:\.[a-z0-9_.]+)?\b/gi, 'EasyICU Copilot');
+  }
   function assistantTextHtml(value) {
     const renderer = window.EU_GUIDED_PI_MARKDOWN;
     return renderer && typeof renderer.render === 'function'
@@ -67,6 +87,9 @@
       : apiResearchReady();
   }
   function projectId() { return String((state.project && state.project.id) || '').trim(); }
+  function uiLanguage() { return window.EU_LANG === 'zh' ? 'zh' : 'en'; }
+  function sessionLanguage(session) { return session && session.language === 'zh' ? 'zh' : 'en'; }
+  function sessionMatchesUiLanguage(session) { return sessionLanguage(session) === uiLanguage(); }
   function displaySessionTitle(value) { return window.EU_PRODUCT_LABELS.copilotTitle(value); }
   function displayProjectTitle(value, fallback) { return window.EU_PRODUCT_LABELS.projectTitle(value, fallback); }
   function agentMode() {
@@ -87,7 +110,9 @@
     render();
   }
   function rememberSession(id) {
-    const key = projectId() ? 'easyicu_pi_copilot_session:' + encodeURIComponent(projectId()) : '';
+    const key = projectId()
+      ? 'easyicu_pi_copilot_session:' + encodeURIComponent(projectId()) + ':' + uiLanguage()
+      : '';
     if (!key) return;
     try {
       if (id) localStorage.setItem(key, id);
@@ -95,7 +120,9 @@
     } catch (e) {}
   }
   function rememberedSession() {
-    const key = projectId() ? 'easyicu_pi_copilot_session:' + encodeURIComponent(projectId()) : '';
+    const key = projectId()
+      ? 'easyicu_pi_copilot_session:' + encodeURIComponent(projectId()) + ':' + uiLanguage()
+      : '';
     if (!key) return '';
     try { return localStorage.getItem(key) || ''; } catch (e) { return ''; }
   }
@@ -163,6 +190,15 @@
   const resourceButton = RESOURCE_OWNER.button;
   const ACTIVITY = window.EU_GUIDED_PI_ACTIVITY.create({
     tr, esc, iconHtml, resourceName, resourceKey, resourceButton,
+  });
+  const MESSAGE_ACTIONS = window.EU_GUIDED_PI_MESSAGE_ACTIONS.create({
+    tr, iconHtml,
+    rows: () => state.messages.concat(state.workflowReceipts),
+    canEdit: () => !state.busy && !sessionIsStale(),
+    setEditing: id => { state.editingMessageId = id; },
+    renderHost: render,
+    sendText,
+    host: () => state.host,
   });
   const { timeMs } = ACTIVITY;
 
@@ -308,24 +344,25 @@
       replay.forEach(event => {
         const at = timeMs(event && event.at);
         if (event.type === 'run_start') upsertActivityStep(replayActivity, { id: 'agent', kind: 'agent', status: 'complete', at });
-        else if (event.type === 'turn_start') upsertActivityStep(replayActivity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at, startedAt: at });
-        else if (event.type === 'turn_end') {
-          const turn = replayActivity.steps.find(item => item.id === 'turn-' + event.turn_index);
-          if (turn) { turn.status = 'complete'; turn.endedAt = at; }
-        } else if (event.type === 'assistant_start') {
+        else if (event.type === 'turn_start') ACTIVITY.startTurn(replayActivity, at);
+        else if (event.type === 'turn_end') ACTIVITY.finishTurn(replayActivity, at);
+        else if (event.type === 'assistant_start') {
           const phase = replayActivity.steps.filter(item => item.kind === 'assistant').length + 1;
           upsertActivityStep(replayActivity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at, startedAt: at });
         } else if (event.type === 'message_end') {
           const phase = replayActivity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
-          if (phase) { phase.status = event.error_code ? 'error' : 'complete'; phase.endedAt = at; }
-        } else if (event.type === 'tool_start' || event.type === 'tool_progress') {
-          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at, resource: event.resource || null });
+          if (phase) { phase.status = event.error_code ? 'error' : 'complete'; phase.endedAt = at; phase.stopReason = event.stop_reason || ''; }
+        } else if (event.type === 'tool_start') {
+          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at, startedAt: at, resource: event.resource || null });
+        } else if (event.type === 'tool_progress') {
+          upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
         } else if (event.type === 'tool_end') {
           upsertActivityStep(replayActivity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: event.is_error ? 'error' : 'complete', code: event.code || '', owner: event.owner || '', jobId: event.job_id || '', at, endedAt: at, resource: event.resource || null, resources: Array.isArray(event.resources) ? event.resources : [] });
         } else if (event.type === 'retry') upsertActivityStep(replayActivity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'complete', attempt: event.attempt, maxAttempts: event.max_attempts, at, startedAt: at, endedAt: at });
         else if (event.type === 'compaction_start') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: 'running', at, startedAt: at });
         else if (event.type === 'compaction_end') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at, endedAt: at });
       });
+      replayActivity.steps.sort((left, right) => Number(left.at || 0) - Number(right.at || 0));
       replayActivity.steps.forEach(step => {
         if (step.status === 'running' && replayActivity.status !== 'running') {
           step.status = replayActivity.status === 'complete' ? 'complete' : 'error';
@@ -386,7 +423,7 @@
   }
 
   function activatePanel() {
-    const saved = state.sessions.map(row => `
+    const saved = state.sessions.filter(sessionMatchesUiLanguage).map(row => `
       <button class="gpi-session-row" type="button" data-gpi-session="${esc(row.session_id)}">
         <span><strong>${esc(displaySessionTitle(row.title))}</strong><small>${esc(row.updated_at || '')}</small></span>
         <span>${row.agent_mode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}</span>
@@ -443,7 +480,16 @@
       </div>`;
   }
 
-  function messageHtml(row) {
+  function restoringPanel() {
+    return `
+      <div class="gpi-activate gpi-restoring" role="status" aria-live="polite">
+        <div class="gpi-kicker">EASYICU COPILOT · ${tr('RESTORING PROJECT', '正在恢复项目')}</div>
+        <h2>${tr('Restoring your current research', '正在恢复当前研究')}</h2>
+        <p>${tr('EasyICU is loading the saved project, model connection, and conversation together.', 'EasyICU 正在一起读取已保存的项目、模型连接和对话。')}</p>
+      </div>`;
+  }
+
+  function messageHtml(row, options) {
     if (row.role === 'activity') return ACTIVITY.render(row);
     if (row.role === 'workflow_receipt') {
       const rows = row.total_rows == null ? Number.NaN : Number(row.total_rows);
@@ -485,10 +531,32 @@
         return (leftRank < 0 ? preferredArtifacts.length : leftRank) - (rightRank < 0 ? preferredArtifacts.length : rightRank);
       })
       .slice(0, 8);
-    return `<article class="gpi-message ${cls}">
+    const publicRow = row.role === 'assistant' ? { ...row, text: publicAssistantText(row.text) } : row;
+    const nextOwner = window.EU_GUIDED_PI_NEXT_ACTIONS;
+    const nextStep = row.role === 'assistant' && row.complete !== false && options && options.interactive
+      && nextOwner && typeof nextOwner.project === 'function'
+      ? nextOwner.project(publicRow.text) : null;
+    const visibleText = nextStep ? nextStep.body : publicRow.text;
+    const nextStepHtml = nextStep && typeof nextOwner.render === 'function'
+      ? nextOwner.render(nextStep, {
+        language: window.EU_LANG,
+        disabled: state.busy || sessionIsStale(),
+      }) : '';
+    const messageActions = MESSAGE_ACTIONS.render(publicRow, {
+      editing: state.editingMessageId === row.id,
+      allowEdit: Boolean(options && options.allowEdit),
+      canEdit: Boolean(options && options.canEdit),
+      canRetry: Boolean(options && options.interactive),
+      retryText: String(options && options.retryText || ''),
+    });
+    const contentHtml = messageActions.editorHtml
+      || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
+    return `<article class="gpi-message ${cls}${messageActions.actionsHtml ? ' has-actions' : ''}" data-gpi-message-id="${esc(row.id || '')}">
       <div class="gpi-message-body">
-        ${row.text ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`}
+        ${contentHtml}
         ${messageResources.length ? `<div class="gpi-message-resources" aria-label="${tr('Referenced run artifacts', '本轮引用的运行产物')}"><span>${tr('Open evidence and artifacts', '打开证据和产物')}</span><div class="gpi-resource-list">${messageResources.map(resource => resourceButton(resource)).join('')}</div></div>` : ''}
+        ${nextStepHtml}
+        ${messageActions.actionsHtml}
       </div>
     </article>`;
   }
@@ -608,7 +676,7 @@
       : '';
     const authorizationQuestions = confirmation.code === 'plan_scientific_changes_required'
       && review && Array.isArray(review.authorization_questions)
-      ? review.authorization_questions.slice(0, 4).map(item => `<li>${esc(item.question || item.code || '')}</li>`).join('')
+      ? review.authorization_questions.slice(0, 4).map(item => `<li>${esc(localizedAuthorizationQuestion(item))}</li>`).join('')
       : '';
     const remediationLanes = confirmation.code === 'plan_scientific_changes_required'
       && review && review.remediation_buckets && typeof review.remediation_buckets === 'object'
@@ -632,6 +700,25 @@
     </section>`;
   }
 
+  function localizedAuthorizationQuestion(item) {
+    const code = String((item && item.code) || '');
+    const known = {
+      OUTCOME_DEFINITION_UNRESOLVED: tr(
+        'Which available clinical endpoint and time horizon should this study use?',
+        '这项研究应使用哪个当前数据可支持的临床结局及时间范围？',
+      ),
+      POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED: tr(
+        'Should the revised study use a prespecified landmark/time-varying design, or remain descriptive?',
+        '修订后的研究应采用预先设定的 landmark／时变设计，还是仅保留描述性分析？',
+      ),
+      ADJUSTMENT_SET_NOT_USER_CONFIRMED: tr(
+        'Do you approve the proposed baseline adjustment set and its pre-time-zero rationale?',
+        '你是否批准建议的基线调整变量及其时间零点前的选择依据？',
+      ),
+    };
+    return known[code] || String((item && (item.question || item.code)) || '');
+  }
+
   function accessModeHtml() {
     const modes = [
       ['ask', tr('Ask before every tool action', '每次工具操作前都询问')],
@@ -652,9 +739,26 @@
     const model = session.model || {};
     const research = session.research_provider || {};
     const connection = session.model_connection || null;
-    const messages = state.messages.concat(state.workflowReceipts).map(messageHtml).join('');
     const stale = sessionIsStale();
     const workspace = agentMode() === 'workspace';
+    const dataConsentRequired = !workspace
+      && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
+    const timeline = state.messages.concat(state.workflowReceipts);
+    const latestAssistant = timeline.slice().reverse().find(row => row.role === 'assistant' && row.complete !== false);
+    let precedingUserText = '';
+    const messages = timeline.map(row => {
+      const html = messageHtml(row, {
+        interactive: row === latestAssistant && !state.busy && !stale,
+        allowEdit: true,
+        canEdit: !state.busy && !stale,
+        retryText: row.role === 'assistant' ? precedingUserText : '',
+      });
+      if (row.role === 'user') precedingUserText = String(row.text || '');
+      return html;
+    }).join('');
+    const dataConsentHtml = dataConsentRequired
+      ? DATA_CONSENT.render(session, { tr, esc, icon: iconHtml })
+      : '';
     return `
       <div class="gpi-panel">
         <header class="gpi-head">
@@ -667,7 +771,7 @@
             ${connection
               ? `<span title="${tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')}">${esc([connection.provider, connection.model].filter(Boolean).join(' · ') || 'model')}</span>`
               : `<span title="${tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定')}">${esc([model.id || (state.runtime && state.runtime.model), research.provider, research.model].filter(Boolean).join(' / ') || 'legacy model binding')}</span>`}
-            <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Full demo', '完整演示')}</button>
+            <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Reviewer demo', '审稿流程演示')}</button>
             <button class="gpi-link" type="button" data-gpi-presentation-pin aria-pressed="${session.pinned_for_presentation ? 'true' : 'false'}">${session.pinned_for_presentation ? tr('Saved for presentation', '已保留演示') : tr('Save for presentation', '保留演示')}</button>
             <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
             <button class="gpi-link" type="button" data-gpi-new>${tr('New', '新会话')}</button>
@@ -676,11 +780,14 @@
         </header>
         ${workflowHtml()}
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
+        ${dataConsentHtml}
         <div class="gpi-log" data-gpi-log>
-          ${messages || (workspace
-            ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
-            : `<div class="gpi-empty"><strong>${tr('Ask about the current study', '询问当前研究')}</strong><span>${tr('EasyICU Copilot can inspect context, plans, runs, validation, artefacts, evidence, and blockers through bounded EasyICU tools.', 'EasyICU 研究助手可通过受限的 EasyICU 工具检查上下文、计划、运行、验证、产物、证据和阻断原因。')}</span></div>`)}
-          ${workflowConfirmationHtml()}
+          ${messages || (dataConsentRequired
+            ? `<div class="gpi-empty"><strong>${tr('Start with the research question', '先描述研究问题')}</strong><span>${tr('Conversation and study design are available now. When data are needed, EasyICU will ask for one explicit local or official-demo choice before any data tool can read them.', '现在即可讨论研究问题与设计；需要读取、抽取或分析数据时，EasyICU 会先请你明确选择本地来源或官方 Demo。')}</span></div>`
+            : workspace
+              ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
+              : `<div class="gpi-empty"><strong>${tr('Ask about the current study', '询问当前研究')}</strong><span>${tr('EasyICU Copilot can inspect context, plans, runs, validation, artefacts, evidence, and blockers through bounded EasyICU tools.', 'EasyICU 研究助手可通过受限的 EasyICU 工具检查上下文、计划、运行、验证、产物、证据和阻断原因。')}</span></div>`)}
+          ${dataConsentRequired ? '' : workflowConfirmationHtml()}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
         <div class="gpi-compose">
@@ -698,7 +805,7 @@
     if (!demo || typeof demo.messages !== 'function') {
       return `<div class="gpi-activate"><h2>${tr('Demo unavailable', '演示暂不可用')}</h2><button class="btn" type="button" data-gpi-demo-exit>${tr('Back', '返回')}</button></div>`;
     }
-    const messages = demo.messages().map(messageHtml).join('');
+    const messages = demo.messages().map(row => messageHtml(row, { interactive: false })).join('');
     const workflow = demo.workflow();
     const reviewResources = typeof demo.reviewResources === 'function' ? demo.reviewResources() : [];
     return `<div class="gpi-panel gpi-demo-panel">
@@ -818,13 +925,16 @@
 
   function render() {
     if (!state.host) return;
-    const setupFocused = state.shell !== 'legacy'
+    const restoring = state.loading || state.projectLoading || state.projectDiscoveryLoading;
+    const setupFocused = !restoring && state.shell !== 'legacy'
       && !state.demoMode
       && (state.showSetup || !connectionReady() || state.projectIssue === 'pi_project_study_context_missing');
     const main = state.host.closest('.gd-main');
     if (main) main.classList.toggle('gpi-setup-focus', setupFocused);
     state.host.hidden = false;
-    state.host.innerHTML = state.shell === 'legacy'
+    state.host.innerHTML = restoring
+      ? restoringPanel()
+      : state.shell === 'legacy'
       ? statusBanner()
       : (state.demoMode ? demoPanel() : (state.projectIssue === 'pi_project_study_context_missing'
         ? activatePanel()
@@ -836,6 +946,7 @@
         log.scrollTop = state.demoScrollTopPending ? 0 : log.scrollHeight;
         state.demoScrollTopPending = false;
       }
+      ACTIVITY.syncLiveClock(state.host, state.busy);
     });
   }
 
@@ -843,7 +954,7 @@
     state.loading = true; state.error = ''; render();
     if (isStaticPreview()) {
       state.runtime = { status: 'unavailable', blockers: ['static_preview_no_backend'] };
-      state.showSetup = true; state.loading = false; render(); return;
+      state.showSetup = true; state.loading = false; state.projectLoading = false; render(); return;
     }
     try {
       const payload = await api().loadPiCopilotStatus();
@@ -861,7 +972,9 @@
       state.runtime = { status: 'unavailable', blockers: ['status_request_failed'] };
       state.error = errorText(error);
     } finally {
-      state.loading = false; render();
+      state.loading = false;
+      state.projectLoading = false;
+      render();
     }
   }
 
@@ -985,7 +1098,7 @@
         base_url: String(data.get('base_url') || '').trim(),
         model: String(data.get('model') || '').trim(),
         api_transport: String(data.get('api_transport') || 'openai-completions'),
-        enable_ai: data.get('enable_ai') === 'on',
+        enable_ai: true,
       });
       state.runtime = payload && payload.runtime;
       if (!runtimeReady()) {
@@ -1025,6 +1138,7 @@
   async function createSession() {
     if (state.creating || !projectId()) return;
     const expectedProjectId = projectId();
+    const selectionRevision = ++state.sessionSelectionRevision;
     if (!connectionReady()) {
       state.showSetup = true;
       state.error = tr('Finish the one model connection before starting a conversation.', '请先完成这一套模型连接，再开始对话。');
@@ -1040,7 +1154,7 @@
       state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
       render(); return;
     }
-    state.creating = true; state.error = ''; state.pendingAuthorityRebind = false; render();
+    state.creating = true; state.error = ''; state.pendingAuthorityRebind = false; state.editingMessageId = ''; render();
     try {
       if (state.projectInitialization && state.projectInitialization.required) {
         const bindingReceipt = state.project && state.project.binding_receipt;
@@ -1050,7 +1164,7 @@
           confirm_initialization: true,
           binding_receipt: bindingReceipt || undefined,
         });
-        if (expectedProjectId !== projectId()) return;
+        if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
         state.projectInitialization = initialized || { status: 'ready' };
         if (bindingReceipt && initialized && initialized.binding_receipt) {
           state.project = { ...state.project, binding_receipt: null };
@@ -1066,7 +1180,7 @@
         research_provider: state.researchProvider,
         research_model: state.researchProvider === 'codex' ? state.researchModel : null,
       });
-      if (expectedProjectId !== projectId()) return;
+      if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || state.agentMode;
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
@@ -1077,20 +1191,34 @@
     finally { state.creating = false; render(); }
   }
 
-  async function openSession(sessionId) {
+  async function openSession(sessionId, selectionRevision) {
     const expectedProjectId = projectId();
     if (!expectedProjectId) return;
+    const expectedSelectionRevision = selectionRevision == null
+      ? ++state.sessionSelectionRevision : selectionRevision;
     closeChildSource();
     state.error = '';
+    state.editingMessageId = '';
     state.pendingAuthorityRebind = false;
     try {
       const payload = await api().loadPiCopilotSession(sessionId, expectedProjectId);
-      if (expectedProjectId !== projectId()) return;
+      if (expectedProjectId !== projectId() || expectedSelectionRevision !== state.sessionSelectionRevision) return;
+      if (!sessionMatchesUiLanguage(payload && payload.session)) {
+        rememberSession('');
+        state.session = null;
+        state.messages = [];
+        state.error = tr(
+          'This conversation uses another response language. Switch the interface language to open it.',
+          '这段对话使用另一种回复语言，请切换界面语言后再打开。',
+        );
+        render();
+        return;
+      }
       const replayOwner = window.EU_GUIDED_PI_REPLAY;
       state.session = replayOwner && typeof replayOwner.hydrate === 'function'
         ? await replayOwner.hydrate(api(), payload.session, expectedProjectId)
         : payload.session;
-      if (expectedProjectId !== projectId()) return;
+      if (expectedProjectId !== projectId() || expectedSelectionRevision !== state.sessionSelectionRevision) return;
       state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || 'research';
       (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
@@ -1157,8 +1285,8 @@
     }
     const replayOwner = window.EU_GUIDED_PI_REPLAY;
     let existingSessionId = replayOwner && typeof replayOwner.preferredSessionId === 'function'
-      ? replayOwner.preferredSessionId(state.sessions, '', next)
-      : String(state.sessions.find(row => (row.agent_mode || 'research') === next)?.session_id || '');
+      ? replayOwner.preferredSessionId(state.sessions, '', next, uiLanguage())
+      : String(state.sessions.find(row => (row.agent_mode || 'research') === next && sessionMatchesUiLanguage(row))?.session_id || '');
     if (!existingSessionId && projectId()) {
       try {
         const listed = await api().loadPiCopilotSessions(100, projectId(), next);
@@ -1167,8 +1295,8 @@
           const matchingIds = new Set(matching.map(row => row.session_id));
           state.sessions = matching.concat(state.sessions.filter(row => !matchingIds.has(row.session_id)));
           existingSessionId = replayOwner && typeof replayOwner.preferredSessionId === 'function'
-            ? replayOwner.preferredSessionId(matching, '', next)
-            : String(matching[0].session_id || '');
+            ? replayOwner.preferredSessionId(matching, '', next, uiLanguage())
+            : String(matching.find(sessionMatchesUiLanguage)?.session_id || '');
         }
       } catch (error) {
         state.error = errorText(error);
@@ -1183,6 +1311,7 @@
     state.agentMode = next;
     state.session = null;
     state.messages = [];
+    state.editingMessageId = '';
     rememberSession('');
     await createSession();
   }
@@ -1194,12 +1323,13 @@
       state.currentTurnResources = [];
       upsertActivityStep(activity, { id: 'agent', kind: 'agent', status: 'complete', at });
     } else if (event.type === 'turn_start') {
-      upsertActivityStep(activity, { id: 'turn-' + event.turn_index, kind: 'turn', turn: Number(event.turn_index || 0), status: 'running', at, startedAt: at });
+      ACTIVITY.startTurn(activity, at);
     } else if (event.type === 'assistant_start') {
       const phase = activity.steps.filter(item => item.kind === 'assistant').length + 1;
       upsertActivityStep(activity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at, startedAt: at });
     } else if (event.type === 'text_delta') {
-      assistantRow().text += String(event.delta || '');
+      const delta = String(event.delta || '');
+      assistantRow().text += delta; ACTIVITY.appendPublicDelta(activity, delta);
     } else if (event.type === 'message_end') {
       let row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
       if (event.error_code) {
@@ -1209,7 +1339,7 @@
       }
       completeLatestAssistant(event.stop_reason);
       const step = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
-      if (step) { step.status = event.error_code ? 'error' : 'complete'; step.endedAt = at; }
+      if (step) { step.status = event.error_code ? 'error' : 'complete'; step.endedAt = at; step.stopReason = event.stop_reason || ''; }
     } else if (event.type === 'tool_start') {
       const assistant = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
       if (assistant) assistant.status = 'complete';
@@ -1221,6 +1351,7 @@
       upsertActivityStep(activity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
     }
     else if (event.type === 'tool_end') {
+      const toolResources = [event.resource].concat(Array.isArray(event.resources) ? event.resources : []).filter(Boolean);
       upsertActivityStep(activity, {
         id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
         status: event.is_error ? 'error' : 'complete', code: event.code || '',
@@ -1229,7 +1360,13 @@
         resource: event.resource || null,
         resources: Array.isArray(event.resources) ? event.resources : [],
       });
-      addAssistantResources([event.resource].concat(Array.isArray(event.resources) ? event.resources : []));
+      addAssistantResources(toolResources);
+      const localWorkspace = !event.is_error && String(event.code || '') === 'easyicu_local_source_workspace_ready'
+        ? toolResources.find(resource => resource && resource.kind === 'native_workspace')
+        : null;
+      if (localWorkspace && window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
+        window.EU_GUIDED_PI_PREVIEW.open(localWorkspace, projectId());
+      }
       if (event.host_rebind_after_turn === true || ['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted'].includes(String(event.code || ''))) {
         state.pendingAuthorityRebind = true;
       }
@@ -1240,8 +1377,7 @@
         watchChildJob(String(event.job_id), String(event.code || ''));
       }
     } else if (event.type === 'turn_end') {
-      const turn = activity.steps.find(item => item.id === 'turn-' + event.turn_index);
-      if (turn) { turn.status = 'complete'; turn.endedAt = at; }
+      ACTIVITY.finishTurn(activity, at);
     } else if (event.type === 'retry') {
       upsertActivityStep(activity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'running', attempt: event.attempt, maxAttempts: event.max_attempts, at, startedAt: at });
     } else if (event.type === 'compaction_start') {
@@ -1433,18 +1569,61 @@
 
   async function loadProjectSessions() {
     const expectedProjectId = projectId();
+    const selectionRevision = state.sessionSelectionRevision;
     if (!connectionReady() || !expectedProjectId) return;
     const listed = await api().loadPiCopilotSessions(100, expectedProjectId);
-    if (expectedProjectId !== projectId()) return;
+    if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
     state.sessions = (listed && listed.sessions) || [];
     const remembered = rememberedSession();
     const replayOwner = window.EU_GUIDED_PI_REPLAY;
     const preferred = replayOwner && typeof replayOwner.preferredSessionId === 'function'
-      ? replayOwner.preferredSessionId(state.sessions, remembered)
-      : (remembered && state.sessions.some(row => row.session_id === remembered)
+      ? replayOwner.preferredSessionId(state.sessions, remembered, '', uiLanguage())
+      : (remembered && state.sessions.some(row => row.session_id === remembered && sessionMatchesUiLanguage(row))
         ? remembered
-        : String(state.sessions[0] && state.sessions[0].session_id || ''));
-    if (preferred) await openSession(preferred);
+        : String(state.sessions.find(sessionMatchesUiLanguage)?.session_id || ''));
+    if (preferred) await openSession(preferred, selectionRevision);
+  }
+
+  async function reloadSessionsForLanguage() {
+    const expectedProjectId = projectId();
+    const selectionRevision = ++state.sessionSelectionRevision;
+    closeSource();
+    closeChildSource();
+    state.pendingLanguageReload = false;
+    state.session = null;
+    state.sessions = [];
+    state.messages = [];
+    state.currentTurnResources = [];
+    state.editingMessageId = '';
+    state.error = '';
+    state.busy = false;
+    state.jobId = '';
+    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
+      window.EU_GUIDED_PI_PREVIEW.close();
+    }
+    state.projectLoading = Boolean(expectedProjectId && connectionReady());
+    render();
+    if (!state.projectLoading) return;
+    try {
+      await loadProjectSessions();
+    } catch (error) {
+      if (expectedProjectId === projectId() && selectionRevision === state.sessionSelectionRevision) {
+        state.error = errorText(error);
+      }
+    } finally {
+      if (expectedProjectId === projectId() && selectionRevision === state.sessionSelectionRevision) {
+        state.projectLoading = false;
+        render();
+      }
+    }
+  }
+
+  function handleLanguageChange() {
+    if (!state.host) return;
+    state.pendingLanguageReload = true;
+    state.projectLoading = Boolean(projectId());
+    render();
+    if (!state.busy) reloadSessionsForLanguage();
   }
 
   async function loadWorkflow() {
@@ -1495,12 +1674,18 @@
     state.session = null;
     state.sessions = [];
     state.messages = [];
+    // Extraction receipts are project-scoped UI state. Keeping them while the
+    // user switches to a blank project makes the new conversation look as if
+    // it inherited the previous project's data configuration.
+    state.workflowReceipts = [];
+    state.editingMessageId = '';
     state.busy = false;
     state.jobId = '';
     state.error = '';
     state.projectIssue = '';
     state.projectInitialization = null;
     state.workflow = null;
+    state.projectLoading = !!next;
     state.agentMode = 'research';
     state.pendingAuthorityRebind = false;
     if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.clearProject) {
@@ -1513,10 +1698,22 @@
       // saved-session lists asynchronously, so render again when it settles;
       // otherwise the legacy 0/8 aside and empty-session panel remain visible
       // even though the server returned the bound StudyContext revision.
-      prepareProject()
-        .then(() => { if (projectId() === next.id) render(); })
-        .catch(error => { if (projectId() === next.id) { state.error = errorText(error); render(); } });
+      if (!state.host || !state.runtime) return Promise.resolve();
+      return prepareProject()
+        .catch(error => { if (projectId() === next.id) state.error = errorText(error); })
+        .finally(() => {
+          if (projectId() !== next.id) return;
+          state.projectLoading = false;
+          render();
+        });
     }
+    state.projectLoading = false;
+    return Promise.resolve();
+  }
+
+  function setProjectDiscoveryLoading(active) {
+    state.projectDiscoveryLoading = active === true;
+    render();
   }
 
   function isActive() { return state.shell === 'pi'; }
@@ -1540,6 +1737,10 @@
           finishActivity('complete', null, 'settled');
         }
         await refreshSession(true);
+        if (state.pendingLanguageReload) {
+          await reloadSessionsForLanguage();
+          return;
+        }
         if (state.pendingAuthorityRebind && state.session && sessionIsStale()) {
           await rebind();
         }
@@ -1552,8 +1753,13 @@
   }
   async function sendText(text, grantsOverride) {
     if (!state.session || state.busy || sessionIsStale()) return;
+    if (!sessionMatchesUiLanguage(state.session)) {
+      handleLanguageChange();
+      return;
+    }
     text = String(text || '').trim();
     if (!text) return;
+    state.editingMessageId = '';
     const grants = Array.isArray(grantsOverride) ? grantsOverride : turnGrants();
     const submittedAt = Date.now();
     state.currentTurnResources = [];
@@ -1582,13 +1788,28 @@
     if (!confirmation) return;
     await sendText(confirmation.message, confirmation.grants);
   }
+  function governedNextChoiceGrants(element, message) {
+    const projected = String((element && element.dataset && element.dataset.gpiNextGrants) || '')
+      .split(',').map(value => value.trim()).filter(Boolean);
+    if (projected.length && projected.every(value => value === 'extract')) return ['extract'];
+    const code = String((state.workflow && state.workflow.next_action_code) || '');
+    const normalized = String(message || '').trim().replace(/[。.]+$/, '').toLowerCase();
+    if (code !== 'provider_ready_to_generate_plan') return null;
+    const providerPlanChoices = new Set([
+      '生成并提交 research agent 分析计划',
+      '授权 research agent 生成分析计划',
+      'generate and submit the research agent analysis plan',
+      'authorize the research agent to generate the analysis plan',
+    ]);
+    return providerPlanChoices.has(normalized) ? ['provider_run'] : null;
+  }
   function editWorkflow() {
     const workflow = state.workflow || {};
     const review = workflow.plan_review_summary || {};
     const questions = Array.isArray(review.authorization_questions)
       ? review.authorization_questions.filter(item => item && (item.question || item.code))
       : [];
-    const nextQuestion = questions.length ? String(questions[0].question || questions[0].code) : '';
+    const nextQuestion = questions.length ? localizedAuthorizationQuestion(questions[0]) : '';
     state.draft = nextQuestion || tr(
       'Please ask me the next unresolved scientific decision and save my answer in the typed study configuration.',
       '请一次只问我一个尚未解决的科学设定问题，并把我的回答保存到结构化研究配置。',
@@ -1624,6 +1845,41 @@
     await loadWorkflow();
     const prompt = studySetupReviewPrompt(state.workflow);
     await sendText(prompt, ['configure']);
+  }
+  async function authorizeDataSource(action) {
+    if (!state.session || state.busy || !api().authorizePiCopilotDataSource) return;
+    state.error = '';
+    try {
+      const payload = await api().authorizePiCopilotDataSource(
+        state.session.session_id,
+        { project_id: projectId(), action },
+      );
+      state.session = payload.session || state.session;
+      rememberSession(state.session.session_id);
+      if (action === 'begin_local_selection') {
+        const contextId = String(
+          payload.resource && payload.resource.study_context_id
+          || state.session && state.session.binding && state.session.binding.study_context_id
+          || ''
+        );
+        const store = window.EU_STUDY_CONTEXT;
+        // A project may have been created after the page-level StudyContext
+        // cache finished hydrating. Refresh the owner list before activating
+        // the session-bound context so a brand-new project cannot look missing.
+        if (store && typeof store.hydrate === 'function') await store.hydrate({ force: true });
+        const active = store && typeof store.active === 'function' ? store.active() : null;
+        if (contextId && (!active || active.id !== contextId) && store && typeof store.activate === 'function') {
+          await store.activate(contextId);
+        }
+      }
+      if (payload.resource && window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
+        window.EU_GUIDED_PI_PREVIEW.open(payload.resource, projectId());
+      }
+      render();
+    } catch (error) {
+      state.error = errorText(error);
+      render();
+    }
   }
   async function stopMessage() {
     if (!state.session || !state.busy) return;
@@ -1668,10 +1924,56 @@
       study_revision: Number(receipt.study_revision || 0),
     };
     state.workflowReceipts = state.workflowReceipts.filter(row => row.id !== id).concat([projected]).slice(-3);
+    if (
+      state.session
+      && DATA_CONSENT
+      && DATA_CONSENT.selectionInProgress(state.session)
+      && api().authorizePiCopilotDataSource
+    ) {
+      api().authorizePiCopilotDataSource(
+        state.session.session_id,
+        { project_id: projectId(), action: 'confirm_selected_source' },
+      ).then(payload => {
+        state.session = payload.session || state.session;
+        rememberSession(state.session.session_id);
+        loadWorkflow().then(render);
+      }).catch(error => {
+        state.error = errorText(error);
+        render();
+      });
+    }
     render();
     requestAnimationFrame(() => {
       const log = state.host && state.host.querySelector('[data-gpi-log]');
       if (log) log.scrollTop = log.scrollHeight;
+    });
+    return true;
+  }
+
+  async function confirmDataSourceBinding(receipt) {
+    if (
+      !receipt
+      || receipt.receipt_kind !== 'data_source_binding'
+      || !state.session
+      || !DATA_CONSENT
+      || !DATA_CONSENT.selectionInProgress(state.session)
+      || !api().authorizePiCopilotDataSource
+    ) return false;
+    const payload = await api().authorizePiCopilotDataSource(
+      state.session.session_id,
+      { project_id: projectId(), action: 'confirm_selected_source' },
+    );
+    state.session = payload.session || state.session;
+    rememberSession(state.session.session_id);
+    document.dispatchEvent(new CustomEvent('easyicu:guided-projects-refresh'));
+    if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
+      window.EU_GUIDED_PI_PREVIEW.close();
+    }
+    await loadWorkflow();
+    render();
+    requestAnimationFrame(() => {
+      const composer = state.host && state.host.querySelector('[data-gpi-input]');
+      if (composer) composer.focus();
     });
     return true;
   }
@@ -1759,13 +2061,34 @@
       if (event.target.closest('[data-gpi-create]')) { createSession(); return; }
       if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
       if (event.target.closest('[data-gpi-confirm-edit]')) { editWorkflow(); return; }
+      const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);
+      if (dataSourceAction) { authorizeDataSource(dataSourceAction); return; }
+      if (event.target.closest('[data-gpi-data-demo]')) {
+        sendText(tr(
+          'I do not have local data yet. Show only the official EasyICU demo datasets and explain their limits. Do not download or use one until I choose it. Offer only each exact demo or continuing study planning without data; do not offer a local full-database workflow.',
+          '我还没有本地数据。请只列出 EasyICU 官方 Demo 数据并说明局限；在我选择前不要下载或使用。下一步只提供每个准确 Demo 或继续无数据规划，不要提供本地完整数据库工作流。',
+        ));
+        return;
+      }
+      if (MESSAGE_ACTIONS.handleClick(event)) return;
+      const nextChoice = event.target.closest('[data-gpi-next-choice]');
+      if (nextChoice) {
+        const message = nextChoice.dataset.gpiNextChoice;
+        sendText(message, governedNextChoiceGrants(nextChoice, message));
+        return;
+      }
+      if (event.target.closest('[data-gpi-next-focus]')) {
+        const input = state.host.querySelector('[data-gpi-input]');
+        if (input) { input.focus(); input.scrollIntoView({ block: 'nearest' }); }
+        return;
+      }
       if (event.target.closest('[data-gpi-send]')) { sendMessage(); return; }
       if (event.target.closest('[data-gpi-stop]')) { stopMessage(); return; }
       if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }
       if (event.target.closest('[data-gpi-presentation-pin]')) { togglePresentationPin(); return; }
       if (event.target.closest('[data-gpi-config]')) { state.showSetup = true; state.error = ''; render(); return; }
       if (event.target.closest('[data-gpi-cancel-setup]')) { state.showSetup = false; state.error = ''; render(); return; }
-      if (event.target.closest('[data-gpi-new]')) { state.session = null; state.messages = []; rememberSession(''); render(); }
+      if (event.target.closest('[data-gpi-new]')) { state.sessionSelectionRevision += 1; state.session = null; state.messages = []; state.editingMessageId = ''; rememberSession(''); render(); }
     });
     state.host.addEventListener('input', event => {
       if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
@@ -1803,6 +2126,7 @@
       }
     });
     state.host.addEventListener('submit', event => {
+      if (MESSAGE_ACTIONS.handleSubmit(event)) return;
       const form = event.target.closest('[data-gpi-provider-form]');
       if (!form) return;
       event.preventDefault(); configureProvider(form);
@@ -1817,5 +2141,16 @@
   function unmount() {
     stopCodexPoll(); closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
-  window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive, rebind, notifyExtractionHandoff };
+  window.addEventListener('easyicu:languagechange', handleLanguageChange);
+  window.EU_GUIDED_PI = {
+    mount,
+    unmount,
+    setShell,
+    bindProject,
+    isActive,
+    rebind,
+    notifyExtractionHandoff,
+    confirmDataSourceBinding,
+    setProjectDiscoveryLoading,
+  };
 })();

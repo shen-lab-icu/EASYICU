@@ -10,7 +10,7 @@
      Coverage Audit / SOFA Reclassification are now tabs inside Cohort Statistics;
      ICD Cohort Filter is folded into the extraction cohort filter. Old deep
      links still resolve to the right place. */
-  const FALLBACK_ROUTE = 'entry';
+  const FALLBACK_ROUTE = 'guided';
 
   function normRoute(r) {
     if (r === 'help') return 'tutorial';
@@ -21,7 +21,12 @@
     return r;
   }
   function rawRouteFromHash() {
-    return (location.hash || `#${FALLBACK_ROUTE}`).slice(1).trim();
+    const raw = (location.hash || `#${FALLBACK_ROUTE}`).slice(1).trim();
+    if (raw === 'entry') {
+      replaceHash('guided');
+      return 'guided';
+    }
+    return raw;
   }
   function replaceHash(id) {
     const next = `${location.pathname}${location.search}#${id}`;

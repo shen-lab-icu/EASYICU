@@ -284,6 +284,7 @@ def validate_progressive_foundation(
     *,
     context: ResearchContext,
     analysis_type: str,
+    require_robustness_intent: bool = False,
 ) -> None:
     """Fail before step generation when a sealed Foundation cannot compile."""
 
@@ -297,6 +298,14 @@ def validate_progressive_foundation(
             "descriptive_epidemiology has no fitted primary effect or interval; "
             "use typed measurement and denominator audits instead of "
             "effect-style robustness intents",
+            path="robustness_intents",
+        )
+    if require_robustness_intent and not foundation.robustness_intents:
+        raise _fail(
+            "progressive_required_robustness_intent_missing",
+            "the binding article contract requires at least one executable "
+            "robustness specification; progressive v1 must declare an explicit "
+            "complete-case missing-data intent in the plan foundation",
             path="robustness_intents",
         )
     variables = {item.name: item for item in context.variables}
@@ -316,8 +325,7 @@ def validate_progressive_foundation(
             if (
                 (descriptor := variables.get(name)) is not None
                 and descriptor.observation_semantics is not None
-                and descriptor.observation_semantics.kind
-                == "conditional_event_time"
+                and descriptor.observation_semantics.kind == "conditional_event_time"
             )
         ]
         if conditional_event_times:
@@ -326,10 +334,7 @@ def validate_progressive_foundation(
                 "complete-case membership cannot require conditional event-time "
                 "columns whose event-absent rows are typed as not applicable: "
                 + ", ".join(conditional_event_times),
-                path=(
-                    f"robustness_intents.{intent.spec_id}."
-                    "complete_case_variables"
-                ),
+                path=(f"robustness_intents.{intent.spec_id}.complete_case_variables"),
             )
 
 
@@ -490,11 +495,7 @@ def _compile_ordered_stratified_contract(
         observed_levels_for(name=binary_outcome, variables=dict(variables))
     )
     event_index = int(parent.event_level_index)
-    if (
-        len(levels) < 3
-        or binary_levels != [0, 1]
-        or event_index != 1
-    ):
+    if len(levels) < 3 or binary_levels != [0, 1] or event_index != 1:
         raise _fail(
             "progressive_ordered_trend_domain_unsupported",
             "the v1 deterministic owner requires >=3 ordered exposure levels "
@@ -616,6 +617,8 @@ def _validate_scientific_action_runtime_contract(
             path="product_inputs",
             detail={"non_dependency_producers": non_dependencies},
         )
+
+
 def _compile_binary_association_sensitivity_capability(
     *,
     skeleton: ProgressivePlanSkeleton,
@@ -631,9 +634,7 @@ def _compile_binary_association_sensitivity_capability(
         if semantic_role == "scientific_sensitivity"
     ]
     parsed_output = (
-        typed_product(scientific_outputs[0])
-        if len(scientific_outputs) == 1
-        else None
+        typed_product(scientific_outputs[0]) if len(scientific_outputs) == 1 else None
     )
     if not scientific_outputs:
         return None
@@ -768,9 +769,7 @@ def _compile_table_one(
     step_index: int,
 ) -> TableOneSpec:
     group_by = str(step.table_one_group_by or "")
-    row_intents = [
-        item for item in step.table_one_variables if item.name != group_by
-    ]
+    row_intents = [item for item in step.table_one_variables if item.name != group_by]
     if not row_intents:
         raise _fail(
             "progressive_table_one_rows_missing",
@@ -982,10 +981,7 @@ def _compile_distribution(
         step=step,
         step_index=step_index,
     )
-    if (
-        step.reference_exposure_level_index
-        == step.comparison_exposure_level_index
-    ):
+    if step.reference_exposure_level_index == step.comparison_exposure_level_index:
         raise _fail(
             "progressive_distribution_contrast_not_distinct",
             "risk-difference comparison and reference levels must differ",
@@ -1112,12 +1108,8 @@ def _compile_model_terms(
     covariates = [item.name for item in compiled if item.role == "covariate"]
     exposure_term = exposures[0]
     treatment_coded = exposure_term.coding in {"binary", "categorical"}
-    exposure_levels = (
-        list(exposure_term.levels or ()) if treatment_coded else []
-    )
-    reference = (
-        str(exposure_term.reference_level or "") if treatment_coded else ""
-    )
+    exposure_levels = list(exposure_term.levels or ()) if treatment_coded else []
+    reference = str(exposure_term.reference_level or "") if treatment_coded else ""
     if exposure_levels:
         if len(exposure_levels) == 2:
             primary_contrast = next(
@@ -1255,8 +1247,7 @@ def _compile_measurement_spec(
         finding = exc.errors(include_input=False)[0]
         raise _fail(
             "progressive_measurement_audit_spec_invalid",
-            "compiled measurement audit violates its typed contract: "
-            f"{finding['msg']}",
+            f"compiled measurement audit violates its typed contract: {finding['msg']}",
             step=step,
             step_index=step_index,
             path="outputs",
@@ -1283,8 +1274,7 @@ def _compile_robustness_spec(
         finding = exc.errors(include_input=False)[0]
         raise _fail(
             "progressive_robustness_replay_spec_invalid",
-            "compiled robustness replay violates its typed contract: "
-            f"{finding['msg']}",
+            f"compiled robustness replay violates its typed contract: {finding['msg']}",
             step=step,
             step_index=step_index,
             path="outputs",
@@ -1384,14 +1374,16 @@ def _compile_inputs(
     if (
         step.module_id not in {"cohort_definition", "visualization"}
         and not (
-            runtime_contract is not None
-            and runtime_contract.required_product_inputs
+            runtime_contract is not None and runtime_contract.required_product_inputs
         )
         and "artifact:analysis_cohort" in producers
     ):
         inputs.append("artifact:analysis_cohort")
     refs = list(step.product_inputs)
-    if step.module_id == "visualization" and len(refs) > _MAX_VISUALIZATION_SOURCE_PRODUCTS:
+    if (
+        step.module_id == "visualization"
+        and len(refs) > _MAX_VISUALIZATION_SOURCE_PRODUCTS
+    ):
         raise _fail(
             "progressive_visualization_source_budget_exceeded",
             "a rendering-only visualization binds too many direct result sources "
@@ -1430,9 +1422,7 @@ def _compile_inputs(
         )
         if (
             runtime_contract is not None
-            and (
-                reference.producer_step_id != owner or owner not in step.depends_on
-            )
+            and (reference.producer_step_id != owner or owner not in step.depends_on)
         ) or (strict_visualization_reference and owner not in step.depends_on):
             raise _fail(
                 "progressive_product_dependency_mismatch",
@@ -1456,13 +1446,10 @@ def _compile_inputs(
         # those steps, but its table/report product must not become a second
         # data-frame input that the executor neither reads nor receipts.
         parsed_reference = typed_product(reference.product_id)
-        if (
-            step.module_id not in _COHORT_FRAME_ONLY_MODULES
-            and not (
-                step.module_id == "report"
-                and parsed_reference is not None
-                and parsed_reference[0] == "figure"
-            )
+        if step.module_id not in _COHORT_FRAME_ONLY_MODULES and not (
+            step.module_id == "report"
+            and parsed_reference is not None
+            and parsed_reference[0] == "figure"
         ):
             inputs.append(reference.product_id)
     inputs = list(dict.fromkeys(inputs))
@@ -2061,9 +2048,7 @@ def compile_progressive_plan(
         context=context,
         analysis_type=canonical_type,
     )
-    allowed_modules = set(
-        progressive_module_ids_for_analysis_types((canonical_type,))
-    )
+    allowed_modules = set(progressive_module_ids_for_analysis_types((canonical_type,)))
     for index, step in enumerate(skeleton.steps):
         if step.module_id not in allowed_modules:
             raise _fail(
@@ -2192,9 +2177,7 @@ def compile_progressive_plan(
                 host_reporting_source_key if index == target_index else None
             ),
             host_interpretation_source_key=(
-                host_interpretation_source_key
-                if skeleton_step.model_terms
-                else None
+                host_interpretation_source_key if skeleton_step.model_terms else None
             ),
             host_missing_data_binding=(
                 host_missing_data_binding
@@ -2254,9 +2237,7 @@ def compile_progressive_plan(
                 {
                     "research_question": context.research_question,
                     "analysis_type": canonical_type,
-                    "steps": [
-                        step.model_dump(mode="json") for step in compiled_steps
-                    ],
+                    "steps": [step.model_dump(mode="json") for step in compiled_steps],
                     "cohort": cohort.to_dict(),
                     "endpoint": (
                         context.endpoint.model_dump(mode="json")

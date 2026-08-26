@@ -13,14 +13,18 @@
       || Boolean(String(session.active_message_job_id || '').trim());
   }
 
-  function preferredSessionId(sessions, rememberedSessionId, requestedAgentMode) {
+  function preferredSessionId(sessions, rememberedSessionId, requestedAgentMode, requestedLanguage) {
     const requestedMode = requestedAgentMode === 'workspace'
       ? 'workspace'
       : (requestedAgentMode === 'research' ? 'research' : '');
+    const language = requestedLanguage === 'zh'
+      ? 'zh'
+      : (requestedLanguage === 'en' ? 'en' : '');
     const saved = rows(sessions).filter(session => {
-      if (!requestedMode) return true;
       const sessionMode = session && session.agent_mode === 'workspace' ? 'workspace' : 'research';
-      return sessionMode === requestedMode;
+      const sessionLanguage = session && session.language === 'zh' ? 'zh' : 'en';
+      return (!requestedMode || sessionMode === requestedMode)
+        && (!language || sessionLanguage === language);
     });
     const remembered = String(rememberedSessionId || '').trim();
     const rememberedRow = saved.find(row => String(row && row.session_id || '') === remembered);

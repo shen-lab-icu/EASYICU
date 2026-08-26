@@ -211,7 +211,34 @@ def build_result_interpretation_card(
     gate_status = _text(gate.get("status") or "unknown", 120)
     readiness_status = _text(readiness.get("status") or "unknown", 120)
     reportable = bool(readiness.get("reportable"))
-    analysis_only = gate_status == "analysis_only" and not reportable
+    checks = gate.get("checks") if isinstance(gate.get("checks"), list) else []
+    checks_by_id = {
+        _text(check.get("id"), 160): bool(check.get("passed"))
+        for check in checks
+        if isinstance(check, Mapping) and _text(check.get("id"), 160)
+    }
+    scientific_facts = (
+        scientific_readiness.get("facts")
+        if isinstance(scientific_readiness, Mapping)
+        and isinstance(scientific_readiness.get("facts"), Mapping)
+        else {}
+    )
+    analysis_facts = (
+        scientific_facts.get("analysis")
+        if isinstance(scientific_facts.get("analysis"), Mapping)
+        else {}
+    )
+    validated_analysis_only = bool(
+        isinstance(scientific_readiness, Mapping)
+        and scientific_readiness.get("status") == "analysis_only"
+        and scientific_readiness.get("claim_ceiling") == "analysis_only"
+        and analysis_facts.get("analysis_validated") is True
+        and checks_by_id.get("numeric_verified") is True
+    )
+    analysis_only = bool(
+        not reportable
+        and (gate_status == "analysis_only" or validated_analysis_only)
+    )
     claim_ceiling: Literal["unsupported", "analysis_only", "reportable"] = (
         "reportable"
         if reportable
@@ -226,7 +253,6 @@ def build_result_interpretation_card(
         if analysis_only
         else "blocked"
     )
-    checks = gate.get("checks") if isinstance(gate.get("checks"), list) else []
     limitations: List[str] = []
     for check in checks[:80]:
         if not isinstance(check, Mapping) or check.get("passed") is not False:

@@ -131,6 +131,26 @@ ALLOWED_TOOLS = READ_TOOLS | CONTROL_TOOLS | WORKSPACE_TOOLS
 MUTATING_HOST_TOOLS = CONTROL_TOOLS | frozenset(
     {"easyicu_write_project_file", "easyicu_edit_project_file"}
 )
+DATA_SOURCE_REQUIRED_TOOLS = frozenset(
+    {
+        "easyicu_list_source_concepts",
+        "easyicu_inspect_data_package",
+        "easyicu_review_cohort",
+        "easyicu_open_data_download",
+        "easyicu_preview_icd_cohort",
+        "easyicu_review_patient_timeline",
+        "easyicu_compare_data_sources",
+        "easyicu_inspect_run",
+        "easyicu_inspect_step",
+        "easyicu_inspect_validation",
+        "easyicu_list_artifacts",
+        "easyicu_inspect_evidence",
+        "easyicu_inspect_interpretation",
+        "easyicu_inspect_manuscript",
+        "easyicu_run",
+        "easyicu_resume",
+    }
+)
 
 
 def _bounded_model_text(value: Any, limit: int = 1_200) -> str:
@@ -367,13 +387,14 @@ def _artifact_resource(
     }
 
 
-def _extraction_workspace_resource(
+def extraction_workspace_resource(
     study: Mapping[str, Any],
     *,
     state: str,
     job_id: Any = None,
     source_id: Any = None,
     expected_database: Any = None,
+    entry_mode: Any = None,
 ) -> Dict[str, Any]:
     """Project the native Extraction owner without exposing its host paths."""
 
@@ -392,6 +413,9 @@ def _extraction_workspace_resource(
     clean_source_id = str(source_id or "").strip()
     if clean_source_id:
         resource["source_id"] = clean_source_id[:80]
+    if str(entry_mode or "").strip() == "source_binding":
+        resource["entry_mode"] = "source_binding"
+        resource["label"] = "Data source setup"
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     database = str(expected_database or source.get("database") or "").strip()
@@ -546,7 +570,7 @@ def _workspace_status(
 
 
 def _registered_source_projection(
-    source: Mapping[str, Any], *, active_path: Any
+    source: Mapping[str, Any], *, active_path: Any, database_label: str
 ) -> Dict[str, Any]:
     """Return one path-free registered-export choice for conversational setup."""
 
@@ -565,14 +589,23 @@ def _registered_source_projection(
     official_demo_labels = {
         f"{spec.title} v{spec.version}".casefold() for spec in official_demo_specs
     }
+    source_scope = (
+        "official_demo"
+        if label.casefold() in official_demo_labels
+        else "registered_export"
+    )
     return {
         "source_id": str(source.get("id") or "")[:80],
-        "label": label,
+        # Registry labels are execution identity and may contain internal run
+        # names such as "full6".  Conversational setup gets the canonical
+        # database/release label instead; exact source_id remains authoritative.
+        "label": label if source_scope == "official_demo" else database_label,
         "database": str(source.get("database") or "")[:80],
-        "source_scope": (
+        "source_scope": source_scope,
+        "availability": (
             "official_demo"
-            if label.casefold() in official_demo_labels
-            else "registered_export"
+            if source_scope == "official_demo"
+            else "available_in_easyicu"
         ),
         "generated": str(source.get("generated") or "")[:80] or None,
         "active": bool(
@@ -589,6 +622,41 @@ def _registered_source_projection(
     }
 
 
+def _dominant_local_source(
+    choices: Sequence[Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Return one unambiguously most-complete local dataset, if present."""
+
+    local_choices = [
+        row for row in choices if row.get("source_scope") == "registered_export"
+    ]
+    dominant = []
+    for candidate in local_choices:
+        candidate_stays = int((candidate.get("aggregate") or {}).get("stays") or 0)
+        candidate_modules = int(candidate.get("module_count") or 0)
+        if all(
+            candidate_stays >= int((other.get("aggregate") or {}).get("stays") or 0)
+            and candidate_modules >= int(other.get("module_count") or 0)
+            for other in local_choices
+        ):
+            dominant.append(candidate)
+    return dict(dominant[0]) if len(dominant) == 1 else None
+
+
+def _database_named_in_message(message: str) -> Optional[str]:
+    for database, pattern in (
+        ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
+        ("mimic", r"\bmimic[\s_-]*(?:iii|3)\b"),
+        ("eicu", r"\beicu\b"),
+        ("aumc", r"\b(?:amsterdamumcdb|aumc)\b"),
+        ("hirid", r"\bhirid\b"),
+        ("sic", r"\b(?:sicdb|sic)\b"),
+    ):
+        if re.search(pattern, message):
+            return database
+    return None
+
+
 def _list_data_sources(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -597,15 +665,16 @@ def _list_data_sources(
     _require_args(params, allowed=("database",))
     requested_database = str(params.get("database") or "").strip()
     user_message = str(context.user_message or "").casefold()
-    explicit_mimic_database = None
-    if re.search(r"\bmimic[\s_-]*(?:iv|4)\b", user_message):
-        explicit_mimic_database = "miiv"
-    elif re.search(r"\bmimic[\s_-]*(?:iii|3)\b", user_message):
-        explicit_mimic_database = "mimic"
+    explicit_database = _database_named_in_message(user_message)
+    if explicit_database:
+        # The current user's exact database wording is stronger authority than
+        # a model-generated tool argument. Recover the request deterministically
+        # instead of returning a receipt for a different database family.
+        requested_database = explicit_database
     ambiguous_mimic_request = bool(
         requested_database in {"miiv", "mimic"}
         and "mimic" in user_message
-        and explicit_mimic_database is None
+        and explicit_database not in {"miiv", "mimic"}
     )
     if ambiguous_mimic_request:
         # The model argument is not user authority. A bare "MIMIC" request
@@ -628,6 +697,11 @@ def _list_data_sources(
     registry = sources.load_registry()
     choices = []
     if selected_profile is not None:
+        database_label = selected_profile.display_name
+        if selected_profile.reference_release:
+            database_label = (
+                f"{database_label} v{selected_profile.reference_release}"
+            )
         for row in (registry.get("sources") or []):
             if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
                 continue
@@ -640,16 +714,47 @@ def _list_data_sources(
                 continue
             choices.append(
                 _registered_source_projection(
-                    row, active_path=registry.get("active_path")
+                    row,
+                    active_path=registry.get("active_path"),
+                    database_label=database_label,
                 )
             )
             if len(choices) >= 40:
                 break
+    recommended_source = _dominant_local_source(choices)
+    exact_database_named = bool(
+        selected_profile is not None
+        and explicit_database == selected_profile.key
+    )
+    auto_select_recommended = bool(recommended_source and exact_database_named)
+    if recommended_source is not None:
+        recommended_source = {
+            key: recommended_source.get(key)
+            for key in (
+                "source_id",
+                "label",
+                "database",
+                "availability",
+                "module_count",
+                "aggregate",
+            )
+        }
+        recommended_source.update(
+            {
+                "selection_reason": "most_complete_local_dataset",
+                "auto_select_for_exact_database_request": auto_select_recommended,
+            }
+        )
     supported_databases = [
         {
             "database": profile.key,
             "label": profile.display_name,
             "reference_release": profile.reference_release,
+            "display_label": (
+                f"{profile.display_name} v{profile.reference_release}"
+                if profile.reference_release
+                else profile.display_name
+            ),
             "selection_required": True,
         }
         for profile in iter_database_profiles(public_only=True)
@@ -679,8 +784,8 @@ def _list_data_sources(
             "and their reference releases."
             if selected_profile is None
             else (
-                f"Listed {len(choices)} validated {selected_profile.display_name} "
-                "export choices without filesystem paths or patient rows."
+                f"EasyICU can use {database_label} from the local data catalog "
+                "without exposing filesystem paths or patient rows."
             )
         ),
         owner="easyicu.webserver.sources",
@@ -698,10 +803,19 @@ def _list_data_sources(
             ),
             "supported_databases": supported_databases,
             "official_demos": official_demos,
+            "recommended_source": recommended_source,
             "source_modes": (
                 []
                 if selected_profile is None
-                else ["local_full_database", "registered_export", "official_demo"]
+                else (
+                    ["easyicu_available_data"]
+                    if auto_select_recommended
+                    else [
+                        "local_full_database",
+                        "registered_export",
+                        "official_demo",
+                    ]
+                )
             ),
             "database_selection_deferred": ambiguous_mimic_request,
             "selection_policy": {
@@ -711,6 +825,8 @@ def _list_data_sources(
                 "exact_source_id_required_for_data_queries": True,
                 "local_folder_paths_stay_host_side": True,
                 "demo_never_implies_full_database": True,
+                "official_demo_only_when_explicitly_requested_if_local_available": True,
+                "user_facing_availability_term": "EasyICU can use",
             },
         },
     )
@@ -792,6 +908,21 @@ def _list_source_concepts(
     from easyicu.research_agent.acquisition.catalog import build_available_catalog
 
     catalog = build_available_catalog(Path(source_path).expanduser())
+    def project_concept(concept: Any) -> Dict[str, str]:
+        return {
+            "concept_id": str(concept.concept_id)[:80],
+            "module": Path(concept.file_name).stem.lower()[:80],
+            "role": str(concept.column_role or "value")[:40],
+            "description": " ".join(str(concept.description or "").split())[:300],
+            "selection_mode": str(concept.selection_mode or "ordinary")[:40],
+            "selection_note": " ".join(
+                str(concept.selection_note or "").split()
+            )[:500],
+            "canonical_alternative": str(
+                concept.canonical_alternative or ""
+            )[:80],
+        }
+
     rows = []
     for concept in catalog.concepts:
         module = Path(concept.file_name).stem.lower()
@@ -808,24 +939,23 @@ def _list_source_concepts(
         searchable = " ".join(re.findall(r"[a-z0-9]+", searchable))
         if query_terms and not any(term in searchable for term in query_terms):
             continue
-        rows.append(
+        rows.append(project_concept(concept))
+    rows = rows[:limit]
+    catalog_by_id = {
+        str(concept.concept_id): concept for concept in catalog.concepts
+    }
+    canonical_alternatives = []
+    for row in rows:
+        alternative_id = str(row.get("canonical_alternative") or "")
+        alternative = catalog_by_id.get(alternative_id)
+        if alternative is None:
+            continue
+        canonical_alternatives.append(
             {
-                "concept_id": str(concept.concept_id)[:80],
-                "module": module[:80],
-                "role": str(concept.column_role or "value")[:40],
-                "description": " ".join(
-                    str(concept.description or "").split()
-                )[:300],
-                "selection_mode": str(concept.selection_mode or "ordinary")[:40],
-                "selection_note": " ".join(
-                    str(concept.selection_note or "").split()
-                )[:500],
-                "canonical_alternative": str(
-                    concept.canonical_alternative or ""
-                )[:80],
+                "source_concept_id": row["concept_id"],
+                **project_concept(alternative),
             }
         )
-    rows = rows[:limit]
     return _result(
         context,
         status="ok",
@@ -838,6 +968,7 @@ def _list_source_concepts(
         details={
             "source_id": source_id,
             "concepts": rows,
+            "canonical_alternatives": canonical_alternatives,
             "returned_count": len(rows),
             "truncated": len(rows) == limit,
         },
@@ -1178,7 +1309,7 @@ def _open_data_download(
             "source_id": str(source.get("id") or "")[:80],
             "file_count": int((source.get("summary") or {}).get("file_count") or 0),
             "total_rows": int((source.get("summary") or {}).get("total_rows") or 0),
-            "resource": _extraction_workspace_resource(
+            "resource": extraction_workspace_resource(
                 study,
                 state="review",
                 source_id=source.get("id"),
@@ -1667,8 +1798,16 @@ def _prepare_demo_source(
     )
 
 
-def _workflow_snapshot(context: ToolExecutionContext) -> Dict[str, Any]:
-    study = _bound_context(context.session.binding)
+def _workflow_snapshot(
+    context: ToolExecutionContext,
+    *,
+    study_override: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    study = (
+        dict(study_override)
+        if study_override is not None
+        else _bound_context(context.session.binding)
+    )
     registry = sources.load_registry()
     active_job = None
     if study and study.get("active_job_id"):
@@ -2304,6 +2443,23 @@ def _inspect_interpretation(
         if card.status == "blocked"
         else "easyicu_result_interpretation_projected"
     )
+    card_projection = card.model_dump(mode="json")
+    safe_claims = []
+    for claim in card_projection.get("claims") or []:
+        try:
+            ensure_safe_projection(claim)
+        except PiCopilotError:
+            continue
+        safe_claims.append(claim)
+    card_projection["claims"] = safe_claims
+    safe_limitations = []
+    for limitation in card_projection.get("limitations") or []:
+        try:
+            ensure_safe_projection(limitation)
+        except PiCopilotError:
+            continue
+        safe_limitations.append(limitation)
+    card_projection["limitations"] = safe_limitations
     return _result(
         context,
         status=status,
@@ -2311,7 +2467,10 @@ def _inspect_interpretation(
         summary=card.summary,
         owner="easyicu.research_agent.reporting.result_card",
         details={
-            "interpretation": card.model_dump(mode="json"),
+            "interpretation": card_projection,
+            "withheld_claim_count": len(card.claims) - len(safe_claims),
+            "withheld_limitation_count": len(card.limitations)
+            - len(safe_limitations),
             "resources": resources,
         },
     )
@@ -2383,6 +2542,14 @@ def _inspect_manuscript(
         )
         if resource is not None
     ]
+    safe_review_claims = []
+    for claim in interpretation.claims:
+        projected_claim = claim.model_dump(mode="json")
+        try:
+            ensure_safe_projection(projected_claim)
+        except PiCopilotError:
+            continue
+        safe_review_claims.append(projected_claim)
     return _result(
         context,
         status="ok",
@@ -2400,10 +2567,9 @@ def _inspect_manuscript(
                     "question": _bounded_model_text(manuscript.get("question"), 1200),
                     "source": stable_code(manuscript.get("source")),
                     "claim_count": len(manuscript.get("claims") or []),
-                    "review_claims": [
-                        claim.model_dump(mode="json")
-                        for claim in interpretation.claims
-                    ],
+                    "review_claims": safe_review_claims,
+                    "withheld_review_claim_count": len(interpretation.claims)
+                    - len(safe_review_claims),
                 }
             ),
             "governance": bounded_json_projection(governance),
@@ -2494,8 +2660,234 @@ _STUDY_SETUP_FIELDS = frozenset(
 )
 
 _NESTED_STUDY_PATCH_FIELDS = frozenset(
-    {"cohort", "time_window", "confirmations", "execution_concepts"}
+    {
+        "cohort",
+        "time_window",
+        "confirmations",
+        "execution_concepts",
+        "analysis_design",
+        "covariate_rationales",
+        "covariate_temporal_roles",
+    }
 )
+
+
+def _message_explicitly_selects_first_stay(message: str) -> bool:
+    """Return whether this user turn explicitly chooses one first ICU stay."""
+
+    normalized = str(message or "").casefold()
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"首次\s*(?:icu|重症监护)",
+            r"首个\s*(?:icu|重症监护)",
+            r"第一(?:次|个)\s*(?:icu|重症监护)",
+            r"\bfirst[\s_-]+(?:icu|intensive care)(?:[\s_-]+stay|[\s_-]+admission)?\b",
+            r"\bindex[\s_-]+(?:icu|intensive care)(?:[\s_-]+stay|[\s_-]+admission)?\b",
+            r"\bone[\s_-]+(?:icu[\s_-]+)?stay[\s_-]+per[\s_-]+patient\b",
+            r"排除\s*(?:再次|重复|再入|重返).*?(?:icu|重症监护)",
+            r"\bexclude[\s_-]+(?:icu[\s_-]+)?readmissions?\b",
+        )
+    )
+
+
+def _message_explicitly_selects_all_stays(message: str) -> bool:
+    """Return whether this user turn explicitly retains eligible ICU stays."""
+
+    normalized = str(message or "").casefold()
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"所有符合条件.*?(?:icu|重症监护).*?(?:stay|入住|住院)",
+            r"(?:包括|保留|纳入).*?(?:重复|再次|再入).*?(?:icu|重症监护)",
+            r"不(?:限制|限于|只纳入).*?(?:首次|首个|第一).*?(?:icu|重症监护)",
+            r"\ball[\s_-]+eligible[\s_-]+(?:adult[\s_-]+)?icu[\s_-]+stays?\b",
+            r"\b(?:include|retain)[\s_-]+(?:repeated|repeat|readmission)[\s_-]+(?:icu[\s_-]+)?stays?\b",
+            r"\bnot[\s_-]+(?:restricted[\s_-]+to[\s_-]+)?(?:the[\s_-]+)?first[\s_-]+icu[\s_-]+stay\b",
+        )
+    )
+
+
+def _message_explicitly_selects_primary_outcome(message: str) -> bool:
+    """Return whether this turn chooses, rather than merely mentions, an outcome."""
+
+    normalized = str(message or "").casefold()
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"主要结局.*?(?:使用|采用|设为|定义为|改为|替换为)",
+            r"(?:使用|采用|设为|改为|替换为).*?(?:死亡|mortality).*?(?:主要)?结局",
+            r"结局.*?(?:使用|采用|设为|定义为|改为|替换为).*?(?:死亡|mortality)",
+            r"不(?:改成|改为|替换为).*?(?:死亡|mortality)",
+            # A rendered next-step choice is itself an explicit selection even
+            # when its button label is a compact noun phrase.  Requiring the
+            # user to add a verb after clicking the option makes the same
+            # scientific decision repeat indefinitely.
+            r"^(?:icu\s*(?:stay\s*)?(?:住院期间|期间|内)?死亡|icu\s*mortality)(?:\s*[（(]推荐[）)])?$",
+            r"^(?:hospital|in[\s_-]*hospital|28[\s_-]*day|30[\s_-]*day|90[\s_-]*day)[\s_-]*(?:death|mortality)$",
+            r"\bprimary[\s_-]+outcome[\s_-]+(?:is|uses?|will[\s_-]+be)\b",
+            r"\buse[\s_-]+.+?[\s_-]+(?:as[\s_-]+the[\s_-]+)?primary[\s_-]+outcome\b",
+            r"\bdo[\s_-]+not[\s_-]+change[\s_-]+(?:it[\s_-]+)?to\b",
+        )
+    )
+
+
+def _message_explicitly_selects_primary_exposure(message: str) -> bool:
+    """Return whether this turn chooses a primary exposure definition."""
+
+    normalized = str(message or "").casefold()
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"主要暴露.*?(?:使用|采用|设为|定义为)",
+            r"(?:使用|采用|设为).*?(?:sepsis|脓毒症).*?(?:定义|作为.*?暴露)",
+            r"(?:sepsis|脓毒症).*?(?:定义|版本).*?(?:使用|采用)",
+            r"不要使用.*?(?:sofa|sepsis|脓毒症)",
+            r"\bprimary[\s_-]+exposure[\s_-]+(?:is|uses?|will[\s_-]+be)\b",
+            r"\b(?:use|adopt)[\s_-]+.+?[\s_-]+(?:as[\s_-]+the[\s_-]+)?primary[\s_-]+exposure\b",
+            r"\bdo[\s_-]+not[\s_-]+use[\s_-]+.+?(?:sofa|sepsis)\b",
+        )
+    )
+
+
+def _message_explicitly_selects_clustered_inference(message: str) -> bool:
+    """Return whether this turn explicitly chooses patient-clustered inference."""
+
+    normalized = str(message or "").casefold()
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"(?:按|以).*?患者.*?(?:聚类|相关性|相关)",
+            r"患者.*?(?:聚类稳健|聚类处理|cluster)",
+            r"(?:聚类坐标|cluster.*coordinate).*?(?:患者|patient)",
+            r"\bcluster(?:ed|ing)?[\s_-]+(?:robust[\s_-]+)?(?:by[\s_-]+)?patient\b",
+            r"\bpatient[\s_-]+cluster(?:ed|ing|[\s_-]+robust)?\b",
+        )
+    )
+
+
+def _message_explicitly_changes_variance_estimator(message: str) -> bool:
+    """Return whether this turn directly selects an inference variance policy."""
+
+    normalized = str(message or "").casefold()
+    return _message_explicitly_selects_clustered_inference(message) or any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"(?:普通|异方差|heteroskedastic).*?稳健标准误",
+            r"(?:模型|model)[\s_-]*(?:标准误|based)",
+            r"(?:不进行|不做|仅报告).*?(?:关联推断|统计推断|患病率)",
+            r"\b(?:model[\s_-]*based|heteroskedastic[\s_-]*robust|counts[\s_-]*only)\b",
+        )
+    )
+
+
+def _message_explicitly_selects_analysis_goal(message: str) -> bool:
+    """Return whether this turn directly chooses the scientific analysis goal."""
+
+    normalized = str(message or "").casefold()
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"(?:分析目标|研究目标).*?(?:患病率|关联|因果|预测|描述)",
+            r"(?:分析目标|研究目标).*?(?:同步|替换|改为|更新).*?(?:死亡|mortality|患病率|关联)",
+            r"先报告.*?患病率.*?(?:关联|关系)",
+            r"(?:观察性关联|非因果|不要写成因果|不.*?因果效应)",
+            r"^(?:描述|报告).*?患病率.*?(?:未调整|协变量调整|调整后).*?关联(?:分析)?(?:\s*[（(]推荐[）)])?$",
+            r"^仅(?:描述|报告).*?患病率.*?(?:不分析|不评估).*?(?:死亡)?关联$",
+            r"\b(?:analysis|study)[\s_-]+goal\b",
+            r"\b(?:observational[\s_-]+association|non[\s_-]*causal)\b",
+            r"\bfirst[\s_-]+report[\s_-]+.+?prevalence\b",
+        )
+    )
+
+
+def _message_explicitly_selects_export_format(message: str) -> bool:
+    """Return whether this turn directly chooses a package format."""
+
+    normalized = str(message or "").casefold()
+    return bool(
+        re.search(
+            r"(?:导出|数据包|格式|export).*?(?:parquet|csv|excel|xlsx)|"
+            r"(?:parquet|csv|excel|xlsx).*?(?:导出|数据包|格式|export)|"
+            r"^(?:parquet|csv|excel|xlsx)(?:\s*[（(].*?[）)])?$",
+            normalized,
+        )
+    )
+
+
+def _message_explicitly_requests_source_rebind(message: str) -> bool:
+    """Return whether this turn explicitly asks to replace the bound source."""
+
+    normalized = str(message or "").casefold()
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"(?:更换|切换|重新选择|改用|换成).{0,24}(?:数据源|数据库|数据目录|文件夹)",
+            r"(?:数据源|数据库|数据目录|文件夹).{0,24}(?:更换|切换|重新选择|改用|换成)",
+            r"\b(?:switch|change|replace|rebind|use a different).{0,32}(?:data source|database|data folder)\b",
+        )
+    )
+
+
+def _immutable_baseline_demographic(value: Any) -> str:
+    """Return the owner-known baseline demographic family for one label."""
+
+    normalized = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(value or "").casefold())
+    if normalized in {"age", "年龄", "入院年龄"}:
+        return "age"
+    if normalized in {"sex", "gender", "性别", "生理性别"}:
+        return "sex"
+    return ""
+
+
+def _message_explicitly_selects_demographic_adjustment(
+    message: str, covariates: Sequence[Any]
+) -> bool:
+    """Return whether the user directly selected an immutable baseline roster."""
+
+    normalized = str(message or "").casefold()
+    families = [_immutable_baseline_demographic(value) for value in covariates]
+    if not families or not all(families):
+        return False
+    if not re.search(r"(?:主要)?调整|协变量|adjust(?:ed|ing)?\s+for|covariates?", normalized):
+        return False
+    return all(
+        (family == "age" and ("年龄" in normalized or re.search(r"\bage\b", normalized)))
+        or (
+            family == "sex"
+            and (
+                "性别" in normalized
+                or re.search(r"\b(?:sex|gender)\b", normalized)
+            )
+        )
+        for family in families
+    )
+
+
+def _message_explicitly_clears_covariate_adjustment(message: str) -> bool:
+    """Return whether the user directly removes the adjustment roster.
+
+    Empty model arguments are not authority to erase a prior scientific
+    decision.  This helper recognizes only turns that explicitly choose an
+    unadjusted or no-covariate analysis, so StudyContext can clear the roster
+    and its owner metadata atomically without weakening the ordinary
+    fail-closed merge behavior.
+    """
+
+    normalized = str(message or "").casefold()
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"(?:清除|移除|删除|取消).{0,24}(?:协变量|调整(?:登记|配置|变量)?)",
+            r"(?:协变量|调整(?:登记|配置|变量)?).{0,24}(?:清除|移除|删除|取消)",
+            r"(?:无|不使用|不登记|不保留|不进行|不执行|不做).{0,16}(?:调整协变量|协变量调整|协变量|调整)",
+            r"(?:仅|只).{0,16}(?:描述|描述性).{0,16}(?:不调整|无调整|不含协变量)",
+            r"\b(?:clear|remove|drop|delete).{0,32}(?:adjustment|covariates?)\b",
+            r"\b(?:no|without).{0,16}(?:adjustment|adjustment covariates?|covariates?)\b",
+            r"\b(?:unadjusted|descriptive-only|descriptive only)\b",
+            r"\bdo not adjust\b",
+        )
+    )
 
 
 def _merge_nested_study_patch(
@@ -2529,6 +2921,46 @@ def _merge_nested_study_patch(
         if isinstance(existing, Mapping) and isinstance(proposed, Mapping):
             merged[field] = merge(existing, proposed)
     return merged
+
+
+def _restore_unconfirmed_study_slot(
+    patch: Dict[str, Any],
+    current: Mapping[str, Any],
+    *,
+    slot: str,
+) -> None:
+    """Discard one unconfirmed proposal while retaining confirmed changes."""
+
+    prior = current.get(slot)
+    if prior:
+        patch[slot] = prior
+    else:
+        patch.pop(slot, None)
+
+    if slot in {"outcome", "primary_exposure"}:
+        proposed_execution = patch.get("execution_concepts")
+        prior_execution = current.get("execution_concepts")
+        if isinstance(proposed_execution, Mapping):
+            restored_execution = dict(proposed_execution)
+            prior_value = (
+                prior_execution.get(slot)
+                if isinstance(prior_execution, Mapping)
+                else None
+            )
+            if prior_value:
+                restored_execution[slot] = prior_value
+            else:
+                restored_execution.pop(slot, None)
+            if restored_execution:
+                patch["execution_concepts"] = restored_execution
+            else:
+                patch.pop("execution_concepts", None)
+        if "modules" in patch:
+            prior_modules = list(current.get("modules") or [])
+            if prior_modules:
+                patch["modules"] = prior_modules
+            else:
+                patch.pop("modules", None)
 
 
 def _update_study_context(
@@ -2565,6 +2997,46 @@ def _update_study_context(
         patch = _merge_nested_study_patch(current, patch)
     if current and current.get("id"):
         patch["id"] = current["id"]
+    proposed_modules = {
+        str(value or "").strip().lower() for value in (params.get("modules") or [])
+    }
+    if "sepsis3_sofa2" in proposed_modules:
+        from easyicu.concept.selection_policy import (
+            concept_selection_confirmation_key,
+            evaluate_concept_selection,
+        )
+
+        concept_id = "sep3_sofa2"
+        confirmation_key = concept_selection_confirmation_key(concept_id)
+        previously_confirmed = bool(
+            ((current or {}).get("confirmations") or {}).get(confirmation_key)
+        )
+        decision = evaluate_concept_selection(
+            concept_id,
+            user_intent=context.user_message,
+            owner_confirmed=previously_confirmed,
+        )
+        if not decision.allowed:
+            return _result(
+                context,
+                status="blocked",
+                code=decision.reason_code,
+                summary=(
+                    "The proposed feature module contains an explicit-only "
+                    "clinical variant that the user did not request."
+                ),
+                owner="easyicu.concept.selection_policy",
+                details={
+                    **decision.to_dict(),
+                    "field": "modules",
+                    "proposed_module": "sepsis3_sofa2",
+                    "canonical_alternative_module": "sepsis3_sofa1",
+                },
+            )
+        confirmations = dict(((current or {}).get("confirmations") or {}))
+        confirmations.update(dict(patch.get("confirmations") or {}))
+        confirmations[confirmation_key] = True
+        patch["confirmations"] = confirmations
     proposed_cohort = params.get("cohort")
     if isinstance(proposed_cohort, Mapping) and "preset" in proposed_cohort:
         try:
@@ -2589,6 +3061,202 @@ def _update_study_context(
         normalized_cohort = dict(patch.get("cohort") or {})
         normalized_cohort["preset"] = normalized_preset
         patch["cohort"] = normalized_cohort
+        current_preset = str(((current or {}).get("cohort") or {}).get("preset") or "")
+        if (
+            normalized_preset == "adult_all"
+            and current_preset != "adult_all"
+            and str(context.user_message or "").strip()
+            and not _message_explicitly_selects_all_stays(context.user_message)
+        ):
+            return _result(
+                context,
+                status="blocked",
+                code="study_cohort_all_stays_confirmation_required",
+                summary=(
+                    "An adult ICU population does not by itself choose between "
+                    "all eligible stays and one stay per patient."
+                ),
+                owner="easyicu.webserver.study_contexts",
+                details={
+                    "field": "cohort.preset",
+                    "proposed": "adult_all",
+                    "safe_alternatives": ["adult_all", "adult_first"],
+                },
+            )
+        if (
+            normalized_preset == "adult_first"
+            and current_preset != "adult_first"
+            and not _message_explicitly_selects_first_stay(context.user_message)
+        ):
+            return _result(
+                context,
+                status="blocked",
+                code="study_cohort_first_stay_confirmation_required",
+                summary=(
+                    "A first-ICU-stay restriction changes the analysis unit and "
+                    "requires the user's explicit selection."
+                ),
+                owner="easyicu.webserver.study_contexts",
+                details={
+                    "field": "cohort.preset",
+                    "proposed": "adult_first",
+                    "safe_alternatives": ["adult_all", "all_icu"],
+                },
+            )
+    if (
+        params.get("outcome")
+        and str(context.user_message or "").strip()
+        and str(params.get("outcome") or "").strip()
+        != str((current or {}).get("outcome") or "").strip()
+        and not _message_explicitly_selects_primary_outcome(context.user_message)
+    ):
+        other_confirmed_change = any(
+            key in params
+            for key in _STUDY_SETUP_FIELDS
+            - {"outcome", "execution_concepts", "modules", "confirmations"}
+        )
+        if other_confirmed_change:
+            _restore_unconfirmed_study_slot(patch, current or {}, slot="outcome")
+        else:
+            return _result(
+                context,
+                status="blocked",
+                code="study_primary_outcome_confirmation_required",
+                summary=(
+                    "Mentioning an outcome in the research question records candidate "
+                    "intent but does not confirm the primary outcome definition."
+                ),
+                owner="easyicu.webserver.study_contexts",
+                details={"field": "outcome"},
+            )
+    if (
+        params.get("primary_exposure")
+        and str(context.user_message or "").strip()
+        and str(params.get("primary_exposure") or "").strip()
+        != str((current or {}).get("primary_exposure") or "").strip()
+        and not _message_explicitly_selects_primary_exposure(context.user_message)
+    ):
+        other_confirmed_change = any(
+            key in params
+            for key in _STUDY_SETUP_FIELDS
+            - {"primary_exposure", "execution_concepts", "modules", "confirmations"}
+        )
+        if other_confirmed_change:
+            _restore_unconfirmed_study_slot(
+                patch, current or {}, slot="primary_exposure"
+            )
+        else:
+            return _result(
+                context,
+                status="blocked",
+                code="study_primary_exposure_confirmation_required",
+                summary=(
+                    "Mentioning an exposure in the research question records candidate "
+                    "intent but does not confirm its primary executable definition."
+                ),
+                owner="easyicu.webserver.study_contexts",
+                details={"field": "primary_exposure"},
+            )
+    if (
+        params.get("analysis_goal")
+        and str(context.user_message or "").strip()
+        and str(params.get("analysis_goal") or "").strip()
+        != str((current or {}).get("analysis_goal") or "").strip()
+        and not _message_explicitly_selects_analysis_goal(context.user_message)
+    ):
+        other_confirmed_change = any(
+            key in params for key in _STUDY_SETUP_FIELDS - {"analysis_goal"}
+        )
+        if other_confirmed_change:
+            _restore_unconfirmed_study_slot(
+                patch, current or {}, slot="analysis_goal"
+            )
+        else:
+            return _result(
+                context,
+                status="blocked",
+                code="study_analysis_goal_confirmation_required",
+                summary=(
+                    "The research question suggests candidate objectives but does "
+                    "not confirm the analysis goal or causal interpretation."
+                ),
+                owner="easyicu.webserver.study_contexts",
+                details={"field": "analysis_goal"},
+            )
+    proposed_covariates = list(params.get("covariates") or [])
+    explicitly_clears_covariates = (
+        "covariates" in params
+        and not proposed_covariates
+        and _message_explicitly_clears_covariate_adjustment(context.user_message)
+    )
+    if explicitly_clears_covariates:
+        # Recursive StudyContext merging intentionally preserves omitted
+        # nested siblings.  An explicit empty roster is different: the roster,
+        # its rationales/temporal roles, and executable bindings form one owner
+        # contract and must be cleared together.  The user-message gate above
+        # prevents a model-authored empty list from silently erasing a prior
+        # scientific decision.
+        patch["covariates"] = []
+        patch["covariate_selection"] = "exact"
+        patch["covariate_rationales"] = {}
+        patch["covariate_temporal_roles"] = {}
+        prior_execution = (current or {}).get("execution_concepts")
+        proposed_execution = patch.get("execution_concepts")
+        if isinstance(proposed_execution, Mapping) or isinstance(
+            prior_execution, Mapping
+        ):
+            synchronized_execution = dict(
+                proposed_execution
+                if isinstance(proposed_execution, Mapping)
+                else prior_execution
+            )
+            synchronized_execution["covariates"] = []
+            patch["execution_concepts"] = synchronized_execution
+    elif _message_explicitly_selects_demographic_adjustment(
+        context.user_message, proposed_covariates
+    ):
+        # Age and sex are immutable baseline demographics. Once the user
+        # explicitly chooses them for adjustment, their temporal role is an
+        # EasyICU-owned semantic fact rather than another user decision.
+        patch["covariate_selection"] = "exact"
+        rationales = dict(patch.get("covariate_rationales") or {})
+        temporal_roles = dict(patch.get("covariate_temporal_roles") or {})
+        for covariate in proposed_covariates:
+            key = str(covariate)
+            family = _immutable_baseline_demographic(covariate)
+            rationales[key] = (
+                f"Pre-specified {family} baseline demographic confounder selected by the user."
+            )
+            temporal_roles[key] = "baseline_static"
+        patch["covariate_rationales"] = rationales
+        patch["covariate_temporal_roles"] = temporal_roles
+        # If this study already has executable concept coordinates, keep the
+        # exact user-approved demographic roster synchronized with them. Age
+        # and sex are owner-known catalog identifiers, so leaving a stale
+        # ``execution_concepts.covariates=[]`` would make the visible study
+        # configuration disagree with the ResearchContext and fail only after
+        # a background run starts.
+        prior_execution = (current or {}).get("execution_concepts")
+        proposed_execution = patch.get("execution_concepts")
+        if isinstance(proposed_execution, Mapping) or isinstance(
+            prior_execution, Mapping
+        ):
+            synchronized_execution = dict(
+                proposed_execution
+                if isinstance(proposed_execution, Mapping)
+                else prior_execution
+            )
+            synchronized_execution["covariates"] = list(proposed_covariates)
+            patch["execution_concepts"] = synchronized_execution
+    if params.get("export_format") and _message_explicitly_selects_export_format(
+        context.user_message
+    ):
+        # An export-format turn authorizes exactly one new confirmation. Do not
+        # let a model-authored partial confirmations object erase prior owner
+        # receipts such as the already-confirmed feature window.
+        confirmations = dict(((current or {}).get("confirmations") or {}))
+        confirmations["export_format"] = True
+        patch["confirmations"] = confirmations
     for field in (
         "title",
         "question",
@@ -2667,11 +3335,48 @@ def _update_study_context(
                 ),
                 owner="easyicu.webserver.sources",
             )
-        patch["data_source"] = {
-            "path": selected_path,
-            "label": source.get("label") or "active EasyICU export",
-            "database": database,
-        }
+        current_source = (current or {}).get("data_source")
+        current_source = (
+            current_source if isinstance(current_source, Mapping) else {}
+        )
+        current_path = str(current_source.get("path") or "").strip()
+        source_rebind_blocked = bool(
+            context.session.data_source_authorization.status == "confirmed"
+            and current_path
+            and current_path != selected_path
+            and not _message_explicitly_requests_source_rebind(context.user_message)
+        )
+        if source_rebind_blocked:
+            has_other_setup_change = any(
+                key in params
+                for key in _STUDY_SETUP_FIELDS
+                - {"bind_active_export", "bind_source_id"}
+            )
+            if not has_other_setup_change:
+                return _result(
+                    context,
+                    status="blocked",
+                    code="study_data_source_rebind_confirmation_required",
+                    summary=(
+                        "This conversation already has a confirmed data source. "
+                        "Changing it requires an explicit user request."
+                    ),
+                    owner="easyicu.webserver.study_contexts",
+                    details={"field": "data_source"},
+                )
+        else:
+            patch["data_source"] = {
+                "path": selected_path,
+                "label": source.get("label") or "active EasyICU export",
+                "database": database,
+            }
+            confirmations = dict(((current or {}).get("confirmations") or {}))
+            confirmations.update(dict(patch.get("confirmations") or {}))
+            # A validated registry row is the Data Extraction owner's receipt
+            # for an already prepared EasyICU export. Reusing it must not send
+            # the user back to the raw-database folder workflow.
+            confirmations["extraction_completed"] = True
+            patch["confirmations"] = confirmations
     effective_source = patch.get("data_source") or (current or {}).get("data_source")
     effective_source = effective_source if isinstance(effective_source, Mapping) else {}
     effective_modules = patch.get("modules")
@@ -2713,10 +3418,9 @@ def _update_study_context(
             for value in effective_modules
             if str(value).strip()
         }
-        allowed_ids = {
-            concept.concept_id
+        concept_modules = {
+            concept.concept_id: Path(concept.file_name).stem.lower()
             for concept in catalog.concepts
-            if Path(concept.file_name).stem.lower() in allowed_modules
         }
         bound_ids = [
             value
@@ -2727,16 +3431,25 @@ def _update_study_context(
             )
             if value
         ]
-        unavailable = sorted(set(bound_ids) - allowed_ids)
-        if unavailable:
+        absent_from_source = sorted(set(bound_ids) - set(concept_modules))
+        if absent_from_source:
             return _result(
                 context,
                 status="blocked",
                 code="study_execution_concepts_unavailable",
-                summary="One or more executable concepts are absent from the selected modules.",
+                summary="One or more executable concepts are absent from the selected source.",
                 owner="easyicu.research_agent.acquisition.catalog",
-                details={"unavailable_concepts": unavailable},
+                details={"unavailable_concepts": absent_from_source},
             )
+        required_modules = {concept_modules[value] for value in bound_ids}
+        if required_modules - allowed_modules:
+            # Module selection for already-authorized exact concepts is an
+            # EasyICU implementation detail, not another scientific choice.
+            # Add only the catalog-proven owning modules; never invent a module
+            # name or broaden to unrelated features.
+            patch["modules"] = sorted(allowed_modules | required_modules)
+            effective_modules = patch["modules"]
+            allowed_modules = set(effective_modules)
         primary_concept = normalized_execution.get("primary_exposure")
         if primary_concept:
             from easyicu.concept.selection_policy import (
@@ -2757,7 +3470,8 @@ def _update_study_context(
                 context.user_message or (current or {}).get("question") or ""
             )
             confirmation_key = concept_selection_confirmation_key(primary_concept)
-            confirmations = dict(patch.get("confirmations") or {})
+            confirmations = dict(((current or {}).get("confirmations") or {}))
+            confirmations.update(dict(patch.get("confirmations") or {}))
             previously_confirmed = bool(
                 ((current or {}).get("confirmations") or {}).get(confirmation_key)
             )
@@ -2785,6 +3499,75 @@ def _update_study_context(
             patch["confirmations"] = confirmations
         patch["execution_concepts"] = normalized_execution
     if "analysis_design" in patch:
+        proposed_design = patch.get("analysis_design")
+        proposed_design = (
+            proposed_design if isinstance(proposed_design, Mapping) else {}
+        )
+        requested_design = params.get("analysis_design")
+        requested_design = (
+            requested_design if isinstance(requested_design, Mapping) else {}
+        )
+        current_design = (current or {}).get("analysis_design")
+        current_design = (
+            current_design if isinstance(current_design, Mapping) else {}
+        )
+        if (
+            requested_design.get("variance_estimator") == "none_counts_only"
+            and _message_explicitly_changes_variance_estimator(
+                context.user_message
+            )
+        ):
+            # ``cluster_unit`` is meaningful only for clustered inference.
+            # The nested merge may retain the previous patient coordinate, so
+            # remove it when the user explicitly switches to counts-only
+            # description instead of forcing a second technical decision.
+            proposed_design = dict(proposed_design)
+            proposed_design.pop("cluster_unit", None)
+            patch["analysis_design"] = proposed_design
+        if (
+            current_design
+            and str(context.user_message or "").strip()
+            and not _message_explicitly_changes_variance_estimator(
+                context.user_message
+            )
+        ):
+            proposed_design = dict(proposed_design)
+            for field in ("variance_estimator", "cluster_unit"):
+                prior_value = current_design.get(field)
+                if prior_value:
+                    proposed_design[field] = prior_value
+                else:
+                    proposed_design.pop(field, None)
+            patch["analysis_design"] = proposed_design
+        proposes_patient_clustering = (
+            str(proposed_design.get("variance_estimator") or "").strip()
+            == "cluster_robust"
+            or str(proposed_design.get("cluster_unit") or "").strip() == "patient"
+        )
+        current_patient_clustering = (
+            str(current_design.get("variance_estimator") or "").strip()
+            == "cluster_robust"
+            or str(current_design.get("cluster_unit") or "").strip() == "patient"
+        )
+        if (
+            proposes_patient_clustering
+            and not current_patient_clustering
+            and str(context.user_message or "").strip()
+            and not _message_explicitly_selects_clustered_inference(
+                context.user_message
+            )
+        ):
+            return _result(
+                context,
+                status="blocked",
+                code="study_patient_clustering_confirmation_required",
+                summary=(
+                    "Retaining repeated ICU stays does not by itself authorize "
+                    "patient-clustered inference."
+                ),
+                owner="easyicu.webserver.study_contexts",
+                details={"field": "analysis_design.variance_estimator"},
+            )
         try:
             patch["analysis_design"] = study_contexts.normalize_analysis_design(
                 patch.get("analysis_design")
@@ -2904,17 +3687,19 @@ def _update_study_context(
                 if exc.detail.get(key) is not None
             },
         )
+    workflow = _workflow_snapshot(context, study_override=updated)
     result = _result(
         context,
         status="ok",
         code="study_context_updated",
         summary=(
-            f"Saved typed StudyContext revision {int(updated.get('revision') or 0)}. "
-            "The conversation host will rebind this Copilot session after the turn settles."
+            f"Saved typed StudyContext revision {int(updated.get('revision') or 0)} "
+            "and projected the post-update workflow for the next scientific decision."
         ),
         owner="easyicu.webserver.study_contexts",
         details={
             "study": project_study_context(updated),
+            "workflow": workflow,
             "rebind_required": True,
             "host_rebind_after_turn": True,
         },
@@ -3793,7 +4578,7 @@ def _start_extraction(
         release_label = (
             f" {profile.reference_release}" if profile.reference_release else ""
         )
-        resource = _extraction_workspace_resource(
+        resource = extraction_workspace_resource(
             study, state="setup", expected_database=profile.key
         )
         resource["label"] = (
@@ -3850,7 +4635,7 @@ def _start_extraction(
             owner="easyicu.webserver.study_contexts",
             details={
                 "missing_fields": missing,
-                "resource": _extraction_workspace_resource(
+                "resource": extraction_workspace_resource(
                     study, state="setup"
                 ),
             },
@@ -3889,7 +4674,7 @@ def _start_extraction(
                             "source_id": str(registered_source.get("id") or "")[:80],
                         },
                         "extraction_contract": handoff_receipt,
-                        "resource": _extraction_workspace_resource(
+                        "resource": extraction_workspace_resource(
                             study, state="review"
                         ),
                     },
@@ -3978,7 +4763,7 @@ def _start_extraction(
                 if handoff_receipt is not None
                 else {}
             ),
-            "resource": _extraction_workspace_resource(
+            "resource": extraction_workspace_resource(
                 study,
                 state="running",
                 job_id=submitted.get("job_id"),
@@ -4970,12 +5755,33 @@ def execute_tool(
             "pi_tool_arguments_invalid",
             "EasyICU tool arguments must be an object.",
         )
+    authorization = context.session.data_source_authorization
+    if (
+        tool_name in DATA_SOURCE_REQUIRED_TOOLS
+        and authorization.status in {"pending", "selection_in_progress"}
+    ):
+        return _result(
+            context,
+            status="blocked",
+            code="pi_session_data_source_confirmation_required",
+            summary=(
+                "Choose and confirm a local or official-demo data source before "
+                "EasyICU reads data or starts analysis. Research planning can continue."
+            ),
+            owner="easyicu.webserver.pi_copilot.data_source_authority",
+            details={
+                "status": authorization.status,
+                "reason": authorization.reason,
+                "conversation_available": True,
+            },
+        )
     return handler(context, arguments)
 
 
 __all__ = [
     "ALLOWED_TOOLS",
     "CONTROL_TOOLS",
+    "DATA_SOURCE_REQUIRED_TOOLS",
     "READ_TOOLS",
     "WORKSPACE_TOOLS",
     "execute_tool",
