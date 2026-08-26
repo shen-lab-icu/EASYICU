@@ -198,6 +198,70 @@ def _h1_draft_plan() -> AnalysisPlan:
     )
 
 
+@pytest.mark.parametrize(
+    ("step_updates", "record_updates"),
+    [
+        ({"method": "descriptive_summary"}, {}),
+        ({"planned_analysis_role": "sensitivity"}, {}),
+        ({"expected_outputs": ["figure:survival"]}, {}),
+        ({"icu_rule_refs": []}, {}),
+        ({}, {"deterministic_standard_analysis": "association_model_grid"}),
+        (
+            {},
+            {
+                "deterministic_standard_selection_reason": (
+                    "signed_association_model_grid_contract_preflight"
+                )
+            },
+        ),
+        ({}, {"standard_executor_candidates": {"claimed_by": "coder"}}),
+    ],
+    ids=[
+        "wrong-method",
+        "wrong-role",
+        "no-table-output",
+        "no-runtime-contract",
+        "wrong-analysis-owner",
+        "wrong-selection-reason",
+        "coder-claimed",
+    ],
+)
+def test_h1_effect_output_authority_fails_closed_on_near_miss(
+    step_updates: dict[str, object],
+    record_updates: dict[str, object],
+) -> None:
+    _projection, authority = _authority("h1_ventilation_survival")
+    assert isinstance(authority, LandmarkSurvivalRuntimeAuthority)
+    bound, _findings = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=authority,
+    ).bind_plan(_h1_draft_plan())
+    step = bound.steps[1].model_copy(update=step_updates)
+    step_record = {
+        "deterministic_standard_analysis": "signed_landmark_survival_suite",
+        "deterministic_standard_selection_reason": (
+            "signed_landmark_survival_suite_contract_preflight"
+        ),
+        "standard_executor_candidates": {
+            "claimed_by": "signed_landmark_survival_suite"
+        },
+    }
+    step_record.update(record_updates)
+
+    assert effect_output_authorized(step, step_record=step_record) is False
+
+
+def test_h1_effect_output_authority_requires_mapping_record() -> None:
+    _projection, authority = _authority("h1_ventilation_survival")
+    assert isinstance(authority, LandmarkSurvivalRuntimeAuthority)
+    bound, _findings = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=authority,
+    ).bind_plan(_h1_draft_plan())
+
+    assert effect_output_authorized(bound.steps[1], step_record=None) is False
+
+
 def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) -> None:
     projection, authority = _authority("e2_lactate_mortality")
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
