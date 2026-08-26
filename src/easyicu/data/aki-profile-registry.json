@@ -1,0 +1,231 @@
+{
+  "schema_version": "easyicu_aki_profile_registry_v1",
+  "contract_status": "FROZEN_BEFORE_SOURCE_NATIVE_COMPARISON",
+  "default_profile": "EASYICU_KDIGO_STRICT_PRIOR_V1",
+  "selection_rule": "Cross-database analyses use the canonical profile unless a source-native profile is explicitly requested. Source-native outputs never overwrite canonical outputs.",
+  "reliability_scale": {
+    "A": "Public, version-pinned, complete phenotype implementation maintained by the database or study authors; still inherits documented clinical and ascertainment limitations.",
+    "B": "Public and version-pinned source-native implementation with material departures from complete dynamic KDIGO or restricted source prerequisites; suitable for compatibility or sensitivity analyses.",
+    "C": "Official source component or partial renal phenotype only; not a complete AKI staging authority.",
+    "H": "EasyICU harmonized phenotype intended for cross-database comparability; not a database-native definition."
+  },
+  "profiles": {
+    "EASYICU_KDIGO_STRICT_PRIOR_V1": {
+      "database": "all",
+      "authority_level": "EASYICU_HARMONIZED_CONTRACT",
+      "reliability_grade": "H",
+      "fidelity": "NATIVE_IMPLEMENTATION",
+      "output_kind": "DYNAMIC_KDIGO_STAGE_0_TO_3_WITH_ASCERTAINMENT",
+      "recommended_role": "PRIMARY_CROSS_DATABASE",
+      "uses_future_information": false,
+      "missing_to_stage_zero": false,
+      "baseline_semantics": "lowest observed strictly prior creatinine in [t-48h,t) and [t-168h,t)",
+      "urine_semantics": "interval-aware observed urine; complete 6h/12h/24h support; measured weight required; no LOCF or backward fill",
+      "rrt_semantics": "explicit active RRT evidence; absent events are negative only after a completed source search",
+      "limitations": [
+        "Cross-database harmonization cannot create pre-ICU history absent from a source.",
+        "A negative result requires explicit component and observation-window ascertainment."
+      ],
+      "sources": [
+        {
+          "type": "guideline",
+          "title": "KDIGO Clinical Practice Guideline for Acute Kidney Injury",
+          "year": 2012,
+          "url": "https://kdigo.org/guidelines/acute-kidney-injury/"
+        }
+      ]
+    },
+    "MIMIC_IV_MIT_LCP_KDIGO_D20B49A7": {
+      "database": "miiv",
+      "aliases": ["mimic_iv"],
+      "authority_level": "DATABASE_MAINTAINER_REFERENCE_IMPLEMENTATION",
+      "reliability_grade": "A",
+      "fidelity": "SEMANTIC_PORT_OF_PINNED_SQL",
+      "output_kind": "DYNAMIC_KDIGO_STAGE_0_TO_3",
+      "recommended_role": "SOURCE_NATIVE_SENSITIVITY",
+      "upstream_repository": "https://github.com/MIT-LCP/mimic-code",
+      "upstream_commit": "d20b49a71ebb8cafc6febb0821432778592192d5",
+      "source_bundle_sha256": "9d280d1b70f707abe8d55b72afe02b21af0a92b2566c541973c3871cdb154b59",
+      "uses_future_information": false,
+      "missing_to_stage_zero": true,
+      "baseline_semantics": "lowest strictly prior creatinine over 48h and 7d within the source extraction window",
+      "urine_semantics": "MIT-LCP interval sums requiring 6h/12h/24h documented duration",
+      "rrt_semantics": "CRRT rows with a non-null CRRT mode produce stage 3",
+      "postprocessing": "six-hour rolling maximum aki_stage_smoothed",
+      "limitations": [
+        "Component NULL values are coalesced to zero in the combined stage.",
+        "The reference stage-3 treatment component is CRRT rather than every possible RRT modality.",
+        "The six-hour smoothed column is an engineering post-processing field, not a separate KDIGO criterion."
+      ],
+      "sources": [
+        {
+          "type": "maintainer_code",
+          "title": "MIMIC-IV KDIGO derived concepts",
+          "url": "https://github.com/MIT-LCP/mimic-code/tree/d20b49a71ebb8cafc6febb0821432778592192d5/mimic-iv/concepts/organfailure"
+        }
+      ]
+    },
+    "MIMIC_III_MIT_LCP_KDIGO_D20B49A7": {
+      "database": "mimic",
+      "aliases": ["mimic_iii"],
+      "authority_level": "DATABASE_MAINTAINER_REFERENCE_IMPLEMENTATION",
+      "reliability_grade": "B",
+      "fidelity": "SEMANTIC_PORT_OF_PINNED_SQL",
+      "output_kind": "DYNAMIC_KDIGO_STAGE_0_TO_3_WITHOUT_RRT_COMPONENT",
+      "recommended_role": "SOURCE_NATIVE_COMPATIBILITY",
+      "upstream_repository": "https://github.com/MIT-LCP/mimic-code",
+      "upstream_commit": "d20b49a71ebb8cafc6febb0821432778592192d5",
+      "source_bundle_sha256": "954718bb5f6cc36b5f9df323b48448c879767e8efc46ffbe42160fb62b1f0b47",
+      "uses_future_information": false,
+      "missing_to_stage_zero": true,
+      "baseline_semantics": "lowest strictly prior creatinine in the source query window, which is restricted to six hours before ICU through seven days after ICU admission",
+      "urine_semantics": "legacy MIT-LCP window sums with reduced documentation-span thresholds (3h/6h/12h for nominal 6h/12h/24h windows)",
+      "rrt_semantics": "not included in the pinned kdigo_stages SQL",
+      "limitations": [
+        "Urine documentation completeness thresholds are materially less strict than MIMIC-IV.",
+        "RRT is not included in the final pinned stage query.",
+        "Component NULL values are coalesced to zero."
+      ],
+      "sources": [
+        {
+          "type": "maintainer_code",
+          "title": "MIMIC-III KDIGO derived concepts",
+          "url": "https://github.com/MIT-LCP/mimic-code/tree/d20b49a71ebb8cafc6febb0821432778592192d5/mimic-iii/concepts/organfailure"
+        }
+      ]
+    },
+    "HIRID_AKI_EWS_2024_BTAE212": {
+      "database": "hirid",
+      "authority_level": "PUBLISHED_AUTHOR_REFERENCE_IMPLEMENTATION",
+      "reliability_grade": "B",
+      "fidelity": "SEMANTIC_REIMPLEMENTATION_REQUIRES_HIRID_II_AUXILIARIES_FOR_EXACT_REPRODUCTION",
+      "output_kind": "DYNAMIC_KDIGO_EVENT_ANNOTATION",
+      "recommended_role": "SOURCE_NATIVE_SENSITIVITY_WHEN_PREREQUISITES_MET",
+      "upstream_repository": "https://github.com/ratschlab/AKI-EWS",
+      "upstream_commit": "4bcba852f4007f72aba17b8f3576ec43d268c2ff",
+      "source_bundle_sha256": "e12f3a704220cbf10cb30c890f8636b8ea06511f036a9b99ee508ad216cb9d69",
+      "paper_doi": "10.1093/bioinformatics/btae212",
+      "paper_pmid": "38940165",
+      "uses_future_information": true,
+      "missing_to_stage_zero": false,
+      "baseline_semantics": "published code combines pre-ICU creatinine when available with a whole-series/selected baseline strategy",
+      "urine_semantics": "recorded urine rate normalized by weight and backward-filled on a five-minute grid before window evaluation",
+      "rrt_semantics": "first available dialysis marker time produces stage 3 thereafter",
+      "required_sources": [
+        "HiRID-II merged stage",
+        "pre-ICU creatinine auxiliary data",
+        "dialysis variables used by the publication"
+      ],
+      "limitations": [
+        "The public code targets HiRID-II, not the public HiRID 1.1.1 release used by current EasyICU exports.",
+        "Backward-filled urine and interpolated creatinine are intentional compatibility semantics and are not suitable for leakage-sensitive canonical analyses.",
+        "Exact reproduction must fail closed when publication-only auxiliary sources are unavailable."
+      ],
+      "sources": [
+        {
+          "type": "peer_reviewed_article",
+          "title": "An empirical study on KDIGO-defined acute kidney injury prediction in the intensive care unit",
+          "year": 2024,
+          "doi": "10.1093/bioinformatics/btae212",
+          "pmid": "38940165",
+          "url": "https://pubmed.ncbi.nlm.nih.gov/38940165/"
+        },
+        {
+          "type": "author_code",
+          "title": "ratschlab/AKI-EWS",
+          "url": "https://github.com/ratschlab/AKI-EWS/tree/4bcba852f4007f72aba17b8f3576ec43d268c2ff"
+        }
+      ]
+    },
+    "SICDB_NATIVE_KDIGO_AKI_168_44A27CC8": {
+      "database": "sic",
+      "aliases": ["sicdb"],
+      "authority_level": "DATASET_NATIVE_DERIVED_FIELD",
+      "reliability_grade": "B",
+      "fidelity": "SEMANTIC_PORT_OF_PINNED_PYTHON",
+      "output_kind": "CASE_LEVEL_MAXIMUM_STAGE_OVER_FIRST_168H",
+      "recommended_role": "SOURCE_NATIVE_COMPATIBILITY_ONLY",
+      "upstream_repository": "https://github.com/nrodemund/sicdb",
+      "upstream_commit": "44a27cc8dc7923917a7b07c01717a4e63e464ee4",
+      "source_bundle_sha256": "24f9d29abf5e9864674780be6d05ae50ce9ffd91315ece4ddc37e7435a6b200c",
+      "uses_future_information": true,
+      "missing_to_stage_zero": true,
+      "baseline_semantics": "first creatinine between -24h and the end of the 168h observation period",
+      "urine_semantics": "hourly urine field evaluated with a fixed 70kg denominator and missing hours retained in the window denominator",
+      "rrt_semantics": "any CRRT DataID 723 event in the first 168h produces stage 3",
+      "limitations": [
+        "The upstream script fixes weight at 70kg even when patient weight exists.",
+        "Missing creatinine or urine evidence remains stage 0.",
+        "The output is a whole-window case summary and uses future observations relative to early ICU times.",
+        "The upstream authors warn that automated urine-output KDIGO may overestimate kidney injury."
+      ],
+      "sources": [
+        {
+          "type": "dataset_documentation",
+          "title": "SICdb documentation, version 1.0.6 change log",
+          "url": "https://www.sicdb.com/Documentation/SICdb_Documentation"
+        },
+        {
+          "type": "maintainer_code",
+          "title": "SICdb KDIGO_AKI_168 algorithm",
+          "url": "https://github.com/nrodemund/sicdb/blob/44a27cc8dc7923917a7b07c01717a4e63e464ee4/Scripts/KDIGO/kdigo.py"
+        }
+      ]
+    },
+    "AUMC_LEGACY_ACUTE_RENAL_FAILURE_8906394D": {
+      "database": "aumc",
+      "authority_level": "OFFICIAL_PARTIAL_RENAL_PHENOTYPE",
+      "reliability_grade": "C",
+      "fidelity": "SEMANTIC_PORT_OF_PINNED_SQL",
+      "output_kind": "CASE_LEVEL_STAGE3_LIKE_BINARY",
+      "recommended_role": "SOURCE_NATIVE_COMPONENT_SENSITIVITY",
+      "upstream_repository": "https://github.com/AmsterdamUMC/AmsterdamUMCdb",
+      "upstream_commit": "8906394d5642ea8b359e32f4a4f3c3012ca4a99a",
+      "source_bundle_sha256": "dec60343d298c12c53e8ab8bdc3290d8e1f1bb45316cabe45158f1a437c0dda9",
+      "uses_future_information": true,
+      "missing_to_stage_zero": true,
+      "baseline_semantics": "minimum creatinine from up to 365d before admission through 24h after admission",
+      "urine_semantics": "official legacy urine item mapping and outlier repair; not incorporated into the acute_renal_failure Boolean",
+      "rrt_semantics": "official RRT components exist separately; not incorporated into the acute_renal_failure Boolean",
+      "limitations": [
+        "This is not complete KDIGO stage 0-3; it captures a stage-3-like creatinine definition only.",
+        "The baseline window includes the first 24h after admission and the outcome scans the first seven days.",
+        "The code belongs to the legacy 1.0.2 layout, not the current OMOP 1.5.0 layout."
+      ],
+      "sources": [
+        {
+          "type": "maintainer_code",
+          "title": "AmsterdamUMCdb legacy acute kidney injury/failure query",
+          "url": "https://github.com/AmsterdamUMC/AmsterdamUMCdb/blob/8906394d5642ea8b359e32f4a4f3c3012ca4a99a/amsterdamumcdb/sql/common/legacy/creatinine_acute_kidney_injury_failure.sql"
+        }
+      ]
+    },
+    "EICU_OFFICIAL_RENAL_COMPONENTS_34CECE8C": {
+      "database": "eicu",
+      "authority_level": "OFFICIAL_COMPONENTS_ONLY",
+      "reliability_grade": "C",
+      "fidelity": "SEMANTIC_PORT_OF_PINNED_SQL_COMPONENT",
+      "output_kind": "URINE_COMPONENT_ONLY_NO_OFFICIAL_AKI_STAGE",
+      "recommended_role": "SOURCE_COMPONENT_AUDIT_ONLY",
+      "upstream_repository": "https://github.com/MIT-LCP/eicu-code",
+      "upstream_commit": "34cece8c70771a3fab48da84d4c47f0e133ca021",
+      "source_bundle_sha256": "bc73eb99565dd54a34202f4d6a9f352a35165b16e256f618568322f946ae3a23",
+      "uses_future_information": false,
+      "missing_to_stage_zero": false,
+      "baseline_semantics": "no complete official eICU KDIGO baseline implementation was found in the pinned maintainer tree",
+      "urine_semantics": "current cellvaluenumeric rows from the I&O|Output (ml) namespace; outputtotal is cumulative and excluded",
+      "rrt_semantics": "no complete official eICU KDIGO stage implementation was found in the pinned maintainer tree",
+      "limitations": [
+        "This profile intentionally does not emit an official AKI stage.",
+        "EasyICU canonical KDIGO may consume the normalized official components, but that result remains an EasyICU harmonized phenotype."
+      ],
+      "sources": [
+        {
+          "type": "maintainer_code",
+          "title": "eICU pivoted urine output",
+          "url": "https://github.com/MIT-LCP/eicu-code/blob/34cece8c70771a3fab48da84d4c47f0e133ca021/concepts/pivoted/pivoted-uo.sql"
+        }
+      ]
+    }
+  }
+}
