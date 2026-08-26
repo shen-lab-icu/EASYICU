@@ -22,6 +22,9 @@ from easyicu.research_agent.reporting.article_display_package import (
 from easyicu.research_agent.reporting.bibtex import render_bibtex
 from easyicu.research_agent.reporting.latex import scaffold_to_latex
 from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+from easyicu.research_agent.reporting.manuscript_quality import (
+    repair_reader_structure_from_existing_prose,
+)
 from easyicu.research_agent.reporting.manuscript_provenance import (
     build_manuscript_provenance,
     strip_numeric_provenance,
@@ -43,6 +46,15 @@ def _load_literature(run_dir: Path) -> LiteratureBundle | None:
         return LiteratureBundle.model_validate_json(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
         return None
+
+
+def _prepare_reader_manuscript(
+    source_bound: str,
+) -> tuple[str, tuple[dict[str, str], ...]]:
+    """Apply provider-free reader repairs before provenance is projected."""
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(source_bound)
+    return repaired, tuple(dict(item) for item in repairs)
 
 
 def _copy_figures(
@@ -128,9 +140,10 @@ def build_bundle(
     if not source_path.is_file():
         raise ValueError(f"manuscript source is not a file: {source_path}")
     source_bound = source_path.read_text(encoding="utf-8")
+    prepared_bound, deterministic_repairs = _prepare_reader_manuscript(source_bound)
     evidence = EvidenceStore(run_dir, enforcement_mode=EvidenceEnforcementMode.STRICT)
 
-    unbound = strip_numeric_provenance(source_bound)
+    unbound = strip_numeric_provenance(prepared_bound)
     corrected, binding_map, untraced = bind_numeric_values(
         unbound,
         evidence=evidence,
@@ -210,6 +223,7 @@ def build_bundle(
         "provider_calls": 0,
         "claim_ceiling": "analysis_only",
         "publication_authorized": False,
+        "deterministic_repairs": list(deterministic_repairs),
         "semantic_rebinding_changed_source": corrected != source_bound,
         "outputs": sorted(
             [
