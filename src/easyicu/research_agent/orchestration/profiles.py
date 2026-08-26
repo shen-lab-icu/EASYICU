@@ -89,6 +89,7 @@ class SubmissionProfile:
     enable_pubmed: Optional[bool] = None
     require_human_plan_review: Optional[bool] = None
     require_literature_design_authority: Optional[bool] = None
+    development_stop_after_planner_outline: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -162,6 +163,10 @@ class SubmissionProfile:
             options["require_literature_design_authority"] = (
                 self.require_literature_design_authority
             )
+        if self.development_stop_after_planner_outline is not None:
+            options["development_stop_after_planner_outline"] = (
+                self.development_stop_after_planner_outline
+            )
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -202,6 +207,7 @@ class SubmissionProfile:
             "enable_pubmed",
             "require_human_plan_review",
             "require_literature_design_authority",
+            "development_stop_after_planner_outline",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -683,8 +689,15 @@ QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25 = replace(
     enable_pubmed=False,
 )
 
+QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25 = replace(
+    QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25,
+    name="npj_dm_qualification12_design_outline_canary_dev",
+    locked_at="2026-08-25T15:30:00-04:00",
+    development_stop_after_planner_outline=True,
+)
+
 CURRENT_QUALIFICATION12_LITERATURE_DESIGN_CANARY_PROFILE_REF = (
-    QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25.ref
+    QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25.ref
 )
 
 NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
@@ -812,6 +825,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     ),
     QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25.ref: (
         QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25
+    ),
+    QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25.ref: (
+        QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25
     ),
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
@@ -1061,6 +1077,7 @@ __all__ = [
     "QUALIFICATION12_LITERATURE_DESIGN_2026_08_25",
     "CURRENT_QUALIFICATION12_LITERATURE_DESIGN_PROFILE_REF",
     "QUALIFICATION12_LITERATURE_DESIGN_CANARY_2026_08_25",
+    "QUALIFICATION12_LITERATURE_DESIGN_OUTLINE_CANARY_2026_08_25",
     "CURRENT_QUALIFICATION12_LITERATURE_DESIGN_CANARY_PROFILE_REF",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",

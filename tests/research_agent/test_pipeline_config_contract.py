@@ -282,6 +282,33 @@ def test_planner_efficiency_budget_is_complete_and_development_only(
     assert recovered.development_planner_efficiency_max_wall_seconds == 600.0
 
 
+def test_outline_only_planner_termination_is_strictly_development_design_canary(
+    ra, tmp_path: Path
+) -> None:
+    base = {
+        "workdir": tmp_path,
+        "development_diagnostic": True,
+        "planner_strategy": "progressive_v2",
+        "planner_only": True,
+        "require_human_plan_review": True,
+        "require_literature_design_authority": True,
+        "enable_literature": True,
+        "development_stop_after_planner_outline": True,
+    }
+
+    config = ra.PipelineConfig(**base)
+    assert config.development_stop_after_planner_outline is True
+
+    with pytest.raises(ValueError, match="planner_only=True"):
+        ra.PipelineConfig(**{**base, "planner_only": False})
+    with pytest.raises(ValueError, match="require_literature_design_authority=True"):
+        ra.PipelineConfig(
+            **{**base, "require_literature_design_authority": False}
+        )
+    with pytest.raises(ValueError, match="progressive_v2"):
+        ra.PipelineConfig(**{**base, "planner_strategy": "monolithic_v1"})
+
+
 def test_legacy_flat_constructor_is_a_warning_only_adapter(ra, tmp_path: Path) -> None:
     client = ra.MockLLMClient()
 

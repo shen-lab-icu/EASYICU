@@ -171,6 +171,37 @@ class ProgressiveResumePersistenceReceipt:
     new_checkpoint_count: int
 
 
+class ProgressiveDesignCanaryReceipt(BaseModel):
+    """Terminal, non-executable receipt for one validated design outline."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.progressive_design_canary_receipt/1"] = (
+        "easyicu.progressive_design_canary_receipt/1"
+    )
+    owner: Literal["easyicu.planning.progressive_artifacts_v1"] = (
+        "easyicu.planning.progressive_artifacts_v1"
+    )
+    status: Literal["design_outline_complete"] = "design_outline_complete"
+    reason_code: Literal["progressive_design_canary_complete"] = (
+        "progressive_design_canary_complete"
+    )
+    claim_ceiling: Literal["analysis_only"] = "analysis_only"
+    paper_authority: Literal[False] = False
+    request_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checkpoint_sequence: int = Field(ge=0)
+    checkpoint_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outline_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outline_step_count: int = Field(ge=1, le=24)
+    candidate_design_count: int = Field(ge=2, le=4)
+    selected_design_ids: list[str] = Field(min_length=1, max_length=1)
+    rejected_design_ids: list[str] = Field(min_length=1, max_length=3)
+    selected_literature_dimension_count: int = Field(ge=0, le=7)
+    selected_literature_citation_keys: list[str] = Field(default_factory=list)
+    planner_efficiency: dict[str, Any] = Field(default_factory=dict)
+    cost_summary: dict[str, Any] = Field(default_factory=dict)
+
+
 @dataclass
 class ProgressivePlannerCheckpointEmitter:
     """Build one typed append-only checkpoint chain in memory.
@@ -527,6 +558,83 @@ def persist_progressive_planner_checkpoint(
         prompt_pack_version=prompt_pack_version,
     )
     return path
+
+
+def persist_progressive_design_canary_receipt(
+    *,
+    run_dir: Path,
+    evidence: ProgressiveEvidenceRegistrar,
+    checkpoint: ProgressivePlannerCheckpoint,
+    prompt_metrics: Mapping[str, Any],
+    cost_summary: Mapping[str, Any],
+    prompt_pack_version: str,
+) -> tuple[ProgressiveDesignCanaryReceipt, Path, str]:
+    """Persist the terminal receipt for an outline-only development canary."""
+
+    if checkpoint.stage != "outline" or checkpoint.foundation is not None:
+        raise ProgressivePlanningArtifactError(
+            "progressive_design_canary_checkpoint_invalid",
+            "outline-only canary requires an outline checkpoint without foundation",
+        )
+    selection = checkpoint.outline.design_selection
+    if selection is None:
+        raise ProgressivePlanningArtifactError(
+            "progressive_design_canary_selection_missing",
+            "outline-only canary has no research design selection",
+        )
+    selected = selection.selected
+    rejected = [
+        candidate
+        for candidate in selection.candidates
+        if candidate.disposition == "rejected"
+    ]
+    citation_keys = sorted(
+        {
+            key
+            for decision in selected.literature_design_decisions
+            for key in decision.citation_keys
+        }
+    )
+    efficiency = prompt_metrics.get("efficiency_budget")
+    receipt = ProgressiveDesignCanaryReceipt(
+        request_authority_sha256=checkpoint.request_authority_sha256,
+        checkpoint_sequence=checkpoint.sequence,
+        checkpoint_sha256=checkpoint.checkpoint_sha256,
+        outline_sha256=canonical_sha256(
+            checkpoint.outline.model_dump(mode="json")
+        ),
+        outline_step_count=len(checkpoint.outline.steps),
+        candidate_design_count=len(selection.candidates),
+        selected_design_ids=[selected.design_id],
+        rejected_design_ids=[candidate.design_id for candidate in rejected],
+        selected_literature_dimension_count=len(
+            selected.literature_design_decisions
+        ),
+        selected_literature_citation_keys=citation_keys,
+        planner_efficiency=(
+            dict(efficiency) if isinstance(efficiency, Mapping) else {}
+        ),
+        cost_summary=dict(cost_summary),
+    )
+    path = Path(run_dir) / "progressive_design_canary_receipt.json"
+    _write_and_register_once(
+        evidence,
+        content=receipt.model_dump_json(indent=2),
+        evidence_id="progressive_design_canary_receipt",
+        description=(
+            "Terminal analysis-only receipt for a host-validated research "
+            "design outline; no executable AnalysisPlan was produced."
+        ),
+        source_path=path,
+        inputs=(
+            "research_context",
+            f"progressive_planner_checkpoint_{checkpoint.sequence:03d}",
+        ),
+        producer="progressive_planning_artifacts",
+        generation_mode="deterministic_skill",
+        prompt_pack_version=prompt_pack_version,
+    )
+    return receipt, path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def persist_progressive_compile_failure_replay(
@@ -1222,6 +1330,7 @@ __all__ = [
     "ProgressiveCompileFailureReplay",
     "ProgressiveCompileReplayAttempt",
     "ProgressiveCompilerFinding",
+    "ProgressiveDesignCanaryReceipt",
     "ProgressivePlanningArtifactError",
     "ProgressivePlanningArtifactPaths",
     "ProgressivePlanningAuthority",
@@ -1231,6 +1340,7 @@ __all__ = [
     "load_progressive_compile_failure_replay",
     "load_progressive_planner_checkpoint_chain",
     "persist_progressive_compile_failure_replay",
+    "persist_progressive_design_canary_receipt",
     "persist_progressive_planner_checkpoint",
     "persist_progressive_planning_artifacts",
     "persist_progressive_planning_authority",

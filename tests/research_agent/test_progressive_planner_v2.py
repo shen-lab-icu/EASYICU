@@ -82,6 +82,7 @@ from easyicu.research_agent.planning.progressive_resume import (
     validate_progressive_materialization_coordinate,
 )
 from easyicu.research_agent.orchestration.progressive_planning import (
+    ProgressiveDesignCanaryDraft,
     run_progressive_planner,
 )
 from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
@@ -5175,6 +5176,39 @@ def test_progressive_checkpoints_persist_as_a_digest_verified_chain(
         loaded[-1].checkpoint_sha256
         == json.loads(paths[-1].read_text(encoding="utf-8"))["checkpoint_sha256"]
     )
+
+
+def test_progressive_design_canary_stops_after_one_validated_outline(
+    tmp_path: Path,
+) -> None:
+    llm = ScriptedMockLLMClient([json.dumps(_outline_payload())])
+    llm.supports_strict_json_schema = True
+    evidence = _RecordingEvidence()
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort_path.write_bytes(b"design canary cohort")
+
+    result = run_progressive_planner(
+        planner=ProgressivePlannerAgent(llm),
+        context=_context(),
+        run_dir=tmp_path,
+        evidence=evidence,
+        prompt_pack_version="test-v1",
+        resume_checkpoint_path=None,
+        resume_checkpoint_sha256=None,
+        cohort_path=cohort_path,
+        llm_signature="mock:test",
+        planner_kwargs={},
+        know_how_binding=PlannerKnowHowBinding(),
+        planning_contract_context="",
+        finding_sink=lambda _finding: None,
+        stop_after_outline=True,
+    )
+
+    assert isinstance(result, ProgressiveDesignCanaryDraft)
+    assert result.checkpoint.stage == "outline"
+    assert result.outline.design_selection is not None
+    assert len(llm.calls) == 1
+    assert not (tmp_path / "progressive_plan_foundation.json").exists()
 
 
 def test_progressive_resume_loader_rejects_incomplete_source_chain(
