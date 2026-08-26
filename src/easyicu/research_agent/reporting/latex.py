@@ -53,7 +53,10 @@ _BOUND_NUMERIC_MARKER_PATTERN = re.compile(
 _NUMERIC_FOOTNOTE_DEFINITION_PATTERN = re.compile(
     r"^\[\^(?P<id>[A-Za-z0-9_-]+)\]:\s*(?P<text>.+)$"
 )
-_LITERATURE_CITATION_PATTERN = re.compile(r"\[@(?P<key>[A-Za-z0-9_.:-]+)\]")
+_LITERATURE_CITATION_PATTERN = re.compile(
+    r"\[(?P<keys>@[A-Za-z0-9_.:-]+"
+    r"(?:\s*;\s*@[A-Za-z0-9_.:-]+)*)\]"
+)
 _STANDARD_SECTION_HEADINGS = frozenset(
     {
         "abstract",
@@ -196,7 +199,11 @@ def _md_inline_to_latex(line: str, *, claim_base_url: Optional[str] = None) -> s
         return f"\x00{len(placeholders) - 1}\x00"
 
     def _literature_citation(match: "re.Match[str]") -> str:
-        placeholders.append(r"\cite{" + sanitise_bibtex_key(match.group("key")) + "}")
+        keys = [
+            sanitise_bibtex_key(part.strip().lstrip("@"))
+            for part in match.group("keys").split(";")
+        ]
+        placeholders.append(r"\cite{" + ",".join(keys) + "}")
         return f"\x00{len(placeholders) - 1}\x00"
 
     line = _LITERATURE_CITATION_PATTERN.sub(_literature_citation, line)
@@ -252,7 +259,11 @@ def scaffold_to_latex(
 
     if bibliography is not None:
         allowed_citation_keys = {record.key for record in bibliography.citations}
-        requested_citation_keys = set(_LITERATURE_CITATION_PATTERN.findall(markdown))
+        requested_citation_keys = {
+            part.strip().lstrip("@")
+            for match in _LITERATURE_CITATION_PATTERN.finditer(markdown)
+            for part in match.group("keys").split(";")
+        }
         unknown_citation_keys = sorted(requested_citation_keys - allowed_citation_keys)
         if unknown_citation_keys:
             raise ValueError(
