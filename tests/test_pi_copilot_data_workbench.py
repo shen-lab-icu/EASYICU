@@ -119,8 +119,12 @@ def test_copilot_schema_and_prompt_forbid_implicit_source_fallback() -> None:
         tool = main.split(f'name: "{tool_name}"', 1)[1].split("hostTool", 1)[0]
         assert "source_id: Type.String" in tool
         assert "source_id: Type.Optional" not in tool
-    assert "the first reply must say it is ambiguous between MIMIC-III 1.4 and MIMIC-IV 3.1" in main
-    assert "ask one source-mode question" in main
+    assert (
+        "the first reply must say it is ambiguous between MIMIC-III v1.4 "
+        "and MIMIC-IV v3.1" in main
+    )
+    assert "ask one direct choice before any cohort" in main
+    assert "call easyicu_list_data_sources directly with that database key" in main
     assert "Never treat a bound, active, demo, or sample source as implicit consent" in main
     assert "ask one direct Extraction authorization question and stop without calling" in main
 
