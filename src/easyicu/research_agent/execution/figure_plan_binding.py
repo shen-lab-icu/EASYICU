@@ -204,6 +204,12 @@ def validate_step_planned_figure_contract_binding(
         return []
     panels_by_output: dict[str, list[Any]] = {}
     for panel in step.figure_panels:
+        # This validator binds the current main-figure artifact.  A panel that
+        # the final article strategy moved to the supplement is satisfied by
+        # the dedicated supporting display step and must not be required to
+        # remain embedded in the main composite.
+        if str(getattr(panel, "placement", "main")) == "supplementary":
+            continue
         panels_by_output.setdefault(str(panel.figure_output), []).append(panel)
 
     findings: list[ValidationFinding] = []

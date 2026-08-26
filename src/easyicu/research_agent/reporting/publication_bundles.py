@@ -140,6 +140,8 @@ def _build_probe_summary(
     )
     files.append(summary_path)
     return summary, files
+
+
 def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
     """Promote figure files written beside ``outputs/`` into ``outputs/``.
 
@@ -197,6 +199,8 @@ def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
         encoding="utf-8",
     )
     return "sibling_figure_exports_promote_v1"
+
+
 def _promote_prior_publication_bundle(
     *,
     run_dir: Path,
@@ -349,6 +353,8 @@ def _promote_prior_publication_bundle(
         encoding="utf-8",
     )
     return "publication_bundle_promote_v1"
+
+
 def _publication_contract_file_references(contract: Any) -> List[str]:
     """Return local file-like source/evidence references from a contract."""
 
@@ -376,6 +382,8 @@ def _publication_contract_file_references(contract: Any) -> List[str]:
                 if isinstance(panel, dict):
                     _collect(panel.get("evidence_ids"))
     return list(dict.fromkeys(artifact_refs))
+
+
 def _publication_bundle_has_resolvable_sources(files: Mapping[str, Path]) -> bool:
     """Require every declared file reference to exist beside the parent bundle."""
 
@@ -398,6 +406,8 @@ def _publication_bundle_has_resolvable_sources(files: Mapping[str, Path]) -> boo
         if not source.is_relative_to(source_outputs) or not source.is_file():
             return False
     return True
+
+
 def _publication_bundle_has_any_role(
     files: Mapping[str, Path], required_roles: set[str]
 ) -> bool:
@@ -423,6 +433,8 @@ def _publication_bundle_has_any_role(
     if top_role:
         roles.add(top_role)
     return bool(roles & required_roles)
+
+
 def _render_prediction_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -620,6 +632,8 @@ def _render_prediction_publication_bundle_from_prior_outputs(
         encoding="utf-8",
     )
     return "prediction_publication_bundle_from_parent_outputs_v1"
+
+
 def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -953,6 +967,8 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
         encoding="utf-8",
     )
     return "cohort_overlap_publication_bundle_from_parent_outputs_v1"
+
+
 def _render_cohort_flow_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -1306,6 +1322,8 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
         encoding="utf-8",
     )
     return "cohort_flow_publication_bundle_from_parent_outputs_v1"
+
+
 def _render_phenotype_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -1550,6 +1568,8 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
         encoding="utf-8",
     )
     return "phenotype_publication_bundle_from_parent_outputs_v1"
+
+
 _TABLE_ONE_ROWTYPE_COLS = ("row_type", "summary_type", "variable_class")
 _TABLE_ONE_VALUE_TOKENS = ("median", "mean", "percentage", "count", "q25", "q75")
 _RESULT_TABLE_COLS = (
@@ -1561,6 +1581,8 @@ _RESULT_TABLE_COLS = (
     "coef",
     "auroc",
 )
+
+
 def _render_descriptive_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -1812,6 +1834,8 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
         encoding="utf-8",
     )
     return "descriptive_publication_bundle_from_parent_outputs_v1"
+
+
 def _iter_prior_output_tables(
     *,
     run_dir: Path,
@@ -1833,6 +1857,8 @@ def _iter_prior_output_tables(
             except Exception:
                 continue
     return tables
+
+
 def _find_column(
     frame: pd.DataFrame,
     *,
@@ -1856,6 +1882,8 @@ def _find_column(
         if contains and any(token.lower() in key for token in contains):
             return str(column)
     return None
+
+
 def _as_percent(row: pd.Series, column: Optional[str]) -> Optional[float]:
     if not column:
         return None
@@ -1864,6 +1892,8 @@ def _as_percent(row: pd.Series, column: Optional[str]) -> Optional[float]:
         return None
     value = float(value)
     return value * 100.0 if abs(value) <= 1.0 else value
+
+
 def _event_count_column(
     frame: pd.DataFrame, denominator_col: Optional[str]
 ) -> Optional[str]:
@@ -1882,6 +1912,8 @@ def _event_count_column(
         exclude=tuple(excluded),
     )
     return column
+
+
 def _label_column(frame: pd.DataFrame) -> Optional[str]:
     return _find_column(
         frame,
@@ -1894,6 +1926,8 @@ def _label_column(frame: pd.DataFrame) -> Optional[str]:
         ),
         suffixes=("_label",),
     )
+
+
 _BINARY_GROUP_EXCLUDED_TOKENS = (
     "n",
     "count",
@@ -1913,6 +1947,8 @@ _BINARY_GROUP_EXCLUDED_TOKENS = (
     "source",
     "row",
 )
+
+
 def _binary_group_column(frame: pd.DataFrame) -> Optional[str]:
     binary_tokens = {"0", "1", "0.0", "1.0", "false", "true", "no", "yes"}
     for column in frame.columns:
@@ -1935,6 +1971,8 @@ def _binary_group_column(frame: pd.DataFrame) -> Optional[str]:
         if len(set(binary_values)) >= 2 and not allowed_extra_values:
             return str(column)
     return None
+
+
 def _binary_group_label(column: str, value: Any) -> str:
     normalized = str(value).strip().lower()
     base = _publication_label(column)
@@ -1943,6 +1981,8 @@ def _binary_group_label(column: str, value: Any) -> str:
     if normalized in {"0", "0.0", "false", "no"}:
         return f"{base} negative"
     return _publication_label(value)
+
+
 def _is_risk_difference_row(row: pd.Series, *values: Any) -> bool:
     haystack = " ".join([str(value or "") for value in values])
     haystack = (
@@ -1951,6 +1991,8 @@ def _is_risk_difference_row(row: pd.Series, *values: Any) -> bool:
     return (
         "risk_difference" in haystack.lower() or "risk difference" in haystack.lower()
     )
+
+
 def _context_axis_label(metric: Any, group: Any) -> str:
     metric_text = str(metric or "").strip()
     group_text = str(group or "").strip()
@@ -1968,6 +2010,8 @@ def _context_axis_label(metric: Any, group: Any) -> str:
             f"{_short_figure_label(metric_text, limit=24)}"
         )
     return _short_figure_label(group_text or metric_text or "Context", limit=28)
+
+
 def _association_descriptive_context(
     *,
     run_dir: Path,
@@ -2218,6 +2262,8 @@ def _association_descriptive_context(
         "title": title,
         "claim": claim,
     }
+
+
 def _render_absolute_risk_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -2461,7 +2507,7 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
         if str(row.get("group_type") or "").lower() == "exposure_level":
             label = f"{exposure_label} = {row.get('group_value')}"
         elif str(row.get("group_value") or "").lower() == "no_source":
-            label = "No recorded source"
+            label = "Not measured"
         else:
             label = _publication_label(row.get("label") or row.get("group_value"))
         risk_labels.append(_short_figure_label(label, limit=30))
@@ -2609,6 +2655,8 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
         encoding="utf-8",
     )
     return "absolute_risk_publication_bundle_from_parent_outputs_v1"
+
+
 _UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
     "association": "association",
     "dose_response": "association",
@@ -2642,6 +2690,8 @@ _UPSTREAM_FIGURE_DATA_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
 }
 _AMBIGUOUS_FIGURE_DATA_FAMILY = "__ambiguous_figure_data_family__"
 _INCOMPATIBLE_FIGURE_DATA_FAMILY = "__incompatible_figure_data_family__"
+
+
 def _resolve_upstream_analysis_family(
     run_dir: Path, current_step_id: str
 ) -> Optional[str]:
@@ -2656,6 +2706,8 @@ def _resolve_upstream_analysis_family(
     except Exception:
         return None
     return str(fam).strip().lower() if fam else None
+
+
 def _renderer_for_upstream_figure_data_family(family: Optional[str]):
     """Map an explicit step-level figure-data contract to its renderer."""
 
@@ -2669,11 +2721,15 @@ def _renderer_for_upstream_figure_data_family(family: Optional[str]):
 
         return render_ordered_distribution_bundle_from_prior_outputs
     return None
+
+
 def deterministic_figure_family_supported(step_id: str) -> bool:
     """Deprecated name-only compatibility probe; names never establish ownership."""
 
     del step_id
     return False
+
+
 def _truthy_figure_value(value: Any) -> bool:
     if value is True:
         return True
@@ -2685,6 +2741,8 @@ def _truthy_figure_value(value: Any) -> bool:
     except (TypeError, ValueError):
         pass
     return str(value).strip().lower() in {"true", "1", "yes"}
+
+
 def _explicit_false_figure_value(value: Any) -> bool:
     if value is False:
         return True
@@ -2696,6 +2754,8 @@ def _explicit_false_figure_value(value: Any) -> bool:
     except (TypeError, ValueError):
         pass
     return str(value).strip().lower() in {"false", "0", "no"}
+
+
 def _sensitivity_plot_label(row: Mapping[str, Any]) -> str:
     spec_id = str(row.get("spec_id") or "").strip().lower()
     if spec_id.endswith("_crude_rd"):

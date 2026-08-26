@@ -436,6 +436,11 @@ def test_absolute_risk_owner_matches_structured_output_contract():
 
 def test_absolute_risk_runner_rejects_figure_and_primary_effect_contracts():
     assert not _absolute_risk_context_runner_owns_step(
+        "Estimate adjusted absolute risk from a fitted model",
+        "06_adjusted_absolute_risk",
+        ["table:absolute_risk_context"],
+    )
+    assert not _absolute_risk_context_runner_owns_step(
         "absolute_risk_context",
         "06_absolute_risk_context_figure",
         ["figure:absolute_risk_context"],

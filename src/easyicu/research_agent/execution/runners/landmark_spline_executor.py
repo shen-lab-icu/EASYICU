@@ -176,6 +176,7 @@ def run_landmark_spline_association(
     import pandas as pd
     import patsy
     import statsmodels.api as sm
+    from scipy.special import expit, logit
     from scipy.stats import chi2
 
     sealed = load_current_case_scientific_runtime_authority(authority)
@@ -287,6 +288,10 @@ def run_landmark_spline_association(
         1 : 1 + spline.shape[1], 1 : 1 + spline.shape[1]
     ].to_numpy(dtype=float)
     curve_rows = []
+    absolute_risk_rows = []
+    fit_parameters = fit.params.to_numpy(dtype=float)
+    fit_covariance = fit.cov_params().to_numpy(dtype=float)
+    standardized_design = design.to_numpy(dtype=float, copy=True)
     for x_value, basis_row in zip(curve_values, np.asarray(curve_basis)):
         delta = np.asarray(basis_row, dtype=float) - reference_basis
         log_or = float(delta @ beta)
@@ -299,6 +304,38 @@ def run_landmark_spline_association(
                 "adjusted_odds_ratio": _finite(math.exp(log_or)),
                 "ci_low": _finite(math.exp(log_or - 1.96 * se)),
                 "ci_high": _finite(math.exp(log_or + 1.96 * se)),
+            }
+        )
+        standardized_design[:, 1 : 1 + spline.shape[1]] = np.asarray(
+            basis_row, dtype=float
+        )
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            linear_predictor = standardized_design @ fit_parameters
+        if not np.isfinite(linear_predictor).all():
+            raise ValueError(
+                "standardized absolute-risk linear predictor is non-finite"
+            )
+        probabilities = expit(linear_predictor)
+        standardized_risk = float(probabilities.mean())
+        gradient = (
+            probabilities[:, None]
+            * (1.0 - probabilities[:, None])
+            * standardized_design
+        ).mean(axis=0)
+        risk_variance = max(float(gradient @ fit_covariance @ gradient), 0.0)
+        risk_se = math.sqrt(risk_variance)
+        bounded_risk = min(max(standardized_risk, 1e-12), 1.0 - 1e-12)
+        logit_se = risk_se / (bounded_risk * (1.0 - bounded_risk))
+        absolute_risk_rows.append(
+            {
+                "exposure_value": _finite(x_value),
+                "reference_exposure_value": _finite(reference),
+                "adjusted_absolute_risk": _finite(standardized_risk),
+                "ci_low": _finite(expit(logit(bounded_risk) - 1.96 * logit_se)),
+                "ci_high": _finite(expit(logit(bounded_risk) + 1.96 * logit_se)),
+                "standardization_n": int(len(model_frame)),
+                "events": int(model_frame["__outcome"].sum()),
+                "standardization_method": "marginal_over_primary_complete_case_covariates",
             }
         )
 
@@ -446,8 +483,124 @@ def run_landmark_spline_association(
             out_dir, sealed.exposure_definition_sensitivity_product
         )
         pd.DataFrame(definition_rows).to_csv(definition_path, index=False)
+    absolute_risk_path = None
+    if sealed.adjusted_absolute_risk_product is not None:
+        absolute_risk_path = _product_path(
+            out_dir, sealed.adjusted_absolute_risk_product
+        )
+        pd.DataFrame(absolute_risk_rows).to_csv(absolute_risk_path, index=False)
+
+    landmark_eligible = alive_at_landmark & under_observation
+    population_flow_rows = [
+        {
+            "stage": "source_cohort",
+            "n": int(len(working)),
+            "excluded_from_previous": 0,
+            "population_rule": "all_digest_bound_source_rows",
+        },
+        {
+            "stage": "alive_and_under_observation_at_landmark",
+            "n": int(landmark_eligible.sum()),
+            "excluded_from_previous": int(len(working) - landmark_eligible.sum()),
+            "population_rule": "verified_alive_and_observed_at_landmark",
+        },
+        {
+            "stage": "valid_exposure_primary_population",
+            "n": int(primary_mask.sum()),
+            "excluded_from_previous": int(
+                landmark_eligible.sum() - primary_mask.sum()
+            ),
+            "population_rule": "landmark_population_with_valid_exposure",
+        },
+        {
+            "stage": "complete_case_model_population",
+            "n": int(len(model_frame)),
+            "excluded_from_previous": int(primary_mask.sum() - len(model_frame)),
+            "population_rule": "primary_population_with_complete_model_terms",
+        },
+    ]
+    population_flow_path = None
+    if sealed.population_flow_product is not None:
+        population_flow_path = _product_path(out_dir, sealed.population_flow_product)
+        pd.DataFrame(population_flow_rows).to_csv(population_flow_path, index=False)
+
+    variable_opportunity_path = None
+    variable_opportunity_summary = None
+    if sealed.variable_opportunity_sensitivity_product is not None:
+        variable_population = working.loc[
+            valid_exposure & working[sealed.outcome_column].notna()
+        ].copy()
+        variable_adjustment = _adjustment_design(variable_population, sealed)
+        variable_frame = pd.concat(
+            [
+                variable_population[sealed.exposure_column].rename("__exposure"),
+                variable_population[sealed.outcome_column].rename("__outcome"),
+                variable_adjustment,
+            ],
+            axis=1,
+        ).dropna()
+        variable_design = pd.concat(
+            [
+                variable_frame[["__exposure"]].rename(
+                    columns={"__exposure": sealed.exposure_column}
+                ),
+                variable_frame.drop(columns=["__exposure", "__outcome"]),
+            ],
+            axis=1,
+        ).astype(float)
+        variable_design = sm.add_constant(variable_design, has_constant="add")
+        if np.linalg.matrix_rank(variable_design.to_numpy()) != variable_design.shape[1]:
+            raise ValueError("variable-opportunity sensitivity is rank deficient")
+        variable_fit = sm.GLM(
+            variable_frame["__outcome"].astype(float),
+            variable_design,
+            family=sm.families.Binomial(),
+        ).fit(maxiter=200, disp=0)
+        if not bool(getattr(variable_fit, "converged", False)):
+            raise ValueError("variable-opportunity sensitivity did not converge")
+        variable_coefficient = _finite(
+            variable_fit.params[sealed.exposure_column]
+        )
+        variable_standard_error = _finite(
+            variable_fit.bse[sealed.exposure_column]
+        )
+        variable_opportunity_summary = {
+            "population_rule": "all_rows_with_observed_exposure_and_complete_model_terms",
+            "interpretation": "secondary_variable_opportunity_association_not_landmark_equivalent",
+            "exposure_increment": sealed.linear_sensitivity_per_unit,
+            "adjusted_odds_ratio": _finite(math.exp(variable_coefficient)),
+            "ci_low": _finite(
+                math.exp(variable_coefficient - 1.96 * variable_standard_error)
+            ),
+            "ci_high": _finite(
+                math.exp(variable_coefficient + 1.96 * variable_standard_error)
+            ),
+            "n": int(len(variable_frame)),
+            "events": int(variable_frame["__outcome"].sum()),
+            "early_event_at_or_before_landmark_n": int(
+                (
+                    working[sealed.outcome_column].eq(1)
+                    & working[sealed.outcome_time_column].le(sealed.landmark_hours)
+                ).sum()
+            ),
+            "icu_observation_shorter_than_landmark_n": int(
+                working[sealed.observation_duration_column]
+                .lt(observation_threshold)
+                .sum()
+            ),
+        }
+        variable_opportunity_path = _product_path(
+            out_dir, sealed.variable_opportunity_sensitivity_product
+        )
+        pd.DataFrame([variable_opportunity_summary]).to_csv(
+            variable_opportunity_path, index=False
+        )
     receipt = {
-        "schema_version": "easyicu.landmark_spline_runtime_receipt/1",
+        "schema_version": (
+            "easyicu.landmark_spline_runtime_receipt/2"
+            if sealed.schema_version.endswith("/2")
+            else "easyicu.landmark_spline_runtime_receipt/1"
+        ),
         "protocol_content_sha256": sealed.protocol_content_sha256,
         "execution_contract_sha256": sealed.execution_contract_sha256,
         "runtime_projection_sha256": runtime_projection_sha256,
@@ -471,6 +624,15 @@ def run_landmark_spline_association(
         },
         "interpretation": sealed.interpretation,
     }
+    if sealed.schema_version.endswith("/2"):
+        receipt["population_flow"] = population_flow_rows
+        receipt["adjusted_absolute_risk"] = {
+            "method": "marginal_standardization_over_primary_complete_case_covariates",
+            "interval": "delta_method_logit_scale_95_percent_confidence_interval",
+            "grid_rows": len(absolute_risk_rows),
+        }
+    if variable_opportunity_summary is not None:
+        receipt["variable_opportunity_sensitivity"] = variable_opportunity_summary
     receipt_path = _product_path(out_dir, sealed.receipt_product)
     receipt_path.write_text(
         json.dumps(receipt, indent=2, sort_keys=True, allow_nan=False),
@@ -488,6 +650,17 @@ def run_landmark_spline_association(
     ):
         output_files[sealed.exposure_definition_sensitivity_product] = (
             definition_path.name
+        )
+    if absolute_risk_path is not None and sealed.adjusted_absolute_risk_product:
+        output_files[sealed.adjusted_absolute_risk_product] = absolute_risk_path.name
+    if population_flow_path is not None and sealed.population_flow_product:
+        output_files[sealed.population_flow_product] = population_flow_path.name
+    if (
+        variable_opportunity_path is not None
+        and sealed.variable_opportunity_sensitivity_product
+    ):
+        output_files[sealed.variable_opportunity_sensitivity_product] = (
+            variable_opportunity_path.name
         )
     return {
         "status": "ok",

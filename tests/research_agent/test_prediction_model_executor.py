@@ -326,6 +326,9 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
         assert (figure_dir / f"prediction_figure.{suffix}").is_file()
         assert (
+            figure_dir / f"prediction_figure_validation_stability.{suffix}"
+        ).is_file()
+        assert (
             figure_dir / f"prediction_figure_supplementary_decision_curve.{suffix}"
         ).is_file()
     contract = json.loads(
@@ -335,10 +338,27 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
         "model_performance",
         "model_performance",
         "calibration",
-        "validation",
     ]
     assert {panel["metadata"]["placement"] for panel in contract["panels"]} == {"main"}
-    assert contract["panels"][-1]["metadata"]["chart_type"] == ("metric_dot_interval")
+    validation_contract = json.loads(
+        (
+            figure_dir / "prediction_figure_validation_stability.figure_contract.json"
+        ).read_text("utf-8")
+    )
+    assert [panel["role"] for panel in validation_contract["panels"]] == [
+        "validation",
+        "validation",
+    ]
+    assert validation_contract["panels"][0]["metadata"]["article_role"] == (
+        "validation_design"
+    )
+    assert validation_contract["panels"][1]["metadata"]["chart_type"] == (
+        "metric_dot_interval"
+    )
+    assert summary["main_figure_paths"] == [
+        "prediction_figure.png",
+        "prediction_figure_validation_stability.png",
+    ]
     supplementary_contract = json.loads(
         (
             figure_dir

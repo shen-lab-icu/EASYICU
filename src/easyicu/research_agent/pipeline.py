@@ -614,6 +614,8 @@ from .orchestration.resume_plan_migration import (  # noqa: F401 — owner modul
     _restore_resume_plan_robustness_lock,
     _resume_completed_records_for_plan_migration,
 )
+
+
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
     try:
         loaded = load_run_artifact_authority(run_dir)
@@ -869,9 +871,7 @@ def _apply_resume_plan_migrations(
                 ),
                 detail={
                     "kind": "resume_trajectory_schema_migration",
-                    "plan_path": str(
-                        trajectory_migration_path.relative_to(run_dir)
-                    ),
+                    "plan_path": str(trajectory_migration_path.relative_to(run_dir)),
                 },
             )
         )
@@ -903,9 +903,7 @@ def _apply_resume_plan_migrations(
                 detail={
                     "kind": "legacy_figure_render_edge",
                     "target_step_ids": list(figure_edge_step_ids),
-                    "plan_path": str(
-                        figure_edge_migration_path.relative_to(run_dir)
-                    ),
+                    "plan_path": str(figure_edge_migration_path.relative_to(run_dir)),
                 },
             )
         )
@@ -971,7 +969,15 @@ def _run_preplan_literature_and_hypothesis(
     direct_comparator_literature_keys: list[str] = []
     preplan_literature: Optional[LiteratureBundle] = None
     abort_context = _scientific_plan_gate.PreplanAbortContext(
-        run_id, run_dir, context, context_path, agent_context, evidence, findings, llm, resume_state
+        run_id,
+        run_dir,
+        context,
+        context_path,
+        agent_context,
+        evidence,
+        findings,
+        llm,
+        resume_state,
     )
 
     if self._enable_literature and skill_obj is None:
@@ -2070,9 +2076,7 @@ class ResearchAgentPipeline:
                     "development locked analysis plan research question mismatch"
                 )
             primary_steps = [
-                step
-                for step in plan.steps
-                if step.planned_analysis_role == "primary"
+                step for step in plan.steps if step.planned_analysis_role == "primary"
             ]
             if len(primary_steps) == 1 and primary_steps[0].scientific_capability:
                 from .planning.analysis_types import (
@@ -2120,9 +2124,7 @@ class ResearchAgentPipeline:
                             },
                         )
                     )
-                    plan = plan.model_copy(
-                        update={"analysis_type": rebound_type.key}
-                    )
+                    plan = plan.model_copy(update={"analysis_type": rebound_type.key})
             plan_generation_mode = "development_locked_analysis_plan"
             development_locked_plan_loaded = True
             findings.append(
@@ -2633,6 +2635,11 @@ class ResearchAgentPipeline:
                 article_contract = final_design.contract
                 article_figure_strategy = final_design.figure_strategy
                 analysis_blueprint = final_design.blueprint
+            if article_figure_strategy is not None:
+                plan = _figure_plan.apply_article_figure_strategy_placements(
+                    plan=plan,
+                    strategy=article_figure_strategy,
+                )
             findings.extend(
                 validate_plan_against_study_design_brief(
                     plan=plan,
@@ -4611,10 +4618,22 @@ class ResearchAgentPipeline:
         if self._config.planner_only:
             self._clear_validated_runtime()
             runtime_capabilities = ()
-            _emit_progress("runtime", "Execution runtime preflight skipped for planner-only authority.", run_id=run_id, method_capabilities=[])
+            _emit_progress(
+                "runtime",
+                "Execution runtime preflight skipped for planner-only authority.",
+                run_id=run_id,
+                method_capabilities=[],
+            )
         else:
-            runtime_capabilities = self._preflight_execution_runtime(run_dir=run_dir, cohort_path=cohort_path, target_outcome=target_outcome)
-            _emit_progress("runtime", "Execution runtime validated before planning.", run_id=run_id, method_capabilities=list(runtime_capabilities))
+            runtime_capabilities = self._preflight_execution_runtime(
+                run_dir=run_dir, cohort_path=cohort_path, target_outcome=target_outcome
+            )
+            _emit_progress(
+                "runtime",
+                "Execution runtime validated before planning.",
+                run_id=run_id,
+                method_capabilities=list(runtime_capabilities),
+            )
 
         def _plan_invoker():
             return _pipeline_run___plan_invoker(
