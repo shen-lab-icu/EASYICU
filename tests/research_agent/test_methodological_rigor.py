@@ -170,6 +170,47 @@ def test_extract_method_signals_reads_survival_evidence(ra, tmp_path: Path):
     assert MethodologicalRigorAuditor().audit(context=context, evidence=evidence) == []
 
 
+def test_extract_method_signals_reads_namespaced_survival_products(
+    ra,
+    tmp_path: Path,
+):
+    evidence = ra.EvidenceStore(tmp_path)
+    records = []
+    for stem, description in (
+        ("landmark_cox_summary", "Table landmark_cox_summary from a signed suite."),
+        ("landmark_km_curve", "Table landmark_km_curve from a signed suite."),
+    ):
+        path = tmp_path / f"{stem}.csv"
+        path.write_text("value\n1\n", encoding="utf-8")
+        records.append(
+            evidence.register_file(
+                kind="table",
+                description=description,
+                source_path=path,
+                evidence_id=f"table_step_artifact_{stem}",
+                producer="deterministic_standard",
+            )
+        )
+    context = ra.ResearchContext(
+        research_question="Estimate post-landmark time-to-event mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_patients=100, n_stays=100
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+
+    signals = extract_method_signals(
+        context,
+        evidence,
+        evidence_records=records,
+    )
+
+    assert signals.has_hazard_ratio is True
+    assert signals.has_survival_curve is True
+
+
 def test_method_signals_ignore_retired_evidence_in_current_authority_snapshot(
     ra,
     tmp_path: Path,

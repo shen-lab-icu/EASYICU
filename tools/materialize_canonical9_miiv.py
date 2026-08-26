@@ -270,6 +270,8 @@ def _build_jsonl_row(
     runtime_projection = None
     if task.task_id in {
         "e2_lactate_mortality",
+        "e3_kdigo_gradient",
+        "m1_hepatobiliary_missingness",
         "h1_ventilation_survival",
         "h2_vasopressor_causal",
         "h3_trajectory_clustering",
@@ -348,6 +350,8 @@ def _build_jsonl_row(
     }
     if task.task_id in {
         "e2_lactate_mortality",
+        "e3_kdigo_gradient",
+        "m1_hepatobiliary_missingness",
         "h1_ventilation_survival",
         "h2_vasopressor_causal",
         "h3_trajectory_clustering",

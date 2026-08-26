@@ -1,0 +1,127 @@
+{
+  "schema_version": "easyicu.dev9_comparator_shadow_review/1",
+  "protocol_ref": "easyicu.dev9_comparator_shadow_review/20260825-v2",
+  "audience": "evaluator_only",
+  "agent_visibility": "forbidden_before_execution",
+  "purpose": "Use representative high-quality studies as external method and presentation anchors after each exact-head Dev9 run.",
+  "use_policy": {
+    "allowed": [
+      "study_design_completeness",
+      "method_and_diagnostic_completeness",
+      "table_and_figure_completeness",
+      "claim_boundary_calibration"
+    ],
+    "forbidden": [
+      "numeric_gold_answer",
+      "expected_effect_direction",
+      "result_similarity_pass_fail",
+      "copying_source_specific_definitions_without_justification",
+      "copying_a_fixed_figure_template"
+    ]
+  },
+  "dimensions": [
+    "study_population",
+    "time_zero_and_windows",
+    "variable_operationalization",
+    "missingness_and_censoring",
+    "primary_model_and_sensitivities",
+    "table_and_figure_completeness",
+    "conclusion_boundaries"
+  ],
+  "review_states": [
+    "meets_anchor",
+    "stronger_than_anchor",
+    "actionable_gap",
+    "not_applicable",
+    "fail_closed_appropriate"
+  ],
+  "required_review_fields": [
+    "run_head",
+    "run_image",
+    "run_path",
+    "dimension",
+    "state",
+    "run_evidence_paths",
+    "gap_or_rationale",
+    "owner_module",
+    "next_action",
+    "supports",
+    "cannot_prove"
+  ],
+  "acceptance_rule": "Every dimension must have run-bound evidence and no unowned actionable gap. A scientifically justified fail-closed result is acceptable and must not be converted into a synthetic estimate. Comparator agreement in magnitude or direction is never an acceptance condition.",
+  "anchor_access_policy": {
+    "full_text_required_for_every_anchor": true,
+    "supplement_handling": "record_and_review_if_published",
+    "inaccessible_anchor_action": "replace_anchor"
+  },
+  "tasks": [
+    {
+      "task_id": "e1_sepsis3_prevalence_mortality",
+      "anchors": [
+        {"citation_id": "pmid_38905261", "url": "https://pubmed.ncbi.nlm.nih.gov/38905261/"},
+        {"citation_id": "pmid_34259454", "url": "https://pubmed.ncbi.nlm.nih.gov/34259454/"}
+      ],
+      "focus": ["Sepsis-3 operationalization", "denominator and infection timing", "prevalence and mortality presentation"]
+    },
+    {
+      "task_id": "e2_lactate_mortality",
+      "anchors": [
+        {"citation_id": "pmid_20181242", "url": "https://pubmed.ncbi.nlm.nih.gov/20181242/"}
+      ],
+      "focus": ["continuous exposure and nonlinearity", "lactate measurement window", "absolute risk and dose-response presentation"]
+    },
+    {
+      "task_id": "e3_kdigo_gradient",
+      "anchors": [
+        {"citation_id": "pmid_35674748", "url": "https://pubmed.ncbi.nlm.nih.gov/35674748/"}
+      ],
+      "focus": ["stage gradient and trend", "length-of-stay distribution", "mortality risk and baseline renal definition"]
+    },
+    {
+      "task_id": "m1_hepatobiliary_missingness",
+      "anchors": [
+        {"citation_id": "pmcid_PMC9322581", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9322581/"},
+        {"citation_id": "pmid_34238904", "url": "https://pubmed.ncbi.nlm.nih.gov/34238904/"}
+      ],
+      "focus": ["bilirubin measurement selection", "missing is not normal", "association claim boundary"]
+    },
+    {
+      "task_id": "m2_mortality_prediction",
+      "anchors": [
+        {"citation_id": "pmid_31209213", "url": "https://pubmed.ncbi.nlm.nih.gov/31209213/"},
+        {"citation_id": "pmid_32383124", "url": "https://pubmed.ncbi.nlm.nih.gov/32383124/"}
+      ],
+      "focus": ["patient-level split and leakage", "calibration and Brier score", "external validation and transportability"]
+    },
+    {
+      "task_id": "m3_sepsis_subphenotype",
+      "anchors": [
+        {"citation_id": "pmid_31104070", "url": "https://pubmed.ncbi.nlm.nih.gov/31104070/"},
+        {"citation_id": "pmid_42223936", "url": "https://pubmed.ncbi.nlm.nih.gov/42223936/"}
+      ],
+      "focus": ["cluster-count selection", "stability and external replication", "clinical interpretation without over-naming"]
+    },
+    {
+      "task_id": "h1_ventilation_survival",
+      "anchors": [
+        {"citation_id": "pmid_32735841", "url": "https://pubmed.ncbi.nlm.nih.gov/32735841/"}
+      ],
+      "focus": ["time-dependent exposure", "survivor bias and informative censoring", "risk sets and time zero"]
+    },
+    {
+      "task_id": "h2_vasopressor_causal",
+      "anchors": [
+        {"citation_id": "pmid_32059682", "url": "https://pubmed.ncbi.nlm.nih.gov/32059682/"},
+        {"citation_id": "pmid_37073334", "url": "https://pubmed.ncbi.nlm.nih.gov/37073334/"}
+      ],
+      "focus": ["observable exposed and comparison groups", "propensity overlap and positivity", "confounding by indication and sensitivity"]
+    },
+    {
+      "task_id": "h3_trajectory_clustering",
+      "anchors": [
+        {"citation_id": "pmid_35786445", "url": "https://pubmed.ncbi.nlm.nih.gov/35786445/"}
+      ],
+      "focus": ["trajectory window and dynamic distance", "cluster stability and alternative algorithms", "cross-cohort replication"]
+    }
+  ]
+}

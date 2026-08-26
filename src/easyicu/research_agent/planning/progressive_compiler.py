@@ -129,7 +129,7 @@ _METHOD_BY_MODULE: Mapping[str, str] = {
     "adjusted_association": "adjusted_association_models",
     "robustness_replay": "robustness_sensitivity",
     "visualization": "visualization",
-    "report": "feasibility_protocol",
+    "report": "scientific_reporting",
 }
 
 
@@ -285,10 +285,19 @@ def validate_progressive_foundation(
     context: ResearchContext,
     analysis_type: str,
     require_robustness_intent: bool = False,
+    robustness_replay_required: bool = False,
 ) -> None:
     """Fail before step generation when a sealed Foundation cannot compile."""
 
     _validate_progressive_cohort_intent(foundation.cohort, context=context)
+    if robustness_replay_required and not foundation.robustness_intents:
+        raise _fail(
+            "progressive_foundation_robustness_intent_missing",
+            "the validated outline declares a robustness_replay step, but the "
+            "foundation supplies no replayable robustness intent; add at least "
+            "one prespecified host-replayable intent or remove the outline step",
+            path="robustness_intents",
+        )
     if (
         str(analysis_type or "").strip().casefold() == "descriptive_epidemiology"
         and foundation.robustness_intents
@@ -2047,6 +2056,9 @@ def compile_progressive_plan(
         ),
         context=context,
         analysis_type=canonical_type,
+        robustness_replay_required=any(
+            step.module_id == "robustness_replay" for step in skeleton.steps
+        ),
     )
     allowed_modules = set(progressive_module_ids_for_analysis_types((canonical_type,)))
     for index, step in enumerate(skeleton.steps):
@@ -2237,6 +2249,11 @@ def compile_progressive_plan(
                 {
                     "research_question": context.research_question,
                     "analysis_type": canonical_type,
+                    "design_selection": (
+                        skeleton.design_selection.model_dump(mode="json")
+                        if skeleton.design_selection is not None
+                        else None
+                    ),
                     "steps": [step.model_dump(mode="json") for step in compiled_steps],
                     "cohort": cohort.to_dict(),
                     "endpoint": (

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import textwrap
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 import warnings
 
 import numpy as np
@@ -23,16 +23,28 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
-    roc_auc_score,
 )
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from ...contracts.dependence import PlannedDependenceRequirement, resolve_patient_groups
+from ...contracts.prediction_execution import (
+    PREDICTION_MODEL_ANALYSIS_KIND,
+    PREDICTION_PERFORMANCE_PRODUCT,
+    PREDICTION_PRIMARY_ACTION,
+    PREDICTION_SCORES_PRODUCT,
+    static_prediction_execution_verdict,
+    static_prediction_model_columns,
+)
 from ...contracts.prediction_validation import PredictionValidationSpec
+from ...methods.delong_auc import delong_auc_ci
 from ...planning.dependence_authority import context_patient_group_authority
-from ...prediction_validation_owner import run_prediction_validation
+from ...prediction_validation_owner import (
+    run_prediction_validation,
+    run_prediction_validation_csv,
+)
+from ...robustness.panel import load_locked_robustness_specs
 from ...intake.materialized_metadata import (
     MaterializedCohortAuthority,
     MaterializedCohortAuthorityRef,
@@ -50,9 +62,6 @@ from .typed_input_binding import (
     sole_typed_cohort_input,
 )
 
-PREDICTION_MODEL_ANALYSIS_KIND = "static_prediction_model"
-PREDICTION_SCORES_PRODUCT = "table:prediction_scores"
-PREDICTION_PERFORMANCE_PRODUCT = "table:model_performance"
 PREDICTION_INTERNAL_VALIDATION_PRODUCT = "table:validation"
 PREDICTION_CALIBRATION_PRODUCT = "table:calibration"
 PREDICTION_CLINICAL_UTILITY_PRODUCT = "table:clinical_utility"
@@ -66,17 +75,11 @@ _ACTION_OUTPUTS = {
     "prediction.calibration_metrics": (PREDICTION_CALIBRATION_PRODUCT,),
     "prediction.decision_curve": (PREDICTION_CLINICAL_UTILITY_PRODUCT,),
 }
-_PRIMARY_ACTION = "prediction.discrimination_calibration"
+_PRIMARY_ACTION = PREDICTION_PRIMARY_ACTION
 _SCORE_COLUMNS = ("unit_id", "subject_id", "split", "outcome", "probability")
 _THRESHOLDS = tuple(float(value) for value in np.linspace(0.05, 0.50, 10))
-
-
-def _raw_columns(step: AnalysisStep) -> tuple[str, ...]:
-    return tuple(
-        value
-        for item in step.inputs
-        if (value := str(item or "").strip()) and ":" not in value
-    )
+_PRIMARY_SPLIT_SEED = 1729
+_REPEATED_SPLIT_SEEDS = tuple(range(1730, 1740))
 
 
 def prediction_model_executor_owns_step(step: AnalysisStep) -> bool:
@@ -87,12 +90,7 @@ def prediction_model_executor_owns_step(step: AnalysisStep) -> bool:
     if expected is None or tuple(step.expected_outputs) != expected:
         return False
     if action == _PRIMARY_ACTION:
-        if (
-            step.planned_analysis_role != "primary"
-            or sole_typed_cohort_input(step) is None
-            or len(_raw_columns(step)) < 2
-        ):
-            return False
+        return static_prediction_execution_verdict(step).claimed
     else:
         typed_inputs = tuple(value for value in step.inputs if ":" in value)
         if (
@@ -141,7 +139,7 @@ def prediction_model_executor_code(step: AnalysisStep) -> str:
             )
             summary = run_prediction_model(
                 frame=frame,
-                declared_columns={_raw_columns(step)!r},
+                declared_columns={static_prediction_model_columns(step)!r},
                 typed_cohort_input={cohort!r},
                 source_cohort=cohort_path,
                 out_dir=Path(os.environ["STEP_OUT_DIR"]),
@@ -275,10 +273,15 @@ def _unit_ids(frame: pd.DataFrame, source: str) -> pd.Series:
     return text
 
 
-def _split_labels(groups: pd.Series, outcome: pd.Series) -> np.ndarray:
+def _split_labels(
+    groups: pd.Series,
+    outcome: pd.Series,
+    *,
+    seed: int = _PRIMARY_SPLIT_SEED,
+) -> np.ndarray:
     if groups.nunique() < 10:
         raise RuntimeError("prediction requires at least 10 patient groups")
-    splitter = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=1729)
+    splitter = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=seed)
     train_index, validation_index = next(
         splitter.split(np.zeros(len(groups)), outcome.to_numpy(), groups.to_numpy())
     )
@@ -292,6 +295,83 @@ def _split_labels(groups: pd.Series, outcome: pd.Series) -> np.ndarray:
         if outcome.iloc[np.flatnonzero(labels == label)].nunique() != 2:
             raise RuntimeError(f"{label} split does not contain both outcome classes")
     return labels
+
+
+def _repeated_group_split_validation(
+    *,
+    frame: pd.DataFrame,
+    outcome: pd.Series,
+    groups: pd.Series,
+    unit_ids: pd.Series,
+    features: tuple[str, ...],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Refit ten fixed patient-group splits and return auditable uncertainty."""
+
+    rows: list[dict[str, Any]] = []
+    for seed in _REPEATED_SPLIT_SEEDS:
+        split = _split_labels(groups, outcome, seed=seed)
+        development = split == "development"
+        validation = split == "validation"
+        probabilities = _fit_probabilities(
+            frame=frame,
+            outcome=outcome,
+            features=features,
+            development=development,
+            prediction_rows=validation,
+        )
+        scores = pd.DataFrame(
+            {
+                "unit_id": unit_ids.loc[validation].to_numpy(),
+                "subject_id": groups.loc[validation].to_numpy(),
+                "split": "validation",
+                "outcome": outcome.loc[validation].to_numpy(),
+                "probability": probabilities,
+            },
+            columns=_SCORE_COLUMNS,
+        )
+        result = run_prediction_validation(scores, _prediction_validation_spec())
+        auc = delong_auc_ci(scores["outcome"], scores["probability"])
+        rows.append(
+            {
+                "split_seed": seed,
+                "development_n": int(development.sum()),
+                "validation_n": int(validation.sum()),
+                "development_subject_n": int(groups.loc[development].nunique()),
+                "validation_subject_n": int(groups.loc[validation].nunique()),
+                "patient_overlap_n": 0,
+                "validation_event_n": int(scores["outcome"].sum()),
+                "auroc": auc.auc,
+                "average_precision": float(
+                    average_precision_score(scores["outcome"], scores["probability"])
+                ),
+                "brier_score": result.summary.brier_score,
+                "calibration_status": result.summary.calibration_status,
+                "calibration_intercept": result.summary.calibration_intercept,
+                "calibration_slope": result.summary.calibration_slope,
+            }
+        )
+    metrics = ("auroc", "average_precision", "brier_score")
+    summary = {
+        "method": "repeated_patient_group_split_refit",
+        "n_repeats": len(rows),
+        "validation_fraction": 0.20,
+        "split_seeds": list(_REPEATED_SPLIT_SEEDS),
+        "all_patient_overlap_zero": all(row["patient_overlap_n"] == 0 for row in rows),
+        "metrics": {
+            metric: {
+                "mean": float(np.mean([row[metric] for row in rows])),
+                "standard_deviation": float(
+                    np.std([row[metric] for row in rows], ddof=1)
+                ),
+                "minimum": float(min(row[metric] for row in rows)),
+                "maximum": float(max(row[metric] for row in rows)),
+            }
+            for metric in metrics
+        },
+        "authority_scope": "analysis_only",
+        "external_validation_established": False,
+    }
+    return rows, summary
 
 
 def _model_pipeline(frame: pd.DataFrame, features: tuple[str, ...]) -> Pipeline:
@@ -346,6 +426,165 @@ def _model_pipeline(frame: pd.DataFrame, features: tuple[str, ...]) -> Pipeline:
     )
 
 
+def _fit_probabilities(
+    *,
+    frame: pd.DataFrame,
+    outcome: pd.Series,
+    features: tuple[str, ...],
+    development: np.ndarray,
+    prediction_rows: np.ndarray,
+) -> np.ndarray:
+    """Fit once on the declared development rows and score declared rows."""
+
+    if not bool(development.any()) or not bool(prediction_rows.any()):
+        raise RuntimeError("prediction fit requires non-empty development and scoring rows")
+    if outcome.loc[development].nunique() != 2:
+        raise RuntimeError("prediction development rows do not contain both outcome classes")
+    model = _model_pipeline(frame.loc[development], features)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        model.fit(frame.loc[development, list(features)], outcome.loc[development])
+    if any(issubclass(item.category, ConvergenceWarning) for item in caught):
+        raise RuntimeError("prediction logistic model did not converge")
+    probabilities = model.predict_proba(frame.loc[prediction_rows, list(features)])[:, 1]
+    if not np.isfinite(probabilities).all() or not (
+        (0 <= probabilities) & (probabilities <= 1)
+    ).all():
+        raise RuntimeError("prediction model produced invalid probabilities")
+    return probabilities
+
+
+def _prediction_validation_spec() -> PredictionValidationSpec:
+    return PredictionValidationSpec(
+        unit_id_column="unit_id",
+        subject_id_column="subject_id",
+        split_column="split",
+        outcome_column="outcome",
+        probability_column="probability",
+        evaluation_split="validation",
+        analysis_unit="encounter",
+        thresholds=_THRESHOLDS,
+        calibration_bins=10,
+    )
+
+
+def run_prediction_robustness_specs(
+    *,
+    frame: pd.DataFrame,
+    outcome: pd.Series,
+    groups: pd.Series,
+    unit_ids: pd.Series,
+    split: np.ndarray,
+    features: tuple[str, ...],
+    specs: Sequence[Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Execute only plan-locked complete-case variants this owner understands.
+
+    The model, split, outcome, and feature roster are inherited unchanged from
+    the primary owner.  A spec that changes any other coordinate is left
+    unexecuted so the run-level robustness gate retains its fail-closed error.
+    """
+
+    panel_rows: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    expected_variables = set((*features, outcome.name))
+    for spec in specs:
+        missing = getattr(spec, "missing_override", None)
+        if (
+            getattr(spec, "axis", None) != "missing"
+            or getattr(spec, "cohort_override", None) is not None
+            or getattr(spec, "outcome_override", None) is not None
+            or not isinstance(missing, Mapping)
+            or str(missing.get("strategy") or "") != "complete_case"
+        ):
+            continue
+        variables = tuple(str(value or "").strip() for value in missing.get("variables", ()))
+        if (
+            not variables
+            or len(variables) != len(set(variables))
+            or set(variables) != expected_variables
+            or any(variable not in frame.columns for variable in variables)
+        ):
+            continue
+        complete = frame.loc[:, list(variables)].notna().all(axis=1).to_numpy()
+        development = complete & (split == "development")
+        validation = complete & (split == "validation")
+        if (
+            int(development.sum()) == 0
+            or int(validation.sum()) == 0
+            or outcome.loc[development].nunique() != 2
+            or outcome.loc[validation].nunique() != 2
+        ):
+            continue
+        probabilities = _fit_probabilities(
+            frame=frame,
+            outcome=outcome,
+            features=features,
+            development=development,
+            prediction_rows=complete,
+        )
+        variant_scores = pd.DataFrame(
+            {
+                "unit_id": unit_ids.loc[complete].to_numpy(),
+                "subject_id": groups.loc[complete].to_numpy(),
+                "split": split[complete],
+                "outcome": outcome.loc[complete].to_numpy(),
+                "probability": probabilities,
+            },
+            columns=_SCORE_COLUMNS,
+        )
+        validation_result = run_prediction_validation(
+            variant_scores, _prediction_validation_spec()
+        )
+        evaluated = variant_scores.loc[variant_scores["split"].eq("validation")]
+        auc = delong_auc_ci(evaluated["outcome"], evaluated["probability"])
+        average_precision = float(
+            average_precision_score(evaluated["outcome"], evaluated["probability"])
+        )
+        summary = validation_result.summary
+        result = {
+            "spec_id": str(getattr(spec, "spec_id", "")),
+            "axis": "missing",
+            "analysis": "complete_case_refit_same_patient_split",
+            "predictors": list(features),
+            "development_n": int(development.sum()),
+            "validation_n": int(validation.sum()),
+            "validation_subject_n": int(evaluated["subject_id"].nunique()),
+            "validation_event_n": int(evaluated["outcome"].sum()),
+            "auroc": auc.auc,
+            "auroc_se": auc.se,
+            "auroc_ci_low": auc.ci_low,
+            "auroc_ci_high": auc.ci_high,
+            "auroc_ci_method": "delong_logit_normal_95pct",
+            "average_precision": average_precision,
+            "brier_score": summary.brier_score,
+            "calibration_status": summary.calibration_status,
+            "calibration_intercept": summary.calibration_intercept,
+            "calibration_slope": summary.calibration_slope,
+            "authority_scope": "analysis_only",
+        }
+        results.append(result)
+        panel_rows.append(
+            {
+                "spec_id": result["spec_id"],
+                "axis": "missing",
+                "n": result["validation_n"],
+                "point_estimate": auc.auc,
+                "ci_low": auc.ci_low,
+                "ci_high": auc.ci_high,
+                "se": auc.se,
+                "evidence_id": "",
+                "converged": True,
+                "notes": (
+                    "metric=AUROC; complete-case refit with the primary model, "
+                    "outcome, predictor roster, and patient split unchanged; "
+                    "95% CI uses the deterministic DeLong logit interval"
+                ),
+            }
+        )
+    return panel_rows, results
+
+
 def run_prediction_model(
     *,
     frame: pd.DataFrame,
@@ -390,19 +629,19 @@ def run_prediction_model(
     )
     split = _split_labels(groups, outcome)
     development = split == "development"
-    model = _model_pipeline(frame, features)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", ConvergenceWarning)
-        model.fit(frame.loc[development, list(features)], outcome.loc[development])
-    if any(issubclass(item.category, ConvergenceWarning) for item in caught):
-        raise RuntimeError("prediction logistic model did not converge")
-    probabilities = model.predict_proba(frame.loc[:, list(features)])[:, 1]
-    if not np.isfinite(probabilities).all() or not ((0 <= probabilities) & (probabilities <= 1)).all():
-        raise RuntimeError("prediction model produced invalid probabilities")
+    all_rows = np.ones(len(frame), dtype=bool)
+    probabilities = _fit_probabilities(
+        frame=frame,
+        outcome=outcome,
+        features=features,
+        development=development,
+        prediction_rows=all_rows,
+    )
 
+    unit_ids = _unit_ids(frame, group_authority.group_source)
     scores = pd.DataFrame(
         {
-            "unit_id": _unit_ids(frame, group_authority.group_source),
+            "unit_id": unit_ids,
             "subject_id": groups,
             "split": split,
             "outcome": outcome,
@@ -411,13 +650,23 @@ def run_prediction_model(
         columns=_SCORE_COLUMNS,
     )
     validation = scores.loc[scores["split"].eq("validation")]
+    validation_result = run_prediction_validation(scores, _prediction_validation_spec())
+    validation_summary = validation_result.summary
+    auc = delong_auc_ci(validation["outcome"], validation["probability"])
+    repeated_split_rows, repeated_split_summary = _repeated_group_split_validation(
+        frame=frame,
+        outcome=outcome,
+        groups=groups,
+        unit_ids=unit_ids,
+        features=features,
+    )
     performance = pd.DataFrame(
         [
             {
                 "model": "logistic_regression_l2",
                 "authority_scope": "analysis_only",
                 "paper_authorization_allowed": False,
-                "split_seed": 1729,
+                "split_seed": _PRIMARY_SPLIT_SEED,
                 "validation_fraction": 0.20,
                 "predictor_n": len(features),
                 "predictors": "|".join(features),
@@ -428,9 +677,11 @@ def run_prediction_model(
                 "patient_overlap_n": 0,
                 "validation_event_n": int(validation["outcome"].sum()),
                 "validation_event_rate": float(validation["outcome"].mean()),
-                "auroc": float(
-                    roc_auc_score(validation["outcome"], validation["probability"])
-                ),
+                "auroc": auc.auc,
+                "auroc_se": auc.se,
+                "auroc_ci_low": auc.ci_low,
+                "auroc_ci_high": auc.ci_high,
+                "auroc_ci_method": "delong_logit_normal_95pct",
                 "average_precision": float(
                     average_precision_score(
                         validation["outcome"], validation["probability"]
@@ -441,9 +692,37 @@ def run_prediction_model(
                         validation["outcome"], validation["probability"]
                     )
                 ),
+                "calibration_status": validation_summary.calibration_status,
+                "calibration_intercept": validation_summary.calibration_intercept,
+                "calibration_slope": validation_summary.calibration_slope,
                 "preprocessing_fit_scope": "development_partition_only",
                 "patient_group_source": group_authority.group_source,
                 "patient_group_derivation": group_authority.group_derivation,
+                "repeated_split_n": repeated_split_summary["n_repeats"],
+                "repeated_split_seeds": json.dumps(
+                    repeated_split_summary["split_seeds"], separators=(",", ":")
+                ),
+                "repeated_split_auroc_mean": repeated_split_summary["metrics"][
+                    "auroc"
+                ]["mean"],
+                "repeated_split_auroc_sd": repeated_split_summary["metrics"][
+                    "auroc"
+                ]["standard_deviation"],
+                "repeated_split_average_precision_mean": repeated_split_summary[
+                    "metrics"
+                ]["average_precision"]["mean"],
+                "repeated_split_average_precision_sd": repeated_split_summary[
+                    "metrics"
+                ]["average_precision"]["standard_deviation"],
+                "repeated_split_brier_mean": repeated_split_summary["metrics"][
+                    "brier_score"
+                ]["mean"],
+                "repeated_split_brier_sd": repeated_split_summary["metrics"][
+                    "brier_score"
+                ]["standard_deviation"],
+                "repeated_split_results": json.dumps(
+                    repeated_split_rows, separators=(",", ":"), allow_nan=False
+                ),
             }
         ]
     )
@@ -451,15 +730,40 @@ def run_prediction_model(
     out_dir.mkdir(parents=True, exist_ok=True)
     scores.to_csv(out_dir / "prediction_scores.csv", index=False)
     performance.to_csv(out_dir / "prediction_performance.csv", index=False)
+    validation_receipt = run_prediction_validation_csv(
+        source_path=out_dir / "prediction_scores.csv",
+        expected_source_sha256=sha256_file(out_dir / "prediction_scores.csv"),
+        spec=_prediction_validation_spec(),
+    )
+    robustness_rows, prediction_robustness = run_prediction_robustness_specs(
+        frame=frame,
+        outcome=outcome,
+        groups=groups,
+        unit_ids=unit_ids,
+        split=split,
+        features=features,
+        specs=load_locked_robustness_specs(Path(run_dir)),
+    )
     summary = {
         "step_id": step_id,
         "status": "ok",
         "analysis_status": "ok",
-        "method": "deterministic_static_prediction_model",
+        "method": "deterministic_static_prediction_model_with_repeated_split_validation",
         "analysis_family": "prediction",
         "deterministic_standard_analysis": PREDICTION_MODEL_ANALYSIS_KIND,
         "authority_scope": "analysis_only",
         "paper_authorization_allowed": False,
+        "predictor_roster": list(features),
+        "predictor_roster_contract": "raw_input_prefix_before_typed_cohort",
+        "scientific_validation_owner": "prediction_validation_owner",
+        "scientific_validation_contract": "PredictionValidationReceipt",
+        "prediction_validation_receipt": validation_receipt.model_dump(mode="json"),
+        "resampling_validation": {
+            **repeated_split_summary,
+            "repeats": repeated_split_rows,
+        },
+        "robustness_rows": robustness_rows,
+        "prediction_robustness_results": prediction_robustness,
         "source_cohort": str(Path(source_cohort).resolve()),
         "source_cohort_sha256": sha256_file(Path(source_cohort)),
         "source_inputs": [typed_cohort_input],
@@ -628,5 +932,6 @@ __all__ = [
     "prediction_model_executor_code",
     "prediction_model_executor_owns_step",
     "run_prediction_model",
+    "run_prediction_robustness_specs",
     "run_prediction_score_analysis",
 ]

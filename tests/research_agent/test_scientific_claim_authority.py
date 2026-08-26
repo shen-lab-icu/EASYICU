@@ -162,10 +162,8 @@ def test_writer_can_only_select_a_host_rendered_scientific_claim(
     assert removed == []
     bound = store.bind_manuscript(filtered)
 
-    assert (
-        "Lactate was positively associated with hospital mortality in the "
-        "primary cohort analysis set (estimand: adjusted odds ratio" in bound
-    )
+    assert "the prespecified exposure was positively associated" in bound
+    assert "the prespecified analysis cohort" in bound
     assert "04_association_summary" in bound
     assert "{claim:" not in bound
 
@@ -224,7 +222,7 @@ def test_scientific_claim_authority_survives_store_reload(ra, tmp_path: Path) ->
     assert [claim.claim_ref for claim in claims] == [
         "04_association.adjusted_association"
     ]
-    assert "Lactate was positively associated" in reopened.bind_manuscript(
+    assert "the prespecified exposure was positively associated" in reopened.bind_manuscript(
         claims[0].placeholder
     )
 
@@ -377,6 +375,51 @@ def test_host_derives_association_direction_from_interval_against_null(
     assert [claim.direction for claim in claims] == [expected_direction]
 
 
+def test_host_association_claim_renders_registered_estimate_and_interval() -> None:
+    from easyicu.research_agent.authority.scientific_claims import (
+        bind_scientific_claim_drafts,
+        derive_scientific_claim_drafts,
+    )
+
+    drafts = derive_scientific_claim_drafts(
+        {
+            "interpretation_class": "adjusted_association",
+            "exposure": "exposure",
+            "outcome": "mortality",
+            "effect_scale": "odds_ratio",
+            "primary_estimate": 1.6058663945340168,
+            "primary_estimate_interval": [
+                1.5375641608263024,
+                1.6772027748798501,
+            ],
+            "analysis_set": "primary_cohort",
+            "analysis_role": "primary",
+            "adjustment_covariates": ["age"],
+        }
+    )
+    claim = bind_scientific_claim_drafts(
+        [drafts[0].model_dump(mode="json")],
+        step_id="04_association",
+        evidence_id="04_summary",
+    )[0]
+
+    rendered = claim.render_text()
+    assert "adjusted odds ratio, 1.60587" in rendered
+    assert "95% CI, 1.53756 to 1.6772" in rendered
+    assert "After adjustment for age" in rendered
+
+    reader = claim.render_reader_text()
+    assert reader == (
+        "In the covariate-adjusted model, the prespecified exposure was "
+        "positively associated with the study outcome in the prespecified "
+        "analysis cohort (adjusted odds ratio, 1.606; 95% CI, 1.538 to 1.677)."
+    )
+    assert all(
+        term not in reader.casefold()
+        for term in ("analysis role", "primary_cohort", "source aware")
+    )
+
+
 def test_host_derives_only_descriptive_absolute_risks_and_risk_difference() -> None:
     from easyicu.research_agent.authority.scientific_claims import (
         bind_scientific_claim_drafts,
@@ -411,6 +454,12 @@ def test_host_derives_only_descriptive_absolute_risks_and_risk_difference() -> N
     )
     assert "descriptive, unadjusted, noncausal" in rendered
     assert all(word not in rendered for word in ("associated", "independent", "caused"))
+
+    reader = " ".join(claim.render_reader_text() for claim in claims).lower()
+    assert "observed absolute risk in the prespecified group was 10%" in reader
+    assert "unadjusted risk difference between groups was 20 percentage points" in reader
+    assert "analysis role" not in reader
+    assert "bound typed cohort" not in reader
 
 
 def test_host_derives_counts_only_claims_without_inventing_intervals() -> None:

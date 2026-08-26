@@ -21,16 +21,15 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...figures.display_labels import display_label
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
 
 
 _REQUIRED_COLUMNS = {
-    "contrast": frozenset(
+    "curve": frozenset(
         {
-            "lactate_mmol_l",
-            "reference_lactate_mmol_l",
             "adjusted_odds_ratio",
             "ci_low",
             "ci_high",
@@ -42,7 +41,7 @@ _REQUIRED_COLUMNS = {
     "table:robustness_summary": frozenset(
         {"axis", "total_specs", "converged_specs", "range_low", "range_high"}
     ),
-    "table:measurement_process_audit": frozenset(
+    "measurement_process": frozenset(
         {"concept", "n_total", "measured_one_n"}
     ),
 }
@@ -59,23 +58,53 @@ def _figure_product(value: Any) -> str | None:
     return product
 
 
-def _contrast_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+def _curve_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+    reserved = {
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+    }
     matches = [
         value
         for value in inputs
         if value.startswith("table:")
-        and value.partition(":")[2].endswith("landmark_rcs_contrasts")
+        and value not in reserved
+        and value.partition(":")[2]
+        not in {"measurement_process", "measurement_process_audit"}
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def _measurement_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+    matches = [
+        value
+        for value in inputs
+        if value.startswith("table:")
+        and value.partition(":")[2] in {"measurement_process", "measurement_process_audit"}
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _exposure_columns(frame: pd.DataFrame) -> tuple[str, str]:
+    pairs = [
+        (column.removeprefix("reference_"), column)
+        for column in frame.columns
+        if column.startswith("reference_")
+        and column.removeprefix("reference_") in frame.columns
+    ]
+    if len(pairs) != 1:
+        raise ValueError("curve table requires one exposure/reference column pair")
+    return pairs[0]
 
 
 def landmark_association_figure_input_profile(
     inputs: list[str] | tuple[str, ...],
 ) -> tuple[str, ...] | None:
     values = tuple(str(value or "").strip() for value in inputs)
-    contrast = _contrast_input(values)
+    curve = _curve_input(values)
+    measurement = _measurement_input(values)
     if (
-        contrast is None
+        curve is None
+        or measurement is None
         or len(values) != 4
         or len(values) != len(set(values))
         or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(values)
@@ -114,12 +143,15 @@ def landmark_association_figure_executor_owns_step(
         or set(resolved_bindings) != set(profile)
     ):
         return False
-    contrast = _contrast_input(profile)
-    assert contrast is not None
+    curve = _curve_input(profile)
+    measurement = _measurement_input(profile)
+    assert curve is not None and measurement is not None
     return all(
         _binding_has_columns(
             resolved_bindings.get(key),
-            _REQUIRED_COLUMNS["contrast" if key == contrast else key],
+            _REQUIRED_COLUMNS[
+                "curve" if key == curve else "measurement_process" if key == measurement else key
+            ],
         )
         for key in profile
     )
@@ -185,6 +217,37 @@ def _label(value: Any) -> str:
     return re.sub(r"[_\s]+", " ", str(value or "").strip()) or "Value"
 
 
+def _measurement_state_label(value: Any) -> str:
+    token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if token in {"observed", "measured", "source_present", "with_source"}:
+        return "Measured"
+    if token in {"no_source", "not_measured", "unmeasured", "source_absent"}:
+        return "Not measured"
+    return _label(value)
+
+
+def _continuous_exposure_label(column: str) -> str:
+    """Derive a reader-facing exposure label and common unit from its field."""
+
+    unit_suffixes = {
+        "_mmol_l": "mmol/L",
+        "_mg_dl": "mg/dL",
+        "_mg_l": "mg/L",
+        "_g_dl": "g/dL",
+    }
+    token = str(column or "").strip().lower()
+    for suffix, unit in unit_suffixes.items():
+        if token.endswith(suffix):
+            name = token[: -len(suffix)]
+            return f"{_label(name).title()} ({unit})"
+    token = re.sub(r"_(max|min|mean|median|first|last|value)$", "", token)
+    clinical_names = {
+        "lact": "Lactate",
+        "bili": "Bilirubin",
+    }
+    return clinical_names.get(token, _label(token).title())
+
+
 def run_landmark_association_figure(
     *,
     out_dir: Path,
@@ -209,24 +272,29 @@ def run_landmark_association_figure(
         step_id=step_id,
         input_keys=profile,
     )
-    contrast_key = _contrast_input(profile)
-    assert contrast_key is not None
-    contrast = bound[contrast_key].frame.copy()
+    curve_key = _curve_input(profile)
+    measurement_key = _measurement_input(profile)
+    assert curve_key is not None and measurement_key is not None
+    curve = bound[curve_key].frame.copy()
     risk = bound["table:absolute_risk_context"].frame.copy()
     robustness = bound["table:robustness_summary"].frame.copy()
-    process = bound["table:measurement_process_audit"].frame.copy()
+    process = bound[measurement_key].frame.copy()
     for key, frame in (
-        (contrast_key, contrast),
+        (curve_key, curve),
         ("table:absolute_risk_context", risk),
         ("table:robustness_summary", robustness),
-        ("table:measurement_process_audit", process),
+        (measurement_key, process),
     ):
-        required = _REQUIRED_COLUMNS["contrast" if key == contrast_key else key]
+        required = _REQUIRED_COLUMNS[
+            "curve" if key == curve_key else "measurement_process" if key == measurement_key else key
+        ]
         missing = required - set(frame.columns)
         if missing:
             raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
+    exposure_column, reference_column = _exposure_columns(curve)
     _require_finite_columns(
-        contrast, ("lactate_mmol_l", "adjusted_odds_ratio", "ci_low", "ci_high")
+        curve,
+        (exposure_column, reference_column, "adjusted_odds_ratio", "ci_low", "ci_high"),
     )
     shown_risk = risk.loc[
         risk["estimate_type"].astype(str).isin(["outcome_risk", "prevalence"])
@@ -252,53 +320,167 @@ def run_landmark_association_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0), constrained_layout=True)
-
-    ax = axes[0, 0]
-    x = pd.to_numeric(contrast["lactate_mmol_l"])
-    y = pd.to_numeric(contrast["adjusted_odds_ratio"])
-    low = pd.to_numeric(contrast["ci_low"])
-    high = pd.to_numeric(contrast["ci_high"])
-    ax.errorbar(
-        x, y, yerr=[y - low, high - y], fmt="o-", color=palette["blue"], capsize=3
+    fig = plt.figure(figsize=(183 / 25.4, 132 / 25.4), constrained_layout=True)
+    grid = fig.add_gridspec(
+        2,
+        3,
+        width_ratios=(1.0, 1.0, 0.86),
+        height_ratios=(1.12, 0.88),
     )
+    ax_curve = fig.add_subplot(grid[0, :2])
+    ax_context = fig.add_subplot(grid[0, 2])
+    ax_robustness = fig.add_subplot(grid[1, :2])
+    ax_process = fig.add_subplot(grid[1, 2])
+
+    ax = ax_curve
+    display_curve = curve.sort_values(exposure_column, kind="stable")
+    x = pd.to_numeric(display_curve[exposure_column]).to_numpy(dtype=float)
+    y = pd.to_numeric(display_curve["adjusted_odds_ratio"]).to_numpy(dtype=float)
+    low = pd.to_numeric(display_curve["ci_low"]).to_numpy(dtype=float)
+    high = pd.to_numeric(display_curve["ci_high"]).to_numpy(dtype=float)
+    ax.fill_between(x, low, high, color=palette["blue_soft"], alpha=0.45, linewidth=0)
+    ax.plot(x, y, color=palette["blue"], linewidth=1.5)
     ax.axhline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
-    ax.set_xlabel("Exposure value")
+    references = pd.to_numeric(
+        display_curve[reference_column], errors="coerce"
+    ).dropna()
+    source_exposure = (
+        str(risk["exposure"].dropna().iloc[0])
+        if "exposure" in risk.columns and not risk["exposure"].dropna().empty
+        else exposure_column
+    )
+    exposure_label = _continuous_exposure_label(source_exposure)
+    if references.nunique() == 1:
+        reference = float(references.iloc[0])
+        exposure_label = (
+            f"{exposure_label[:-1]}; reference {reference:g})"
+            if exposure_label.endswith(")")
+            else f"{exposure_label} (reference {reference:g})"
+        )
+    ax.set_xlabel(exposure_label)
     ax.set_ylabel("Adjusted odds ratio")
-    ax.set_title("Landmark association contrasts", loc="left", pad=12)
-    add_panel_label(ax, "A", x=-0.12, y=1.04)
+    ax.set_title("Adjusted landmark association", loc="left", pad=7)
+    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=8.0)
 
-    ax = axes[0, 1]
-    positions = np.arange(len(shown_risk))
-    estimates = 100.0 * pd.to_numeric(shown_risk["estimate"])
-    ax.barh(positions, estimates, color=palette["orange"])
+    ax = ax_context
+    group_column = "group_value" if "group_value" in shown_risk.columns else "label"
+    display = shown_risk.copy()
+    display["group_key"] = display[group_column].astype(str)
+    group_keys = list(dict.fromkeys(display["group_key"].tolist()))
+    positions = np.arange(len(group_keys), dtype=float)
+    height = 0.34
+    series_specs = (
+        ("prevalence", "Cohort share", palette["blue_soft"], -height / 2),
+        ("outcome_risk", "Observed outcome risk", palette["orange"], height / 2),
+    )
+    for estimate_type, legend_label, color, offset in series_specs:
+        subset = display.loc[display["estimate_type"].astype(str).eq(estimate_type)]
+        if subset["group_key"].duplicated().any():
+            raise ValueError(
+                f"absolute-risk context repeats {estimate_type!r} within a group"
+            )
+        by_group = subset.set_index("group_key")
+        values = np.array(
+            [
+                100.0 * float(by_group.loc[key, "estimate"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        valid = np.isfinite(values)
+        if not valid.any():
+            continue
+        lower = np.array(
+            [
+                100.0 * float(by_group.loc[key, "ci_low"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        upper = np.array(
+            [
+                100.0 * float(by_group.loc[key, "ci_high"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        xerr = np.vstack([values[valid] - lower[valid], upper[valid] - values[valid]])
+        ax.barh(
+            positions[valid] + offset,
+            values[valid],
+            height=height,
+            color=color,
+            xerr=xerr,
+            capsize=2.2,
+            label=legend_label,
+        )
     ax.set_yticks(
-        positions, [_label(value) for value in shown_risk["label"]], fontsize=5.8
+        positions,
+        [_measurement_state_label(value) for value in group_keys],
+        fontsize=5.8,
     )
+    ax.invert_yaxis()
     ax.set_xlabel("Percent")
-    ax.set_title("Absolute-risk context", loc="left", pad=12)
-    add_panel_label(ax, "B", x=-0.12, y=1.04)
+    ax.set_title("Measurement context", loc="left", pad=7)
+    ax.legend(frameon=False, fontsize=5.4, loc="lower right")
+    add_panel_label(ax, "b", x=-0.15, y=1.04, fontsize=8.0)
 
-    ax = axes[1, 0]
-    centres = (
-        pd.to_numeric(robustness["range_low"]) + pd.to_numeric(robustness["range_high"])
-    ) / 2.0
-    errors = np.vstack(
-        [
-            centres - pd.to_numeric(robustness["range_low"]),
-            pd.to_numeric(robustness["range_high"]) - centres,
-        ]
+    ax = ax_robustness
+    total_specs = pd.to_numeric(robustness["total_specs"]).to_numpy(dtype=float)
+    converged_specs = pd.to_numeric(robustness["converged_specs"]).to_numpy(
+        dtype=float
     )
+    if (
+        (total_specs <= 0).any()
+        or (converged_specs < 0).any()
+        or (converged_specs > total_specs).any()
+    ):
+        raise ValueError("robustness specification counts do not nest")
     positions = np.arange(len(robustness))
-    ax.errorbar(
-        centres, positions, xerr=errors, fmt="o", color=palette["blue"], capsize=3
-    )
-    ax.set_yticks(positions, [_label(value) for value in robustness["axis"]])
-    ax.set_xlabel("Estimate range")
-    ax.set_title("Robustness summary", loc="left", pad=12)
-    add_panel_label(ax, "C", x=-0.12, y=1.04)
+    for position, total, converged, low_value, high_value in zip(
+        positions,
+        total_specs,
+        converged_specs,
+        pd.to_numeric(robustness["range_low"]),
+        pd.to_numeric(robustness["range_high"]),
+        strict=True,
+    ):
+        ax.plot(
+            [float(low_value), float(high_value)],
+            [position, position],
+            color=palette["blue"],
+            linewidth=2.2,
+            solid_capstyle="round",
+        )
+        ax.scatter(
+            [(float(low_value) + float(high_value)) / 2.0],
+            [position],
+            color=palette["blue"],
+            s=14,
+            zorder=3,
+        )
+        ax.text(
+            float(high_value),
+            position,
+            f"  {int(converged)}/{int(total)} fitted",
+            va="center",
+            ha="left",
+            fontsize=5.7,
+        )
+    ax.set_yticks(positions, [display_label(value) for value in robustness["axis"]])
+    if (robustness[["range_low", "range_high"]] > 0).all().all():
+        ax.axvline(1.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
+    ax.set_xlabel("Reported estimate range")
+    ax.set_title("Prespecified sensitivity analyses", loc="left", pad=7)
+    add_panel_label(ax, "c", x=-0.08, y=1.04, fontsize=8.0)
 
-    ax = axes[1, 1]
+    ax = ax_process
     denominator = pd.to_numeric(process["n_total"])
     numerator = pd.to_numeric(process["measured_one_n"])
     if (
@@ -311,12 +493,12 @@ def run_landmark_association_figure(
     positions = np.arange(len(process))
     ax.barh(positions, pct, color=palette["blue_soft"])
     ax.set_yticks(
-        positions, [_label(value) for value in process["concept"]], fontsize=5.8
+        positions, [display_label(value) for value in process["concept"]], fontsize=5.8
     )
     ax.set_xlim(0, 100)
     ax.set_xlabel("Measured at least once (%)")
-    ax.set_title("Measurement process", loc="left", pad=12)
-    add_panel_label(ax, "D", x=-0.12, y=1.04)
+    ax.set_title("Measurement availability", loc="left", pad=7)
+    add_panel_label(ax, "d", x=-0.15, y=1.04, fontsize=8.0)
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
     panels = landmark_association_composite_panels(profile)
@@ -327,7 +509,7 @@ def run_landmark_association_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=178.0,
+        height_mm=132.0,
         panels=[
             {
                 "panel_id": panel.panel_id,
@@ -336,7 +518,13 @@ def run_landmark_association_figure(
                 "claim": "This panel renders the complete registered source table without model refitting.",
                 "evidence_ids": [evidence[source] for source in panel.source_products],
                 "metadata": {
+                    "chart_type": panel.chart_type,
                     "source_products": list(panel.source_products),
+                    "estimate_geometry": (
+                        "continuous_fitted_curve_with_95ci"
+                        if panel.panel_id == "association_curve"
+                        else "direct_table_projection"
+                    ),
                     "source_data": [
                         f"{source.partition(':')[2]}_source_data.csv"
                         for source in panel.source_products

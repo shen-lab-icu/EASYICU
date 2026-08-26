@@ -9,6 +9,12 @@ from easyicu.research_agent.execution.runners.landmark_association_figure_execut
     landmark_association_figure_executor_owns_step,
     run_landmark_association_figure,
 )
+from easyicu.research_agent.contracts.figure_plan import (
+    landmark_association_composite_panels,
+)
+from easyicu.research_agent.execution.figure_plan_binding import (
+    validate_step_planned_figure_contract_binding,
+)
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
 from easyicu.research_agent.planning.figure_plan_shaping import (
     close_empty_deterministic_figure_contracts,
@@ -17,10 +23,10 @@ from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
 INPUTS = (
-    "table:generic_landmark_rcs_contrasts",
+    "table:generic_landmark_rcs_curve",
     "table:absolute_risk_context",
     "table:robustness_summary",
-    "table:measurement_process_audit",
+    "table:measurement_process",
 )
 
 
@@ -28,11 +34,11 @@ def _frames() -> dict[str, pd.DataFrame]:
     return {
         INPUTS[0]: pd.DataFrame(
             {
-                "lactate_mmol_l": [1.0, 5.0],
-                "reference_lactate_mmol_l": [2.1, 2.1],
-                "adjusted_odds_ratio": [0.76, 1.96],
-                "ci_low": [0.72, 1.89],
-                "ci_high": [0.81, 2.03],
+                "biomarker_mg_dl": [1.0, 3.0, 5.0],
+                "reference_biomarker_mg_dl": [2.1, 2.1, 2.1],
+                "adjusted_odds_ratio": [0.76, 1.10, 1.96],
+                "ci_low": [0.72, 1.00, 1.89],
+                "ci_high": [0.81, 1.21, 2.03],
             }
         ),
         INPUTS[1]: pd.DataFrame(
@@ -114,6 +120,34 @@ def test_empty_visualization_contract_closes_and_selects_owner(tmp_path: Path) -
     assert selection.analysis_kind == "landmark_association_composite_figure"
 
 
+def test_composite_owner_accepts_a_case_neutral_curve_product(tmp_path: Path) -> None:
+    generic_curve = "table:continuous_exposure_curve"
+    generic_inputs = (generic_curve, *INPUTS[1:])
+    draft = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render the four typed sources.",
+        method="visualization",
+        inputs=list(generic_inputs),
+        expected_outputs=["figure:display_suite"],
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"} for key in generic_inputs
+        ],
+    )
+    frames = _frames()
+    frames[generic_curve] = frames.pop(INPUTS[0])
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    assert landmark_association_figure_executor_owns_step(
+        draft,
+        resolved_bindings=bindings,
+    )
+
+
 def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     bindings = {}
     for key, frame in _frames().items():
@@ -131,6 +165,45 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
     assert summary["status"] == "ok"
     assert len(summary["source_data_files"]) == 4
     source = pd.read_csv(tmp_path / "outputs" / summary["source_data_files"][0])
-    assert source["source_row_index"].tolist() == [0, 1]
+    assert source["source_row_index"].tolist() == [0, 1, 2]
     assert source["source_table"].nunique() == 1
     assert (tmp_path / "outputs" / "display_suite.figure_contract.json").is_file()
+    svg = (tmp_path / "outputs" / "display_suite.svg").read_text(encoding="utf-8")
+    assert "Biomarker (mg/dL; reference 2.1)" in svg
+    assert "Cohort share" in svg
+    assert "Observed outcome risk" in svg
+    contract = pd.read_json(
+        tmp_path / "outputs" / "display_suite.figure_contract.json", typ="series"
+    )
+    assert contract["panels"][0]["metadata"]["estimate_geometry"] == (
+        "continuous_fitted_curve_with_95ci"
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "data_quality",
+    ]
+    assert [panel["metadata"]["chart_type"] for panel in contract["panels"]] == [
+        "marginal_effect_panel",
+        "dot_interval_absolute_risk",
+        "specification_grid",
+        "availability_panel",
+    ]
+    step = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render four typed sources.",
+        inputs=list(INPUTS),
+        expected_outputs=["figure:display_suite"],
+        method="visualization",
+        figure_panels=[
+            panel.bind(figure_output="figure:display_suite")
+            for panel in landmark_association_composite_panels(INPUTS)
+        ],
+    )
+    assert validate_step_planned_figure_contract_binding(
+        step=step,
+        out_dir=tmp_path / "outputs",
+        step_summary=summary,
+    ) == []

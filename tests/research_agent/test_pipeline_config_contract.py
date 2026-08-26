@@ -165,6 +165,47 @@ def test_progressive_resume_is_explicitly_development_only(
         )
 
 
+def test_locked_analysis_plan_is_digest_bound_and_development_only(
+    ra, tmp_path: Path
+) -> None:
+    plan_path = tmp_path / "analysis_plan.json"
+    digest = "b" * 64
+
+    with pytest.raises(ValueError, match="configured together"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_locked_analysis_plan_path=plan_path,
+        )
+    with pytest.raises(ValueError, match="development_diagnostic=True"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_locked_analysis_plan_path=plan_path,
+            development_locked_analysis_plan_sha256=digest,
+        )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        ra.PipelineConfig(
+            workdir=tmp_path,
+            development_diagnostic=True,
+            planner_strategy="progressive_v2",
+            development_progressive_resume_checkpoint_path=tmp_path / "cp.json",
+            development_progressive_resume_checkpoint_sha256="a" * 64,
+            development_locked_analysis_plan_path=plan_path,
+            development_locked_analysis_plan_sha256=digest,
+        )
+
+    config = ra.PipelineConfig(
+        workdir=tmp_path,
+        development_diagnostic=True,
+        development_locked_analysis_plan_path=plan_path,
+        development_locked_analysis_plan_sha256=digest,
+    )
+    pipeline = ra.ResearchAgentPipeline.from_config(config)
+    assert pipeline._config.development_locked_analysis_plan_path == plan_path
+    assert config.canonical_payload()[
+        "development_locked_analysis_plan_sha256"
+    ] == digest
+
+
 def test_pipeline_accepts_development_diagnostic_with_dev_profile(
     ra, tmp_path: Path
 ) -> None:

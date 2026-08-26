@@ -9,10 +9,22 @@ import pytest
 
 
 class _EvRec:
-    def __init__(self, evidence_id, *, produced_by_step=None, description=None):
+    def __init__(
+        self,
+        evidence_id,
+        *,
+        produced_by_step=None,
+        description=None,
+        relative_path=None,
+        kind="table",
+        metadata=None,
+    ):
         self.evidence_id = evidence_id
         self.produced_by_step = produced_by_step
         self.description = description
+        self.relative_path = relative_path
+        self.kind = kind
+        self.metadata = metadata or {}
 
 
 class _Finding:
@@ -90,6 +102,48 @@ def test_reviewer_detects_generated_association_and_missingness_evidence(ra):
     assert not any(c.topic == "missingness" for c in stats.comments)
 
 
+def test_reviewer_detects_hashed_prediction_performance_record(ra):
+    recs = [
+        _EvRec(
+            "table_step_artifact_d40d4c7a",
+            produced_by_step="05_primary_discrimination",
+            description="Table prediction_performance from the primary step.",
+            relative_path=(
+                "table_step_artifact_d40d4c7a__prediction_performance.csv"
+            ),
+        ),
+        _EvRec("missingness"),
+        _EvRec("reproducibility_envelope", kind="log"),
+    ]
+
+    report = ra.run_reviewer_round(evidence_records=recs, findings=[])
+    stats = next(c for c in report.critiques if c.reviewer == "statistician")
+    meth = next(c for c in report.critiques if c.reviewer == "methodologist")
+    assert not any(c.topic == "effect_estimate" for c in stats.comments)
+    assert not any(c.topic == "reproducibility" for c in meth.comments)
+
+
+def test_unresolved_run_blocker_prevents_accept(ra):
+    recs = [
+        _EvRec("primary_association"),
+        _EvRec("missingness"),
+        _EvRec("reproducibility_envelope"),
+    ]
+    findings = [
+        _Finding(
+            "scientific_maturity",
+            "warning",
+            "Paper authorization remains blocked.",
+            detail={"paper_authorization_allowed": False},
+        )
+    ]
+
+    report = ra.run_reviewer_round(evidence_records=recs, findings=findings)
+    meth = next(c for c in report.critiques if c.reviewer == "methodologist")
+    assert any(c.topic == "scientific_gate" for c in meth.comments)
+    assert report.aggregated_recommendation() == "major_revision"
+
+
 def test_causal_error_triggers_clinician_reject(ra):
     recs = [_EvRec("primary_association"), _EvRec("causal_audit_report")]
     findings = [
@@ -146,6 +200,7 @@ def test_pipeline_writes_reviewer_report_by_default(ra, synthetic_cohort, tmp_pa
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "out",
         llm=ra.MockLLMClient(),
+        enable_reproducibility_envelope=True,
     )
     result = pipeline.run(
         skill="association_analysis",
@@ -159,6 +214,7 @@ def test_pipeline_writes_reviewer_report_by_default(ra, synthetic_cohort, tmp_pa
     ev_ids = {r["evidence_id"] for r in manifest["evidence"]}
     assert "reviewer_report" in ev_ids
     assert "reviewer_report_json" in ev_ids
+    assert "reproducibility_envelope" in ev_ids
     findings = [f for f in manifest["findings"] if f["validator"] == "reviewer_round"]
     assert len(findings) == 1
     # Read the structured report and make sure three reviewers appear.
@@ -169,6 +225,15 @@ def test_pipeline_writes_reviewer_report_by_default(ra, synthetic_cohort, tmp_pa
         "clinician",
         "methodologist",
     }
+    methodologist = next(
+        critique
+        for critique in payload["critiques"]
+        if critique["reviewer"] == "methodologist"
+    )
+    assert not any(
+        comment["topic"] == "reproducibility"
+        for comment in methodologist["comments"]
+    )
 
 
 def test_pipeline_reviewer_can_be_disabled(ra, synthetic_cohort, tmp_path):

@@ -41,6 +41,24 @@ import re
 import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+from ..contracts.capability_ids import (
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    PHENOTYPING_ANALYSIS_KIND,
+    PHENOTYPING_CLUSTER_CAPABILITY_ID,
+    SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+    SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
+)
+from ..contracts.landmark_spline_validation import (
+    landmark_spline_runtime_receipt_valid,
+)
+from ..contracts.phenotyping_validation import (
+    phenotyping_runtime_bundle_errors,
+    phenotyping_runtime_receipt_valid,
+)
+from ..contracts.source_feasibility_validation import (
+    source_feasibility_runtime_bundle_errors,
+)
+from ..trajectory.runtime_validation import signed_trajectory_runtime_bundle_errors
 
 from .article_contract import (
     article_contract_audit_payload,
@@ -74,6 +92,7 @@ from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_result_receipt_valid,
 )
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
+from ..contracts.prediction_execution import PREDICTION_MODEL_ANALYSIS_KIND
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..gates.visual import _is_cosmetic_visual_finding
@@ -84,12 +103,28 @@ from ..planning.capability_registry import (
 from ..planning.figure_strategy import summarize_article_figure_strategy_coverage
 from ..planning.study_design import study_design_family_for_analysis_type
 from ..research_context.cohort_granularity import format_patient_count
+from ..robustness.panel import load_robustness_panel, unexecuted_locked_spec_ids
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from ..plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
+from .reviewer import run_reviewer_round
 from .result_integrity import (
     primary_result_plausibility_errors,
     primary_survival_estimate_integrity_errors,
+)
+
+
+_MANUSCRIPT_ERROR_VALIDATORS = frozenset(
+    {
+        "critic_agent",
+        "evidence_bound_writer",
+        "manuscript_gate",
+        "manuscript_language_guard",
+        "manuscript_literature",
+        "manuscript_quality",
+        "manuscript_result_sufficiency",
+        "writer_agent",
+    }
 )
 from .scientific_maturity import (
     SCIENTIFIC_MATURITY_AUDIT_REGISTRATION,
@@ -657,7 +692,14 @@ def _publication_figure_bundle_ready(
         if not strict_checkpoint:
             return True
         metadata = record.metadata or {}
-        raw_ids = metadata.get("source_evidence_ids")
+        # Publication bundles may include host-derived source-data copies in
+        # their full provenance DAG.  Only the explicitly typed checkpoint
+        # roots must belong to the active step projection; otherwise a newly
+        # generated bundle incorrectly invalidates itself because its derived
+        # run-level records are not step outputs.
+        raw_ids = metadata.get("checkpoint_source_evidence_ids")
+        if raw_ids is None:
+            raw_ids = metadata.get("source_evidence_ids")
         if isinstance(raw_ids, list):
             source_ids = {str(value) for value in raw_ids if str(value).strip()}
         else:
@@ -1000,9 +1042,29 @@ _GATE_STATE_SUPERSESSION_PATTERNS = (
         "execution_complete",
     ),
     (
+        "robustness_panel",
+        "locked robustness specifications that no step estimated",
+        "robustness_panel_complete",
+    ),
+    (
         "evidence_bound_writer",
         "strict evidence enforcement blocked manuscript generation",
         "manuscript_bound_clean",
+    ),
+    (
+        "evidence_bound_writer",
+        "bound manuscript is empty or non-substantive",
+        "manuscript_bound_clean",
+    ),
+    (
+        "writer_agent",
+        "failed before producing a manuscript scaffold",
+        "manuscript_bound_clean",
+    ),
+    (
+        "manuscript_literature",
+        "manuscript literature authority is incomplete",
+        "manuscript_literature_complete",
     ),
     (
         "manuscript_numeric_auditor",
@@ -1438,6 +1500,9 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
     {
         ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
         EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
+        PREDICTION_MODEL_ANALYSIS_KIND,
+        LANDMARK_SPLINE_ANALYSIS_KIND,
+        PHENOTYPING_ANALYSIS_KIND,
         SURVIVAL_PRIMARY_ANALYSIS_KIND,
     }
 )
@@ -1445,6 +1510,46 @@ _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
 
 def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
     """Require a complete primary effect emitted by a currently registered owner."""
+
+    from ..contracts.prediction_validation import PredictionValidationReceipt
+
+    for record in per_step_records or []:
+        if (
+            not isinstance(record, dict)
+            or record.get("deterministic_standard_analysis")
+            != LANDMARK_SPLINE_ANALYSIS_KIND
+        ):
+            continue
+        if landmark_spline_runtime_receipt_valid(record.get("step_summary")):
+            return True
+
+    for record in per_step_records or []:
+        if (
+            not isinstance(record, dict)
+            or record.get("deterministic_standard_analysis")
+            != PHENOTYPING_ANALYSIS_KIND
+        ):
+            continue
+        if phenotyping_runtime_receipt_valid(record.get("step_summary")):
+            return True
+
+    for record in per_step_records or []:
+        if (
+            not isinstance(record, dict)
+            or record.get("deterministic_standard_analysis")
+            != PREDICTION_MODEL_ANALYSIS_KIND
+        ):
+            continue
+        summary = record.get("step_summary")
+        if not isinstance(summary, Mapping) or summary.get("status") != "ok":
+            continue
+        try:
+            PredictionValidationReceipt.model_validate(
+                summary.get("prediction_validation_receipt")
+            )
+        except Exception:
+            continue
+        return True
 
     for record in per_step_records or []:
         if not isinstance(record, dict):
@@ -1737,7 +1842,16 @@ def _compute_readiness_gates(
             and not writer_probe_mode
         ),
         "manuscript_critique_passed": False,
+        "manuscript_literature_complete": False,
+        "robustness_panel_complete": False,
     }
+    current_robustness_panel = load_robustness_panel(
+        Path(run_dir) / "robustness_panel.json"
+    )
+    current_gate_state["robustness_panel_complete"] = bool(
+        current_robustness_panel is not None
+        and not unexecuted_locked_spec_ids(current_robustness_panel)
+    )
     critique_path = run_dir / "manuscript_critique.json"
     if critique_path.exists():
         try:
@@ -1747,6 +1861,18 @@ def _compute_readiness_gates(
         current_gate_state["manuscript_critique_passed"] = (
             isinstance(critique_payload, dict)
             and critique_payload.get("status") == "pass"
+        )
+    literature_audit_path = run_dir / "manuscript_literature_audit.json"
+    if literature_audit_path.exists():
+        try:
+            literature_audit_payload = json.loads(
+                literature_audit_path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            literature_audit_payload = {}
+        current_gate_state["manuscript_literature_complete"] = (
+            isinstance(literature_audit_payload, dict)
+            and literature_audit_payload.get("status") == "pass"
         )
     latest_publication_audit = _latest_publication_figure_audit_status(
         run_dir,
@@ -1772,7 +1898,7 @@ def _compute_readiness_gates(
         f.message
         for f in active_findings
         if f.severity == "error"
-        and f.validator in {"evidence_bound_writer", "critic_agent"}
+        and f.validator in _MANUSCRIPT_ERROR_VALIDATORS
     ]
     non_manuscript_errors = [
         f.message
@@ -1782,8 +1908,7 @@ def _compute_readiness_gates(
         and f.validator
         not in {
             "manuscript_numeric_auditor",
-            "evidence_bound_writer",
-            "critic_agent",
+            *_MANUSCRIPT_ERROR_VALIDATORS,
             # Run-level replan-budget latch: collected separately (from the
             # full findings list, not active_findings) so a step-id-shaped
             # replan trigger can never let supersession drop it.
@@ -1863,12 +1988,43 @@ def _compute_readiness_gates(
             f"{capability_assessment.reason}"
         ]
     )
+    phenotyping_validation_errors = (
+        phenotyping_runtime_bundle_errors(per_step_records or [])
+        if capability_assessment.capability_id
+        == PHENOTYPING_CLUSTER_CAPABILITY_ID
+        else []
+    )
+    source_feasibility_validation_errors = (
+        source_feasibility_runtime_bundle_errors(
+            plan=plan,
+            records=per_step_records or [],
+            run_dir=run_dir,
+        )
+        if plan is not None
+        and capability_assessment.capability_id
+        == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
+        else []
+    )
+    signed_trajectory_validation_errors = (
+        signed_trajectory_runtime_bundle_errors(
+            plan=plan,
+            records=per_step_records or [],
+            run_dir=run_dir,
+        )
+        if plan is not None
+        and capability_assessment.capability_id
+        == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID
+        else []
+    )
     base_analysis_errors = (
         non_manuscript_errors
         + blocked_outcome_errors
         + plausibility_errors
         + survival_integrity_errors
         + scientific_capability_errors
+        + phenotyping_validation_errors
+        + source_feasibility_validation_errors
+        + signed_trajectory_validation_errors
     )
     selected_capability = get_capability_by_id(capability_assessment.capability_id)
     _no_det_primary_expected = bool(
@@ -1942,9 +2098,7 @@ def _compute_readiness_gates(
         display_suite=display_suite,
         publication_bundle=publication,
     )
-    scientific_maturity_gates = scientific_maturity_readiness_gates(
-        scientific_maturity
-    )
+    scientific_maturity_gates = scientific_maturity_readiness_gates(scientific_maturity)
     # Read the FULL findings list, not `active_findings`: supersession retires a
     # finding when its step later succeeds, and a dropped step never ran, so no
     # later success can speak for it. What *can* speak for it is a later plan
@@ -2259,6 +2413,17 @@ def write_readiness_artifacts(
     )
     artifact_paths["author_review_note"] = str(author_review_path.relative_to(run_dir))
 
+    quality_audit_path = run_dir / "manuscript_quality_audit.json"
+    if quality_audit_path.exists():
+        artifact_paths["manuscript_quality_audit"] = str(
+            quality_audit_path.relative_to(run_dir)
+        )
+    reader_manuscript_path = run_dir / "manuscript_reader.md"
+    if reader_manuscript_path.exists():
+        artifact_paths["manuscript_reader"] = str(
+            reader_manuscript_path.relative_to(run_dir)
+        )
+
     manuscript_ready_path = run_dir / "manuscript_ready.md"
     if gates["manuscript_ready"] and manuscript_path.exists():
         manuscript_ready_path.write_text(
@@ -2292,22 +2457,7 @@ def write_readiness_artifacts(
     )
     artifact_paths["figure_gallery"] = str(figure_gallery_path.relative_to(run_dir))
 
-    run_status_payload["canonical_outputs"] = {
-        **artifact_paths,
-        **canonical_figure_paths,
-    }
-    run_status_path.write_text(
-        json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-
     registrations = [
-        (
-            "run_status",
-            "log",
-            "Fail-closed run readiness gate summary.",
-            run_status_path,
-        ),
         (
             "evidence_audit",
             "statistic",
@@ -2373,6 +2523,113 @@ def write_readiness_artifacts(
                 producer="pipeline",
                 generation_mode="system",
             )
+
+    # The write-phase reviewer necessarily runs before the final readiness and
+    # scientific-maturity gates exist.  Keep that report as drafting feedback,
+    # then emit a distinct post-readiness report that inherits the final gate
+    # verdict without feeding it back into maturity (which would be circular).
+    # Runs with the optional reviewer disabled do not gain a surprise reviewer
+    # artifact here.
+    if evidence.get("reviewer_report_json") is not None:
+        final_gate_finding = ValidationFinding(
+            validator="final_readiness",
+            severity=("info" if gates["paper_authorized"] else "error"),
+            message=(
+                "Final readiness and scientific-maturity gates authorize the "
+                "current run for paper use."
+                if gates["paper_authorized"]
+                else "Final readiness or scientific-maturity gates do not "
+                "authorize the current run for paper use."
+            ),
+            evidence_ids=["run_status", "scientific_maturity_audit"],
+            detail={
+                "analysis_validated": bool(gates["analysis_validated"]),
+                "paper_authorization_allowed": bool(gates["paper_authorized"]),
+                "scientific_maturity_article_grade": bool(
+                    gates["scientific_maturity_article_grade"]
+                ),
+                "scientific_maturity_status": gates["scientific_maturity_status"],
+                "scientific_maturity_score": gates["scientific_maturity_score"],
+            },
+        )
+        final_reviewer_report = run_reviewer_round(
+            evidence_records=evidence.current_verified_records(per_step_records),
+            findings=[*findings, final_gate_finding],
+            round_index=1,
+        )
+        final_reviewer_md = run_dir / "reviewer_report_post_readiness.md"
+        final_reviewer_json = run_dir / "reviewer_report_post_readiness.json"
+        final_reviewer_md.write_text(
+            final_reviewer_report.to_markdown(), encoding="utf-8"
+        )
+        final_reviewer_json.write_text(
+            json.dumps(
+                final_reviewer_report.to_json(),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+        final_md_record = evidence.register_file(
+            kind="log",
+            description=(
+                "Authoritative simulated reviewer report reconciled against "
+                "final readiness and scientific-maturity gates."
+            ),
+            source_path=final_reviewer_md,
+            evidence_id="reviewer_report_post_readiness",
+            aliases=["reviewer_report_post_readiness"],
+            producer="pipeline",
+            generation_mode="system",
+            on_sha_change="new_id",
+        )
+        final_json_record = evidence.register_file(
+            kind="log",
+            description=(
+                "Structured authoritative reviewer report reconciled against "
+                "final readiness and scientific-maturity gates."
+            ),
+            source_path=final_reviewer_json,
+            evidence_id="reviewer_report_post_readiness_json",
+            aliases=["reviewer_report_post_readiness_json"],
+            producer="pipeline",
+            generation_mode="system",
+            on_sha_change="new_id",
+        )
+        artifact_paths["reviewer_report_post_readiness"] = str(
+            final_reviewer_md.relative_to(run_dir)
+        )
+        artifact_paths["reviewer_report_post_readiness_json"] = str(
+            final_reviewer_json.relative_to(run_dir)
+        )
+        gates["post_readiness_reviewer_evidence_ids"] = [
+            final_md_record.evidence_id,
+            final_json_record.evidence_id,
+        ]
+        gates["post_readiness_reviewer_recommendation"] = (
+            final_reviewer_report.aggregated_recommendation()
+        )
+
+    run_status_payload["gates"] = gates
+    run_status_payload["canonical_outputs"] = {
+        **artifact_paths,
+        **canonical_figure_paths,
+    }
+    run_status_path.write_text(
+        json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    if evidence.get("run_status") is None:
+        evidence.register_file(
+            kind="log",
+            description="Fail-closed run readiness gate summary.",
+            source_path=run_status_path,
+            evidence_id="run_status",
+            aliases=["run_status"],
+            producer="pipeline",
+            generation_mode="system",
+        )
 
     return gates, artifact_paths
 

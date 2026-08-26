@@ -81,6 +81,60 @@ def test_association_kind_forces_strobe(monkeypatch, tmp_path):
     assert captured.get("reporting_checklist_names") == ["strobe"]
 
 
+def test_planner_only_human_review_pause_is_a_completed_planning_outcome(
+    monkeypatch, tmp_path
+):
+    import easyicu.research_agent as rapkg
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewPending,
+        HumanReviewRequest,
+    )
+    import tools.run_research_agent_bench as bench
+
+    run_dir = tmp_path / "run_demo"
+    run_dir.mkdir()
+    (run_dir / "analysis_plan.json").write_text("{}\n", encoding="utf-8")
+    (run_dir / "human_review_checkpoint.json").write_text("{}\n", encoding="utf-8")
+    request = HumanReviewRequest.create(
+        kind="protocol_claim",
+        authority_sha256="a" * 64,
+        summary="Review the locked plan.",
+        payload={"run_id": "run_demo"},
+    )
+
+    class PausingPipeline:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, **kwargs):
+            return HumanReviewPending(
+                run_id="run_demo",
+                thread_id="thread_demo",
+                run_dir=str(run_dir),
+                requests=(request,),
+            )
+
+    monkeypatch.setattr(rapkg, "ResearchAgentPipeline", PausingPipeline)
+
+    score = bench._run_one_arm(
+        item=_item("descriptive_association"),
+        cohort=SimpleNamespace(columns=["age", "death"]),
+        workdir=tmp_path,
+        disable_icu_context=False,
+        label="aware",
+        llm=object(),
+        pipeline_options={"planner_only": True},
+    )
+
+    assert score["status"] == "human_review_pending"
+    assert score["planner_only_complete"] is True
+    assert score["execution_complete"] is False
+    assert bench._score_execution_failures({"aware": score}) == []
+
+    hard_stop = SimpleNamespace(finish=lambda **kwargs: pytest.fail("must stay paused"))
+    bench._finish_task_on_execution_outcome(hard_stop, {"aware": score})
+
+
 def test_scientific_contract_binds_primary_cohort_mode(monkeypatch, tmp_path):
     captured = _run_and_capture(
         monkeypatch,
@@ -269,3 +323,72 @@ def test_question_exposed_exposure_label_is_typed_context_metadata(
 
     assert captured["primary_exposure"] == "lact_max"
     assert captured["concept_descriptions"] == {"lact_max": "lactate"}
+
+
+def test_external_scientific_authority_reaches_context_builder(monkeypatch, tmp_path):
+    from easyicu.research_agent.contracts.endpoint import EndpointSpec
+
+    item = _item("descriptive_association")
+    item.exclusion_criteria = ["Exclude events before the landmark."]
+    item.endpoint = EndpointSpec(
+        name="death",
+        kind="binary",
+        absence_semantics="no_absent_rows",
+        levels=[0, 1],
+    )
+    item.concept_descriptions = {
+        "death": "Documented in-hospital mortality through discharge."
+    }
+    item.user_preferences = {
+        "covariates": ["age"],
+        "covariate_selection": "exact",
+        "covariate_rationales": {
+            "age": "Age is a baseline confounder of exposure and outcome."
+        },
+        "covariate_temporal_roles": {"age": "baseline_static"},
+    }
+    item.time_columns = ["followup_hour"]
+    item.outcome_columns = ["death"]
+    item.time_windows = [
+        {
+            "name": "followup",
+            "anchor": "icu_admission",
+            "start_hours": 24.0,
+            "end_hours": 168.0,
+            "rationale": "Prespecified post-landmark follow-up.",
+        }
+    ]
+
+    import easyicu.research_agent as rapkg
+    import tools.run_research_agent_bench as bench
+
+    captured: dict = {}
+
+    class CapturePipeline:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(workdir=str(tmp_path))
+
+    monkeypatch.setattr(rapkg, "ResearchAgentPipeline", CapturePipeline)
+    monkeypatch.setattr(bench, "_score_arm", lambda **kwargs: {})
+
+    bench._run_one_arm(
+        item=item,
+        cohort=SimpleNamespace(columns=["age", "death"]),
+        workdir=tmp_path,
+        disable_icu_context=False,
+        label="aware",
+        llm=object(),
+    )
+
+    assert captured["endpoint"] == item.endpoint
+    assert captured["exclusion_criteria"] == item.exclusion_criteria
+    assert captured["concept_descriptions"] == item.concept_descriptions
+    assert captured["user_preferences"]["covariate_selection"] == "exact"
+    assert "K1" in captured["user_preferences"]["data_constraints"]
+    assert captured["time_columns"] == ["followup_hour"]
+    assert captured["outcome_columns"] == ["death"]
+    assert captured["time_windows"][0]["anchor"] == "icu_admission"

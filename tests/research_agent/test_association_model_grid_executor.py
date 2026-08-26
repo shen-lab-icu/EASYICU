@@ -16,8 +16,10 @@ from benchmarks.figure2_canonical9.e1_scientific_acceptance import (
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     AssociationModelGridRuntimeAuthority,
     CurrentCaseScientificAuthorityError,
+    build_current_case_scientific_runtime_authority,
     load_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.plan_input_closure import (
     close_measurement_companion_inputs,
 )
@@ -37,6 +39,10 @@ from easyicu.research_agent.contracts.declared_product import (
 )
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
+)
+from easyicu.research_agent.orchestration.resume_plan_migration import (
+    LegacyResumePlanMigrationError,
+    _migrate_resume_scientific_runtime_binding,
 )
 from easyicu.research_agent.plan_utils import effect_output_authorized
 from easyicu.research_agent.schema import (
@@ -155,9 +161,119 @@ def _cohort(n: int = 800) -> pd.DataFrame:
             "charlson_max": charlson,
             "death": death,
             "death_time": death_time,
+            "los_icu": rng.uniform(0.25, 8.0, n),
             "icu_readmission": readmission,
         }
     )
+
+
+def test_landmark_missing_observation_duration_is_excluded_not_imputed() -> None:
+    _projection, authority, plan, _findings = _authority_and_plan()
+    landmark = next(
+        item
+        for item in authority.variants
+        if item.analysis_id == "landmark_alive_at_24h"
+    )
+    frame = _cohort(80)
+    frame.loc[0, "los_icu"] = float("nan")
+    from easyicu.research_agent.execution.runners.association_model_grid_executor import (
+        _eligibility_mask,
+    )
+
+    mask = _eligibility_mask(
+        frame,
+        variant=landmark,
+        outcome_column=plan.steps[0].model_requirements[0].outcome,
+    )
+
+    assert bool(mask.loc[0]) is False
+
+
+def _saved_plan_missing_one_nonlinear_parent():
+    _projection, authority, plan, _findings = _authority_and_plan()
+    parent = plan.steps[0]
+    requirement = parent.model_requirements[0]
+    reduced = requirement.model_copy(
+        update={
+            "covariates": [
+                value for value in requirement.covariates if value != "charlson_max"
+            ],
+            "model_terms": [
+                value
+                for value in requirement.model_terms
+                if value.name != "charlson_max"
+            ],
+        }
+    )
+    saved = plan.model_copy(
+        update={
+            "steps": [
+                parent.model_copy(update={"model_requirements": [reduced]}),
+                *plan.steps[1:],
+            ]
+        }
+    )
+    return authority, saved
+
+
+def test_resume_recompiles_signed_binding_only_inside_requested_replay_cut(
+    tmp_path,
+):
+    authority, saved = _saved_plan_missing_one_nonlinear_parent()
+    evidence = EvidenceStore(tmp_path)
+
+    migrated, path, changed_ids, findings = (
+        _migrate_resume_scientific_runtime_binding(
+            plan=saved,
+            resume_state={"per_step_records": []},
+            resume_from_step_id=saved.steps[0].step_id,
+            scientific_runtime_authorities=ScientificRuntimeAuthorities(
+                current_case=authority,
+                trajectory=None,
+            ),
+            run_dir=tmp_path,
+            evidence=evidence,
+            prompt_version="test",
+            llm_signature="mock",
+        )
+    )
+
+    assert path == tmp_path / f"analysis_plan_revision_{migrated.revision}.json"
+    assert changed_ids == (saved.steps[0].step_id,)
+    assert "charlson_max" in migrated.steps[0].model_requirements[0].covariates
+    authority.validate_plan(migrated)
+    assert findings
+    record = evidence.get(f"analysis_plan_revision_{migrated.revision}")
+    assert record is not None
+    assert record.metadata["reason"] == "restore_signed_scientific_runtime_binding"
+
+
+def test_resume_refuses_signed_binding_that_would_change_a_completed_parent(
+    tmp_path,
+):
+    authority, saved = _saved_plan_missing_one_nonlinear_parent()
+
+    with pytest.raises(
+        LegacyResumePlanMigrationError,
+        match="would change completed steps",
+    ):
+        _migrate_resume_scientific_runtime_binding(
+            plan=saved,
+            resume_state={
+                "per_step_records": [
+                    {"step_id": saved.steps[0].step_id, "status": "ok"}
+                ]
+            },
+            resume_from_step_id=saved.steps[1].step_id,
+            scientific_runtime_authorities=ScientificRuntimeAuthorities(
+                current_case=authority,
+                trajectory=None,
+            ),
+            run_dir=tmp_path,
+            evidence=EvidenceStore(tmp_path),
+            prompt_version="test",
+            llm_signature="mock",
+        )
 
 
 def test_signed_standard_selection_authorizes_grid_effect_outputs_only_at_runtime():
@@ -306,6 +422,44 @@ def test_host_compiles_the_exact_grid_and_the_real_router_claims_it() -> None:
         authority.validate_plan(drifted)
 
 
+def test_host_inserts_missing_grid_without_repurposing_existing_sensitivity() -> None:
+    _, authority, bound, _ = _authority_and_plan()
+    parent = bound.steps[0]
+    legacy_sensitivity = bound.steps[1].model_copy(
+        update={
+            "step_id": "legacy_robustness",
+            "intent": "Retain the pre-existing robustness analysis.",
+            "expected_outputs": ["table:legacy_robustness"],
+            "method": "legacy_robustness",
+            "scientific_capability": None,
+            "icu_rule_refs": [],
+            "sensitivity_spec_ids": ["legacy_complete_case"],
+            "input_consumption_contracts": [],
+        }
+    )
+    draft = bound.model_copy(update={"steps": [parent, legacy_sensitivity]})
+
+    rebound = authority.bind_plan(draft)
+
+    assert [step.step_id for step in rebound.steps] == [
+        parent.step_id,
+        f"host_association_model_grid_{authority.execution_contract_sha256[:12]}",
+        legacy_sensitivity.step_id,
+    ]
+    assert rebound.steps[2] == legacy_sensitivity
+    assert rebound.steps[1].expected_outputs == [authority.output_product]
+    assert rebound.steps[1].literature_citation_keys == parent.literature_citation_keys
+    assert rebound.steps[1].literature_design_bindings == (
+        parent.literature_design_bindings
+    )
+    authority.validate_plan(rebound)
+
+    rebound_again = authority.bind_plan(rebound)
+    assert [step.step_id for step in rebound_again.steps] == [
+        step.step_id for step in rebound.steps
+    ]
+
+
 def test_runtime_grid_rebinds_after_generic_measurement_input_closure() -> None:
     _, authority, bound, _ = _authority_and_plan()
     context = ResearchContext(
@@ -346,6 +500,38 @@ def test_runtime_grid_rebinds_after_generic_measurement_input_closure() -> None:
     }
 
 
+def test_grid_compiles_every_nonlinear_source_into_the_linear_parent() -> None:
+    _, authority, bound, _ = _authority_and_plan()
+    parent = bound.steps[0]
+    requirement = parent.model_requirements[0]
+    reduced = requirement.model_copy(
+        update={
+            "covariates": [name for name in requirement.covariates if name != "charlson_max"],
+            "model_terms": [
+                term for term in requirement.model_terms if term.name != "charlson_max"
+            ],
+        }
+    )
+    draft = bound.model_copy(
+        update={
+            "steps": [
+                parent.model_copy(update={"model_requirements": [reduced]}),
+                bound.steps[1],
+            ]
+        }
+    )
+
+    rebound = authority.bind_plan(draft)
+    rebound_requirement = rebound.steps[0].model_requirements[0]
+
+    assert "charlson_max" in rebound_requirement.covariates
+    assert any(
+        term.name == "charlson_max" and term.coding == "continuous"
+        for term in rebound_requirement.model_terms
+    )
+    authority.validate_plan(rebound)
+
+
 def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(
     tmp_path: Path,
 ) -> None:
@@ -376,9 +562,21 @@ def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(
     assert table.loc[0, "n_stays"] == len(frame)
     assert table.loc[1, "n_stays"] < len(frame)
     assert table.loc[2, "n_stays"] < len(frame)
+    assert set(table["exposure"]) == {"sep3_sofa2_max"}
+    assert table["is_reference"].sum() == 1
+    assert table.loc[table["is_reference"], "analysis_id"].item() == (
+        summary["scientific_runtime_receipt"]["reference_variant_id"]
+    )
+    assert set(table["outcome"]) == {"death"}
+    assert set(table["adjustment_covariates"]) == {"age;sex;charlson_max"}
+    assert table["fitted_covariates"].str.len().gt(0).all()
+    assert table["landmark_hours"].notna().any()
     assert summary["basis_receipts"]["flexible_age_charlson"]
     assert summary["scientific_runtime_receipt"]["adapter"] == (
         "adjusted_association_executor/statsmodels"
+    )
+    assert summary["scientific_runtime_receipt"]["adjustment_covariates"] == (
+        _COVARIATES
     )
     selection_record = {
         "deterministic_standard_analysis": "association_model_grid",
@@ -423,3 +621,68 @@ def test_grid_reuses_the_parent_fit_and_emits_all_signed_variants(
             resolved_inputs=manifest,
             step_id=plan.steps[1].step_id,
         )
+
+
+def test_grid_can_compare_a_prespecified_exposure_definition(
+    tmp_path: Path,
+) -> None:
+    projection, original, draft, _ = _authority_and_plan()
+    body = original.model_dump(
+        mode="json", exclude={"execution_contract_sha256"}
+    )
+    reference = body["variants"][0]
+    alternate = {
+        **reference,
+        "analysis_id": "alternate_definition",
+        "exposure_column": "sep3_sofa2_alternate",
+        "metadata": {
+            **reference["metadata"],
+            "readmission_restriction": "alternate exposure definition",
+        },
+    }
+    body["variants"] = [reference, alternate]
+    body["reference_variant_id"] = reference["analysis_id"]
+    authority = build_current_case_scientific_runtime_authority(body)
+    assert isinstance(authority, AssociationModelGridRuntimeAuthority)
+    plan = authority.bind_plan(draft)
+    frame = _cohort()
+    frame["sep3_sofa2_alternate"] = frame["sep3_sofa2_max"]
+    run_dir, manifest = _parent_binding(
+        tmp_path=tmp_path,
+        frame=frame,
+        authority=authority,
+        plan=plan,
+    )
+
+    summary = run_association_model_grid(
+        frame=frame,
+        cohort_path=Path("cohort.parquet"),
+        authority=authority,
+        runtime_projection_sha256=projection["runtime_projection_sha256"],
+        parent_requirement=plan.steps[0].model_requirements[0],
+        out_dir=tmp_path / "outputs",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=plan.steps[1].step_id,
+    )
+
+    table = pd.read_csv(tmp_path / "outputs" / "e1_scientific_sensitivity.csv")
+    assert table["exposure"].tolist() == [
+        "sep3_sofa2_max",
+        "sep3_sofa2_alternate",
+    ]
+    assert summary["scientific_runtime_receipt"]["variant_exposures"] == {
+        reference["analysis_id"]: "sep3_sofa2_max",
+        "alternate_definition": "sep3_sofa2_alternate",
+    }
+
+
+def test_grid_reference_cannot_replace_the_parent_exposure() -> None:
+    _projection, original, _draft, _ = _authority_and_plan()
+    body = original.model_dump(
+        mode="json", exclude={"execution_contract_sha256"}
+    )
+    body["variants"][0]["exposure_column"] = "different_exposure"
+
+    with pytest.raises(ValueError, match="reference variant must retain"):
+        build_current_case_scientific_runtime_authority(body)

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ..canonical_json import canonical_sha256
 from ..contracts.product_identity import is_canonical_typed_product_token
+from .design_selection import ResearchDesignSelection
 
 
 ProgressiveModuleId = Literal[
@@ -419,6 +420,10 @@ class ProgressivePlanOutline(BaseModel):
     )
     analysis_type: str = Field(min_length=1, max_length=128)
     cohort_objective: str = Field(min_length=8, max_length=600)
+    design_selection: Optional[ResearchDesignSelection] = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     steps: list[ProgressiveOutlineStep] = Field(min_length=1, max_length=24)
     rationale: str = Field(min_length=8, max_length=1200)
 
@@ -688,6 +693,10 @@ class ProgressivePlanSkeleton(BaseModel):
         "easyicu.progressive_plan_skeleton/1"
     )
     analysis_type: str = Field(min_length=1, max_length=128)
+    design_selection: Optional[ResearchDesignSelection] = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     cohort: ProgressiveCohortIntent
     display_labels: list[ProgressiveDisplayLabel] = Field(default_factory=list)
     robustness_intents: list[ProgressiveRobustnessIntent] = Field(default_factory=list)

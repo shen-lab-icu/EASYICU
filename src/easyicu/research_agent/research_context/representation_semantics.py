@@ -27,6 +27,12 @@ _RELATIVE_TIME_TRANSFORMS = frozenset(
     }
 )
 _MEAN_TRANSFORMS = frozenset({"window_numeric_mean"})
+_PRECOMPUTED_NUMERIC_TRANSFORMS = {
+    "window_numeric_first": "first non-null value",
+    "window_numeric_max": "maximum value",
+    "window_numeric_mean": "arithmetic mean",
+    "window_numeric_min": "minimum value",
+}
 
 
 def _without_base_score_caveats(values: Sequence[str]) -> list[str]:
@@ -122,6 +128,28 @@ def _mean_representation(descriptor: ConceptDescriptor) -> ConceptDescriptor:
     )
 
 
+def _precomputed_numeric_representation(
+    descriptor: ConceptDescriptor, *, transform: str
+) -> ConceptDescriptor:
+    label = _PRECOMPUTED_NUMERIC_TRANSFORMS[transform]
+    caveats = list(descriptor.clinical_caveats)
+    caveat = (
+        f"This materialized column is the precomputed {label} within its "
+        "declared analysis window. Do not reinterpret it using the source "
+        "concept's default aggregation policy."
+    )
+    if caveat not in caveats:
+        caveats.append(caveat)
+    return descriptor.model_copy(
+        update={
+            # The temporal reduction has already happened upstream. Publishing
+            # a second aggregation default here made *_max columns look like
+            # median columns in reporting and could invite double aggregation.
+            "allowed_aggregations": [AggregationRule.NONE],
+            "aggregation_default": AggregationRule.NONE,
+            "clinical_caveats": caveats,
+        }
+    )
 def compile_wide_representation_semantics(
     descriptors: Sequence[ConceptDescriptor],
 ) -> list[ConceptDescriptor]:
@@ -133,7 +161,20 @@ def compile_wide_representation_semantics(
         if transform in _RELATIVE_TIME_TRANSFORMS:
             compiled.append(_time_representation(descriptor, transform=transform))
         elif transform in _MEAN_TRANSFORMS:
-            compiled.append(_mean_representation(descriptor))
+            mean_descriptor = _mean_representation(descriptor)
+            compiled.append(
+                _precomputed_numeric_representation(
+                    mean_descriptor,
+                    transform=transform,
+                )
+            )
+        elif transform in _PRECOMPUTED_NUMERIC_TRANSFORMS:
+            compiled.append(
+                _precomputed_numeric_representation(
+                    descriptor,
+                    transform=transform,
+                )
+            )
         else:
             compiled.append(descriptor)
     return compiled

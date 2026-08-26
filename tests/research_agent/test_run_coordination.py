@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from contextvars import ContextVar
+from types import SimpleNamespace
 
 import pytest
 
@@ -320,7 +321,51 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
     )
     assert 'stop_failure_roles=frozenset({"primary"})' in phase_source
     assert "or pipeline._submission_profile_name is not None" in phase_source
+    assert "def current_plan() -> AnalysisPlan:" in phase_source
+    assert phase_source.count("plan_supplier=current_plan") == 2
     assert (
         "if pipeline._enable_visual_qa and requested_stop_after_step_id is None:"
         in phase_source
     )
+
+
+def test_step_checkpoint_is_also_a_write_phase_boundary() -> None:
+    from easyicu.research_agent.pipeline import ResearchAgentPipeline
+
+    source = inspect.getsource(ResearchAgentPipeline.run)
+    assert "stop_after_analysis = bool(stop_after_analysis or stop_after_step_id)" in source
+
+
+def test_execute_transition_reads_the_live_replanned_plan() -> None:
+    from easyicu.research_agent.execution.phase import _step_resolve_run_transition
+
+    live = {"plan": "revision_3"}
+    observed: list[str] = []
+
+    def maybe_replan(**kwargs):
+        observed.append(kwargs["current_plan"])
+        return kwargs["current_plan"]
+
+    transition = _step_resolve_run_transition(
+        _step("01"),
+        {"status": "ok", "generation_mode": "llm"},
+        True,
+        run_input_authority_state=SimpleNamespace(corrupted=False),
+        emit_progress=lambda *args, **kwargs: None,
+        run_id="run",
+        requested_stop_after_step_id=None,
+        _maybe_directed_model_replan=lambda **kwargs: None,
+        _replan_state={},
+        pipeline=SimpleNamespace(
+            _enable_replanning=True,
+            _planner_strategy="progressive_v2",
+        ),
+        _maybe_replan=maybe_replan,
+        plan_supplier=lambda: live["plan"],
+        probe_summary=None,
+        per_step_records=[],
+    )
+
+    assert observed == ["revision_3"]
+    assert transition.kind == "replan"
+    assert transition.revised_plan == "revision_3"

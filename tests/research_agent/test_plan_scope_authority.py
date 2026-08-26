@@ -200,6 +200,35 @@ def test_revision_is_runtime_history_not_scientific_scope() -> None:
     )
 
 
+def test_legacy_missing_empty_literature_decisions_matches_but_nonempty_does_not() -> (
+    None
+):
+    expected = [
+        "question",
+        "association_study",
+        '{"design_selection":{"candidates":['
+        '{"design_id":"a","literature_design_decisions":[]}]}}',
+        "rationale",
+    ]
+    legacy = [
+        "question",
+        "association_study",
+        '{"design_selection":{"candidates":[{"design_id":"a"}]}}',
+        "rationale",
+    ]
+    nonempty = [
+        "question",
+        "association_study",
+        '{"design_selection":{"candidates":['
+        '{"design_id":"a","literature_design_decisions":['
+        '{"dimension":"missing_data"}]}]}}',
+        "rationale",
+    ]
+
+    assert plan_scope._plan_scope_signatures_match(legacy, expected)
+    assert not plan_scope._plan_scope_signatures_match(nonempty, expected)
+
+
 def test_plan_display_labels_reject_conflicting_normalized_keys() -> None:
     with pytest.raises(ValueError, match="conflicting normalized keys"):
         AnalysisPlan(

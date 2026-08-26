@@ -5,6 +5,8 @@ from easyicu.research_agent.literature import (
 )
 from easyicu.research_agent.reporting.manuscript_literature import (
     audit_manuscript_literature,
+    remove_sentences_with_unknown_literature_keys,
+    repair_evidence_ids_mistyped_as_literature,
     repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
@@ -82,8 +84,29 @@ def test_writer_digest_exposes_exact_key_and_relevance() -> None:
     assert "direct_comparator" in digest
     assert "method:" in digest
     assert "Run-bound typed methodology applications" in digest
+    assert "not evidence that the method was executed" in digest
     assert "step=01_primary_description" in digest
     assert "design_elements=reporting" in digest
+
+
+def test_unknown_literature_sentence_is_deleted_without_source_substitution() -> None:
+    manuscript = (
+        "## Discussion\n\n"
+        "The supported comparison remained cautious [@paper_2024]. "
+        "An unsupported mechanism was asserted [@invented_2025]. "
+        "The reporting boundary followed guidance [@strobe_2007]."
+    )
+
+    cleaned, keys, count = remove_sentences_with_unknown_literature_keys(
+        manuscript, _bundle()
+    )
+
+    assert keys == ["invented_2025"]
+    assert count == 1
+    assert "unsupported mechanism" not in cleaned
+    assert "[@paper_2024]" in cleaned
+    assert "[@strobe_2007]" in cleaned
+    assert "invented_2025" not in cleaned
 
 
 def test_manuscript_literature_audit_rejects_aggregate_only_or_unknown() -> None:
@@ -96,6 +119,24 @@ def test_manuscript_literature_audit_rejects_aggregate_only_or_unknown() -> None
     unknown = audit_manuscript_literature("Prior work [@invented].", _bundle())
     assert unknown.status == "blocked"
     assert unknown.unknown_keys == ["invented"]
+
+
+def test_evidence_id_mistyped_as_literature_is_demoted_not_promoted() -> None:
+    manuscript = (
+        "The study used typed context {[@research_context]} "
+        "{evidence:research_context}. Prior work was invented [@invented]."
+    )
+
+    repaired, repairs = repair_evidence_ids_mistyped_as_literature(
+        manuscript,
+        _bundle(),
+        evidence_ids=("research_context",),
+    )
+
+    assert repairs == ["research_context"]
+    assert "[@research_context]" not in repaired
+    assert "{evidence:research_context}" in repaired
+    assert "[@invented]" in repaired
 
 
 def test_manuscript_literature_audit_accepts_bound_exact_key() -> None:
@@ -113,6 +154,66 @@ The result is compared with the retained ICU study [@paper_2024].
     assert audit.status == "pass"
     assert audit.cited_keys == ["paper_2024", "strobe_2007"]
     assert audit.section_cited_keys["methods"] == ["strobe_2007"]
+
+
+def test_manuscript_literature_audit_accepts_grouped_pandoc_citations() -> None:
+    manuscript = """## Introduction
+Prior work defines the comparator [@paper_2024; @strobe_2007].
+
+## Methods
+The reporting contract followed RECORD and STROBE [@record_2015; @strobe_2007].
+
+## Discussion
+The result is compared with prior ICU work [@paper_2024; @strobe_2007].
+"""
+    bundle = _bundle().model_copy(
+        update={
+            "citations": [
+                *_bundle().citations,
+                CitationRecord(
+                    key="record_2015",
+                    title="The RECORD statement",
+                    year="2015",
+                    relevance="Methodology: routinely collected data reporting.",
+                ),
+            ]
+        }
+    )
+
+    audit = audit_manuscript_literature(manuscript, bundle)
+
+    assert audit.status == "pass"
+    assert audit.section_cited_keys["methods"] == ["record_2015", "strobe_2007"]
+
+
+def test_manuscript_literature_audit_rejects_unknown_key_in_grouped_citation() -> None:
+    manuscript = """## Introduction
+Prior work [@paper_2024; @invented_2026].
+
+## Methods
+Reporting followed STROBE [@strobe_2007].
+
+## Discussion
+Comparison used the retained study [@paper_2024].
+"""
+
+    audit = audit_manuscript_literature(manuscript, _bundle())
+
+    assert audit.status == "blocked"
+    assert audit.unknown_keys == ["invented_2026"]
+
+
+def test_evidence_id_is_removed_from_grouped_literature_citation() -> None:
+    manuscript = "Clinical context [@paper_2024; @research_context]."
+
+    repaired, repairs = repair_evidence_ids_mistyped_as_literature(
+        manuscript,
+        _bundle(),
+        evidence_ids=("research_context",),
+    )
+
+    assert repairs == ["research_context"]
+    assert repaired == "Clinical context [@paper_2024]."
 
 
 def test_manuscript_literature_audit_rejects_one_token_citation_theatre() -> None:

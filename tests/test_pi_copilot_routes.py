@@ -79,6 +79,22 @@ class FakeService:
             },
         }
 
+    def get_research_evidence_preview(self, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "run_id": kwargs["run_id"],
+            "payload": {
+                "schema_version": "easyicu.web-evidence-preview/1",
+                "evidence_id": kwargs["evidence_id"],
+                "sha256": kwargs["expected_sha256"],
+                "renderer": "code",
+                "previewable": True,
+                "text": "estimate = 1.25\n",
+            },
+            "privacy": {"passed": True},
+            "governance": {"claim_ceiling": "analysis_only"},
+        }
+
     def get_research_document(self, **kwargs) -> dict:
         return {
             "content": b"<!doctype html><title>System validation</title>",
@@ -360,6 +376,28 @@ def test_project_research_artifact_route_uses_path_free_identity(monkeypatch) ->
         "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/artifacts/not-json.txt"
     )
     assert invalid.status_code == 422
+
+
+def test_project_research_evidence_route_requires_id_and_digest(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+    digest = "a" * 64
+
+    response = client.get(
+        "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/"
+        f"evidence/code_analysis_1?expected_sha256={digest}"
+    )
+    assert response.status_code == 200
+    assert response.json()["payload"]["evidence_id"] == "code_analysis_1"
+    assert response.json()["payload"]["sha256"] == digest
+    assert "project_dir" not in response.text
+
+    invalid = client.get(
+        "/api/copilot/pi/projects/guided-project-2/runs/run_20260808/"
+        "evidence/../secret?expected_sha256=bad"
+    )
+    assert invalid.status_code in {404, 422}
 
 
 def test_system_validation_document_route_is_fixed_and_engineering_only(

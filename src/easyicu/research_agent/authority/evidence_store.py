@@ -908,6 +908,100 @@ def _walk_numeric_leaves(obj: Any, prefix: str = "") -> List[Tuple[str, str, flo
     return out
 
 
+def _walk_numeric_leaves_with_effect_scale(
+    obj: Any,
+    prefix: str = "",
+    inherited_effect_scale: Any = None,
+) -> List[Tuple[str, str, float, Any]]:
+    """Walk numeric leaves while carrying a row-local effect-measure label."""
+
+    out: List[Tuple[str, str, float, Any]] = []
+    local_effect_scale = inherited_effect_scale
+    if isinstance(obj, dict):
+        for key in ("effect_scale", "effect_measure"):
+            candidate = obj.get(key)
+            if candidate not in (None, ""):
+                local_effect_scale = candidate
+                break
+        for key, value in obj.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            out.extend(
+                _walk_numeric_leaves_with_effect_scale(
+                    value,
+                    child,
+                    local_effect_scale,
+                )
+            )
+    elif isinstance(obj, (list, tuple)):
+        for index, value in enumerate(obj):
+            child = f"{prefix}[{index}]"
+            out.extend(
+                _walk_numeric_leaves_with_effect_scale(
+                    value,
+                    child,
+                    local_effect_scale,
+                )
+            )
+    else:
+        coerced = _coerce_numeric_literal(obj)
+        if coerced is not None:
+            literal, canonical = coerced
+            out.append(
+                (prefix or "<root>", literal, canonical, local_effect_scale)
+            )
+    return out
+
+
+_HEADLINE_NUMERIC_ROOT_PRIORITY: Tuple[str, ...] = (
+    "primary_estimate",
+    "adjusted_effect",
+    "primary_effect",
+    "primary_or",
+    "primary_hr",
+    "primary_ci_low",
+    "primary_ci_high",
+    "primary_estimate_interval",
+    "primary_or_ci",
+    "primary_hr_ci",
+    "primary_effect_ci",
+    "estimate",
+    "ci_low",
+    "ci_high",
+    "p_value",
+    "sample_size",
+    "n_total",
+    "n_events",
+    "complete_case_n",
+)
+
+
+def _prioritize_headline_numeric_leaves(
+    leaves: Sequence[Tuple[str, str, float, Any]],
+) -> List[Tuple[str, str, float, Any]]:
+    """Put manuscript-facing summary numerics ahead of nested diagnostics.
+
+    The per-step registry cap is a safety boundary, not a scientific priority
+    rule.  Large nested model diagnostics can otherwise consume the cap before
+    top-level effect, interval, and cohort-size fields are reached.  Preserve
+    original traversal order within every priority class and for all remaining
+    leaves so producer ordering remains deterministic.
+    """
+
+    priority = {
+        root: index for index, root in enumerate(_HEADLINE_NUMERIC_ROOT_PRIORITY)
+    }
+
+    def _sort_key(
+        indexed_leaf: Tuple[int, Tuple[str, str, float, Any]],
+    ) -> Tuple[int, int]:
+        original_index, leaf = indexed_leaf
+        path = leaf[0]
+        root = path.split(".", 1)[0].split("[", 1)[0]
+        return priority.get(root, len(priority)), original_index
+
+    return [leaf for _, leaf in sorted(enumerate(leaves), key=_sort_key)]
+
+
 def sha256_of_file(path: Path, chunk: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -2339,12 +2433,11 @@ class EvidenceStore:
         ``max_leaves`` caps the number of claims registered per call to
         prevent a single step that dumps a full interaction matrix into
         ``step_summary`` from drowning the registry. When the cap is
-        exceeded the **first** ``max_leaves`` leaves (typically the most
-        salient summary-level fields like ``primary_or``) are kept and
-        the remainder is silently skipped; a single info-level marker
-        claim records that truncation happened. ``None`` (the default
-        when called directly) disables the cap. Pipelines pass the
-        ``PipelineConfig.max_numeric_claims_per_step`` value.
+        exceeded, headline top-level effect, interval, and cohort-size fields
+        are registered first; remaining leaves retain producer traversal order.
+        A single info-level marker claim records that truncation happened.
+        ``None`` (the default when called directly) disables the cap. Pipelines
+        pass the ``PipelineConfig.max_numeric_claims_per_step`` value.
         """
         # Qualitative scientific authority is validated before any numeric
         # mutation.  The phase-level success transaction then publishes both
@@ -2365,20 +2458,24 @@ class EvidenceStore:
                 summary=summary,
                 drafts=scientific_claim_drafts,
             )
-        leaves = _walk_numeric_leaves(summary)
         declared_effect_scale = (
             summary.get("effect_scale") if isinstance(summary, Mapping) else None
+        )
+        leaves = _walk_numeric_leaves_with_effect_scale(
+            summary,
+            inherited_effect_scale=declared_effect_scale,
         )
         truncated = False
         if max_leaves is not None and max_leaves > 0 and len(leaves) > max_leaves:
             truncated_count = len(leaves) - max_leaves
+            leaves = _prioritize_headline_numeric_leaves(leaves)
             leaves = leaves[:max_leaves]
             truncated = True
         else:
             truncated_count = 0
         registered: List[NumericClaim] = []
         with self._lock:
-            for path, literal, canonical in leaves:
+            for path, literal, canonical, local_effect_scale in leaves:
                 registered.append(
                     self._upsert_numeric_claim_in_memory(
                         value=literal,
@@ -2387,7 +2484,7 @@ class EvidenceStore:
                         step_id=step_id,
                         source_field=path,
                         tolerance=tolerance,
-                        effect_scale=declared_effect_scale,
+                        effect_scale=local_effect_scale,
                     )
                 )
             if truncated:
@@ -3001,9 +3098,16 @@ class EvidenceStore:
 
     def enforce_evidence_bound_scaffold(self, scaffold: str) -> tuple[str, List[str]]:
         """Apply the manuscript claim policy and enforce this store's mode."""
+        verified_ids = {record.evidence_id for record in self.verified_records()}
+
+        def resolve_evidence(ref: str) -> bool:
+            record = self.get(ref)
+            return record is not None and record.evidence_id in verified_ids
+
         result = filter_evidence_bound_scaffold(
             scaffold,
             resolve_claim=self._scientific_claim_by_ref,
+            resolve_evidence=resolve_evidence,
         )
         if result.filtered_sentences and (
             self.enforcement_mode is EvidenceEnforcementMode.STRICT

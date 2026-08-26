@@ -1940,11 +1940,26 @@ def _write_resolved_inputs_manifest(
     return manifest_path
 
 
+def host_authored_generation_mode(generation_mode: str | None) -> bool:
+    """Return whether a recorded source mode was rendered by the host.
+
+    This classification is shared by receipt ownership and optional concept-
+    audit policy.  Keeping it here prevents a resumed deterministic producer
+    from being trusted by one gate but treated as generated code by another.
+    """
+
+    return str(generation_mode or "").strip() in {
+        "fallback",
+        "deterministic_standard",
+    }
+
+
 def host_owns_input_binding_receipts(
     *,
     deterministic_standard_executor_used: bool,
     deterministic_fallback_used: bool,
     sealed_renderer_repair: bool,
+    resumed_from_generation_mode: str | None = None,
 ) -> bool:
     """Whether the HOST, not the generated script, must write the receipts.
 
@@ -1971,6 +1986,7 @@ def host_owns_input_binding_receipts(
         deterministic_standard_executor_used
         or deterministic_fallback_used
         or sealed_renderer_repair
+        or host_authored_generation_mode(resumed_from_generation_mode)
     )
 
 

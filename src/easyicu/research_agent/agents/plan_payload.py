@@ -315,6 +315,14 @@ def _planner_transport_schema(
     if not isinstance(definitions, dict):
         raise PlannerStructuredOutputSchemaError("AnalysisPlan schema has no $defs")
     try:
+        # Candidate-design comparison is owned by the Progressive Planner v2
+        # outline. The classic one-shot Planner remains load-compatible with
+        # the optional public field but must not repeat this high-entropy
+        # authority inside its already budget-constrained transport schema.
+        schema["properties"].pop("design_selection", None)
+        definitions.pop("ResearchDesignSelection", None)
+        definitions.pop("ResearchDesignCandidate", None)
+        definitions.pop("CandidateLiteratureDesignDecision", None)
         robustness = definitions["RobustnessSpec"]["properties"]
         missing_override = _closed_object_schema(
             {

@@ -1807,15 +1807,6 @@ def _verified_complete_case_equivalence(
     if len(variables) != len(set(variables)):
         error = "complete-case equivalence variables are not unique"
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
-    data_columns = {str(column) for column in getattr(primary_data, "columns", [])}
-    missing_columns = [column for column in variables if column not in data_columns]
-    if missing_columns:
-        error = (
-            "complete-case equivalence variables are absent from the primary "
-            "cohort: " + ", ".join(missing_columns)
-        )
-        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
-
     # One reader, so the proof and the primary owner cannot mean different
     # things by "the analysis". This used to read ``analysis_definition`` and
     # nothing else -- a key the host's own primary owner has never written, and
@@ -1841,10 +1832,31 @@ def _verified_complete_case_equivalence(
     exposure = definition["exposure"]
     outcome = definition["outcome"]
     covariates = definition["covariates"]
-    required_variables = {exposure, outcome, *covariates}
-    required_variables.discard("")
-    if not required_variables or not required_variables <= set(variables):
-        error = "locked complete-case variables do not cover every primary model input"
+    required_variables = [
+        value for value in (exposure, outcome, *covariates) if value
+    ]
+    if not required_variables:
+        error = "primary model has no variables for complete-case equivalence"
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+
+    # Complete-case fitting is defined over every primary model input.  The
+    # Planner's explicit list remains an auditable minimum, while the verified
+    # model contract deterministically closes it over exposure, outcome and
+    # covariates.  This is method semantics, not a new variable-selection
+    # decision, and avoids making a newly signed parent covariate fail only in
+    # the downstream robustness owner.
+    declared_variables = list(variables)
+    variables = list(dict.fromkeys([*declared_variables, *required_variables]))
+    host_closed_variables = [
+        value for value in variables if value not in set(declared_variables)
+    ]
+    data_columns = {str(column) for column in getattr(primary_data, "columns", [])}
+    missing_columns = [column for column in variables if column not in data_columns]
+    if missing_columns:
+        error = (
+            "complete-case equivalence variables are absent from the primary "
+            "cohort: " + ", ".join(missing_columns)
+        )
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
 
     complete_case_n = int(primary_data.dropna(subset=variables).shape[0])
@@ -1879,7 +1891,13 @@ def _verified_complete_case_equivalence(
             "analysis_role": "sensitivity",
             "analysis_set": "complete_case",
             "replay_mode": "verified_complete_case_equivalence",
-            "missing_override": dict(override),
+            "missing_override": {
+                **dict(override),
+                COMPLETE_CASE_VARIABLES_KEY: list(variables),
+            },
+            "declared_complete_case_variables": declared_variables,
+            "effective_complete_case_variables": list(variables),
+            "host_closed_primary_model_inputs": host_closed_variables,
             "complete_case_n": complete_case_n,
         }
     )

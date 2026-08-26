@@ -1,0 +1,58 @@
+{
+  "schema_version": "easyicu.figure2_m1_scientific_protocol/1",
+  "task_id": "m1_hepatobiliary_missingness",
+  "protocol_version": "m1_hepatobiliary_missingness/20260824-v1",
+  "review_status": "ai_development_reviewed_human_attestation_pending",
+  "literature_search_cutoff": "2026-08-24",
+  "time_zero": "icu_admission",
+  "exposure_window_hours": [0, 24],
+  "landmark_hours": 24,
+  "primary_exposure_column": "bili_max",
+  "alternative_exposure_column": "bili_first",
+  "exposure_units": "mg/dL",
+  "outcome_column": "death",
+  "outcome_time_column": "death_time",
+  "observation_duration_column": "los_icu",
+  "adjustment_set": [
+    "age",
+    "sex",
+    "sofa2_resp_max",
+    "sofa2_coag_max",
+    "sofa2_cardio_max",
+    "sofa2_cns_max",
+    "sofa2_renal_max"
+  ],
+  "measurement_audit": [
+    "eligible_stays",
+    "measured_fraction",
+    "unmeasured_fraction",
+    "measurement_timing",
+    "measurement_count",
+    "measured_vs_unmeasured_standardized_differences"
+  ],
+  "interpretation": "descriptive_prognostic_association_not_causal",
+  "reportability_rule": "Report the complete eligible denominator and bilirubin measurement process before any association. The main curve is limited to stays alive and still observed at 24 hours with measured bilirubin. Report first-versus-maximum bilirubin as a definition sensitivity. Never interpret unmeasured bilirubin as normal or generalize the measured-subset association to all ICU stays without the selection boundary.",
+  "forbidden_interpretations": [
+    "missing_bilirubin_as_normal",
+    "causal_liver_effect",
+    "whole_stay_peak_substitution",
+    "measured_subset_as_all_icu_stays",
+    "linear_only_bilirubin_effect"
+  ],
+  "citations": [
+    {
+      "citation_id": "sofa_components_mortality_2022",
+      "title": "Sequential Organ Failure Assessment score components and mortality",
+      "year": 2022,
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9322581/",
+      "doi": null
+    },
+    {
+      "citation_id": "early_hyperbilirubinemia_2021",
+      "title": "Early hyperbilirubinemia and clinical outcomes in critically ill patients",
+      "year": 2021,
+      "url": "https://pubmed.ncbi.nlm.nih.gov/34238904/",
+      "doi": null
+    }
+  ]
+}

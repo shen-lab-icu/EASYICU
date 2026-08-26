@@ -10,7 +10,10 @@ from ..cohort.schema import (
     COHORT_LOCK_FILENAME,
     _load_locked_cohort_definition,
 )
-from ..planning.cohort_contract import cohort_definition_sha
+from ..planning.cohort_contract import (
+    cohort_definition_sha,
+    ensure_cohort_definition,
+)
 from ..schema import AnalysisPlan, ResearchContext
 from .evidence_snapshot import load_current_evidence_snapshot
 from .evidence_store import EvidenceStore
@@ -70,9 +73,15 @@ def _plan_matches_completed_steps(
     plan_scope_count: int,
     locked_cohort_sha256: Optional[str],
 ) -> bool:
+    # Cohort locking and execution both define ``plan.cohort is None`` as the
+    # canonical implicit primary cohort.  Resume must compare that same
+    # normalized contract; treating the shorthand as a missing authority makes
+    # a digest-verified, already executed plan impossible to resume.  A plan
+    # that actually drops or changes a non-default cohort still fails because
+    # its normalized digest differs from the immutable lock.
+    normalized_plan = ensure_cohort_definition(plan)
     if locked_cohort_sha256 is not None and (
-        plan.cohort is None
-        or cohort_definition_sha(plan.cohort) != locked_cohort_sha256
+        cohort_definition_sha(normalized_plan.cohort) != locked_cohort_sha256
     ):
         return False
     step_by_id = {step.step_id: step for step in plan.steps}

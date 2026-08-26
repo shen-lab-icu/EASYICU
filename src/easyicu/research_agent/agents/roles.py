@@ -32,8 +32,15 @@ from ..research_context.temporal_semantics import (
     TemporalAlignmentEngine,
 )
 from ..review.step_semantics import decide_step_scientific_review
+from ..reporting.administrative_authority import ManuscriptAdministrativeAuthority
 
-from ._support import _coerce_primary_estimate, _empty_df_placeholder, _initial_reflection_memory, _sentences_missing_evidence_tokens, _suggest_repairs_for
+from ._support import (
+    _coerce_primary_estimate,
+    _empty_df_placeholder,
+    _initial_reflection_memory,
+    _sentences_missing_evidence_tokens,
+    _suggest_repairs_for,
+)
 from .reporting import WriterAgent
 
 # ---------------------------------------------------------------------------
@@ -306,6 +313,7 @@ class ManuscriptAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> str:
         return WriterAgent(
             self.llm,
@@ -317,6 +325,31 @@ class ManuscriptAgent:
             evidence_ids=evidence_ids,
             evidence_digest=evidence_digest,
             literature_digest=literature_digest,
+            administrative_authority=administrative_authority,
+        )
+
+    def repair_existing(
+        self,
+        manuscript: str,
+        *,
+        context: ResearchContext,
+        evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
+        literature_digest: Optional[str] = None,
+        administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+    ) -> tuple[str, tuple[str, ...]]:
+        return WriterAgent(
+            self.llm,
+            language=self.language,
+            nature_writing_enabled=self.nature_writing_enabled,
+            user_writing_advisory=self.user_writing_advisory,
+        ).repair_existing(
+            manuscript,
+            context=context,
+            evidence_ids=evidence_ids,
+            evidence_digest=evidence_digest,
+            literature_digest=literature_digest,
+            administrative_authority=administrative_authority,
         )
 
 
@@ -388,7 +421,10 @@ class CriticAgent:
         concerns: List[str] = []
         if missing:
             concerns.append("Manuscript contains unresolved evidence placeholders.")
-        unsupported = _sentences_missing_evidence_tokens(scaffold)
+        unsupported = _sentences_missing_evidence_tokens(
+            scaffold,
+            available_evidence_ids=available_evidence_ids,
+        )
         if unsupported:
             concerns.append(
                 "Some result-like sentences were filtered or remain unsupported."

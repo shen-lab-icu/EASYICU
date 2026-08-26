@@ -35,6 +35,10 @@ from .contract import (
     trajectory_phenotyping_contract_applies,
 )
 from .plan_contract import evaluate_trajectory_plan_dag
+from .runtime_validation import (
+    signed_trajectory_plan_claimed,
+    signed_trajectory_runtime_bundle_errors,
+)
 
 _CORE_CANONICAL_FILES: tuple[str, ...] = (
     "trajectory_missingness_policy.json",
@@ -532,6 +536,21 @@ def trajectory_bundle_findings(
 
     if findings:
         return findings
+
+    if signed_trajectory_plan_claimed(plan):
+        signed_errors = signed_trajectory_runtime_bundle_errors(
+            plan=plan,
+            records=per_step_records,
+            run_dir=run_dir,
+        )
+        return [
+            _finding(
+                "signed_trajectory_runtime_invalid",
+                message,
+                contributor_step_ids=plan_authority.contributor_step_ids,
+            )
+            for message in signed_errors
+        ]
 
     plan_by_step = {step.step_id: step for step in plan.steps or []}
     contributor_step_ids = list(plan_authority.contributor_step_ids)

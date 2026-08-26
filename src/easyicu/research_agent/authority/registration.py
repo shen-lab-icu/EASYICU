@@ -63,6 +63,36 @@ class EvidencePromotionResult:
     suppressed_basename_evidence_ids: Set[str]
 
 
+def registered_artifact_evidence_kind(
+    *,
+    source_name: str,
+    declared_kinds: Sequence[str] = (),
+) -> str:
+    """Return the EvidenceStore kind used for one physical step artifact.
+
+    Typed product kinds and EvidenceStore storage kinds are not identical:
+    ``artifact:x`` may be a tabular parquet file (stored as ``table``) or a
+    JSON/binary file (stored as ``log``).  Execution registration and sealed
+    Writer recovery must use this one mechanical mapping or an already sealed
+    artifact becomes impossible to bind on resume.
+    """
+
+    supported_declared_kinds = {
+        str(kind or "").strip().lower()
+        for kind in declared_kinds
+        if str(kind or "").strip().lower()
+        in {"table", "statistic", "figure", "log"}
+    }
+    if len(supported_declared_kinds) == 1:
+        return next(iter(supported_declared_kinds))
+    suffix = Path(str(source_name or "")).suffix.lower()
+    if suffix in {".csv", ".tsv", ".parquet", ".feather"}:
+        return "table"
+    if suffix in {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}:
+        return "figure"
+    return "log"
+
+
 def step_owned_artifact_evidence_id(
     *,
     kind: str,
@@ -441,4 +471,6 @@ __all__ = [
     "EvidenceRegistrar",
     "StepEvidenceCommit",
     "filter_success_alias_bindings",
+    "registered_artifact_evidence_kind",
+    "step_owned_artifact_evidence_id",
 ]

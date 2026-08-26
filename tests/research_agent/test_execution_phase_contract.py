@@ -753,6 +753,44 @@ def test_first_step_checkpoint_selector_preserves_agent_owned_step_id():
         _resolve_stop_after_step_selector(plan, "@product:table:summary")
 
 
+def test_resume_from_checkpoint_selectors_preserve_agent_owned_step_ids():
+    from easyicu.research_agent.orchestration.step_selector import (
+        resolve_resume_from_step_selector,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Regenerate a saved analysis plan.",
+        steps=[
+            AnalysisStep(
+                step_id="agent_generated_first",
+                intent="Define the analysis cohort.",
+                expected_outputs=["table:analysis_cohort"],
+                method="cohort_definition",
+            ),
+            AnalysisStep(
+                step_id="agent_generated_second",
+                intent="Summarize the cohort.",
+                expected_outputs=["table:summary"],
+                method="descriptive_summary",
+            ),
+        ],
+    )
+
+    assert resolve_resume_from_step_selector(plan, "@first") == (
+        "agent_generated_first"
+    )
+    assert resolve_resume_from_step_selector(plan, "@index:2") == (
+        "agent_generated_second"
+    )
+    assert resolve_resume_from_step_selector(
+        plan,
+        "@product:table:summary",
+    ) == "agent_generated_second"
+    with pytest.raises(ValueError, match="resume_from_step_id"):
+        resolve_resume_from_step_selector(plan, "@index:3")
+
+
 def test_failed_contract_code_reuse_requires_exact_checkpoint_authority():
     import copy
     import hashlib

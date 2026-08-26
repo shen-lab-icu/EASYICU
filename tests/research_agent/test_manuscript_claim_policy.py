@@ -10,6 +10,8 @@ from easyicu.research_agent.authority.evidence_store import (
 from easyicu.research_agent.authority.manuscript_claim_policy import (
     expand_scientific_claim_tokens,
     filter_evidence_bound_scaffold,
+    missing_scientific_claims_in_results,
+    place_scientific_claim_tokens_in_results,
 )
 from easyicu.research_agent.authority.scientific_claims import ScientificClaim
 
@@ -50,6 +52,29 @@ def test_policy_accepts_only_a_complete_known_claim_token() -> None:
     assert result.unsupported_scientific_claim_sentences == result.filtered_sentences
 
 
+def test_policy_collapses_exact_host_prose_followed_by_duplicate_claim_token() -> None:
+    claim = _claim()
+    sentence = (
+        f"{claim.render_text()} {{evidence:{claim.evidence_id}}}. "
+        f"{{claim:{claim.claim_ref}}}"
+    )
+
+    result = filter_evidence_bound_scaffold(sentence, resolve_claim=_resolver)
+
+    assert result.scaffold == f"{{claim:{claim.claim_ref}}}\n"
+    assert result.filtered_sentences == ()
+
+
+def test_policy_does_not_canonicalize_paraphrase_plus_claim_token() -> None:
+    claim = _claim()
+    sentence = f"A different assertion. {{claim:{claim.claim_ref}}}"
+
+    result = filter_evidence_bound_scaffold(sentence, resolve_claim=_resolver)
+
+    assert result.scaffold == "\n"
+    assert result.unsupported_scientific_claim_sentences == (sentence,)
+
+
 def test_policy_preserves_metadata_but_filters_uncited_numeric_result() -> None:
     result = filter_evidence_bound_scaffold(
         "Data availability: generated scripts are available.\n"
@@ -60,6 +85,68 @@ def test_policy_preserves_metadata_but_filters_uncited_numeric_result() -> None:
     assert "Data availability" in result.scaffold
     assert "Mortality was 20%" not in result.scaffold
     assert result.removed_result_sentences == ("Mortality was 20%.",)
+
+
+def test_policy_keeps_registered_numeric_fact_for_later_provenance_binding() -> None:
+    sentence = "Mortality was 20% {evidence:outcome_rate}."
+
+    result = filter_evidence_bound_scaffold(
+        sentence,
+        resolve_claim=_resolver,
+        resolve_evidence=lambda ref: ref == "outcome_rate",
+    )
+
+    assert result.scaffold == sentence + "\n"
+    assert result.filtered_sentences == ()
+
+
+def test_policy_rejects_numeric_fact_with_unregistered_evidence() -> None:
+    sentence = "Mortality was 20% {evidence:unregistered}."
+
+    result = filter_evidence_bound_scaffold(
+        sentence,
+        resolve_claim=_resolver,
+        resolve_evidence=lambda _ref: False,
+    )
+
+    assert result.scaffold == "\n"
+    assert result.removed_result_sentences == (sentence,)
+
+
+def test_registered_evidence_does_not_bypass_qualitative_claim_authority() -> None:
+    sentence = "Patients had higher mortality {evidence:outcome_rate}."
+
+    result = filter_evidence_bound_scaffold(
+        sentence,
+        resolve_claim=_resolver,
+        resolve_evidence=lambda ref: ref == "outcome_rate",
+    )
+
+    assert result.scaffold == "\n"
+    assert result.unsupported_scientific_claim_sentences == (sentence,)
+
+
+def test_exact_literature_key_keeps_only_nonnumeric_background_context() -> None:
+    context = "Sepsis-3 mortality remains clinically important [@paper_2024]."
+    numeric = "Prior mortality was 20% [@paper_2024]."
+
+    kept = filter_evidence_bound_scaffold(context, resolve_claim=_resolver)
+    blocked = filter_evidence_bound_scaffold(numeric, resolve_claim=_resolver)
+
+    assert kept.scaffold == context + "\n"
+    assert blocked.scaffold == "\n"
+
+
+def test_grouped_exact_literature_keys_keep_nonnumeric_context() -> None:
+    context = (
+        "Cohort reporting followed observational guidance "
+        "[@strobe_2007; @record_2015]."
+    )
+
+    result = filter_evidence_bound_scaffold(context, resolve_claim=_resolver)
+
+    assert result.scaffold == context + "\n"
+    assert result.filtered_sentences == ()
 
 
 @pytest.mark.parametrize(
@@ -155,6 +242,24 @@ def test_policy_applies_qualitative_claim_gate_to_markdown_headings() -> None:
     )
 
 
+def test_policy_preserves_versioned_clinical_term_in_structural_title() -> None:
+    title = "# Retrospective ICU Study of Sepsis-3 and In-Hospital Mortality"
+
+    result = filter_evidence_bound_scaffold(title, resolve_claim=_resolver)
+
+    assert result.scaffold == title + "\n"
+    assert result.filtered_sentences == ()
+
+
+def test_versioned_term_does_not_hide_assertive_numeric_title() -> None:
+    title = "# Sepsis-3 mortality was 20%"
+
+    result = filter_evidence_bound_scaffold(title, resolve_claim=_resolver)
+
+    assert result.scaffold == "\n"
+    assert result.filtered_sentences
+
+
 @pytest.mark.parametrize(
     "heading",
     [
@@ -217,7 +322,9 @@ def test_claim_expansion_preserves_markdown_prefix_and_binds_evidence() -> None:
         resolve_claim=_resolver,
     )
 
-    assert result.scaffold.startswith("> After adjustment for age, sex")
+    assert result.scaffold.startswith(
+        "> In the covariate-adjusted model, the prespecified exposure"
+    )
     assert "{evidence:04_association_summary}" in result.scaffold
     assert result.missing_claim_refs == ()
     assert result.malformed_sentences == ()
@@ -234,3 +341,44 @@ def test_claim_expansion_reports_missing_and_malformed_tokens() -> None:
     assert result.malformed_sentences == (
         "Prose {claim:04_association.adjusted_association}.",
     )
+
+
+def test_host_claim_is_placed_in_results_even_when_writer_used_only_conclusion() -> None:
+    claim = _claim()
+    scaffold = (
+        "## Results\n\n"
+        "### Primary association\n\n"
+        "The model included 100 stays {evidence:model}.\n\n"
+        "## Conclusion\n\n"
+        f"{claim.placeholder}\n"
+    )
+
+    placement = place_scientific_claim_tokens_in_results(
+        scaffold,
+        claims=[claim],
+    )
+
+    results = placement.scaffold.split("## Conclusion", 1)[0]
+    assert claim.placeholder in results
+    assert placement.inserted_claim_refs == (claim.claim_ref,)
+    assert placement.missing_claim_refs == ()
+
+    expanded = expand_scientific_claim_tokens(
+        placement.scaffold,
+        resolve_claim=_resolver,
+    ).scaffold
+    assert missing_scientific_claims_in_results(
+        expanded,
+        claims=[claim],
+    ) == ()
+
+
+def test_host_claim_placement_fails_closed_without_results_section() -> None:
+    claim = _claim()
+    placement = place_scientific_claim_tokens_in_results(
+        f"## Conclusion\n\n{claim.placeholder}\n",
+        claims=[claim],
+    )
+
+    assert placement.inserted_claim_refs == ()
+    assert placement.missing_claim_refs == (claim.claim_ref,)

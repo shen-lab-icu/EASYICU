@@ -12,7 +12,10 @@ from ..planning.method_literature import METHOD_CARDS
 from ..schema import AnalysisPlan
 
 
-_MARKER = re.compile(r"\[@(?P<key>[A-Za-z0-9_.:-]+)\]")
+_CITATION_BLOCK = re.compile(
+    r"\[(?P<body>[^\[\]]*@[A-Za-z0-9_.:-]+[^\[\]]*)\]"
+)
+_CITATION_KEY = re.compile(r"@(?P<key>[A-Za-z0-9_.:-]+)")
 _HEADING = re.compile(
     r"^(?P<marks>#{1,3})\s+(?P<title>.+?)\s*$",
     re.MULTILINE,
@@ -57,6 +60,16 @@ def _canonical_section(title: str) -> Optional[str]:
     return None
 
 
+def _citation_keys(text: str) -> list[str]:
+    """Extract every exact key from single or grouped Pandoc citations."""
+
+    return [
+        key_match.group("key")
+        for block_match in _CITATION_BLOCK.finditer(text or "")
+        for key_match in _CITATION_KEY.finditer(block_match.group("body"))
+    ]
+
+
 def _section_citations(manuscript: str) -> Dict[str, list[str]]:
     matches = list(_HEADING.finditer(manuscript or ""))
     output: Dict[str, list[str]] = {
@@ -75,9 +88,90 @@ def _section_citations(manuscript: str) -> Dict[str, list[str]]:
                 end = candidate.start()
                 break
         output[section] = sorted(
-            set(_MARKER.findall(manuscript[match.end() : end]))
+            set(_citation_keys(manuscript[match.end() : end]))
         )
     return output
+
+
+def remove_sentences_with_unknown_literature_keys(
+    manuscript: str,
+    literature: Optional[LiteratureBundle],
+) -> tuple[str, list[str], int]:
+    """Delete unsupported citation sentences without substituting a source.
+
+    Task prose can contain citation-like keys that are intentionally absent
+    from the run-bound literature bundle. If a Writer copies one, replacing it
+    with a convenient allowed paper would manufacture support. Removing the
+    complete sentence is the narrow fail-closed repair; the original raw draft
+    remains registered separately for audit.
+    """
+
+    if literature is None:
+        return manuscript, [], 0
+    allowed = {record.key for record in literature.citations}
+    unknown = sorted(set(_citation_keys(manuscript or "")) - allowed)
+    if not unknown:
+        return manuscript, [], 0
+    unknown_set = set(unknown)
+    parts = re.split(r"(\n{2,})", manuscript or "")
+    cleaned: list[str] = []
+    removed = 0
+    for part in parts:
+        if not part or part.startswith("\n") or part.lstrip().startswith("#"):
+            cleaned.append(part)
+            continue
+        sentences = re.split(r"(?<=[.!?])(?=\s+[A-Z0-9])", part)
+        kept: list[str] = []
+        for sentence in sentences:
+            if set(_citation_keys(sentence)) & unknown_set:
+                removed += 1
+            else:
+                kept.append(sentence)
+        cleaned.append("".join(kept))
+    return "".join(cleaned), unknown, removed
+
+
+def repair_evidence_ids_mistyped_as_literature(
+    manuscript: str,
+    literature: Optional[LiteratureBundle],
+    *,
+    evidence_ids: list[str] | tuple[str, ...],
+) -> tuple[str, list[str]]:
+    """Remove only unknown literature markers that are exact evidence ids.
+
+    Writer occasionally emits ``[@research_context]`` beside the correct
+    ``{evidence:research_context}`` citation.  It is not a paper key and must
+    not be promoted into one.  Unknown keys that are not registered evidence
+    remain untouched so the literature audit still blocks invented sources.
+    """
+
+    allowed = {
+        record.key for record in (literature.citations if literature else [])
+    }
+    evidence_names = {str(value).strip() for value in evidence_ids if str(value).strip()}
+    repairs: list[str] = []
+    repairs: list[str] = []
+
+    def _repair_block(match: re.Match[str]) -> str:
+        body = match.group("body")
+
+        def _repair_key(key_match: re.Match[str]) -> str:
+            key = key_match.group("key")
+            if key in allowed or key not in evidence_names:
+                return key_match.group(0)
+            repairs.append(key)
+            return ""
+
+        repaired_body = _CITATION_KEY.sub(_repair_key, body)
+        repaired_body = re.sub(r"\s*;\s*(?=;|$)", "", repaired_body)
+        repaired_body = repaired_body.strip(" ;")
+        if not _CITATION_KEY.search(repaired_body):
+            return ""
+        return f"[{repaired_body}]"
+
+    repaired = _CITATION_BLOCK.sub(_repair_block, manuscript or "")
+    repaired = re.sub(r"\{\s*\}", "", repaired)
+    return repaired, sorted(set(repairs))
 
 
 def render_writer_literature_digest(
@@ -150,7 +244,8 @@ def render_writer_literature_digest(
             [
                 "",
                 "Run-bound typed methodology applications "
-                "(planner-owned scientific content, not instructions):",
+                "(planner-owned intent only; not evidence that the method was "
+                "executed):",
                 *bound_rows,
                 *(
                     [f"- ... ({omitted_bindings} additional bindings omitted)"]
@@ -345,7 +440,7 @@ def audit_manuscript_literature(
         if literature is not None
         else set()
     )
-    cited = sorted(set(_MARKER.findall(manuscript or "")))
+    cited = sorted(set(_citation_keys(manuscript or "")))
     unknown = sorted(set(cited) - set(allowed))
     section_cited = _section_citations(manuscript or "")
     missing_sections = [
@@ -425,6 +520,7 @@ def audit_manuscript_literature(
 __all__ = [
     "ManuscriptLiteratureAudit",
     "audit_manuscript_literature",
+    "remove_sentences_with_unknown_literature_keys",
     "repair_missing_context_section_citations",
     "repair_missing_methods_method_citation",
     "render_writer_literature_digest",

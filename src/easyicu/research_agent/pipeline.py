@@ -404,18 +404,10 @@ from .plan_utils import (
     _step_produces_figure,
     effect_output_authorized,
 )
-from .planning.figure_plan_shaping import (
-    bind_deterministic_figure_panels,
-    close_empty_deterministic_figure_contracts,
-    ensure_cohort_accounting_figure_step,
-    ensure_data_quality_figure_step as _ensure_audit_panel_step_in_plan,
-    ensure_primary_result_figure_step,
-)
+from .planning import figure_plan_shaping as _figure_plan
 from .planning.final_plan_shape import validate_final_plan_shape
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
-from .orchestration.scientific_plan_review_gate import (
-    prepare_scientific_plan_review_gate,
-)
+from .orchestration import scientific_plan_review_gate as _scientific_plan_gate
 from .figures.skill import PublicationFigureSkill
 from .figures.prior_output_support import (
     figure_parent_candidate_step_dirs as _figure_parent_candidate_step_dirs,
@@ -431,6 +423,7 @@ from .literature import (
     render_hypothesis_blueprint_for_prompt,
 )
 from .planning.preplan_literature import prepare_preplan_literature
+from .planning import literature_design_authority as _literature_design
 from .planning.preplan_know_how import (
     PlannerKnowHowBinding,
     prepare_preplan_know_how,
@@ -538,12 +531,14 @@ from .audits.validators import (
 )
 from .gates.figure_egress import FigureEgressPolicy
 from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
-
-
 from .orchestration.finalize import (
     _concept_dictionary_manifest_fields,  # noqa: F401
     _render_cost_summary,  # noqa: F401
 )
+
+# Compatibility seam for callers and tests that patch the historical pipeline
+# symbol while the implementation remains owned by figure_plan_shaping.
+_ensure_audit_panel_step_in_plan = _figure_plan.ensure_data_quality_figure_step
 
 
 def _one_capability_job(method: Callable[..., Any]) -> Callable[..., Any]:
@@ -610,6 +605,7 @@ from .orchestration.resume_plan_migration import (  # noqa: F401 — owner modul
     _LegacyModelRosterStepPacket,
     _migrate_legacy_resume_figure_render_edges,
     _migrate_legacy_resume_model_requirements,
+    _migrate_resume_scientific_runtime_binding,
     _migrate_resume_trajectory_products,
     _next_analysis_plan_revision,
     _normalise_plan_contract_token,
@@ -758,6 +754,7 @@ def _apply_resume_plan_migrations(
     plan_generation_mode: str,
     migrated_plan_path: Optional[Path],
     findings: List[ValidationFinding],
+    scientific_runtime_authorities: Any,
 ) -> Tuple[AnalysisPlan, Optional[Path], str]:
     """Apply every resume-time migration a reused plan needs, in order.
 
@@ -775,6 +772,12 @@ def _apply_resume_plan_migrations(
     """
 
     from .orchestration.profiles import is_paper_facing_profile
+    from .orchestration.step_selector import resolve_resume_from_step_selector
+
+    resume_from_step_id = resolve_resume_from_step_selector(
+        plan,
+        resume_from_step_id,
+    )
 
     plan, migrated_plan_path, migrated_step_ids = (
         _migrate_legacy_resume_model_requirements(
@@ -906,6 +909,43 @@ def _apply_resume_plan_migrations(
                 },
             )
         )
+    (
+        plan,
+        scientific_runtime_migration_path,
+        scientific_runtime_step_ids,
+        scientific_runtime_findings,
+    ) = _migrate_resume_scientific_runtime_binding(
+        plan=plan,
+        resume_state=resume_state,
+        resume_from_step_id=resume_from_step_id,
+        scientific_runtime_authorities=scientific_runtime_authorities,
+        run_dir=run_dir,
+        evidence=evidence,
+        prompt_version=prompt_version,
+        llm_signature=llm_signature,
+    )
+    findings.extend(scientific_runtime_findings)
+    if scientific_runtime_migration_path is not None:
+        migrated_plan_path = scientific_runtime_migration_path
+        if plan_generation_mode == "resumed":
+            plan_generation_mode = "resume_with_authority_restore"
+        findings.append(
+            ValidationFinding(
+                validator="scientific_runtime_plan_compiler",
+                severity="warning",
+                message=(
+                    "Resume recompiled the signed scientific runtime binding "
+                    "only on steps selected for replay."
+                ),
+                detail={
+                    "reason_code": "resume_scientific_runtime_binding_restored",
+                    "target_step_ids": list(scientific_runtime_step_ids),
+                    "plan_path": str(
+                        scientific_runtime_migration_path.relative_to(run_dir)
+                    ),
+                },
+            )
+        )
     return plan, migrated_plan_path, plan_generation_mode
 
 
@@ -924,9 +964,16 @@ def _run_preplan_literature_and_hypothesis(
     llm: Any,
     resume_state: Any,
 ) -> Tuple[Optional[Any], Any, list[str], list[str], Any]:
+    _scientific_plan_gate.require_strict_planner_route(
+        self._config.require_literature_design_authority, skill_obj
+    )
     allowed_literature_citation_keys: list[str] = []
     direct_comparator_literature_keys: list[str] = []
     preplan_literature: Optional[LiteratureBundle] = None
+    abort_context = _scientific_plan_gate.PreplanAbortContext(
+        run_id, run_dir, context, context_path, agent_context, evidence, findings, llm, resume_state
+    )
+
     if self._enable_literature and skill_obj is None:
         try:
             emit_progress(
@@ -947,6 +994,10 @@ def _run_preplan_literature_and_hypothesis(
                 tavily_include_domains=self._tavily_include_domains,
                 bound_seed=self._bound_preplan_literature,
             )
+            if self._config.require_literature_design_authority:
+                _literature_design.validate_preplan_literature_design_authority(
+                    preplan_literature
+                )
             allowed_literature_citation_keys = [
                 citation.key for citation in preplan_literature.citations
             ]
@@ -1059,39 +1110,8 @@ def _run_preplan_literature_and_hypothesis(
                     status="error",
                     run_id=run_id,
                 )
-                aborted = self._finalise_aborted(
-                    run_id=run_id,
-                    run_dir=run_dir,
-                    context=context,
-                    context_path=context_path,
-                    evidence=evidence,
-                    findings=findings,
-                    reason="hypothesis_blueprint_blocked",
-                )
-                terminal_result = _PlanPhaseResult(
-                    context=context,
-                    agent_context=agent_context,
-                    context_path=context_path,
-                    evidence=evidence,
-                    findings=findings,
-                    plan=AnalysisPlan(
-                        research_question=context.research_question,
-                        steps=[],
-                    ),
-                    plan_path=run_dir / "analysis_plan.json",
-                    llm_signature=self._llm_signature(llm),
-                    used_mock_llm=any(True for _ in self._iter_mock_clients(llm)),
-                    prompt_version=PROMPT_PACK_VERSION,
-                    prompt_files=prompt_pack_files(),
-                    role_resolver=lambda _role: resolve_role_client(llm, _role),
-                    cost_meter=None,
-                    repro_envelope=None,
-                    started_at=datetime.now(timezone.utc),
-                    resume_state=resume_state,
-                    aborted_result=aborted,
-                )
                 return (
-                    terminal_result,
+                    abort_context.finish(self, reason="hypothesis_blueprint_blocked"),
                     agent_context,
                     allowed_literature_citation_keys,
                     direct_comparator_literature_keys,
@@ -1105,7 +1125,21 @@ def _run_preplan_literature_and_hypothesis(
                 f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
             )
             agent_context = agent_context.model_copy(update={"notes": agent_notes})
+        except _literature_design.LiteratureDesignAuthorityError as exc:
+            _scientific_plan_gate.record_literature_authority_abort(
+                findings, emit_progress, run_id, exc
+            )
+            return (
+                abort_context.finish(self, reason=exc.reason_code),
+                agent_context,
+                allowed_literature_citation_keys,
+                direct_comparator_literature_keys,
+                preplan_literature,
+            )
         except Exception as exc:
+            _scientific_plan_gate.fail_if_strict_prompt_compilation_failed(
+                self._config.require_literature_design_authority, exc
+            )
             findings.append(
                 ValidationFinding(
                     validator="hypothesis_blueprint",
@@ -1946,6 +1980,12 @@ class ResearchAgentPipeline:
         set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
         return frozen_snapshot
 
+    def _clear_validated_runtime(self) -> None:
+        """Remove capabilities published by an earlier run on this instance."""
+
+        self._validated_runtime_capabilities = ()
+        self._validated_runtime_bundle = None
+
     def _generate_or_resume_plan(
         self,
         *,
@@ -1960,6 +2000,7 @@ class ResearchAgentPipeline:
         know_how_binding: PlannerKnowHowBinding,
         llm_signature: str,
         planning_contract_context: str,
+        preplan_literature: Optional[LiteratureBundle],
         planner_prompt_metrics: Optional[Dict[str, Any]],
         prompt_version: str,
         resume_from_step_id: Optional[str],
@@ -1982,6 +2023,7 @@ class ResearchAgentPipeline:
         migrated_plan_path: Optional[Path] = None
         proposed_plan: Optional[AnalysisPlan] = None
         development_authority_plan = None
+        development_locked_plan_loaded = False
         if resume_state is not None:
             (
                 plan,
@@ -1998,6 +2040,106 @@ class ResearchAgentPipeline:
                 know_how_binding=know_how_binding,
                 enable_know_how=self._enable_know_how,
                 findings=findings,
+            )
+        elif self._config.development_locked_analysis_plan_path is not None:
+            locked_plan_path = Path(
+                self._config.development_locked_analysis_plan_path
+            ).expanduser()
+            expected_digest = str(
+                self._config.development_locked_analysis_plan_sha256 or ""
+            )
+            if not locked_plan_path.is_file():
+                raise ValueError(
+                    "development locked analysis plan is not a regular file: "
+                    f"{locked_plan_path}"
+                )
+            observed_digest = sha256_of_file(locked_plan_path)
+            if observed_digest != expected_digest:
+                raise ValueError(
+                    "development locked analysis plan SHA-256 mismatch: "
+                    f"expected={expected_digest} observed={observed_digest}"
+                )
+            try:
+                plan = AnalysisPlan.model_validate_json(
+                    locked_plan_path.read_text(encoding="utf-8")
+                )
+            except Exception as exc:
+                raise ValueError("development locked analysis plan is invalid") from exc
+            if plan.research_question != agent_context.research_question:
+                raise ValueError(
+                    "development locked analysis plan research question mismatch"
+                )
+            primary_steps = [
+                step
+                for step in plan.steps
+                if step.planned_analysis_role == "primary"
+            ]
+            if len(primary_steps) == 1 and primary_steps[0].scientific_capability:
+                from .planning.analysis_types import (
+                    get_analysis_type,
+                    optional_analysis_type_for_capability,
+                )
+                from .planning.capability_registry import get_capability_by_id
+
+                current_type = get_analysis_type(plan.analysis_type)
+                declared_capability = get_capability_by_id(
+                    primary_steps[0].scientific_capability
+                )
+                expected_capability = get_capability_by_id(current_type.capability_id)
+                rebound_type = None
+                if (
+                    declared_capability is not None
+                    and expected_capability is not None
+                    and declared_capability.family == expected_capability.family
+                    and declared_capability.capability_id
+                    != expected_capability.capability_id
+                ):
+                    rebound_type = optional_analysis_type_for_capability(
+                        declared_capability.capability_id
+                    )
+                if rebound_type is not None:
+                    findings.append(
+                        ValidationFinding(
+                            validator="scientific_capability",
+                            severity="warning",
+                            message=(
+                                "Rebound a locked development plan's analysis "
+                                "subtype to the capability declared by its sole "
+                                "primary owner; no estimator or result changed."
+                            ),
+                            detail={
+                                "reason_code": (
+                                    "development_locked_plan_primary_capability_rebound"
+                                ),
+                                "source_analysis_type": plan.analysis_type,
+                                "rebound_analysis_type": rebound_type.key,
+                                "primary_step_id": primary_steps[0].step_id,
+                                "primary_capability_id": (
+                                    declared_capability.capability_id
+                                ),
+                            },
+                        )
+                    )
+                    plan = plan.model_copy(
+                        update={"analysis_type": rebound_type.key}
+                    )
+            plan_generation_mode = "development_locked_analysis_plan"
+            development_locked_plan_loaded = True
+            findings.append(
+                ValidationFinding(
+                    validator="planner",
+                    severity="warning",
+                    message=(
+                        "Used an exact-digest locked development AnalysisPlan "
+                        "without another Planner call; the current host still "
+                        "validates and shapes every execution contract."
+                    ),
+                    detail={
+                        "reason_code": "development_locked_analysis_plan_loaded",
+                        "analysis_only": True,
+                        "source_plan_sha256": observed_digest,
+                    },
+                )
             )
         elif self._development_diagnostic:
             development_authority_plan = (
@@ -2023,8 +2165,13 @@ class ResearchAgentPipeline:
                     plan_generation_mode=plan_generation_mode,
                     migrated_plan_path=migrated_plan_path,
                     findings=findings,
+                    scientific_runtime_authorities=(
+                        self._scientific_runtime_authorities
+                    ),
                 )
             )
+        elif development_locked_plan_loaded:
+            pass
         elif development_authority_plan is not None:
             plan, development_authority_finding = development_authority_plan
             findings.append(development_authority_finding)
@@ -2067,10 +2214,6 @@ class ResearchAgentPipeline:
                 )
             )
 
-            planner_progress = planner_retry_progress_callback(
-                emit_progress, run_id=run_id
-            )
-
             try:
                 planner_run_kwargs = dict(
                     know_how_binding.planner_kwargs,
@@ -2081,9 +2224,16 @@ class ResearchAgentPipeline:
                     enforce_article_contract=True,
                     article_contract_context=context,
                     planning_contract_context=planning_contract_context,
-                    progress_callback=planner_progress,
+                    progress_callback=planner_retry_progress_callback(
+                        emit_progress, run_id=run_id
+                    ),
                 )
                 if progressive:
+                    planner_run_kwargs |= (
+                        _literature_design.progressive_literature_design_kwargs(
+                            preplan_literature
+                        )
+                    )
                     planner_run_kwargs["required_primary_cohort_selection_mode"] = (
                         self._required_primary_cohort_selection_mode
                     )
@@ -2339,6 +2489,7 @@ class ResearchAgentPipeline:
             findings.extend(plan_contract_findings)
             plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
             findings.extend(split_findings)
+            plan = _figure_plan.apply_required_plan_obligations(plan, context, findings)
             plan, report_input_findings = _augment_report_typed_product_inputs(
                 plan=plan
             )
@@ -2352,8 +2503,10 @@ class ResearchAgentPipeline:
             # ensure a declared audit/robustness panel, since that evidence is
             # produced (locked robustness specs, data-quality summaries) but the
             # plan often never presents it.
-            plan, primary_figure_findings = ensure_primary_result_figure_step(
-                plan=plan,
+            plan, primary_figure_findings = (
+                _figure_plan.ensure_primary_result_figure_step(
+                    plan=plan,
+                )
             )
             findings.extend(primary_figure_findings)
             plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
@@ -2362,23 +2515,22 @@ class ResearchAgentPipeline:
                 force=self._enable_publication_figure_skill,
             )
             findings.extend(figure_guard_findings)
-            plan, cohort_figure_findings = ensure_cohort_accounting_figure_step(
-                plan=plan,
+            plan, cohort_figure_findings = (
+                _figure_plan.ensure_cohort_accounting_figure_step(
+                    plan=plan,
+                )
             )
             findings.extend(cohort_figure_findings)
-            plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
+            plan, audit_panel_findings = _figure_plan.ensure_data_quality_figure_step(
                 plan=plan,
                 context=context,
             )
             findings.extend(audit_panel_findings)
-            plan, empty_figure_findings = close_empty_deterministic_figure_contracts(
-                plan=plan
+            plan, empty_figure_findings = (
+                _figure_plan.close_empty_deterministic_figure_contracts(plan=plan)
             )
             findings.extend(empty_figure_findings)
-            plan, deterministic_panel_findings = bind_deterministic_figure_panels(
-                plan=plan
-            )
-            findings.extend(deterministic_panel_findings)
+            plan = _figure_plan.apply_deterministic_figure_panels(plan, findings)
             # Measurement provenance companions are public Coder inputs. Close
             # them before lifecycle sealing and human review so Execute cannot
             # change the exact Plan payload that the decision approved.
@@ -2587,7 +2739,11 @@ class ResearchAgentPipeline:
                 prompt_pack_version=prompt_version,
             )
         if self._config.require_human_plan_review:
-            review_gate = prepare_scientific_plan_review_gate(
+            if self._config.require_literature_design_authority:
+                _scientific_plan_gate.append_literature_design_authority_finding(
+                    findings, plan, preplan_literature
+                )
+            review_gate = _scientific_plan_gate.prepare_scientific_plan_review_gate(
                 context=context,
                 plan=plan,
                 literature=preplan_literature,
@@ -3287,7 +3443,6 @@ class ResearchAgentPipeline:
             )
         else:
             role_resolver = stopped_role_resolver
-
         generation = self._generate_or_resume_plan(
             agent_context=agent_context,
             allowed_literature_citation_keys=allowed_literature_citation_keys,
@@ -3300,6 +3455,7 @@ class ResearchAgentPipeline:
             know_how_binding=know_how_binding,
             llm_signature=llm_signature,
             planning_contract_context=planning_contract_context,
+            preplan_literature=preplan_literature,
             planner_prompt_metrics=planner_prompt_metrics,
             prompt_version=prompt_version,
             resume_from_step_id=resume_from_step_id,
@@ -3965,6 +4121,11 @@ class ResearchAgentPipeline:
         gate. The pause is not an error and carries no result: nothing
         downstream of it executed. Answer it with :meth:`resume_human_review`.
         """
+        # A requested execution checkpoint is an analysis-only boundary.  The
+        # execute coordinator already stops after the selected step; carry the
+        # same boundary into Write/Finalise so a checkpoint replay cannot spend
+        # Writer calls or overwrite a prior manuscript after execution stops.
+        stop_after_analysis = bool(stop_after_analysis or stop_after_step_id)
         skill_obj: Optional[ClinicalSkill] = None
         if skill is not None:
             skill_obj = get_skill(skill) if isinstance(skill, str) else skill
@@ -4447,17 +4608,13 @@ class ResearchAgentPipeline:
                 )
                 return cached
 
-        runtime_capabilities = self._preflight_execution_runtime(
-            run_dir=run_dir,
-            cohort_path=cohort_path,
-            target_outcome=target_outcome,
-        )
-        _emit_progress(
-            "runtime",
-            "Execution runtime validated before planning.",
-            run_id=run_id,
-            method_capabilities=list(runtime_capabilities),
-        )
+        if self._config.planner_only:
+            self._clear_validated_runtime()
+            runtime_capabilities = ()
+            _emit_progress("runtime", "Execution runtime preflight skipped for planner-only authority.", run_id=run_id, method_capabilities=[])
+        else:
+            runtime_capabilities = self._preflight_execution_runtime(run_dir=run_dir, cohort_path=cohort_path, target_outcome=target_outcome)
+            _emit_progress("runtime", "Execution runtime validated before planning.", run_id=run_id, method_capabilities=list(runtime_capabilities))
 
         def _plan_invoker():
             return _pipeline_run___plan_invoker(
@@ -5488,6 +5645,9 @@ class ResearchAgentPipeline:
             "planner_strategy": self._planner_strategy,
             "development_progressive_resume_checkpoint_sha256": (
                 self._config.development_progressive_resume_checkpoint_sha256
+            ),
+            "development_locked_analysis_plan_sha256": (
+                self._config.development_locked_analysis_plan_sha256
             ),
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair

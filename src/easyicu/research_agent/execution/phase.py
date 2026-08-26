@@ -409,6 +409,7 @@ from ..orchestration.resume import (
     upsert_step_record,
 )
 from ..orchestration.step_selector import (
+    resolve_resume_from_step_selector as _resolve_resume_from_step_selector,
     resolve_stop_after_step_selector as _resolve_stop_after_step_selector,
 )
 from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
@@ -1065,6 +1066,10 @@ def _prepare_execute_phase_authority(
             ).evidence_path
             plan_result.plan_path = plan_path
     stop_after_step_id = _resolve_stop_after_step_selector(plan, stop_after_step_id)
+    resume_from_step_id = _resolve_resume_from_step_selector(
+        plan,
+        resume_from_step_id,
+    )
     resume_controller = ResumeController(
         plan=plan,
         run_dir=run_dir,
@@ -1911,6 +1916,13 @@ def run_execute_phase(
         or pipeline._submission_profile_name is not None
     ):
 
+        # Replanning can replace ``plan`` while the coordinator is running.
+        # A live supplier prevents transition callbacks from retaining the
+        # pre-replan object while ``plan_path`` points at a newer registered
+        # revision.
+        def current_plan() -> AnalysisPlan:
+            return plan
+
         _maybe_directed_model_replan = functools.partial(
             _step_maybe_directed_model_replan,
             pipeline=pipeline,
@@ -1919,7 +1931,7 @@ def run_execute_phase(
             per_step_records=per_step_records,
             findings=findings,
             _maybe_replan=_maybe_replan,
-            plan=plan,
+            plan_supplier=current_plan,
             probe_summary=probe_summary,
         )
 
@@ -1933,7 +1945,7 @@ def run_execute_phase(
             _replan_state=_replan_state,
             pipeline=pipeline,
             _maybe_replan=_maybe_replan,
-            plan=plan,
+            plan_supplier=current_plan,
             probe_summary=probe_summary,
             per_step_records=per_step_records,
         )
@@ -3052,6 +3064,7 @@ def _step_settle_initial_code(
         _sync_provider_budget=_sync_provider_budget,
         resume_controller=resume_controller,
         prior_step_record=prior_step_record,
+        prior_attempt_records=prior_attempt_records,
     )
     return None, _StepInitialCodeSettlement(
         code=code,
@@ -3612,6 +3625,9 @@ def _step_prepare_post_candidate_figures(
         sealed_renderer_repair=bool(
             worker_progress.runner_repair_name
             and is_sealed_renderer_repair(worker_progress.runner_repair_name)
+        ),
+        resumed_from_generation_mode=step_record.get(
+            "resumed_from_generation_mode"
         ),
     ):
         step_summary = _write_host_input_binding_receipts(
@@ -4453,7 +4469,7 @@ def _step_maybe_directed_model_replan(
     per_step_records: List[Dict[str, Any]],
     findings: List[ValidationFinding],
     _maybe_replan: Any,
-    plan: AnalysisPlan,
+    plan_supplier: Callable[[], AnalysisPlan],
     probe_summary: Optional[Dict[str, Any]],
 ) -> Optional[AnalysisPlan]:
     """Fire a forced, directive-carrying replan when a model/estimation
@@ -4504,7 +4520,7 @@ def _step_maybe_directed_model_replan(
         )
     )
     return _maybe_replan(
-        current_plan=plan,
+        current_plan=plan_supplier(),
         reason=f"{failed_step.step_id}:self_inflicted_block_on_viable_cohort",
         probe_summary_payload=probe_summary,
         completed_records=per_step_records,
@@ -4526,7 +4542,7 @@ def _step_resolve_run_transition(
     _replan_state: Dict[str, Any],
     pipeline: Any,
     _maybe_replan: Any,
-    plan: AnalysisPlan,
+    plan_supplier: Callable[[], AnalysisPlan],
     probe_summary: Optional[Dict[str, Any]],
     per_step_records: List[Dict[str, Any]],
 ) -> RunTransition:
@@ -4560,7 +4576,7 @@ def _step_resolve_run_transition(
         )
     if _successful_run_transition_requests_replan(pipeline, record, has_remaining):
         revised_plan = _maybe_replan(
-            current_plan=plan,
+            current_plan=plan_supplier(),
             reason=step.step_id,
             probe_summary_payload=probe_summary,
             completed_records=per_step_records,

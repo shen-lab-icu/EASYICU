@@ -181,6 +181,9 @@ def test_bench_item_to_task_surfaces_finding_substrings_as_hazard_key():
 
 
 def test_external_protocol_adapter_preserves_structured_execution_and_rubric_fields():
+    import pandas as pd
+
+    from easyicu.research_agent.authority.run_input import build_scientific_identity
     from tools.run_research_agent_bench import (
         _bench_item_to_task,
         _external_item_from_row,
@@ -217,12 +220,49 @@ def test_external_protocol_adapter_preserves_structured_execution_and_rubric_fie
             "protocol_version": "protocol/1",
             "rubric_version": "rubric/1",
             "id_columns": ["patient_stay_id"],
+            "inclusion_criteria": ["Adult first ICU stays."],
+            "exclusion_criteria": ["Prior event before the landmark."],
+            "time_columns": ["followup_hour"],
+            "outcome_columns": ["event"],
+            "time_windows": [
+                {
+                    "name": "followup",
+                    "anchor": "icu_admission",
+                    "start_hours": 24,
+                    "end_hours": 168,
+                    "rationale": "Prespecified post-landmark follow-up.",
+                }
+            ],
             "notes": "Derive patient groups from the bound row identifier.",
+            "endpoint": {
+                "name": "event",
+                "kind": "binary",
+                "absence_semantics": "no_absent_rows",
+                "levels": [0, 1],
+            },
+            "concept_descriptions": {
+                "event": "Documented binary outcome during the declared follow-up."
+            },
+            "user_preferences": {
+                "covariates": ["severity_signal_max"],
+                "covariate_selection": "exact",
+                "covariate_rationales": {
+                    "severity_signal_max": "Baseline severity is a prespecified confounder."
+                },
+                "covariate_temporal_roles": {
+                    "severity_signal_max": "at_or_before_time_zero"
+                },
+            },
         },
         key="structured_task",
         question="Estimate the declared structured association.",
         target="event",
-        cohort_columns=["stay_id", "severity_signal_max", "event"],
+        cohort_columns=[
+            "patient_stay_id",
+            "severity_signal_max",
+            "followup_hour",
+            "event",
+        ],
         cohort_size=120,
     )
 
@@ -232,7 +272,49 @@ def test_external_protocol_adapter_preserves_structured_execution_and_rubric_fie
     assert item.expected_step_substrings == ["cohort", "association"]
     assert item.expected_artifact_substrings == ["table_one", "effect_figure"]
     assert item.id_columns == ["patient_stay_id"]
+    assert item.inclusion_criteria == ["Adult first ICU stays."]
+    assert item.exclusion_criteria == ["Prior event before the landmark."]
+    assert item.time_columns == ["followup_hour"]
+    assert item.outcome_columns == ["event"]
+    assert item.time_windows[0].anchor == "icu_admission"
     assert item.notes == "Derive patient groups from the bound row identifier."
+    assert item.endpoint.name == "event"
+    assert item.concept_descriptions == {
+        "event": "Documented binary outcome during the declared follow-up."
+    }
+    assert item.user_preferences["covariate_selection"] == "exact"
+    identity = build_scientific_identity(
+        cohort=pd.DataFrame(
+            {
+                "patient_stay_id": [1],
+                "severity_signal_max": [3.0],
+                "followup_hour": [24.0],
+                "event": [0],
+            }
+        ),
+        question=item.research_question,
+        cohort_name=item.name,
+        database=item.database,
+        target_outcome=item.target_outcome,
+        endpoint=item.endpoint,
+        primary_exposure=item.operational_exposure,
+        cross_database_validation=None,
+        inclusion_criteria=item.inclusion_criteria,
+        exclusion_criteria=item.exclusion_criteria,
+        id_columns=item.id_columns,
+        time_columns=item.time_columns,
+        outcome_columns=item.outcome_columns,
+        time_windows=item.time_windows,
+        concept_descriptions=item.concept_descriptions,
+        user_preferences=item.user_preferences,
+        notes=item.notes,
+        skill_key=None,
+        experiment_spec=None,
+        source_files=None,
+        disable_icu_context=False,
+    )
+    assert identity["time_windows"][0]["anchor"] == "icu_admission"
+    assert identity["exclusion_criteria"] == ["Prior event before the landmark."]
     assert item.protocol_adapter["database"]["defaulted"] is False
     assert item.protocol_adapter["operational_exposure"] == {
         "value": "severity_signal_max",
@@ -307,6 +389,54 @@ def test_external_protocol_adapter_rejects_declared_non_column_before_provider()
             question="Estimate the declared association.",
             target="event",
             cohort_columns=["executable_exposure_max", "event"],
+            cohort_size=12,
+        )
+
+
+def test_external_protocol_adapter_rejects_invalid_scientific_authority_before_provider():
+    from tools.run_research_agent_bench import _external_item_from_row
+
+    with pytest.raises(
+        ValueError, match="ENDPOINT_TARGET_MISMATCH.*must match target_outcome"
+    ):
+        _external_item_from_row(
+            row={
+                "endpoint": {
+                    "name": "different_outcome",
+                    "kind": "binary",
+                    "absence_semantics": "no_absent_rows",
+                    "levels": [0, 1],
+                }
+            },
+            key="structured_task",
+            question="Estimate the declared association.",
+            target="event",
+            cohort_columns=["event"],
+            cohort_size=12,
+        )
+
+    with pytest.raises(ValueError, match="exact covariates must be sealed"):
+        _external_item_from_row(
+            row={
+                "user_preferences": {
+                    "covariates": ["unavailable_confounder"],
+                    "covariate_selection": "exact",
+                }
+            },
+            key="structured_task",
+            question="Estimate the declared association.",
+            target="event",
+            cohort_columns=["event"],
+            cohort_size=12,
+        )
+
+    with pytest.raises(ValueError, match="ROLE_COLUMN_MISSING.*time_columns"):
+        _external_item_from_row(
+            row={"time_columns": ["unavailable_time"]},
+            key="structured_task",
+            question="Estimate the declared association.",
+            target="event",
+            cohort_columns=["event"],
             cohort_size=12,
         )
 

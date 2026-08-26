@@ -396,6 +396,53 @@ def test_pipeline_stops_when_hypothesis_blueprint_is_blocked(
     assert any(e["evidence_id"] == "hypothesis_blueprint" for e in manifest["evidence"])
 
 
+def test_strict_literature_design_gate_stops_before_planner_provider(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+):
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    planner_calls = 0
+
+    def forbidden_planner_run(*_args, **_kwargs):
+        nonlocal planner_calls
+        planner_calls += 1
+        raise AssertionError("Planner must not run without reviewed comparator cards")
+
+    monkeypatch.setattr(
+        pipeline_module.ProgressivePlannerAgent,
+        "run",
+        forbidden_planner_run,
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        planner_strategy="progressive_v2",
+        require_human_plan_review=True,
+        require_literature_design_authority=True,
+    )
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="strict_literature_design_gate",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert planner_calls == 0
+    assert result.plan_path == ""
+    assert manifest["notes"].startswith("aborted: literature_")
+    assert any(
+        finding["validator"] == "literature_design_authority"
+        and finding["severity"] == "error"
+        and finding["detail"]["approval_allowed"] is False
+        for finding in manifest["findings"]
+    )
+
+
 def test_pipeline_run_async(ra, synthetic_cohort, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
 
@@ -4558,6 +4605,26 @@ def test_render_writer_evidence_digest_flattens_nested_statistics(ra):
     assert '"p_value": 2.9e-05' in digest
 
 
+def test_render_writer_evidence_digest_withholds_ambiguous_nested_p_values(ra):
+    from easyicu.research_agent.pipeline import _render_writer_evidence_digest
+
+    digest = _render_writer_evidence_digest(
+        [
+            {
+                "step_id": "03_primary_association_model",
+                "status": "ok",
+                "step_summary": {
+                    "primary_predictor": "lactate_max_24h",
+                    "model_a": {"p_value": 0.01},
+                    "model_b": {"p_value": 0.02},
+                },
+            }
+        ]
+    )
+
+    assert '"p_value"' not in digest
+
+
 def test_step_contract_repair_guidance_flags_missing_primary_predictor_in_x(ra):
     from easyicu.research_agent.pipeline import _step_contract_repair_guidance
 
@@ -6444,6 +6511,51 @@ def test_apply_writer_evidence_repair_decisions_cites_or_drops_without_rewriting
     assert [item["action"] for item in applied] == ["cite", "drop"]
 
 
+def test_apply_writer_evidence_repair_replaces_only_stale_placeholder(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    stale = "statistic_step_summary_stale"
+    selected = "statistic_step_summary_selected"
+    existing = "prediction_figure_suite"
+    sentence = (
+        "Calibration slope was 0.98 "
+        f"{{evidence:{stale}}} {{evidence:{existing}}}."
+    )
+
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        f"## Results\n\n{sentence}\n",
+        missing_sentences=[sentence],
+        decisions=[
+            {"index": 0, "action": "cite", "evidence_ids": [selected]}
+        ],
+        allowed_evidence_ids=[selected, existing],
+    )
+
+    assert f"{{evidence:{stale}}}" not in repaired
+    assert repaired.count(f"{{evidence:{selected}}}") == 1
+    assert repaired.count(f"{{evidence:{existing}}}") == 1
+    assert applied[0]["evidence_ids"] == [selected]
+
+
+def test_apply_writer_evidence_repair_rejects_unregistered_selected_id(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    sentence = "Calibration slope was 0.98."
+    with pytest.raises(ValueError, match="registered allowed evidence ids"):
+        _apply_writer_evidence_repair_decisions(
+            sentence,
+            missing_sentences=[sentence],
+            decisions=[
+                {"index": 0, "action": "cite", "evidence_ids": ["stale"]}
+            ],
+            allowed_evidence_ids=["registered"],
+        )
+
+
 def test_apply_writer_evidence_repair_replaces_prose_with_exact_host_claim(ra):
     from easyicu.research_agent.reporting.manuscript_post import (
         _apply_writer_evidence_repair_decisions,
@@ -7013,6 +7125,7 @@ def _register_complete_display_suite_for_readiness(
     *,
     table_step_id: str | None = None,
     publication_source_step_id: str | None = None,
+    supporting_data_quality_step_id: str | None = "03_sensitivity",
 ) -> dict[str, list[str]]:
     provenance_path = tmp_path / "provenance_sources.json"
     provenance_path.write_text(
@@ -7069,7 +7182,7 @@ def _register_complete_display_suite_for_readiness(
         source_step_id=publication_source_step_id,
         contract={
             "figure_id": "easyicu_publication_figure",
-            "core_claim": "Absolute risk, primary effect, data quality, and sensitivity audit are shown.",
+            "core_claim": "Absolute risk, primary effect, and sensitivity audit are shown.",
             "panels": [
                 {
                     "panel_id": "A",
@@ -7086,13 +7199,6 @@ def _register_complete_display_suite_for_readiness(
                     "claim": "The primary effect estimate is drawn from source data.",
                 },
                 {
-                    "panel_id": "C",
-                    "title": "Missingness and measurement availability",
-                    "role": "data_quality",
-                    "chart_type": "availability_panel",
-                    "claim": "Missingness and measurement availability are shown with source-data denominators.",
-                },
-                {
                     "panel_id": "D",
                     "title": "Sensitivity and denominator audit",
                     "role": "robustness",
@@ -7102,6 +7208,43 @@ def _register_complete_display_suite_for_readiness(
             ],
         },
     )
+    if supporting_data_quality_step_id:
+        support_dir = (
+            tmp_path / "steps" / supporting_data_quality_step_id / "outputs"
+        )
+        support_dir.mkdir(parents=True, exist_ok=True)
+        (support_dir / "missingness_measurement_panel.png").write_text(
+            "supporting figure",
+            encoding="utf-8",
+        )
+        (support_dir / "missingness_measurement_panel.svg").write_text(
+            "supporting figure",
+            encoding="utf-8",
+        )
+        (support_dir / "missingness_measurement_panel.figure_contract.json").write_text(
+            json.dumps(
+                {
+                    "figure_id": "missingness_measurement_panel",
+                    "core_claim": (
+                        "Supporting missingness and measurement availability "
+                        "are shown with source-data denominators."
+                    ),
+                    "panels": [
+                        {
+                            "panel_id": "C",
+                            "title": "Missingness and measurement availability",
+                            "role": "data_quality",
+                            "chart_type": "availability_panel",
+                            "claim": (
+                                "Missingness and measurement availability are shown "
+                                "with source-data denominators."
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
     bound: dict[str, list[str]] = {}
     if table_step_id:
         bound.setdefault(table_step_id, []).append(table_record.evidence_id)
@@ -7468,7 +7611,7 @@ def test_display_suite_keeps_step_contracts_supporting_not_primary(
     display_audit = json.loads(
         (tmp_path / artifact_paths["display_suite_audit"]).read_text(encoding="utf-8")
     )
-    assert display_audit["schema_version"] == "easyicu.display_suite_audit/2"
+    assert display_audit["schema_version"] == "easyicu.display_suite_audit/3"
     assert display_audit["primary_publication_panel_count"] == 1
     assert display_audit["supporting_panel_count"] == 3
     assert display_audit["primary_publication_contract_paths"] == [
@@ -7634,6 +7777,7 @@ def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
         tmp_path,
         table_step_id="01_table_one",
         publication_source_step_id="02_model",
+        supporting_data_quality_step_id=None,
     )
     write_support_contract(
         "03_old_primary_render",
@@ -9282,6 +9426,100 @@ def test_critic_does_not_flag_footnote_provenance_block(ra):
     assert flagged.unsupported_claims
 
 
+def test_critic_accepts_numeric_claim_refs_with_bound_footnote_provenance(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "## Results\n"
+        "The adjusted odds ratio was 1.61[^claim_1] (95% CI, "
+        "1.54[^claim_2] to 1.68[^claim_3]) for death.\n\n"
+        "[^claim_1]: value=1.61; step=primary; field=estimate; evidence=primary\n"
+        "[^claim_2]: value=1.54; step=primary; field=ci_lower; evidence=primary\n"
+        "[^claim_3]: value=1.68; step=primary; field=ci_upper; evidence=primary\n"
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=["primary"],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+
+def test_critic_does_not_treat_literature_key_year_as_result_number(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "Repeated ICU stays can affect patient-level inference "
+        "[@strobe_2007; @record_2015]."
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=[],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+
+def test_critic_accepts_cited_prior_study_performance_framing(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "Prior studies evaluated prognostic performance across ICU populations "
+        "[@paper_2024; @paper_2025]."
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=[],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+
+def test_critic_does_not_treat_scientific_version_names_as_results(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "A direct comparison in MIMIC-IV evaluated SOFA-2 against SOFA-1 "
+        "for mortality prediction [@paper_2026]. "
+        "A multicentre study examined SOFA-2 for sepsis identification and "
+        "mortality prediction [@external_2026]."
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=[],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+    genuine_result = critic.review_manuscript(
+        scaffold="Mortality was 10% for SOFA-2 [@paper_2026].",
+        available_evidence_ids=[],
+    )
+    assert genuine_result.status == "needs_revision"
+    assert genuine_result.unsupported_claims
+
+
+def test_critic_rejects_numeric_claim_ref_without_bound_footnote_provenance(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "## Results\n"
+        "The adjusted odds ratio was 1.61[^claim_1] for death.\n\n"
+        "[^claim_1]: value=1.61; step=primary; field=estimate; evidence=not_registered\n"
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=[],
+    )
+
+    assert critique.status == "needs_revision"
+    assert critique.unsupported_claims
+
+
 def test_critic_ignores_manuscript_metadata_sections(ra):
     critic = ra.CriticAgent()
     scaffold = (
@@ -9343,7 +9581,14 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     assert critique["status"] == "pass"
     assert critique["unsupported_claims"] == []
     assert "performance was consistent" not in filtered
-    assert run_status["gates"]["evidence_complete"] is True
+    # Filtering the unsupported result sentence succeeds, but a deliberately
+    # citation-free mock manuscript must still fail the independent literature
+    # authority gate introduced for article-grade outputs.
+    assert run_status["gates"]["evidence_complete"] is False
+    assert any(
+        "Manuscript literature authority is incomplete" in error
+        for error in run_status["gates"]["evidence_errors"]
+    )
     assert not any(
         finding["validator"] == "critic_agent" and "manuscript" in finding["message"]
         for finding in manifest["findings"]

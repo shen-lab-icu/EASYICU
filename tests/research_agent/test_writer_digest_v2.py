@@ -73,14 +73,16 @@ def test_write_phase_never_reads_append_only_evidence_without_current_ledger() -
 
 def test_live_writer_digest_uses_verified_result_envelope_records() -> None:
     source = inspect.getsource(write_phase._draft_manuscript)
+    dispatch_source = inspect.getsource(write_phase._render_or_resume_writer_scaffold)
 
     authority_call = source.index("authoritative_writer_records(")
     digest_call = source.index("_render_writer_evidence_digest_v2(")
-    writer_prompt_call = source.index("writer.run(")
+    writer_prompt_call = source.index("_render_or_resume_writer_scaffold(")
     assert authority_call < digest_call < writer_prompt_call
     assert source.count("per_step_records=writer_authority_records") == 1
     assert source.count("writer_authority_records,") == 2
     assert source.count("evidence=evidence") >= 2
+    assert "writer.run(" in dispatch_source
 
 
 def test_preferred_writer_evidence_names_excludes_records_with_active_findings(
@@ -296,6 +298,9 @@ def test_v2_with_evidence_reads_claim_registry(tmp_path: Path) -> None:
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
     assert "## secondary numbers" in out
     assert "cohort_male_fraction=0.86" in out
+    assert "## numeric citation authority" in out
+    assert "- 03_primary: {evidence:03_primary_summary}" in out
+    assert "cite={evidence:03_primary_summary}" in out
     # The primary-keys field MUST NOT appear in the secondary block.
     secondary = out.split("## secondary numbers", 1)[1]
     assert "primary_or=" not in secondary
@@ -488,6 +493,53 @@ def test_v2_secondary_cap_counts_only_uncovered_claims(tmp_path: Path) -> None:
     assert "3 more leaves omitted" in out
 
 
+def test_v2_reserves_cap_for_typed_reportable_results(tmp_path: Path) -> None:
+    evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="04_descriptive",
+        evidence_id="04_descriptive_summary",
+    )
+    evidence.register_numeric_claim(
+        value="999",
+        canonical=999.0,
+        evidence_id="04_descriptive_summary",
+        step_id="04_descriptive",
+        source_field="diagnostic_first",
+    )
+    for source_field, value in (
+        ("reportable_descriptive_results.groups[0].risk_pct", "14.7"),
+        ("reportable_descriptive_results.groups[1].risk_pct", "6.3"),
+        ("reportable_descriptive_results.overall_outcome.risk_pct", "10.0"),
+    ):
+        evidence.register_numeric_claim(
+            value=value,
+            canonical=float(value),
+            evidence_id="04_descriptive_summary",
+            step_id="04_descriptive",
+            source_field=source_field,
+        )
+    records = [
+        {
+            **_record("04_descriptive", "ok", {}),
+            "evidence_ids": ["04_descriptive_summary"],
+        }
+    ]
+
+    out = _render_writer_evidence_digest_v2(
+        records,
+        evidence=evidence,
+        secondary_cap_per_step=1,
+    )
+
+    assert "groups[0].risk_pct=14.7" in out
+    assert "groups[1].risk_pct=6.3" in out
+    assert "overall_outcome.risk_pct=10.0" in out
+    assert "diagnostic_first=999" not in out
+    assert "1 more leaves omitted" in out
+
+
 def test_v2_shows_derived_numbers_in_separate_block(tmp_path: Path) -> None:
     evidence = EvidenceStore(root=tmp_path)
     _register_step_evidence(
@@ -638,6 +690,35 @@ def test_v2_output_strictly_contains_v1_output() -> None:
     assert out_v2.startswith(out_v1)
 
 
+def test_preferred_writer_names_include_exact_numeric_evidence_owner(
+    tmp_path: Path,
+) -> None:
+    evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_distribution",
+        evidence_id="distribution_summary_exact",
+    )
+    evidence.register_numeric_claim(
+        value="64.01",
+        canonical=64.01,
+        evidence_id="distribution_summary_exact",
+        step_id="03_distribution",
+        source_field="prevalence_pct",
+    )
+    records = [
+        {
+            **_record("03_distribution", "ok", {"prevalence_pct": 64.01}),
+            "evidence_ids": ["distribution_summary_exact"],
+        }
+    ]
+
+    names = _preferred_writer_evidence_names(evidence, records)
+
+    assert "distribution_summary_exact" in names
+
+
 def test_writer_digest_preferred_keys_is_tuple_and_nonempty() -> None:
     # Symbolic guard: the exported constant is iterable and unchanged
     # in shape. Useful for downstream consumers that may want to
@@ -649,3 +730,27 @@ def test_writer_digest_preferred_keys_is_tuple_and_nonempty() -> None:
     assert "average_treatment_effect" in WRITER_DIGEST_PREFERRED_KEYS
     assert "median_los_icu" in WRITER_DIGEST_PREFERRED_KEYS
     assert "auroc" in WRITER_DIGEST_PREFERRED_KEYS
+
+
+def test_primary_digest_flattens_unique_nested_p_value_beside_effect(
+    tmp_path: Path,
+) -> None:
+    digest = _render_writer_evidence_digest(
+        per_step_records=[
+            _record(
+                "primary_model",
+                "ok",
+                {
+                    "primary_or": 1.96,
+                    "scientific_runtime_receipt": {
+                        "functional_form_comparison": {"p_value": 0.619}
+                    },
+                },
+            )
+        ],
+        run_dir=tmp_path,
+        include_robustness_panel=False,
+    )
+
+    assert '"primary_or": 1.96' in digest
+    assert '"p_value": 0.619' in digest

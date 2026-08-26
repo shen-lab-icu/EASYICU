@@ -218,7 +218,7 @@ def test_signed_plan_rejects_representation_inputs_and_intent_drift() -> None:
         authority.validate_plan(drifted)
 
 
-def test_signed_trajectory_contract_owns_all_three_real_execution_steps() -> None:
+def test_signed_trajectory_contract_owns_all_four_real_execution_steps() -> None:
     authority = _authority()
     plan = authority.development_execution_only_plan(
         research_question="Assess fixed-window trajectory phenotypes."
@@ -227,6 +227,7 @@ def test_signed_trajectory_contract_owns_all_three_real_execution_steps() -> Non
         "trajectory_signed_representation",
         "trajectory_signed_candidate_selection",
         "trajectory_cluster_stability",
+        "trajectory_selection_diagnostic_figure",
     )
     for step, expected_kind in zip(plan.steps, expected_kinds):
         selected = select_standard_executor(
@@ -237,7 +238,8 @@ def test_signed_trajectory_contract_owns_all_three_real_execution_steps() -> Non
         )
         assert selected is not None
         assert selected.analysis_kind == expected_kind
-        assert authority.execution_contract_sha256 in selected.code
+        if expected_kind != "trajectory_selection_diagnostic_figure":
+            assert authority.execution_contract_sha256 in selected.code
 
 
 def test_signed_trajectory_authority_projects_and_rebinds_execution_only_plan() -> None:
@@ -253,9 +255,14 @@ def test_signed_trajectory_authority_projects_and_rebinds_execution_only_plan() 
         authority.representation_plan_method,
         "observed_data_diagonal_gaussian_mixture_candidate_selection",
         "trajectory_cluster_stability_characterization",
+        "signed_trajectory_selection_diagnostic_figure",
     ]
     assert "manifest:trajectory_window_manifest" in plan.steps[0].expected_outputs
-    assert trajectory_step_roles(plan.steps[-1]) == frozenset(
+    assert "table:trajectory_candidate_selection" in plan.steps[1].expected_outputs
+    assert plan.steps[-1].expected_outputs == [
+        "figure:trajectory_selection_diagnostics"
+    ]
+    assert trajectory_step_roles(plan.steps[2]) == frozenset(
         {"stability_freeze", "characterization"}
     )
     context = ResearchContext(
@@ -308,8 +315,34 @@ def test_signed_trajectory_authority_projects_and_rebinds_execution_only_plan() 
         plan.model_copy(update={"steps": [*plan.steps, generic_step]})
     )
     authority.validate_plan(rebound)
-    assert len(rebound.steps) == 3
+    assert len(rebound.steps) == 4
     assert rebound_findings[0].detail["reason_code"] == (
+        "trajectory_development_execution_only_authority_compiled"
+    )
+
+    legacy_checkpoint = plan.model_copy(update={"steps": plan.steps[:3]})
+    assert authority.is_development_execution_only_plan(legacy_checkpoint)
+    upgraded, upgrade_findings = authorities.bind_plan(legacy_checkpoint)
+    authority.validate_plan(upgraded)
+    assert len(upgraded.steps) == 4
+    assert upgraded.steps[-1].step_id == (
+        "03_authority_compiled_trajectory_selection_figure"
+    )
+    assert upgrade_findings[0].detail["reason_code"] == (
+        "trajectory_development_execution_only_authority_compiled"
+    )
+
+    host_capped_prefix = plan.model_copy(update={"steps": plan.steps[:2]})
+    assert authority.is_development_execution_only_plan(host_capped_prefix)
+    rebuilt, rebuild_findings = authorities.bind_plan(host_capped_prefix)
+    authority.validate_plan(rebuilt)
+    assert tuple(step.step_id for step in rebuilt.steps) == (
+        "00_authority_compiled_trajectory_representation",
+        "01_authority_compiled_trajectory_candidates",
+        "02_authority_compiled_trajectory_stability",
+        "03_authority_compiled_trajectory_selection_figure",
+    )
+    assert rebuild_findings[0].detail["reason_code"] == (
         "trajectory_development_execution_only_authority_compiled"
     )
 
@@ -494,6 +527,27 @@ def test_signed_candidate_and_stability_share_one_scaling_and_selection_contract
 
     assert candidate_summary["status"] == "ok", candidate_summary
     assert candidate_summary["n_clusters"] == 3
+    assert (
+        candidate_summary["output_files"]["table:trajectory_candidate_selection"]
+        == "trajectory_candidate_selection.csv"
+    )
+    selection_table = pd.read_csv(candidate_out / "trajectory_candidate_selection.csv")
+    assert list(selection_table.columns) == [
+        "n_clusters",
+        "bic",
+        "aic",
+        "final_log_likelihood",
+        "parameter_count",
+        "selected",
+        "aic_minimum",
+        "upper_boundary",
+        "scientific_status",
+        "reason_code",
+        "reportable_result",
+    ]
+    assert np.isfinite(selection_table[["bic", "aic"]].to_numpy()).all()
+    assert selection_table["aic_minimum"].sum() == 1
+    assert candidate_summary["diagnostic_criteria"] == ["bic", "aic"]
     stability_inputs = {
         "inputs": {
             "artifact:trajectory_representation": _binding(

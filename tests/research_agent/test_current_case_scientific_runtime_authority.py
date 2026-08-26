@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -19,11 +21,36 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     SourceFeasibilityRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.plausibility import FlagOnlyPlausibilityScope
+from easyicu.research_agent.contracts.capability_ids import (
+    LANDMARK_SPLINE_ANALYSIS_KIND,
+    LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+    SOURCE_FEASIBILITY_ANALYSIS_KIND,
+    SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
+)
+from easyicu.research_agent.contracts.landmark_spline_validation import (
+    landmark_spline_runtime_receipt_valid,
+)
+from easyicu.research_agent.contracts.source_feasibility_validation import (
+    source_feasibility_runtime_bundle_errors,
+)
+from easyicu.research_agent.execution.final_validation import (
+    _primary_runner_core_estimate_present,
+)
+from easyicu.research_agent.reporting.readiness import (
+    _compute_readiness_gates,
+    _deterministic_primary_estimate_bound,
+)
 from easyicu.research_agent.execution.runners.landmark_spline_executor import (
     run_landmark_spline_association,
 )
+from easyicu.research_agent.execution.runners.landmark_spline_functional_form_executor import (
+    LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
+    run_landmark_spline_functional_form,
+)
 from easyicu.research_agent.execution.runners.landmark_spline_robustness_executor import (
+    _matching_complete_case_spec_id,
     run_landmark_spline_robustness,
 )
 from easyicu.research_agent.execution.runners.landmark_survival_executor import (
@@ -44,7 +71,16 @@ from easyicu.research_agent.plan_utils import (
     _typed_plan_dag_findings,
     effect_output_authorized,
 )
-from easyicu.research_agent.schema import AnalysisPlan
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    CohortDescriptor,
+    ResearchContext,
+)
+from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
+from easyicu.research_agent.planning.capability_registry import (
+    assess_scientific_capability,
+    resolve_primary_capability,
+)
 
 
 def _authority(task_id: str):
@@ -73,12 +109,46 @@ def _e2_plan(authority: LandmarkSplineRuntimeAuthority) -> AnalysisPlan:
                     ],
                     "expected_outputs": list(authority.plan_outputs),
                     "method": authority.plan_method,
-                    "scientific_capability": "association_freeform_v1",
+                    "scientific_capability": LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
                     "icu_rule_refs": [authority.plan_rule_ref],
                 }
             ],
         }
     )
+
+
+def test_landmark_complete_case_row_binds_only_to_equivalent_locked_spec() -> None:
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    variables = [
+        authority.exposure_column,
+        authority.outcome_column,
+        *authority.required_adjustment_columns,
+    ]
+    specs = [
+        RobustnessSpec(
+            spec_id="primary_complete_case",
+            axis="missing",
+            description="Use complete observations for the signed primary model.",
+            missing_override={"strategy": "complete_case", "variables": variables},
+        )
+    ]
+
+    assert (
+        _matching_complete_case_spec_id(specs=specs, authority=authority)
+        == "primary_complete_case"
+    )
+    specs[0] = RobustnessSpec(
+        spec_id="narrow_complete_case",
+        axis="missing",
+        description="Uses a scientifically different analysis set.",
+        missing_override={
+            "strategy": "complete_case",
+            "variables": variables[:-1],
+        },
+    )
+    with pytest.raises(ValueError, match="matched 0"):
+        _matching_complete_case_spec_id(specs=specs, authority=authority)
 
 
 def _h2_plan(authority: SourceFeasibilityRuntimeAuthority) -> AnalysisPlan:
@@ -133,6 +203,27 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
     plan = _e2_plan(authority)
     authority.validate_plan(plan)
+    verdict = resolve_primary_capability(
+        analysis_type=plan.analysis_type,
+        plan=plan,
+    )
+    assert verdict.capability_id == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
+    assert verdict.execution_owner == "host_deterministic"
+    assert verdict.scientific_validation == "reportable"
+    assessment = assess_scientific_capability(
+        analysis_type=plan.analysis_type,
+        context=SimpleNamespace(
+            research_question=plan.research_question,
+            primary_exposure=authority.exposure_column,
+            target_outcome=authority.outcome_column,
+            variables=[],
+            cohort=object(),
+            endpoint=None,
+        ),
+        plan=plan,
+    )
+    assert assessment.scientific_validator_available
+    assert assessment.claim_ceiling == "reportable"
 
     drifted_step = plan.steps[0].model_copy(
         update={"method": "linear_logistic_regression"}
@@ -147,9 +238,7 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     sex = rng.choice(["F", "M"], size=n).astype(object)
     sex[0] = None
     charlson = rng.poisson(3.0, size=n).astype(float)
-    probability = 1.0 / (
-        1.0 + np.exp(-(-3.6 + 0.45 * lactate + 0.018 * (age - 60.0)))
-    )
+    probability = 1.0 / (1.0 + np.exp(-(-3.6 + 0.45 * lactate + 0.018 * (age - 60.0))))
     death = rng.binomial(1, probability, size=n)
     death_time = np.where(death == 1, rng.uniform(30.0, 180.0, size=n), np.nan)
     frame = pd.DataFrame(
@@ -172,14 +261,82 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     assert summary["status"] == "ok"
     assert set(summary["output_files"]) == set(authority.plan_outputs)
     receipt = summary["scientific_runtime_receipt"]
-    assert receipt["execution_contract_sha256"] == (
-        authority.execution_contract_sha256
+    assert receipt["execution_contract_sha256"] == (authority.execution_contract_sha256)
+    assert landmark_spline_runtime_receipt_valid(summary)
+    assert _primary_runner_core_estimate_present(LANDMARK_SPLINE_ANALYSIS_KIND, summary)
+    records = [
+        {
+            "step_id": "01_signed_primary",
+            "deterministic_standard_analysis": LANDMARK_SPLINE_ANALYSIS_KIND,
+            "step_summary": summary,
+        }
+    ]
+    assert _deterministic_primary_estimate_bound(records)
+    broken = json.loads(json.dumps(summary))
+    broken["scientific_runtime_receipt"]["observed_knots"] = [2.0, 1.0, 3.0]
+    assert not landmark_spline_runtime_receipt_valid(broken)
+    assert not _primary_runner_core_estimate_present(
+        LANDMARK_SPLINE_ANALYSIS_KIND, broken
     )
     assert receipt["runtime_projection_sha256"] == (
         projection.runtime_projection_sha256
     )
     assert summary["n_primary_population"] == n
     assert summary["n_complete_case"] == n - 1
+    sensitivity = pd.read_csv(tmp_path / "e2_linear_sensitivity.csv")
+    assert len(sensitivity) == 1
+    assert int(sensitivity.loc[0, "n"]) == n - 1
+    assert int(sensitivity.loc[0, "additional_spline_parameters"]) > 0
+    assert 0.0 <= sensitivity.loc[0, "nonlinearity_p_value"] <= 1.0
+    assert sensitivity.loc[0, "likelihood_ratio_statistic"] >= 0.0
+
+
+def test_m1_reuses_generic_landmark_spline_with_definition_sensitivity(
+    tmp_path: Path,
+) -> None:
+    projection, authority = _authority("m1_hepatobiliary_missingness")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    rng = np.random.default_rng(20260824)
+    n = 420
+    bilirubin_first = rng.lognormal(mean=-0.1, sigma=0.6, size=n)
+    bilirubin_max = bilirubin_first + rng.gamma(shape=1.2, scale=0.35, size=n)
+    age = rng.normal(64.0, 13.0, size=n)
+    sex = rng.choice(["F", "M"], size=n)
+    components = {
+        column: rng.integers(0, 4, size=n).astype(float)
+        for column in authority.required_adjustment_columns
+        if column not in {"age", "sex"}
+    }
+    logit = -4.0 + 0.35 * bilirubin_max + 0.018 * (age - 60.0)
+    death = rng.binomial(1, 1.0 / (1.0 + np.exp(-logit)), size=n)
+    frame = pd.DataFrame(
+        {
+            "bili_max": bilirubin_max,
+            "bili_first": bilirubin_first,
+            "death": death,
+            "death_time": np.where(
+                death == 1, rng.uniform(30.0, 180.0, size=n), np.nan
+            ),
+            "los_icu": rng.uniform(1.2, 8.0, size=n),
+            "age": age,
+            "sex": sex,
+            **components,
+        }
+    )
+
+    summary = run_landmark_spline_association(
+        frame=frame,
+        authority=authority,
+        runtime_projection_sha256=projection.runtime_projection_sha256,
+        out_dir=tmp_path,
+    )
+
+    assert set(summary["output_files"]) == set(authority.plan_outputs)
+    definitions = pd.read_csv(tmp_path / "m1_exposure_definition_sensitivity.csv")
+    assert definitions["exposure_column"].tolist() == ["bili_max", "bili_first"]
+    assert definitions["is_primary_definition"].tolist() == [True, False]
+    curve = pd.read_csv(tmp_path / "m1_landmark_bilirubin_curve.csv")
+    assert {"exposure_value", "reference_exposure_value"}.issubset(curve.columns)
 
 
 def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
@@ -220,6 +377,81 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     assert set(authority.required_columns).issubset(bound.steps[0].inputs)
     assert bound.steps[1].inputs == [authority.downstream_parent_product]
     assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
+
+
+def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
+    tmp_path: Path,
+) -> None:
+    projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    exact = _e2_plan(authority)
+    draft_step = exact.steps[0].model_copy(
+        update={
+            "method": "adjusted_association_models",
+            "intent": "Estimate a generic adjusted association.",
+            "expected_outputs": ["table:adjusted_association_estimates"],
+            "scientific_capability": "association_adjusted_v1",
+            "icu_rule_refs": [],
+        }
+    )
+    sensitivity = exact.steps[0].model_copy(
+        update={
+            "step_id": "02_sensitivity",
+            "planned_analysis_role": "sensitivity",
+            "method": "prespecified_functional_form_check",
+            "intent": "Check the declared functional form.",
+            "inputs": ["table:adjusted_association_estimates"],
+            "expected_outputs": ["table:functional_form_check"],
+            "scientific_capability": "association_freeform_v1",
+            "sensitivity_spec_ids": ["functional_form_check"],
+            "icu_rule_refs": [],
+        }
+    )
+    draft = exact.model_copy(update={"steps": [draft_step, sensitivity]})
+
+    bound = authority.bind_plan(draft)
+
+    rebound = bound.steps[1]
+    assert rebound.scientific_capability is None
+    assert rebound.inputs == [
+        authority.downstream_parent_product,
+        authority.linear_sensitivity_product,
+    ]
+    AnalysisPlan.model_validate(bound.model_dump(mode="json"))
+    selected = select_standard_executor(
+        rebound,
+        plan=bound,
+        current_case_scientific_runtime_authority=authority,
+        scientific_runtime_projection_sha256=(projection.runtime_projection_sha256),
+    )
+    assert selected is not None
+    assert selected.analysis_kind == LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND
+    summary = run_landmark_spline_functional_form(
+        step=rebound,
+        authority=authority,
+        runtime_projection_sha256=projection.runtime_projection_sha256,
+        linear_sensitivity=pd.DataFrame(
+            [
+                {
+                    "n": 44095,
+                    "events": 6200,
+                    "linear_aic": 310.0,
+                    "spline_aic": 300.0,
+                    "linear_bic": 340.0,
+                    "spline_bic": 338.0,
+                    "likelihood_ratio_statistic": 14.0,
+                    "additional_spline_parameters": 2,
+                    "nonlinearity_p_value": 0.00091,
+                }
+            ]
+        ),
+        linear_evidence_id="table_linear",
+        out_dir=tmp_path,
+    )
+    assert summary["n_complete_case"] == 44095
+    projected = pd.read_csv(tmp_path / "functional_form_check.csv")
+    assert projected.loc[0, "n_complete_case"] == 44095
+    assert projected.loc[0, "nonlinearity_p_value"] == pytest.approx(0.00091)
 
 
 def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
@@ -344,8 +576,30 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     )
     assert summary["status"] == "ok"
     assert summary["analysis_only"] is True
+    assert summary["effect_measure"] == "hazard_ratio"
+    assert " versus " in summary["contrast"]
+    assert "primary_predictor" not in summary
     assert summary["n_landmark_population"] < n
+    assert summary["missingness_measurement_audit"]["source_n"] == n
+    assert set(
+        summary["missingness_measurement_audit"]["source_missing_n_by_column"]
+    ) == set(authority.required_columns)
+    assert set(
+        summary["missingness_measurement_audit"]["landmark_missing_n_by_model_column"]
+    ) == set(authority.adjustment_columns)
     assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
+    assert authority.rmst_product is not None
+    assert (tmp_path / "landmark_rmst_summary.csv").is_file()
+    assert (tmp_path / "landmark_time_varying_cox_summary.csv").is_file()
+    rmst = pd.read_csv(tmp_path / "landmark_rmst_summary.csv")
+    assert len(rmst) == 1
+    assert rmst.loc[0, "tau_days_from_landmark"] == pytest.approx(27.0)
+    assert rmst.loc[0, "ci_low"] <= rmst.loc[0, "rmst_difference_days"]
+    assert rmst.loc[0, "rmst_difference_days"] <= rmst.loc[0, "ci_high"]
+    time_varying = pd.read_csv(tmp_path / "landmark_time_varying_cox_summary.csv")
+    exposure_intervals = time_varying.loc[time_varying["is_exposure"]]
+    assert exposure_intervals["interval_start_days"].tolist() == [0.0, 7.0, 14.0]
+    assert exposure_intervals["interval_end_days"].tolist() == [7.0, 14.0, 27.0]
     assert not (tmp_path / "landmark_survival_suite.svg").exists()
     risk = pd.read_csv(tmp_path / "landmark_risk_set_flow.csv")
     final_count = risk.loc[
@@ -361,6 +615,12 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         (authority.km_product, "landmark_km_curve.csv"),
         (authority.cox_product, "landmark_cox_summary.csv"),
         (authority.risk_set_product, "landmark_risk_set_flow.csv"),
+        (authority.ph_product, "landmark_ph_diagnostics.csv"),
+        (authority.rmst_product, "landmark_rmst_summary.csv"),
+        (
+            authority.time_varying_cox_product,
+            "landmark_time_varying_cox_summary.csv",
+        ),
     ):
         evidence_path = evidence_dir / f"table_step_artifact_deadbeef__{source_name}"
         evidence_path.write_bytes((tmp_path / source_name).read_bytes())
@@ -369,18 +629,101 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     figure_summary = run_landmark_survival_figure(
         km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
         cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
+        rmst_table=rmst,
+        time_varying_table=time_varying,
         risk_flow=risk,
+        ph_table=pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv"),
         source_paths=figure_sources,
         authority=authority,
         out_dir=figure_dir,
     )
     assert figure_summary["status"] == "ok"
     assert (figure_dir / "landmark_survival_suite.svg").is_file()
+    figure_receipt = json.loads(
+        (figure_dir / "landmark_survival_figure_runtime_receipt.json").read_text()
+    )
+    assert figure_receipt["adjustment_columns"] == list(authority.adjustment_columns)
+    if summary["proportional_hazards_status"].startswith("violation_"):
+        assert figure_receipt["promoted_adjustment_columns"] == list(
+            authority.adjustment_columns
+        )
+        assert figure_receipt["promoted_effect_measure"] == (
+            "interval_specific_hazard_ratio"
+        )
+    else:
+        assert figure_receipt["promoted_adjustment_columns"] == list(
+            authority.adjustment_columns
+        )
+        assert figure_receipt["promoted_effect_measure"] == "hazard_ratio"
+    assert figure_summary["figure_assets"]["runtime_receipt"] == (
+        "landmark_survival_figure_runtime_receipt.json"
+    )
     assert set(figure_summary["source_data_files"]) == {
         "landmark_km_curve.csv",
         "landmark_cox_summary.csv",
         "landmark_risk_set_flow.csv",
+        "landmark_ph_diagnostics.csv",
+        "landmark_rmst_summary.csv",
+        "landmark_time_varying_cox_summary.csv",
     }
+    contract = json.loads(
+        (figure_dir / "landmark_survival_suite.figure_contract.json").read_text()
+    )
+    assert contract["panels"][0]["title"].startswith("Unadjusted landmark")
+    if summary["proportional_hazards_status"].startswith("violation_"):
+        assert contract["panels"][1]["title"] == ("Time-varying adjusted association")
+        assert contract["panels"][1]["role"] == "survival_effect"
+        assert contract["panels"][1]["metadata"]["chart_type"] == (
+            "time_varying_hazard_ratio_forest"
+        )
+        assert "withheld" in contract["core_claim"]
+    else:
+        assert contract["panels"][1]["role"] == "survival_effect"
+    assert contract["panels"][3]["role"] == "diagnostics"
+    assert contract["panels"][3]["metadata"]["chart_type"] == "schoenfeld_plot"
+    assert "direction can differ" in contract["statistics_note"]
+
+    violation_ph = pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv")
+    violation_ph["ph_status"] = "violation_block_paper_authorization"
+    violation_ph["paper_authorization_allowed"] = False
+    violation_ph.loc[0, "p_value"] = 0.001
+    violation_dir = tmp_path / "violation_figure"
+    run_landmark_survival_figure(
+        km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
+        cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
+        rmst_table=rmst,
+        time_varying_table=time_varying,
+        risk_flow=risk,
+        ph_table=violation_ph,
+        source_paths=figure_sources,
+        authority=authority,
+        out_dir=violation_dir,
+    )
+    violation_contract = json.loads(
+        (violation_dir / "landmark_survival_suite.figure_contract.json").read_text()
+    )
+    assert violation_contract["panels"][1]["title"] == (
+        "Time-varying adjusted association"
+    )
+    assert violation_contract["panels"][1]["metadata"]["chart_type"] == (
+        "time_varying_hazard_ratio_forest"
+    )
+    assert "landmark_rmst_summary.csv" in violation_contract["source_data"]
+
+    invalid_ph = pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv")
+    invalid_ph.loc[0, "p_value"] = float("nan")
+    with pytest.raises(ValueError, match="finite p values"):
+        run_landmark_survival_figure(
+            km_table=pd.read_csv(tmp_path / "landmark_km_curve.csv"),
+            cox_table=pd.read_csv(tmp_path / "landmark_cox_summary.csv"),
+            rmst_table=rmst,
+            time_varying_table=time_varying,
+            risk_flow=risk,
+            ph_table=invalid_ph,
+            source_paths=figure_sources,
+            authority=authority,
+            out_dir=tmp_path / "invalid_figure",
+        )
 
 
 def test_host_bound_cohort_root_publishes_exact_input_bytes(
@@ -435,6 +778,21 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         {
             "research_question": "Project signed sensitivity results.",
             "analysis_type": "association_study",
+            "robustness_specs": [
+                {
+                    "spec_id": "primary_complete_case",
+                    "axis": "missing",
+                    "description": "Complete cases for the draft primary model.",
+                    "missing_override": {
+                        "strategy": "complete_case",
+                        "variables": [
+                            authority.exposure_column,
+                            authority.outcome_column,
+                            "draft_adjustment",
+                        ],
+                    },
+                }
+            ],
             "steps": [
                 primary.model_dump(mode="json"),
                 {
@@ -443,7 +801,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
                     "intent": "Summarize signed robustness results.",
                     "inputs": [
                         "dataset:analysis_cohort",
-                        "table:adjusted_association_estimates",
+                        "unrelated_raw_covariate",
                     ],
                     "expected_outputs": [
                         "statistic:primary_or",
@@ -453,6 +811,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
                         "table:robustness_matrix",
                     ],
                     "method": "robustness_sensitivity",
+                    "sensitivity_spec_ids": ["primary_complete_case"],
                     "robustness_replay_spec": {
                         "products": [
                             {"product_id": "primary_or", "output": "primary_effect"},
@@ -475,6 +834,39 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
                         ]
                     },
                 },
+                {
+                    "step_id": "03_absolute_risk",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Describe absolute-risk context.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:absolute_risk_context"],
+                    "method": "descriptive_statistics",
+                },
+                {
+                    "step_id": "04_measurement_audit",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Audit the measurement process.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:measurement_process"],
+                    "method": "missing_data",
+                },
+                {
+                    "step_id": "05_robustness_figure",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the registered evidence.",
+                    "inputs": [
+                        "statistic:primary_or",
+                        "table:robustness_summary",
+                    ],
+                    "expected_outputs": ["figure:robustness_plot"],
+                    "method": "visualization",
+                    "input_consumption_contracts": [
+                        {
+                            "input_key": "table:robustness_summary",
+                            "mode": "all_rows",
+                        }
+                    ],
+                },
             ],
         }
     )
@@ -482,10 +874,34 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     step = bound.steps[1]
     assert authority.downstream_parent_product in step.inputs
     assert authority.linear_sensitivity_product in step.inputs
+    assert step.inputs == [
+        authority.downstream_parent_product,
+        authority.linear_sensitivity_product,
+    ]
     assert {item.input_key for item in step.input_consumption_contracts} == {
         authority.downstream_parent_product,
         authority.linear_sensitivity_product,
     }
+    assert bound.robustness_specs[0].missing_override == {
+        "strategy": "complete_case",
+        "variables": list(authority.model_complete_case_columns),
+    }
+    figure = bound.steps[4]
+    assert figure.inputs == [
+        authority.curve_product,
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+        "table:measurement_process",
+    ]
+    assert {item.input_key for item in figure.input_consumption_contracts} == set(
+        figure.inputs
+    )
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "data_quality",
+    ]
 
     selected = select_standard_executor(
         step,
@@ -524,6 +940,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         contrast_evidence_id="contrast_evidence",
         linear_evidence_id="linear_evidence",
         out_dir=tmp_path,
+        complete_case_spec_id="primary_complete_case",
         input_bindings=[
             {
                 "input_key": authority.downstream_parent_product,
@@ -544,14 +961,196 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     assert summary["status"] == "ok"
     assert summary["primary_or"] == 2.0
     assert summary["primary_effect_is_nonlinear_curve_summary"] is False
+    assert "exposure_value=5" in summary["primary_effect_label"]
+    assert "reference_value=2.1" in summary["primary_effect_label"]
     assert summary["complete_case_n"] == 44095
     assert len(summary["input_bindings"]) == 2
     matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
     assert set(matrix["axis"]) == {"primary", "functional_form", "missing"}
+    assert (
+        matrix.loc[matrix["axis"] == "missing", "spec_id"].item()
+        == "primary_complete_case"
+    )
     assert matrix.loc[matrix["axis"] == "missing", "independent_variant"].item() in (
         False,
         0,
     )
+
+
+def test_e2_runtime_authority_rejects_missing_referenced_complete_case_spec() -> None:
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Project signed sensitivity results.",
+            "analysis_type": "association_study",
+            "robustness_specs": [
+                {
+                    "spec_id": "unreferenced_complete_case",
+                    "axis": "missing",
+                    "description": "A complete-case spec not selected by the step.",
+                    "missing_override": {
+                        "strategy": "complete_case",
+                        "variables": list(authority.model_complete_case_columns),
+                    },
+                }
+            ],
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_robustness",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Summarize signed robustness results.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:robustness_summary"],
+                    "method": "robustness_sensitivity",
+                    "sensitivity_spec_ids": ["unrelated_robustness_axis"],
+                    "robustness_replay_spec": {
+                        "products": [
+                            {
+                                "product_id": "robustness_summary",
+                                "output": "robustness_summary",
+                            }
+                        ]
+                    },
+                },
+            ],
+        }
+    )
+
+    with pytest.raises(
+        CurrentCaseScientificAuthorityError,
+        match="exactly one referenced complete-case specification",
+    ):
+        authority.bind_plan(plan)
+
+
+def test_landmark_authority_migrates_one_legacy_missingness_axis() -> None:
+    _projection, authority = _authority("m1_hepatobiliary_missingness")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Project the signed legacy sensitivity.",
+            "analysis_type": "association_study",
+            "robustness_specs": [
+                {
+                    "spec_id": "primary_complete_case_replay",
+                    "axis": "missing",
+                    "description": "Complete cases for the primary model.",
+                    "missing_override": {
+                        "strategy": "complete_case",
+                        "variables": ["draft_variable"],
+                    },
+                }
+            ],
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_legacy_robustness",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Retain the legacy missingness axis.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:robustness_summary"],
+                    "method": "robustness_sensitivity",
+                    "sensitivity_spec_ids": ["informative_measurement_missingness"],
+                    "robustness_replay_spec": {
+                        "products": [
+                            {
+                                "product_id": "robustness_summary",
+                                "output": "robustness_summary",
+                            }
+                        ]
+                    },
+                },
+            ],
+        }
+    )
+
+    bound = authority.bind_plan(plan)
+
+    assert bound.steps[1].sensitivity_spec_ids == [
+        "informative_measurement_missingness",
+        "primary_complete_case_replay",
+    ]
+    assert bound.robustness_specs[0].missing_override == {
+        "strategy": "complete_case",
+        "variables": list(authority.model_complete_case_columns),
+    }
+
+
+def test_landmark_authority_prefers_four_table_hero_over_robustness_figure() -> None:
+    _projection, authority = _authority("m1_hepatobiliary_missingness")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Render robustness and a primary display.",
+            "analysis_type": "association_study",
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_absolute_risk",
+                    "intent": "Report absolute-risk context.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:absolute_risk_context"],
+                    "method": "descriptive_statistics",
+                },
+                {
+                    "step_id": "03_measurement",
+                    "intent": "Audit measurement.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:measurement_process_audit"],
+                    "method": "missing_data",
+                },
+                {
+                    "step_id": "04_robustness",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Summarize robustness.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:robustness_summary"],
+                    "method": "robustness_sensitivity",
+                },
+                {
+                    "step_id": "05_robustness_figure",
+                    "intent": "Render robustness only.",
+                    "inputs": ["table:robustness_summary"],
+                    "expected_outputs": ["figure:robustness_plot"],
+                    "method": "visualization",
+                },
+                {
+                    "step_id": "06_publication_figure",
+                    "intent": "Render the four-table publication display.",
+                    "inputs": [
+                        "table:adjusted_association_estimates",
+                        "table:absolute_risk_context",
+                        "table:robustness_summary",
+                        "table:measurement_process_audit",
+                    ],
+                    "expected_outputs": ["figure:publication_figure"],
+                    "method": "visualization",
+                },
+            ],
+        }
+    )
+
+    bound = authority.bind_plan(plan)
+    robustness_figure = next(
+        step for step in bound.steps if step.step_id == "05_robustness_figure"
+    )
+    publication_figure = next(
+        step for step in bound.steps if step.step_id == "06_publication_figure"
+    )
+
+    assert robustness_figure.inputs == ["table:robustness_summary"]
+    assert publication_figure.inputs == [
+        authority.curve_product,
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    ]
+    assert len(publication_figure.figure_panels) == 4
 
 
 def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
@@ -596,7 +1195,9 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
     rebound, rebound_findings = ScientificRuntimeAuthorities(
         trajectory=None,
         current_case=authority,
-    ).bind_plan(plan.model_copy(update={"steps": [plan.steps[0], generic_article_step]}))
+    ).bind_plan(
+        plan.model_copy(update={"steps": [plan.steps[0], generic_article_step]})
+    )
     authority.validate_plan(rebound)
     assert len(rebound.steps) == 1
     assert rebound.steps[0].method == authority.plan_method
@@ -616,21 +1217,102 @@ def test_h2_plan_forbids_effect_work_and_runtime_emits_no_estimate(
             plan.model_copy(update={"steps": [plan.steps[0], forbidden]})
         )
 
+    source_out_dir = tmp_path / "steps" / plan.steps[0].step_id / "outputs"
     summary = run_source_feasibility_fail_closed(
         authority=authority,
         runtime_projection_sha256=projection.runtime_projection_sha256,
-        out_dir=tmp_path,
+        out_dir=source_out_dir,
     )
     assert summary["status"] == "ok"
     assert summary["scientific_decision"] == "blocked_by_source_authority"
     assert summary["reason_code"] == "H2_VERIFIED_NON_USE_UNAVAILABLE"
     assert summary["effect_estimate"] is None
-    table = pd.read_csv(tmp_path / "h2_source_feasibility.csv")
+    table = pd.read_csv(source_out_dir / "h2_source_feasibility.csv")
     assert table.loc[0, "causal_contrast_authorized"] in (False, 0)
     assert pd.isna(table.loc[0, "effect_estimate"])
 
+    record = {
+        "step_id": plan.steps[0].step_id,
+        "status": "ok",
+        "generation_mode": "deterministic_standard",
+        "deterministic_standard_analysis": SOURCE_FEASIBILITY_ANALYSIS_KIND,
+        "step_summary": summary,
+    }
+    assert (
+        source_feasibility_runtime_bundle_errors(
+            plan=plan,
+            records=[record],
+            run_dir=tmp_path,
+        )
+        == []
+    )
+    verdict = resolve_primary_capability(
+        analysis_type=plan.analysis_type,
+        plan=plan,
+    )
+    assert verdict.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
+    assert verdict.execution_owner == "host_deterministic"
+    wrong_family = plan.model_copy(update={"analysis_type": "association_study"})
+    wrong_verdict = resolve_primary_capability(
+        analysis_type=wrong_family.analysis_type,
+        plan=wrong_family,
+    )
+    assert wrong_verdict.failure_reason == "source_feasibility_family_mismatch"
+    assessment = assess_scientific_capability(
+        analysis_type=plan.analysis_type,
+        context=ResearchContext(
+            research_question=plan.research_question,
+            variables=[],
+            cohort=CohortDescriptor(
+                cohort_name="source_audit",
+                database="synthetic",
+                n_patients=1,
+                n_stays=1,
+            ),
+        ),
+        plan=plan,
+    )
+    assert assessment.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID
+    assert assessment.claim_ceiling == "reportable"
 
-def test_signed_current_case_contracts_are_selected_by_the_real_execution_router() -> None:
+    tampered = deepcopy(record)
+    tampered["step_summary"]["scientific_runtime_receipt"]["effect_estimate"] = 1.0
+    assert (
+        "runtime receipt is invalid"
+        in source_feasibility_runtime_bundle_errors(
+            plan=plan,
+            records=[tampered],
+            run_dir=tmp_path,
+        )[0]
+    )
+
+    gates = _compute_readiness_gates(
+        context=ResearchContext(
+            research_question=plan.research_question,
+            variables=[],
+            cohort=CohortDescriptor(
+                cohort_name="source_audit",
+                database="synthetic",
+                n_patients=1,
+                n_stays=1,
+            ),
+        ),
+        plan=plan,
+        per_step_records=[record],
+        findings=[],
+        evidence=EvidenceStore(tmp_path),
+        run_dir=tmp_path,
+        manuscript_path=tmp_path / "manuscript.md",
+        stop_after_analysis=True,
+    )
+    assert gates["execution_complete"] is True
+    assert gates["analysis_validated"] is True
+    assert gates["paper_authorized"] is False
+
+
+def test_signed_current_case_contracts_are_selected_by_the_real_execution_router() -> (
+    None
+):
     for task_id, expected_kind, plan_factory in (
         (
             "e2_lactate_mortality",
@@ -649,9 +1331,7 @@ def test_signed_current_case_contracts_are_selected_by_the_real_execution_router
             plan.steps[0],
             plan=plan,
             current_case_scientific_runtime_authority=authority,
-            scientific_runtime_projection_sha256=(
-                projection.runtime_projection_sha256
-            ),
+            scientific_runtime_projection_sha256=(projection.runtime_projection_sha256),
         )
         assert selected is not None
         assert selected.analysis_kind == expected_kind
@@ -664,9 +1344,7 @@ def test_signed_current_case_contracts_are_selected_by_the_real_execution_router
             rebuilt_step,
             plan=plan,
             current_case_scientific_runtime_authority=authority,
-            scientific_runtime_projection_sha256=(
-                projection.runtime_projection_sha256
-            ),
+            scientific_runtime_projection_sha256=(projection.runtime_projection_sha256),
         )
         assert rebuilt is not None
         assert rebuilt.analysis_kind == expected_kind
@@ -686,7 +1364,5 @@ def test_pipeline_config_requires_the_signed_contract_and_projection_as_a_pair(
     with pytest.raises(ValueError, match="configured together"):
         PipelineConfig(
             workdir=tmp_path,
-            current_case_scientific_runtime_authority=authority.model_dump(
-                mode="json"
-            ),
+            current_case_scientific_runtime_authority=authority.model_dump(mode="json"),
         )

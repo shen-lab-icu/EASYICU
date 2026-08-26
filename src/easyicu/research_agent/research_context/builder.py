@@ -87,6 +87,17 @@ _observed_domain = observed_domain_for_series
 # ---------------------------------------------------------------------------
 
 
+def _logical_dtype(series: pd.Series) -> str:
+    """Return a stable logical dtype across pandas string-inference modes."""
+
+    observed = series.dropna()
+    if not observed.empty and pd.api.types.infer_dtype(
+        observed, skipna=True
+    ) == "string":
+        return "str"
+    return str(series.dtype)
+
+
 def _safe_get_concept_info(name: str) -> Optional[Dict[str, Any]]:
     """Best-effort fetch of EasyICU concept metadata. Returns None if unavailable."""
     try:
@@ -757,7 +768,8 @@ def _describe_column(
 ) -> ConceptDescriptor:
     series = df[col]
     sample = series.dropna().head(50).tolist() if len(series) else []
-    hint = classify_variable(col, str(series.dtype), sample)
+    logical_dtype = _logical_dtype(series)
+    hint = classify_variable(col, logical_dtype, sample)
 
     # role fix-ups: respect user-declared id/time/outcome
     role = hint.role
@@ -867,7 +879,7 @@ def _describe_column(
         name=col,
         description=description,
         role=role,
-        dtype=str(series.dtype),
+        dtype=logical_dtype,
         unit=hint.unit,
         valid_range=list(hint.valid_range) if hint.valid_range else None,
         observed_domain=observed_domain_for_series(series),
@@ -1045,7 +1057,7 @@ def _infer_outcome_semantics(
         }
     if outcome in {"death", "mortality"}:
         return {
-            "label": "all-cause mortality",
+            "label": "mortality without a specified setting or horizon",
             "description": "Binary mortality outcome flag; confirm whether this refers to ICU, hospital, or fixed-horizon mortality before interpretation.",
             "source_concept": "mortality_unspecified",
             "substitution_note": (
@@ -1185,13 +1197,23 @@ def _enrich_target_outcome_descriptor(
             or requested_semantic != "declared_primary_outcome"
         ):
             descriptor.source_concept = requested_semantic
-        if owner_metadata_present and owner_semantic != requested_semantic:
+        if (
+            owner_metadata_present
+            and requested_semantic != "mortality_unspecified"
+            and owner_semantic != requested_semantic
+        ):
             explicit_note = (
                 f"Endpoint-definition conflict: the research question requests "
                 f"{semantics['label']}, but the owner-issued concept metadata for "
                 f"'{target_outcome}' defines {descriptor.description!r}. Do not "
                 "reinterpret or execute this endpoint until the physical concept "
                 "and requested definition agree."
+            )
+        elif owner_metadata_present and requested_semantic == "mortality_unspecified":
+            explicit_note = (
+                f"The research question leaves mortality setting and horizon "
+                f"unspecified; '{target_outcome}' therefore retains its "
+                f"owner-issued clinical definition ({descriptor.description!r})."
             )
         elif owner_metadata_present:
             explicit_note = (

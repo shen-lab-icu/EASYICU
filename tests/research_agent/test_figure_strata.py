@@ -56,6 +56,13 @@ def test_display_label_fallback_does_not_invent_endpoint_semantics() -> None:
     )
 
 
+def test_fallback_display_labels_expand_common_icu_tokens() -> None:
+    assert display_label("sep3_sofa2") == "Sepsis-3 SOFA"
+    assert display_label("sofa2_resp") == "SOFA Respiratory"
+    assert display_label("lact") == "Lactate"
+    assert display_label("spo2") == "SpO2"
+
+
 def test_scoped_binary_labels_remain_bound_to_their_planner_variable() -> None:
     labels = {
         "marker_a=0": "Marker A absent",

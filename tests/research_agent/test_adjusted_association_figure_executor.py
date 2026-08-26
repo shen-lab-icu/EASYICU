@@ -23,9 +23,14 @@ from easyicu.research_agent.execution.runners.adjusted_association_executor impo
 )
 from easyicu.research_agent.execution.runners.adjusted_association_figure_executor import (
     ADJUSTED_ASSOCIATION_FIGURE_INPUT,
+    ASSOCIATION_OVERVIEW_FIGURE_INPUTS,
     adjusted_association_figure_executor_code,
     adjusted_association_figure_executor_owns_step,
+    association_overview_figure_executor_owns_step,
     run_adjusted_association_figure,
+)
+from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
 )
 from easyicu.research_agent.execution.runners.effect_scale import (
     describe_effect_scale,
@@ -266,6 +271,32 @@ def test_it_declines_a_second_table_it_cannot_read():
     )
     assert not adjusted_association_figure_executor_owns_step(
         step, resolved_bindings=_host_bindings()
+    )
+
+
+def test_two_host_tables_select_the_association_overview_owner():
+    step = _step(
+        inputs=list(ASSOCIATION_OVERVIEW_FIGURE_INPUTS),
+        input_consumption_contracts=[
+            {
+                "schema_version": "easyicu.artifact_consumption/1",
+                "input_key": key,
+                "mode": "all_rows",
+                "role_column": None,
+                "expected_roles": [],
+            }
+            for key in ASSOCIATION_OVERVIEW_FIGURE_INPUTS
+        ],
+    )
+    bindings = _host_bindings()
+    bindings[ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0]] = {
+        "product_contract": {
+            "columns": list(EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS)
+        }
+    }
+
+    assert association_overview_figure_executor_owns_step(
+        step, resolved_bindings=bindings
     )
 
 

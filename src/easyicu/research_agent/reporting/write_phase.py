@@ -18,7 +18,7 @@ import re
 import hashlib
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..agents.core import CriticAgent, ManuscriptAgent
 from ..audits.manuscript_claims import audit_manuscript_numeric_claims
@@ -36,15 +36,35 @@ from ..authority.evidence_store import (
     EvidenceEnforcementMode,
     sha256_of_file,
 )
-from ..authority.runtime_artifacts import current_step_records
+from ..authority.manuscript_claim_policy import (
+    missing_scientific_claims_in_results,
+    place_scientific_claim_tokens_in_results,
+)
+from ..authority.runtime_artifacts import (
+    current_step_records,
+    verified_run_evidence_path,
+)
 from ..figures.skill import PublicationFigureSkill
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_literature import (
     audit_manuscript_literature,
+    remove_sentences_with_unknown_literature_keys,
+    repair_evidence_ids_mistyped_as_literature,
     repair_missing_context_section_citations,
     repair_missing_methods_method_citation,
     render_writer_literature_digest,
+)
+from .manuscript_quality import (
+    ManuscriptQualityFinding,
+    audit_manuscript_quality,
+    expected_manuscript_display_labels,
+    render_reader_manuscript,
+)
+from .administrative_authority import load_manuscript_administrative_authority
+from .manuscript_provenance import (
+    ManuscriptProvenanceError,
+    build_manuscript_provenance,
 )
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle
@@ -53,10 +73,13 @@ from ..providers.prompt_budget import budgeted_vlm_client
 from ..providers.structured_retry import StructuredResponseFailure
 from .manuscript_post import (
     _apply_writer_evidence_repair_decisions,
+    _writer_repair_target_span,
     bind_numeric_values,
+    drop_untraceable_numeric_sentences,
     enforce_writer_claim_language,
     _demote_unresolved_evidence_placeholders,
     _remove_tbd_sentences,
+    _remove_unregistered_evidence_placeholders,
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
     repair_miscited_numeric_citations,
@@ -113,8 +136,10 @@ def _deterministically_drop_rejected_writer_sentences(
     sentences = [str(sentence).strip() for sentence in rejected_sentences]
     repaired = scaffold
     for sentence in sorted(set(sentences), key=lambda value: (-len(value), value)):
-        if sentence:
-            repaired = repaired.replace(sentence, "")
+        if not sentence:
+            continue
+        while (span := _writer_repair_target_span(repaired, sentence)) is not None:
+            repaired = repaired[: span[0]] + repaired[span[1] :]
     applied = [
         {
             "index": index,
@@ -167,6 +192,7 @@ def _repair_rejected_writer_sentences(
             original_scaffold,
             missing_sentences=rejected_sentences,
             decisions=repair_decisions,
+            allowed_evidence_ids=evidence_ids,
             allowed_claim_refs=allowed_claim_refs,
         )
     except (StructuredResponseFailure, ValueError) as exc:
@@ -593,6 +619,130 @@ def _persist_manuscript_critique(
     return critique_path
 
 
+def _persist_manuscript_quality_artifacts(
+    *,
+    bound: str,
+    bound_evidence_id: str,
+    run_dir: Path,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    expected_display_labels: Sequence[str] = (),
+) -> tuple[ManuscriptQualityFinding, ...]:
+    """Persist a non-authoritative reader view and its deterministic audit."""
+
+    audit = audit_manuscript_quality(
+        bound,
+        expected_display_labels=expected_display_labels,
+    )
+    quality_audit_path = run_dir / "manuscript_quality_audit.json"
+    quality_audit_path.write_text(
+        json.dumps(
+            audit.to_dict(),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    reader_path = run_dir / "manuscript_reader.md"
+    reader_path.write_text(render_reader_manuscript(bound), encoding="utf-8")
+    if evidence.get("manuscript_quality_audit") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Deterministic reader-facing manuscript structure, terminology, "
+                "and cross-section consistency audit."
+            ),
+            source_path=quality_audit_path,
+            evidence_id="manuscript_quality_audit",
+            producer="pipeline",
+            generation_mode="system",
+        )
+    if evidence.get("manuscript_reader") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Non-authoritative reader view with audit links and numeric claim "
+                "footnotes removed; the bound manuscript remains authoritative."
+            ),
+            source_path=reader_path,
+            evidence_id="manuscript_reader",
+            producer="pipeline",
+            generation_mode="system",
+            metadata={
+                "authoritative_manuscript": False,
+                "source_evidence_id": bound_evidence_id,
+                "source_sha256": audit.source_sha256,
+            },
+        )
+    errors = tuple(item for item in audit.findings if item.severity == "error")
+    if errors:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_quality",
+                severity="error",
+                message=(
+                    "Deterministic manuscript quality audit requires changes: "
+                    + "; ".join(f"{item.code} ({item.section})" for item in errors[:8])
+                ),
+                evidence_ids=["manuscript_quality_audit", "manuscript_reader"],
+                detail=audit.to_dict(),
+            )
+        )
+    return errors
+
+
+def _persist_manuscript_provenance_artifact(
+    *,
+    bound: str,
+    numeric_binding_map: Mapping[str, Any],
+    run_dir: Path,
+    evidence: Any,
+    findings: List[ValidationFinding],
+) -> None:
+    """Persist the path-free number -> JSON -> code/data reader contract."""
+
+    try:
+        payload = build_manuscript_provenance(
+            manuscript=bound,
+            evidence=evidence,
+            binding_map=numeric_binding_map,
+        )
+    except ManuscriptProvenanceError as exc:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_provenance",
+                severity="error",
+                message=(
+                    f"Interactive manuscript provenance could not be verified: {exc}"
+                ),
+            )
+        )
+        return
+    path = run_dir / "manuscript_provenance.json"
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    if evidence.get("manuscript_provenance") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Path-free interactive manuscript reader provenance: every bound "
+                "number maps to its JSON field and registered code/data artefacts."
+            ),
+            source_path=path,
+            evidence_id="manuscript_provenance",
+            producer="pipeline",
+            generation_mode="system",
+            metadata={
+                "schema_version": payload["schema_version"],
+                "manuscript_sha256": payload["manuscript_sha256"],
+                "claim_ceiling": payload["claim_ceiling"],
+            },
+        )
+
+
 @dataclass(frozen=True)
 class _DraftStageResult:
     """Immutable handoff from manuscript generation to evidence binding."""
@@ -613,13 +763,11 @@ class _BindingStageResult:
     manuscript_critique: CritiqueReport
 
 
-def _activate_publication_inputs(
+def _activate_publication_figure(
     pipeline: Any,
     *,
-    plan_result: _PlanPhaseResult,
     execute_result: _ExecutePhaseResult,
     context: Any,
-    agent_context: Any,
     evidence: Any,
     findings: List[ValidationFinding],
     role_resolver: Callable[[str], Any],
@@ -627,9 +775,14 @@ def _activate_publication_inputs(
     run_dir: Path,
     run_id: str,
     emit_progress: Callable[..., None],
-) -> Optional[LiteratureBundle]:
-    """Activate publication skills and produce the run-bound literature bundle."""
-    literature: Optional[LiteratureBundle] = plan_result.preplan_literature
+) -> None:
+    """Build the deterministic publication figure after successful execution.
+
+    Figure promotion is an analysis-output suffix, not manuscript drafting. It
+    must therefore run before a requested ``stop_after_analysis`` pause. This
+    keeps the pause provider-free while still closing the source-backed article
+    display bundle from already registered evidence.
+    """
     publication_skill_activation = compile_publication_skill_activation(
         nature_figure_enabled=pipeline._enable_publication_figure_skill,
         nature_writing_enabled=pipeline._enable_nature_writing_skill,
@@ -735,9 +888,29 @@ def _activate_publication_inputs(
                 ValidationFinding(
                     validator="publication_figure_skill",
                     severity="warning",
-                    message=f"Publication figure skill failed; writer will use existing evidence only: {exc}",
+                    message=(
+                        "Publication figure skill failed; downstream reporting "
+                        f"will use existing evidence only: {exc}"
+                    ),
                 )
             )
+
+
+def _activate_publication_inputs(
+    pipeline: Any,
+    *,
+    plan_result: _PlanPhaseResult,
+    agent_context: Any,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    role_resolver: Callable[[str], Any],
+    prompt_version: str,
+    run_dir: Path,
+    run_id: str,
+    emit_progress: Callable[..., None],
+) -> Optional[LiteratureBundle]:
+    """Produce the run-bound literature bundle for manuscript drafting."""
+    literature: Optional[LiteratureBundle] = plan_result.preplan_literature
 
     if pipeline._enable_literature and literature is None:
         try:
@@ -879,6 +1052,254 @@ def _activate_publication_inputs(
     return literature
 
 
+def _writer_execution_checkpoint_sha256(
+    records: Sequence[Dict[str, Any]],
+) -> str:
+    """Digest the final record for every execution step."""
+
+    payload = current_step_records(records)
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _verified_resume_writer_scaffold(
+    *,
+    resume_state: Optional[Dict[str, Any]],
+    evidence: Any,
+    run_dir: Path,
+    per_step_records: Sequence[Dict[str, Any]],
+) -> Optional[tuple[str, Dict[str, Any]]]:
+    """Return the prior Writer draft only for an unchanged execution ledger.
+
+    A report-only resume should not pay for or introduce a second free-form
+    manuscript when every analysis checkpoint is unchanged. Reuse is denied
+    when the prior step ledger differs, the registered raw draft is absent, or
+    its immutable EvidenceStore copy fails path/digest verification. The
+    caller still runs every current host-owned manuscript gate.
+    """
+
+    if not isinstance(resume_state, dict):
+        return None
+    prior_records = resume_state.get("per_step_records")
+    if not isinstance(prior_records, list) or not prior_records:
+        return None
+    current_records = list(per_step_records)
+    if not current_records:
+        return None
+    prior_digest = _writer_execution_checkpoint_sha256(prior_records)
+    current_digest = _writer_execution_checkpoint_sha256(current_records)
+    if prior_digest != current_digest:
+        return None
+    from .manuscript_sections import manuscript_writer_contract_sha256
+
+    current_contract_sha256 = manuscript_writer_contract_sha256()
+    records = [
+        record
+        for record in evidence.current_verified_records(per_step_records)
+        if record.evidence_id == "manuscript_scaffold_raw"
+        or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
+    ]
+    record = next(
+        (
+            candidate
+            for candidate in reversed(records)
+            if (candidate.metadata or {}).get("writer_contract_sha256")
+            == current_contract_sha256
+        ),
+        None,
+    )
+    if record is None:
+        return None
+    verified_path = verified_run_evidence_path(run_dir, record)
+    if verified_path is None:
+        return None
+    try:
+        scaffold = verified_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    if not scaffold.strip():
+        return None
+    return scaffold, {
+        "reason_code": "verified_prior_writer_scaffold_reused",
+        "source_evidence_id": str(record.evidence_id),
+        "source_sha256": str(record.sha256),
+        "execution_checkpoint_sha256": current_digest,
+        "source_relative_path": str(record.relative_path),
+        "writer_contract_sha256": current_contract_sha256,
+    }
+
+
+def _verified_resume_writer_scaffold_for_quality_migration(
+    *,
+    resume_state: Optional[Dict[str, Any]],
+    evidence: Any,
+    run_dir: Path,
+    per_step_records: Sequence[Dict[str, Any]],
+) -> Optional[tuple[str, Dict[str, Any]]]:
+    """Return the newest verified older-contract scaffold for targeted repair."""
+
+    if not isinstance(resume_state, dict):
+        return None
+    prior_records = resume_state.get("per_step_records")
+    if not isinstance(prior_records, list) or not prior_records:
+        return None
+    current_records = list(per_step_records)
+    if not current_records:
+        return None
+    prior_digest = _writer_execution_checkpoint_sha256(prior_records)
+    current_digest = _writer_execution_checkpoint_sha256(current_records)
+    if prior_digest != current_digest:
+        return None
+
+    from .manuscript_sections import manuscript_writer_contract_sha256
+
+    current_contract_sha256 = manuscript_writer_contract_sha256()
+    candidates = [
+        record
+        for record in evidence.current_verified_records(per_step_records)
+        if record.evidence_id == "manuscript_scaffold_raw"
+        or (record.metadata or {}).get("resume_supersedes") == "manuscript_scaffold_raw"
+    ]
+    for record in reversed(candidates):
+        prior_contract = str(
+            (record.metadata or {}).get("writer_contract_sha256") or ""
+        )
+        if prior_contract == current_contract_sha256:
+            continue
+        verified_path = verified_run_evidence_path(run_dir, record)
+        if verified_path is None:
+            continue
+        try:
+            scaffold = verified_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if not scaffold.strip():
+            continue
+        return scaffold, {
+            "reason_code": "verified_prior_writer_scaffold_quality_migration",
+            "source_evidence_id": str(record.evidence_id),
+            "source_sha256": str(record.sha256),
+            "execution_checkpoint_sha256": current_digest,
+            "source_relative_path": str(record.relative_path),
+            "source_writer_contract_sha256": prior_contract or None,
+            "target_writer_contract_sha256": current_contract_sha256,
+        }
+    return None
+
+
+def _render_or_resume_writer_scaffold(
+    *,
+    writer: Any,
+    resume_state: Optional[Dict[str, Any]],
+    evidence: Any,
+    run_dir: Path,
+    per_step_records: Sequence[Dict[str, Any]],
+    execute_result: _ExecutePhaseResult,
+    literature: Optional[LiteratureBundle],
+    agent_context: Any,
+    preferred_evidence_names: Sequence[str],
+    writer_evidence_digest: str,
+    findings: List[ValidationFinding],
+) -> str:
+    """Select exact reuse, bounded section migration, or a fresh Writer draft."""
+
+    resume_scaffold = _verified_resume_writer_scaffold(
+        resume_state=resume_state,
+        evidence=evidence,
+        run_dir=run_dir,
+        per_step_records=per_step_records,
+    )
+    if resume_scaffold is not None:
+        scaffold, resume_detail = resume_scaffold
+        findings.append(
+            ValidationFinding(
+                validator="writer_resume",
+                severity="info",
+                message=(
+                    "Reused the digest-verified prior Writer scaffold because "
+                    "the current execution checkpoint is unchanged. Current "
+                    "evidence, numeric, literature, and critique gates still "
+                    "revalidate the manuscript."
+                ),
+                evidence_ids=["manuscript_scaffold_raw"],
+                detail=resume_detail,
+            )
+        )
+        return scaffold
+
+    administrative_authority = load_manuscript_administrative_authority(run_dir)
+    literature_digest = render_writer_literature_digest(
+        literature,
+        plan=execute_result.plan,
+    )
+    migration_scaffold = _verified_resume_writer_scaffold_for_quality_migration(
+        resume_state=resume_state,
+        evidence=evidence,
+        run_dir=run_dir,
+        per_step_records=per_step_records,
+    )
+    if migration_scaffold is None:
+        return writer.run(
+            context=agent_context,
+            evidence_ids=preferred_evidence_names,
+            evidence_digest=writer_evidence_digest,
+            literature_digest=literature_digest,
+            administrative_authority=administrative_authority,
+        )
+
+    prior_scaffold, migration_detail = migration_scaffold
+    try:
+        scaffold, repaired_section_keys = writer.repair_existing(
+            prior_scaffold,
+            context=agent_context,
+            evidence_ids=preferred_evidence_names,
+            evidence_digest=writer_evidence_digest,
+            literature_digest=literature_digest,
+            administrative_authority=administrative_authority,
+        )
+    except Exception as exc:
+        findings.append(
+            ValidationFinding(
+                validator="writer_resume",
+                severity="error",
+                message=(
+                    "Writer quality migration failed; the last digest-verified "
+                    "non-empty scaffold was preserved and remains unpromoted."
+                ),
+                evidence_ids=[migration_detail["source_evidence_id"]],
+                detail={
+                    **migration_detail,
+                    "reason_code": "WRITER_QUALITY_MIGRATION_FAILED_PRIOR_PRESERVED",
+                    "exception_type": type(exc).__name__,
+                },
+            )
+        )
+        return prior_scaffold
+    findings.append(
+        ValidationFinding(
+            validator="writer_resume",
+            severity="warning",
+            message=(
+                "Migrated the digest-verified prior Writer scaffold by "
+                "regenerating only deterministic error-owning sections under "
+                "the current Writer contract."
+            ),
+            evidence_ids=[migration_detail["source_evidence_id"]],
+            detail={
+                **migration_detail,
+                "repaired_section_keys": list(repaired_section_keys),
+            },
+        )
+    )
+    return scaffold
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -888,6 +1309,7 @@ def _draft_manuscript(
     findings: List[ValidationFinding],
     literature: Optional[LiteratureBundle],
     per_step_records: Sequence[Dict[str, Any]],
+    resume_state: Optional[Dict[str, Any]],
     prompt_version: str,
     role_resolver: Callable[[str], Any],
     runtime_state: Any,
@@ -1027,14 +1449,18 @@ def _draft_manuscript(
                     ),
                 },
             )
-        scaffold = writer.run(
-            context=agent_context,
-            evidence_ids=preferred_writer_evidence_names,
-            evidence_digest=writer_evidence_digest,
-            literature_digest=render_writer_literature_digest(
-                literature,
-                plan=execute_result.plan,
-            ),
+        scaffold = _render_or_resume_writer_scaffold(
+            writer=writer,
+            resume_state=resume_state,
+            evidence=evidence,
+            run_dir=run_dir,
+            per_step_records=per_step_records,
+            execute_result=execute_result,
+            literature=literature,
+            agent_context=agent_context,
+            preferred_evidence_names=preferred_writer_evidence_names,
+            writer_evidence_digest=writer_evidence_digest,
+            findings=findings,
         )
     except Exception as exc:
         writer_error_message = f"{type(exc).__name__}: {exc}"
@@ -1072,6 +1498,27 @@ def _draft_manuscript(
                     "repairs": [
                         {"from": old, "to": new} for old, new in placeholder_repairs
                     ]
+                },
+            )
+        )
+    scaffold, removed_unregistered_placeholders = (
+        _remove_unregistered_evidence_placeholders(
+            scaffold,
+            allowed_evidence_ids=current_evidence_names,
+        )
+    )
+    if removed_unregistered_placeholders:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    "Removed unregistered manuscript evidence placeholder(s) "
+                    "before the unchanged STRICT sentence and binding gates."
+                ),
+                detail={
+                    "reason_code": "unregistered_evidence_placeholder_removed",
+                    "evidence_ids": removed_unregistered_placeholders,
                 },
             )
         )
@@ -1244,9 +1691,60 @@ def _draft_manuscript(
                     },
                 )
             )
+    authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
+    claim_placement = place_scientific_claim_tokens_in_results(
+        scaffold,
+        claims=authoritative_claims,
+    )
+    scaffold = claim_placement.scaffold
+    if claim_placement.inserted_claim_refs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="warning",
+                message=(
+                    "Inserted host-authorized scientific claim token(s) omitted "
+                    "from the Results section by the Writer."
+                ),
+                detail={
+                    "inserted_claim_refs": list(claim_placement.inserted_claim_refs)
+                },
+            )
+        )
+    if claim_placement.missing_claim_refs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="error",
+                message=(
+                    "The manuscript has no Results section in which to place "
+                    "host-authorized scientific claims."
+                ),
+                detail={"missing_claim_refs": list(claim_placement.missing_claim_refs)},
+            )
+        )
+    from .manuscript_quality import repair_reader_structure_from_existing_prose
+
+    scaffold, structural_repairs = repair_reader_structure_from_existing_prose(scaffold)
+    if structural_repairs:
+        if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
+            evidence.enforce_evidence_bound_scaffold(scaffold)
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_quality",
+                severity="warning",
+                message=(
+                    "Restored reader structure using only existing "
+                    "evidence-bound manuscript prose."
+                ),
+                detail={"repairs": list(structural_repairs)},
+            )
+        )
     scaffold_path = run_dir / "manuscript_scaffold.md"
     scaffold_path.write_text(scaffold, encoding="utf-8")
-    if evidence.get("manuscript_scaffold_raw") is None:
+    if evidence.get("manuscript_scaffold_raw") is None or scaffold.strip():
+        from .manuscript_sections import manuscript_writer_contract_sha256
+
         evidence.register_file(
             kind="log",
             description="Manuscript scaffold (raw, with {evidence:*} placeholders).",
@@ -1255,6 +1753,10 @@ def _draft_manuscript(
             producer="writer",
             generation_mode="llm",
             prompt_pack_version=prompt_version,
+            metadata={
+                "writer_contract_sha256": manuscript_writer_contract_sha256(),
+            },
+            on_sha_change="new_id",
         )
     return _DraftStageResult(
         current_verified_evidence_records=current_verified_evidence_records,
@@ -1281,6 +1783,41 @@ def _bind_and_review_manuscript(
     run_dir: Path,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
+    scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
+        scaffold,
+        literature,
+        evidence_ids=tuple(current_evidence_names),
+    )
+    if mistyped_literature_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="warning",
+                message=(
+                    "Removed evidence id(s) mistyped as literature keys: "
+                    + ", ".join(mistyped_literature_repairs)
+                ),
+                detail={"evidence_ids": mistyped_literature_repairs},
+            )
+        )
+    scaffold, removed_unknown_keys, removed_unknown_sentences = (
+        remove_sentences_with_unknown_literature_keys(scaffold, literature)
+    )
+    if removed_unknown_keys:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_literature",
+                severity="warning",
+                message=(
+                    "Deleted sentence(s) that cited keys outside the exact "
+                    "run-bound literature bundle; no replacement source was inferred."
+                ),
+                detail={
+                    "unknown_keys": removed_unknown_keys,
+                    "removed_sentence_count": removed_unknown_sentences,
+                },
+            )
+        )
     manuscript_literature_audit = audit_manuscript_literature(scaffold, literature)
     manuscript_literature_path = run_dir / "manuscript_literature_audit.json"
     manuscript_literature_path.write_text(
@@ -1350,6 +1887,76 @@ def _bind_and_review_manuscript(
             f"The bound manuscript must not carry unresolved writer "
             f"placeholders before submission.",
             detail={"tbd_sentences": removed_tbd_sentences},
+        )
+    removed_numeric_sentences: List[Dict[str, Any]] = []
+    if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
+        bound, removed_numeric_sentences = drop_untraceable_numeric_sentences(
+            bound,
+            evidence=evidence,
+            per_step_records=per_step_records,
+        )
+    if removed_numeric_sentences:
+        numeric_filtered_path = run_dir / "manuscript_scaffold_numeric_filtered.md"
+        numeric_filtered_path.write_text(bound, encoding="utf-8")
+        if evidence.get("manuscript_scaffold_numeric_filtered") is None:
+            evidence.register_file(
+                kind="log",
+                description=(
+                    "Manuscript scaffold after deterministic removal of "
+                    "sentences rejected by strict numeric provenance binding."
+                ),
+                source_path=numeric_filtered_path,
+                evidence_id="manuscript_scaffold_numeric_filtered",
+                producer="pipeline",
+                generation_mode="system",
+            )
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_numeric_auditor",
+                severity="warning",
+                message=(
+                    "Removed "
+                    f"{len(removed_numeric_sentences)} sentence(s) rejected by "
+                    "the unchanged STRICT numeric provenance gate; the full "
+                    "manuscript is revalidated after this deterministic filter."
+                ),
+                evidence_ids=["manuscript_scaffold_numeric_filtered"],
+                detail={"removed_sentences": removed_numeric_sentences},
+            )
+        )
+    from .manuscript_quality import repair_reader_structure_from_existing_prose
+
+    bound, post_filter_structural_repairs = repair_reader_structure_from_existing_prose(
+        bound
+    )
+    if post_filter_structural_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_quality",
+                severity="warning",
+                message=(
+                    "Restored post-filter reader structure using only prose "
+                    "that already survived the evidence and numeric gates."
+                ),
+                detail={"repairs": list(post_filter_structural_repairs)},
+            )
+        )
+    authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
+    missing_result_claims = missing_scientific_claims_in_results(
+        bound,
+        claims=authoritative_claims,
+    )
+    if missing_result_claims:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="error",
+                message=(
+                    "Final evidence/numeric filtering removed or failed to bind "
+                    "host-authorized scientific claim(s) from the Results section."
+                ),
+                detail={"missing_claim_refs": list(missing_result_claims)},
+            )
         )
     side_findings = collect_side_findings(per_step_records)
     bound, language_guard_detail = enforce_writer_claim_language(
@@ -1523,6 +2130,25 @@ def _bind_and_review_manuscript(
         *manuscript_value_findings,
     ]
 
+    manuscript_quality_errors = _persist_manuscript_quality_artifacts(
+        bound=bound,
+        bound_evidence_id=bound_evidence_id,
+        run_dir=run_dir,
+        evidence=evidence,
+        findings=findings,
+        expected_display_labels=expected_manuscript_display_labels(
+            current_evidence_names
+        ),
+    )
+    if not writer_probe_mode:
+        _persist_manuscript_provenance_artifact(
+            bound=bound,
+            numeric_binding_map=numeric_binding_map,
+            run_dir=run_dir,
+            evidence=evidence,
+            findings=findings,
+        )
+
     manuscript_critique, critic_review_error = _review_manuscript_with_fail_safe(
         critic,
         scaffold=bound,
@@ -1568,6 +2194,19 @@ def _bind_and_review_manuscript(
                 + [
                     "Manuscript numeric claims disagree with registered step_summary values."
                 ],
+            }
+        )
+    if manuscript_quality_errors:
+        manuscript_critique = manuscript_critique.model_copy(
+            update={
+                "status": "blocked",
+                "concerns": list(manuscript_critique.concerns)
+                + [
+                    "The deterministic manuscript quality audit found structural, "
+                    "terminology, or cross-section consistency errors."
+                ],
+                "suggested_repairs": list(manuscript_critique.suggested_repairs)
+                + [item.message for item in manuscript_quality_errors[:8]],
             }
         )
     _persist_manuscript_critique(
@@ -1625,6 +2264,7 @@ def _publish_and_audit_manuscript(
     manuscript_authors: Optional[Sequence[str]],
     manuscript_title: Optional[str],
     per_step_records: Sequence[Dict[str, Any]],
+    repro_envelope: Any,
     run_dir: Path,
     run_id: str,
     emit_progress: Callable[..., None],
@@ -2017,8 +2657,14 @@ def _publish_and_audit_manuscript(
     # bundle that the manuscript author / responsible clinician
     # uses to tighten the draft before submission.
     if pipeline._enable_reviewer_round:
+        _register_reproducibility_envelope_for_review(
+            repro_envelope=repro_envelope,
+            evidence=evidence,
+            run_dir=run_dir,
+        )
+        reviewer_evidence_records = evidence.current_verified_records(per_step_records)
         reviewer_report = run_reviewer_round(
-            evidence_records=current_verified_evidence_records,
+            evidence_records=reviewer_evidence_records,
             findings=findings,
             round_index=0,
         )
@@ -2073,6 +2719,39 @@ def _publish_and_audit_manuscript(
                 detail=summary,
             )
         )
+
+
+def _register_reproducibility_envelope_for_review(
+    *,
+    repro_envelope: Any,
+    evidence: Any,
+    run_dir: Path,
+) -> None:
+    """Publish the completed call envelope before the reviewer reads evidence.
+
+    Planning and manuscript generation are the stochastic stages.  By this
+    point both are complete; the remaining review and finalisation code is
+    deterministic.  Registering the envelope here prevents the reviewer from
+    reporting it missing merely because finalisation has not run yet.
+    """
+
+    if repro_envelope is None:
+        return
+    envelope_path = run_dir / "reproducibility_envelope.json"
+    repro_envelope.to_disk(envelope_path)
+    evidence.register_file(
+        kind="log",
+        description=(
+            "LLM reproducibility envelope (O20): per-call prompt/response "
+            "sha256, requested seed, temperature, provider/model, and a "
+            "PHI-safe environment snapshot."
+        ),
+        source_path=envelope_path,
+        evidence_id="reproducibility_envelope",
+        producer="pipeline",
+        generation_mode="system",
+        on_sha_change="new_id",
+    )
 
 
 def _write_reproducibility_artifacts(
@@ -2378,6 +3057,19 @@ def run_write_phase(
                 "gate did not pass.",
             )
 
+    _activate_publication_figure(
+        pipeline,
+        execute_result=execute_result,
+        context=context,
+        evidence=evidence,
+        findings=findings,
+        role_resolver=role_resolver,
+        prompt_version=prompt_version,
+        run_dir=run_dir,
+        run_id=run_id,
+        emit_progress=emit_progress,
+    )
+
     if stop_after_analysis:
         emit_progress(
             "pause",
@@ -2403,8 +3095,6 @@ def run_write_phase(
     literature = _activate_publication_inputs(
         pipeline,
         plan_result=plan_result,
-        execute_result=execute_result,
-        context=context,
         agent_context=agent_context,
         evidence=evidence,
         findings=findings,
@@ -2423,6 +3113,7 @@ def run_write_phase(
         findings=findings,
         literature=literature,
         per_step_records=per_step_records,
+        resume_state=plan_result.resume_state,
         prompt_version=prompt_version,
         role_resolver=role_resolver,
         runtime_state=runtime_state,
@@ -2464,6 +3155,7 @@ def run_write_phase(
         manuscript_authors=manuscript_authors,
         manuscript_title=manuscript_title,
         per_step_records=per_step_records,
+        repro_envelope=plan_result.repro_envelope,
         run_dir=run_dir,
         run_id=run_id,
         emit_progress=emit_progress,
