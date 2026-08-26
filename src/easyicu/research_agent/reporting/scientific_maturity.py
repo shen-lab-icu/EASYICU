@@ -10,6 +10,7 @@ remain useful without being mislabeled as article-grade evidence.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -36,6 +37,7 @@ from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
 )
 from ..schema import AnalysisPlan, ResearchContext
+from .display_suite import panel_has_absolute_risk_context
 from .novelty_positioning import novelty_authority_digests
 
 
@@ -128,6 +130,107 @@ def _model_covariates(plan: Optional[AnalysisPlan]) -> tuple[str, ...]:
     return _plan_model_covariates(plan)
 
 
+def _registered_figure_adjustment_authority(
+    run_dir: Path,
+    *,
+    figure_evidence_ids: set[str],
+) -> tuple[Optional[tuple[str, ...]], list[str], bool]:
+    """Resolve a figure's executed adjustment roster from registered receipts.
+
+    A host-owned executor may compile its model contract after the Planner plan
+    is frozen. In that case the registered runtime receipt, not missing plan
+    prose, is the authority for whether the rendered estimate is adjusted.
+    Only digest-matching runner receipts produced by a step on the plotted
+    evidence lineage are accepted. Figure-only steps commonly copy an upstream
+    result table, so requiring the receipt to share the renderer's step id would
+    discard the model authority that the evidence graph already binds.
+    """
+
+    authority = _read_json(run_dir / "evidence", "evidence_authority.json")
+    records = [
+        record
+        for record in authority.get("records") or []
+        if isinstance(record, Mapping)
+    ]
+    records_by_id = {
+        str(record.get("evidence_id") or "").strip(): record
+        for record in records
+        if str(record.get("evidence_id") or "").strip()
+    }
+    related_steps: set[str] = set()
+    pending_ids = list(figure_evidence_ids)
+    visited_ids: set[str] = set()
+    while pending_ids:
+        evidence_id = pending_ids.pop()
+        if evidence_id in visited_ids:
+            continue
+        visited_ids.add(evidence_id)
+        record = records_by_id.get(evidence_id)
+        if record is None:
+            continue
+        produced_by_step = str(record.get("produced_by_step") or "").strip()
+        if produced_by_step:
+            related_steps.add(produced_by_step)
+        pending_ids.extend(
+            str(value).strip()
+            for value in record.get("inputs") or []
+            if str(value).strip() and str(value).strip() not in visited_ids
+        )
+    rosters: dict[tuple[str, ...], list[str]] = {}
+    promoted_rosters: dict[tuple[str, ...], list[str]] = {}
+    root = run_dir.resolve()
+    for record in records:
+        if str(record.get("produced_by_step") or "").strip() not in related_steps:
+            continue
+        if record.get("producer") != "runner" or record.get("kind") != "log":
+            continue
+        relative_path = str(record.get("relative_path") or "").strip()
+        if not relative_path.endswith("_runtime_receipt.json"):
+            continue
+        try:
+            path = (run_dir / relative_path).resolve()
+            path.relative_to(root)
+            raw = path.read_bytes()
+        except (OSError, ValueError):
+            continue
+        if hashlib.sha256(raw).hexdigest() != str(record.get("sha256") or ""):
+            continue
+        try:
+            receipt = json.loads(raw)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(receipt, Mapping):
+            continue
+        schema_version = str(receipt.get("schema_version") or "").strip()
+        if not re.fullmatch(r"easyicu\.[a-z0-9_]+_runtime_receipt/1", schema_version):
+            continue
+        promoted_columns = receipt.get("promoted_adjustment_columns")
+        if isinstance(promoted_columns, list) and all(
+            isinstance(value, str) and value.strip() for value in promoted_columns
+        ):
+            roster = tuple(value.strip() for value in promoted_columns)
+            promoted_rosters.setdefault(roster, []).append(relative_path)
+        elif promoted_columns == []:
+            promoted_rosters.setdefault((), []).append(relative_path)
+        adjustment_columns = receipt.get("adjustment_columns")
+        if not isinstance(adjustment_columns, list) or any(
+            not isinstance(value, str) or not value.strip()
+            for value in adjustment_columns
+        ):
+            continue
+        roster = tuple(value.strip() for value in adjustment_columns)
+        rosters.setdefault(roster, []).append(relative_path)
+    if len(promoted_rosters) == 1:
+        roster, refs = next(iter(promoted_rosters.items()))
+        return roster, sorted(set(refs)), True
+    if promoted_rosters:
+        return None, [], True
+    if len(rosters) != 1:
+        return None, [], False
+    roster, refs = next(iter(rosters.items()))
+    return roster, sorted(set(refs)), False
+
+
 def _scientific_steps(plan: Optional[AnalysisPlan]) -> list[Any]:
     return list(_plan_scientific_steps(plan))
 
@@ -157,7 +260,7 @@ def _repeat_units_possible(context: ResearchContext) -> bool:
 def _novelty_facts(
     run_dir: Path,
     *,
-    direct_comparator_keys: list[str],
+    comparison_source_keys: list[str],
     expected_authority_digests: Mapping[str, str],
 ) -> dict[str, Any]:
     """Read an optional independent novelty-positioning receipt.
@@ -171,11 +274,20 @@ def _novelty_facts(
 
     audit = _read_json(run_dir, "novelty_positioning_audit.json")
     status = str(audit.get("status") or "not_established").strip().casefold()
+    direct_keys = {
+        str(value).strip()
+        for value in audit.get("direct_comparator_keys") or []
+        if str(value).strip()
+    }
+    analogue_keys = {
+        str(value).strip()
+        for value in audit.get("design_analogue_keys") or []
+        if str(value).strip()
+    }
     comparator_keys = sorted(
         {
-            str(value).strip()
-            for value in audit.get("direct_comparator_keys") or []
-            if str(value).strip()
+            *direct_keys,
+            *analogue_keys,
         }
     )
     dimensions = audit.get("comparison_dimensions")
@@ -201,7 +313,7 @@ def _novelty_facts(
         status == "supported"
         and digest_bound
         and comparator_keys
-        and set(comparator_keys) <= set(direct_comparator_keys)
+        and set(comparator_keys) <= set(comparison_source_keys)
         and complete_dimensions == required
         and str(audit.get("review_disposition") or "").strip().casefold()
         in {"independent_pre_review_pass", "human_review_pass"}
@@ -209,7 +321,9 @@ def _novelty_facts(
     return {
         "status": status,
         "supported": supported,
-        "direct_comparator_keys": comparator_keys,
+        "direct_comparator_keys": sorted(direct_keys),
+        "design_analogue_keys": sorted(analogue_keys),
+        "comparison_source_keys": comparator_keys,
         "complete_dimensions": sorted(complete_dimensions),
         "required_dimensions": sorted(required),
         "review_disposition": str(audit.get("review_disposition") or "not_available"),
@@ -224,12 +338,17 @@ def _robustness_facts(run_dir: Path, plan: Optional[AnalysisPlan]) -> dict[str, 
     primary_id = str(panel.get("primary_spec_id") or "primary")
     primary = next((row for row in rows if str(row.get("spec_id")) == primary_id), None)
     variants = [row for row in rows if str(row.get("spec_id")) != primary_id]
+    declared_axes = {
+        str(spec.axis)
+        for spec in (plan.robustness_specs if plan is not None else ())
+        if str(spec.axis)
+    }
+    model_grid = _registered_association_model_grid_facts(run_dir)
+    family_robustness = _registered_family_robustness_facts(run_dir)
     axes = sorted(
-        {
-            str(spec.axis)
-            for spec in (plan.robustness_specs if plan is not None else ())
-            if str(spec.axis)
-        }
+        declared_axes
+        | set(model_grid["axes"])
+        | set(family_robustness["axes"])
     )
 
     def same_estimate(row: Mapping[str, Any]) -> bool:
@@ -251,9 +370,201 @@ def _robustness_facts(run_dir: Path, plan: Optional[AnalysisPlan]) -> dict[str, 
 
     return {
         "declared_axes": axes,
-        "variant_count": len(variants),
-        "all_variants_duplicate_primary": bool(variants)
-        and all(same_estimate(row) for row in variants),
+        "variant_count": (
+            len(variants)
+            + int(model_grid["variant_count"])
+            + int(family_robustness["variant_count"])
+        ),
+        "all_variants_duplicate_primary": bool(
+            variants
+            or model_grid["variant_count"]
+            or family_robustness["variant_count"]
+        )
+        and all(same_estimate(row) for row in variants)
+        and (
+            not model_grid["variant_count"]
+            or bool(model_grid["all_variants_duplicate_primary"])
+        )
+        and (
+            not family_robustness["variant_count"]
+            or bool(family_robustness["all_variants_duplicate_primary"])
+        ),
+        "registered_robustness_evidence_refs": sorted(
+            {
+                *model_grid["evidence_refs"],
+                *family_robustness["evidence_refs"],
+            }
+        ),
+    }
+
+
+def _registered_runner_step_summaries(
+    run_dir: Path,
+) -> list[tuple[str, Mapping[str, Any]]]:
+    authority = _read_json(run_dir / "evidence", "evidence_authority.json")
+    records = [
+        record
+        for record in authority.get("records") or []
+        if isinstance(record, Mapping)
+        and record.get("kind") == "statistic"
+        and record.get("producer") == "runner"
+    ]
+    root = run_dir.resolve()
+    summaries: list[tuple[str, Mapping[str, Any]]] = []
+    for record in records:
+        relative_path = str(record.get("relative_path") or "").strip()
+        if not relative_path.endswith("__step_summary.json"):
+            continue
+        try:
+            path = (run_dir / relative_path).resolve()
+            path.relative_to(root)
+            raw = path.read_bytes()
+        except (OSError, ValueError):
+            continue
+        if hashlib.sha256(raw).hexdigest() != str(record.get("sha256") or ""):
+            continue
+        try:
+            summary = json.loads(raw)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(summary, Mapping):
+            continue
+        summaries.append((relative_path, summary))
+    return summaries
+
+
+def _registered_association_model_grid_facts(run_dir: Path) -> dict[str, Any]:
+    """Project typed model-grid evidence into article robustness axes.
+
+    Some study families execute their prespecified sensitivities through a
+    host-owned model-grid step rather than the generic robustness replay.  The
+    result is still valid robustness evidence when its registered step summary
+    is digest-bound and carries the exact model-grid runtime receipt.  Reading
+    only ``robustness_panel.json`` would otherwise discard those completed
+    timing, cohort, and functional-form stress tests.
+    """
+
+    axes: set[str] = set()
+    variant_count = 0
+    duplicate_flags: list[bool] = []
+    evidence_refs: list[str] = []
+    for relative_path, summary in _registered_runner_step_summaries(run_dir):
+        receipt = summary.get("scientific_runtime_receipt")
+        if not isinstance(receipt, Mapping) or receipt.get("schema_version") != (
+            "easyicu.association_model_grid_runtime_receipt/1"
+        ):
+            continue
+        rows = summary.get("analysis_rows")
+        reference_id = str(receipt.get("reference_variant_id") or "").strip()
+        variant_ids = [
+            str(value).strip()
+            for value in receipt.get("variant_ids") or []
+            if str(value).strip()
+        ]
+        if (
+            not isinstance(rows, list)
+            or not reference_id
+            or len(variant_ids) < 2
+            or len(variant_ids) != len(set(variant_ids))
+        ):
+            continue
+        by_id = {
+            str(row.get("analysis_id") or "").strip(): row
+            for row in rows
+            if isinstance(row, Mapping)
+            and str(row.get("analysis_id") or "").strip()
+        }
+        if set(by_id) != set(variant_ids) or reference_id not in by_id:
+            continue
+        reference = by_id[reference_id]
+        basis_receipts = summary.get("basis_receipts")
+        basis_receipts = basis_receipts if isinstance(basis_receipts, Mapping) else {}
+        for analysis_id in variant_ids:
+            if analysis_id == reference_id:
+                continue
+            row = by_id[analysis_id]
+            variant_count += 1
+            row_axes: set[str] = set()
+            if any(
+                row.get(field) != reference.get(field)
+                for field in (
+                    "landmark_hours",
+                    "alive_at_landmark_required",
+                    "negative_event_times_excluded",
+                )
+            ):
+                row_axes.add("timing")
+            if (
+                row.get("fitted_covariates") != reference.get("fitted_covariates")
+                or bool(basis_receipts.get(analysis_id))
+            ):
+                row_axes.add("model")
+            if (
+                "timing" not in row_axes
+                and "model" not in row_axes
+                and (
+                    row.get("readmission_restriction")
+                    != reference.get("readmission_restriction")
+                    or row.get("n_stays") != reference.get("n_stays")
+                )
+            ):
+                row_axes.add("cohort")
+            axes.update(row_axes)
+            duplicate_flags.append(
+                not row_axes
+                and all(
+                    row.get(field) == reference.get(field)
+                    for field in ("n_stays", "estimate", "ci_low", "ci_high")
+                )
+            )
+        evidence_refs.append(relative_path)
+    return {
+        "axes": sorted(axes),
+        "variant_count": variant_count,
+        "all_variants_duplicate_primary": bool(duplicate_flags)
+        and all(duplicate_flags),
+        "evidence_refs": sorted(set(evidence_refs)),
+    }
+
+
+def _registered_family_robustness_facts(run_dir: Path) -> dict[str, Any]:
+    """Accept independent variants from a digest-bound family robustness receipt."""
+
+    axes: set[str] = set()
+    variant_count = 0
+    duplicate_flags: list[bool] = []
+    evidence_refs: list[str] = []
+    for relative_path, summary in _registered_runner_step_summaries(run_dir):
+        if summary.get("analysis_family") != (
+            "robustness_sensitivity"
+        ):
+            continue
+        rows = summary.get("robustness_rows")
+        if not isinstance(rows, list):
+            continue
+        accepted = [
+            row
+            for row in rows
+            if isinstance(row, Mapping)
+            and row.get("converged") is True
+            and row.get("independent_variant") is True
+            and str(row.get("axis") or "").strip() not in {"", "primary"}
+            and str(row.get("spec_id") or "").strip()
+            and str(row.get("evidence_id") or "").strip()
+        ]
+        if not accepted:
+            continue
+        for row in accepted:
+            axes.add(str(row["axis"]).strip())
+            variant_count += 1
+            duplicate_flags.append(False)
+        evidence_refs.append(relative_path)
+    return {
+        "axes": sorted(axes),
+        "variant_count": variant_count,
+        "all_variants_duplicate_primary": bool(duplicate_flags)
+        and all(duplicate_flags),
+        "evidence_refs": sorted(set(evidence_refs)),
     }
 
 
@@ -291,7 +602,9 @@ def _manuscript_section_word_counts(manuscript: str) -> dict[str, int]:
     """Count words under top-level article headings, including subheadings."""
 
     matches = list(
-        re.finditer(r"^(?P<marks>#{1,3})\s+(?P<title>.+?)\s*$", manuscript, re.MULTILINE)
+        re.finditer(
+            r"^(?P<marks>#{1,3})\s+(?P<title>.+?)\s*$", manuscript, re.MULTILINE
+        )
     )
     aliases = {
         "abstract": {"abstract"},
@@ -321,9 +634,7 @@ def _manuscript_section_word_counts(manuscript: str) -> dict[str, int]:
             if len(candidate.group("marks")) <= level:
                 end = candidate.start()
                 break
-        output[section] = len(
-            re.findall(r"\b[\w'-]+\b", manuscript[match.end() : end])
-        )
+        output[section] = len(re.findall(r"\b[\w'-]+\b", manuscript[match.end() : end]))
     return output
 
 
@@ -350,11 +661,7 @@ def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
         {"funding"},
         {"conflicts of interest", "conflict of interest"},
     )
-    missing = [
-        sorted(group)[0]
-        for group in required_groups
-        if not (headings & group)
-    ]
+    missing = [sorted(group)[0] for group in required_groups if not (headings & group)]
     section_word_counts = _manuscript_section_word_counts(manuscript)
     # These are structural anti-stub floors, not a target-journal word limit.
     # A journal-ready manuscript may be much longer, but a core section below
@@ -394,7 +701,9 @@ def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
             audit.get("methods_method_source_missing")
         ),
         "pdf_present": (run_dir / "manuscript_scaffold.pdf").is_file(),
-        "pdf_receipt_present": (run_dir / "manuscript_pdf_render_receipt.json").is_file()
+        "pdf_receipt_present": (
+            run_dir / "manuscript_pdf_render_receipt.json"
+        ).is_file()
         or (run_dir / "manuscript_pdf_receipt.json").is_file(),
     }
 
@@ -410,38 +719,90 @@ def _primary_figure_facts(
         for path in figure_contract_paths(run_dir)
         if figure_contract_tier(path, run_dir) == "primary_publication"
     ]
-    covariates = _model_covariates(plan)
-    expected_label = "adjusted" if covariates else "unadjusted"
     labels: list[str] = []
     roles: list[str] = []
+    adjustment_labels: list[str] = []
+    adjustment_roles: list[str] = []
+    figure_evidence_ids: set[str] = set()
+    absolute_risk_panel_present = False
     for path in primary_contracts:
         raw = _read_json(path.parent, path.name)
         for panel in raw.get("panels") or []:
             if not isinstance(panel, Mapping):
                 continue
-            roles.append(str(panel.get("role") or "").strip().casefold())
-            labels.append(
-                " ".join(
-                    [
-                        str(panel.get("title") or ""),
-                        str(panel.get("claim") or ""),
-                    ]
-                ).casefold()
+            absolute_risk_panel_present = (
+                absolute_risk_panel_present or panel_has_absolute_risk_context(panel)
             )
+            role = str(panel.get("role") or "").strip().casefold()
+            roles.append(role)
+            figure_evidence_ids.update(
+                str(value).strip()
+                for value in panel.get("evidence_ids") or []
+                if str(value).strip()
+            )
+            label = " ".join(
+                [
+                    str(panel.get("title") or ""),
+                    str(panel.get("claim") or ""),
+                ]
+            ).casefold()
+            labels.append(label)
+            if role in {
+                "association",
+                "association_forest",
+                "effect",
+                "primary_effect",
+                "primary_estimand",
+                "survival_effect",
+            }:
+                adjustment_labels.append(label)
+                adjustment_roles.append(role)
+    plan_covariates = _model_covariates(plan)
+    executed_covariates, execution_refs, promoted_authority = (
+        _registered_figure_adjustment_authority(
+            run_dir,
+            figure_evidence_ids=figure_evidence_ids,
+        )
+    )
+    covariates = (
+        executed_covariates
+        if promoted_authority and executed_covariates is not None
+        else plan_covariates
+        if plan_covariates
+        else executed_covariates
+        if executed_covariates is not None
+        else ()
+    )
+    expected_label = "adjusted" if covariates else "unadjusted"
+    labels_to_check = adjustment_labels or labels
     conflicting = (
-        any("adjusted" in label and "unadjusted" not in label for label in labels)
+        any(
+            "adjusted" in label and "unadjusted" not in label
+            for label in labels_to_check
+        )
         if expected_label == "unadjusted"
-        else any("unadjusted" in label for label in labels)
+        else any("unadjusted" in label for label in labels_to_check)
     )
     return {
         "expected_adjustment_label": expected_label,
-        "primary_contract_paths": [str(path.relative_to(run_dir)) for path in primary_contracts],
+        "primary_contract_paths": [
+            str(path.relative_to(run_dir)) for path in primary_contracts
+        ],
         "primary_panel_roles": roles,
-        "adjustment_label_conflict": conflicting,
-        "absolute_risk_panel_present": any(
-            role in {"descriptive_result", "temporal_absolute_risk"}
-            for role in roles
+        "adjustment_panel_roles": adjustment_roles,
+        "adjustment_covariates": list(covariates),
+        "adjustment_authority": (
+            "promoted_runtime_receipt"
+            if promoted_authority and executed_covariates is not None
+            else "plan"
+            if plan_covariates
+            else "runtime_receipt"
+            if executed_covariates is not None
+            else "not_established"
         ),
+        "adjustment_authority_refs": execution_refs,
+        "adjustment_label_conflict": conflicting,
+        "absolute_risk_panel_present": absolute_risk_panel_present,
     }
 
 
@@ -477,6 +838,21 @@ def build_scientific_maturity_audit(
             and str(decision.get("citation_key") or "").strip()
         }
     )
+    design_analogue_keys = sorted(
+        {
+            str(decision.get("citation_key"))
+            for decision in screening_decisions
+            if decision.get("disposition") == "include"
+            and decision.get("evidence_role") == "design_analogue"
+            and decision.get("publication_type_eligible", True) is not False
+            and str(decision.get("citation_key") or "").strip()
+        }
+    )
+    comparison_source_keys = sorted(
+        set(direct_comparator_keys)
+        | (set(design_analogue_keys) if not context.primary_exposure else set())
+    )
+    direct_required = bool(context.primary_exposure)
     citation_by_key = {
         str(record.get("key") or record.get("citation_key")): record
         for record in literature.get("citations") or []
@@ -491,6 +867,14 @@ def build_scientific_maturity_audit(
             and str(citation_by_key[key].get("year") or "").strip().isdigit()
         }
     )
+    comparison_source_years = sorted(
+        {
+            int(str(citation_by_key[key].get("year") or "").strip())
+            for key in comparison_source_keys
+            if key in citation_by_key
+            and str(citation_by_key[key].get("year") or "").strip().isdigit()
+        }
+    )
     search_year = datetime.now(timezone.utc).year
     searched_at = str(provenance.get("searched_at") or "")
     searched_year_match = re.search(r"\b(20\d{2})\b", searched_at)
@@ -499,13 +883,15 @@ def build_scientific_maturity_audit(
     newest_direct_comparator_year = (
         direct_comparator_years[-1] if direct_comparator_years else None
     )
+    newest_comparison_source_year = (
+        comparison_source_years[-1] if comparison_source_years else None
+    )
     scientific_steps = _scientific_steps(plan)
     unbound = [
         str(step.step_id)
         for step in scientific_steps
         if not step.literature_citation_keys
     ]
-    covariates = _model_covariates(plan)
     association_study = _association_study(plan)
     preferences = context.user_preferences
     covariate_selection = (
@@ -513,9 +899,7 @@ def build_scientific_maturity_audit(
         if preferences is not None
         else "planner_selectable"
     )
-    covariate_rationales = dict(
-        getattr(preferences, "covariate_rationales", {}) or {}
-    )
+    covariate_rationales = dict(getattr(preferences, "covariate_rationales", {}) or {})
     covariate_temporal_roles = dict(
         getattr(preferences, "covariate_temporal_roles", {}) or {}
     )
@@ -540,7 +924,7 @@ def build_scientific_maturity_audit(
     missing_method_layers = list(method_facts["missing_method_layers"])
     novelty = _novelty_facts(
         run_dir,
-        direct_comparator_keys=direct_comparator_keys,
+        comparison_source_keys=comparison_source_keys,
         expected_authority_digests=(
             novelty_authority_digests(
                 context=context,
@@ -558,9 +942,7 @@ def build_scientific_maturity_audit(
         else _read_json(run_dir, "display_suite_audit.json")
     )
     publication = (
-        dict(publication_bundle)
-        if isinstance(publication_bundle, Mapping)
-        else {}
+        dict(publication_bundle) if isinstance(publication_bundle, Mapping) else {}
     )
     reviewer = (
         dict(reviewer_report)
@@ -572,6 +954,7 @@ def build_scientific_maturity_audit(
     endpoint = _endpoint_semantic_facts(context)
     manuscript = _manuscript_facts(run_dir)
     primary_figure = _primary_figure_facts(run_dir, plan)
+    covariates = tuple(primary_figure["adjustment_covariates"])
 
     if not searched or not sources_returning:
         findings.append(
@@ -608,36 +991,53 @@ def build_scientific_maturity_audit(
                 ),
             )
         )
-    if searched and not direct_comparator_keys:
+    if searched and not comparison_source_keys:
         findings.append(
             ScientificMaturityFinding(
-                code="DIRECT_COMPARATOR_SCREENING_NOT_ESTABLISHED",
+                code=(
+                    "DIRECT_COMPARATOR_SCREENING_NOT_ESTABLISHED"
+                    if direct_required
+                    else "DESIGN_ANALOGUE_SCREENING_NOT_ESTABLISHED"
+                ),
                 severity="blocker",
                 dimension="literature",
                 message=(
-                    "Retrieved records have no inspectable, included direct-comparator "
-                    "screening decision for this exact ICU question."
+                    "Retrieved records have no inspectable, included "
+                    + ("direct-comparator" if direct_required else "design-analogue")
+                    + " screening decision for this exact ICU question."
                 ),
                 evidence_refs=["preplan_literature_bundle.json.screening_decisions"],
                 remediation=(
                     "Screen each retrieved record against the declared population, "
-                    "exposure, outcome, and estimand; retain a record-level decision."
+                    + (
+                        "exposure, outcome, and estimand"
+                        if direct_required
+                        else "clinical topic and analysis-design intent"
+                    )
+                    + "; retain a record-level decision without conflating design "
+                    "analogy with a direct effect comparator."
                 ),
             )
         )
     if (
         searched
-        and newest_direct_comparator_year is not None
-        and search_year - newest_direct_comparator_year > 5
+        and newest_comparison_source_year is not None
+        and search_year - newest_comparison_source_year > 5
     ):
         findings.append(
             ScientificMaturityFinding(
-                code="RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED",
+                code=(
+                    "RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED"
+                    if direct_required
+                    else "RECENT_DESIGN_ANALOGUE_NOT_ESTABLISHED"
+                ),
                 severity="major",
                 dimension="literature",
                 message=(
-                    "The newest retained direct comparator predates the search "
-                    f"year by {search_year - newest_direct_comparator_year} years. "
+                    "The newest retained "
+                    + ("direct comparator" if direct_required else "design analogue")
+                    + " predates the search "
+                    f"year by {search_year - newest_comparison_source_year} years. "
                     "Older canonical sources may remain valid, but current similar "
                     "work has not been established for a timeliness/novelty claim."
                 ),
@@ -658,16 +1058,20 @@ def build_scientific_maturity_audit(
         if step.planned_analysis_role == "primary"
         for key in step.literature_citation_keys
     }
-    if direct_comparator_keys and set(direct_comparator_keys).isdisjoint(
+    if comparison_source_keys and set(comparison_source_keys).isdisjoint(
         primary_citation_keys
     ):
         findings.append(
             ScientificMaturityFinding(
-                code="DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN",
+                code=(
+                    "DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN"
+                    if direct_required
+                    else "DESIGN_ANALOGUE_NOT_BOUND_TO_PRIMARY_PLAN"
+                ),
                 severity="blocker",
                 dimension="literature_to_plan",
                 message=(
-                    "A direct comparator survived screening, but no primary "
+                    "A screened comparison source survived, but no primary "
                     "analysis step binds it as design/comparison context."
                 ),
                 evidence_refs=[
@@ -675,7 +1079,8 @@ def build_scientific_maturity_audit(
                     "manifest.json.current_plan_authority",
                 ],
                 remediation=(
-                    "Bind a screened comparator to the primary step alongside the "
+                    "Bind a screened comparator or design analogue to the primary "
+                    "step alongside the "
                     "relevant method source; never infer borrowing from bundle presence."
                 ),
             )
@@ -691,7 +1096,7 @@ def build_scientific_maturity_audit(
                     "how its population/setting, exposure/time zero, outcome/"
                     "estimand, analysis/robustness, data-source transportability, "
                     "and clinical or methodological contribution differ from "
-                    "retained direct comparators."
+                    "retained comparison sources."
                 ),
                 evidence_refs=[
                     "preplan_literature_bundle.json.screening_decisions",
@@ -1274,8 +1679,12 @@ def build_scientific_maturity_audit(
                 for source, values in search_queries.items()
             },
             "direct_comparator_keys": direct_comparator_keys,
+            "design_analogue_keys": design_analogue_keys,
+            "comparison_source_keys": comparison_source_keys,
             "direct_comparator_years": direct_comparator_years,
+            "comparison_source_years": comparison_source_years,
             "newest_direct_comparator_year": newest_direct_comparator_year,
+            "newest_comparison_source_year": newest_comparison_source_year,
             "literature_search_year": search_year,
             "primary_plan_citation_keys": sorted(primary_citation_keys),
             "endpoint_semantics": endpoint,
@@ -1290,18 +1699,14 @@ def build_scientific_maturity_audit(
             "association_study": association_study,
             "post_baseline_exposure": post_baseline,
             "exposure_window": exposure_window,
-            "primary_exposure_time_anchor_alignment": (
-                time_anchor_alignment.to_dict()
-            ),
+            "primary_exposure_time_anchor_alignment": (time_anchor_alignment.to_dict()),
             "patient_identity_available": patient_identity,
             "repeat_units_possible": repeat_units_possible,
             "method_source_gaps": method_source_gaps,
             "method_layers_by_step": method_layers_by_step,
             "required_method_layers": required_method_layers,
             "missing_method_layers": missing_method_layers,
-            "unsupported_method_bindings": method_facts[
-                "unsupported_method_bindings"
-            ],
+            "unsupported_method_bindings": method_facts["unsupported_method_bindings"],
             "novelty": novelty,
             **robustness,
             "display_suite_complete": bool(display.get("display_suite_complete")),

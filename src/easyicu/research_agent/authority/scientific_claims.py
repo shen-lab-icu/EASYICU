@@ -12,6 +12,7 @@ author the scientific sentence.
 from __future__ import annotations
 
 import math
+import re
 from typing import Literal
 
 from pydantic import (
@@ -53,6 +54,9 @@ class ScientificClaimDraft(BaseModel):
     ]
     status: Literal["supported"]
     adjusted_for: list[str] = Field(default_factory=list)
+    point_estimate: float | None = None
+    interval_lower: float | None = None
+    interval_upper: float | None = None
 
     @field_validator("exposure", "outcome", "estimand", "population")
     @classmethod
@@ -76,6 +80,23 @@ class ScientificClaimDraft(BaseModel):
 
     @model_validator(mode="after")
     def _claim_kind_matches_its_ceiling(self) -> "ScientificClaimDraft":
+        numeric_values = (
+            self.point_estimate,
+            self.interval_lower,
+            self.interval_upper,
+        )
+        if any(value is not None for value in numeric_values):
+            if any(value is None for value in numeric_values):
+                raise ValueError(
+                    "scientific claim numeric estimate and interval must be complete"
+                )
+            point, lower, upper = (float(value) for value in numeric_values)
+            if not all(math.isfinite(value) for value in (point, lower, upper)):
+                raise ValueError("scientific claim numeric values must be finite")
+            if lower > point or point > upper:
+                raise ValueError(
+                    "scientific claim interval must contain its point estimate"
+                )
         if self.claim_type == "association":
             if self.schema_version != "easyicu.scientific_claim/1":
                 raise ValueError("association claims require scientific_claim/1")
@@ -133,10 +154,110 @@ class ScientificClaim(ScientificClaimDraft):
         adjustment = ""
         if self.adjusted_for:
             adjustment = "After adjustment for " + ", ".join(self.adjusted_for) + ", "
+        estimate_text = f"estimand: {self.estimand}"
+        if self.point_estimate is not None:
+            estimate_text = (
+                f"{self.estimand}, {self.point_estimate:.6g}; 95% CI, "
+                f"{self.interval_lower:.6g} to {self.interval_upper:.6g}"
+            )
         return (
             f"{adjustment}{self.exposure} {relation} {self.outcome} in "
-            f"{self.population} (estimand: {self.estimand}; analysis role: "
+            f"{self.population} ({estimate_text}; analysis role: "
             f"{self.analysis_role})."
+        )
+
+    def render_reader_text(self) -> str:
+        """Render the same claim as publication-scale reader-facing prose.
+
+        ``render_text`` remains the exact machine-authority representation used
+        to validate Writer claim tokens.  This projection deliberately omits
+        runtime roles, analysis-set identifiers, and raw variable names while
+        retaining the claim type, direction, estimate, interval, and causal
+        ceiling.  The immutable claim object and its evidence coordinates are
+        unchanged.
+        """
+
+        def display_number(value: float) -> str:
+            return f"{value:.3f}".rstrip("0").rstrip(".")
+
+        def estimand_interval() -> tuple[float, float, float] | None:
+            match = re.search(
+                r"\bwas\s+([-+]?\d+(?:\.\d+)?)\s+"
+                r"(?:percent|percentage points)\s+\("
+                r"[^)]*?\bCI,\s+([-+]?\d+(?:\.\d+)?)\s+to\s+"
+                r"([-+]?\d+(?:\.\d+)?)",
+                self.estimand,
+                flags=re.I,
+            )
+            if match is None:
+                return None
+            point, lower, upper = (float(value) for value in match.groups())
+            return point, lower, upper
+
+        if self.claim_type == "descriptive_absolute_risk":
+            values = (
+                (self.point_estimate, self.interval_lower, self.interval_upper)
+                if self.point_estimate is not None
+                else estimand_interval()
+            )
+            if values is None:
+                return (
+                    f"In the prespecified group, the {self.estimand}; this was "
+                    "a descriptive, unadjusted, noncausal estimate."
+                )
+            point, lower, upper = values
+            assert lower is not None
+            assert upper is not None
+            return (
+                "The observed absolute risk in the prespecified group was "
+                f"{display_number(point)}% (95% CI, "
+                f"{display_number(lower)}% to "
+                f"{display_number(upper)}%); this was a "
+                "descriptive, unadjusted, noncausal estimate."
+            )
+        if self.claim_type == "descriptive_risk_difference":
+            values = (
+                (self.point_estimate, self.interval_lower, self.interval_upper)
+                if self.point_estimate is not None
+                else estimand_interval()
+            )
+            if values is None:
+                return (
+                    f"The {self.estimand}; this was a descriptive, unadjusted, "
+                    "noncausal contrast."
+                )
+            point, lower, upper = values
+            assert lower is not None
+            assert upper is not None
+            return (
+                "The prespecified unadjusted risk difference between groups "
+                f"was {display_number(point)} percentage points "
+                f"(95% CI, {display_number(lower)} to "
+                f"{display_number(upper)}); this was a "
+                "descriptive, unadjusted, noncausal contrast."
+            )
+
+        if self.direction == "positive":
+            relation = "was positively associated with"
+        elif self.direction == "negative":
+            relation = "was negatively associated with"
+        else:
+            relation = "showed no clear association with"
+        estimate_text = self.estimand
+        if self.point_estimate is not None:
+            assert self.interval_lower is not None
+            assert self.interval_upper is not None
+            estimate_text = (
+                f"{self.estimand}, {display_number(self.point_estimate)}; "
+                f"95% CI, {display_number(self.interval_lower)} to "
+                f"{display_number(self.interval_upper)}"
+            )
+        model_prefix = (
+            "In the covariate-adjusted model, " if self.adjusted_for else ""
+        )
+        return (
+            f"{model_prefix}the prespecified exposure {relation} the study "
+            f"outcome in the prespecified analysis cohort ({estimate_text})."
         )
 
 
@@ -222,6 +343,19 @@ def derive_scientific_claim_drafts(summary: object) -> list[ScientificClaimDraft
         raise ValueError(
             "scientific_claims primary_estimate_interval must be finite and ordered"
         )
+    raw_point = summary.get("primary_estimate", summary.get("adjusted_effect"))
+    point: float | None = None
+    if raw_point is not None:
+        try:
+            point = float(raw_point)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "scientific_claims primary estimate must be numeric"
+            ) from exc
+        if not math.isfinite(point) or point < low or point > high:
+            raise ValueError(
+                "scientific_claims primary estimate must be finite and inside its interval"
+            )
     if low > null_value:
         direction = "positive"
     elif high < null_value:
@@ -251,6 +385,9 @@ def derive_scientific_claim_drafts(summary: object) -> list[ScientificClaimDraft
             analysis_role=role,
             status="supported",
             adjusted_for=[str(value) for value in covariates],
+            point_estimate=point,
+            interval_lower=low if point is not None else None,
+            interval_upper=high if point is not None else None,
         )
     ]
 

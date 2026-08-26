@@ -97,11 +97,11 @@ def test_e1_prevalence_plus_adjusted_association_routes_to_association(ra):
     assert {
         "cohort_accounting",
         "baseline_context",
-        "data_quality",
         "primary_estimand",
         "robustness",
     } <= roles
     modules = {module.module_id: module for module in brief.display_modules}
+    assert modules["missingness_measurement_audit"].tier == "supplementary"
     assert "prevalence_or_event_rate_question" in " ".join(brief.adaptive_triggers)
     assert modules["exposure_outcome_distribution"].role == "descriptive_result"
 
@@ -1116,8 +1116,12 @@ def test_family_playbooks_are_distinct_and_not_effect_only(ra):
         roles = {
             module.role for module in brief.display_modules if module.tier == "core"
         }
+        all_roles = {module.role for module in brief.display_modules}
         role_sets[family] = roles
-        assert len(roles) >= 4
+        assert len(roles) >= 3
+        assert len(all_roles) >= 4
+        if family in {"association", "prediction", "phenotyping", "descriptive"}:
+            assert "data_quality" in all_roles
         assert roles != {"primary_estimand"}
 
     assert "calibration" in role_sets["prediction"]
@@ -1176,6 +1180,53 @@ def test_article_figure_strategies_are_family_specific(ra):
         "risk-difference sensitivity" in anti_pattern.lower()
         for anti_pattern in association.anti_patterns
     )
+
+
+def test_routine_data_quality_is_supplementary_but_central_missingness_is_main(ra):
+    from easyicu.research_agent.planning.figure_strategy import (
+        build_article_figure_strategy,
+        render_article_figure_strategy_for_prompt,
+    )
+
+    routine = build_article_figure_strategy(
+        _context(ra, "Estimate whether exposure X is associated with mortality.")
+    )
+    routine_quality = next(
+        role for role in routine.role_strategies if role.role == "data_quality"
+    )
+    assert routine_quality.placement == "supplementary"
+    assert "placement=supplementary" in render_article_figure_strategy_for_prompt(
+        routine
+    )
+
+    central = build_article_figure_strategy(
+        _context(
+            ra,
+            "Does measurement availability and missingness change the observed association?",
+        )
+    )
+    central_quality = next(
+        role for role in central.role_strategies if role.role == "data_quality"
+    )
+    assert central_quality.placement == "main"
+
+
+def test_analysis_blueprint_plans_multiple_figures_and_supplementary_missingness(ra):
+    from easyicu.research_agent.planning.analysis_blueprint import (
+        build_analysis_blueprint,
+        render_analysis_blueprint_for_prompt,
+    )
+
+    blueprint = build_analysis_blueprint(
+        _context(ra, "Estimate whether exposure X is associated with mortality.")
+    )
+    prompt = render_analysis_blueprint_for_prompt(blueprint)
+
+    assert any(
+        "2-4 complementary main figures" in item for item in blueprint.planner_sequence
+    )
+    assert "single technically valid composite is one figure" in prompt
+    assert "routine missingness" in prompt.lower()
 
 
 def test_cross_database_context_adds_transportability_module(ra):

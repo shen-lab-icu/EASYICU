@@ -223,6 +223,27 @@ def test_analyzer_and_writer_do_not_receive_materialized_block_by_default(
     assert _MATERIALIZED_HEADING not in _last_user_prompt(writer_llm)
 
 
+def test_writer_prompt_forbids_unregistered_numeric_derivation(
+    v2_context: ResearchContextV2,
+) -> None:
+    writer_llm = _CapturingLLM("No supported prose.")
+    WriterAgent(writer_llm)._call_section(
+        section_name="Results",
+        instruction="Report only registered results.",
+        context=v2_context,
+        evidence_ids=["registered_result"],
+        evidence_digest=(
+            "Registered value: 0.25 {evidence:registered_result}"
+        ),
+    )
+
+    prompt = _last_user_prompt(writer_llm)
+    assert "Copy a current-study number only when that exact literal value" in prompt
+    assert "Do not calculate, infer, transform, round, or reconstruct" in prompt
+    assert "RESEARCH CONTEXT supplies study semantics only" in prompt
+    assert "host has registered it explicitly in the evidence digest" in prompt
+
+
 def test_wide_materialized_projection_keeps_primary_and_no_science_choices(
     v2_context: ResearchContextV2,
 ) -> None:

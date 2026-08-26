@@ -21,6 +21,10 @@ from easyicu.research_agent.audits.validators import (
     FigureSourceDataValidator,
 )
 from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.reporting.writer_evidence import (
+    _render_writer_evidence_digest,
+)
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
 
 def _execute_runner(
@@ -180,6 +184,80 @@ def test_structured_inputs_produce_level_risk_source_states_and_continuous_summa
     assert summary["exposure_columns"] == ["organ_stage_max", "marker_peak"]
     assert "unrelated_score" not in summary["exposure_columns"]
     assert summary["adjusted_effect"] is None
+    reporting = summary["reportable_descriptive_results"]
+    assert reporting["interpretation_ceiling"] == "descriptive_not_causal"
+    assert reporting["overall_outcome"]["n"] == 8
+    assert reporting["overall_outcome"]["event_n"] == 4
+    assert reporting["overall_outcome"]["risk_pct"] == pytest.approx(50.0)
+    stage_reporting = next(
+        item
+        for item in reporting["exposures"]
+        if item["exposure"] == "organ_stage_max"
+    )
+    observed_reporting = next(
+        item
+        for item in stage_reporting["groups"]
+        if item["group_type"] == "source_state"
+        and item["group_value"] == "observed"
+    )
+    assert observed_reporting["n"] == 4
+    assert observed_reporting["outcome_event_n"] == 2
+    digest = _render_writer_evidence_digest(
+        [
+            {
+                "step_id": "06_absolute_risk_context",
+                "status": "ok",
+                "step_summary": summary,
+            }
+        ]
+    )
+    assert '"reportable_descriptive_results"' in digest
+    assert '"outcome_event_n": 2' in digest
+
+    # Live Writer records are reconstructed from registered scalars. Prose
+    # metadata such as schema/owner/interpretation strings is intentionally
+    # absent there, but the verified sidecar plus deterministic owner identity
+    # remains sufficient authority for the same numeric payload.
+    canonical_summary = json.loads(json.dumps(summary))
+    canonical_summary.pop("interpretation_class")
+    canonical_reporting = canonical_summary["reportable_descriptive_results"]
+    canonical_reporting.pop("schema_version")
+    canonical_reporting.pop("execution_owner")
+    canonical_reporting.pop("interpretation_ceiling")
+    for exposure in canonical_reporting["exposures"]:
+        exposure.pop("description", None)
+        exposure.pop("materialized_representation", None)
+        for group in exposure["groups"]:
+            group.pop("label", None)
+    writer_store = EvidenceStore(tmp_path / "writer_authority")
+    canonical_record = {
+        "step_id": "06_absolute_risk_context",
+        "status": "ok",
+        "generation_mode": "deterministic_standard",
+        "deterministic_standard_analysis": "absolute_risk_context",
+        "writer_result_envelope_evidence_id": "envelope_fixture",
+        "step_summary": canonical_summary,
+    }
+    canonical_digest = _render_writer_evidence_digest(
+        [canonical_record],
+        run_dir=writer_store.root,
+        include_robustness_panel=False,
+        evidence=writer_store,
+    )
+    assert '"reportable_descriptive_results"' in canonical_digest
+    assert '"outcome_event_n": 2' in canonical_digest
+    assert "## EXECUTED METHOD BOUNDARY" in canonical_digest
+    assert '"deterministic_standard_analysis": "absolute_risk_context"' in canonical_digest
+
+    unowned_record = dict(canonical_record)
+    unowned_record.pop("deterministic_standard_analysis")
+    unowned_digest = _render_writer_evidence_digest(
+        [unowned_record],
+        run_dir=writer_store.root,
+        include_robustness_panel=False,
+        evidence=writer_store,
+    )
+    assert '"reportable_descriptive_results"' not in unowned_digest
 
     table = pd.read_csv(out_dir / "exposure_outcome_summary.csv")
     stage = table[table["exposure"] == "organ_stage_max"]

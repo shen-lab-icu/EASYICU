@@ -37,6 +37,7 @@ from .runners.plausibility_receipt import (
 from ..authority.evidence_store import sha256_of_bytes, sha256_of_file
 from ..authority.typed_binding import (
     _write_host_input_binding_receipts,
+    host_authored_generation_mode,
     host_owns_input_binding_receipts,
 )
 from ..gates.contract import (
@@ -634,6 +635,9 @@ def _candidate_concept_audit_transition(
             elif (
                 attempt.worker_progress.deterministic_fallback_used
                 or attempt.worker_progress.deterministic_standard_executor_used
+                or host_authored_generation_mode(
+                    attempt.step_record.get("resumed_from_generation_mode")
+                )
             ):
                 attempt.step_record["llm_concept_audit_status"] = (
                     "skipped_trusted_deterministic_code"
@@ -647,6 +651,9 @@ def _candidate_concept_audit_transition(
                 or not host.pipeline._enable_llm_concept_audit
                 or attempt.worker_progress.deterministic_fallback_used
                 or attempt.worker_progress.deterministic_standard_executor_used
+                or host_authored_generation_mode(
+                    attempt.step_record.get("resumed_from_generation_mode")
+                )
             )
             if (
                 audit_authority_complete
@@ -1318,6 +1325,9 @@ def _candidate_success_prepare_transition(
         sealed_renderer_repair=bool(
             attempt.worker_progress.runner_repair_name
             and is_sealed_renderer_repair(attempt.worker_progress.runner_repair_name)
+        ),
+        resumed_from_generation_mode=attempt.step_record.get(
+            "resumed_from_generation_mode"
         ),
     ):
         state.visual_step_summary = _write_host_input_binding_receipts(

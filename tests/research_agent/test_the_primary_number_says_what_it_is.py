@@ -142,6 +142,45 @@ def test_every_declared_fact_reaches_the_writer(tmp_path: pathlib.Path) -> None:
     assert any("State the scale and the contrast" in line for line in lines)
 
 
+def test_a_ph_violation_withholds_the_constant_cox_headline(
+    tmp_path: pathlib.Path,
+) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "ev1__step_summary.json").write_text(
+        json.dumps(
+            {
+                "effect_measure": "hazard_ratio",
+                "proportional_hazards_status": ("violation_block_paper_authorization"),
+                "paper_authorization_allowed": False,
+                "hazard_ratio": 0.52,
+            }
+        ),
+        encoding="utf-8",
+    )
+    lines = _primary_effect_interpretation_lines(run_dir=tmp_path, evidence_id="ev1")
+    assert len(lines) == 1
+    assert "HEADLINE EFFECT UNAUTHORIZED" in lines[0]
+    assert "Do not report the Cox point estimate" in lines[0]
+
+    (evidence / "ev2__step_summary.json").write_text(
+        json.dumps(
+            {
+                "effect_measure": "hazard_ratio",
+                "proportional_hazards_status": "not_rejected",
+                "paper_authorization_allowed": False,
+                "hazard_ratio": 0.52,
+            }
+        ),
+        encoding="utf-8",
+    )
+    nonviolation_lines = _primary_effect_interpretation_lines(
+        run_dir=tmp_path,
+        evidence_id="ev2",
+    )
+    assert all("PH policy rejected" not in line for line in nonviolation_lines)
+
+
 # --------------------------------------------------------------------------
 # Against the real run whose manuscript carried the bare number
 # --------------------------------------------------------------------------
@@ -233,3 +272,53 @@ def test_a_panel_without_a_primary_row_gains_nothing() -> None:
 
     if not seen_without_primary:
         pytest.skip("every recorded panel publishes a primary row")
+
+
+def test_executed_typed_robustness_supersedes_empty_legacy_panel(
+    tmp_path: pathlib.Path,
+) -> None:
+    records = [
+        {
+            "step_id": "robustness_projection",
+            "status": "ok",
+            "step_summary_evidence_id": "statistic_robustness_summary",
+            "step_summary": {
+                "analysis_family": "robustness_sensitivity",
+                "n_converged_variants": 3,
+                "primary_effect_label": "upper boundary contrast",
+                "primary_effect_scale": "odds_ratio",
+                "primary_effect_is_nonlinear_curve_summary": False,
+                "limitations": ["The missing-data row is not an independent refit."],
+                "robustness_rows": [
+                    {
+                        "axis": "primary",
+                        "converged": True,
+                        "independent_variant": True,
+                        "point_estimate": 1.96,
+                        "ci_low": 1.89,
+                        "ci_high": 2.03,
+                        "evidence_id": "table_primary_contrast",
+                    },
+                    {
+                        "axis": "functional_form",
+                        "converged": True,
+                        "independent_variant": True,
+                    },
+                    {
+                        "axis": "missing",
+                        "converged": True,
+                        "independent_variant": False,
+                    },
+                ],
+            },
+        }
+    ]
+
+    lines = _render_robustness_panel_block(run_dir=tmp_path, records=records)
+    joined = "\n".join(lines)
+
+    assert "EXECUTED ROBUSTNESS AUTHORITY" in joined
+    assert "n_converged=3" in joined
+    assert "n_independent=2" in joined
+    assert "not a summary of the entire nonlinear curve" in joined
+    assert "no robustness variants converged" not in joined

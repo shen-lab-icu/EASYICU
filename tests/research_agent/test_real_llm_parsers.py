@@ -1235,10 +1235,56 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
     assert calls["create"]["extra_body"] == extra_body
 
 
+def _valid_writer_section_responses(
+    *,
+    title: str = "# Title",
+    body: str = "Evidence-bound prose {evidence:table_one}.",
+) -> list[str]:
+    methods = """## Methods
+
+### Study design and cohort
+{body}
+
+### Variables
+{body}
+
+### Statistical analysis
+{body}
+
+### Software and reproducibility
+{body}""".format(body=body)
+    results = """## Results
+
+### Cohort characteristics
+{body}
+
+### Primary outcome
+{body}
+
+### Primary association
+{body}
+
+### Sensitivity and subgroup analyses
+{body}""".format(body=body)
+    return [
+        title,
+        f"## Abstract\n\n{body}",
+        f"## Introduction\n\n{body}",
+        methods,
+        results,
+        f"## Discussion\n\n{body}",
+        f"## Limitations\n\n{body}",
+        f"## Conclusion\n\n{body}",
+    ]
+
+
 def test_writer_strips_markdown_fence(ra, tmp_path: Path):
     """If the LLM wraps the manuscript in ```markdown, the binder must
     still see raw markdown so it can locate ``{evidence:*}``."""
-    raw = "```markdown\n# Title\n\nCohort: {evidence:table_one}.\n```"
+    responses = _valid_writer_section_responses(
+        body="Cohort: {evidence:table_one}.",
+    )
+    responses[0] = "```markdown\n# Title\n\nCohort: {evidence:table_one}.\n```"
 
     from easyicu.research_agent.agents.core import WriterAgent
 
@@ -1250,7 +1296,7 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
         ),
         variables=[],
     )
-    out = WriterAgent(ScriptedMockLLMClient([raw], repeat_last=True)).run(
+    out = WriterAgent(ScriptedMockLLMClient(responses)).run(
         context=ctx, evidence_ids=["table_one"]
     )
     # The fence must be stripped so the binder regex matches.
@@ -1272,8 +1318,10 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
     )
 
     llm = ScriptedMockLLMClient(
-        ["# 标题\n\n结果：12 例 {evidence:table_one}。\n"],
-        repeat_last=True,
+        _valid_writer_section_responses(
+            title="# 标题",
+            body="结果：12 例 {evidence:table_one}。",
+        )
     )
     out = WriterAgent(llm, language="zh").run(
         context=ctx,
@@ -1305,11 +1353,12 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     )
 
     llm = ScriptedMockLLMClient(
-        [
-            "# Title\n\n## Results\n\nBaseline characteristics are summarised "
-            "in Table 1 {evidence:table_one}.\n"
-        ],
-        repeat_last=True,
+        _valid_writer_section_responses(
+            body=(
+                "Baseline characteristics are summarised in Table 1 "
+                "{evidence:table_one}."
+            ),
+        )
     )
     out = WriterAgent(llm).run(context=ctx, evidence_ids=["table_one"])
 
@@ -1331,6 +1380,11 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     assert "`model_performance`" in captured["system"]
     assert "Use exactly single braces" in captured["user"]
     assert "SCIENTIFIC CLAIM RULE" in captured["user"]
+    assert "EXECUTION AUTHORITY RULE" in captured["user"]
+    assert "`EXECUTED METHOD BOUNDARY`" in captured["user"]
+    assert "not proof that a method was executed" in captured["user"]
+    assert "still claim method implementation" in captured["user"]
+    assert "Do not claim that an LLM generated analysis code" in captured["user"]
     assert "complete standalone sentence" in captured["user"]
     assert "Run-bound typed methodology applications" in captured["user"]
     assert "mechanisms, strengths, or limitations" in captured["user"]

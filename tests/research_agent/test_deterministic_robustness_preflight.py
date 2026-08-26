@@ -1325,6 +1325,70 @@ def test_complete_case_equivalence_requires_identical_locked_membership(
     assert "complete_case_n=3, model_n=4" in str(error)
 
 
+def test_complete_case_equivalence_closes_declared_minimum_over_primary_inputs(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+        _verified_complete_case_equivalence,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(
+        run_dir,
+        coefficient_filename="adjusted_association_coefficients.csv",
+        include_primary_model_id=False,
+        include_headline=False,
+        model_n=4,
+        analysis_covariates=["age", "charlson"],
+    )
+    source = _find_structured_primary_model_source(
+        records=[record],
+        run_dir=run_dir,
+        evidence_records=evidence,
+    )
+    assert source is not None
+    spec = RobustnessSpec(
+        spec_id="complete_case",
+        axis="missing",
+        description="Use complete cases for the primary model.",
+        missing_override={
+            "strategy": "complete_case",
+            "variables": ["exposure", "outcome", "age"],
+        },
+    )
+    complete = pd.DataFrame(
+        {
+            "exposure": [0.0, 1.0, 0.0, 1.0],
+            "outcome": [0, 1, 0, 1],
+            "age": [50.0, 60.0, 70.0, 80.0],
+            "charlson": [0.0, 1.0, 2.0, 3.0],
+        }
+    )
+
+    row, _coefficient_rows, contract, error = _verified_complete_case_equivalence(
+        spec=spec,
+        source=source,
+        primary_data=complete,
+    )
+
+    assert error is None
+    assert row.converged is True
+    assert contract is not None
+    assert contract["declared_complete_case_variables"] == [
+        "exposure",
+        "outcome",
+        "age",
+    ]
+    assert contract["effective_complete_case_variables"] == [
+        "exposure",
+        "outcome",
+        "age",
+        "charlson",
+    ]
+    assert contract["host_closed_primary_model_inputs"] == ["charlson"]
+
+
 def test_complete_case_difference_replays_registered_primary_code(
     tmp_path: Path,
 ) -> None:

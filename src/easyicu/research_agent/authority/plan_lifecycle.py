@@ -53,6 +53,33 @@ def _plan_payload(
     return typed.model_dump(mode="json")
 
 
+def _drop_legacy_empty_literature_design_decisions(value: Any) -> Any:
+    if isinstance(value, list):
+        return [
+            _drop_legacy_empty_literature_design_decisions(item) for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: _drop_legacy_empty_literature_design_decisions(item)
+        for key, item in value.items()
+        if not (key == "literature_design_decisions" and item == [])
+    }
+
+
+def _plan_payload_matches_current_or_legacy_empty_decisions(
+    observed: Mapping[str, Any],
+    canonical: Mapping[str, Any],
+) -> bool:
+    """Accept only the schema-added empty design-decision default on load."""
+
+    if dict(observed) == dict(canonical):
+        return True
+    return _drop_legacy_empty_literature_design_decisions(
+        dict(observed)
+    ) == _drop_legacy_empty_literature_design_decisions(dict(canonical))
+
+
 def _unsigned_normalized_payload(value: "NormalizedPlan") -> dict[str, Any]:
     payload = value.model_dump(mode="json", exclude={"authority_sha256"})
     if value.proposed.schema_version == "easyicu.proposed_plan/1":
@@ -121,9 +148,12 @@ class ProposedPlan(BaseModel):
             self.plan_payload,
             cohort_concept_ids=concept_ids,
         )
-        if payload != self.plan_payload:
+        if not _plan_payload_matches_current_or_legacy_empty_decisions(
+            self.plan_payload,
+            payload,
+        ):
             raise ValueError("proposed plan payload is not canonical AnalysisPlan JSON")
-        if canonical_sha256(payload) != self.plan_sha256:
+        if canonical_sha256(self.plan_payload) != self.plan_sha256:
             raise ValueError("proposed plan digest does not bind its payload")
         return self
 
@@ -239,10 +269,10 @@ class NormalizedPlan(BaseModel):
             self.plan_payload,
             cohort_concept_ids=self.proposed.cohort_concept_ids,
         )
-        if (
-            payload != self.plan_payload
-            or canonical_sha256(payload) != self.plan_sha256
-        ):
+        if not _plan_payload_matches_current_or_legacy_empty_decisions(
+            self.plan_payload,
+            payload,
+        ) or canonical_sha256(self.plan_payload) != self.plan_sha256:
             raise ValueError("normalized plan payload/digest mismatch")
         cursor = self.proposed.plan_sha256
         for receipt in self.transformation_receipts:
@@ -331,10 +361,10 @@ class ApprovedExecutablePlan(BaseModel):
             self.plan_payload,
             cohort_concept_ids=concept_ids,
         )
-        if (
-            payload != self.plan_payload
-            or canonical_sha256(payload) != self.plan_sha256
-        ):
+        if not _plan_payload_matches_current_or_legacy_empty_decisions(
+            self.plan_payload,
+            payload,
+        ) or canonical_sha256(self.plan_payload) != self.plan_sha256:
             raise ValueError("approved executable plan payload/digest mismatch")
         unsigned = _unsigned_approved_payload(self)
         if canonical_sha256(unsigned) != self.authority_sha256:

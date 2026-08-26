@@ -1,0 +1,104 @@
+{
+  "schema_version": "easyicu.dev9_exact_review_assessments/1",
+  "review_authority": "ai_development_review",
+  "claim_boundary": "Post-run method and presentation comparison only. Published effects are not expected answers; no paper, clinical, Qualification12, or Held-out27 authority.",
+  "supplement_review": {
+    "source": "Europe PMC supplementaryFiles archives for every hydrated anchor that published supplementary material",
+    "coverage": "11/11 anchors with published supplementary material downloaded; 27 PDF/DOCX files converted to Markdown and one standalone TIF inspected visually; three anchors published no supplement",
+    "artifact_inventory_sha256": "e4b2641b9fd68a0298a58f2bf5c31f5fd3d0b1df881560abcd133835d859b64b",
+    "task_findings": {
+      "e1_sepsis3_prevalence_mortality": "Supplementary definitions, missing-data rules, cohort flow, sensitivity tables, and mortality figures support the operationalization and display comparison; they also expose the need to keep repeated-admission and external-reproduction limits explicit.",
+      "e2_lactate_mortality": "The accessible anchor published no separate supplement; the comparison is therefore bound to its full article rather than silently claiming supplement review.",
+      "e3_kdigo_gradient": "The supplement clarifies variable and outcome definitions; the exact run covers definition-specific staging but still needs a prospectively authorized temporal estimand for article-grade inference.",
+      "m1_hepatobiliary_missingness": "Supplementary tables reinforce that measurement selection must remain visible; the exact run correctly refuses to code unmeasured bilirubin as normal.",
+      "m2_mortality_prediction": "Supplementary site-stratified characteristics and missingness tables reinforce transport and calibration requirements; internal repeated splits do not substitute for temporal or external validation.",
+      "m3_sepsis_subphenotype": "Cross-site alluvial plots, agreement statistics, cluster profiles, and outcome tables show that external phenotype reproducibility is a primary result; the exact run correctly withholds naming when stability is low.",
+      "h1_ventilation_survival": "Supplementary time-varying analyses, missingness tables, and multiply imputed joint-model results show a robustness axis absent from the exact run.",
+      "h2_vasopressor_causal": "Supplementary early-versus-late group balance and outcome tables require an observable comparator and positivity; they support the exact run's fail-closed decision rather than licensing a synthetic control group.",
+      "h3_trajectory_clustering": "Supplementary cluster-number criteria, alternative algorithms, sensitivity cohorts, cross-cohort tables, and trajectory figures confirm that a boundary-optimal K without replication is not a publishable phenotype solution."
+    }
+  },
+  "tasks": {
+    "e1_sepsis3_prevalence_mortality": {
+      "study_population": ["meets_anchor", "The exact run reports the ICU denominator, cohort flow, and Sepsis-3 analysis population transparently."],
+      "time_zero_and_windows": ["actionable_gap", "The 24-hour exposure window and landmark sensitivity are explicit, but post-baseline exposure opportunity and early-event handling are not fully closed for article-grade inference."],
+      "variable_operationalization": ["meets_anchor", "Sepsis-3 construction and component completeness are source-bound rather than inferred from a diagnosis label."],
+      "missingness_and_censoring": ["actionable_gap", "Component completeness is audited, but repeated-stay dependence cannot be handled because patient identity is unavailable."],
+      "primary_model_and_sensitivities": ["actionable_gap", "The primary adjusted association and four distinct sensitivities are present, but the exact adjustment set remains unconfirmed and no external reproduction is available."],
+      "table_and_figure_completeness": ["meets_anchor", "The primary display combines denominator, absolute risk, adjusted association, signed sensitivities, and component completeness with source data and vector exports."],
+      "conclusion_boundaries": ["actionable_gap", "Claims remain analysis-only and appropriately noncausal, but no substantive evidence-bound manuscript was generated and independent scientific review remains open."]
+    },
+    "e2_lactate_mortality": {
+      "study_population": ["meets_anchor", "The exact run defines the measured cohort and landmark-eligible population with explicit denominators."],
+      "time_zero_and_windows": ["meets_anchor", "The lactate measurement window is separated from subsequent outcome follow-up through an alive-and-observed landmark."],
+      "variable_operationalization": ["meets_anchor", "Lactate is treated as a continuous exposure with a nonlinear dose-response rather than only a threshold category."],
+      "missingness_and_censoring": ["actionable_gap", "Measurement status and measurement process are displayed, but residual selection by indication cannot be eliminated in this single-database analysis."],
+      "primary_model_and_sensitivities": ["actionable_gap", "Nonlinearity, absolute risk, landmarking, and robustness are present; the adjustment set and external reproduction remain unconfirmed."],
+      "table_and_figure_completeness": ["meets_anchor", "The display includes dose response, absolute risk, measurement status, robustness, and measurement-process panels with governed source data."],
+      "conclusion_boundaries": ["actionable_gap", "The result is bounded as observational and analysis-only, but novelty positioning, a substantive manuscript, and independent review are incomplete."]
+    },
+    "e3_kdigo_gradient": {
+      "study_population": ["meets_anchor", "The cohort flow and stage denominators are explicit for the exact ICU population."],
+      "time_zero_and_windows": ["actionable_gap", "The analysis window is explicit, but post-baseline AKI ascertainment and early-event opportunity require a prospectively authorized landmark or descriptive-only decision."],
+      "variable_operationalization": ["meets_anchor", "KDIGO stage, creatinine, urine-output, RRT, baseline renal definition, and LOS outputs are separated rather than collapsed into a single AKI flag."],
+      "missingness_and_censoring": ["meets_anchor", "Definition-specific availability and denominator changes are reported without treating unavailable components as normal."],
+      "primary_model_and_sensitivities": ["actionable_gap", "The prespecified stage and definition grid converges, but repeated-stay dependence, adjustment authorization, and external reproduction remain open."],
+      "table_and_figure_completeness": ["meets_anchor", "Stage distribution, mortality gradient, trend, LOS, definition sensitivity, and data-quality displays are present."],
+      "conclusion_boundaries": ["actionable_gap", "The gradient is not promoted to causal or clinical guidance, but no complete manuscript or independent clinical review exists."]
+    },
+    "m1_hepatobiliary_missingness": {
+      "study_population": ["meets_anchor", "Measured and unmeasured bilirubin populations are shown separately with explicit selection denominators."],
+      "time_zero_and_windows": ["meets_anchor", "First and maximum measurements and the landmark analysis are temporally distinguished."],
+      "variable_operationalization": ["meets_anchor", "Unmeasured bilirubin is never coded as normal, and nonlinear exposure handling is explicit."],
+      "missingness_and_censoring": ["actionable_gap", "Measurement-process selection is visible, but residual measurement-by-indication remains and cannot be removed by the available data."],
+      "primary_model_and_sensitivities": ["actionable_gap", "First-versus-maximum and nonlinear landmark analyses are present, but adjustment authorization and external reproduction remain open."],
+      "table_and_figure_completeness": ["meets_anchor", "The figure makes measurement status, nonlinear association, and exposure-definition sensitivity visible with source-bound panels."],
+      "conclusion_boundaries": ["actionable_gap", "The analysis avoids interpreting missing as normal, but direct-comparator positioning, a full manuscript, and independent review remain incomplete."]
+    },
+    "m2_mortality_prediction": {
+      "study_population": ["meets_anchor", "Patient-level grouped splits have zero overlap and the prediction cohort is explicitly defined."],
+      "time_zero_and_windows": ["meets_anchor", "Predictor ascertainment and outcome horizon are bound in the exact run context."],
+      "variable_operationalization": ["meets_anchor", "Predictors, outcome, and preprocessing are recorded without test-set feature selection."],
+      "missingness_and_censoring": ["meets_anchor", "Missingness and preprocessing are audited within the split-aware workflow."],
+      "primary_model_and_sensitivities": ["actionable_gap", "AUROC, AUPRC, Brier, calibration, DCA, and ten grouped-split repetitions are present, but they form one internal robustness axis and no temporal or external validation or recalibration exists."],
+      "table_and_figure_completeness": ["meets_anchor", "ROC, correctly labelled precision-recall, calibration, Brier, decision curves, and repeated-split uncertainty are displayed."],
+      "conclusion_boundaries": ["actionable_gap", "The run is correctly nondeployable, but the design analogue is not plan-bound and no complete manuscript or independent review exists."]
+    },
+    "m3_sepsis_subphenotype": {
+      "study_population": ["meets_anchor", "The phenotyping denominator and retained feature population are explicit."],
+      "time_zero_and_windows": ["meets_anchor", "The first-24-hour static feature window is fixed before clustering."],
+      "variable_operationalization": ["meets_anchor", "Scaling, feature availability, cluster profiles, and candidate labels remain source-bound."],
+      "missingness_and_censoring": ["actionable_gap", "Feature availability is shown, but the missing-data method lacks a complete source layer and external transport cannot be assessed."],
+      "primary_model_and_sensitivities": ["actionable_gap", "Resampling stability and GMM-versus-k-means agreement are low and correctly block biological naming; a second robustness axis and external replication remain absent."],
+      "table_and_figure_completeness": ["meets_anchor", "Structure, profiles, sizes, stability, and algorithm disagreement are shown without hiding the negative result."],
+      "conclusion_boundaries": ["actionable_gap", "Phenotype names and clinical meaning are withheld appropriately, but no full negative-result manuscript or independent review exists."]
+    },
+    "h1_ventilation_survival": {
+      "study_population": ["meets_anchor", "The exact risk set and eligible ventilation population are explicit."],
+      "time_zero_and_windows": ["meets_anchor", "Time zero, landmarking, follow-up, and risk-set construction are machine-readable."],
+      "variable_operationalization": ["meets_anchor", "Ventilation intensity and survival outcome are temporally aligned rather than treated as baseline-only exposure."],
+      "missingness_and_censoring": ["actionable_gap", "Measurement and censoring are audited, but informative missingness and censoring require another executable robustness axis."],
+      "primary_model_and_sensitivities": ["actionable_gap", "The severe PH violation is detected, the constant HR is withheld, and RMST is used; stronger censoring sensitivity and external reproduction remain absent."],
+      "table_and_figure_completeness": ["meets_anchor", "Risk set, PH diagnostics, RMST contrast, and measurement audit are displayed with explicit claim limits."],
+      "conclusion_boundaries": ["actionable_gap", "The run does not headline an invalid constant HR, but exact method-literature binding, a full manuscript, and independent review remain incomplete."]
+    },
+    "h2_vasopressor_causal": {
+      "study_population": ["actionable_gap", "A genuine verified nonuse or delayed comparator cannot be identified from the available cohort, so positivity is not established."],
+      "time_zero_and_windows": ["fail_closed_appropriate", "The run refuses to create a treatment contrast when comparator timing cannot be observed reliably."],
+      "variable_operationalization": ["actionable_gap", "Exposure nonuse is unresolved and the outcome definition is not sufficiently closed for causal execution."],
+      "missingness_and_censoring": ["fail_closed_appropriate", "Unavailable comparator status is treated as an identification failure rather than ordinary missingness or synthetic control assignment."],
+      "primary_model_and_sensitivities": ["fail_closed_appropriate", "No propensity model, balance table, effect estimate, or sensitivity analysis is produced because the causal contrast is unidentified."],
+      "table_and_figure_completeness": ["not_applicable", "No effect figure is appropriate for an unidentified contrast; the fail-closed receipt is the authoritative product."],
+      "conclusion_boundaries": ["fail_closed_appropriate", "The exact run is a correct terminal non-solution and makes no treatment-effect claim; a real comparator is required before any causal article can be attempted."]
+    },
+    "h3_trajectory_clustering": {
+      "study_population": ["meets_anchor", "The trajectory-eligible population and fixed observation window are explicit."],
+      "time_zero_and_windows": ["meets_anchor", "Trajectory time zero and window are fixed before model selection."],
+      "variable_operationalization": ["meets_anchor", "Trajectory representation and candidate K grid are recorded without post-hoc phenotype naming."],
+      "missingness_and_censoring": ["actionable_gap", "Availability is audited, but baseline characterization and external transport remain incomplete."],
+      "primary_model_and_sensitivities": ["fail_closed_appropriate", "AIC and BIC minimize at the upper K boundary, so K selection, outcome binding, and phenotype claims are correctly withheld; an alternative algorithm is still required before retrying."],
+      "table_and_figure_completeness": ["actionable_gap", "Boundary diagnostics are present, but baseline characteristics and alternative-algorithm agreement panels are absent."],
+      "conclusion_boundaries": ["fail_closed_appropriate", "The run is a correct no-stable-solution diagnostic and does not convert the boundary optimum into a biological claim."]
+    }
+  }
+}

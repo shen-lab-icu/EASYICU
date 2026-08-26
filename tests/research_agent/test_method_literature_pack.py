@@ -268,6 +268,72 @@ def test_bound_seed_upstream_include_cannot_promote_an_irrelevant_record() -> No
     assert decision.disposition == "exclude"
 
 
+def test_exact_question_reviewed_design_analogue_keeps_fulltext_decision() -> None:
+    context = _context()
+    citation_key = "reviewed_design_analogue"
+    seed = LiteratureBundle.model_validate(
+        {
+            "research_question": context.research_question,
+            "citations": [
+                {
+                    "key": citation_key,
+                    "title": "A reviewed methodological analogue",
+                    "year": "2025",
+                    "pmid": "12345678",
+                }
+            ],
+            "search_provenance": {
+                "curated_seed_count": 0,
+                "sources_enabled": ["pubmed"],
+                "sources_returning": ["pubmed"],
+                "search_queries": {"pubmed": ["verified query"]},
+                "record_queries": {citation_key: ["12345678[PMID]"]},
+                "search_conducted": True,
+                "searched_at": "2026-08-25T12:00:00+00:00",
+            },
+            "screening_decisions": [
+                {
+                    "citation_key": citation_key,
+                    "source": "pubmed",
+                    "disposition": "include",
+                    "evidence_role": "design_analogue",
+                    "rationale": (
+                        "Full text provides a reviewed design pattern for the exact question."
+                    ),
+                    "design_excerpt_available": True,
+                }
+            ],
+            "design_evidence_cards": [
+                {
+                    "citation_key": citation_key,
+                    "evidence_role": "design_analogue",
+                    "access_mode": "open_access_fulltext",
+                    "full_text_locator": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/",
+                    "full_text_sha256": "a" * 64,
+                    "supplement_status": "not_published",
+                    "reviewed_at": "2026-08-25T12:00:00+00:00",
+                    "evidence": [
+                        {
+                            "dimension": "primary_model_and_sensitivities",
+                            "source_backed_summary": (
+                                "The source describes a relevant methodological pattern."
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    bundle = build_preplan_literature_bundle(context, bound_seed=seed)
+
+    decision = next(
+        row for row in bundle.screening_decisions if row.citation_key == citation_key
+    )
+    assert decision.disposition == "include"
+    assert decision.evidence_role == "design_analogue"
+
+
 def test_the_methodology_layer_reaches_every_study() -> None:
     """Design guidance is not conditional on which concepts are in scope.
 

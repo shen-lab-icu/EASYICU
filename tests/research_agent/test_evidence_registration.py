@@ -11,6 +11,7 @@ import pytest
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.registration import (
     EvidenceRegistrar,
+    registered_artifact_evidence_kind,
     step_owned_artifact_evidence_id,
 )
 
@@ -30,6 +31,30 @@ def _register(
         produced_by_step=step_id,
         evidence_id=evidence_id,
         publish_aliases=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_name", "declared_kinds", "expected"),
+    [
+        ("representation.parquet", ["artifact"], "table"),
+        ("model.json", ["artifact"], "log"),
+        ("estimate.json", ["statistic"], "statistic"),
+        ("main.svg", ["figure"], "figure"),
+        ("ambiguous.csv", ["table", "statistic"], "table"),
+    ],
+)
+def test_registered_artifact_kind_is_shared_by_registration_and_writer(
+    source_name: str,
+    declared_kinds: list[str],
+    expected: str,
+) -> None:
+    assert (
+        registered_artifact_evidence_kind(
+            source_name=source_name,
+            declared_kinds=declared_kinds,
+        )
+        == expected
     )
 
 

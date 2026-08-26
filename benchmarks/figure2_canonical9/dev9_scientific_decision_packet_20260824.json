@@ -1,0 +1,73 @@
+{
+  "schema_version": "easyicu.dev9_scientific_decision_packet/1",
+  "decision_id": "DEV9-SCI-20260824-V1",
+  "status": "withdrawn_pending_fulltext_and_supplement_review",
+  "withdrawal_reason": "The packet was produced before the nine current runs were compared against the anchor main texts and supplementary materials. It is nonauthoritative and must not be signed or executed.",
+  "superseding_review": "/Volumes/外置硬盘/easyicu_data/figure2_dev9_anchor_fulltext_supplement_review_e271409_20260824/README.md",
+  "scope": "Dev9 development analyses only; all outputs remain analysis_only and have no publication, clinical, deployment, Qualification12, or Held-out27 authority.",
+  "code_baseline": "4a6bf92",
+  "principles": [
+    "Published anchors are method and presentation comparators, never numerical gold standards.",
+    "Full-cohort prevalence and absolute outcome summaries may remain descriptive when a first-24-hour exposure makes same-window adjusted outcome inference temporally unsafe.",
+    "Only case protocols contain task-specific definitions; shared prompts and method owners remain case-neutral.",
+    "No unavailable external cohort, control arm, censoring process, or replication result may be synthesized."
+  ],
+  "decisions": [
+    {
+      "task_id": "e1_sepsis3_prevalence_mortality",
+      "decision": "Use all eligible ICU stays for descriptive Sepsis-3 prevalence and absolute in-hospital mortality. Use a 24-hour landmark among stays alive at 24 hours for the adjusted association of the first-24-hour Sepsis-3 classification with subsequent in-hospital death. Adjust for age, sex, and charlson_first as baseline prognostic factors. Preserve the full-cohort association, non-readmission restriction, and flexible age/Charlson forms as explicitly labelled sensitivities.",
+      "claim_boundary": "Observational prognostic association only; not the causal effect of sepsis and not a patient-level prevalence estimate when patient identity is unavailable.",
+      "implementation_route": "Reuse the generic association-model-grid authority; update only the E1 case protocol/runtime projection and affected deterministic reporting suffix."
+    },
+    {
+      "task_id": "e3_kdigo_gradient",
+      "decision": "Keep full-cohort KDIGO stage distribution, absolute mortality, and ICU length-of-stay summaries descriptive. Use a 24-hour landmark for the adjusted post-landmark mortality association, with KDIGO stage categorical and stage 0 as reference; adjust for age, sex, and charlson_first. Add two prespecified sensitivities: an ordinal-linear stage model and a creatinine-only KDIGO definition, while keeping the full composite creatinine/urine-output/RRT definition primary.",
+      "claim_boundary": "Prognostic gradient only; LOS remains median/IQR plus ordered trend and is not interpreted causally. Concurrent non-renal SOFA components are not called baseline confounders.",
+      "implementation_route": "Extend the generic association-model-grid/definition-axis contract, then replay only E3 deterministic analysis and reporting owners."
+    },
+    {
+      "task_id": "m1_hepatobiliary_missingness",
+      "decision": "Keep measured-versus-unmeasured bilirubin accounting in the full cohort and never encode unmeasured bilirubin as normal. Use a 24-hour landmark among stays alive at 24 hours and with observed first-24-hour bilirubin for the adjusted post-landmark mortality association. Model bili_max with a restricted cubic spline as primary, adjust for age, sex, and charlson_first, and add linear-per-unit and bili_first-versus-bili_max sensitivities.",
+      "claim_boundary": "Association among measured stays only; the result does not identify the full-cohort bilirubin effect and does not make missing-at-random assumptions.",
+      "implementation_route": "Reuse the generic landmark-spline owner and a generic exposure-definition sensitivity; update only the M1 case protocol/runtime projection."
+    },
+    {
+      "task_id": "m2_mortality_prediction",
+      "decision": "Retain the current patient-group 80/20 held-out internal validation as the primary development evaluation. Add ten prespecified repeated patient-group 80/20 splits with sealed seeds derived from master seed 1729 and summarize AUROC, Brier score, calibration intercept, and calibration slope across splits. Preserve the complete-case refit as the missingness axis.",
+      "claim_boundary": "Internal validation only. The source material contains no independent hospital, database, site, or calendar-time coordinate, so external or temporal transport validation remains unavailable and must not be claimed.",
+      "implementation_route": "Add one generic repeated-group-split prediction-validation adapter; do not create an M2-only model implementation."
+    },
+    {
+      "task_id": "m3_sepsis_subphenotype",
+      "decision": "Treat absent external replication as an explicit evidence boundary, not an executable Dev9 defect. Run only the provider-free deterministic publication-figure/reporting suffix after the registered clustering result remains unchanged.",
+      "claim_boundary": "Internal candidate phenotypes, analysis_only; no stable biological subtype or external reproducibility claim.",
+      "implementation_route": "Use the already repaired generic publication-figure suffix; no new clustering method or Provider call."
+    },
+    {
+      "task_id": "h1_ventilation_survival",
+      "decision": "Retain the 24-hour landmark and the current Cox model as a PH diagnostic, not an authorized headline estimate when the global PH test fails. Add an extended Cox model with a constant ventilation coefficient and prespecified age, sex, charlson_first, and sofa2_max interactions with log1p(time from landmark in days). Add the unadjusted 27-day post-landmark RMST difference as an absolute, PH-free sensitivity. Do not add IPCW because 94,452 of 94,458 source stays have fixed-horizon endpoint support and the observed non-event censoring is administrative at day 28.",
+      "claim_boundary": "Descriptive prognostic association only; ventilation timing is first observed in ICU and neither the adjusted HR nor RMST difference is causal.",
+      "implementation_route": "Add a generic extended-Cox time-interaction adapter and reuse the existing generic RMST kernel; update only the H1 case protocol/runtime projection."
+    },
+    {
+      "task_id": "h2_vasopressor_causal",
+      "decision": "Freeze the existing verified-non-use-unavailable fail-closed result.",
+      "claim_boundary": "No comparator, propensity score, or causal effect estimate is authorized.",
+      "implementation_route": "No execution or code change."
+    },
+    {
+      "task_id": "h3_trajectory_clustering",
+      "decision": "Freeze the existing no-interior-BIC-optimum fail-closed result.",
+      "claim_boundary": "No selected K, named trajectory subtype, or outcome association is authorized.",
+      "implementation_route": "No execution or code change."
+    }
+  ],
+  "execution_after_approval": [
+    "Implement only generic typed owners and case-local protocol projections named above.",
+    "Run focused owner tests, then provider-free affected-case deterministic replays; do not rerun Planner or Coder when the saved plan remains valid.",
+    "Rebuild the 9-task run-bound shadow review without using anchor numerical results as expected answers.",
+    "When Dev9 has no unassigned actionable gap, build one exact-HEAD image and run one exact-HEAD full CI.",
+    "Keep Qualification12 and Held-out27 at zero until the exact-HEAD freeze is verified."
+  ],
+  "signature_text": null
+}

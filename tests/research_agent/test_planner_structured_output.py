@@ -168,6 +168,7 @@ def test_ten_source_run_bound_literature_schema_keeps_retry_headroom():
     schema = json.loads(request.schema_json)
 
     assert request.payload_bytes < 30_000
+    assert "CandidateLiteratureDesignDecision" not in request.schema_json
     assert len(schema["$defs"]["LiteratureDesignBinding"]["anyOf"]) == 6
 
 

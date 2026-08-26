@@ -58,12 +58,12 @@ _FAMILY_TEMPLATES: Dict[StudyDesignFamily, Dict[str, object]] = {
             "exposure prevalence and absolute outcome risk",
             "primary adjusted effect estimate",
             "sensitivity / robustness summary",
-            "missingness or data-quality summary",
         ],
         "supplementary_displays": [
             "full variable definitions and aggregation rules",
             "complete model coefficients",
             "missingness table",
+            "measurement-process and data-quality figure",
             "sensitivity-specification matrix",
             "analysis provenance and code manifest",
         ],
@@ -155,13 +155,13 @@ _FAMILY_TEMPLATES: Dict[StudyDesignFamily, Dict[str, object]] = {
         ],
         "main_text_displays": [
             "cohort flow / feature availability",
-            "feature missingness and scaling summary",
             "embedding or heatmap of phenotype structure",
             "cluster characteristics table",
             "stability or validation diagnostic",
         ],
         "supplementary_displays": [
             "full feature list",
+            "feature missingness and scaling summary",
             "cluster stability grid",
             "alternative cluster-number results",
             "cluster assignment provenance",
@@ -221,11 +221,11 @@ _FAMILY_TEMPLATES: Dict[StudyDesignFamily, Dict[str, object]] = {
             "cohort flow / denominator",
             "Table 1 or descriptive summary table",
             "distribution or prevalence figure",
-            "missingness or data-quality summary",
         ],
         "supplementary_displays": [
             "variable definitions",
             "complete descriptive table",
+            "missingness or data-quality summary",
             "stratified summaries",
             "analysis provenance and code manifest",
         ],
@@ -333,8 +333,8 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
         _module(
             "missingness_measurement_audit",
             "data_quality",
-            "core",
-            "ICU data availability is part of the scientific result and must be visible.",
+            "supplementary",
+            "ICU data availability must remain visible, but routine detail belongs in supplementary material unless it is central to the question.",
             (
                 "missingness heatmap",
                 "measurement availability table",
@@ -451,8 +451,8 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
         _module(
             "missingness_leakage_audit",
             "data_quality",
-            "core",
-            "Feature availability, imputation, and leakage checks are part of model validity.",
+            "supplementary",
+            "Feature availability, imputation, and leakage checks are part of model validity and normally belong in supplementary material.",
             (
                 "missingness table",
                 "feature availability panel",
@@ -571,8 +571,8 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
         _module(
             "feature_quality_scaling",
             "data_quality",
-            "core",
-            "Scaling, missingness, and feature provenance influence cluster geometry.",
+            "supplementary",
+            "Scaling, missingness, and feature provenance influence cluster geometry and normally belong in supplementary material.",
             (
                 "feature missingness heatmap",
                 "scaling summary",
@@ -714,8 +714,8 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
         _module(
             "missingness_data_quality",
             "data_quality",
-            "core",
-            "Coverage and missingness determine how much of the descriptive result is interpretable.",
+            "supplementary",
+            "Coverage and missingness determine interpretability, but routine detail normally belongs in supplementary material.",
             ("missingness table", "coverage heatmap", "data-quality panel"),
         ),
         _module(

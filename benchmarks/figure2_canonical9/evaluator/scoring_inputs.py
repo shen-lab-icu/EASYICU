@@ -1300,6 +1300,35 @@ class _VerifiedFigure2RunAuthority:
     task_authority: Figure2RunTaskAuthority
 
 
+def _selected_checkpoint_matches_final_manifest(
+    selected: Mapping[str, Any],
+    final_payload: Mapping[str, Any],
+) -> bool:
+    """Compare checkpoint authority without confusing hydrated history for drift.
+
+    ``load_run_artifact_authority`` verifies and hydrates an externalized
+    ``step_attempt_history`` so runtime consumers can inspect the full ledger.
+    The final manifest intentionally keeps that history out of line and binds
+    it through ``step_attempt_history_ref``.  Normalize only that verified
+    representation difference before comparing the selected authority with the
+    immutable final checkpoint; every other field must remain byte-equivalent
+    under canonical JSON.
+    """
+
+    normalized = dict(selected)
+    if final_payload.get("step_attempt_history_ref") is not None:
+        if normalized.get("step_attempt_history_ref") != final_payload.get(
+            "step_attempt_history_ref"
+        ):
+            return False
+        if not isinstance(normalized.get("step_attempt_history"), list):
+            return False
+        normalized["step_attempt_history"] = final_payload.get(
+            "step_attempt_history"
+        )
+    return _canonical_json_bytes(normalized) == _canonical_json_bytes(final_payload)
+
+
 def _build_expected_task_authority_locked(
     root: Path,
     *,
@@ -1311,14 +1340,15 @@ def _build_expected_task_authority_locked(
         raise ValueError("task is outside the frozen Figure 2 suite")
     final_bytes, final_payload = _read_final_manifest(root / "manifest.json")
     selected = load_run_artifact_authority(root)
-    if selected is None or _canonical_json_bytes(selected) != _canonical_json_bytes(
-        final_payload
+    if selected is None or not _selected_checkpoint_matches_final_manifest(
+        selected, final_payload
     ):
         raise OSError("final manifest is not the current run checkpoint authority")
-    checkpoint_bytes = _canonical_json_bytes(selected)
-    run_id = selected.get("run_id")
-    sequence = selected.get("checkpoint_sequence")
-    research_question = selected.get("research_question")
+    checkpoint_bytes = _canonical_json_bytes(final_payload)
+    checkpoint = dict(final_payload)
+    run_id = checkpoint.get("run_id")
+    sequence = checkpoint.get("checkpoint_sequence")
+    research_question = checkpoint.get("research_question")
     if run_id != root.name or type(sequence) is not int or sequence < 1:
         raise ValueError("current checkpoint run coordinate is invalid")
     if not final_bytes:
@@ -1338,7 +1368,7 @@ def _build_expected_task_authority_locked(
         task_id
     )
     _require_run_submission_authority(
-        selected,
+        checkpoint,
         profile_ref=manifest.submission_profile.ref,
         concept_dict_sha256=manifest.submission_profile.concept_dict_sha256,
         sofa2_dict_sha256=manifest.submission_profile.sofa2_dict_sha256,
@@ -1348,9 +1378,9 @@ def _build_expected_task_authority_locked(
     ):
         raise PermissionError("ready input binding targets a different question")
 
-    readiness_raw = selected.get("readiness")
-    raw_steps = selected.get("per_step_records")
-    raw_records = selected.get("evidence")
+    readiness_raw = checkpoint.get("readiness")
+    raw_steps = checkpoint.get("per_step_records")
+    raw_records = checkpoint.get("evidence")
     readiness = require_completed_figure2_gates(readiness_raw)
     if not isinstance(raw_steps, list) or any(
         not isinstance(item, dict) for item in raw_steps
@@ -1459,7 +1489,7 @@ def _build_expected_task_authority_locked(
         evidence_payload_sha256=snapshot.payload_sha256,
     )
     return _VerifiedFigure2RunAuthority(
-        checkpoint=dict(selected),
+        checkpoint=checkpoint,
         checkpoint_bytes=checkpoint_bytes,
         final_manifest_bytes=final_bytes,
         readiness=readiness,
@@ -1852,9 +1882,10 @@ def seal_figure2_run_task_authority(
         if (
             final_bytes_after != verified.final_manifest_bytes
             or selected_after is None
-            or _canonical_json_bytes(selected_after)
-            != _canonical_json_bytes(final_payload_after)
-            or _sha256_bytes(_canonical_json_bytes(selected_after))
+            or not _selected_checkpoint_matches_final_manifest(
+                selected_after, final_payload_after
+            )
+            or _sha256_bytes(_canonical_json_bytes(final_payload_after))
             != candidate.checkpoint_payload_sha256
             or selected_after.get("checkpoint_sequence")
             != candidate.checkpoint_sequence

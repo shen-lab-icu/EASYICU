@@ -99,9 +99,224 @@ LANDMARK_ASSOCIATION_COMPOSITE_INPUTS = frozenset(
     {
         "table:absolute_risk_context",
         "table:robustness_summary",
-        "table:measurement_process_audit",
     }
 )
+ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS = frozenset(
+    {
+        "table:exposure_outcome_distribution",
+        "table:adjusted_association_estimates",
+        "table:exposure_component_completeness_audit",
+    }
+)
+COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS = (
+    "table:cohort_flow",
+    "table:table_one",
+    "table:adjusted_association_estimates",
+    "table:robustness_matrix",
+)
+BALANCE_ASSOCIATION_COMPOSITE_INPUTS = (
+    "table:balance_positivity_context",
+    "table:adjusted_association_estimates",
+    "table:robustness_matrix",
+    "table:robustness_summary",
+)
+ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS = (
+    "table:absolute_risk_context",
+    "table:adjusted_association_estimates",
+    "table:robustness_matrix",
+    "table:robustness_summary",
+)
+
+
+def balance_association_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind balance, primary association, and two robustness summaries."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    if cleaned != BALANCE_ASSOCIATION_COMPOSITE_INPUTS:
+        raise ValueError(
+            "balance association composite requires its four exact tables"
+        )
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="baseline_balance",
+            article_role="descriptive_result",
+            chart_type="standardized_difference",
+            source_products=("table:balance_positivity_context",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="primary_adjusted_association",
+            article_role="primary_estimand",
+            chart_type="forest",
+            source_products=("table:adjusted_association_estimates",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_estimates",
+            article_role="robustness",
+            chart_type="sensitivity_forest",
+            source_products=("table:robustness_matrix",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_ranges",
+            article_role="robustness",
+            chart_type="specification_grid",
+            source_products=("table:robustness_summary",),
+        ),
+    )
+
+
+def absolute_risk_association_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind absolute risk, adjusted association, robustness, and quality."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    if cleaned != ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS:
+        raise ValueError(
+            "absolute-risk association composite requires its four exact tables"
+        )
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="absolute_risk_context",
+            article_role="descriptive_result",
+            chart_type="dot_interval_absolute_risk",
+            source_products=("table:absolute_risk_context",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="primary_adjusted_association",
+            article_role="primary_estimand",
+            chart_type="forest",
+            source_products=("table:adjusted_association_estimates",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_estimates",
+            article_role="robustness",
+            chart_type="sensitivity_forest",
+            source_products=("table:robustness_matrix",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_ranges",
+            article_role="robustness",
+            chart_type="specification_grid",
+            source_products=("table:robustness_summary",),
+        ),
+    )
+
+
+def cohort_balance_association_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind cohort, balance, primary-association, and robustness panels."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    if cleaned != COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS:
+        raise ValueError(
+            "cohort-balance association composite requires its four exact tables"
+        )
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="cohort_accounting",
+            article_role="cohort_accounting",
+            chart_type="cohort_flow",
+            source_products=("table:cohort_flow",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="baseline_balance",
+            article_role="descriptive_result",
+            chart_type="standardized_difference",
+            source_products=("table:table_one",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="primary_adjusted_association",
+            article_role="primary_estimand",
+            chart_type="forest_plot",
+            source_products=("table:adjusted_association_estimates",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="robustness_estimates",
+            article_role="robustness",
+            chart_type="forest_plot",
+            source_products=("table:robustness_matrix",),
+        ),
+    )
+
+
+def association_sensitivity_composite_panels(
+    source_products: Sequence[str],
+) -> Tuple[DeterministicFigurePanelTemplate, ...]:
+    """Bind a scientific-sensitivity association display to four typed tables."""
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    extra = [
+        value
+        for value in cleaned
+        if value not in ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS
+    ]
+    if (
+        len(cleaned) != 4
+        or len(cleaned) != len(set(cleaned))
+        or not ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS <= set(cleaned)
+        or len(extra) != 1
+        or not extra[0].startswith("table:")
+    ):
+        raise ValueError(
+            "association sensitivity composite requires three fixed tables "
+            "and one scientific-sensitivity table"
+        )
+    sensitivity = extra[0]
+    return (
+        DeterministicFigurePanelTemplate(
+            panel_id="absolute_risk_context",
+            article_role="descriptive_result",
+            chart_type="grouped_absolute_risk",
+            source_products=("table:exposure_outcome_distribution",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="primary_adjusted_association",
+            article_role="primary_estimand",
+            chart_type="forest_plot",
+            source_products=("table:adjusted_association_estimates",),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="scientific_sensitivity",
+            article_role="robustness",
+            chart_type="sensitivity_forest_plot",
+            source_products=(sensitivity,),
+        ),
+        DeterministicFigurePanelTemplate(
+            panel_id="component_completeness",
+            article_role="data_quality",
+            chart_type="availability_heatmap",
+            source_products=("table:exposure_component_completeness_audit",),
+        ),
+    )
+
+
+def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
+    reserved = {
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+    }
+    matches = [
+        value
+        for value in source_products
+        if value.startswith("table:")
+        and value not in reserved
+        and value.partition(":")[2]
+        not in {"measurement_process", "measurement_process_audit"}
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _measurement_process_product(source_products: Sequence[str]) -> str | None:
+    matches = [
+        value
+        for value in source_products
+        if value.startswith("table:")
+        and value.partition(":")[2] in {"measurement_process", "measurement_process_audit"}
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def landmark_association_composite_panels(
@@ -110,14 +325,11 @@ def landmark_association_composite_panels(
     """Bind a four-panel landmark-association display to typed parents."""
 
     cleaned = tuple(str(value or "").strip() for value in source_products)
-    contrast = [
-        value
-        for value in cleaned
-        if value.startswith("table:")
-        and value.partition(":")[2].endswith("landmark_rcs_contrasts")
-    ]
+    curve = _landmark_curve_product(cleaned)
+    measurement = _measurement_process_product(cleaned)
     if (
-        len(contrast) != 1
+        curve is None
+        or measurement is None
         or len(cleaned) != 4
         or len(cleaned) != len(set(cleaned))
         or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(cleaned)
@@ -125,28 +337,28 @@ def landmark_association_composite_panels(
         raise ValueError("landmark composite requires its four exact typed tables")
     return (
         DeterministicFigurePanelTemplate(
-            panel_id="association_contrasts",
-            article_role="relationship",
-            chart_type="contrast_forest",
-            source_products=(contrast[0],),
+            panel_id="association_curve",
+            article_role="primary_estimand",
+            chart_type="marginal_effect_panel",
+            source_products=(curve,),
         ),
         DeterministicFigurePanelTemplate(
             panel_id="absolute_risk_context",
-            article_role="context",
-            chart_type="absolute_risk",
+            article_role="descriptive_result",
+            chart_type="dot_interval_absolute_risk",
             source_products=("table:absolute_risk_context",),
         ),
         DeterministicFigurePanelTemplate(
             panel_id="robustness_summary",
             article_role="robustness",
-            chart_type="sensitivity_range",
+            chart_type="specification_grid",
             source_products=("table:robustness_summary",),
         ),
         DeterministicFigurePanelTemplate(
             panel_id="measurement_process",
             article_role="data_quality",
             chart_type="availability_panel",
-            source_products=("table:measurement_process_audit",),
+            source_products=(measurement,),
         ),
     )
 
@@ -328,6 +540,9 @@ def robustness_figure_panels(
 
 
 __all__ = [
+    "ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS",
+    "BALANCE_ASSOCIATION_COMPOSITE_INPUTS",
+    "COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS",
     "COHORT_FLOW_FIGURE_PANELS",
     "COHORT_FLOW_INPUT",
     "DATA_QUALITY_AUDIT_ROLES",
@@ -346,7 +561,10 @@ __all__ = [
     "ROBUSTNESS_PRIMARY_EFFECT_INPUT",
     "ROBUSTNESS_PRIMARY_ESTIMATE_INPUT",
     "PlannedFigurePanelSpec",
+    "absolute_risk_association_composite_panels",
+    "balance_association_composite_panels",
     "data_quality_audit_source_candidates",
+    "cohort_balance_association_composite_panels",
     "measurement_availability_figure_panels",
     "LANDMARK_ASSOCIATION_COMPOSITE_INPUTS",
     "landmark_association_composite_panels",

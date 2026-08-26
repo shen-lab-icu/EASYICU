@@ -410,6 +410,49 @@ def test_multi_input_tasks_send_explicit_null_exposure_to_evaluator(
     assert observed[0]["operational_exposure"] is None
 
 
+def test_evaluator_keeps_exposure_concept_distinct_from_operational_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from benchmarks.figure2_canonical9.evaluator import scoring as figure2_scoring
+    from benchmarks.figure2_canonical9.evaluator import (
+        scoring_inputs as figure2_scoring_inputs,
+    )
+
+    run_dir = _run_dir(tmp_path)
+    item = _item("e1_sepsis3_prevalence_mortality")
+    item.operational_exposure = "sep3_sofa2_max"
+    observed: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        figure2_scoring_inputs,
+        "seal_figure2_run_task_authority",
+        lambda _path, **kwargs: observed.append(kwargs),
+    )
+    monkeypatch.setattr(
+        figure2_scoring,
+        "evaluate_figure2_run_from_receipt_path",
+        lambda path, *, task_id: _invalid_attempt(
+            task_id=task_id,
+            run_id=path.name,
+            reason="SAFETY_ADJUDICATION_MISSING",
+            detail="receipt absent",
+        ),
+    )
+
+    bench._figure2_evaluation_attempt(run_dir=run_dir, item=item)
+
+    assert observed == [
+        {
+            "task_id": item.key,
+            "research_question": item.research_question,
+            "exposure_concept": "sepsis3",
+            "outcome_concept": "death",
+            "operational_exposure": "sep3_sofa2_max",
+        }
+    ]
+
+
 def test_pipeline_finishes_before_figure2_seal_and_score_without_evaluator_leakage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

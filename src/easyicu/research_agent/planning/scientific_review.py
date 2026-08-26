@@ -190,6 +190,7 @@ def patient_identity_available(context: ResearchContext) -> bool:
 _EXECUTABLE_TEMPORAL_METHODS = frozenset(
     {
         "signed_landmark_restricted_cubic_spline",
+        "signed_landmark_survival_suite",
         "landmark_analysis",
         "time_varying_exposure_model",
         "clone_censor_weight",
@@ -488,15 +489,22 @@ def method_source_facts(
     }
 
 
-def _literature_facts(literature: Optional[LiteratureBundle]) -> dict[str, Any]:
+def _literature_facts(
+    literature: Optional[LiteratureBundle],
+    context: ResearchContext,
+) -> dict[str, Any]:
     if literature is None:
         return {
             "search_conducted": False,
             "sources_returning": [],
             "queries": {},
             "direct_comparator_keys": [],
+            "design_analogue_keys": [],
+            "comparison_source_keys": [],
             "direct_comparator_years": [],
+            "comparison_source_years": [],
             "newest_direct_comparator_year": None,
+            "newest_comparison_source_year": None,
             "search_year": datetime.now(timezone.utc).year,
         }
     provenance = literature.search_provenance
@@ -514,10 +522,32 @@ def _literature_facts(literature: Optional[LiteratureBundle]) -> dict[str, Any]:
             and item.publication_type_eligible
         }
     )
+    analogue_keys = sorted(
+        {
+            item.citation_key
+            for item in literature.screening_decisions
+            if item.disposition == "include"
+            and item.evidence_role == "design_analogue"
+            and item.population_match
+            and item.design_excerpt_available
+            and item.publication_type_eligible
+        }
+    )
+    comparison_keys = sorted(
+        set(direct_keys)
+        | (set(analogue_keys) if not context.primary_exposure else set())
+    )
     years = sorted(
         {
             int(citations[key].year)
             for key in direct_keys
+            if key in citations and str(citations[key].year).isdigit()
+        }
+    )
+    comparison_years = sorted(
+        {
+            int(citations[key].year)
+            for key in comparison_keys
             if key in citations and str(citations[key].year).isdigit()
         }
     )
@@ -531,8 +561,14 @@ def _literature_facts(literature: Optional[LiteratureBundle]) -> dict[str, Any]:
         "sources_returning": list(provenance.sources_returning if provenance else ()),
         "queries": dict(provenance.search_queries if provenance else {}),
         "direct_comparator_keys": direct_keys,
+        "design_analogue_keys": analogue_keys,
+        "comparison_source_keys": comparison_keys,
         "direct_comparator_years": years,
+        "comparison_source_years": comparison_years,
         "newest_direct_comparator_year": years[-1] if years else None,
+        "newest_comparison_source_year": (
+            comparison_years[-1] if comparison_years else None
+        ),
         "search_year": search_year,
     }
 
@@ -677,6 +713,28 @@ def _sensitivity_facts(
         and step.robustness_replay_spec is not None
         and _has_scientific_output(step)
     ]
+    plan_specs_by_id = {spec.spec_id: spec for spec in plan.robustness_specs}
+    for step in replay_steps:
+        for spec_id in step.sensitivity_spec_ids:
+            typed_spec = typed_specs.get(spec_id)
+            plan_spec = plan_specs_by_id.get(spec_id)
+            if typed_spec is None or plan_spec is None:
+                continue
+            missing_override = dict(plan_spec.missing_override or {})
+            if (
+                typed_spec.axis == "missing_data"
+                and typed_spec.strategy == "complete_case"
+                and plan_spec.axis == "missing"
+                and str(missing_override.get("strategy") or "")
+                .strip()
+                .casefold()
+                == "complete_case"
+            ):
+                # ``robustness_sensitivity`` is the deterministic replay owner
+                # for a locked plan-level complete-case spec.  The context and
+                # plan ids must agree exactly; prose or a method label alone is
+                # never enough to credit execution.
+                executed_spec_ids.add(spec_id)
     plan_spec_axes = {
         {"missing": "missing", "cohort": "cohort", "outcome": "outcome_definition"}[
             spec.axis
@@ -698,7 +756,10 @@ def _sensitivity_facts(
         protocol_only.add("readmission")
     missing_spec_ids = sorted(set(typed_specs) - executed_spec_ids)
     typed_axes = {
-        "readmission" if spec.axis == "repeated_stays" else spec.axis
+        {
+            "repeated_stays": "readmission",
+            "missing_data": "missing",
+        }.get(spec.axis, spec.axis)
         for spec_id, spec in typed_specs.items()
         if spec_id in executed_spec_ids
     }
@@ -748,13 +809,12 @@ def _endpoint_resolved(context: ResearchContext) -> bool:
     descriptor = context.variable(target) if target else None
     if context.endpoint is None or descriptor is None:
         return False
-    text = " ".join(
-        [str(descriptor.description or ""), str(descriptor.source_concept or "")]
-    ).casefold()
+    description = str(descriptor.description or "").strip()
+    description_text = description.casefold()
     return bool(
-        descriptor.description
-        and "mortality_unspecified" not in text
-        and "declared_primary_outcome" not in text
+        description
+        and "mortality_unspecified" not in description_text
+        and "declared_primary_outcome" not in description_text
         and not any(
             "endpoint-definition conflict" in str(value).casefold()
             for value in descriptor.clinical_caveats
@@ -921,7 +981,9 @@ _EXTERNAL_EVIDENCE_FINDINGS = frozenset(
         "TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED",
         "LITERATURE_SEARCH_PROVENANCE_INCOMPLETE",
         "DIRECT_COMPARATOR_NOT_ESTABLISHED",
+        "DESIGN_ANALOGUE_NOT_ESTABLISHED",
         "RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED",
+        "RECENT_DESIGN_ANALOGUE_NOT_ESTABLISHED",
         "NOVELTY_NOT_ESTABLISHED",
     }
 )
@@ -992,7 +1054,7 @@ def build_plan_scientific_review(
     """Score and adjudicate the exact proposed plan before human approval."""
 
     findings: list[PlanScientificFinding] = []
-    literature_facts = _literature_facts(literature)
+    literature_facts = _literature_facts(literature, context)
     method_facts = method_source_facts(plan, context)
     design_bindings = _literature_design_bindings(plan, literature)
     sensitivity = _sensitivity_facts(context, plan)
@@ -1072,25 +1134,55 @@ def build_plan_scientific_review(
                 remediation="Persist normalized source queries and record-to-query bindings.",
             )
         )
-    if not literature_facts["direct_comparator_keys"]:
+    direct_required = bool(context.primary_exposure)
+    if not literature_facts["comparison_source_keys"]:
         findings.append(
             PlanScientificFinding(
-                code="DIRECT_COMPARATOR_NOT_ESTABLISHED",
+                code=(
+                    "DIRECT_COMPARATOR_NOT_ESTABLISHED"
+                    if direct_required
+                    else "DESIGN_ANALOGUE_NOT_ESTABLISHED"
+                ),
                 severity="major",
                 dimension="literature",
-                message="No retrieved study passed all population, exposure, outcome, and design-excerpt checks as a direct comparator.",
+                message=(
+                    "No retrieved study passed all population, exposure, outcome, "
+                    "and design-excerpt checks as a direct comparator."
+                    if direct_required
+                    else (
+                        "No retrieved study passed the ICU population, clinical "
+                        "topic, analysis-intent, and design-excerpt checks as a "
+                        "design analogue."
+                    )
+                ),
                 evidence_refs=["preplan_literature_bundle.json.screening_decisions"],
-                remediation="Run a direct observational-comparator search stratum and record source-backed inclusion/exclusion decisions.",
+                remediation=(
+                    "Run a direct observational-comparator search stratum and "
+                    "record source-backed inclusion/exclusion decisions."
+                    if direct_required
+                    else (
+                        "Run a design-analogue search and retain source-backed "
+                        "topic/design inclusion decisions without inventing a P/E/O "
+                        "contrast."
+                    )
+                ),
             )
         )
-    newest = literature_facts["newest_direct_comparator_year"]
+    newest = literature_facts["newest_comparison_source_year"]
     if newest is not None and literature_facts["search_year"] - newest > 5:
         findings.append(
             PlanScientificFinding(
-                code="RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED",
+                code=(
+                    "RECENT_DIRECT_COMPARATOR_NOT_ESTABLISHED"
+                    if direct_required
+                    else "RECENT_DESIGN_ANALOGUE_NOT_ESTABLISHED"
+                ),
                 severity="major",
                 dimension="literature",
-                message="The newest direct comparator is more than five years older than the search year.",
+                message=(
+                    "The newest screened comparison source is more than five years "
+                    "older than the search year."
+                ),
                 evidence_refs=["preplan_literature_bundle.json.citations"],
                 remediation="Document whether current similar work is truly absent or retrieval/screening missed it.",
             )
@@ -1101,15 +1193,28 @@ def build_plan_scientific_review(
         if step.planned_analysis_role == "primary"
         for key in step.literature_citation_keys
     }
-    if literature_facts["direct_comparator_keys"] and set(literature_facts["direct_comparator_keys"]).isdisjoint(primary_keys):
+    if literature_facts["comparison_source_keys"] and set(
+        literature_facts["comparison_source_keys"]
+    ).isdisjoint(primary_keys):
         findings.append(
             PlanScientificFinding(
-                code="DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN",
+                code=(
+                    "DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN"
+                    if direct_required
+                    else "DESIGN_ANALOGUE_NOT_BOUND_TO_PRIMARY_PLAN"
+                ),
                 severity="major",
                 dimension="literature_to_plan",
-                message="A screened direct comparator exists but does not govern any primary analysis step.",
+                message=(
+                    "A screened comparison source exists but does not govern any "
+                    "primary analysis step."
+                ),
                 evidence_refs=["analysis_plan.json", "preplan_literature_bundle.json"],
-                remediation="Bind the exact comparator key to the primary step and record what design element was borrowed or deliberately differed.",
+                remediation=(
+                    "Bind the exact comparator or design-analogue key to the primary "
+                    "step and record what design element was borrowed or deliberately "
+                    "differed."
+                ),
             )
         )
     if method_facts["method_source_gaps"]:
@@ -1533,15 +1638,23 @@ def build_plan_scientific_review(
                 remediation="Add evidence-producing cohort, baseline, quality, descriptive, primary, or robustness modules as applicable.",
             )
         )
-    if not literature_facts["direct_comparator_keys"]:
+    if not literature_facts["comparison_source_keys"]:
         findings.append(
             PlanScientificFinding(
                 code="NOVELTY_NOT_ESTABLISHED",
                 severity="major",
                 dimension="novelty",
-                message="Without a direct comparator, the system cannot distinguish a genuinely novel design from a new database instantiation.",
+                message=(
+                    "Without a screened direct comparator or eligible design "
+                    "analogue, the system cannot distinguish a genuinely novel "
+                    "design from a new database instantiation."
+                ),
                 evidence_refs=["preplan_literature_bundle.json"],
-                remediation="Complete source-backed direct-comparator screening and a separate five-dimension novelty review before making novelty claims.",
+                remediation=(
+                    "Complete source-backed comparison-source screening and a "
+                    "separate prespecified novelty review before making novelty "
+                    "claims."
+                ),
             )
         )
     else:
@@ -1551,8 +1664,8 @@ def build_plan_scientific_review(
                 severity="major",
                 dimension="novelty",
                 message=(
-                    "A screened direct-comparator candidate exists, but retrieval "
-                    "and deterministic P/E/O screening do not establish novelty. "
+                    "A screened comparison-source candidate exists, but retrieval "
+                    "and deterministic screening do not establish novelty. "
                     "Population, exposure, time zero, estimand, analysis route, and "
                     "clinical contribution still require an independent appraisal."
                 ),
@@ -1668,17 +1781,21 @@ def build_plan_scientific_review(
             "content_roles": content_roles,
             "novelty_status": (
                 "independent_review_required"
-                if literature_facts["direct_comparator_keys"]
+                if literature_facts["comparison_source_keys"]
                 else "not_established"
             ),
             "novelty_review": {
                 "status": (
                     "independent_review_required"
-                    if literature_facts["direct_comparator_keys"]
-                    else "direct_comparator_required"
+                    if literature_facts["comparison_source_keys"]
+                    else "comparison_source_required"
                 ),
                 "direct_comparator_keys": list(
                     literature_facts["direct_comparator_keys"]
+                ),
+                "design_analogue_keys": list(literature_facts["design_analogue_keys"]),
+                "comparison_source_keys": list(
+                    literature_facts["comparison_source_keys"]
                 ),
                 "prespecified_dimensions": list(NOVELTY_REVIEW_DIMENSIONS),
                 "claim_boundary": (

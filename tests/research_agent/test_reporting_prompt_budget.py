@@ -7,6 +7,9 @@ from easyicu.research_agent.agents.core import (
     ReportingPromptBudgetError,
     WriterAgent,
 )
+from easyicu.research_agent.agents.reporting import (
+    _project_writer_evidence_digest,
+)
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     AnalysisStep,
@@ -87,3 +90,30 @@ def test_writer_oversize_fails_before_provider_call() -> None:
         )
 
     assert llm.calls == []
+
+
+def test_writer_non_result_section_uses_role_scoped_evidence_projection() -> None:
+    digest = (
+        "RUN_CONTEXT\n"
+        + "x" * 20_000
+        + "\n## host-authorized scientific claims\n{claim:step.result}\n"
+        + "\n## secondary numbers\n"
+        + "y" * 70_000
+    )
+    projected = _project_writer_evidence_digest("Methods", digest)
+
+    assert "{claim:step.result}" in projected
+    assert "## secondary numbers" not in projected
+    assert _project_writer_evidence_digest("Results", digest) == digest
+
+    llm = PatternScriptedMockLLMClient([], default="## Methods\n\nComplete.")
+    WriterAgent(llm)._call_section(
+        section_name="Methods",
+        instruction="Write one evidence-bound sentence.",
+        context=_context(),
+        evidence_ids=["primary_result"],
+        evidence_digest=digest,
+    )
+
+    assert len(llm.calls) == 1
+    assert "## secondary numbers" not in llm.calls[0][0][1].content

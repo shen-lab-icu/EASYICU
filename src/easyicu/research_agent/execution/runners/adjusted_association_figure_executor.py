@@ -50,25 +50,39 @@ from typing import Any, Mapping, Optional
 import pandas as pd
 
 from ...figures.publication import (
+    add_panel_label,
     apply_publication_style,
     make_figure_contract,
     save_publication_figure,
 )
 from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
+from ...contracts.model_terms import level_spelling
 from .adjusted_association_executor import ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS
+from .exposure_outcome_distribution_executor import (
+    EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
+)
 from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
+from .typed_input_binding import load_typed_input
 
 __all__ = [
     "ADJUSTED_ASSOCIATION_FIGURE_INPUT",
+    "ASSOCIATION_OVERVIEW_FIGURE_INPUTS",
+    "association_overview_figure_executor_code",
+    "association_overview_figure_executor_owns_step",
     "adjusted_association_figure_executor_code",
     "adjusted_association_figure_executor_owns_step",
     "run_adjusted_association_figure",
+    "run_association_overview_figure",
 ]
 
 
 ADJUSTED_ASSOCIATION_FIGURE_INPUT = "table:adjusted_association_estimates"
+ASSOCIATION_OVERVIEW_FIGURE_INPUTS = (
+    "table:exposure_outcome_distribution",
+    ADJUSTED_ASSOCIATION_FIGURE_INPUT,
+)
 
 #: The producer's own header, imported rather than restated. A second copy here
 #: would be a header this renderer believes in that the producer has stopped
@@ -196,6 +210,62 @@ def adjusted_association_figure_executor_owns_step(
     return _binding_is_host_contract(
         resolved_bindings.get(ADJUSTED_ASSOCIATION_FIGURE_INPUT)
     )
+
+
+def association_overview_figure_executor_owns_step(
+    step: AnalysisStep,
+    *,
+    resolved_bindings: Mapping[str, Any] | None = None,
+) -> bool:
+    """Own a two-table overview when both upstream owners are verified."""
+
+    products = [_figure_product(value) for value in step.expected_outputs]
+    if not (
+        step.planned_analysis_role == "auxiliary"
+        and _method_head(step.method) == "visualization"
+        and set(step.inputs) == set(ASSOCIATION_OVERVIEW_FIGURE_INPUTS)
+        and len(step.inputs) == len(ASSOCIATION_OVERVIEW_FIGURE_INPUTS)
+        and len(products) == 1
+        and products[0] is not None
+        and isinstance(resolved_bindings, Mapping)
+        and set(resolved_bindings) == set(ASSOCIATION_OVERVIEW_FIGURE_INPUTS)
+        and _binding_is_host_contract(
+            resolved_bindings.get(ADJUSTED_ASSOCIATION_FIGURE_INPUT)
+        )
+    ):
+        return False
+    distribution = resolved_bindings.get(ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0])
+    contract = distribution.get("product_contract") if isinstance(distribution, Mapping) else None
+    columns = contract.get("columns") if isinstance(contract, Mapping) else None
+    return isinstance(columns, list) and set(
+        EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS
+    ) <= set(columns)
+
+
+def association_overview_figure_executor_code(
+    step: AnalysisStep,
+    *,
+    display_labels: Mapping[str, str] | None = None,
+) -> str:
+    product = _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
+    if product is None:
+        raise ValueError("association overview has no canonical figure product")
+    return textwrap.dedent(
+        f"""
+        import os
+        from pathlib import Path
+        from easyicu.research_agent.execution.runners.adjusted_association_figure_executor import run_association_overview_figure
+
+        run_association_overview_figure(
+            out_dir=Path(os.environ["STEP_OUT_DIR"]),
+            run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
+            resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
+            step_id={step.step_id!r},
+            figure_product={product!r},
+            display_labels={dict(display_labels or {})!r},
+        )
+        """
+    ).strip()
 
 
 def adjusted_association_figure_executor_code(step: AnalysisStep) -> str:
@@ -509,6 +579,237 @@ def _adjustment_note(covariates: Any) -> str:
     if not terms:
         return "Unadjusted: the model declared no covariates."
     return "Adjusted for " + ", ".join(_reader_label(term) for term in terms) + "."
+
+
+def run_association_overview_figure(
+    *,
+    out_dir: Path,
+    run_dir: Path,
+    resolved_inputs: Path | Mapping[str, Any],
+    step_id: str,
+    figure_product: str,
+    display_labels: Mapping[str, str] | None = None,
+) -> Mapping[str, Any]:
+    """Render absolute group outcomes beside the host-owned adjusted effect."""
+
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", figure_product or ""):
+        raise ValueError("figure product must be one canonical lowercase token")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    estimates, estimate_binding = _load_estimates(
+        run_dir=Path(run_dir),
+        resolved_inputs=resolved_inputs,
+        step_id=step_id,
+    )
+    distribution = load_typed_input(
+        input_key=ASSOCIATION_OVERVIEW_FIGURE_INPUTS[0],
+        run_dir=Path(run_dir),
+        resolved_inputs=resolved_inputs,
+        step_id=step_id,
+        expected_declared_kind="table",
+        expected_evidence_kind="table",
+        expected_columns=EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS,
+        require_consumption_contract=True,
+        consumption_mode="all_rows",
+        minimum_row_count=2,
+    )
+    groups = distribution.frame.loc[
+        distribution.frame["row_role"].astype(str) == "exposure_level"
+    ].copy()
+    if len(groups) < 2:
+        raise ValueError("distribution has fewer than two exposure-level rows")
+    for column in (
+        "exposure_pct",
+        "exposure_ci_low_pct",
+        "exposure_ci_high_pct",
+        "outcome_rate_pct",
+        "ci_low_pct",
+        "ci_high_pct",
+    ):
+        groups[column] = pd.to_numeric(groups[column], errors="coerce")
+        if groups[column].isna().any():
+            raise ValueError(f"distribution column {column!r} is not finite")
+
+    exposure = _sole(estimates, "exposure")
+    outcome = _sole(estimates, "outcome")
+    scale = describe_effect_scale(_sole(estimates, "effect_scale"))
+    rows = estimates.copy()
+    rows["__estimate"] = [_finite(value) for value in rows["estimate"]]
+    rows["__low"] = [_finite(value) for value in rows["ci_low"]]
+    rows["__high"] = [_finite(value) for value in rows["ci_high"]]
+    rows["__label"] = [
+        _row_label(row, index) for index, row in enumerate(estimates.to_dict("records"))
+    ]
+    drawable = [
+        index
+        for index, (estimate, low, high) in enumerate(
+            zip(rows["__estimate"], rows["__low"], rows["__high"], strict=True)
+        )
+        if estimate is not None
+        and low is not None
+        and high is not None
+        and low <= estimate <= high
+    ]
+    if not drawable:
+        raise ValueError("adjusted association table has no drawable interval")
+
+    distribution_source = out_dir / f"{figure_product}_distribution_source_data.csv"
+    estimate_source = out_dir / f"{figure_product}_association_source_data.csv"
+    distribution.frame.to_csv(distribution_source, index=False)
+    estimates.to_csv(estimate_source, index=False)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    palette = apply_publication_style(font_size=7.0)
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.35), constrained_layout=True)
+    ax = axes[0]
+    positions = np.arange(len(groups), dtype=float)
+    width = 0.36
+    prevalence = groups["exposure_pct"].to_numpy(dtype=float)
+    risks = groups["outcome_rate_pct"].to_numpy(dtype=float)
+    ax.bar(
+        positions - width / 2,
+        prevalence,
+        width,
+        yerr=[
+            prevalence - groups["exposure_ci_low_pct"].to_numpy(dtype=float),
+            groups["exposure_ci_high_pct"].to_numpy(dtype=float) - prevalence,
+        ],
+        capsize=2,
+        label="Exposure prevalence",
+        color=palette["blue_soft"],
+    )
+    ax.bar(
+        positions + width / 2,
+        risks,
+        width,
+        yerr=[
+            risks - groups["ci_low_pct"].to_numpy(dtype=float),
+            groups["ci_high_pct"].to_numpy(dtype=float) - risks,
+        ],
+        capsize=2,
+        label="Outcome risk",
+        color=palette["orange"],
+    )
+    group_labels = [
+        str(
+            (display_labels or {}).get(
+                f"{exposure}={level_spelling(value)}"
+            )
+            or value
+        )
+        for value in groups["exposure_level"]
+    ]
+    ax.set_xticks(positions, group_labels)
+    ax.set_xlabel(_reader_label(exposure))
+    ax.set_ylabel("Percent")
+    ax.set_title("Absolute prevalence and outcome risk", loc="left", pad=8)
+    ax.legend(frameon=False, fontsize=6)
+    add_panel_label(ax, "A", x=-0.13, y=1.04)
+
+    ax = axes[1]
+    values = [rows["__estimate"].iloc[index] for index in drawable]
+    lows = [rows["__low"].iloc[index] for index in drawable]
+    highs = [rows["__high"].iloc[index] for index in drawable]
+    y = list(range(len(drawable)))
+    ax.errorbar(
+        values,
+        y,
+        xerr=[
+            [value - low for value, low in zip(values, lows, strict=True)],
+            [high - value for value, high in zip(values, highs, strict=True)],
+        ],
+        fmt="o",
+        color=palette["blue"],
+        ecolor=palette["neutral"],
+        capsize=2.4,
+    )
+    if scale.null_value is not None:
+        ax.axvline(scale.null_value, color=palette["neutral"], linestyle="--", linewidth=0.8)
+    if scale.multiplicative and all(value > 0 for value in lows):
+        from matplotlib.ticker import FixedLocator, NullFormatter
+
+        ax.set_xscale("log")
+        ax.xaxis.set_major_locator(FixedLocator(_ratio_ticks(lows, highs, scale)))
+        ax.xaxis.set_major_formatter(_plain_number)
+        ax.xaxis.set_minor_locator(FixedLocator([]))
+        ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.set_yticks(y, [_reader_label(rows["__label"].iloc[index]) for index in drawable])
+    ax.set_xlabel(_reader_label(scale.name))
+    ax.set_title("Adjusted association", loc="left", pad=8)
+    add_panel_label(ax, "B", x=-0.13, y=1.04)
+    adjustment = _adjustment_note(estimates["covariates"].iloc[0])
+    fig.text(0.51, 0.01, adjustment, ha="center", va="bottom", fontsize=5.8)
+
+    evidence_ids = [
+        str(distribution.evidence_id or ""),
+        str(estimate_binding.get("evidence_id") or ""),
+    ]
+    contract = make_figure_contract(
+        figure_id=figure_product,
+        title=f"{_reader_label(exposure)} and {_reader_label(outcome)}",
+        core_claim=(
+            "The absolute exposure/outcome distribution and the adjusted "
+            "association are shown together from two digest-bound host tables."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Absolute distribution",
+                "role": "absolute_risk_context",
+                "claim": "Exposure prevalence and observed outcome risk by declared exposure level.",
+                "evidence_ids": [evidence_ids[0]],
+                "metadata": {"source_data": [distribution_source.name]},
+            },
+            {
+                "panel_id": "B",
+                "title": "Adjusted association",
+                "role": "primary_effect",
+                "claim": f"Host-fitted effect estimate and confidence interval. {adjustment}",
+                "evidence_ids": [evidence_ids[1]],
+                "metadata": {"source_data": [estimate_source.name]},
+            },
+        ],
+        source_data=[distribution_source.name, estimate_source.name],
+        statistics_note=(
+            "All plotted values are direct projections of registered tables; "
+            "the renderer performs no fitting, filtering, or denominator choice."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / figure_product,
+        contract=contract,
+        formats=("png", "svg", "pdf", "tiff"),
+        dpi=300,
+    )
+    plt.close(fig)
+    summary = {
+        "step_id": step_id,
+        "status": "ok",
+        "analysis_status": "ok",
+        "analysis_family": "association",
+        "method": "deterministic_association_overview_figure",
+        "deterministic_standard_analysis": "association_overview_figure",
+        "rendering_only": True,
+        "source_inputs": list(ASSOCIATION_OVERVIEW_FIGURE_INPUTS),
+        "source_evidence_ids": dict(zip(ASSOCIATION_OVERVIEW_FIGURE_INPUTS, evidence_ids, strict=True)),
+        "source_data_files": [distribution_source.name, estimate_source.name],
+        "figure_files": [path.name for key, path in outputs.items() if key != "contract"],
+        "figure_path": f"{figure_product}.png",
+        "figure_contract": f"{figure_product}.figure_contract.json",
+        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
 
 
 def run_adjusted_association_figure(

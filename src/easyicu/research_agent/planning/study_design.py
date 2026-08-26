@@ -171,23 +171,20 @@ def _adaptive_triggers_for_context(
             "cross_database_or_site_heterogeneity: add source-level coverage, "
             "site/database-specific estimates, or transportability displays."
         )
-    if (
-        any(
-            token in text
-            for token in (
-                "missing",
-                "missingness",
-                "completeness",
-                "coverage",
-                "data quality",
-                "measurement availability",
-            )
+    if any(
+        token in text
+        for token in (
+            "missing",
+            "missingness",
+            "completeness",
+            "coverage",
+            "data quality",
+            "measurement availability",
         )
-        or any(
-            v.missingness
-            and v.missingness.missingness_severity in {"medium", "high", "unknown"}
-            for v in context.variables
-        )
+    ) or any(
+        v.missingness
+        and v.missingness.missingness_severity in {"medium", "high", "unknown"}
+        for v in context.variables
     ):
         triggers.append(
             "nontrivial_missingness_or_measurement_process: show availability, "
@@ -288,6 +285,8 @@ def build_study_design_brief(
         "Keep case-specific variables in step inputs/expected outputs; keep global prompts case-neutral.",
         "Declare article-facing outputs separately from diagnostic-only artifacts.",
         "Treat the display playbook as flexible modules, not a rigid checklist; justify substitutions by evidence role.",
+        "Plan an article-level suite of complementary numbered figures and tables; do not treat one composite dashboard as the whole article.",
+        "Keep routine missingness and measurement-process detail in supplementary material unless it is itself the scientific question or changes interpretation of the primary result.",
         "Before defaulting to a forest plot, ask whether the question needs cohort, missingness, calibration, survival, phenotype, causal, or transportability displays.",
     ]
     return StudyDesignBrief(

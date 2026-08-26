@@ -5,7 +5,8 @@ Panels (satisfying the ``phenotyping`` figure strategy, hero role
 
 * A -- cluster x feature z-scored profile heatmap (hero ``phenotype_structure``);
 * B -- parallel-coordinates cluster centroids (role ``phenotype_profile``);
-* C -- cluster sizes with a silhouette / stability annotation (role ``stability``).
+* C -- resampling stability when ARI evidence is available, otherwise cluster
+  sizes with a qualified silhouette annotation (role ``stability``).
 
 Source evidence: the ``cluster_characteristics`` centroid table the plan
 contract already requires, plus an optional clustering-metrics table for the
@@ -57,6 +58,8 @@ _VARIABLE_COL_CANDIDATES = [
     "covariate",
 ]
 _CENTROID_VALUE_CANDIDATES = [
+    "standardised_centroid",
+    "standardized_centroid",
     "mean",
     "centroid",
     "median",
@@ -256,10 +259,44 @@ def _to_wide_cluster_profiles(
     except Exception:
         return frame, None
     wide.columns = [str(c) for c in wide.columns]
+    wide.attrs["values_are_standardised"] = value_col in {
+        "standardised_centroid",
+        "standardized_centroid",
+    }
     # Need the cluster column + at least two feature columns, and >= 2 clusters.
     if wide.shape[1] < 3 or wide[cluster_col].nunique() < 2:
         return frame, None
     return wide, size_series
+
+
+def _ari_stability_values(
+    evidence: EvidenceStore,
+    run_dir: Path,
+) -> Tuple[Optional[EvidenceRecord], Optional[pd.DataFrame]]:
+    """Return qualified row-level resampling ARI evidence when available."""
+
+    record, frame = load_table(
+        evidence,
+        run_dir,
+        ["cluster_stability", "stability_metrics", "cluster_validation"],
+    )
+    if frame is None:
+        return record, None
+    ari_col = resolve_column(frame, ["adjusted_rand_index", "ari"])
+    replicate_col = resolve_column(frame, ["replicate", "resample_id", "bootstrap"])
+    if ari_col is None or replicate_col is None:
+        return record, None
+    values = pd.DataFrame(
+        {
+            "replicate": frame[replicate_col].astype(str),
+            "adjusted_rand_index": pd.to_numeric(frame[ari_col], errors="coerce"),
+        }
+    ).dropna(subset=["adjusted_rand_index"])
+    values = values.loc[values["adjusted_rand_index"].between(-1.0, 1.0)]
+    if values.empty or values["replicate"].duplicated().any():
+        return record, None
+    values["mean_adjusted_rand_index"] = float(values["adjusted_rand_index"].mean())
+    return record, values.reset_index(drop=True)
 
 
 def render_phenotype_figure(
@@ -296,7 +333,12 @@ def render_phenotype_figure(
         else profiles
     )
     cluster_labels = profiles[cluster_col].astype(str).tolist()
-    z = zscore_profiles(profiles, features)
+    values_are_standardised = bool(frame.attrs.get("values_are_standardised"))
+    z = (
+        profiles[features].apply(pd.to_numeric, errors="coerce")
+        if values_are_standardised
+        else zscore_profiles(profiles, features)
+    )
 
     import matplotlib
 
@@ -370,26 +412,79 @@ def render_phenotype_figure(
     ax_par.legend(loc="upper right", fontsize=5.4, ncol=1)
     add_panel_label(ax_par, "B", x=-0.18)
 
-    # C -- cluster sizes + silhouette annotation (stability)
+    # C -- row-level resampling ARI when available. Cluster size and a qualified
+    # overall silhouette are only a fallback; size alone must not masquerade as
+    # stability.
     if size_series is not None:
         sizes = np.array(
             [float(size_series.get(str(lbl), np.nan)) for lbl in cluster_labels]
         )
     elif size_col is not None:
-        sizes = (
-            pd.to_numeric(profiles[size_col], errors="coerce").to_numpy()
-        )
+        sizes = pd.to_numeric(profiles[size_col], errors="coerce").to_numpy()
     else:
         sizes = np.array([], dtype=float)
     has_complete_sizes = len(sizes) == len(cluster_labels) and bool(
         np.isfinite(sizes).all() and (sizes > 0).all()
     )
-    if has_complete_sizes:
+    stability_record, ari_values = _ari_stability_values(evidence, run_dir)
+    silhouette: Optional[float] = None
+    if ari_values is not None:
+        ari = ari_values["adjusted_rand_index"].to_numpy(dtype=float)
+        mean_ari = float(ari_values["mean_adjusted_rand_index"].iloc[0])
+        ax_stab.bar(
+            range(len(ari)),
+            ari,
+            color=palette.get("blue", "#0F4D92"),
+            width=0.68,
+        )
+        ax_stab.axhline(
+            mean_ari,
+            color=palette.get("red", "#B22222"),
+            linestyle="--",
+            linewidth=0.9,
+            label=f"Mean {mean_ari:.2f}",
+        )
+        ax_stab.set_xticks(
+            range(len(ari)), ari_values["replicate"].tolist(), fontsize=5.6
+        )
+        ax_stab.set_xlabel("Resample")
+        ax_stab.set_ylabel("Adjusted Rand index")
+        ax_stab.set_ylim(min(-0.05, float(ari.min()) - 0.05), 1.0)
+        ax_stab.legend(loc="upper right", fontsize=5.4, frameon=False)
+        title = "Resampling stability (ARI)"
+        stability_claim = (
+            "Adjusted Rand indices across registered resamples quantify the "
+            "reproducibility of the selected partition."
+        )
+    elif has_complete_sizes:
         ax_stab.bar(
             range(len(cluster_labels)),
             sizes,
             color=[colors[i % len(colors)] for i in range(len(cluster_labels))],
             width=0.62,
+        )
+        ax_stab.set_xticks(
+            range(len(cluster_labels)),
+            [f"C{lbl}" for lbl in cluster_labels],
+            fontsize=6.0,
+        )
+        ax_stab.set_ylabel("Cluster size (n)")
+        stability_record, silhouette = _silhouette_value(evidence, run_dir)
+        title = "Cluster diagnostics"
+        if silhouette is not None:
+            ax_stab.text(
+                0.02,
+                0.92,
+                f"silhouette {silhouette:.2f}",
+                transform=ax_stab.transAxes,
+                fontsize=6.2,
+                color=palette.get("baseline", "#272727"),
+            )
+        stability_claim = (
+            "Cluster sizes and the qualified overall silhouette value are shown "
+            "as descriptive clustering diagnostics."
+            if silhouette is not None
+            else "Cluster sizes are shown; registered resampling stability was unavailable."
         )
     else:
         ax_stab.text(
@@ -400,44 +495,28 @@ def render_phenotype_figure(
             fontsize=6.0,
             color=palette.get("neutral", "#8F8F8F"),
         )
-    ax_stab.set_xticks(
-        range(len(cluster_labels)), [f"C{lbl}" for lbl in cluster_labels], fontsize=6.0
-    )
-    ax_stab.set_ylabel("Cluster size (n)")
-    stability_record, silhouette = _silhouette_value(evidence, run_dir)
-    title = "Cluster stability"
-    if silhouette is not None:
-        ax_stab.text(
-            0.02,
-            0.92,
-            f"silhouette {silhouette:.2f}",
-            transform=ax_stab.transAxes,
-            fontsize=6.2,
-            color=palette.get("baseline", "#272727"),
+        ax_stab.set_xticks([])
+        ax_stab.set_ylabel("Cluster diagnostic")
+        stability_record, silhouette = _silhouette_value(evidence, run_dir)
+        title = "Cluster diagnostics"
+        stability_claim = (
+            "The qualified overall silhouette value is shown; cluster sizes and "
+            "resampling stability were unavailable."
+            if silhouette is not None
+            else "No qualified cluster stability diagnostic was available."
         )
+        if silhouette is not None:
+            ax_stab.text(
+                0.02,
+                0.92,
+                f"silhouette {silhouette:.2f}",
+                transform=ax_stab.transAxes,
+                fontsize=6.2,
+                color=palette.get("baseline", "#272727"),
+            )
     ax_stab.set_title(title, loc="left", pad=4)
     add_panel_label(ax_stab, "C", x=-0.3)
 
-    if has_complete_sizes and silhouette is not None:
-        stability_claim = (
-            "Cluster sizes and the qualified overall silhouette value are shown "
-            "as descriptive clustering diagnostics."
-        )
-    elif has_complete_sizes:
-        stability_claim = (
-            "Cluster sizes are shown; no qualified overall silhouette value was "
-            "available from the registered stability evidence."
-        )
-    elif silhouette is not None:
-        stability_claim = (
-            "The qualified overall silhouette value is shown; cluster sizes were "
-            "unavailable from the registered profile evidence."
-        )
-    else:
-        stability_claim = (
-            "Neither cluster sizes nor a qualified overall silhouette value were "
-            "available from the registered clustering evidence."
-        )
     core_claim = (
         "Unsupervised phenotypes are shown as standardised cluster profiles and "
         "descriptive clustering diagnostics, rendered from registered evidence."
@@ -476,7 +555,7 @@ def render_phenotype_figure(
             "chart_type": "stability_grid",
             "claim": stability_claim,
             "evidence_ids": profile_and_stability_ids,
-            "review_risk": "A low silhouette or a tiny cluster warns that the partition may be unstable.",
+            "review_risk": "Low resampling ARI, low silhouette, or a tiny cluster warns that the partition may be unstable.",
         },
     ]
 
@@ -503,12 +582,18 @@ def render_phenotype_figure(
         how="inner",
         validate="one_to_one",
     )
-    stability_plot_data = pd.DataFrame(
-        {
-            cluster_col: cluster_labels,
-            "cluster_size": sizes if has_complete_sizes else [None] * len(cluster_labels),
-            "overall_silhouette": [silhouette] * len(cluster_labels),
-        }
+    stability_plot_data = (
+        ari_values.copy()
+        if ari_values is not None
+        else pd.DataFrame(
+            {
+                cluster_col: cluster_labels,
+                "cluster_size": (
+                    sizes if has_complete_sizes else [None] * len(cluster_labels)
+                ),
+                "overall_silhouette": [silhouette] * len(cluster_labels),
+            }
+        )
     )
     source_frames: Dict[str, pd.DataFrame] = {
         "phenotype_profile_plot_data": profile_plot_data,

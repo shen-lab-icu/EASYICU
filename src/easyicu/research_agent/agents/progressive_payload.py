@@ -298,19 +298,70 @@ def _bind_outline_authorities(
     variable_names: tuple[str, ...],
     scientific_action_ids: tuple[str, ...],
     allowed_citation_keys: tuple[str, ...],
+    design_card_citation_keys: tuple[str, ...] | None,
 ) -> None:
     properties = schema.get("properties")
     step = definitions.get("ProgressiveOutlineStep")
-    if not isinstance(properties, dict) or not isinstance(step, dict):
+    selection = definitions.get("ResearchDesignSelection")
+    candidate = definitions.get("ResearchDesignCandidate")
+    literature_decision = definitions.get("CandidateLiteratureDesignDecision")
+    if not all(
+        isinstance(value, dict) for value in (properties, step, selection, candidate)
+    ):
         raise ProgressiveTransportSchemaError(
             "progressive outline properties are unavailable"
         )
     step_properties = step.get("properties")
-    if not isinstance(step_properties, dict):
+    selection_properties = selection.get("properties")
+    candidate_properties = candidate.get("properties")
+    literature_decision_properties = (
+        literature_decision.get("properties")
+        if isinstance(literature_decision, dict)
+        else None
+    )
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            step_properties,
+            selection_properties,
+            candidate_properties,
+        )
+    ):
         raise ProgressiveTransportSchemaError(
-            "progressive outline step properties are unavailable"
+            "progressive outline nested properties are unavailable"
         )
     properties["analysis_type"] = _string_enum(analysis_types)
+    properties["design_selection"] = {"$ref": "#/$defs/ResearchDesignSelection"}
+    selection_properties["candidates"]["minItems"] = 2
+    selection_properties["candidates"]["maxItems"] = 4
+    candidate_properties["analysis_type"] = _string_enum(analysis_types)
+    candidate_properties["required_variables"]["items"] = _string_enum(variable_names)
+    candidate_citations = candidate_properties["literature_citation_keys"]
+    if allowed_citation_keys:
+        candidate_citations["items"] = _string_enum(allowed_citation_keys)
+        if isinstance(literature_decision_properties, dict):
+            decision_keys = (
+                allowed_citation_keys
+                if design_card_citation_keys is None
+                else design_card_citation_keys
+            )
+            if decision_keys:
+                literature_decision_properties["citation_keys"]["items"] = (
+                    _string_enum(decision_keys)
+                )
+            else:
+                candidate_properties["literature_design_decisions"] = {
+                    "type": "array",
+                    "maxItems": 0,
+                }
+                definitions.pop("CandidateLiteratureDesignDecision", None)
+    else:
+        candidate_citations["maxItems"] = 0
+        candidate_properties["literature_design_decisions"] = {
+            "type": "array",
+            "maxItems": 0,
+        }
+        definitions.pop("CandidateLiteratureDesignDecision", None)
     step_properties["module_id"] = _string_enum(
         progressive_module_ids_for_analysis_types(analysis_types)
     )
@@ -606,6 +657,13 @@ def _bind_initial_authorities(
         raise ProgressiveTransportSchemaError(
             "progressive plan root properties are unavailable"
         )
+    # The legacy one-shot skeleton request predates design comparison. Fresh
+    # Progressive Planner v2 captures that authority once in its outline, then
+    # carries it through host assembly; repeating it in the large fallback
+    # schema wastes transport budget and creates a second model-owned copy.
+    properties.pop("design_selection", None)
+    definitions.pop("ResearchDesignSelection", None)
+    definitions.pop("ResearchDesignCandidate", None)
     properties["analysis_type"] = _string_enum(analysis_types)
     robustness = definitions.get("ProgressiveRobustnessIntent")
     predicate = definitions.get("ProgressiveCohortPredicate")
@@ -694,6 +752,7 @@ def progressive_outline_structured_output_request(
     variable_names: Sequence[str],
     scientific_action_ids: Sequence[str],
     allowed_literature_citation_keys: Sequence[str] = (),
+    design_card_citation_keys: Sequence[str] | None = None,
 ) -> StructuredOutputRequest:
     """Return the tiny run-bound schema used for the first Planner response."""
 
@@ -719,6 +778,23 @@ def progressive_outline_structured_output_request(
             if str(value).strip()
         )
     )
+    normalized_design_cards = (
+        None
+        if design_card_citation_keys is None
+        else tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in design_card_citation_keys
+                if str(value).strip()
+            )
+        )
+    )
+    if normalized_design_cards is not None and not set(
+        normalized_design_cards
+    ).issubset(set(normalized_citations)):
+        raise ProgressiveTransportSchemaError(
+            "design-card citation keys must be a subset of the sealed citation roster"
+        )
     if not normalized_types or not normalized_variables:
         raise ProgressiveTransportSchemaError(
             "progressive outline transport requires analysis-type and variable rosters"
@@ -734,6 +810,7 @@ def progressive_outline_structured_output_request(
         variable_names=normalized_variables,
         scientific_action_ids=normalized_actions,
         allowed_citation_keys=normalized_citations,
+        design_card_citation_keys=normalized_design_cards,
     )
     return _closed_request(
         name="easyicu_progressive_plan_outline_v1",
@@ -911,7 +988,10 @@ def progressive_step_materialization_request(
             "outline scientific action is outside the run-bound action roster"
         )
     normalized_products: list[tuple[str, str]] = []
-    for producer, product in available_product_refs:
+    for producer, product in product_refs_for_materialization_coordinate(
+        outline_step,
+        available_product_refs,
+    ):
         producer_id = str(producer or "").strip()
         product_id = str(product or "").strip()
         if not re.fullmatch(r"[a-z0-9][a-z0-9_]{0,79}", producer_id):
@@ -969,6 +1049,26 @@ def progressive_step_materialization_request(
         name="easyicu_progressive_step_materialization_v1",
         schema=schema,
     )
+
+
+def product_refs_for_materialization_coordinate(
+    outline_step: ProgressiveOutlineStep,
+    available_product_refs: Sequence[tuple[str, str]],
+) -> tuple[tuple[str, str], ...]:
+    """Expose only product edges the frozen outline can legally consume.
+
+    Visualization products are strict result sources: their registered owner
+    must be a direct outline dependency.  Showing unrelated prefix products in
+    the current-step prompt/schema creates an impossible repair because the
+    same schema freezes ``depends_on``.  Other modules retain the complete
+    prefix registry and remain governed by the compiler's module contract.
+    """
+
+    refs = tuple(available_product_refs)
+    if outline_step.module_id != "visualization":
+        return refs
+    dependencies = set(outline_step.depends_on)
+    return tuple(ref for ref in refs if ref[0] in dependencies)
 
 
 @lru_cache(maxsize=64)
@@ -1076,6 +1176,7 @@ def progressive_structured_output_request(
 
 __all__ = [
     "ProgressiveTransportSchemaError",
+    "product_refs_for_materialization_coordinate",
     "progressive_foundation_structured_output_request",
     "progressive_outline_structured_output_request",
     "progressive_step_materialization_request",

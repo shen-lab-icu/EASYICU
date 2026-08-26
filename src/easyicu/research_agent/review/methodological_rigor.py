@@ -350,6 +350,8 @@ def extract_method_signals(
             evidence,
             "hazard ratio",
             "cox proportional",
+            "cox_summary",
+            "cox model",
             evidence_records=evidence_records,
         ),
         has_survival_curve=_any_record(
@@ -365,6 +367,7 @@ def extract_method_signals(
             "kaplan-meier",
             "kaplan meier",
             "cumulative incidence",
+            "km_curve",
             evidence_records=evidence_records,
         ),
         landmark_or_timezero_defined=_plan_landmark_defined(

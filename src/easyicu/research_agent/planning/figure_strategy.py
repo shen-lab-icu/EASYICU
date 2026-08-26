@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -59,11 +59,13 @@ _PRIMARY_PUBLICATION_MIN_ROLES = {
     "descriptive": 2,
 }
 
+
 class FigureRoleStrategy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: str
     required: bool = True
+    placement: Literal["main", "supplementary"] = "main"
     rationale: str
     acceptable_chart_types: List[str] = Field(default_factory=list)
     required_text_terms: List[str] = Field(default_factory=list)
@@ -96,9 +98,9 @@ def figure_panel_covers_role(panel: Any, role: FigureRoleStrategy) -> bool:
     ).replace(" ", "_")
     if declared_role != expected_role:
         return False
-    chart_type = _normalise_role_match_text(
-        getattr(panel, "chart_type", "")
-    ).replace(" ", "_")
+    chart_type = _normalise_role_match_text(getattr(panel, "chart_type", "")).replace(
+        " ", "_"
+    )
     return _acceptable_chart_match(role, chart_type)
 
 
@@ -126,10 +128,12 @@ def _role(
     required_text_terms: Sequence[str] = (),
     search_terms: Sequence[str] = (),
     required: bool = True,
+    placement: Literal["main", "supplementary"] = "main",
 ) -> FigureRoleStrategy:
     return FigureRoleStrategy(
         role=role,
         required=required,
+        placement=placement,
         rationale=rationale,
         acceptable_chart_types=list(acceptable_chart_types),
         required_text_terms=list(required_text_terms),
@@ -209,6 +213,7 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                 "Make missingness and measurement-process context visible.",
                 ("missingness_matrix", "availability_panel", "coverage_heatmap", "bar"),
                 search_terms=("missingness", "measurement", "availability", "coverage"),
+                placement="supplementary",
             ),
         ],
         "anti_patterns": [
@@ -253,13 +258,20 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "data_quality",
                 "Feature availability, imputation, and leakage checks affect reported model performance.",
-                ("feature_availability_panel", "missingness_matrix", "leakage_audit"),
+                (
+                    "feature_availability_panel",
+                    "availability_panel",
+                    "missingness_matrix",
+                    "coverage_heatmap",
+                    "leakage_audit",
+                ),
                 search_terms=(
                     "missingness",
                     "feature availability",
                     "leakage",
                     "preprocessing",
                 ),
+                placement="supplementary",
             ),
         ],
         "anti_patterns": [
@@ -343,6 +355,7 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                 "Feature availability and scaling affect cluster geometry.",
                 ("feature_missingness_matrix", "scaling_summary", "availability_panel"),
                 search_terms=("feature missingness", "scaling", "availability"),
+                placement="supplementary",
             ),
         ],
         "anti_patterns": [
@@ -426,6 +439,7 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                 "Coverage and missingness determine how interpretable descriptive summaries are.",
                 ("coverage_heatmap", "missingness_matrix", "availability_panel"),
                 search_terms=("missingness", "coverage", "availability"),
+                placement="supplementary",
             ),
         ],
         "anti_patterns": [
@@ -438,6 +452,35 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
 }
 
 
+def _data_quality_is_the_scientific_question(context: ResearchContext) -> bool:
+    """Return true only when measurement quality is explicitly a headline aim.
+
+    High missingness alone is not enough: that would push routine ICU data audits
+    into every main figure.  The question or author notes must make measurement,
+    availability, or missingness itself part of the scientific problem.
+    """
+
+    text = " ".join((context.research_question or "", context.notes or "")).casefold()
+    return any(
+        token in text
+        for token in (
+            "missingness",
+            "missing data",
+            "measurement process",
+            "measurement frequency",
+            "measurement availability",
+            "data completeness",
+            "source absence",
+            "not measured",
+            "缺失",
+            "测量过程",
+            "测量频率",
+            "数据完整",
+            "未测量",
+        )
+    )
+
+
 def build_article_figure_strategy(
     context: ResearchContext,
     *,
@@ -445,14 +488,30 @@ def build_article_figure_strategy(
 ) -> ArticleFigureStrategy:
     family = analysis_family or infer_study_design_family(context)
     template = _FAMILY_STRATEGIES[family]
+    roles = [role.model_copy(deep=True) for role in template["roles"]]
+    if _data_quality_is_the_scientific_question(context):
+        roles = [
+            role.model_copy(update={"placement": "main"})
+            if role.role == "data_quality"
+            else role
+            for role in roles
+        ]
     return ArticleFigureStrategy(
         analysis_family=family,
         archetype=str(template["archetype"]),
         hero_role=str(template["hero_role"]),
         minimum_distinct_chart_types=int(template["minimum_distinct_chart_types"]),
-        role_strategies=[role.model_copy(deep=True) for role in template["roles"]],
-        anti_patterns=list(template["anti_patterns"]),
-        prompt_rules=list(template["prompt_rules"]),
+        role_strategies=roles,
+        anti_patterns=[
+            *list(template["anti_patterns"]),
+            "A single composite treated as the entire article display package.",
+            "Routine missingness or measurement audits occupying a main-result panel when they are not central to the scientific question.",
+        ],
+        prompt_rules=[
+            *list(template["prompt_rules"]),
+            "Plan an article-level suite, usually 2-4 complementary main figures plus main tables; this is a planning target, not a fixed acceptance count.",
+            "Put routine missingness and measurement-process detail in supplementary displays; promote it to the main text only when it is central to the research question or changes interpretation of the primary result.",
+        ],
     )
 
 
@@ -470,7 +529,7 @@ def render_article_figure_strategy_for_prompt(strategy: ArticleFigureStrategy) -
             continue
         lines.append(
             "  - "
-            f"{role.role} (acceptable_chart_types={', '.join(role.acceptable_chart_types[:5])}; "
+            f"{role.role} (placement={role.placement}; acceptable_chart_types={', '.join(role.acceptable_chart_types[:5])}; "
             f"rationale={role.rationale})"
         )
     lines.append("- anti_patterns: " + "; ".join(strategy.anti_patterns))
@@ -714,14 +773,26 @@ def summarize_article_figure_strategy_coverage(
             and primary_acceptable
         ):
             primary_publication_roles.add(role.role)
+            if role.placement == "supplementary":
+                role_errors.append(
+                    "Figure role "
+                    f"{role.role} is designated supplementary but appears in a "
+                    "primary publication figure. Promote it only when the "
+                    "research question explicitly makes that evidence central."
+                )
 
     required_roles = {role.role for role in strategy.role_strategies if role.required}
+    required_main_roles = {
+        role.role
+        for role in strategy.role_strategies
+        if role.required and role.placement == "main"
+    }
     errors = list(role_errors)
     primary_minimum_required_role_count = min(
-        len(required_roles),
+        len(required_main_roles),
         _PRIMARY_PUBLICATION_MIN_ROLES.get(
             str(strategy.analysis_family),
-            min(3, len(required_roles)),
+            min(3, len(required_main_roles)),
         ),
     )
     if not primary_panels:
@@ -731,7 +802,7 @@ def summarize_article_figure_strategy_coverage(
             "Primary publication figure lacks the required hero role: "
             f"{strategy.hero_role}."
         )
-    primary_required_role_count = len(primary_publication_roles & required_roles)
+    primary_required_role_count = len(primary_publication_roles & required_main_roles)
     if (
         primary_panels
         and primary_required_role_count < primary_minimum_required_role_count
@@ -765,6 +836,7 @@ def summarize_article_figure_strategy_coverage(
         "article_figure_strategy_archetype": strategy.archetype,
         "article_figure_strategy_hero_role": strategy.hero_role,
         "article_figure_strategy_required_roles": sorted(required_roles),
+        "article_figure_strategy_required_main_roles": sorted(required_main_roles),
         "article_figure_strategy_covered_roles": sorted(covered_roles),
         "article_figure_strategy_missing_roles": sorted(required_roles - covered_roles),
         "article_figure_strategy_chart_types": chart_types,

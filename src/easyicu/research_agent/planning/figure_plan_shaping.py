@@ -13,6 +13,10 @@ from typing import Sequence
 
 from ..contracts.declared_product import typed_product
 from ..contracts.figure_plan import (
+    ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS,
+    BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+    ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS,
+    COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
     COHORT_FLOW_FIGURE_PANELS,
     COHORT_FLOW_INPUT,
     DATA_QUALITY_AUDIT_ROLES,
@@ -27,6 +31,10 @@ from ..contracts.figure_plan import (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     ROBUSTNESS_FIGURE_INPUT,
     ROBUSTNESS_FIGURE_KNOWN_INPUTS,
+    association_sensitivity_composite_panels,
+    absolute_risk_association_composite_panels,
+    balance_association_composite_panels,
+    cohort_balance_association_composite_panels,
     data_quality_audit_source_candidates,
     landmark_association_composite_panels,
     measurement_availability_figure_panels,
@@ -43,6 +51,7 @@ from .figure_strategy import (
     DATA_QUALITY_FIGURE_PRODUCT,
     DATA_QUALITY_FIGURE_REQUIRED_INPUTS,
 )
+from .sensitivity_plan_shaping import ensure_prespecified_sensitivity_steps
 
 _AUDIT_PANEL_TOKENS = (
     "audit",
@@ -58,6 +67,22 @@ _PRIMARY_RESULT_FIGURE_TEMPLATES = {
         GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS
     ),
 }
+
+_PREDICTION_FIGURE_CORE_INPUTS = frozenset(
+    {
+        "table:prediction_scores",
+        "table:model_performance",
+        "table:calibration",
+        "table:validation",
+    }
+)
+_PREDICTION_CLINICAL_UTILITY_INPUT = "table:clinical_utility"
+_ASSOCIATION_FIGURE_CORE_INPUTS = frozenset(
+    {
+        "table:exposure_outcome_distribution",
+        "table:adjusted_association_estimates",
+    }
+)
 
 
 def _method_head(method: str) -> str:
@@ -274,6 +299,67 @@ def ensure_primary_result_figure_step(
     ]
 
 
+def ensure_descriptive_context_figure_step(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Append the deterministic exposure/outcome context renderer if unique.
+
+    In an adjusted association study the primary model owns the estimand, while
+    the separately declared exposure/outcome table owns the absolute observed
+    context.  A single-source rendering child is presentation plumbing only;
+    it does not promote that descriptive table to the primary analysis.
+    """
+
+    source = EXPOSURE_OUTCOME_DISTRIBUTION_INPUT
+    owners = [
+        str(step.step_id)
+        for step in plan.steps
+        if source in {str(output) for output in step.expected_outputs}
+    ]
+    if len(owners) != 1 or dedicated_renderer_consumes_typed_source(
+        plan.steps,
+        source=source,
+    ):
+        return plan, []
+    steps = list(plan.steps)
+    step_id = _next_step_id(steps, "descriptive_context_figure")
+    figure_output = _next_figure_output(steps, "figure:descriptive_context")
+    figure_step = AnalysisStep(
+        step_id=step_id,
+        planned_analysis_role="auxiliary",
+        intent=(
+            "Render the exact exposure/outcome distribution table using its "
+            "registered deterministic descriptive-result contract. Do not "
+            "refit a model, change denominators, or scan run files."
+        ),
+        method="visualization",
+        inputs=[source],
+        expected_outputs=[figure_output],
+        icu_rule_refs=["visualization_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=source, mode="all_rows")
+        ],
+    )
+    return plan.model_copy(update={"steps": [*steps, figure_step]}), [
+        ValidationFinding(
+            validator="descriptive_context_figure_contract",
+            severity="warning",
+            message=(
+                "Bound a rendering-only descriptive-result figure to the "
+                f"unique typed source {source!r}."
+            ),
+            detail={
+                "reason": "descriptive_context_figure_bound_to_typed_source",
+                "step_id": step_id,
+                "source_step_id": owners[0],
+                "source_product": source,
+                "figure_output": figure_output,
+            },
+        )
+    ]
+
+
 def ensure_cohort_accounting_figure_step(
     *,
     plan: AnalysisPlan,
@@ -441,6 +527,9 @@ def bind_deterministic_figure_panels(
             measurement_availability_figure_panels(MISSINGNESS_MEASUREMENT_AUDIT_INPUT)
         ),
         frozenset(DATA_QUALITY_FIGURE_REQUIRED_INPUTS): DATA_QUALITY_FIGURE_PANELS,
+        frozenset(BALANCE_ASSOCIATION_COMPOSITE_INPUTS): (
+            balance_association_composite_panels(BALANCE_ASSOCIATION_COMPOSITE_INPUTS)
+        ),
     }
     data_quality_sources, _candidates, _missing, _ambiguous = (
         _closed_data_quality_sources(plan.steps)
@@ -448,6 +537,25 @@ def bind_deterministic_figure_panels(
     changed = False
     findings: list[ValidationFinding] = []
     steps: list[AnalysisStep] = []
+    clinical_utility_owners = [
+        candidate.step_id
+        for candidate in plan.steps
+        if _PREDICTION_CLINICAL_UTILITY_INPUT
+        in {str(value) for value in candidate.expected_outputs}
+    ]
+    sensitivity_outputs = [
+        (str(output), candidate.step_id)
+        for candidate in plan.steps
+        if candidate.method == "verified_association_model_grid"
+        for output in candidate.expected_outputs
+        if str(output).startswith("table:")
+    ]
+    completeness_owners = [
+        candidate.step_id
+        for candidate in plan.steps
+        if "table:exposure_component_completeness_audit"
+        in {str(value) for value in candidate.expected_outputs}
+    ]
     for step in plan.steps:
         figure_outputs = [
             str(output)
@@ -455,6 +563,92 @@ def bind_deterministic_figure_panels(
             if str(output).startswith("figure:")
         ]
         input_set = frozenset(str(value) for value in step.inputs)
+        if (
+            _method_head(str(step.method or "")) == "visualization"
+            and step.planned_analysis_role == "auxiliary"
+            and input_set == _PREDICTION_FIGURE_CORE_INPUTS
+            and len(figure_outputs) == 1
+            and len(clinical_utility_owners) == 1
+        ):
+            changed = True
+            step = step.model_copy(
+                update={
+                    "inputs": [
+                        *step.inputs,
+                        _PREDICTION_CLINICAL_UTILITY_INPUT,
+                    ],
+                    "input_consumption_contracts": [
+                        *step.input_consumption_contracts,
+                        ArtifactConsumptionContract(
+                            input_key=_PREDICTION_CLINICAL_UTILITY_INPUT,
+                            mode="all_rows",
+                        ),
+                    ],
+                }
+            )
+            input_set = frozenset(str(value) for value in step.inputs)
+            findings.append(
+                ValidationFinding(
+                    validator="deterministic_figure_plan_binding",
+                    severity="warning",
+                    message=(
+                        "Bound the registered clinical-utility table to the "
+                        f"prediction figure step {step.step_id!r}."
+                    ),
+                    detail={
+                        "reason": "prediction_figure_clinical_utility_bound",
+                        "step_id": step.step_id,
+                        "source_step_id": clinical_utility_owners[0],
+                        "input": _PREDICTION_CLINICAL_UTILITY_INPUT,
+                    },
+                )
+            )
+        if (
+            _method_head(str(step.method or "")) == "visualization"
+            and step.planned_analysis_role == "auxiliary"
+            and input_set == _ASSOCIATION_FIGURE_CORE_INPUTS
+            and len(figure_outputs) == 1
+            and len(sensitivity_outputs) == 1
+            and len(completeness_owners) == 1
+        ):
+            sensitivity_input, sensitivity_owner = sensitivity_outputs[0]
+            additions = (
+                sensitivity_input,
+                "table:exposure_component_completeness_audit",
+            )
+            step = step.model_copy(
+                update={
+                    "inputs": [*step.inputs, *additions],
+                    "input_consumption_contracts": [
+                        *step.input_consumption_contracts,
+                        *(
+                            ArtifactConsumptionContract(
+                                input_key=value, mode="all_rows"
+                            )
+                            for value in additions
+                        ),
+                    ],
+                }
+            )
+            input_set = frozenset(str(value) for value in step.inputs)
+            changed = True
+            findings.append(
+                ValidationFinding(
+                    validator="deterministic_figure_plan_binding",
+                    severity="warning",
+                    message=(
+                        "Bound the registered scientific-sensitivity and component-"
+                        f"completeness tables to association figure {step.step_id!r}."
+                    ),
+                    detail={
+                        "reason": "association_scientific_sensitivity_bound",
+                        "step_id": step.step_id,
+                        "sensitivity_source_step_id": sensitivity_owner,
+                        "completeness_source_step_id": completeness_owners[0],
+                        "inputs": list(additions),
+                    },
+                )
+            )
         templates = templates_by_inputs.get(input_set)
         if (
             ROBUSTNESS_FIGURE_INPUT in input_set
@@ -465,6 +659,15 @@ def bind_deterministic_figure_panels(
             data_quality_sources
         ):
             templates = _data_quality_panel_templates(data_quality_sources)
+        if (
+            ASSOCIATION_SENSITIVITY_COMPOSITE_FIXED_INPUTS <= input_set
+            and len(input_set) == 4
+        ):
+            templates = association_sensitivity_composite_panels(step.inputs)
+        if input_set == frozenset(COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS):
+            templates = cohort_balance_association_composite_panels(step.inputs)
+        if input_set == frozenset(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS):
+            templates = absolute_risk_association_composite_panels(step.inputs)
         if input_set == frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_INPUT}):
             producers = [
                 candidate
@@ -561,6 +764,33 @@ def bind_deterministic_figure_panels(
     return (plan.model_copy(update={"steps": steps}) if changed else plan), findings
 
 
+def apply_deterministic_figure_panels(
+    plan: AnalysisPlan,
+    findings: list[ValidationFinding],
+) -> AnalysisPlan:
+    """Bind deterministic panels and retain owner-attributable findings."""
+
+    shaped, panel_findings = bind_deterministic_figure_panels(plan=plan)
+    findings.extend(panel_findings)
+    return shaped
+
+
+def apply_required_plan_obligations(
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    findings: list[ValidationFinding],
+) -> AnalysisPlan:
+    """Close paired typed sensitivity and descriptive-context obligations."""
+
+    shaped, sensitivity_findings = ensure_prespecified_sensitivity_steps(
+        plan=plan,
+        context=context,
+    )
+    shaped, figure_findings = ensure_descriptive_context_figure_step(plan=shaped)
+    findings.extend([*sensitivity_findings, *figure_findings])
+    return shaped
+
+
 def close_empty_deterministic_figure_contracts(
     *,
     plan: AnalysisPlan,
@@ -604,11 +834,20 @@ def close_empty_deterministic_figure_contracts(
             and len(input_set) == 4
             and any(
                 value.startswith("table:")
-                and value.partition(":")[2].endswith("landmark_rcs_contrasts")
+                and value.partition(":")[2].endswith("landmark_rcs_curve")
+                for value in input_set
+            )
+            and any(
+                value.partition(":")[2]
+                in {"measurement_process", "measurement_process_audit"}
                 for value in input_set
             )
         ):
             templates = landmark_association_composite_panels(inputs)
+        elif input_set == frozenset(COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS):
+            templates = cohort_balance_association_composite_panels(inputs)
+        elif input_set == frozenset(ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS):
+            templates = absolute_risk_association_composite_panels(inputs)
         if (
             templates is None
             or (eligible is not None and step_id not in eligible)
@@ -667,9 +906,12 @@ def close_empty_deterministic_figure_contracts(
 
 
 __all__ = [
+    "apply_deterministic_figure_panels",
+    "apply_required_plan_obligations",
     "bind_deterministic_figure_panels",
     "close_empty_deterministic_figure_contracts",
     "dedicated_renderer_consumes_typed_source",
+    "ensure_descriptive_context_figure_step",
     "ensure_cohort_accounting_figure_step",
     "ensure_data_quality_figure_step",
     "ensure_primary_result_figure_step",

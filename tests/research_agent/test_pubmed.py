@@ -144,9 +144,188 @@ def test_protocol_query_uses_primary_exposure_and_outcome_not_benchmark_instruct
     query = build_pubmed_protocol_query_for_context(ctx)
 
     assert '"lactate"[Title/Abstract]' in query
-    assert '"hospital mortality"[Title/Abstract]' in query
+    assert '"in hospital mortality"[Title/Abstract]' in query
     assert "twelve outputs" not in query
     assert "intensive care" in query.lower() or "icu" in query.lower()
+
+
+def test_protocol_query_uses_clinical_identity_not_materialized_column(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Estimate Sepsis-3 prevalence and mortality.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="sep3_sofa2_max",
+                description="sepsis-3 criterion based on SOFA-2",
+                role="other",
+                dtype="int64",
+                source_concept="sep3_sofa2",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="in hospital mortality",
+                role="outcome",
+                dtype="int64",
+                source_concept="death",
+            ),
+        ],
+        primary_exposure="sep3_sofa2_max",
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_query_for_context,
+    )
+
+    query = build_pubmed_protocol_query_for_context(ctx)
+
+    assert "sep3 sofa2" not in query.casefold()
+    assert '"Sepsis-3"[Title/Abstract]' in query
+    assert '"SOFA"[Title/Abstract]' in query
+    assert '"mortality"[Title/Abstract]' in query
+
+
+def test_protocol_queries_remove_operational_window_suffix(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Estimate the association between mechanical ventilation and "
+            "28-day mortality."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="mech_vent_max",
+                description="mechanical ventilation windows",
+                source_concept="mech_vent",
+                role="intervention",
+                dtype="int64",
+            ),
+            schema.ConceptDescriptor(
+                name="mort_28d",
+                description="28-day mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="mech_vent_max",
+        target_outcome="mort_28d",
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    assert len(queries) >= 2
+    assert all("ventilation windows" not in query.casefold() for query in queries)
+    assert any('"mechanical ventilation"[Title/Abstract]' in query for query in queries)
+
+
+def test_protocol_query_uses_question_topic_and_intent_without_exposure(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Identify candidate sepsis subphenotypes by unsupervised clustering "
+            "of first-24h labs and vitals."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64")
+        ],
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    assert len(queries) >= 2
+    assert all('"sepsis"[Title/Abstract]' in query for query in queries)
+    assert any("phenotyp*" in query and "cluster*" in query for query in queries)
+
+
+def test_protocol_query_uses_kdigo_identity_for_materialized_aki_stage(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Characterise the KDIGO AKI stage gradient.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="aki_stage_max",
+                description=(
+                    "KDIGO AKI stage (0-3): max of creatinine and urine output criteria"
+                ),
+                source_concept="aki_stage",
+                role="other",
+                dtype="int64",
+            ),
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        primary_exposure="aki_stage_max",
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    assert any('"KDIGO"[Title/Abstract]' in query for query in queries)
+    assert all("staging (0-3)" not in query for query in queries)
+
+
+def test_protocol_query_skips_instruction_verbs_for_causal_topic(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Estimate the effect of early vasopressor exposure on mortality "
+            "using PSM/IPTW."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[],
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    assert all('"Estimate"[Title/Abstract]' not in query for query in queries)
+    assert all('"vasopressor"[Title/Abstract]' in query for query in queries)
+    assert any("propensity[Title/Abstract]" in query for query in queries)
+
+
+def test_trajectory_intent_takes_precedence_over_generic_clustering(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Cluster longitudinal organ-dysfunction trajectories into latent classes."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[],
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    assert any("trajector*" in query for query in queries)
+    assert all("phenotyp*" not in query for query in queries)
 
 
 def test_prepare_preplan_literature_persists_and_registers_bundle(ra, tmp_path):
@@ -295,6 +474,33 @@ def test_parse_esummary_empty_payload(ra):
     assert parse_pubmed_esummary({"result": {"uids": []}}) == []
 
 
+def test_parse_esummary_keys_cannot_collide_on_author_title_year(ra):
+    from easyicu.research_agent.literature import parse_pubmed_esummary
+
+    payload = {
+        "result": {
+            "uids": ["101", "202"],
+            "101": {
+                "uid": "101",
+                "title": "Early lactate trajectories in critical illness",
+                "pubdate": "2025",
+                "authors": [{"name": "Wang X"}],
+            },
+            "202": {
+                "uid": "202",
+                "title": "Early ventilation trajectories in critical illness",
+                "pubdate": "2025",
+                "authors": [{"name": "Wang Y"}],
+            },
+        }
+    }
+
+    records = parse_pubmed_esummary(payload)
+
+    assert len({record.key for record in records}) == 2
+    assert {record.key.rsplit("_", 1)[-1] for record in records} == {"101", "202"}
+
+
 # ---------------------------------------------------------------------------
 # Client integration with a stub HTTP transport
 # ---------------------------------------------------------------------------
@@ -440,6 +646,53 @@ def test_context_search_keeps_exposure_and_outcome_sentences_in_excerpt(ra):
     assert "hospital mortality" in excerpt
 
 
+def test_context_strata_preserve_queries_returning_each_record(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact_max",
+                description="lactate",
+                source_concept="lact",
+                role="lab",
+                dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="hospital mortality",
+                source_concept="hospital_mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="lact_max",
+        target_outcome="death",
+    )
+    stub = _StubClient(
+        ra,
+        esearch_ids=["8844239", "26903338"],
+        esummary_payload=_fixture_payload(),
+    )
+
+    result = stub.client.search_context_strata(context, retmax=2)
+
+    assert len(result.search_queries) >= 2
+    assert len(result.records) == 2
+    assert all(result.record_queries[record.key] for record in result.records)
+    assert all(
+        set(result.record_queries[record.key]) == set(result.search_queries)
+        for record in result.records
+    )
+    paths = [call["path"] for call in stub.calls]
+    assert paths.count("esearch.fcgi") == len(result.search_queries)
+    assert paths.count("esummary.fcgi") == 1
+    assert paths.count("efetch.fcgi") == 1
+
+
 def test_client_search_returns_empty_on_no_hits(ra):
     stub = _StubClient(ra, esearch_ids=[], esummary_payload={})
     out = stub.client.search("query", retmax=5)
@@ -505,6 +758,7 @@ def test_literature_agent_merges_pubmed_with_curated(ra):
     # the dedup keeps exactly one regardless.
     pmids2 = [c.pmid for c in bundle.citations if c.pmid == "26903338"]
     assert len(pmids2) <= 1
+    assert all(decision.citation_key in keys for decision in bundle.screening_decisions)
 
 
 def test_literature_agent_pubmed_failure_is_silent(ra):
@@ -1006,12 +1260,127 @@ def test_focused_pubmed_return_does_not_auto_pass_direct_comparator_screen(ra):
 
     assert "irrelevant_return" in {row.key for row in bundle.citations}
     decision = next(
-        row for row in bundle.screening_decisions if row.citation_key == "irrelevant_return"
+        row
+        for row in bundle.screening_decisions
+        if row.citation_key == "irrelevant_return"
     )
     assert decision.disposition == "exclude"
     assert not decision.population_match
     assert not decision.exposure_match
     assert not decision.outcome_match
+
+
+def test_no_exposure_context_can_include_design_analogue_without_direct_authority(
+    ra,
+):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Identify candidate sepsis subphenotypes by unsupervised clustering."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64")
+        ],
+        target_outcome="death",
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            return [
+                CitationRecord(
+                    key="sepsis_phenotype",
+                    title="Classification of sepsis subphenotypes in adult ICU patients",
+                    year="2025",
+                    relevance=(
+                        "Study-design excerpt: An observational adult ICU cohort "
+                        "used clustering to classify sepsis subphenotypes."
+                    ),
+                    publication_types=["Observational Study"],
+                    pmid="101",
+                )
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    bundle = LiteratureAgent(enable_pubmed=True, pubmed_client=_PubMed()).run(context)
+    decision = next(
+        row
+        for row in bundle.screening_decisions
+        if row.citation_key == "sepsis_phenotype"
+    )
+
+    assert decision.disposition == "include"
+    assert decision.evidence_role == "design_analogue"
+    assert decision.population_match is True
+    assert decision.exposure_match is False
+    assert "not a direct exposure/outcome comparator" in decision.rationale
+    from easyicu.research_agent.literature import (
+        HypothesisBlueprintAgent,
+        render_hypothesis_blueprint_for_prompt,
+    )
+
+    blueprint = HypothesisBlueprintAgent().run(
+        context=context,
+        literature=bundle,
+    )
+    prompt = render_hypothesis_blueprint_for_prompt(
+        blueprint,
+        literature=bundle,
+    )
+    assert "role=design_analogue" in prompt
+
+
+def test_prediction_design_analogue_rejects_single_predictor_association(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Build an in-hospital mortality prediction model.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[],
+    )
+
+    class _PubMed:
+        def search_for_context(self, context, *, retmax=5):
+            from easyicu.research_agent.literature import CitationRecord
+
+            excerpt = "Study-design excerpt: An observational adult ICU cohort."
+            return [
+                CitationRecord(
+                    key="single_predictor",
+                    title="A biomarker predicts in-hospital mortality in ICU",
+                    year="2025",
+                    relevance=excerpt,
+                    publication_types=["Observational Study"],
+                    pmid="201",
+                ),
+                CitationRecord(
+                    key="prediction_model",
+                    title="Prediction model for in-hospital mortality in ICU",
+                    year="2025",
+                    relevance=excerpt,
+                    publication_types=["Observational Study"],
+                    pmid="202",
+                ),
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    decisions = {
+        row.citation_key: row
+        for row in LiteratureAgent(enable_pubmed=True, pubmed_client=_PubMed())
+        .run(context)
+        .screening_decisions
+    }
+
+    assert decisions["single_predictor"].disposition == "exclude"
+    assert decisions["prediction_model"].disposition == "include"
+    assert decisions["prediction_model"].evidence_role == "design_analogue"
 
 
 def test_composite_sepsis_sofa2_identity_requires_both_terms_for_comparator(ra):
@@ -1310,10 +1679,14 @@ def test_adult_protocol_excludes_pediatric_direct_comparator(ra):
 
     from easyicu.research_agent.literature import LiteratureAgent
 
-    decision = LiteratureAgent(
-        enable_pubmed=True,
-        pubmed_client=_PubMed(),
-    ).run(ctx).screening_decisions[-1]
+    decision = (
+        LiteratureAgent(
+            enable_pubmed=True,
+            pubmed_client=_PubMed(),
+        )
+        .run(ctx)
+        .screening_decisions[-1]
+    )
 
     assert decision.population_match is False
     assert decision.exposure_match is True

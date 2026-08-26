@@ -31,6 +31,7 @@ _SENSITIVITY_COLUMNS = (
     "ci_high",
     "landmark_hours",
     "alive_at_landmark_required",
+    "under_observation_at_landmark_required",
     "negative_event_times_excluded",
     "readmission_restriction",
     "age_form",
@@ -77,6 +78,8 @@ def e1_scientific_acceptance_contract() -> dict[str, Any]:
         "exposure_column": "sep3_sofa2_max",
         "outcome_column": "death",
         "event_time_column": "death_time",
+        "observation_duration_column": "los_icu",
+        "observation_duration_unit": "days",
         "readmission_column": "icu_readmission",
         "positive_only_event_column": "susp_inf_max",
         "landmark_hours": 24.0,
@@ -134,6 +137,7 @@ def build_e1_model_grid_runtime_projection(
             "metadata_columns": [
                 "landmark_hours",
                 "alive_at_landmark_required",
+                "under_observation_at_landmark_required",
                 "negative_event_times_excluded",
                 "readmission_restriction",
                 "age_form",
@@ -151,6 +155,7 @@ def build_e1_model_grid_runtime_projection(
                     "metadata": {
                         "landmark_hours": None,
                         "alive_at_landmark_required": False,
+                        "under_observation_at_landmark_required": False,
                         "negative_event_times_excluded": False,
                         "readmission_restriction": "all_stays",
                         "age_form": "linear",
@@ -166,12 +171,19 @@ def build_e1_model_grid_runtime_projection(
                             "event_time_column": supplied["event_time_column"],
                             "landmark_hours": float(supplied["landmark_hours"]),
                             "exclude_negative_event_times": True,
+                            "observation_duration_column": supplied[
+                                "observation_duration_column"
+                            ],
+                            "observation_duration_unit": supplied[
+                                "observation_duration_unit"
+                            ],
                         }
                     ],
                     "nonlinear_terms": [],
                     "metadata": {
                         "landmark_hours": float(supplied["landmark_hours"]),
                         "alive_at_landmark_required": True,
+                        "under_observation_at_landmark_required": True,
                         "negative_event_times_excluded": True,
                         "readmission_restriction": "all_stays",
                         "age_form": "linear",
@@ -192,6 +204,7 @@ def build_e1_model_grid_runtime_projection(
                     "metadata": {
                         "landmark_hours": None,
                         "alive_at_landmark_required": False,
+                        "under_observation_at_landmark_required": False,
                         "negative_event_times_excluded": False,
                         "readmission_restriction": "non_readmission_only",
                         "age_form": "linear",
@@ -218,6 +231,7 @@ def build_e1_model_grid_runtime_projection(
                     "metadata": {
                         "landmark_hours": None,
                         "alive_at_landmark_required": False,
+                        "under_observation_at_landmark_required": False,
                         "negative_event_times_excluded": False,
                         "readmission_restriction": "all_stays",
                         "age_form": "natural_cubic_spline_df3",
@@ -239,6 +253,8 @@ def build_e1_model_grid_runtime_projection(
         "agent_visible_guardrails": (
             "Use the primary adjusted-association model as the exact parent; "
             "the Host compiles product wiring and executes every variant.",
+            "The 24-hour landmark retains only stays alive and still under ICU "
+            "observation at the landmark.",
             "The landmark, non-readmission, and flexible-form coordinates are "
             "prespecified; no generated-code fallback may replace them.",
         ),
@@ -853,12 +869,13 @@ def _validate_sensitivity(
             abs_tol=1e-9,
         )
         or not _truthy(landmark["alive_at_landmark_required"])
+        or not _truthy(landmark["under_observation_at_landmark_required"])
         or not _truthy(landmark["negative_event_times_excluded"])
     ):
         issues.append(
             _issue(
                 "e1_landmark_protocol_invalid",
-                "The landmark sensitivity did not prove the 24-hour alive-at-landmark protocol.",
+                "The landmark sensitivity did not prove alive and under-observation eligibility at 24 hours.",
             )
         )
     readmission_restriction = table.loc[
@@ -892,6 +909,7 @@ def _validate_sensitivity(
     required_cohort_columns = {
         str(contract["outcome_column"]),
         str(contract["event_time_column"]),
+        str(contract["observation_duration_column"]),
         str(contract["readmission_column"]),
     }
     if not required_cohort_columns.issubset(cohort.columns):
@@ -915,10 +933,15 @@ def _validate_sensitivity(
         cohort[str(contract["readmission_column"])],
         errors="coerce",
     )
+    observation_duration = pd.to_numeric(
+        cohort[str(contract["observation_duration_column"])],
+        errors="coerce",
+    )
     if (
         outcome.isna().any()
         or not outcome.isin([0, 1]).all()
         or ((outcome.eq(1)) & event_time.isna()).any()
+        or (observation_duration < 0).any()
         or readmission.isna().any()
         or not readmission.isin([0, 1]).all()
     ):
@@ -933,10 +956,16 @@ def _validate_sensitivity(
         outcome.eq(1)
         & event_time.le(float(contract["landmark_hours"]))
     )
+    duration_threshold = float(contract["landmark_hours"])
+    if contract["observation_duration_unit"] == "days":
+        duration_threshold /= 24.0
+    under_observation_at_landmark = observation_duration.ge(duration_threshold)
     non_readmission = readmission.eq(0)
     expected_n = {
         "primary_full_cohort": int(len(cohort)),
-        "landmark_alive_at_24h": int(alive_at_landmark.sum()),
+        "landmark_alive_at_24h": int(
+            (alive_at_landmark & under_observation_at_landmark).sum()
+        ),
         "non_readmission_icu_stays": int(non_readmission.sum()),
         "flexible_age_charlson": int(len(cohort)),
     }

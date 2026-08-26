@@ -71,9 +71,8 @@ from .planning.cohort_contract import (
     CohortSchemaError,
     coerce_cohort_definition,
 )
-from .planning.literature_contract import (
-    LiteratureDesignBinding,
-)
+from .planning.design_selection import ResearchDesignSelection
+from .planning.literature_contract import LiteratureDesignBinding
 from .planning.robustness_contract import (
     ROBUSTNESS_REPLAY_OUTPUT_PRODUCT_KINDS,
     RobustnessPlanError,
@@ -2437,6 +2436,7 @@ class AnalysisPlan(BaseModel):
             "deterministic retrieval. Empty decisions are omitted for legacy/default-off runs."
         ),
     )
+    design_selection: Optional[ResearchDesignSelection] = Field(default=None, exclude_if=lambda value: value is None)
     rationale: Optional[str] = None
     revision: int = 1
 

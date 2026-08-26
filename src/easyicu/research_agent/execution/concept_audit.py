@@ -40,6 +40,7 @@ from ..authority.run_input import canonical_sha256
 from ..schema import AnalysisStep, ResearchContext
 from ..authority.step_attempt import StepAttemptState
 from ..authority.step_runtime import read_concept_audit_findings
+from ..authority.typed_binding import host_authored_generation_mode
 from .concept_reaudit import DETERMINISTIC_CONCEPT_REAUDIT_BUDGET_ISSUE_CODE
 from .step_worker_state import StepWorkerProgress
 
@@ -511,6 +512,9 @@ class ConceptAuditCoordinator:
                 and (
                     runtime.worker_progress.deterministic_fallback_used
                     or runtime.worker_progress.deterministic_standard_executor_used
+                    or host_authored_generation_mode(
+                        runtime.step_record.get("resumed_from_generation_mode")
+                    )
                 )
             ):
                 generation_mode = (

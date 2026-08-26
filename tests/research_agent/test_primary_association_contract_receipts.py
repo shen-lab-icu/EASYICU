@@ -330,6 +330,8 @@ def test_the_term_table_reports_the_same_number_as_the_headline(
     assert exposure_row["ci_high"] == pytest.approx(
         summary["primary_estimate_interval"][1]
     )
+    assert summary["primary_ci_low"] == pytest.approx(exposure_row["ci_low"])
+    assert summary["primary_ci_high"] == pytest.approx(exposure_row["ci_high"])
     assert exposure_row["effect_scale"] == summary["effect_scale"] == "odds_ratio"
 
 

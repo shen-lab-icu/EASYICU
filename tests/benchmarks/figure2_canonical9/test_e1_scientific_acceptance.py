@@ -89,6 +89,7 @@ def _accepted_run(tmp_path: Path) -> Path:
             "stay_id": [1, 2, 3, 4, 5],
             "death": [0, 1, 1, 1, 0],
             "death_time": [None, 10.0, -1.0, 30.0, None],
+            "los_icu": [2.0, 2.0, 2.0, 2.0, 0.5],
             "icu_readmission": [0, 0, 1, 0, 1],
         }
     )
@@ -199,6 +200,7 @@ def _accepted_run(tmp_path: Path) -> Path:
                 "ci_high": 1.70,
                 "landmark_hours": None,
                 "alive_at_landmark_required": False,
+                "under_observation_at_landmark_required": False,
                 "negative_event_times_excluded": False,
                 "readmission_restriction": "all_stays",
                 "age_form": "linear",
@@ -206,13 +208,14 @@ def _accepted_run(tmp_path: Path) -> Path:
             },
             {
                 "analysis_id": "landmark_alive_at_24h",
-                "n_stays": 3,
+                "n_stays": 2,
                 "n_deaths": 1,
                 "odds_ratio": 1.58,
                 "ci_low": 1.40,
                 "ci_high": 1.78,
                 "landmark_hours": 24.0,
                 "alive_at_landmark_required": True,
+                "under_observation_at_landmark_required": True,
                 "negative_event_times_excluded": True,
                 "readmission_restriction": "all_stays",
                 "age_form": "linear",
@@ -227,6 +230,7 @@ def _accepted_run(tmp_path: Path) -> Path:
                 "ci_high": 1.90,
                 "landmark_hours": None,
                 "alive_at_landmark_required": False,
+                "under_observation_at_landmark_required": False,
                 "negative_event_times_excluded": False,
                 "readmission_restriction": True,
                 "age_form": "linear",
@@ -241,6 +245,7 @@ def _accepted_run(tmp_path: Path) -> Path:
                 "ci_high": 1.73,
                 "landmark_hours": None,
                 "alive_at_landmark_required": False,
+                "under_observation_at_landmark_required": False,
                 "negative_event_times_excluded": False,
                 "readmission_restriction": "all_stays",
                 "age_form": "restricted_cubic_spline",
@@ -473,7 +478,7 @@ def test_e1_scientific_acceptance_rejects_changed_primary_denominator(
 ) -> None:
     run_dir = _accepted_run(tmp_path)
     source = pd.read_parquet(run_dir / "cohort.parquet")
-    source.loc[len(source)] = [6, 0, None, 0]
+    source.loc[len(source)] = [6, 0, None, 2.0, 0]
     source.to_parquet(run_dir / "cohort.parquet", index=False)
 
     receipt = evaluate_e1_scientific_acceptance(

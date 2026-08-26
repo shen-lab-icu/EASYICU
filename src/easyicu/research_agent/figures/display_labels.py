@@ -119,7 +119,36 @@ def display_label(
     token = str(value or "").strip()
     if not token:
         return "Value"
-    return re.sub(r"[_-]+", " ", token).strip().title()
+    words = re.sub(r"[_-]+", " ", token).strip().split()
+    clinical_tokens = {
+        "aki": "AKI",
+        "bili": "Bilirubin",
+        "bun": "BUN",
+        "cardio": "Cardiovascular",
+        "charlson": "Charlson index",
+        "cns": "CNS",
+        "coag": "Coagulation",
+        "crea": "Creatinine",
+        "hr": "Heart rate",
+        "icu": "ICU",
+        "kdigo": "KDIGO",
+        "lact": "Lactate",
+        "map": "MAP",
+        "na": "Sodium",
+        "ph": "pH",
+        "plt": "Platelets",
+        "resp": "Respiratory",
+        "rrt": "RRT",
+        "sep3": "Sepsis-3",
+        "sofa": "SOFA",
+        "sofa2": "SOFA",
+        "spo2": "SpO2",
+        "susp": "Suspected",
+        "temp": "Temperature",
+        "wbc": "WBC",
+    }
+    rendered = [clinical_tokens.get(word.casefold(), word.title()) for word in words]
+    return " ".join(rendered)
 
 
 __all__ = [

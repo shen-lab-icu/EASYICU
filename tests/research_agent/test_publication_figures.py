@@ -493,9 +493,10 @@ def test_curated_publication_bundle_rejects_digest_stale_figure_bytes(
     assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
 
 
-def test_publication_figure_skill_promotes_step_publication_bundle_before_robustness(
+def test_publication_figure_skill_promotes_deterministic_step_before_family_renderer(
     ra,
     tmp_path: Path,
+    monkeypatch,
 ):
     from PIL import Image
 
@@ -557,7 +558,7 @@ def test_publication_figure_skill_promotes_step_publication_bundle_before_robust
     metadata = {
         "figure_role": "publication_figure",
         "step_id": "05_sensitivity_comparison_across_definitions_figure",
-        "generation_mode": "fallback",
+        "generation_mode": "deterministic_standard",
     }
     for path, kind, evidence_id in (
         (svg, "figure", "figure_sensitivity_forest_svg"),
@@ -571,9 +572,15 @@ def test_publication_figure_skill_promotes_step_publication_bundle_before_robust
             source_path=path,
             evidence_id=evidence_id,
             producer="runner",
-            generation_mode="fallback",
+            generation_mode="deterministic_standard",
             metadata=metadata if kind != "table" else {"step_id": metadata["step_id"]},
         )
+    active_step_evidence_ids = [
+        "figure_sensitivity_forest_svg",
+        "figure_sensitivity_forest_png",
+        "log_sensitivity_forest_contract",
+        "table_sensitivity_forest_source_data",
+    ]
 
     panel = RobustnessPanel.from_rows(
         [
@@ -613,6 +620,14 @@ def test_publication_figure_skill_promotes_step_publication_bundle_before_robust
         ],
     )
 
+    def family_renderer_must_not_run(*args, **kwargs):
+        raise AssertionError("deterministic step bundle must outrank family synthesis")
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.figures.skill.render_family_figure",
+        family_renderer_must_not_run,
+    )
+
     result = ra.PublicationFigureSkill().run(
         context=context,
         plan=plan,
@@ -640,6 +655,37 @@ def test_publication_figure_skill_promotes_step_publication_bundle_before_robust
     )
     assert "sensitivity estimates" in promoted_contract["core_claim"]
     assert "robustness panel" not in promoted_contract["statistics_note"].lower()
+    assert promoted_contract["source_data"] == ["sensitivity_forest_source_data.csv"]
+    assert (
+        run_dir / "publication_figures" / "sensitivity_forest_source_data.csv"
+    ).is_file()
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+
+    readiness = _publication_figure_bundle_ready(
+        evidence=evidence,
+        run_dir=run_dir,
+        per_step_records=[
+            {
+                "step_id": "05_sensitivity_comparison_across_definitions_figure",
+                "status": "ok",
+                "evidence_ids": active_step_evidence_ids,
+            }
+        ],
+    )
+    assert readiness["publication_figure_contract_ready"] is True
+    assert readiness["publication_figure_source_data_ready"] is True
+    assert readiness["publication_figure_bundle_ready"] is True
+    migrated_sources = [
+        record
+        for record in evidence.records()
+        if "_checkpoint_" in record.evidence_id
+    ]
+    assert migrated_sources
+    assert all(
+        (record.metadata or {}).get("source_evidence_ids")
+        == active_step_evidence_ids
+        for record in migrated_sources
+    )
 
 
 def test_publication_figure_skill_prefers_primary_bundle_over_sensitivity(
@@ -1204,8 +1250,8 @@ def test_publication_figure_skill_uses_distribution_and_labels_unadjusted_model(
     evidence = ra.EvidenceStore(run_dir)
     primary_table = tmp_path / "adjusted_association_estimates.csv"
     primary_table.write_text(
-        "exposure,estimate,ci_low,ci_high,effect_scale\n"
-        "exposure,1.70,1.50,1.92,odds_ratio\n",
+        "exposure,outcome,covariates,estimate,ci_low,ci_high,effect_scale\n"
+        "exposure,death,,1.70,1.50,1.92,odds_ratio\n",
         encoding="utf-8",
     )
     distribution = tmp_path / "exposure_outcome_distribution.csv"
@@ -1288,6 +1334,44 @@ def test_publication_figure_skill_uses_distribution_and_labels_unadjusted_model(
     assert contract["panels"][1]["evidence_ids"] == [
         "exposure_outcome_distribution"
     ]
+
+
+def test_association_figure_semantics_come_from_executed_result_fields() -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.figures.skill import (
+        _association_adjustment_state,
+        _sole_source_landmark_hours,
+        _sole_source_semantic,
+    )
+
+    adjusted = pd.DataFrame(
+        {
+            "is_reference": [True, False],
+            "exposure": ["sofa", "sofa"],
+            "outcome": ["death", "death"],
+            "adjustment_covariates": ["age;sex", ""],
+            "landmark_hours": [24.0, 48.0],
+        }
+    )
+    assert _association_adjustment_state(
+        adjusted,
+        primary_requirements=[SimpleNamespace(covariates=["age", "sex"])],
+    ) is True
+    assert _sole_source_semantic(adjusted, "outcome") == "death"
+    assert _sole_source_landmark_hours(adjusted) == 24.0
+
+    with pytest.raises(ValueError, match="conflicts with the typed primary Plan"):
+        _association_adjustment_state(
+            adjusted,
+            primary_requirements=[SimpleNamespace(covariates=[])],
+        )
+
+    undeclared = pd.DataFrame({"estimate": [1.4]})
+    assert _association_adjustment_state(
+        undeclared,
+        primary_requirements=[],
+    ) is None
 
 
 def test_distribution_overall_audit_row_is_not_drawn_as_a_third_exposure_group():
@@ -1413,6 +1497,42 @@ def test_e1_typed_distribution_without_authorized_contrast_fails_closed(ra):
 
     assert incomplete_typed.empty
     assert arbitrary_numeric.empty
+
+
+def test_association_frame_rejects_context_rates_and_labels_continuous_contrasts(
+    ra,
+):
+    from easyicu.research_agent.figures.skill import _normalise_association_frame
+
+    context_rates = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "exposure": ["marker", "marker"],
+                "estimate_type": ["prevalence", "outcome_risk"],
+                "estimate": [0.54, 0.14],
+                "ci_low": [0.53, 0.13],
+                "ci_high": [0.55, 0.15],
+            }
+        )
+    )
+    contrasts = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "biomarker_mmol_l": [1.0, 5.0],
+                "reference_biomarker_mmol_l": [2.1, 2.1],
+                "adjusted_odds_ratio": [0.76, 1.96],
+                "ci_low": [0.72, 1.89],
+                "ci_high": [0.81, 2.03],
+            }
+        )
+    )
+
+    assert context_rates.empty
+    assert contrasts["label"].tolist() == [
+        "Biomarker Mmol L: 1 vs 2.1",
+        "Biomarker Mmol L: 5 vs 2.1",
+    ]
+    assert contrasts.attrs["xlabel"] == "Odds ratio"
 
 
 def test_counts_only_descriptive_bundle_is_promoted_without_invented_contrast(
@@ -2593,7 +2713,7 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
     source = pd.read_csv(
         run_dir / "publication_figures" / "publication_figure_source_missingness.csv"
     )
-    assert source["variable"].tolist() == ["Lactate", "Temperature", "Resp. rate"]
+    assert source["variable"].tolist() == ["Lactate", "Temperature", "Respiratory"]
 
 
 def test_primary_association_selector_prefers_single_primary_estimand(
@@ -2754,7 +2874,7 @@ def test_missingness_frame_deduplicates_variable_labels(ra):
         display_labels={"lact": "Lactate", "temp": "Temperature"},
     )
 
-    assert frame["variable"].tolist() == ["Lact Max", "Bun Max"]
+    assert frame["variable"].tolist() == ["Lactate Max", "BUN Max"]
 
 
 def test_missingness_frame_groups_measurement_summary_features(ra):

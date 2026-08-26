@@ -42,6 +42,8 @@ from .gates.data_answerability import analysis_answerability_findings
 from .literature_concepts import literature_concept_identity
 from .literature_excerpt import select_source_backed_excerpt
 from .planning.method_literature import method_literature_citations
+from .planning.literature_design_authority import LiteratureDesignEvidenceCard
+from .planning.literature_design_authority import render_literature_design_cards_for_prompt
 from .providers.mocks import MockLLMClient
 from .providers.factory import authorized_complete
 from .providers.protocol import LLMClient, LLMMessage
@@ -131,6 +133,17 @@ class LiteratureSearchProvenance(BaseModel):
     note: str = ""
 
 
+class PubMedContextSearchResult(BaseModel):
+    """Bounded multi-stratum PubMed result with exact query lineage."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "easyicu.pubmed_context_search/1"
+    records: List[CitationRecord] = Field(default_factory=list)
+    search_queries: List[str] = Field(default_factory=list)
+    record_queries: Dict[str, List[str]] = Field(default_factory=dict)
+
+
 class LiteratureAuthorityTrace(BaseModel):
     """Host coordinates for one verified, upstream retrieval receipt.
 
@@ -162,6 +175,7 @@ class LiteratureScreeningDecision(BaseModel):
     disposition: Literal["include", "exclude"]
     evidence_role: Literal[
         "direct_comparator",
+        "design_analogue",
         "definition",
         "method",
         "database",
@@ -208,6 +222,13 @@ class LiteratureBundle(BaseModel):
         description=(
             "Record-level inclusion/exclusion and evidence-role decisions. "
             "Retrieval alone is not evidence that a paper supports the plan."
+        ),
+    )
+    design_evidence_cards: List["LiteratureDesignEvidenceCard"] = Field(
+        default_factory=list,
+        description=(
+            "Bounded reviewed full-text/supplement facts used to shape study design; "
+            "the article body is never stored here."
         ),
     )
 
@@ -337,16 +358,22 @@ def render_hypothesis_blueprint_for_prompt(
             "- prior_literature_keys: " + ", ".join(blueprint.prior_literature_keys[:8])
         )
     if literature is not None:
-        direct_keys = {
-            decision.citation_key
+        if literature.design_evidence_cards:
+            lines.append(
+                render_literature_design_cards_for_prompt(
+                    literature.design_evidence_cards
+                )
+            )
+        comparison_roles = {
+            decision.citation_key: decision.evidence_role
             for decision in literature.screening_decisions
             if decision.disposition == "include"
-            and decision.evidence_role == "direct_comparator"
+            and decision.evidence_role in {"direct_comparator", "design_analogue"}
         }
         protocol_records = [
             record
             for record in literature.citations
-            if record.key in direct_keys
+            if record.key in comparison_roles
             and str(record.relevance or "").startswith(
                 ("Study-design excerpt:", "Source excerpt:")
             )
@@ -360,7 +387,10 @@ def render_hypothesis_blueprint_for_prompt(
             for record in protocol_records:
                 title = " ".join(record.title.split())[:180]
                 relevance = " ".join(str(record.relevance or "").split())[:420]
-                lines.append(f"  - [{record.key}] {record.year}: {title}; {relevance}")
+                lines.append(
+                    f"  - [{record.key}] role={comparison_roles[record.key]} "
+                    f"{record.year}: {title}; {relevance}"
+                )
             lines.append(
                 "- literature_eligibility_rule: Similar-study eligibility is a "
                 "candidate, not automatic authority. Apply it only when it matches "
@@ -622,8 +652,7 @@ class PubMedLiteratureClient:
                     ),
                     "publication_types": (
                         list(
-                            article_metadata[record.pmid].get("publication_types")
-                            or []
+                            article_metadata[record.pmid].get("publication_types") or []
                         )
                         if record.pmid and record.pmid in article_metadata
                         else record.publication_types
@@ -652,6 +681,107 @@ class PubMedLiteratureClient:
             ),
         )
         return _rank_protocol_search_results(context, records)[: int(retmax)]
+
+    def search_context_strata(
+        self,
+        context: ResearchContext,
+        *,
+        retmax: int = 8,
+    ) -> PubMedContextSearchResult:
+        """Search bounded complementary strata and retain per-record lineage.
+
+        ESearch is cheap but ESummary/EFetch are not repeated for each stratum:
+        identifiers are round-robin selected across the prespecified queries,
+        then hydrated once.  Query membership never grants scientific
+        eligibility; the caller still applies the source-backed screen.
+        """
+
+        queries = build_pubmed_protocol_queries_for_context(context)
+        candidate_limit = max(int(retmax) * 3, 12)
+        ids_by_query: List[List[str]] = []
+        queries_by_pmid: Dict[str, List[str]] = {}
+        for query in queries:
+            ids = self._esearch(query, retmax=candidate_limit)
+            ids_by_query.append(ids)
+            for pmid in ids:
+                queries_by_pmid.setdefault(pmid, []).append(query)
+
+        selected_ids: List[str] = []
+        seen_ids: set[str] = set()
+        offset = 0
+        while len(selected_ids) < candidate_limit:
+            added = False
+            for ids in ids_by_query:
+                if offset >= len(ids):
+                    continue
+                added = True
+                pmid = ids[offset]
+                if pmid not in seen_ids:
+                    seen_ids.add(pmid)
+                    selected_ids.append(pmid)
+                    if len(selected_ids) >= candidate_limit:
+                        break
+            if not added:
+                break
+            offset += 1
+
+        if not selected_ids:
+            return PubMedContextSearchResult(search_queries=queries)
+
+        records = self._hydrate_ids(
+            selected_ids,
+            excerpt_terms=(
+                _protocol_search_term(context, context.primary_exposure),
+                _protocol_search_term(context, context.target_outcome),
+                _question_topic_term(context.research_question),
+                *_study_intent_focus_terms(context.research_question),
+                "intensive care",
+                "critical care",
+                "ICU",
+            ),
+        )
+        retained = _rank_protocol_search_results(context, records)[: int(retmax)]
+        return PubMedContextSearchResult(
+            records=retained,
+            search_queries=queries,
+            record_queries={
+                record.key: list(queries_by_pmid.get(record.pmid or "", []))
+                for record in retained
+            },
+        )
+
+    def _hydrate_ids(
+        self,
+        pmids: Sequence[str],
+        *,
+        excerpt_terms: Sequence[str] = (),
+    ) -> List[CitationRecord]:
+        records = self._esummary(pmids)
+        article_metadata = self._protocol_article_metadata(
+            pmids, focus_terms=excerpt_terms
+        )
+        return [
+            record.model_copy(
+                update={
+                    "relevance": (
+                        "Study-design excerpt: "
+                        + str(article_metadata[record.pmid].get("excerpt") or "")
+                        if record.pmid
+                        and record.pmid in article_metadata
+                        and article_metadata[record.pmid].get("excerpt")
+                        else record.relevance
+                    ),
+                    "publication_types": (
+                        list(
+                            article_metadata[record.pmid].get("publication_types") or []
+                        )
+                        if record.pmid and record.pmid in article_metadata
+                        else record.publication_types
+                    ),
+                }
+            )
+            for record in records
+        ]
 
     # ------------------------------------------------------------------
     # E-utilities calls (private)
@@ -839,6 +969,15 @@ def _clinical_phrase_from_description(description: str) -> str:
         if match:
             return " ".join(match.group(1).split())
     if len(value.split()) <= 4:
+        # Dictionary descriptions sometimes append execution metadata such as
+        # "window" or "measurement".  Those tokens describe materialisation,
+        # not the clinical construct, and make literal bibliographic queries
+        # needlessly brittle (for example, "mechanical ventilation windows").
+        value = re.sub(
+            r"(?i)\s+(?:window|windows|measurement|measurements|variable|variables)$",
+            "",
+            value,
+        ).strip()
         return value
     return ""
 
@@ -851,6 +990,14 @@ def _screening_decision_for_record(
     query: Optional[str],
 ) -> LiteratureScreeningDecision:
     """Classify a retrieved record without granting it methodological authority."""
+
+    if not context.primary_exposure:
+        return _screen_source_backed_design_analogue(
+            context=context,
+            record=record,
+            source=source,
+            query=query,
+        )
 
     exposure = _protocol_search_term(context, context.primary_exposure)
     outcome = _protocol_search_term(context, context.target_outcome)
@@ -878,6 +1025,104 @@ def _screening_decision_for_record(
             if exposure_identity is not None
             else ()
         ),
+    )
+
+
+def _screen_source_backed_design_analogue(
+    *,
+    context: ResearchContext,
+    record: CitationRecord,
+    source: str,
+    query: Optional[str],
+) -> LiteratureScreeningDecision:
+    """Screen a non-P/E/O study against topic and analysis-design intent.
+
+    This route is available only when the sealed context has no primary
+    exposure.  It identifies an external design analogue for prediction,
+    phenotyping, trajectory, or causal-feasibility review; it never upgrades
+    that source to a direct exposure/outcome comparator.
+    """
+
+    source_excerpt = str(record.relevance or "")
+    blob = _normalise_clinical_text(" ".join((record.title, source_excerpt)))
+    padded_blob = f" {blob} "
+    topic_terms = tuple(
+        _normalise_clinical_text(value)
+        for value in _question_topic_terms(context.research_question)
+        if _normalise_clinical_text(value)
+    )
+    intent_terms = tuple(
+        _normalise_clinical_text(value)
+        for value in _study_intent_focus_terms(context.research_question)
+        if _normalise_clinical_text(value)
+    )
+    title_blob = _normalise_clinical_text(record.title)
+    topic_match = any(f" {term} " in padded_blob for term in topic_terms)
+    intent_match = any(term in title_blob for term in intent_terms)
+    question = context.research_question.casefold()
+    if any(marker in question for marker in ("predict", "prognos", "validation")):
+        intent_match = bool(
+            any(marker in title_blob for marker in ("predict", "prognos"))
+            and any(
+                marker in title_blob
+                for marker in ("model", "validation", "machine learning", "nomogram")
+            )
+        )
+    if any(
+        marker in question
+        for marker in ("causal", "propensity", "psm", "iptw", "treatment effect")
+    ):
+        topic_match = any(term in title_blob for term in topic_terms)
+    icu_match = any(
+        token in padded_blob
+        for token in (" intensive care ", " critical care ", " icu ")
+    )
+    adult_required = _adult_population_required(context)
+    adult_match = (not adult_required) or any(
+        token in padded_blob for token in (" adult ", " adults ")
+    )
+    population_match = icu_match and adult_match
+    design_excerpt = source_excerpt.startswith(
+        ("Study-design excerpt:", "Source excerpt:")
+    )
+    publication_type_eligible = _publication_type_comparator_eligible(record)
+    included = bool(
+        topic_match
+        and intent_match
+        and population_match
+        and design_excerpt
+        and publication_type_eligible
+    )
+    outcome = _protocol_search_term(context, context.target_outcome)
+    outcome_match = bool(
+        outcome and _clinical_axis_matches(outcome, blob, axis="outcome")
+    )
+    return LiteratureScreeningDecision(
+        citation_key=record.key,
+        source=source,
+        disposition="include" if included else "exclude",
+        evidence_role="design_analogue" if included else "related_context",
+        rationale=(
+            "Included as a source-backed design analogue because the retained "
+            "title/design excerpt matches the declared ICU population, clinical "
+            "topic, and analysis intent. It is not a direct exposure/outcome "
+            "comparator; independent review must still compare eligibility, time "
+            "zero, estimand, variables, and validation route."
+            if included
+            else (
+                "Excluded from design-analogue authority because the retained "
+                "title/source excerpt does not establish the declared ICU "
+                "population, clinical topic, analysis intent, source-backed study "
+                "design, or an eligible observational publication type. Query "
+                "membership alone is not design authority."
+            )
+        ),
+        query=query,
+        population_match=population_match,
+        exposure_match=False,
+        outcome_match=outcome_match,
+        design_excerpt_available=design_excerpt,
+        publication_type_eligible=publication_type_eligible,
     )
 
 
@@ -1018,9 +1263,7 @@ def _publication_type_comparator_eligible(record: CitationRecord) -> bool:
 def _normalise_clinical_text(value: str) -> str:
     """Normalize punctuation without inventing a clinical synonym."""
 
-    return " ".join(
-        re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).split()
-    )
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).split())
 
 
 def _adult_population_required(context: ResearchContext) -> bool:
@@ -1181,6 +1424,207 @@ def _clinical_axis_matches(term: str, blob: str, *, axis: str) -> bool:
     return any(f" {alias} " in padded for alias in aliases)
 
 
+def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> str:
+    if not name:
+        return ""
+    variable = context.variable(name)
+    concept = variable.source_concept or variable.name if variable is not None else name
+    identity = literature_concept_identity(concept)
+    if identity is None:
+        value = _protocol_search_term(context, name).replace('"', "")
+        return f'"{value}"[Title/Abstract]' if value else ""
+    return _pubmed_identity_alternatives_clause(identity)
+
+
+def _pubmed_identity_alternatives_clause(identity: Any) -> str:
+    alternatives: List[str] = []
+    for alternative in identity.retrieval_alternatives:
+        atoms = [
+            f'"{str(value).replace(chr(34), "")}"[Title/Abstract]'
+            for value in alternative
+            if str(value).strip()
+        ]
+        if atoms:
+            alternatives.append(
+                atoms[0] if len(atoms) == 1 else "(" + " AND ".join(atoms) + ")"
+            )
+    if not alternatives:
+        return ""
+    return (
+        alternatives[0]
+        if len(alternatives) == 1
+        else "(" + " OR ".join(alternatives) + ")"
+    )
+
+
+_QUESTION_TOPIC_STOPWORDS = {
+    "adult",
+    "analysis",
+    "associated",
+    "association",
+    "candidate",
+    "characterise",
+    "characterize",
+    "cohort",
+    "compare",
+    "build",
+    "develop",
+    "determine",
+    "does",
+    "effect",
+    "early",
+    "estimate",
+    "evaluate",
+    "examine",
+    "first",
+    "identify",
+    "intensive",
+    "investigate",
+    "laboratory",
+    "mortality",
+    "outcome",
+    "patients",
+    "reporting",
+    "score",
+    "style",
+    "using",
+    "vitals",
+    "what",
+    "whether",
+    "which",
+}
+
+
+def _question_topic_term(question: str) -> str:
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}", question or ""):
+        normalized = token.casefold().strip("-")
+        if normalized in _QUESTION_TOPIC_STOPWORDS:
+            continue
+        if any(
+            marker in normalized
+            for marker in (
+                "cluster",
+                "phenotyp",
+                "predict",
+                "preval",
+                "trajectory",
+                "longitudinal",
+                "survival",
+            )
+        ):
+            continue
+        return token.replace(chr(34), "")
+    return ""
+
+
+def _question_topic_clause(question: str) -> str:
+    """Extract one bounded clinical topic token when no exposure is declared."""
+
+    topic = _question_topic_term(question)
+    if not topic:
+        return ""
+    identity = literature_concept_identity(topic)
+    if identity is not None:
+        return _pubmed_identity_alternatives_clause(identity)
+    return f'"{topic}"[Title/Abstract]'
+
+
+def _question_topic_terms(question: str) -> tuple[str, ...]:
+    topic = _question_topic_term(question)
+    if not topic:
+        return ()
+    identity = literature_concept_identity(topic)
+    if identity is None:
+        return (topic,)
+    return tuple(
+        dict.fromkeys(
+            value
+            for alternative in identity.retrieval_alternatives
+            for value in alternative
+            if str(value).strip()
+        )
+    )
+
+
+def _study_intent_clause(question: str) -> str:
+    text = (question or "").casefold()
+    if any(
+        marker in text
+        for marker in ("causal", "propensity", "psm", "iptw", "treatment effect")
+    ):
+        return (
+            "(causal[Title/Abstract] OR propensity[Title/Abstract] OR "
+            '"inverse probability"[Title/Abstract] OR "treatment effect"[Title/Abstract])'
+        )
+    if "trajectory" in text or "longitudinal" in text:
+        return "(trajector*[Title/Abstract] OR longitudinal[Title/Abstract])"
+    if any(marker in text for marker in ("phenotyp", "cluster", "subtype")):
+        return (
+            "(phenotyp*[Title/Abstract] OR cluster*[Title/Abstract] OR "
+            "subphenotyp*[Title/Abstract] OR subtype*[Title/Abstract])"
+        )
+    if any(marker in text for marker in ("predict", "prognos", "validation")):
+        return (
+            "(predict*[Title/Abstract] OR prognos*[Title/Abstract] OR "
+            "validation[Title/Abstract])"
+        )
+    if any(marker in text for marker in ("prevalence", "incidence", "epidemiolog")):
+        return (
+            "(prevalence[Title/Abstract] OR incidence[Title/Abstract] OR "
+            "epidemiolog*[Title/Abstract])"
+        )
+    if any(marker in text for marker in ("survival", "hazard", "time-to-event")):
+        return "(survival[Title/Abstract] OR hazard[Title/Abstract])"
+    return ""
+
+
+def _study_intent_focus_terms(question: str) -> tuple[str, ...]:
+    text = (question or "").casefold()
+    groups = (
+        (
+            ("causal", "propensity", "psm", "iptw", "treatment effect"),
+            ("causal", "propensity", "inverse probability", "treatment effect"),
+        ),
+        (
+            ("trajectory", "longitudinal"),
+            ("trajectory", "longitudinal"),
+        ),
+        (
+            ("phenotyp", "cluster", "subtype"),
+            (
+                "phenotype",
+                "cluster",
+                "subphenotype",
+                "subtype",
+                "classification",
+                "endotype",
+            ),
+        ),
+        (
+            ("predict", "prognos", "validation"),
+            ("predict", "model", "validation", "machine learning"),
+        ),
+        (
+            ("prevalence", "incidence", "epidemiolog"),
+            ("prevalence", "incidence", "epidemiology"),
+        ),
+        (("survival", "hazard", "time-to-event"), ("survival", "hazard")),
+    )
+    for markers, terms in groups:
+        if any(marker in text for marker in markers):
+            return terms
+    return ()
+
+
+_OBSERVATIONAL_FILTER = (
+    "(cohort[Title/Abstract] OR observational[Title/Abstract] OR "
+    "retrospective[Title/Abstract] OR prospective[Title/Abstract] OR "
+    "database[Title/Abstract]) NOT (Review[Publication Type] OR "
+    "Meta-Analysis[Publication Type] OR Randomized Controlled Trial[Publication Type] "
+    "OR Clinical Trial[Publication Type])"
+)
+
+
 def build_pubmed_protocol_query_for_context(context: ResearchContext) -> str:
     """Build a focused query for similar study-design and eligibility papers.
 
@@ -1192,12 +1636,17 @@ def build_pubmed_protocol_query_for_context(context: ResearchContext) -> str:
     """
 
     terms: List[str] = []
-    exposure = _protocol_search_term(context, context.primary_exposure)
-    outcome = _protocol_search_term(context, context.target_outcome)
-    for value in (exposure, outcome):
-        if value and value.casefold() not in {item.casefold() for item in terms}:
-            escaped = value.replace('"', "")
-            terms.append(f'"{escaped}"[Title/Abstract]')
+
+    for name in (context.primary_exposure, context.target_outcome):
+        clause = _pubmed_identity_clause(context, name)
+        if clause and clause.casefold() not in {item.casefold() for item in terms}:
+            terms.append(clause)
+    if not context.primary_exposure:
+        topic = _question_topic_clause(context.research_question)
+        intent = _study_intent_clause(context.research_question)
+        for clause in (topic, intent):
+            if clause and clause.casefold() not in {item.casefold() for item in terms}:
+                terms.insert(0, clause)
     if not terms:
         for variable in context.variables:
             if variable.role not in _QUERY_ROLES:
@@ -1211,12 +1660,40 @@ def build_pubmed_protocol_query_for_context(context: ResearchContext) -> str:
     return " AND ".join(terms)
 
 
+def build_pubmed_protocol_queries_for_context(
+    context: ResearchContext,
+) -> List[str]:
+    """Compile complementary, case-neutral retrieval strata.
+
+    The first query preserves the exact P/E/O protocol query.  The second
+    omits the outcome to recover observational construct/application papers;
+    the optional third uses the declared study intent.  These are retrieval
+    aids only and never relax the downstream direct-comparator screen.
+    """
+
+    strict = build_pubmed_protocol_query_for_context(context)
+    exposure_or_topic = _pubmed_identity_clause(context, context.primary_exposure)
+    if not exposure_or_topic:
+        exposure_or_topic = _question_topic_clause(context.research_question)
+    queries = [strict]
+    if exposure_or_topic:
+        queries.append(
+            " AND ".join((exposure_or_topic, _ICU_FILTER, _OBSERVATIONAL_FILTER))
+        )
+    intent = _study_intent_clause(context.research_question)
+    if exposure_or_topic and intent:
+        queries.append(" AND ".join((exposure_or_topic, intent, _ICU_FILTER)))
+    return list(dict.fromkeys(query for query in queries if query))
+
+
 def _rank_protocol_search_results(
     context: ResearchContext,
     records: Sequence[CitationRecord],
 ) -> List[CitationRecord]:
     exposure = _protocol_search_term(context, context.primary_exposure).casefold()
     outcome = _protocol_search_term(context, context.target_outcome).casefold()
+    topic = _question_topic_term(context.research_question).casefold()
+    intent_terms = _study_intent_focus_terms(context.research_question)
 
     def score(record: CitationRecord) -> tuple[int, int]:
         title = " ".join(record.title.casefold().split())
@@ -1225,6 +1702,10 @@ def _rank_protocol_search_results(
             value += 6
         if outcome and outcome in title:
             value += 5
+        if topic and topic in title:
+            value += 4
+        if any(term in title for term in intent_terms):
+            value += 7
         if any(word in title for word in ("cohort", "predict", "association")):
             value += 2
         if exposure and (
@@ -1363,7 +1844,11 @@ def parse_pubmed_esummary(payload: Dict[str, Any]) -> List[CitationRecord]:
         surname = _surname_from_authors(rec.get("authors"))
         slug = _slug_from_title(title)
         key_parts = [p for p in (surname, slug, year if year != "n/a" else "") if p]
-        key = "_".join(key_parts) if key_parts else f"pmid_{uid}"
+        # PMID is the source-issued identity.  Author/title/year alone can and
+        # does collide (for example, one author publishing multiple "Early ..."
+        # papers in a year), which previously cross-wired screening decisions,
+        # query provenance, and the displayed citation.
+        key = "_".join((*key_parts, str(uid))) if key_parts else f"pmid_{uid}"
         try:
             citation = CitationRecord(
                 key=key,
@@ -1670,8 +2155,35 @@ class LiteratureAgent:
                 if seed_provenance is not None
                 else []
             )
-            bound_decisions = {
-                record.key: _screening_decision_for_record(
+            reviewed_cards = {
+                card.citation_key: card
+                for card in self.bound_seed.design_evidence_cards
+            }
+            reviewed_decisions = {
+                decision.citation_key: decision
+                for decision in self.bound_seed.screening_decisions
+                if decision.disposition == "include"
+                and decision.evidence_role
+                in {"direct_comparator", "design_analogue"}
+            }
+            exact_reviewed_seed = (
+                self.bound_seed.research_question.strip()
+                == context.research_question.strip()
+            )
+            bound_decisions: Dict[str, LiteratureScreeningDecision] = {}
+            for record in self.bound_seed.citations:
+                reviewed_decision = reviewed_decisions.get(record.key)
+                reviewed_card = reviewed_cards.get(record.key)
+                if (
+                    exact_reviewed_seed
+                    and reviewed_decision is not None
+                    and reviewed_card is not None
+                    and reviewed_card.evidence_role
+                    == reviewed_decision.evidence_role
+                ):
+                    bound_decisions[record.key] = reviewed_decision
+                    continue
+                bound_decisions[record.key] = _screening_decision_for_record(
                     context=context,
                     record=record,
                     source=source,
@@ -1680,8 +2192,6 @@ class LiteratureAgent:
                         or (source_queries[0] if source_queries else None)
                     ),
                 )
-                for record in self.bound_seed.citations
-            }
             screening_decisions.extend(bound_decisions.values())
             seed_identified = int(
                 (self.bound_seed.prisma or {}).get("identified")
@@ -1711,27 +2221,44 @@ class LiteratureAgent:
             live_bibliographic_retrieval_attempted = True
             sources_enabled.append("pubmed")
             client = self.pubmed_client or PubMedLiteratureClient()
-            pubmed_query = build_pubmed_protocol_query_for_context(context)
-            search_queries["pubmed"] = [pubmed_query]
+            fallback_query = build_pubmed_protocol_query_for_context(context)
             try:
-                hits = client.search_for_context(context, retmax=self.pubmed_retmax)
+                stratified_search = getattr(client, "search_context_strata", None)
+                if callable(stratified_search):
+                    pubmed_result = PubMedContextSearchResult.model_validate(
+                        stratified_search(context, retmax=self.pubmed_retmax)
+                    )
+                    hits = pubmed_result.records
+                    pubmed_queries = pubmed_result.search_queries
+                    pubmed_record_queries = pubmed_result.record_queries
+                else:
+                    hits = client.search_for_context(context, retmax=self.pubmed_retmax)
+                    pubmed_queries = [fallback_query]
+                    pubmed_record_queries = {
+                        record.key: [fallback_query] for record in hits
+                    }
             except Exception:
                 hits = []
+                pubmed_queries = build_pubmed_protocol_queries_for_context(context)
+                pubmed_record_queries = {}
+            search_queries["pubmed"] = pubmed_queries
             if hits:
                 sources_returning.append("pubmed")
             identified += len(hits)
             for rec in hits:
-                record_queries[rec.key] = [pubmed_query]
+                if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
+                    duplicates += 1
+                    continue
+                bound_queries = list(pubmed_record_queries.get(rec.key) or [])
+                record_queries[rec.key] = bound_queries
+                screening_query = " || ".join(bound_queries) or None
                 decision = _screening_decision_for_record(
                     context=context,
                     record=rec,
                     source="pubmed",
-                    query=pubmed_query,
+                    query=screening_query,
                 )
                 screening_decisions.append(decision)
-                if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
-                    duplicates += 1
-                    continue
                 seen_keys.add(rec.key)
                 if rec.pmid:
                     seen_pmids.add(rec.pmid)
@@ -1903,6 +2430,11 @@ class LiteratureAgent:
                 else None
             ),
             screening_decisions=screening_decisions,
+            design_evidence_cards=(
+                list(self.bound_seed.design_evidence_cards)
+                if self.bound_seed is not None
+                else []
+            ),
         )
 
 
