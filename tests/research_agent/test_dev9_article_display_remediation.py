@@ -319,7 +319,8 @@ def test_landmark_article_figure_uses_comparable_contrasts_not_robustness_ranges
     )
 
     figure_name = "generic_main_figure_2_continuous_association_and_contrasts"
-    assert summary["main_figure_count"] == 2
+    assert summary["main_figure_count"] == 1
+    assert summary["supplementary_figure_count"] == 2
     contract = json.loads(
         (tmp_path / "out" / f"{figure_name}.figure_contract.json").read_text()
     )
@@ -329,7 +330,7 @@ def test_landmark_article_figure_uses_comparable_contrasts_not_robustness_ranges
         "robustness" not in source.casefold() for source in contract["source_data"]
     )
     svg = (
-        tmp_path / "out" / "generic_main_figure_1_source_state_and_absolute_risk.svg"
+        tmp_path / "out" / "generic_supplementary_figure_s1_measurement_context.svg"
     ).read_text(encoding="utf-8")
     assert "Not measured" in svg
     assert "No recorded source" not in svg

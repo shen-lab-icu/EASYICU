@@ -1092,12 +1092,18 @@ def _render_landmark_association(
     )
     axes[1].set_xticks(positions, labels)
     axes[1].set_ylabel("Observed mortality risk (%)")
-    axes[1].set_title("Outcome risk by source state", loc="left", pad=10)
+    axes[1].set_title("Outcome risk by measurement status", loc="left", pad=10)
     add_panel_label(axes[1], "b", x=-0.12, y=1.04, fontsize=8.0)
+    source_state_placement = "main" if measurement_is_main else "supplementary"
+    source_state_product = (
+        f"{task_id}_main_figure_1_source_state_and_absolute_risk"
+        if measurement_is_main
+        else f"{task_id}_supplementary_figure_s1_measurement_context"
+    )
     figure_files += _save(
         fig,
         out_dir=out_dir,
-        product=f"{task_id}_main_figure_1_source_state_and_absolute_risk",
+        product=source_state_product,
         height_mm=82.0,
         panels=[
             {
@@ -1109,20 +1115,20 @@ def _render_landmark_association(
                 "claim": "Measured and not-measured states exhaust the frozen denominator; this is measurement availability, not structural source absence.",
                 "evidence_ids": [_sha256(paths["absolute_risk"])],
                 "metadata": {
-                    "placement": "main",
+                    "placement": source_state_placement,
                     "source_data": [source_files["absolute_risk"]],
                 },
             },
             {
                 "panel_id": "b",
-                "title": "Outcome risk by source state",
+                "title": "Outcome risk by measurement status",
                 "role": "descriptive_result",
                 "article_role": "descriptive_result",
                 "chart_type": "dot_interval_absolute_risk",
                 "claim": "Observed mortality risk is separated from the continuous exposure association.",
                 "evidence_ids": [_sha256(paths["absolute_risk"])],
                 "metadata": {
-                    "placement": "main",
+                    "placement": source_state_placement,
                     "source_data": [source_files["absolute_risk"]],
                 },
             },
@@ -1306,7 +1312,7 @@ def _render_landmark_association(
     product = (
         f"{task_id}_main_figure_3_measurement_process"
         if measurement_is_main
-        else f"{task_id}_supplementary_figure_s1_measurement_process"
+        else f"{task_id}_supplementary_figure_s2_measurement_process"
     )
     figure_files += _save(
         fig,
@@ -1340,8 +1346,8 @@ def _render_landmark_association(
         source=source_dir,
         paths=paths,
         figure_files=figure_files,
-        main_figure_count=3 if measurement_is_main else 2,
-        supplementary_figure_count=0 if measurement_is_main else 1,
+        main_figure_count=3 if measurement_is_main else 1,
+        supplementary_figure_count=0 if measurement_is_main else 2,
     )
 
 
