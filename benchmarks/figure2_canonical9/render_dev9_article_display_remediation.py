@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any
 
@@ -32,6 +33,9 @@ from easyicu.research_agent.figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from easyicu.research_agent.reporting.article_display_package import (
+    inspect_article_display_package,
+)
 
 
 E3_RUN_RELATIVE = Path("e3/e3_kdigo_gradient/aware/run_20260825T024928_3b8fef")
@@ -39,6 +43,279 @@ M2_RUN_RELATIVE = Path("m2/m2_mortality_prediction/aware/run_20260825T025332_5c7
 H2_FEASIBILITY_RELATIVE = Path(
     "steps/00_authority_compiled_source_feasibility/outputs/h2_source_feasibility.csv"
 )
+RUN_RELATIVES = {
+    "e1": Path("e1/e1_sepsis3_prevalence_mortality/aware/run_20260825T024625_c92a2b"),
+    "e2": Path("e2/e2_lactate_mortality/aware/run_20260825T024807_5b7759"),
+    "e3": E3_RUN_RELATIVE,
+    "m1": Path("m1/m1_hepatobiliary_missingness/aware/run_20260825T025150_5ca36b"),
+    "m2": M2_RUN_RELATIVE,
+    "m3": Path("m3/m3_sepsis_subphenotype/aware/run_20260825T025546_81b23c"),
+    "h1": Path("h1/h1_ventilation_survival/aware/run_20260825T025904_fceb36"),
+    "h2": Path("h2/h2_vasopressor_causal/aware/run_20260825T025958_39cbae"),
+    "h3": Path("h3/h3_trajectory_clustering/aware/run_20260825T030126_bbb780"),
+}
+
+# Benchmark-specific display choices. These never enter shared prompts or execution
+# contracts. Each tuple is (display id, placement, producing step, source basename,
+# title). The source table is copied byte-for-byte from the frozen EvidenceStore.
+ARTICLE_TABLE_SPECS = {
+    "e1": (
+        (
+            "table_1_cohort_characteristics",
+            "main",
+            "baseline_context",
+            "table_one.csv",
+            "Cohort characteristics",
+        ),
+        (
+            "table_2_adjusted_association",
+            "main",
+            "primary_adjusted_association",
+            "adjusted_association_estimates.csv",
+            "Adjusted association estimates",
+        ),
+        (
+            "table_s1_component_completeness",
+            "supplementary",
+            "data_quality_audit",
+            "exposure_component_completeness_audit.csv",
+            "Component completeness audit",
+        ),
+        (
+            "table_s2_definition_sensitivity",
+            "supplementary",
+            "scientific_sensitivity",
+            "e1_scientific_sensitivity.csv",
+            "Definition and cohort sensitivity analyses",
+        ),
+    ),
+    "e2": (
+        (
+            "table_1_cohort_characteristics",
+            "main",
+            "table_one",
+            "table_one.csv",
+            "Cohort characteristics",
+        ),
+        (
+            "table_2_lactate_contrasts",
+            "main",
+            "primary_adjusted_association",
+            "e2_landmark_rcs_contrasts.csv",
+            "Adjusted lactate contrasts",
+        ),
+        (
+            "table_s1_measurement_process",
+            "supplementary",
+            "measurement_audit",
+            "measurement_process_audit.csv",
+            "Lactate measurement-process audit",
+        ),
+        (
+            "table_s2_robustness",
+            "supplementary",
+            "robustness_replay",
+            "robustness_summary.csv",
+            "Robustness specifications",
+        ),
+    ),
+    "e3": (
+        (
+            "table_1_cohort_characteristics",
+            "main",
+            "table_one_01",
+            "table_one.csv",
+            "Cohort characteristics",
+        ),
+        (
+            "table_2_stage_outcomes",
+            "main",
+            "ordinal_trend_01",
+            "ordered_stratified_outcomes.csv",
+            "Outcomes across ordered KDIGO stages",
+        ),
+        (
+            "table_s1_missingness",
+            "supplementary",
+            "measurement_audit_01",
+            "missingness_measurement_audit.csv",
+            "Kidney-measurement missingness audit",
+        ),
+        (
+            "table_s2_stage_sensitivity",
+            "supplementary",
+            "host_association_model_grid_d3cfb9c38429",
+            "e3_scientific_sensitivity.csv",
+            "KDIGO sensitivity analyses",
+        ),
+    ),
+    "m1": (
+        (
+            "table_1_cohort_characteristics",
+            "main",
+            "baseline_table",
+            "table_one.csv",
+            "Cohort characteristics",
+        ),
+        (
+            "table_2_bilirubin_contrasts",
+            "main",
+            "primary_adjusted_estimate",
+            "m1_landmark_bilirubin_contrasts.csv",
+            "Adjusted bilirubin contrasts",
+        ),
+        (
+            "table_s1_measurement_process",
+            "supplementary",
+            "measurement_process_audit",
+            "measurement_process_audit.csv",
+            "Bilirubin measurement-process audit",
+        ),
+        (
+            "table_s2_robustness",
+            "supplementary",
+            "robustness_grid",
+            "robustness_summary.csv",
+            "Robustness specifications",
+        ),
+    ),
+    "m2": (
+        (
+            "table_1_cohort_characteristics",
+            "main",
+            "baseline_context",
+            "table_one.csv",
+            "Cohort characteristics",
+        ),
+        (
+            "table_2_model_performance",
+            "main",
+            "primary_discrimination",
+            "prediction_performance.csv",
+            "Model discrimination and overall performance",
+        ),
+        (
+            "table_3_calibration",
+            "main",
+            "calibration_assessment",
+            "calibration_assessment.csv",
+            "Calibration assessment",
+        ),
+        (
+            "table_s1_internal_validation",
+            "supplementary",
+            "test_validation",
+            "internal_validation.csv",
+            "Repeated patient-level internal validation",
+        ),
+        (
+            "table_s2_clinical_utility",
+            "supplementary",
+            "clinical_utility",
+            "clinical_utility.csv",
+            "Exploratory decision-curve values",
+        ),
+    ),
+    "m3": (
+        (
+            "table_1_cohort_characteristics",
+            "main",
+            "baseline_context",
+            "table_one.csv",
+            "Cohort characteristics",
+        ),
+        (
+            "table_2_candidate_profiles",
+            "main",
+            "primary_phenotype_solution",
+            "phenotype_profiles.csv",
+            "Candidate cluster profiles",
+        ),
+        (
+            "table_3_stability",
+            "main",
+            "cluster_stability",
+            "cluster_stability_with_algorithm_agreement.csv",
+            "Cluster stability and algorithm agreement",
+        ),
+        (
+            "table_s1_complete_case",
+            "supplementary",
+            "primary_phenotype_solution",
+            "phenotyping_complete_case_sensitivity.csv",
+            "Complete-case sensitivity analysis",
+        ),
+        (
+            "table_s2_measurement_process",
+            "supplementary",
+            "measurement_process_audit",
+            "measurement_process_audit.csv",
+            "Phenotyping measurement-process audit",
+        ),
+    ),
+    "h1": (
+        (
+            "table_1_landmark_cohort",
+            "main",
+            "01_authority_compiled_survival_suite",
+            "landmark_table_one.csv",
+            "Landmark cohort characteristics",
+        ),
+        (
+            "table_2_time_to_event_model",
+            "main",
+            "01_authority_compiled_survival_suite",
+            "landmark_cox_summary.csv",
+            "Landmark time-to-event model",
+        ),
+        (
+            "table_3_rmst",
+            "main",
+            "01_authority_compiled_survival_suite",
+            "landmark_rmst_summary.csv",
+            "Restricted mean survival-time contrasts",
+        ),
+        (
+            "table_s1_ph_diagnostics",
+            "supplementary",
+            "01_authority_compiled_survival_suite",
+            "landmark_ph_diagnostics.csv",
+            "Proportional-hazards diagnostics",
+        ),
+        (
+            "table_s2_risk_set",
+            "supplementary",
+            "01_authority_compiled_survival_suite",
+            "landmark_risk_set_flow.csv",
+            "Landmark risk-set accounting",
+        ),
+    ),
+    "h2": (
+        (
+            "table_s1_fail_closed_feasibility",
+            "supplementary",
+            "00_authority_compiled_source_feasibility",
+            "h2_source_feasibility.csv",
+            "Fail-closed causal-feasibility audit",
+        ),
+    ),
+    "h3": (
+        (
+            "table_s1_candidate_selection",
+            "supplementary",
+            "01_authority_compiled_trajectory_candidates",
+            "trajectory_candidate_selection.csv",
+            "Candidate-grid selection diagnostics",
+        ),
+        (
+            "table_s2_feature_availability",
+            "supplementary",
+            "00_authority_compiled_trajectory_representation",
+            "feature_availability.csv",
+            "Trajectory-feature availability",
+        ),
+    ),
+}
 
 
 def _require_current_worktree_import() -> None:
@@ -78,6 +355,82 @@ def _copy_source(frame: pd.DataFrame, path: Path, output: Path) -> str:
     copied.insert(0, "source_row_index", range(len(copied)))
     copied.to_csv(output, index=False)
     return output.name
+
+
+def _package_article_tables(
+    *, source_root: Path, output_root: Path
+) -> dict[str, dict[str, Any]]:
+    """Copy selected frozen evidence tables and bind manuscript placement."""
+
+    summaries: dict[str, dict[str, Any]] = {}
+    for task_id, specs in ARTICLE_TABLE_SPECS.items():
+        run_dir = source_root / RUN_RELATIVES[task_id]
+        index_path = run_dir / "evidence/evidence_index.json"
+        rows = json.loads(index_path.read_text(encoding="utf-8"))
+        if not isinstance(rows, list):
+            raise ValueError(f"Evidence index must be a list: {index_path}")
+        task_out = output_root / task_id
+        task_out.mkdir(parents=True, exist_ok=True)
+        placements = {"main": 0, "supplementary": 0}
+        contracts: list[str] = []
+        for table_id, placement, step_id, basename, title in specs:
+            matches = [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and row.get("kind") == "table"
+                and row.get("produced_by_step") == step_id
+                and Path(str(row.get("relative_path") or "")).name.endswith(
+                    f"__{basename}"
+                )
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    f"{task_id}:{table_id} expected one {step_id}/{basename}; "
+                    f"found {len(matches)}"
+                )
+            row = matches[0]
+            source_path = run_dir / str(row["relative_path"])
+            if _sha256(source_path) != row.get("sha256"):
+                raise ValueError(f"Evidence digest mismatch: {source_path}")
+            packaged_name = f"{table_id}{source_path.suffix.lower()}"
+            packaged_path = task_out / packaged_name
+            shutil.copy2(source_path, packaged_path)
+            contract = {
+                "schema_version": "easyicu.article_table_contract/1",
+                "table_id": f"table:{task_id}:{table_id}",
+                "title": title,
+                "placement": placement,
+                "authority_scope": "analysis_only",
+                "paper_authorization_allowed": False,
+                "source_path": packaged_name,
+                "source_sha256": _sha256(packaged_path),
+                "upstream_evidence_id": row.get("evidence_id"),
+                "upstream_relative_path": row.get("relative_path"),
+                "upstream_sha256": row.get("sha256"),
+                "produced_by_step": step_id,
+                "supports": (
+                    f"The frozen EvidenceStore supports the values displayed in {title}."
+                ),
+                "cannot_prove": (
+                    "This table does not establish publication readiness, external "
+                    "validity, causality, or clinical utility beyond its declared analysis."
+                ),
+            }
+            contract_path = task_out / f"{table_id}.table_contract.json"
+            contract_path.write_text(
+                json.dumps(contract, indent=2, ensure_ascii=False, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            contracts.append(contract_path.name)
+            placements[placement] += 1
+        summaries[task_id] = {
+            "main_table_count": placements["main"],
+            "supplementary_table_count": placements["supplementary"],
+            "table_contracts": contracts,
+        }
+    return summaries
 
 
 def _load_frozen_tables(
@@ -1791,7 +2144,7 @@ def main() -> int:
         {
             "authority_scope": "analysis_only",
             "paper_authorization_allowed": False,
-            "main_figure_count": 1,
+            "main_figure_count": 2,
             "supplementary_figure_count": 1,
         }
     )
@@ -1799,22 +2152,10 @@ def main() -> int:
     h1 = _render_h1(h1_source_dir, output_root / "h1")
     h2 = _render_h2(h2_run, output_root / "h2")
     h3 = _render_h3(visual_source_root / "h3", output_root / "h3")
-    try:
-        code_head = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        code_head = "unknown"
-    manifest = {
-        "schema_version": "easyicu.dev9_article_display_remediation/2",
-        "code_head": code_head,
-        "source_root": str(source_root),
-        "visual_source_root": str(visual_source_root),
-        "h2_run": str(h2_run),
-        "authority_scope": "analysis_only",
-        "paper_authorization_allowed": False,
-        "provider_calls": 0,
-        "scientific_recomputation": False,
+    table_summaries = _package_article_tables(
+        source_root=source_root, output_root=output_root
+    )
+    task_summaries = {
         "e1": e1,
         "e2": e2,
         "e3": e3,
@@ -1824,6 +2165,61 @@ def main() -> int:
         "h1": h1,
         "h2": h2,
         "h3": h3,
+    }
+    for task_id, table_summary in table_summaries.items():
+        task_summaries[task_id].update(table_summary)
+    for task_id, summary in task_summaries.items():
+        status_contract = {
+            "schema_version": "easyicu.article_display_status/1",
+            "task_id": task_id,
+            "scientific_status": summary.get("scientific_status", "analysis_only"),
+            "authority_scope": "analysis_only",
+            "paper_authorization_allowed": False,
+            "reason_code": summary.get("reason_code"),
+        }
+        (output_root / task_id / "article_display_status.json").write_text(
+            json.dumps(
+                status_contract,
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    article_inventories = {
+        task_id: inspect_article_display_package(output_root / task_id)
+        for task_id in task_summaries
+    }
+    inventory_path = output_root / "article_display_inventory.json"
+    inventory_path.write_text(
+        json.dumps(
+            article_inventories,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    try:
+        code_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        code_head = "unknown"
+    manifest = {
+        "schema_version": "easyicu.dev9_article_display_remediation/3",
+        "code_head": code_head,
+        "source_root": str(source_root),
+        "visual_source_root": str(visual_source_root),
+        "h2_run": str(h2_run),
+        "authority_scope": "analysis_only",
+        "paper_authorization_allowed": False,
+        "provider_calls": 0,
+        "scientific_recomputation": False,
+        "article_display_inventory": inventory_path.name,
+        **task_summaries,
     }
     (output_root / "article_display_remediation_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
