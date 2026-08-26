@@ -24,6 +24,11 @@ STABLE_EXPORTS: Final[tuple[str, ...]] = (
     "PipelineServices",
     "configure_runtime",
     "clear_easyicu_cache",
+    "apply_aki_profile",
+    "apply_source_native_aki",
+    "compare_aki_profiles",
+    "get_aki_profile",
+    "list_aki_profiles",
 )
 
 
@@ -241,6 +246,15 @@ _EXPORT_GROUPS: Final[dict[str, tuple[str, ...]]] = {
         "delta_cummin",
         "delta_start",
         "delta_min",
+    ),
+    "easyicu.scores.aki_profiles": (
+        "apply_aki_profile",
+        "apply_source_native_aki",
+        "compare_aki_profiles",
+        "default_source_native_profile",
+        "get_aki_profile",
+        "list_aki_profiles",
+        "load_aki_profile_registry",
     ),
     "easyicu.scores.sepsis_sofa2": ("sep3_sofa2", "label_sep3_sofa2"),
     "easyicu.scores.sofa2": (
