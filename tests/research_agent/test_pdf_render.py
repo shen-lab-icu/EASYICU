@@ -21,7 +21,9 @@ def test_scaffold_draft_watermark_is_explicit_and_opt_in() -> None:
     assert "Human scientific and authorship review required" in draft
 
 
-def test_scaffold_uses_run_relative_figure_path_without_duplicate_evidence_prefix() -> None:
+def test_scaffold_uses_run_relative_figure_path_without_duplicate_evidence_prefix() -> (
+    None
+):
     tex = scaffold_to_latex(
         markdown="# Results\n\nEvidence-bound result.",
         figure_paths=[
@@ -50,8 +52,25 @@ def test_scaffold_uses_run_relative_figure_path_without_duplicate_evidence_prefi
         )
 
 
+def test_scaffold_separates_main_and_supplementary_figures() -> None:
+    tex = scaffold_to_latex(
+        markdown="# Study\n\n## Results\n\nBound result.",
+        figure_paths=[("Main Figure 1", "figures/main/figure1.png")],
+        supplementary_figure_paths=[
+            ("Supplementary Figure S1", "figures/supplementary/figure_s1.png")
+        ],
+    )
+
+    assert r"\section*{Main figures}" in tex
+    assert r"\section*{Supplementary figures}" in tex
+    assert "figures/main/figure1.png" in tex
+    assert "figures/supplementary/figure\\_s1.png" in tex
+
+
 @pytest.mark.skipif(
-    not any(shutil.which(name) for name in ("tectonic", "latexmk", "xelatex", "pdflatex")),
+    not any(
+        shutil.which(name) for name in ("tectonic", "latexmk", "xelatex", "pdflatex")
+    ),
     reason="a local LaTeX engine is required for the render contract",
 )
 def test_pdf_render_emits_sandbox_and_digest_receipt(tmp_path) -> None:

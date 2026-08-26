@@ -50,6 +50,60 @@ def test_copy_source_preserves_nested_provenance(tmp_path: Path) -> None:
     assert copied.loc[0, "source_sha256"] == renderer._sha256(source)
 
 
+def test_article_table_packaging_preserves_frozen_digest_and_placement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "source" / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    source = evidence_dir / "table_step_artifact_abc__table_one.csv"
+    source.write_text("name,value\nAge,63\n", encoding="utf-8")
+    index = [
+        {
+            "evidence_id": "table_step_artifact_abc",
+            "kind": "table",
+            "relative_path": "evidence/table_step_artifact_abc__table_one.csv",
+            "sha256": renderer._sha256(source),
+            "produced_by_step": "baseline_context",
+        }
+    ]
+    (evidence_dir / "evidence_index.json").write_text(
+        json.dumps(index), encoding="utf-8"
+    )
+    monkeypatch.setattr(renderer, "RUN_RELATIVES", {"x": Path("run")})
+    monkeypatch.setattr(
+        renderer,
+        "ARTICLE_TABLE_SPECS",
+        {
+            "x": (
+                (
+                    "table_1_cohort_characteristics",
+                    "main",
+                    "baseline_context",
+                    "table_one.csv",
+                    "Cohort characteristics",
+                ),
+            )
+        },
+    )
+
+    summary = renderer._package_article_tables(
+        source_root=tmp_path / "source", output_root=tmp_path / "out"
+    )
+
+    assert summary["x"]["main_table_count"] == 1
+    packaged = tmp_path / "out/x/table_1_cohort_characteristics.csv"
+    assert renderer._sha256(packaged) == renderer._sha256(source)
+    contract = json.loads(
+        (
+            tmp_path / "out/x/table_1_cohort_characteristics.table_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert contract["placement"] == "main"
+    assert contract["upstream_evidence_id"] == "table_step_artifact_abc"
+    assert contract["paper_authorization_allowed"] is False
+
+
 def test_h2_renderer_emits_only_supplementary_fail_closed_figure(
     tmp_path: Path,
 ) -> None:

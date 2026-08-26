@@ -227,6 +227,7 @@ def scaffold_to_latex(
     inline_bibliography: bool = False,
     venue_template: str = "article",
     figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
+    supplementary_figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
     draft_watermark: bool = False,
     claim_base_url: Optional[str] = None,
 ) -> str:
@@ -360,10 +361,12 @@ def scaffold_to_latex(
             parts.append(r"\bibliography{" + bibliography_basename + "}")
             parts.append("")
 
-    # Auto-embed registered figures as a Figures appendix.
+    # Keep main and supplementary displays visibly separate. This prevents a
+    # routine quality-control plot from being mistaken for a main result and
+    # makes it obvious when a reader contains only one composite main figure.
     if figure_paths:
         parts.append(r"\clearpage")
-        parts.append(r"\section*{Figures}")
+        parts.append(r"\section*{Main figures}")
         parts.append("")
         for idx, (fig_id, fig_rel_path) in enumerate(figure_paths, start=1):
             normalized_figure_path = str(fig_rel_path).replace("\\", "/")
@@ -389,6 +392,37 @@ def scaffold_to_latex(
             )
             label_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", fig_id).strip("-")
             parts.append(r"\label{fig:" + label_key + "}")
+            parts.append(r"\end{figure}")
+            parts.append("")
+
+    if supplementary_figure_paths:
+        parts.append(r"\clearpage")
+        parts.append(r"\section*{Supplementary figures}")
+        parts.append("")
+        for fig_id, fig_rel_path in supplementary_figure_paths:
+            normalized_figure_path = str(fig_rel_path).replace("\\", "/")
+            figure_parts = PurePosixPath(normalized_figure_path).parts
+            if (
+                not normalized_figure_path
+                or normalized_figure_path.startswith("/")
+                or ".." in figure_parts
+                or figure_parts[:2] == ("evidence", "evidence")
+            ):
+                raise ValueError(
+                    "supplementary_figure_paths must contain one safe run-relative evidence path"
+                )
+            parts.append(r"\begin{figure}[htbp]")
+            parts.append(r"\centering")
+            parts.append(
+                r"\includegraphics[width=\textwidth]{"
+                + _escape_latex(normalized_figure_path)
+                + "}"
+            )
+            parts.append(
+                r"\caption{" + _escape_latex(fig_id.replace("_", " ").strip()) + "}"
+            )
+            label_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", fig_id).strip("-")
+            parts.append(r"\label{fig:supp-" + label_key + "}")
             parts.append(r"\end{figure}")
             parts.append("")
 
