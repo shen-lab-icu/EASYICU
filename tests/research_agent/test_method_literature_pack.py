@@ -32,7 +32,10 @@ from easyicu.research_agent.planning.method_literature import (
     method_binding_support,
     reporting_method_source_keys_for_guidelines,
 )
-from easyicu.research_agent.schema import ResearchContext
+from easyicu.research_agent.planning.scientific_review import (
+    required_method_layers_for_plan,
+)
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, ResearchContext
 
 
 def _context(**overrides: Any) -> ResearchContext:
@@ -358,6 +361,8 @@ def test_the_methodology_layer_reaches_every_study() -> None:
         "functional_form",
         "missing_data",
         "interpretation",
+        "survival_assumption",
+        "survival_estimand",
     ],
 )
 def test_every_design_question_the_planner_faces_has_a_card(layer: str) -> None:
@@ -444,7 +449,42 @@ def test_sources_expose_only_the_frozen_verified_identifiers() -> None:
             "10.1136/bmj.b2393",
             "https://pubmed.ncbi.nlm.nih.gov/19564179/",
         ),
+        "grambsch_therneau_ph_1994": (
+            None,
+            "10.1093/biomet/81.3.515",
+            "https://doi.org/10.1093/biomet/81.3.515",
+        ),
+        "royston_parmar_rmst_2011": (
+            "21611958",
+            "10.1002/sim.4274",
+            "https://pubmed.ncbi.nlm.nih.gov/21611958/",
+        ),
     }
+
+
+def test_survival_outputs_require_assumption_and_estimand_sources() -> None:
+    context = _context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="survival",
+        steps=[
+            AnalysisStep(
+                step_id="primary_survival",
+                planned_analysis_role="primary",
+                intent="Estimate survival with prespecified non-PH handling.",
+                method="cox survival analysis",
+                expected_outputs=[
+                    "table:ph_diagnostics",
+                    "table:rmst_summary",
+                ],
+            )
+        ],
+    )
+
+    layers = required_method_layers_for_plan(plan, context)
+
+    assert "survival_assumption" in layers
+    assert "survival_estimand" in layers
 
 
 def test_the_pack_digest_is_stable_and_sensitive() -> None:

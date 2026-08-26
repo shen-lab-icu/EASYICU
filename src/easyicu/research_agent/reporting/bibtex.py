@@ -37,7 +37,11 @@ from __future__ import annotations
 import re
 from typing import Iterable, List, Optional, Sequence, Set
 
-from ..literature import CitationRecord, LiteratureBundle
+from ..literature import (
+    CitationRecord,
+    LiteratureBundle,
+    manuscript_citable_records,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -178,13 +182,14 @@ def render_bibtex(bundle: Optional[LiteratureBundle]) -> str:
     bare key so ``\\cite{vincent_sofa_1996}`` remains stable across
     a typical run where curated entries always come first.
     """
-    if bundle is None or not bundle.citations:
+    records = manuscript_citable_records(bundle)
+    if not records:
         return ""
 
     seen: Set[str] = set()
     blocks: List[str] = []
 
-    for rec in bundle.citations:
+    for rec in records:
         key = sanitise_bibtex_key(rec.key)
         # Disambiguate post-hoc.
         unique = key
@@ -265,10 +270,11 @@ def render_thebibliography_block(bundle: Optional[LiteratureBundle]) -> str:
     an external BibTeX run. Mirrors the BibTeX content but compiles
     standalone with ``pdflatex`` alone.
     """
-    if bundle is None or not bundle.citations:
+    records = manuscript_citable_records(bundle)
+    if not records:
         return ""
     lines = [r"\begin{thebibliography}{99}"]
-    for rec in bundle.citations:
+    for rec in records:
         key = sanitise_bibtex_key(rec.key)
         body_parts: List[str] = []
         if rec.title:

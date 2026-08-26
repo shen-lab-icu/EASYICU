@@ -44,7 +44,7 @@ __all__ = [
     "reporting_method_source_keys_for_guidelines",
 ]
 
-METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/3"
+METHOD_LITERATURE_SCHEMA_VERSION = "easyicu.method_literature_pack/4"
 
 
 @dataclass(frozen=True)
@@ -186,6 +186,59 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
         source_doi="10.1200/JCO.1983.1.11.710",
         source_url="https://pubmed.ncbi.nlm.nih.gov/6668489/",
         design_elements=("time_zero", "exposure", "estimand"),
+    ),
+    MethodCard(
+        id="proportional_hazards_diagnostics",
+        layer="survival_assumption",
+        question=(
+            "Can one constant hazard ratio adequately summarize the association "
+            "over follow-up?"
+        ),
+        requirement=(
+            "Pre-specify how proportional hazards will be assessed, report the "
+            "covariate-level and global diagnostics, and inspect the estimated "
+            "time pattern rather than treating a test as a formality. If the "
+            "assumption is not supported, do not headline one constant hazard "
+            "ratio; retain it as a diagnostic model and report a prespecified "
+            "time-varying or absolute-time summary instead."
+        ),
+        source_key="grambsch_therneau_ph_1994",
+        source_title=(
+            "Proportional hazards tests and diagnostics based on weighted residuals."
+        ),
+        source_year="1994",
+        source_venue="Biometrika",
+        source_doi="10.1093/biomet/81.3.515",
+        source_url="https://doi.org/10.1093/biomet/81.3.515",
+        design_elements=("robustness", "estimand"),
+    ),
+    MethodCard(
+        id="restricted_mean_survival_time",
+        layer="survival_estimand",
+        question=(
+            "Which absolute survival summary remains interpretable when hazards "
+            "are non-proportional?"
+        ),
+        requirement=(
+            "Choose the restriction time before inspecting the result and keep it "
+            "within the supported follow-up horizon. Report the restricted mean "
+            "survival time in each group, their contrast and uncertainty, and say "
+            "whether the contrast is adjusted or unadjusted. In an observational "
+            "study, an RMST contrast remains an association unless the design and "
+            "identification assumptions support a causal interpretation."
+        ),
+        source_key="royston_parmar_rmst_2011",
+        source_title=(
+            "The use of restricted mean survival time to estimate the treatment "
+            "effect in randomized clinical trials when the proportional hazards "
+            "assumption is in doubt."
+        ),
+        source_year="2011",
+        source_venue="Statistics in Medicine",
+        source_pmid="21611958",
+        source_doi="10.1002/sim.4274",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/21611958/",
+        design_elements=("estimand", "outcome"),
     ),
     MethodCard(
         id="repeated_units_per_patient",
