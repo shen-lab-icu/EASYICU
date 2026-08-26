@@ -3524,11 +3524,15 @@ def make_research_pipeline_run_runner(
         ) from exc
     target = _target_outcome(study)
     primary_exposure = _primary_exposure(study)
+    # Reject an unconfirmed explicit-only phenotype before validating the
+    # remaining model-produced execution bindings. Otherwise an unrelated
+    # stale covariate roster can mask the user-intent gate and return the wrong
+    # decision to Copilot.
+    _validate_primary_concept_selection(study, primary_exposure)
     covariates = _configured_covariates(study)
     covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(study)
-    _validate_primary_concept_selection(study, primary_exposure)
     validated_analysis_design = _validate_analysis_design(study)
     patient_grouping = (
         _patient_grouping_for_analysis_design(study)
