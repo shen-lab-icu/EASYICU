@@ -1954,51 +1954,71 @@ def _render_h2(source_run: Path, out_dir: Path) -> dict[str, Any]:
         frame, path, out_dir / "h2_source_feasibility_source_data.csv"
     )
     palette = apply_publication_style(font_size=7.0)
-    labels = ["Verified non-use", "Control arm", "Causal contrast", "Effect estimate"]
-    fig, ax = plt.subplots(figsize=(183 / 25.4, 70 / 25.4), constrained_layout=True)
-    positions = np.arange(len(labels))
-    ax.scatter(
-        positions,
-        np.zeros(len(labels)),
-        s=90,
-        color=palette["red_soft"],
-        edgecolor=palette["red"],
-    )
-    for position in positions:
+    labels = [
+        "Verified non-use comparator",
+        "Binary control arm",
+        "Causal contrast",
+        "Effect estimate",
+    ]
+    statuses = ["Unavailable", "Not authorized", "Not authorized", "Not estimated"]
+    fig, ax = plt.subplots(figsize=(89 / 25.4, 75 / 25.4), constrained_layout=True)
+    positions = np.arange(len(labels))[::-1]
+    for position, label, status in zip(positions, labels, statuses, strict=True):
+        ax.axhline(position, color=palette["neutral_light"], linewidth=0.6, zorder=0)
+        ax.text(0.02, position, label, ha="left", va="center", color="#272727")
+        ax.scatter(
+            [0.66],
+            [position],
+            s=64,
+            color=palette["red_soft"],
+            edgecolor=palette["red"],
+            zorder=2,
+        )
         ax.text(
+            0.66,
             position,
-            0,
             "×",
             ha="center",
             va="center",
             color=palette["red"],
             fontsize=10,
             fontweight="bold",
+            zorder=3,
         )
-    ax.set_xticks(positions, labels)
-    ax.set_yticks([])
-    ax.set_ylim(-0.35, 0.35)
+        ax.text(
+            0.74,
+            position,
+            status,
+            ha="left",
+            va="center",
+            color=palette["red"],
+            fontweight="bold",
+        )
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.9, 3.65)
+    ax.axis("off")
     ax.set_title("Causal-contrast identifiability", loc="left", pad=10)
     ax.text(
-        0.0,
-        -0.26,
-        "Not estimable from the current source",
+        0.02,
+        -0.62,
+        "Analysis stops before estimation",
         color=palette["red"],
         fontweight="bold",
     )
-    add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=8.0)
+    add_panel_label(ax, "a", x=-0.17, y=1.04, fontsize=8.0)
     figure_files = _save(
         fig,
         out_dir=out_dir,
         product="h2_main_figure_1_causal_identifiability_diagnostic",
-        height_mm=70.0,
+        width_mm=89.0,
+        height_mm=75.0,
         panels=[
             {
                 "panel_id": "a",
                 "title": "Causal-contrast identifiability",
                 "role": "causal_protocol",
                 "article_role": "causal_protocol",
-                "chart_type": "fail_closed_gate",
+                "chart_type": "identifiability_status_matrix",
                 "claim": "Verified non-use, a binary control arm and a causal contrast are all unauthorized; no effect estimate exists.",
                 "evidence_ids": [_sha256(path)],
                 "metadata": {
