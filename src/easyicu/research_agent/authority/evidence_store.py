@@ -974,6 +974,22 @@ _HEADLINE_NUMERIC_ROOT_PRIORITY: Tuple[str, ...] = (
     "complete_case_n",
 )
 
+_HEADLINE_NUMERIC_LEAF_PRIORITY: Tuple[str, ...] = (
+    "auroc",
+    "auc",
+    "brier_score",
+    "average_precision",
+    "calibration_intercept",
+    "calibration_slope",
+    "auroc_ci_low",
+    "auroc_ci_high",
+    "auc_ci_low",
+    "auc_ci_high",
+    "event_rate",
+    "evaluation_n",
+    "event_n",
+)
+
 
 def _prioritize_headline_numeric_leaves(
     leaves: Sequence[Tuple[str, str, float, Any]],
@@ -987,17 +1003,25 @@ def _prioritize_headline_numeric_leaves(
     leaves so producer ordering remains deterministic.
     """
 
-    priority = {
+    root_priority = {
         root: index for index, root in enumerate(_HEADLINE_NUMERIC_ROOT_PRIORITY)
+    }
+    leaf_priority = {
+        leaf: index for index, leaf in enumerate(_HEADLINE_NUMERIC_LEAF_PRIORITY)
     }
 
     def _sort_key(
         indexed_leaf: Tuple[int, Tuple[str, str, float, Any]],
-    ) -> Tuple[int, int]:
+    ) -> Tuple[int, int, int]:
         original_index, leaf = indexed_leaf
         path = leaf[0]
         root = path.split(".", 1)[0].split("[", 1)[0]
-        return priority.get(root, len(priority)), original_index
+        terminal = path.rsplit(".", 1)[-1].split("[", 1)[0]
+        if root in root_priority:
+            return 0, root_priority[root], original_index
+        if terminal in leaf_priority:
+            return 1, leaf_priority[terminal], original_index
+        return 2, 0, original_index
 
     return [leaf for _, leaf in sorted(enumerate(leaves), key=_sort_key)]
 
