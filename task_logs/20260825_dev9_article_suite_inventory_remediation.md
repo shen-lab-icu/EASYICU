@@ -67,7 +67,7 @@ All 59 display placements are resolved. Every result-bearing task falls within
 the non-binding article planning range; H2/H3 correctly waive that range.
 
 E2 reader:
-`output/pdf/e2_article_suite_b4c5a23/manuscript_scaffold.pdf`
+`/Users/haibo/Documents/GitHub/EASYICU-dev9-topjournal-rereview-20260825/output/pdf/e2_article_suite_b4c5a23/manuscript_scaffold.pdf`
 (SHA-256 `3ca2bbee0bbeee61c2ecb9821f1e5030615bd788761226bd9a518a8721baffbf`).
 Pages 8–9 were visually inspected: the two main figures are separate and
 readable, the measurement-process audit is supplementary, and no clipping or
