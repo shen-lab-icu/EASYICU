@@ -24,6 +24,12 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequen
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..schema import ValidationFinding
+from ..reporting.article_display_policy import (
+    ARTICLE_DISPLAY_PURPOSE_CONFLICT,
+    ArticleDisplayPolicyError,
+    ArticleDisplayPolicyRequest,
+    decide_article_display,
+)
 
 
 PUBLICATION_FIGURE_SKILL_POLICY_VERSION = "publication_figure_skill_policy_v6"
@@ -361,6 +367,34 @@ def _normalise_panels(
         for key in list(raw):
             if key not in allowed:
                 metadata[key] = raw.pop(key)
+        article_role = str(metadata.get("article_role") or raw.get("role") or "")
+        requested_placement = metadata.get("placement")
+        if requested_placement not in {"main", "supplementary"}:
+            requested_placement = None
+        decision = decide_article_display(
+            ArticleDisplayPolicyRequest(
+                article_role=article_role,
+                requested_placement=requested_placement,
+                analysis_type=str(metadata.get("analysis_type") or ""),
+                scientific_status=str(
+                    metadata.get("scientific_status") or "analysis_only"
+                ),
+                central_to_question=bool(metadata.get("central_to_question", False)),
+                interpretation_critical=bool(
+                    metadata.get("interpretation_critical", False)
+                ),
+                terminal_diagnostic=bool(metadata.get("terminal_diagnostic", False)),
+            )
+        )
+        declared_purpose = metadata.get("display_purpose")
+        if declared_purpose not in {None, "", decision.display_purpose}:
+            raise ArticleDisplayPolicyError(
+                ARTICLE_DISPLAY_PURPOSE_CONFLICT,
+                "Declared display purpose conflicts with the typed article role.",
+            )
+        metadata["placement"] = decision.placement
+        metadata["display_purpose"] = decision.display_purpose
+        metadata["display_policy_reason_code"] = decision.reason_code
         if metadata:
             raw["metadata"] = metadata
         parsed.append(PanelSpec.model_validate(raw))

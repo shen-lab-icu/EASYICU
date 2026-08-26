@@ -70,6 +70,12 @@ def _panel_display_purpose(contract: Mapping[str, Any]) -> str:
             purposes.add(purpose)
     if len(purposes) == 1:
         return next(iter(purposes))
+    if purposes and purposes <= {"scientific_result", "context"}:
+        return "scientific_result"
+    if purposes and purposes <= {"diagnostic", "context"}:
+        return "diagnostic"
+    if purposes and purposes <= {"audit", "context"}:
+        return "audit"
     if len(purposes) > 1:
         return "mixed"
     return "unresolved"
@@ -227,6 +233,13 @@ def inspect_article_display_package(package_dir: Path) -> dict[str, Any]:
         planning_gaps.append("main_table_count_outside_planning_target")
     if unresolved:
         planning_gaps.append("display_placement_unresolved")
+    unresolved_purpose = [
+        str(row["contract_path"])
+        for row in rows
+        if row.get("display_purpose") in {"unresolved", "mixed"}
+    ]
+    if unresolved_purpose:
+        planning_gaps.append("display_purpose_unresolved")
     failed_closed_main = [row for row in rows if row.get("placement") == "main"]
     if scientific_status in {"failed_closed", "blocked"}:
         if any(
@@ -280,6 +293,7 @@ def inspect_article_display_package(package_dir: Path) -> dict[str, Any]:
         "single_composite_only": planning_targets_applicable and main_figures == 1,
         "planning_target_gaps": list(dict.fromkeys(planning_gaps)),
         "unresolved_contract_paths": unresolved,
+        "unresolved_purpose_contract_paths": unresolved_purpose,
         "displays": rows,
         "claim_boundary": (
             "This inventory proves which digest-bound display contracts and exports "

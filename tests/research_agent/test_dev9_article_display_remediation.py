@@ -86,6 +86,11 @@ def test_article_table_packaging_preserves_frozen_digest_and_placement(
             )
         },
     )
+    monkeypatch.setattr(
+        renderer,
+        "ARTICLE_TABLE_ROLES",
+        {("x", "table_1_cohort_characteristics"): "baseline_context"},
+    )
 
     summary = renderer._package_article_tables(
         source_root=tmp_path / "source", output_root=tmp_path / "out"
@@ -100,6 +105,8 @@ def test_article_table_packaging_preserves_frozen_digest_and_placement(
         ).read_text(encoding="utf-8")
     )
     assert contract["placement"] == "main"
+    assert contract["display_purpose"] == "context"
+    assert contract["article_role"] == "baseline_context"
     assert contract["upstream_evidence_id"] == "table_step_artifact_abc"
     assert contract["paper_authorization_allowed"] is False
 
@@ -128,7 +135,7 @@ def test_h2_renderer_emits_main_diagnostic_without_an_effect(
     ].endswith("no effect estimate exists.")
     table_id, placement, *_ = renderer.ARTICLE_TABLE_SPECS["h2"][0]
     assert (table_id, placement) == ("table_1_causal_identifiability", "main")
-    assert renderer.ARTICLE_TABLE_DISPLAY_PURPOSES[("h2", table_id)] == "diagnostic"
+    assert renderer.ARTICLE_TABLE_ROLES[("h2", table_id)] == "diagnostics"
 
 
 def test_h2_renderer_rejects_an_effect_estimate(tmp_path: Path) -> None:
@@ -201,7 +208,17 @@ def test_h3_renderer_separates_main_selection_diagnostic_from_missingness_audit(
     assert "no class is selected" in main_contract["statistics_note"].casefold()
     table_id, placement, *_ = renderer.ARTICLE_TABLE_SPECS["h3"][0]
     assert (table_id, placement) == ("table_1_candidate_selection", "main")
-    assert renderer.ARTICLE_TABLE_DISPLAY_PURPOSES[("h3", table_id)] == "diagnostic"
+    assert renderer.ARTICLE_TABLE_ROLES[("h3", table_id)] == "cluster_selection"
+
+
+def test_article_table_specs_have_complete_typed_role_coverage() -> None:
+    expected = {
+        (task_id, table_id)
+        for task_id, specs in renderer.ARTICLE_TABLE_SPECS.items()
+        for table_id, *_ in specs
+    }
+
+    assert set(renderer.ARTICLE_TABLE_ROLES) == expected
 
 
 def test_h1_renderer_adds_prespecified_time_varying_main_figure(
