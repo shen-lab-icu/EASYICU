@@ -84,7 +84,9 @@ def test_native_static_route_registry_contains_fallback_only_routes() -> None:
 def test_native_hash_router_has_help_alias_and_unknown_hash_fails_safe() -> None:
     app_js = _static_js("app.js")
 
-    assert "const FALLBACK_ROUTE = 'entry';" in app_js
+    assert "const FALLBACK_ROUTE = 'guided';" in app_js
+    assert "if (raw === 'entry')" in app_js
+    assert "replaceHash('guided')" in app_js
     assert "if (r === 'help') return 'tutorial';" in app_js
     assert "history.replaceState(null, '', next)" in app_js
     assert "resolveRoute(rawRouteFromHash(), { rewrite: true })" in app_js
@@ -183,9 +185,9 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260824-single-copilot1" in index_html
+    assert "js/app.js?v=20260826-copilot-home1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
-    assert "js/screens-extraction.js?v=20260824-extraction-roundtrip1" in index_html
+    assert "js/screens-extraction.js?v=20260825-source-binding1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
@@ -340,7 +342,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260824-single-copilot1" in index_html
+    assert "js/app.js?v=20260826-copilot-home1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -358,13 +360,13 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "研究助手" in dock_js
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
+        "js/screens-guided-projects.js?v=20260825-remove-project1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-guided.js?v=20260825-remove-project1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
 
 
@@ -537,11 +539,11 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     redesign_css = _static_css("redesign.css")
 
     assert "css/guided.css?v=20260815-compact-rail2" in index_html
-    assert "css/guided-projects.css?v=20260815-mobile-rail1" in index_html
+    assert "css/guided-projects.css?v=20260825-remove-project1" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260824-local-open1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260815-compact-rail2" in index_html
+        "js/screens-guided-projects.js?v=20260825-remove-project1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -639,7 +641,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-guided.js?v=20260825-remove-project1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -948,7 +950,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert provider_pos != -1 and main_pos != -1
     assert provider_pos < main_pos
     assert (
-        "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"
+        "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
         in index_html
     )
 
@@ -1512,7 +1514,8 @@ def test_native_extraction_module_counts_match_backend_catalog() -> None:
     module_block = extraction_js.split("const MODS = [", 1)[1].split("];", 1)[0]
     key_block = extraction_js.split("const EX_KEYS = {", 1)[1].split("};", 1)[0]
     entries = re.findall(
-        r"\['([^']+)',\s*'[^']+',\s*(\d+),\s*true,\s*(true|false)\]", module_block
+        r"\['([^']+)',\s*'[^']+',\s*(\d+),\s*(true|false),\s*(true|false)\]",
+        module_block,
     )
     keys = dict(re.findall(r"'([^']+)':\s*'([^']+)'", key_block))
 
@@ -1521,11 +1524,12 @@ def test_native_extraction_module_counts_match_backend_catalog() -> None:
     assert "window.EU_CATALOG && window.EU_CATALOG.groupConcepts" in extraction_js
 
     fallback_total = 0
-    for name, count_text, _is_core in entries:
+    for name, count_text, selected, _is_core in entries:
         group_key = keys[name]
         expected = len(cc.CONCEPT_GROUPS_INTERNAL[group_key])
         count = int(count_text)
         fallback_total += count
+        assert selected == "false", f"{name} should require an explicit user selection"
         assert count == expected, f"{name} fallback count should match {group_key}"
 
     assert fallback_total == len(cc.CONCEPT_DICTIONARY)
@@ -1580,8 +1584,8 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "wsi-sub" in app_js
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20260812-route-a11y1" in index_html
-    assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260824-single-copilot1" in index_html
+    assert "js/icons.js?v=20260825-message-actions1" in index_html
+    assert "js/app.js?v=20260826-copilot-home1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -1867,7 +1871,7 @@ def test_native_extraction_exposes_real_cohort_gate_and_recommended_contract() -
     assert "data-ex-cancel" in extraction_js
     assert "'/api/jobs/' + exportJobId + '/cancel'" in extraction_js
     assert (
-        "Cancel requested. The current database read may finish before the job stops."
+        "Cancel accepted. Stopping the current database query"
         in extraction_js
     )
 
@@ -2476,10 +2480,22 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "/api/guided/drafts/remove" in api_js
     assert "loadGuidedDrafts({ limit: 20 })" in guided_js
     assert "createGuidedDraft(payload)" in guided_js
+    assert "function blankGuidedDraftPayload(label)" in guided_js
+    assert "data_mode: 'unbound'" in guided_js
+    assert "source: null" in guided_js
+    assert "bindGuidedDraftMemory(selectedGuidedDraft, true)" in guided_js
+    assert "No data selected" in projects_js
+    assert "未选择数据" in projects_js
     assert "removeGuidedDraft" in api_js
     assert "data-remove-localdraft" in guided_js
     assert "removeLocalGuidedDraft(row)" in guided_js
     assert "delete_project_folder: false" in guided_js
+    assert "trash_project_folder: trashProjectFolder" in guided_js
+    assert "trash_confirmation: trashProjectFolder ? row.id : null" in guided_js
+    assert "data-remove-project-folder" in projects_js
+    assert "Also move the local project folder to the system trash" in projects_js
+    assert "By default, the project folder and all files on disk are preserved" in projects_js
+    assert "data-confirm-remove-draft" in projects_js
     assert "The project folder on disk was left untouched" in guided_js
     assert "/api/guided/session" in api_js
     assert "/api/guided/project/open" in api_js
@@ -2547,6 +2563,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "gdFolderDialogHost" in guided_js
     assert "data-folder-menu-toggle" in projects_js
     assert "data-folder-choice" in projects_js
+    assert "guidedFolderMenuOpen && !e.target.closest('.gd-folder-picker')" in guided_js
+    assert "guidedDraftRemoval && !guidedDraftRemoval.busy" in guided_js
     assert "data-folder-dialog" in projects_js
     assert "New blank study folder" in projects_js
     assert (
@@ -2651,6 +2669,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gd-draft-setup" in guided_css
     assert ".gd-folder-picker" in projects_css
     assert ".gd-folder-menu" in projects_css
+    assert ".gd-remove-option" in projects_css
+    assert ".gd-remove-option" not in guided_css
     assert "right:0;left:auto;width:min(270px" in projects_css
     assert ".gd-folder-dialog" in guided_css
     assert ".gd-folder-tabs" in guided_css
@@ -2684,14 +2704,14 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20260824-local-open1" in index_html
-    assert "screens-guided-projects.js?v=20260815-compact-rail2" in index_html
+    assert "screens-guided-projects.js?v=20260825-remove-project1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260817-copilot-boundary1" in index_html
+    assert "screens-guided.js?v=20260825-remove-project1" in index_html
     assert "guided.css?v=20260815-compact-rail2" in index_html
-    assert "guided-projects.css?v=20260815-mobile-rail1" in index_html
+    assert "guided-projects.css?v=20260825-remove-project1" in index_html
     assert "gd-name\">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span>" in projects_js
     assert "${t('New / open research folder', '新建/打开研究目录')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
@@ -3475,8 +3495,8 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
-    assert "js/screens-extraction-embedded.js?v=20260824-extraction-roundtrip1" in index_html
-    assert "js/screens-guided-pi.js?v=20260824-extraction-roundtrip1" in index_html
+    assert "js/screens-extraction-embedded.js?v=20260825-source-binding1" in index_html
+    assert "js/screens-guided-pi.js?v=20260826-public-copy1" in index_html
     assert "/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output" in api_js
     assert "window.EU_API.openExtractionOutput = openExtractionOutput" in api_js
     assert "data-ex-open-output" in extraction_js

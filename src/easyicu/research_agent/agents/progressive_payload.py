@@ -226,9 +226,10 @@ def _bind_step_module_shape(
     if locked_module_id == "custom_analysis":
         generic_custom = copy.deepcopy(custom)
         generic_properties = generic_custom["properties"]
-        generic_properties["outputs"]["items"]["properties"][
-            "semantic_role"
-        ] = {"type": "string", "const": "custom"}
+        generic_properties["outputs"]["items"]["properties"]["semantic_role"] = {
+            "type": "string",
+            "const": "custom",
+        }
         generic_properties["outputs"]["items"]["properties"]["product_id"] = {
             "type": "string",
             "pattern": (
@@ -246,9 +247,7 @@ def _bind_step_module_shape(
         sensitivity_properties = scientific_sensitivity["properties"]
         sensitivity_properties["outputs"]["minItems"] = 1
         sensitivity_properties["outputs"]["maxItems"] = 1
-        sensitivity_output = sensitivity_properties["outputs"]["items"][
-            "properties"
-        ]
+        sensitivity_output = sensitivity_properties["outputs"]["items"]["properties"]
         sensitivity_output["product_id"] = {
             "type": "string",
             "pattern": r"^table:[a-z][a-z0-9_]*$",
@@ -344,8 +343,7 @@ def _bind_foundation_authorities(
     robustness = definitions.get("ProgressiveRobustnessIntent")
     predicate = definitions.get("ProgressiveCohortPredicate")
     if not all(
-        isinstance(value, dict)
-        for value in (foundation, cohort, robustness, predicate)
+        isinstance(value, dict) for value in (foundation, cohort, robustness, predicate)
     ):
         raise ProgressiveTransportSchemaError(
             "progressive materialization foundation definitions are unavailable"
@@ -369,9 +367,7 @@ def _bind_foundation_authorities(
     complete_case_variables = copy.deepcopy(
         robustness_properties["complete_case_variables"]
     )
-    complete_case_variables["items"] = _string_enum(
-        complete_case_variable_names
-    )
+    complete_case_variables["items"] = _string_enum(complete_case_variable_names)
     required_complete_case_variables = copy.deepcopy(complete_case_variables)
     required_complete_case_variables["minItems"] = 1
     definitions["ProgressiveRobustnessIntent"] = {
@@ -380,9 +376,7 @@ def _bind_foundation_authorities(
                 {
                     "spec_id": copy.deepcopy(robustness_properties["spec_id"]),
                     "axis": {"type": "string", "const": "missing"},
-                    "description": copy.deepcopy(
-                        robustness_properties["description"]
-                    ),
+                    "description": copy.deepcopy(robustness_properties["description"]),
                     "missing_strategy": {
                         "type": "string",
                         "const": "complete_case",
@@ -710,9 +704,7 @@ def progressive_outline_structured_output_request(
     )
     normalized_actions = tuple(
         dict.fromkeys(
-            str(value).strip()
-            for value in scientific_action_ids
-            if str(value).strip()
+            str(value).strip() for value in scientific_action_ids if str(value).strip()
         )
     )
     normalized_variables = tuple(
@@ -759,6 +751,7 @@ def progressive_foundation_structured_output_request(
     required_cohort_selection_mode: str | None = None,
     required_cohort_name: str | None = None,
     analysis_type: str | None = None,
+    require_robustness_intent: bool = False,
 ) -> StructuredOutputRequest:
     """Return the run-bound plan-wide contract without any step fields."""
 
@@ -825,6 +818,20 @@ def progressive_foundation_structured_output_request(
         required_cohort_name=required_cohort_name,
         analysis_type=analysis_type,
     )
+    if require_robustness_intent:
+        if str(analysis_type or "").strip().casefold() == "descriptive_epidemiology":
+            raise ProgressiveTransportSchemaError(
+                "descriptive epidemiology cannot require effect-style robustness"
+            )
+        foundation = definitions.get("ProgressivePlanFoundation")
+        foundation_properties = (
+            foundation.get("properties") if isinstance(foundation, dict) else None
+        )
+        if not isinstance(foundation_properties, dict):
+            raise ProgressiveTransportSchemaError(
+                "progressive foundation properties are unavailable"
+            )
+        foundation_properties["robustness_intents"]["minItems"] = 1
     return _closed_request(
         name="easyicu_progressive_plan_foundation_v1",
         schema=schema,
@@ -854,9 +861,7 @@ def progressive_step_materialization_request(
     )
     normalized_actions = tuple(
         dict.fromkeys(
-            str(value).strip()
-            for value in scientific_action_ids
-            if str(value).strip()
+            str(value).strip() for value in scientific_action_ids if str(value).strip()
         )
     )
     normalized_executable_variables = tuple(
@@ -937,9 +942,7 @@ def progressive_step_materialization_request(
     )
     step_definition = definitions.get("ProgressiveSkeletonStep")
     step_properties = (
-        step_definition.get("properties")
-        if isinstance(step_definition, dict)
-        else None
+        step_definition.get("properties") if isinstance(step_definition, dict) else None
     )
     if not isinstance(step_properties, dict) or not isinstance(
         step_properties.get("literature_bindings"), dict
@@ -947,12 +950,8 @@ def progressive_step_materialization_request(
         raise ProgressiveTransportSchemaError(
             "progressive step literature roster is unavailable"
         )
-    step_properties["literature_bindings"]["minItems"] = len(
-        normalized_citations
-    )
-    step_properties["literature_bindings"]["maxItems"] = len(
-        normalized_citations
-    )
+    step_properties["literature_bindings"]["minItems"] = len(normalized_citations)
+    step_properties["literature_bindings"]["maxItems"] = len(normalized_citations)
     _bind_materialization_coordinate(
         schema,
         definitions,

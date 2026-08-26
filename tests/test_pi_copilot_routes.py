@@ -101,6 +101,9 @@ class FakeService:
     def send_message(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
+    def authorize_data_source(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
     def list_sessions(self, **kwargs) -> dict:
         return {"ok": True, "sessions": [], "received": kwargs}
 
@@ -180,6 +183,36 @@ def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None
     )
     assert opened.status_code == 200
     assert opened.json()["received"]["project_id"] == "guided-project-2"
+
+
+def test_data_source_authorization_route_is_project_scoped_and_typed(
+    monkeypatch,
+) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+    path = "/api/copilot/pi/sessions/pi-test/data-source-authorization"
+
+    assert client.post(path, json={}).status_code == 422
+    response = client.post(
+        path,
+        json={
+            "project_id": "guided-project-2",
+            "action": "begin_local_selection",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["received"] == {
+        "project_id": "guided-project-2",
+        "action": "begin_local_selection",
+    }
+    assert (
+        client.post(
+            path,
+            json={"project_id": "guided-project-2", "action": "auto_select"},
+        ).status_code
+        == 422
+    )
 
 
 def test_project_initialization_is_an_explicit_typed_mutation(monkeypatch) -> None:

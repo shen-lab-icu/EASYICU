@@ -139,6 +139,47 @@ class PiProjectBindingHandoffReceipt(BaseModel):
     study_context_revision: int = Field(ge=0)
 
 
+class PiSessionDataSourceReference(BaseModel):
+    """Path-free data-source identity presented for one conversation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: Optional[str] = Field(default=None, max_length=160)
+    label: Optional[str] = Field(default=None, max_length=160)
+    database: Optional[str] = Field(default=None, max_length=80)
+    reference_release: Optional[str] = Field(default=None, max_length=80)
+    identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    study_revision: int = Field(ge=0)
+
+
+class PiSessionDataSourceAuthorization(BaseModel):
+    """Conversation-level consent; never a replacement for StudyContext."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.pi-session-data-source-authorization/1"] = (
+        "easyicu.pi-session-data-source-authorization/1"
+    )
+    status: Literal[
+        "pending",
+        "selection_in_progress",
+        "confirmed",
+        "not_required",
+        "legacy_confirmed",
+    ] = "legacy_confirmed"
+    reason: Optional[
+        Literal[
+            "project_source_confirmation_required",
+            "local_data_selection_required",
+        ]
+    ] = None
+    confirmation_mode: Optional[
+        Literal["reuse_project_source", "select_local_source", "legacy_session"]
+    ] = "legacy_session"
+    source: Optional[PiSessionDataSourceReference] = None
+    confirmed_at: Optional[str] = None
+
+
 class PiSessionRecord(BaseModel):
     """Bounded EasyICU metadata; Pi's JSONL remains separate UX state."""
 
@@ -176,6 +217,12 @@ class PiSessionRecord(BaseModel):
         frozen=True,
     )
     binding: AuthorityBinding = Field(default_factory=AuthorityBinding)
+    # Historical sessions default to legacy_confirmed so this addition does not
+    # retroactively lock existing conversations. New research sessions always
+    # pass an explicit pending authorization from the service owner.
+    data_source_authorization: PiSessionDataSourceAuthorization = Field(
+        default_factory=PiSessionDataSourceAuthorization
+    )
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
     last_message_job_id: Optional[str] = Field(
@@ -380,6 +427,8 @@ __all__ = [
     "MAX_MESSAGE_CHARS",
     "PROTOCOL_VERSION",
     "PiCopilotError",
+    "PiSessionDataSourceAuthorization",
+    "PiSessionDataSourceReference",
     "PiProjectBindingHandoffReceipt",
     "ResearchProviderBinding",
     "PiSessionRecord",

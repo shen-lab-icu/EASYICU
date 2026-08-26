@@ -353,7 +353,11 @@ def test_validation_projection_records_only_closed_stage_field_paths_and_types(
                     "loc": ("steps", 2, "figure_panels", 0, "chart_type"),
                     "type": "literal_error",
                     "msg": secret,
-                    "input": secret,
+                    "input": {
+                        "type": "null",
+                        "default": None,
+                        secret: {"prompt": secret},
+                    },
                 },
                 {
                     "loc": (secret,),
@@ -388,11 +392,17 @@ def test_validation_projection_records_only_closed_stage_field_paths_and_types(
         {
             "location": ["steps", 2, "figure_panels", 0, "chart_type"],
             "issue_type": "literal_error",
+            "input_shape": {
+                "kind": "mapping",
+                "keys": ["<other>", "default", "type"],
+                "key_count": 3,
+            },
         },
         {"location": ["<other>"], "issue_type": "other"},
         {
             "location": ["step", "primary_exposure"],
             "issue_type": "value_error",
+            "input_shape": {"kind": "string", "sentinel": "other"},
         },
     ]
     assert len(projected[0]["violation_sha256"]) == 64

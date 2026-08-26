@@ -10,6 +10,10 @@ const WORKSPACE_FILE_TOOLS = new Set([
   "easyicu_check_project_file",
   "easyicu_preview_project_file",
 ]);
+const START_TIMESTAMP_EVENTS = new Set([
+  "agent_start", "turn_start", "message_start", "tool_execution_start",
+  "compaction_start", "auto_retry_start",
+]);
 
 function boundedText(value, limit = MAX_TEXT_CHARS) {
   return String(value ?? "").slice(0, limit);
@@ -32,8 +36,10 @@ function modelErrorCode(message) {
   return "pi_model_provider_error";
 }
 
-function eventTimestamp(event) {
-  const value = Number(event?.timestamp ?? event?.message?.timestamp);
+function eventTimestamp(event, { useMessageTimestamp = false } = {}) {
+  const value = Number(
+    event?.timestamp ?? (useMessageTimestamp ? event?.message?.timestamp : undefined),
+  );
   return Number.isFinite(value) && value > 0
     ? new Date(value).toISOString()
     : new Date().toISOString();
@@ -266,7 +272,12 @@ function toolReceipt(result) {
 
 export function normalizePiEvent(event) {
   if (!event || typeof event !== "object") return undefined;
-  const at = eventTimestamp(event);
+  const startEvent = START_TIMESTAMP_EVENTS.has(event.type);
+  const at = eventTimestamp(startEvent ? event : {}, {
+    // Pi message timestamps identify when generation started. Reusing them on
+    // message_end/turn_end made multi-second provider calls look like 0 ms.
+    useMessageTimestamp: event.type === "message_start",
+  });
   if (event.type === "agent_start") return { type: "run_start", at };
   if (event.type === "turn_start") {
     return { type: "turn_start", at, turn_index: Number(event.turnIndex || 0) };
@@ -357,7 +368,7 @@ export function projectTranscriptMessage(message) {
   const content = Array.isArray(message.content)
     ? message.content
     : [{ type: "text", text: message.content }];
-  const timestamp = eventTimestamp({ message });
+  const timestamp = eventTimestamp({ message }, { useMessageTimestamp: true });
 
   if (role === "toolResult") {
     const receipt = toolReceipt(message);

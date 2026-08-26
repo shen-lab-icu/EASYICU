@@ -137,6 +137,10 @@ def test_route_handoffs_have_sources_and_viz_mapping_has_its_own_owner() -> None
     assert "function project(context, expectedDatabase)" in extraction_owner
     assert "function hydrate(context, expectedDatabase)" in extraction_owner
     assert "function matchesDatabase(expected, actual)" in extraction_owner
+    assert "question: existing.question || ''" in extraction_owner
+    assert "purpose: existing.purpose || ''" in extraction_owner
+    assert "analysis_goal: existing.analysis_goal || ''" in extraction_owner
+    assert "Run an evidence-bound analysis of the prepared cohort." not in extraction_owner
     # crossdb moved out of screens-viz.js into its own owner files; its handoff
     # marker moved with it. Assert per-owner rather than in the shell file, or
     # the test drifts into demanding a layering violation.

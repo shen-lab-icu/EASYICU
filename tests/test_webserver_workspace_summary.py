@@ -865,7 +865,7 @@ def test_guided_draft_registry_preserves_unicode_folder_slug(
     assert (Path(draft["project_dir"]) / "guided_draft.json").exists()
 
 
-def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(
+def test_guided_draft_remove_defaults_to_unregister_and_supports_explicit_trash(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
@@ -899,6 +899,73 @@ def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(
     assert dangerous_body["error"] == "project_folder_delete_not_supported"
     assert dangerous_body["disk_deleted"] is False
     assert artifact.exists()
+
+    trashable = client.post(
+        "/api/guided/drafts",
+        json={
+            "title": "Draft to trash",
+            "folder_slug": "trash-me",
+            "data_mode": "real",
+        },
+    ).json()["draft"]
+    trashable_dir = Path(trashable["project_dir"])
+    trash_destination = tmp_path / "system-trash" / trashable_dir.name
+
+    def fake_send2trash(path: str) -> None:
+        trash_destination.parent.mkdir(parents=True, exist_ok=True)
+        Path(path).rename(trash_destination)
+
+    monkeypatch.setattr(guided_sessions, "_send2trash", fake_send2trash)
+    missing_confirmation = client.post(
+        "/api/guided/drafts/remove",
+        json={
+            "draft_id": trashable["id"],
+            "trash_project_folder": True,
+        },
+    ).json()
+    assert missing_confirmation["blocked"] is True
+    assert (
+        missing_confirmation["error"]
+        == "project_folder_trash_confirmation_required"
+    )
+    assert trashable_dir.exists()
+
+    marker_path = trashable_dir / "guided_draft.json"
+    marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker_path.write_text(
+        json.dumps({**marker_payload, "id": "draft_mismatch"}), encoding="utf-8"
+    )
+    marker_mismatch = client.post(
+        "/api/guided/drafts/remove",
+        json={
+            "draft_id": trashable["id"],
+            "trash_project_folder": True,
+            "trash_confirmation": trashable["id"],
+        },
+    ).json()
+    assert marker_mismatch["blocked"] is True
+    assert marker_mismatch["error"] == "project_folder_marker_mismatch"
+    assert trashable_dir.exists()
+    marker_path.write_text(json.dumps(marker_payload), encoding="utf-8")
+
+    trashed = client.post(
+        "/api/guided/drafts/remove",
+        json={
+            "draft_id": trashable["id"],
+            "project_dir": trashable["project_dir"],
+            "delete_project_folder": False,
+            "trash_project_folder": True,
+            "trash_confirmation": trashable["id"],
+        },
+    )
+    assert trashed.status_code == 200
+    trashed_body = trashed.json()
+    assert trashed_body["ok"] is True
+    assert trashed_body["project_folder_trashed"] is True
+    assert trashed_body["recoverable_from_system_trash"] is True
+    assert trashed_body["disk_deleted"] is False
+    assert not trashable_dir.exists()
+    assert (trash_destination / "guided_draft.json").exists()
 
     removed = client.post(
         "/api/guided/drafts/remove",

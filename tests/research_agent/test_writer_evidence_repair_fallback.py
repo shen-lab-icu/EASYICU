@@ -65,6 +65,43 @@ def test_invalid_repair_application_falls_back_to_deterministic_drop(
     assert fallback["exception_type"] == "ValueError"
 
 
+def test_overlapping_rejected_sentences_use_offset_free_drop_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scaffold = "## Results\n\n**Finding:** Unsupported interpretation.\n"
+    rejected = [
+        "**Finding:** Unsupported interpretation.",
+        "Unsupported interpretation.",
+    ]
+    monkeypatch.setattr(
+        write_phase,
+        "decide_writer_evidence_repairs",
+        lambda *args, **kwargs: [
+            {"index": 0, "action": "drop", "evidence_ids": []},
+            {"index": 1, "action": "drop", "evidence_ids": []},
+        ],
+    )
+
+    repaired, applied, fallback = write_phase._repair_rejected_writer_sentences(
+        scaffold,
+        llm=object(),
+        evidence_ids=["registered_result"],
+        evidence_digest="registered_result: observed counts",
+        rejected_sentences=rejected,
+        scientific_claims={},
+        claim_required_sentences=[],
+        allowed_claim_refs=[],
+        language="en",
+    )
+
+    assert "Unsupported interpretation" not in repaired
+    assert [item["index"] for item in applied] == [0, 1]
+    assert all(item["action"] == "drop" for item in applied)
+    assert fallback is not None
+    assert fallback["reason_code"] == "writer_evidence_repair_deterministic_drop"
+    assert fallback["exception_type"] == "ValueError"
+
+
 def test_provider_failure_is_not_hidden_by_writer_drop_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -17,7 +17,7 @@
       if (resource.kind === 'demo_document') return `demo-document:${resource.artifact || ''}`;
       if (resource.kind === 'data_package_review') return `data-package:${resource.study_context_id || ''}:${resource.study_revision || 0}:${resource.review_sha256 || ''}`;
       if (resource.kind === 'data_workbench_snapshot') return `data-workbench:${resource.view || ''}:${resource.snapshot_sha256 || ''}`;
-      if (resource.kind === 'native_workspace') return `native-workspace:${resource.route || ''}:${resource.study_context_id || ''}:${resource.job_id || resource.source_id || resource.state || ''}`;
+      if (resource.kind === 'native_workspace') return `native-workspace:${resource.route || ''}:${resource.study_context_id || ''}:${resource.job_id || resource.source_id || resource.state || ''}:${resource.entry_mode || ''}`;
       return resource.kind === 'research_artifact' || resource.kind === 'research_document' || resource.kind === 'system_validation_document'
         ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
         : `${resource.kind || 'file'}:${resource.file || ''}`;
@@ -63,6 +63,7 @@
         data-gpi-resource-job="${esc(resource.job_id || '')}"
         data-gpi-resource-source="${esc(resource.source_id || '')}"
         data-gpi-resource-database="${esc(resource.expected_database || '')}"
+        data-gpi-resource-entry-mode="${esc(resource.entry_mode || '')}"
         data-gpi-resource-view="${esc(resource.view || '')}"
         data-gpi-resource-digest="${esc(resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}">${esc(overrideLabel || label(resource))}</button>`;
     }
@@ -89,6 +90,7 @@
         job_id: element.dataset.gpiResourceJob,
         source_id: element.dataset.gpiResourceSource,
         expected_database: element.dataset.gpiResourceDatabase,
+        entry_mode: element.dataset.gpiResourceEntryMode,
         view: element.dataset.gpiResourceView,
         snapshot_sha256: element.dataset.gpiResourceDigest,
         review_sha256: element.dataset.gpiResourceDigest,

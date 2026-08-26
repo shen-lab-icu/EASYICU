@@ -39,7 +39,9 @@
               : (row.status === 'ready' ? t('Ready', '已就绪') : (row.status || t('Study', '研究')));
     const mode = row.data_mode === 'demo'
       ? t('Demo data', '演示数据')
-      : (row.data_mode === 'real' ? t('Local data', '本地数据') : (row.data_mode || ''));
+      : (row.data_mode === 'real'
+        ? t('Local data', '本地数据')
+        : (row.data_mode === 'unbound' ? t('No data selected', '未选择数据') : (row.data_mode || '')));
     return [status, mode].filter(Boolean).join(' · ');
   }
 
@@ -273,6 +275,45 @@
       </section>`;
   }
 
+  function renderDraftRemovalDialog(ctx) {
+    const { t, icon, esc, compactPath } = helpers(ctx);
+    const host = document.getElementById('gdRemoveDraftDialogHost');
+    if (!host) return;
+    const state = ctx.guidedDraftRemoval;
+    const row = state && state.row;
+    if (!row) {
+      host.innerHTML = '';
+      return;
+    }
+    const title = projectTitle(row.title, row.question || t('Guided project', '研究项目'));
+    const trashProjectFolder = !!state.trashProjectFolder;
+    const busy = !!state.busy;
+    host.innerHTML = `
+      <div class="gd-folder-backdrop" data-remove-draft-close></div>
+      <section class="gd-folder-dialog gd-remove-dialog" data-remove-draft-dialog role="dialog" aria-modal="true" aria-label="${t('Remove research project', '移除研究项目')}">
+        <div class="gd-folder-dialog-head">
+          <span class="gds-ico">${icon('folder', 15)}</span>
+          <div><strong>${t('Remove research project', '移除研究项目')}</strong><span>${t('Choose whether to remove only the EasyICU list entry or also move this project folder to the system trash.', '请选择只从 EasyICU 列表移除，还是同时把该项目文件夹移到系统废纸篓。')}</span></div>
+          <button class="gd-folder-close" type="button" data-remove-draft-close aria-label="${t('Close', '关闭')}" ${busy ? 'disabled' : ''}>×</button>
+        </div>
+        <div class="gds-choice">
+          <div class="gds-choice-head"><strong>${esc(title)}</strong><span>${t('By default, the project folder and all files on disk are preserved.', '默认会保留磁盘上的项目文件夹和全部文件。')}</span></div>
+          <label class="gd-remove-option ${trashProjectFolder ? 'selected' : ''}">
+            <input type="checkbox" data-remove-project-folder ${trashProjectFolder ? 'checked' : ''} ${busy || !row.project_dir ? 'disabled' : ''} />
+            <span><strong>${t('Also move the local project folder to the system trash', '同时将本地项目文件夹移到系统废纸篓')}</strong><small>${t('This includes this project’s conversations, configuration, runs, results, and evidence. It can normally be restored from the system trash.', '其中包括该项目的对话、配置、运行、结果和证据；通常可以从系统废纸篓恢复。')}</small>${row.project_dir ? `<code>${esc(compactPath(row.project_dir))}</code>` : ''}</span>
+          </label>
+          <div class="gd-remove-impact ${trashProjectFolder ? 'warn' : ''}">${trashProjectFolder
+            ? t('The entire project folder will leave its current location. Other EasyICU modules using this folder will no longer find it unless you restore it.', '整个项目文件夹将离开当前位置；其他正在使用该目录的 EasyICU 模块将无法继续找到它，除非你从废纸篓恢复。')
+            : t('Only the list entry will be removed. The project folder remains unchanged on disk.', '只会移除列表记录，项目文件夹在磁盘上保持不变。')}</div>
+          ${state.error ? `<div class="gd-remove-error" role="alert">${esc(state.error)}</div>` : ''}
+          <div class="row gap-8">
+            <button class="btn sm gd-remove-confirm ${trashProjectFolder ? 'danger' : ''}" type="button" data-confirm-remove-draft ${busy ? 'disabled' : ''}>${trashProjectFolder ? t('Move to trash and remove', '移到废纸篓并移除') : t('Remove from list', '从列表移除')}</button>
+            <button class="btn sm" type="button" data-remove-draft-close ${busy ? 'disabled' : ''}>${t('Cancel', '取消')}</button>
+          </div>
+        </div>
+      </section>`;
+  }
+
   window.EU_GUIDED_PROJECTS = {
     renderShellRail,
     renderProjectRail,
@@ -280,5 +321,6 @@
     renderKnownProjectPicker,
     renderFolderBrowser,
     renderFolderDialog,
+    renderDraftRemovalDialog,
   };
 })();

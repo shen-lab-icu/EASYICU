@@ -95,6 +95,38 @@ class RuntimeProvenanceMismatchError(RuntimeError):
     """Docker steps disagree about the immutable execution environment."""
 
 
+def _deterministically_drop_rejected_writer_sentences(
+    scaffold: str,
+    rejected_sentences: Sequence[str],
+) -> tuple[str, List[Dict[str, object]]]:
+    """Remove STRICT-rejected prose without depending on mutable offsets.
+
+    Rejected sentence strings can overlap (for example, a labelled sentence
+    and its unlabelled body) or repeat across manuscript sections. Applying
+    one indexed edit at a time can therefore remove the target of a later
+    edit. The fallback is intentionally more conservative: longest exact
+    rejected strings are removed first, and every remaining exact occurrence
+    of the same rejected prose is removed. The unchanged STRICT gate still
+    revalidates the result immediately afterwards.
+    """
+
+    sentences = [str(sentence).strip() for sentence in rejected_sentences]
+    repaired = scaffold
+    for sentence in sorted(set(sentences), key=lambda value: (-len(value), value)):
+        if sentence:
+            repaired = repaired.replace(sentence, "")
+    applied = [
+        {
+            "index": index,
+            "action": "drop",
+            "evidence_ids": [],
+            "sentence": sentence[:500],
+        }
+        for index, sentence in enumerate(sentences)
+    ]
+    return repaired, applied
+
+
 def _repair_rejected_writer_sentences(
     scaffold: str,
     *,
@@ -138,15 +170,9 @@ def _repair_rejected_writer_sentences(
             allowed_claim_refs=allowed_claim_refs,
         )
     except (StructuredResponseFailure, ValueError) as exc:
-        drop_decisions = [
-            {"index": index, "action": "drop", "evidence_ids": []}
-            for index in range(len(rejected_sentences))
-        ]
-        repaired, applied = _apply_writer_evidence_repair_decisions(
+        repaired, applied = _deterministically_drop_rejected_writer_sentences(
             original_scaffold,
-            missing_sentences=rejected_sentences,
-            decisions=drop_decisions,
-            allowed_claim_refs=allowed_claim_refs,
+            rejected_sentences,
         )
         raw_attempts = getattr(exc, "easyicu_structured_attempt_metadata", [])
         safe_attempts = [dict(item) for item in raw_attempts if isinstance(item, dict)][

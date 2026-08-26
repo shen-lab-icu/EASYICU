@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -776,6 +777,14 @@ def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     assert "pi_shell_session_cost_budget_exhausted" in budget
     assert "record.budgetGuard.authorize(context, options)" in source
     assert "maxRetries: 0" in source
+    assert "Concept-catalog convergence rule" in source
+    assert "canonical_alternatives rows" in source
+    assert "Concept lookup is just in time, not prefetch" in source
+    assert "do not make a catalog-only call first" in source
+    assert "first-stay restriction is a scientific analysis-unit decision" in source
+    assert "adult ICU population alone authorizes neither first-stay nor all-stay" in source
+    assert "Every completed research reply must end with a localized standalone" in source
+    assert "The host renders those bullets as clickable choices" in source
     assert 'update.type === "thinking_delta"' not in source + projection
     assert 'item.type === "thinking"' not in source + projection
     assert "normalizePiEvent" in source
@@ -935,6 +944,14 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         normalizePiEvent({{ type: 'agent_settled' }}),
         normalizePiEvent({{ type: 'message_update', assistantMessageEvent: {{ type: 'thinking_delta', delta: 'private' }} }}),
       ];
+      const staleModelStart = 1720000000000;
+      const observedBefore = Date.now();
+      const timing = {{
+        start: normalizePiEvent({{ type: 'message_start', message: {{ role: 'assistant', timestamp: staleModelStart }} }}),
+        messageEnd: normalizePiEvent({{ type: 'message_end', timestamp: staleModelStart, message: {{ role: 'assistant', timestamp: staleModelStart, stopReason: 'stop' }} }}),
+        turnEnd: normalizePiEvent({{ type: 'turn_end', timestamp: staleModelStart, turnIndex: 0 }}),
+        observedBefore,
+      }};
       const transcript = projectTranscriptMessage({{
         role: 'toolResult', toolCallId: 'call-1', toolName: 'easyicu_inspect_context',
         content: [{{ type: 'text', text: 'raw result must not leak' }}],
@@ -1028,7 +1045,7 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         role: 'assistant', content: [], stopReason: 'error',
         errorMessage: 'pi_shell_token_budget_exhausted: bounded session budget reached'
       }});
-      console.log(JSON.stringify({{ events, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, systemValidationDocuments, dataPackageReview, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript, shellBudgetEvent, shellBudgetTranscript }}));
+      console.log(JSON.stringify({{ events, timing, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, systemValidationDocuments, dataPackageReview, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript, shellBudgetEvent, shellBudgetTranscript }}));
     """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script],
@@ -1052,6 +1069,15 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
     assert "partial_result" not in payload["events"][4]
     assert payload["events"][5]["code"] == "study_context_ready"
     assert payload["events"][5]["summary"] == "Bounded summary"
+    assert payload["timing"]["start"]["at"] == "2024-07-03T09:46:40.000Z"
+    assert (
+        datetime.fromisoformat(payload["timing"]["messageEnd"]["at"].replace("Z", "+00:00"))
+        >= datetime.fromtimestamp(payload["timing"]["observedBefore"] / 1000, tz=timezone.utc)
+    )
+    assert (
+        datetime.fromisoformat(payload["timing"]["turnEnd"]["at"].replace("Z", "+00:00"))
+        >= datetime.fromtimestamp(payload["timing"]["observedBefore"] / 1000, tz=timezone.utc)
+    )
     assert payload["transcript"]["content"][0]["type"] == "tool_result"
     assert payload["transcript"]["content"][0]["summary"] == "Persisted bounded summary"
     assert payload["blockedEvent"]["is_error"] is True
@@ -1195,7 +1221,14 @@ def test_research_system_prompt_does_not_guess_literature_grant_state() -> None:
 
 def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers() -> None:
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
-    assert "Match the user's language and brevity" in entrypoint
+    assert "Conversation language authority: Simplified Chinese (zh-CN)" in entrypoint
+    assert "Conversation language authority: English" in entrypoint
+    assert "Do not switch languages merely because" in entrypoint
+    assert "follow that request for that response only" in entrypoint
+    assert "EASYICU_INTERNAL_RESPONSE_LANGUAGE_V1" in entrypoint
+    assert "Respond in English even when the preceding user content" in entrypoint
+    assert "Respond in Simplified Chinese even when the preceding user content" in entrypoint
+    assert "userVisiblePromptText(part.text)" in entrypoint
     assert "use at most two short sentences around tool calls" in entrypoint
     assert "ask one direct question and stop" in entrypoint
     assert "independently answerable scientific decision" in entrypoint
@@ -1210,6 +1243,30 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "never save suspected-infection onset as its physical anchor" in entrypoint
     assert "never send a questionnaire or numbered list of confirmations" in entrypoint
     assert "Never hide a blocker or weaken its exact stable code" in entrypoint
+
+
+def test_study_update_guidance_continues_with_model_chosen_scientific_step() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+
+    assert "continue the same reply from its returned post-update study and workflow" in entrypoint
+    assert "make no further tool call for that user message" in entrypoint
+    assert "Never expose session rebind, authority invalidation, host lifecycle" in entrypoint
+    assert "Choose one highest-impact unresolved scientific decision dynamically" in entrypoint
+    assert "the host renders the model-authored choices but must not hard-code" in entrypoint
+    assert "persist every explicit, unambiguous user-authored slot" in entrypoint
+    assert "do not make the user repeat facts from the same message" in entrypoint
+    assert "omit only that unresolved field instead of bundling it" in entrypoint
+    assert "A user's phenotype wording is not permission" in entrypoint
+    assert "never batch easyicu_list_data_sources with easyicu_update_study_context" in entrypoint
+    assert "one atomic study update that combines bind_source_id" in entrypoint
+    assert "never ask for a generic 'continue'" in entrypoint
+    assert "Continue opening the Data Extraction workspace" not in entrypoint
+
+    update_declaration = entrypoint.split(
+        'name: "easyicu_update_study_context"', 1
+    )[1].split("}),", 1)[0]
+    assert "post-update study and workflow" in update_declaration
+    assert "rebinds the session" not in update_declaration
 
 
 def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
@@ -1249,9 +1306,20 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
                 "session_id": "pi-workspace-smoke",
                 "thinking_level": "off",
                 "agent_mode": "workspace",
+                "language": "zh",
             },
             timeout=30,
         )
+        with pytest.raises(PiCopilotError) as language_error:
+            gateway.request(
+                "session.create",
+                {
+                    "session_id": "pi-smoke",
+                    "thinking_level": "off",
+                    "language": "zh",
+                },
+                timeout=30,
+            )
     finally:
         gateway.close()
 
@@ -1300,6 +1368,9 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     }.issubset(state["enabled_tools"])
     assert {"read", "write", "edit", "bash"}.isdisjoint(state["enabled_tools"])
     assert workspace_state["agent_mode"] == "workspace"
+    assert state["language"] == "en"
+    assert workspace_state["language"] == "zh"
+    assert language_error.value.code == "pi_session_language_mismatch"
     assert workspace_state["enabled_tools"] == runtime["custom_tools_by_mode"]["workspace"]
     assert workspace_state["enabled_tools"]
     assert all(

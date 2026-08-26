@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from easyicu.databases.profiles import get_database_profile
 from easyicu.extensions import (
     ExtensionActivationSnapshot,
     ExtensionRegistry,
@@ -41,6 +42,8 @@ from .contracts import (
     AuthorityBinding,
     PiCopilotError,
     PiProjectBindingHandoffReceipt,
+    PiSessionDataSourceAuthorization,
+    PiSessionDataSourceReference,
     PiSessionRecord,
     ResearchProviderBinding,
     ToolExecutionContext,
@@ -60,7 +63,11 @@ from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
 )
-from .turn_authority import infer_explicit_turn_actions
+from .turn_authority import (
+    explicitly_confirms_easyicu_registered_source,
+    infer_explicit_turn_actions,
+)
+from .tools import extraction_workspace_resource
 from .workspace import ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
@@ -68,6 +75,7 @@ from .workflow import (
 )
 
 MAX_SESSIONS = 100
+COPILOT_MESSAGE_TIMEOUT_SECONDS = 90
 MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024
 ALLOWED_TURN_ACTIONS = frozenset(
     {
@@ -568,6 +576,79 @@ class PiCopilotService:
             ),
         )
 
+    @staticmethod
+    def _session_source_reference(
+        context: Mapping[str, Any],
+    ) -> Optional[PiSessionDataSourceReference]:
+        source = context.get("data_source")
+        if not isinstance(source, Mapping) or not any(
+            str(source.get(key) or "").strip()
+            for key in ("source_id", "id", "path", "path_hash", "database", "label")
+        ):
+            return None
+        identity = {
+            key: str(source.get(key) or "").strip()
+            for key in (
+                "source_id",
+                "id",
+                "path",
+                "path_hash",
+                "database",
+                "label",
+                "reference_release",
+            )
+        }
+        digest = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        database = str(source.get("database") or "").strip()
+        profile = None
+        if database:
+            try:
+                profile = get_database_profile(database)
+            except KeyError:
+                profile = None
+        return PiSessionDataSourceReference(
+            source_id=str(source.get("source_id") or source.get("id") or "").strip()
+            or None,
+            label=str(
+                profile.display_name if profile is not None else source.get("label") or ""
+            ).strip()[:160]
+            or None,
+            database=database[:80] or None,
+            reference_release=str(
+                source.get("reference_release")
+                or (profile.reference_release if profile is not None else "")
+            ).strip()[:80]
+            or None,
+            identity_sha256=digest,
+            study_revision=int(context.get("revision") or 0),
+        )
+
+    @classmethod
+    def _new_session_data_authorization(
+        cls,
+        context: Mapping[str, Any],
+        *,
+        agent_mode: str,
+    ) -> PiSessionDataSourceAuthorization:
+        if agent_mode == "workspace":
+            return PiSessionDataSourceAuthorization(
+                status="not_required",
+                confirmation_mode=None,
+            )
+        source = cls._session_source_reference(context)
+        return PiSessionDataSourceAuthorization(
+            status="pending",
+            reason=(
+                "project_source_confirmation_required"
+                if source is not None
+                else "local_data_selection_required"
+            ),
+            confirmation_mode=None,
+            source=source,
+        )
+
     def _latest_run_id(
         self,
         study_context_id: Optional[str],
@@ -1026,6 +1107,7 @@ class PiCopilotService:
                 "session_id": session_id,
                 "thinking_level": resolved_thinking,
                 "agent_mode": resolved_mode,
+                "language": resolved_language,
                 "extension_snapshot": extension_activation.model_dump(mode="json"),
             },
             timeout=30,
@@ -1043,6 +1125,10 @@ class PiCopilotService:
             extension_activation=extension_activation,
             research_provider=selected_model_connection,
             binding=binding,
+            data_source_authorization=self._new_session_data_authorization(
+                context,
+                agent_mode=resolved_mode,
+            ),
         )
         self._save_record(record)
         return {
@@ -1080,6 +1166,7 @@ class PiCopilotService:
                 "session_file": record.pi_session_file,
                 "thinking_level": "off",
                 "agent_mode": record.agent_mode,
+                "language": record.language,
                 "extension_snapshot": record.extension_activation.model_dump(
                     mode="json"
                 ),
@@ -1202,6 +1289,24 @@ class PiCopilotService:
                 project_id=record.project_id,
             ),
         )
+        if record.agent_mode == "research":
+            prior_authorization = record.data_source_authorization
+            current_source = self._session_source_reference(context or {})
+            if (
+                prior_authorization.status == "confirmed"
+                and prior_authorization.source is not None
+                and current_source is not None
+                and prior_authorization.source.identity_sha256
+                == current_source.identity_sha256
+            ):
+                record.data_source_authorization = prior_authorization.model_copy(
+                    update={"source": current_source}
+                )
+            elif prior_authorization.status != "selection_in_progress":
+                record.data_source_authorization = self._new_session_data_authorization(
+                    context or {},
+                    agent_mode=record.agent_mode,
+                )
         self._save_record(record)
         state = self._ensure_open(record)
         return {
@@ -1209,6 +1314,179 @@ class PiCopilotService:
             "session": self._public_session(record, gateway_state=state),
             "rebound": True,
         }
+
+    def authorize_data_source(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        action: str,
+    ) -> Dict[str, Any]:
+        """Confirm one path-free source choice before a research conversation."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        if record.agent_mode != "research":
+            raise PiCopilotError(
+                "pi_session_data_source_authorization_not_required",
+                "Workspace conversations do not use the research data-source gate.",
+                status_code=409,
+            )
+        clean_action = str(action or "").strip()
+        if clean_action not in {
+            "reuse_project_source",
+            "begin_local_selection",
+            "confirm_selected_source",
+        }:
+            raise PiCopilotError(
+                "pi_session_data_source_action_invalid",
+                "Choose a supported data-source confirmation action.",
+                status_code=422,
+            )
+        context_id = self.project_store.assert_matches(
+            project_id,
+            record.binding.study_context_id,
+        )
+        try:
+            context = study_contexts.get_context(context_id)
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(exc.detail.get("error") or "study_context_invalid"),
+                "The project data source cannot be confirmed because its StudyContext is invalid.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        if context is None:
+            raise PiCopilotError(
+                "study_context_not_found",
+                "The project data source cannot be confirmed because its StudyContext is missing.",
+                status_code=404,
+            )
+
+        if clean_action == "begin_local_selection":
+            record.data_source_authorization = PiSessionDataSourceAuthorization(
+                status="selection_in_progress",
+                reason="local_data_selection_required",
+                confirmation_mode="select_local_source",
+            )
+            self._save_record(record)
+            return {
+                "ok": True,
+                "session": self._public_session(record),
+                "resource": extraction_workspace_resource(
+                    context,
+                    state="setup",
+                    entry_mode="source_binding",
+                ),
+            }
+
+        source = self._session_source_reference(context)
+        if source is None:
+            raise PiCopilotError(
+                "pi_session_data_source_unavailable",
+                "Select and validate a local data folder before confirming this conversation.",
+                status_code=409,
+            )
+        if clean_action == "confirm_selected_source":
+            if record.data_source_authorization.status != "selection_in_progress":
+                raise PiCopilotError(
+                    "pi_session_local_selection_not_started",
+                    "Start the local folder workflow before confirming its selected source.",
+                    status_code=409,
+                )
+            record.binding = self._binding_for_context(
+                context,
+                run_id=self._latest_run_id(
+                    str(context.get("id") or ""),
+                    project_id=record.project_id,
+                ),
+            )
+            confirmation_mode = "select_local_source"
+        else:
+            stale = self._stale_details(record)
+            if stale.get("stale"):
+                raise PiCopilotError(
+                    "pi_session_authority_stale",
+                    "The project data source changed before confirmation. Refresh this conversation and choose again.",
+                    status_code=409,
+                    details=stale,
+                )
+            confirmation_mode = "reuse_project_source"
+        record.data_source_authorization = PiSessionDataSourceAuthorization(
+            status="confirmed",
+            reason=None,
+            confirmation_mode=confirmation_mode,
+            source=source,
+            confirmed_at=utc_now(),
+        )
+        self._save_record(record)
+        return {
+            "ok": True,
+            "session": self._public_session(record),
+            "resource": None,
+        }
+
+    def _confirm_registered_source_selected_in_turn(
+        self,
+        record: PiSessionRecord,
+        *,
+        user_message: str,
+    ) -> None:
+        """Project an explicit prepared-source choice into session authority.
+
+        The StudyContext tool owns source binding.  This service owns the
+        per-conversation data-access gate, so it reconciles the two only after
+        the tool has persisted an exact path that still matches a validated
+        registered export.
+        """
+
+        if (
+            record.agent_mode != "research"
+            or record.data_source_authorization.status == "confirmed"
+            or not explicitly_confirms_easyicu_registered_source(user_message)
+        ):
+            return
+        context_id = str(record.binding.study_context_id or "").strip()
+        if not context_id:
+            return
+        try:
+            context = study_contexts.get_context(context_id)
+        except study_contexts.StudyContextError:
+            return
+        if not context:
+            return
+        source = context.get("data_source")
+        source = source if isinstance(source, Mapping) else {}
+        expected_path = str(source.get("path") or "").strip()
+        registry = sources.load_registry()
+        exact_registered_source = next(
+            (
+                row
+                for row in (registry.get("sources") or [])
+                if isinstance(row, Mapping)
+                and bool(row.get("ok"))
+                and str(row.get("path") or "").strip() == expected_path
+            ),
+            None,
+        )
+        if exact_registered_source is None:
+            return
+        source_reference = self._session_source_reference(context)
+        if source_reference is None:
+            return
+        record.binding = self._binding_for_context(
+            context,
+            run_id=self._latest_run_id(
+                context_id,
+                project_id=record.project_id,
+            ),
+        )
+        record.data_source_authorization = PiSessionDataSourceAuthorization(
+            status="confirmed",
+            reason=None,
+            confirmation_mode="reuse_project_source",
+            source=source_reference,
+            confirmed_at=utc_now(),
+        )
 
     def send_message(
         self,
@@ -1247,6 +1525,21 @@ class PiCopilotService:
                 status_code=409,
                 details=stale,
             )
+        # A prepared source that is already bound to this project can be
+        # confirmed before the provider turn.  This lets one explicit user
+        # choice both unlock the data gate and advance to the requested data
+        # action, instead of forcing a second identical confirmation click.
+        # The helper still requires an exact validated registry-path match.
+        prior_authorization = record.data_source_authorization.model_dump(mode="json")
+        self._confirm_registered_source_selected_in_turn(
+            record,
+            user_message=text,
+        )
+        if (
+            record.data_source_authorization.model_dump(mode="json")
+            != prior_authorization
+        ):
+            self._save_record(record)
         requested_actions = frozenset(
             str(item).strip() for item in allowed_actions if str(item).strip()
         ) | infer_explicit_turn_actions(text)
@@ -1340,6 +1633,7 @@ class PiCopilotService:
                 state = conversation_gateway.request(
                     "session.prompt",
                     {"session_id": record.session_id, "message": text},
+                    timeout=COPILOT_MESSAGE_TIMEOUT_SECONDS,
                     event_sink=emit,
                     tool_context=tool_context,
                 )
@@ -1349,6 +1643,10 @@ class PiCopilotService:
                 )
                 refreshed.pi_session_file = (
                     str(state.get("session_file") or "") or refreshed.pi_session_file
+                )
+                self._confirm_registered_source_selected_in_turn(
+                    refreshed,
+                    user_message=text,
                 )
                 refreshed.last_message_job_id = job.id
                 refreshed.active_message_job_id = job.id
@@ -2174,6 +2472,9 @@ class PiCopilotService:
                 else {}
             ),
             "binding": record.binding.model_dump(mode="json"),
+            "data_source_authorization": record.data_source_authorization.model_dump(
+                mode="json"
+            ),
             "research_provider": record.research_provider.public_projection(),
             "model_connection": (
                 record.research_provider.public_projection()

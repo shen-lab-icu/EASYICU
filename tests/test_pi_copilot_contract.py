@@ -8,6 +8,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ from easyicu.webserver.pi_copilot.contracts import (
     PiProjectBindingHandoffReceipt,
     ResearchProviderBinding,
     SESSION_SCHEMA_VERSION,
+    PiSessionDataSourceAuthorization,
     PiSessionRecord,
     ToolExecutionContext,
     WorkspaceMutationLimitError,
@@ -102,6 +104,20 @@ class FakeGateway:
     def apply_provider_config(self, config: PiProviderConfig) -> None:
         self.applied_config = config
         self.environ.update(config.as_environment())
+
+
+def _allow_unrelated_message_test(
+    service: PiCopilotService,
+    session_id: str,
+) -> None:
+    """Keep non-consent tests focused on their original owner contract."""
+
+    record = service._get_record(session_id)
+    record.data_source_authorization = PiSessionDataSourceAuthorization(
+        status="legacy_confirmed",
+        confirmation_mode="legacy_session",
+    )
+    service._save_record(record)
 
 
 def test_research_provider_binding_is_coherent_and_browser_projection_is_safe() -> None:
@@ -452,6 +468,331 @@ def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return current
 
 
+def test_new_research_session_allows_planning_but_blocks_data_tools_until_confirmation(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-data-consent",
+        external_llm_opt_in=True,
+    )
+    session_id = created["session"]["session_id"]
+    authorization = created["session"]["data_source_authorization"]
+
+    assert authorization["status"] == "pending"
+    assert authorization["reason"] == "project_source_confirmation_required"
+    assert authorization["source"]["database"] == "mimiciv"
+    assert authorization["source"]["label"] == "MIMIC-IV"
+    assert authorization["source"]["reference_release"] == "3.1"
+    assert "/private/export" not in json.dumps(authorization)
+
+    submitted = service.send_message(
+        session_id,
+        project_id="project-data-consent",
+        message="Help me refine the research question without reading any data.",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+    assert job is not None and job.status == "done"
+    assert [call[0] for call in gateway.calls] == [
+        "session.create",
+        "session.state",
+        "session.prompt",
+    ]
+    context = gateway.tool_contexts[-1]
+    assert context.session.data_source_authorization.status == "pending"
+
+    listed = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
+    assert listed["status"] == "ok"
+    blocked = tool_module.execute_tool("easyicu_review_cohort", {}, context)
+    assert blocked["status"] == "blocked"
+    assert blocked["code"] == "pi_session_data_source_confirmation_required"
+
+    confirmed = service.authorize_data_source(
+        session_id,
+        project_id="project-data-consent",
+        action="reuse_project_source",
+    )
+    assert confirmed["session"]["data_source_authorization"]["status"] == "confirmed"
+    assert (
+        confirmed["session"]["data_source_authorization"]["confirmation_mode"]
+        == "reuse_project_source"
+    )
+
+
+def test_explicit_prepared_source_choice_confirms_same_session_after_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    study_state: dict[str, Any],
+) -> None:
+    gateway = FakeGateway()
+    source_path = str(study_state["data_source"]["path"])
+    monkeypatch.setattr(
+        service_module.sources,
+        "load_registry",
+        lambda: {
+            "sources": [
+                {
+                    "id": "src_prepared",
+                    "path": source_path,
+                    "database": "mimiciv",
+                    "label": "MIMIC-IV v3.1",
+                    "ok": True,
+                }
+            ]
+        },
+    )
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-prepared-source-choice",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-prepared-source-choice",
+        message="使用 EasyICU 已准备好的完整 **MIMIC-IV v3.1**。",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    session = service.get_session(
+        created["session"]["session_id"],
+        project_id="project-prepared-source-choice",
+    )["session"]
+    assert session["data_source_authorization"]["status"] == "confirmed"
+    assert session["data_source_authorization"]["confirmation_mode"] == (
+        "reuse_project_source"
+    )
+    assert session["binding"]["study_revision"] == study_state["revision"]
+
+
+def test_prepared_local_source_choice_unlocks_the_same_provider_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    study_state: dict[str, Any],
+) -> None:
+    gateway = FakeGateway()
+    source_path = str(study_state["data_source"]["path"])
+    monkeypatch.setattr(
+        service_module.sources,
+        "load_registry",
+        lambda: {
+            "sources": [
+                {
+                    "id": "src_prepared",
+                    "path": source_path,
+                    "database": "mimiciv",
+                    "label": "MIMIC-IV v3.1",
+                    "ok": True,
+                }
+            ]
+        },
+    )
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-prepared-local-same-turn",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-prepared-local-same-turn",
+        message="确认使用已准备好的完整本地 MIMIC-IV v3.1，并生成新的分析计划。",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    turn_context = gateway.tool_contexts[-1]
+    assert turn_context.session.data_source_authorization.status == "confirmed"
+    assert turn_context.session.data_source_authorization.confirmation_mode == (
+        "reuse_project_source"
+    )
+
+
+def test_research_question_alone_does_not_confirm_registered_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    study_state: dict[str, Any],
+) -> None:
+    gateway = FakeGateway()
+    monkeypatch.setattr(
+        service_module.sources,
+        "load_registry",
+        lambda: {
+            "sources": [
+                {
+                    "id": "src_prepared",
+                    "path": study_state["data_source"]["path"],
+                    "database": "mimiciv",
+                    "ok": True,
+                }
+            ]
+        },
+    )
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-source-mention-only",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-source-mention-only",
+        message="我想研究 MIMIC-IV 成人 ICU 人群。",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    session = service.get_session(
+        created["session"]["session_id"],
+        project_id="project-source-mention-only",
+    )["session"]
+    assert session["data_source_authorization"]["status"] == "pending"
+
+
+def test_local_folder_selection_stays_locked_until_study_source_is_saved(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    study_state["data_source"] = {}
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-local-selection",
+        external_llm_opt_in=True,
+    )
+    session_id = created["session"]["session_id"]
+
+    assert created["session"]["data_source_authorization"] == {
+        "schema_version": "easyicu.pi-session-data-source-authorization/1",
+        "status": "pending",
+        "reason": "local_data_selection_required",
+        "confirmation_mode": None,
+        "source": None,
+        "confirmed_at": None,
+    }
+    selecting = service.authorize_data_source(
+        session_id,
+        project_id="project-local-selection",
+        action="begin_local_selection",
+    )
+    assert selecting["session"]["data_source_authorization"]["status"] == (
+        "selection_in_progress"
+    )
+    assert selecting["resource"]["kind"] == "native_workspace"
+    assert selecting["resource"]["route"] == "extraction"
+    assert selecting["resource"]["entry_mode"] == "source_binding"
+    assert selecting["resource"]["label"] == "Data source setup"
+    assert "path" not in selecting["resource"]
+
+    with pytest.raises(PiCopilotError) as no_source:
+        service.authorize_data_source(
+            session_id,
+            project_id="project-local-selection",
+            action="confirm_selected_source",
+        )
+    assert no_source.value.code == "pi_session_data_source_unavailable"
+
+    study_state["revision"] = 4
+    study_state["data_source"] = {
+        "source_id": "src_0123456789ab",
+        "label": "MIMIC-IV v3.1",
+        "database": "miiv",
+        "path": "/private/new-local-source",
+    }
+    confirmed = service.authorize_data_source(
+        session_id,
+        project_id="project-local-selection",
+        action="confirm_selected_source",
+    )
+    session = confirmed["session"]
+    assert session["binding"]["study_revision"] == 4
+    assert session["data_source_authorization"]["status"] == "confirmed"
+    assert session["data_source_authorization"]["confirmation_mode"] == (
+        "select_local_source"
+    )
+    assert "/private/new-local-source" not in json.dumps(session)
+
+
+def test_workspace_session_does_not_require_research_data_confirmation(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    created = service.create_session(
+        project_id="project-workspace-data-gate",
+        agent_mode="workspace",
+        external_llm_opt_in=True,
+    )
+
+    assert created["session"]["data_source_authorization"]["status"] == (
+        "not_required"
+    )
+
+
+def test_blank_guided_project_persists_no_fixture_question_or_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "guided.json")
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", projects_root)
+
+    created = guided_sessions.create_guided_draft(
+        {
+            "title": "Truly blank project",
+            "data_mode": "unbound",
+            "question": "",
+            "source": None,
+            "parent_dir": str(projects_root),
+        }
+    )
+
+    assert created["ok"] is True
+    assert created["draft"]["data_mode"] == "unbound"
+    assert created["draft"]["question"] == ""
+    assert created["draft"]["source"] is None
+    stored = json.loads(
+        (Path(created["draft"]["project_dir"]) / "guided_draft.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stored["data_mode"] == "unbound"
+    assert stored["question"] == ""
+    assert stored["source"] is None
+
+
 def test_runtime_status_has_local_defaults_without_secret_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -639,12 +980,14 @@ def test_new_codex_session_uses_one_account_model_for_chat_and_analysis(
 
     created = service.create_session(
         project_id="project-one-model",
+        language="zh",
         external_llm_opt_in=True,
         research_provider=model_connection,
     )
 
     assert not base_gateway.calls
     assert account_gateway.calls[0][0] == "session.create"
+    assert account_gateway.calls[0][1]["language"] == "zh"
     assert pool.calls == [(model_connection, True)]
     assert created["session"]["model_connection"] == (
         model_connection.public_projection()
@@ -1533,6 +1876,7 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     session_id = service.create_session(
         project_id="project-grants", external_llm_opt_in=True
     )["session"]["session_id"]
+    _allow_unrelated_message_test(service, session_id)
 
     submitted = service.send_message(
         session_id,
@@ -1607,11 +1951,12 @@ def test_current_user_explicit_extraction_confirmation_is_host_granted(
     session_id = service.create_session(
         project_id="project-explicit-extract", external_llm_opt_in=True
     )["session"]["session_id"]
+    _allow_unrelated_message_test(service, session_id)
 
     submitted = service.send_message(
         session_id,
         project_id="project-explicit-extract",
-        message="确认，授权你在本轮准备并注册官方演示数据。",
+        message="授权下载并准备官方 MIMIC-IV demo。",
     )
     deadline = time.monotonic() + 3
     job = None
@@ -1660,6 +2005,7 @@ def test_provider_error_marks_message_job_failed_without_raw_network_detail(
     session_id = service.create_session(
         project_id="project-provider-error", external_llm_opt_in=True
     )["session"]["session_id"]
+    _allow_unrelated_message_test(service, session_id)
 
     submitted = service.send_message(
         session_id,
@@ -1679,6 +2025,43 @@ def test_provider_error_marks_message_job_failed_without_raw_network_detail(
     record = service._get_record(session_id)
     assert record.last_turn_status == "failed"
     assert record.active_message_job_id is None
+
+
+def test_conversation_prompt_uses_bounded_host_deadline(tmp_path: Path) -> None:
+    prompt_timeouts: list[float | None] = []
+
+    class DeadlineGateway(FakeGateway):
+        def request(
+            self, method: str, params: dict[str, Any], **kwargs: Any
+        ) -> dict[str, Any]:
+            if method == "session.prompt":
+                prompt_timeouts.append(kwargs.get("timeout"))
+            return super().request(method, params, **kwargs)
+
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=DeadlineGateway(),
+    )
+    session_id = service.create_session(
+        project_id="project-bounded-prompt", external_llm_opt_in=True
+    )["session"]["session_id"]
+    _allow_unrelated_message_test(service, session_id)
+
+    submitted = service.send_message(
+        session_id,
+        project_id="project-bounded-prompt",
+        message="Confirm the selected source.",
+    )
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    assert prompt_timeouts == [service_module.COPILOT_MESSAGE_TIMEOUT_SECONDS]
+    assert prompt_timeouts[0] < 2 * 60
 
 
 def test_orphaned_replay_execution_is_marked_interrupted(
@@ -1865,6 +2248,7 @@ def test_session_rejects_overlapping_prompts(
     session_id = service.create_session(
         project_id="project-overlap", external_llm_opt_in=True
     )["session"]["session_id"]
+    _allow_unrelated_message_test(service, session_id)
     first = service.send_message(
         session_id,
         project_id="project-overlap",
@@ -2357,7 +2741,22 @@ def test_registered_data_source_choices_are_path_free(
     assert result["details"]["sources"][0]["source_scope"] == "official_demo"
     assert result["details"]["sources"][0]["aggregate"]["stays"] == 140
     assert result["details"]["sources"][1]["source_scope"] == "registered_export"
+    assert result["details"]["sources"][1]["label"] == "MIMIC-IV v3.1"
+    assert (
+        result["details"]["sources"][1]["availability"]
+        == "available_in_easyicu"
+    )
     assert result["details"]["sources"][1]["active"] is True
+    assert result["details"]["recommended_source"] == {
+        "source_id": "src_full",
+        "label": "MIMIC-IV v3.1",
+        "database": "miiv",
+        "availability": "available_in_easyicu",
+        "module_count": 3,
+        "aggregate": {"stays": 94458, "modules": 3},
+        "selection_reason": "most_complete_local_dataset",
+        "auto_select_for_exact_database_request": False,
+    }
     supported = {
         row["database"]: row for row in result["details"]["supported_databases"]
     }
@@ -2365,11 +2764,14 @@ def test_registered_data_source_choices_are_path_free(
         "database": "miiv",
         "label": "MIMIC-IV",
         "reference_release": "3.1",
+        "display_label": "MIMIC-IV v3.1",
         "selection_required": True,
     }
     assert supported["mimic"]["label"] == "MIMIC-III"
     assert supported["mimic"]["reference_release"] == "1.4"
+    assert supported["mimic"]["display_label"] == "MIMIC-III v1.4"
     assert supported["aumc"]["reference_release"] is None
+    assert supported["aumc"]["display_label"] == "AmsterdamUMCdb"
     demos = result["details"]["official_demos"]
     assert [(row["source_id"], row["version"]) for row in demos] == [
         ("mimic_iv_demo_v2_2", "2.2"),
@@ -2391,6 +2793,7 @@ def test_registered_data_source_choices_are_path_free(
         "miiv",
     ]
     assert "/private/" not in json.dumps(result)
+    assert "full export" not in json.dumps(result)
 
     ambiguous = tool_module.execute_tool(
         "easyicu_list_data_sources",
@@ -2415,6 +2818,816 @@ def test_registered_data_source_choices_are_path_free(
     )
     assert explicit["details"]["selected_database"]["database"] == "miiv"
     assert explicit["details"]["database_selection_deferred"] is False
+    assert explicit["details"]["source_modes"] == ["easyicu_available_data"]
+    assert explicit["details"]["recommended_source"] == {
+        "source_id": "src_full",
+        "label": "MIMIC-IV v3.1",
+        "database": "miiv",
+        "availability": "available_in_easyicu",
+        "module_count": 3,
+        "aggregate": {"stays": 94458, "modules": 3},
+        "selection_reason": "most_complete_local_dataset",
+        "auto_select_for_exact_database_request": True,
+    }
+
+    corrected_model_argument = tool_module.execute_tool(
+        "easyicu_list_data_sources",
+        {"database": "mimic"},
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-sources-corrected-model-argument"),
+            user_message="研究 MIMIC-IV 成人 ICU 人群",
+        ),
+    )
+    assert corrected_model_argument["details"]["selected_database"]["database"] == "miiv"
+    assert corrected_model_argument["details"]["sources"][0]["database"] == "miiv"
+
+
+def test_conversational_setup_requires_explicit_first_stay_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-first-stay-authority",
+        "revision": 1,
+        "question": "Estimate prevalence in adult ICU patients.",
+        "active_job_id": None,
+        "cohort": {},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 2},
+    )
+    session = PiSessionRecord(
+        session_id="pi-first-stay-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    blocked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"cohort": {"preset": "adult_first", "label": "Adult first ICU stay"}},
+        ToolExecutionContext(
+            session=session,
+            user_message="研究成人 ICU 人群的患病率",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert blocked["code"] == "study_cohort_first_stay_confirmation_required"
+    assert blocked["details"]["field"] == "cohort.preset"
+    assert writes == []
+
+    accepted = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"cohort": {"preset": "adult_first", "label": "Adult first ICU stay"}},
+        ToolExecutionContext(
+            session=session,
+            user_message="采用每位患者首次 ICU 入住",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted["code"] == "study_context_updated"
+    assert writes[0]["cohort"]["preset"] == "adult_first"
+
+
+def test_conversational_setup_requires_explicit_all_stays_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-all-stays-authority",
+        "revision": 1,
+        "question": "Estimate prevalence in adult ICU patients.",
+        "active_job_id": None,
+        "cohort": {"preset": "all_icu"},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 2},
+    )
+    session = PiSessionRecord(
+        session_id="pi-all-stays-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    blocked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"cohort": {"preset": "adult_all", "label": "All adult ICU stays"}},
+        ToolExecutionContext(
+            session=session,
+            user_message="研究成人 ICU 人群的患病率",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert blocked["code"] == "study_cohort_all_stays_confirmation_required"
+    assert blocked["details"]["field"] == "cohort.preset"
+    assert writes == []
+
+    accepted = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"cohort": {"preset": "adult_all", "label": "All adult ICU stays"}},
+        ToolExecutionContext(
+            session=session,
+            user_message="纳入所有符合条件的成人 ICU stays，包括重复 ICU 入住。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted["code"] == "study_context_updated"
+    assert writes[0]["cohort"]["preset"] == "adult_all"
+
+
+def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-candidate-intent-authority",
+        "revision": 1,
+        "question": "",
+        "active_job_id": None,
+        "cohort": {},
+        "outcome": "",
+        "primary_exposure": "",
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 2},
+    )
+    session = PiSessionRecord(
+        session_id="pi-candidate-intent-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    blocked_outcome = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"outcome": "ICU mortality"},
+        ToolExecutionContext(
+            session=session,
+            user_message="研究 Sepsis-3 与 ICU 死亡的关系。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert blocked_outcome["code"] == "study_primary_outcome_confirmation_required"
+
+    blocked_exposure = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"primary_exposure": "Standard Sepsis-3"},
+        ToolExecutionContext(
+            session=session,
+            user_message="研究 Sepsis-3 与 ICU 死亡的关系。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert blocked_exposure["code"] == "study_primary_exposure_confirmation_required"
+    assert writes == []
+
+    accepted_outcome = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"outcome": "ICU mortality"},
+        ToolExecutionContext(
+            session=session,
+            user_message="主要结局使用 ICU stay 期间死亡，不改成住院期间死亡。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted_outcome["code"] == "study_context_updated"
+
+    accepted_outcome_change = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "question": "研究 Sepsis-3 与院内死亡的关系。",
+            "outcome": "院内死亡（本次住院期间死亡）",
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "当前导出没有可验证的 ICU 专用死亡结局。"
+                "请把主要结局改为院内死亡（本次住院期间死亡）。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted_outcome_change["code"] == "study_context_updated"
+    assert writes[-1]["outcome"] == "院内死亡（本次住院期间死亡）"
+    assert writes[-1]["question"] == "研究 Sepsis-3 与院内死亡的关系。"
+
+    accepted_compact_choice = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "outcome": "ICU mortality",
+            "primary_exposure": "Standard Sepsis-3",
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message="ICU 住院期间死亡（推荐）",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted_compact_choice["code"] == "study_context_updated"
+    assert writes[-1]["outcome"] == "ICU mortality"
+    assert "primary_exposure" not in writes[-1]
+
+    accepted_exposure = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"primary_exposure": "Standard Sepsis-3"},
+        ToolExecutionContext(
+            session=session,
+            user_message="主要暴露采用标准 Sepsis-3，不要使用实验性的 SOFA-2。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted_exposure["code"] == "study_context_updated"
+
+
+def test_conversational_setup_keeps_confirmed_outcome_when_model_bundles_exposure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-partial-confirmation-authority",
+        "revision": 1,
+        "question": "Estimate prevalence and examine mortality association.",
+        "active_job_id": None,
+        "outcome": "",
+        "primary_exposure": "",
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 2},
+    )
+    session = PiSessionRecord(
+        session_id="pi-partial-confirmation-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "outcome": "ICU mortality",
+            "primary_exposure": "Standard Sepsis-3",
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message="主要结局使用 ICU stay 期间死亡，不改成住院期间死亡。",
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["outcome"] == "ICU mortality"
+    assert "primary_exposure" not in writes[0]
+
+
+def test_conversational_setup_does_not_bundle_all_stays_with_clustering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-clustering-authority",
+        "revision": 2,
+        "question": "Estimate Sepsis-3 prevalence.",
+        "active_job_id": None,
+        "cohort": {"preset": "all_icu"},
+        "analysis_design": {},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 3},
+    )
+    session = PiSessionRecord(
+        session_id="pi-clustering-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+    proposal = {
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+        }
+    }
+
+    blocked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        proposal,
+        ToolExecutionContext(
+            session=session,
+            user_message="纳入所有符合条件的成人 ICU stays，包括重复 ICU 入住。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert blocked["code"] == "study_patient_clustering_confirmation_required"
+    assert writes == []
+
+    capability_checked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        proposal,
+        ToolExecutionContext(
+            session=session,
+            user_message="如果能验证患者聚类坐标，请在统计推断中按患者处理相关性。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert capability_checked["code"] == "research_pipeline_cluster_variance_unsupported"
+    assert writes == []
+
+
+def test_conversational_setup_requires_direct_analysis_goal_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-analysis-goal-authority",
+        "revision": 2,
+        "question": "Estimate prevalence and examine a relationship.",
+        "active_job_id": None,
+        "analysis_goal": "",
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 3},
+    )
+    session = PiSessionRecord(
+        session_id="pi-analysis-goal-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    blocked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"analysis_goal": "Descriptive prevalence and observational association"},
+        ToolExecutionContext(
+            session=session,
+            user_message="保留重复 ICU stays 并按患者聚类。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert blocked["code"] == "study_analysis_goal_confirmation_required"
+    assert writes == []
+
+    accepted = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"analysis_goal": "Descriptive prevalence and observational association"},
+        ToolExecutionContext(
+            session=session,
+            user_message="先报告患病率，再评估观察性关联；不要写成因果效应。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted["code"] == "study_context_updated"
+    assert writes[0]["analysis_goal"].startswith("Descriptive prevalence")
+
+    compact_choice = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"analysis_goal": "Adjusted observational association"},
+        ToolExecutionContext(
+            session=session,
+            user_message="描述患病率，并进行协变量调整后的关联分析（推荐）",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert compact_choice["code"] == "study_context_updated"
+    assert writes[-1]["analysis_goal"] == "Adjusted observational association"
+
+    synchronized_wording = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"analysis_goal": "描述患病率并评估与院内死亡的调整后关联"},
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "请把分析目标中的 ICU mortality 同步替换为院内死亡；"
+                "这只是保持同一研究决定一致。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+    assert synchronized_wording["code"] == "study_context_updated"
+    assert writes[-1]["analysis_goal"].endswith("院内死亡的调整后关联")
+
+
+def test_analysis_goal_update_preserves_confirmed_patient_clustering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-analysis-design-preservation",
+        "revision": 4,
+        "question": "Estimate prevalence and observational mortality association.",
+        "active_job_id": None,
+        "analysis_goal": "",
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+        },
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 5},
+    )
+    monkeypatch.setattr(
+        tool_module.agent_pipeline_runs,
+        "validate_analysis_design_for_execution",
+        lambda _study: None,
+    )
+    session = PiSessionRecord(
+        session_id="pi-analysis-design-preservation",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "analysis_goal": "Prevalence followed by observational association",
+            "analysis_design": {
+                "analysis_family": "association_study",
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "none_counts_only",
+            },
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "先报告患病率，再评估观察性关联；不要写成因果效应。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["analysis_design"] == {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+    }
+
+
+def test_explicit_age_sex_adjustment_gets_owner_known_baseline_roles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-demographic-adjustment",
+        "revision": 8,
+        "question": "Estimate an observational association.",
+        "active_job_id": None,
+        "covariates": [],
+        "covariate_selection": "planner_selectable",
+        "data_source": {"database": "mimiciv", "path": "/private/export"},
+        "modules": ["demographics"],
+        "execution_concepts": {
+            "outcome": "death",
+            "primary_exposure": "sep3_sofa1",
+            "covariates": [],
+        },
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 9},
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.build_available_catalog",
+        lambda _path: SimpleNamespace(
+            concepts=[
+                SimpleNamespace(concept_id="death", file_name="outcome.parquet"),
+                SimpleNamespace(
+                    concept_id="sep3_sofa1",
+                    file_name="sepsis3_sofa1.parquet",
+                ),
+                SimpleNamespace(concept_id="age", file_name="demographics.parquet"),
+                SimpleNamespace(concept_id="sex", file_name="demographics.parquet"),
+            ]
+        ),
+    )
+    session = PiSessionRecord(
+        session_id="pi-demographic-adjustment",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "covariates": ["age", "sex"],
+            "covariate_selection": "planner_selectable",
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "主要调整年龄和性别；其他候选协变量必须逐项让我确认。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["covariate_selection"] == "exact"
+    assert writes[0]["covariate_temporal_roles"] == {
+        "age": "baseline_static",
+        "sex": "baseline_static",
+    }
+    assert set(writes[0]["covariate_rationales"]) == {"age", "sex"}
+    assert writes[0]["execution_concepts"]["covariates"] == ["age", "sex"]
+
+
+def test_explicit_no_adjustment_clears_covariate_contract_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-descriptive-no-adjustment",
+        "revision": 9,
+        "question": "Estimate prevalence and describe mortality by exposure group.",
+        "active_job_id": None,
+        "covariates": ["age", "sex"],
+        "covariate_selection": "exact",
+        "covariate_rationales": {
+            "age": "Prior age adjustment decision.",
+            "sex": "Prior sex adjustment decision.",
+        },
+        "covariate_temporal_roles": {
+            "age": "baseline_static",
+            "sex": "baseline_static",
+        },
+        "data_source": {"database": "mimiciv", "path": "/private/export"},
+        "modules": ["demographics", "outcome", "sepsis3_sofa1"],
+        "execution_concepts": {
+            "outcome": "death",
+            "primary_exposure": "sep3_sofa1",
+            "covariates": ["age", "sex"],
+        },
+        "analysis_design": {
+            "analysis_family": "association_study",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+        },
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 10},
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.build_available_catalog",
+        lambda _path: SimpleNamespace(
+            concepts=[
+                SimpleNamespace(concept_id="death", file_name="outcome.parquet"),
+                SimpleNamespace(
+                    concept_id="sep3_sofa1",
+                    file_name="sepsis3_sofa1.parquet",
+                ),
+            ]
+        ),
+    )
+    session = PiSessionRecord(
+        session_id="pi-descriptive-no-adjustment",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "covariates": [],
+            "covariate_selection": "exact",
+            "covariate_rationales": {},
+            "covariate_temporal_roles": {},
+            "execution_concepts": {
+                "outcome": "death",
+                "primary_exposure": "sep3_sofa1",
+                "covariates": [],
+            },
+            "analysis_design": {
+                "analysis_family": "descriptive_epidemiology",
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "none_counts_only",
+            },
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "保留 descriptive_epidemiology，并清除旧 age/sex 调整登记；"
+                "age/sex 仅作描述；仅报告计数、比例和绝对差，"
+                "不进行关联推断。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["covariates"] == []
+    assert writes[0]["covariate_selection"] == "exact"
+    assert writes[0]["covariate_rationales"] == {}
+    assert writes[0]["covariate_temporal_roles"] == {}
+    assert writes[0]["execution_concepts"]["covariates"] == []
+    assert writes[0]["analysis_design"] == {
+        "analysis_family": "descriptive_epidemiology",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "none_counts_only",
+    }
+
+
+def test_empty_covariate_patch_without_user_clear_authority_preserves_metadata() -> None:
+    current = {
+        "covariates": ["age", "sex"],
+        "covariate_rationales": {"age": "age", "sex": "sex"},
+        "covariate_temporal_roles": {
+            "age": "baseline_static",
+            "sex": "baseline_static",
+        },
+    }
+
+    merged = tool_module._merge_nested_study_patch(
+        current,
+        {
+            "covariates": [],
+            "covariate_rationales": {},
+            "covariate_temporal_roles": {},
+        },
+    )
+
+    assert merged["covariates"] == []
+    assert merged["covariate_rationales"] == current["covariate_rationales"]
+    assert merged["covariate_temporal_roles"] == current[
+        "covariate_temporal_roles"
+    ]
+
+
+def test_exact_covariate_roster_rejects_stale_execution_binding() -> None:
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as caught:
+        agent_pipeline_runs._configured_covariates(
+            {
+                "covariates": ["age", "sex"],
+                "covariate_selection": "exact",
+                "execution_concepts": {"covariates": []},
+            }
+        )
+
+    assert caught.value.code == (
+        "research_pipeline_covariate_execution_binding_mismatch"
+    )
+    assert caught.value.details == {"field": "execution_concepts.covariates"}
+
+
+def test_explicit_export_format_writes_confirmation_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-export-format-confirmation",
+        "revision": 9,
+        "question": "Prepare a study package.",
+        "active_job_id": None,
+        "export_format": "parquet",
+        "confirmations": {"feature_time_window": True},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 10},
+    )
+    session = PiSessionRecord(
+        session_id="pi-export-format-confirmation",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"export_format": "parquet"},
+        ToolExecutionContext(
+            session=session,
+            user_message="研究数据包导出为 Parquet。",
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["confirmations"]["export_format"] is True
+    assert writes[0]["confirmations"]["feature_time_window"] is True
+
+    compact_choice = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"export_format": "parquet"},
+        ToolExecutionContext(
+            session=session,
+            user_message="Parquet（推荐，适合后续分析）",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert compact_choice["code"] == "study_context_updated"
+    assert writes[-1]["confirmations"]["export_format"] is True
+    assert writes[-1]["confirmations"]["feature_time_window"] is True
+
+def test_conversational_setup_rejects_unrequested_explicit_only_feature_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-module-authority",
+        "revision": 1,
+        "question": "Estimate standard Sepsis-3 prevalence.",
+        "active_job_id": None,
+        "modules": [],
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 2},
+    )
+    session = PiSessionRecord(
+        session_id="pi-module-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    blocked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"modules": ["demographics", "sepsis3_sofa2", "outcome"]},
+        ToolExecutionContext(
+            session=session,
+            user_message="研究成人 ICU 人群的 Sepsis-3 患病率",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert blocked["code"] == "concept_explicit_selection_required"
+    assert blocked["details"]["field"] == "modules"
+    assert blocked["details"]["canonical_alternative_module"] == "sepsis3_sofa1"
+    assert writes == []
+
+    accepted = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"modules": ["demographics", "sepsis3_sofa2", "outcome"]},
+        ToolExecutionContext(
+            session=session,
+            user_message="使用实验性 SOFA-2 Sepsis-3 敏感性表型",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted["code"] == "study_context_updated"
+    assert writes[0]["confirmations"] == {
+        "concept_selection_sep3_sofa2_authorized": True,
+    }
+
+
+def test_data_source_recommendation_fails_closed_on_equally_complete_local_data() -> None:
+    choices = [
+        {
+            "source_id": source_id,
+            "source_scope": "registered_export",
+            "module_count": 19,
+            "aggregate": {"stays": 94458},
+        }
+        for source_id in ("src_a", "src_b")
+    ]
+
+    assert tool_module._dominant_local_source(choices) is None
 
 
 def test_source_concept_choices_are_exact_module_scoped_and_path_free(
@@ -2436,7 +3649,12 @@ def test_source_concept_choices_are_exact_module_scoped_and_path_free(
                     "path": "/private/demo-export",
                     "database": "miiv",
                     "ok": True,
-                    "modules": ["demographics", "outcome", "sepsis3_sofa2"],
+                    "modules": [
+                        "demographics",
+                        "outcome",
+                        "sepsis3_sofa1",
+                        "sepsis3_sofa2",
+                    ],
                 }
             ]
         },
@@ -2468,6 +3686,12 @@ def test_source_concept_choices_are_exact_module_scoped_and_path_free(
                     file_name="demographics.parquet",
                     column_role="value",
                 ),
+                CatalogConcept(
+                    concept_id="sep3_sofa1",
+                    description="Canonical Sepsis-3 using traditional SOFA",
+                    file_name="sepsis3_sofa1.parquet",
+                    column_role="event_status",
+                ),
             ],
         ),
     )
@@ -2493,6 +3717,18 @@ def test_source_concept_choices_are_exact_module_scoped_and_path_free(
     sofa2 = result["details"]["concepts"][1]
     assert sofa2["selection_mode"] == "explicit_only"
     assert sofa2["canonical_alternative"] == "sep3_sofa1"
+    assert result["details"]["canonical_alternatives"] == [
+        {
+            "source_concept_id": "sep3_sofa2",
+            "concept_id": "sep3_sofa1",
+            "module": "sepsis3_sofa1",
+            "role": "event_status",
+            "description": "Canonical Sepsis-3 using traditional SOFA",
+            "selection_mode": "ordinary",
+            "selection_note": "",
+            "canonical_alternative": "",
+        }
+    ]
     assert "/private/" not in json.dumps(result)
 
 
@@ -2517,7 +3753,10 @@ def test_conversational_setup_binds_verified_execution_concepts(
             "path": "/private/full-export",
             "database": "miiv",
         },
-        "modules": ["demographics", "outcome", "sepsis3_sofa2"],
+        # The user authorizes the exact scientific concept. Its owning parquet
+        # module is a technical implementation detail and may be added by the
+        # StudyContext owner after catalog verification.
+        "modules": ["demographics", "outcome"],
     }
     writes: list[dict[str, Any]] = []
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
@@ -2578,6 +3817,11 @@ def test_conversational_setup_binds_verified_execution_concepts(
         "primary_exposure": "sep3_sofa2",
         "covariates": ["age", "sex"],
     }
+    assert writes[0]["modules"] == [
+        "demographics",
+        "outcome",
+        "sepsis3_sofa2",
+    ]
 
 
 def test_conversational_setup_surfaces_repeated_stay_dependence_gate(
@@ -2813,7 +4057,10 @@ def test_conversational_setup_persists_host_verified_explicit_concept_authorizat
         "active_job_id": None,
         "data_source": {"path": "/private/full-export", "database": "miiv"},
         "modules": ["outcome", "sepsis3_sofa2"],
-        "confirmations": {},
+        "confirmations": {
+            "feature_time_window": True,
+            "export_format": True,
+        },
     }
     writes: list[dict[str, Any]] = []
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
@@ -2868,6 +4115,8 @@ def test_conversational_setup_persists_host_verified_explicit_concept_authorizat
 
     assert result["code"] == "study_context_updated"
     assert writes[0]["confirmations"] == {
+        "feature_time_window": True,
+        "export_format": True,
         "concept_selection_sep3_sofa2_authorized": True,
     }
 
@@ -2880,6 +4129,7 @@ def test_conversational_setup_binds_exact_registered_source_id(
         "revision": 2,
         "question": "Does an aggregate ICU feature predict mortality?",
         "active_job_id": None,
+        "confirmations": {"feature_time_window": True},
     }
     writes: list[dict[str, Any]] = []
     monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
@@ -2928,9 +4178,90 @@ def test_conversational_setup_binds_exact_registered_source_id(
         "label": "MIMIC-IV Clinical Database Demo v2.2",
         "database": "miiv",
     }
+    assert writes[0]["confirmations"] == {
+        "feature_time_window": True,
+        "extraction_completed": True,
+    }
     assert result["details"]["study"]["data_source"]["database"] == "miiv"
     assert len(result["details"]["study"]["data_source"]["path_digest"]) == 32
     assert "/private/" not in json.dumps(result)
+
+
+def test_confirmed_conversation_source_is_not_silently_rebound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-confirmed-source",
+        "revision": 2,
+        "question": "",
+        "data_source": {
+            "path": "/private/user-selected-source",
+            "label": "MIMIC-IV",
+            "database": "miiv",
+        },
+        "active_job_id": None,
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.sources,
+        "load_registry",
+        lambda: {
+            "active_path": "/private/model-recommended-source",
+            "sources": [
+                {
+                    "id": "src_recommended",
+                    "path": "/private/model-recommended-source",
+                    "label": "MIMIC-IV full export",
+                    "database": "miiv",
+                    "ok": True,
+                }
+            ],
+        },
+    )
+
+    def upsert(raw: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        writes.append(dict(raw))
+        return {**current, **raw, "revision": 3}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    session = PiSessionRecord(
+        session_id="pi-confirmed-source",
+        binding=AuthorityBinding(
+            study_context_id="study-confirmed-source",
+            study_revision=2,
+        ),
+        data_source_authorization=PiSessionDataSourceAuthorization(
+            status="confirmed",
+            confirmation_mode="select_local_source",
+            source={
+                "label": "MIMIC-IV",
+                "database": "miiv",
+                "identity_sha256": "a" * 64,
+                "study_revision": 2,
+            },
+            confirmed_at="2026-08-25T00:00:00Z",
+        ),
+    )
+    context = ToolExecutionContext(
+        session=session,
+        user_message="我想研究 MIMIC-IV 成人 ICU 人群中的 Sepsis-3 患病率。",
+        allowed_actions={"configure"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "question": "成人 ICU 人群中的 Sepsis-3 患病率是多少？",
+            "bind_source_id": "src_recommended",
+        },
+        context,
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["question"] == "成人 ICU 人群中的 Sepsis-3 患病率是多少？"
+    assert "data_source" not in writes[0]
+    assert result["details"]["study"]["data_source"]["database"] == "miiv"
 
 
 def test_workspace_tools_are_project_scoped_and_reuse_one_turn_write_grant(
@@ -3116,6 +4447,11 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         ),
     )
     assert saved["code"] == "study_context_updated"
+    assert "rebind" not in saved["summary"].lower()
+    assert "continue" not in saved["summary"].lower()
+    assert saved["details"]["workflow"]["current_stage"] == "setup"
+    assert "question" not in saved["details"]["workflow"]["missing_setup_fields"]
+    assert "data_source" in saved["details"]["workflow"]["missing_setup_fields"]
     assert saved["details"]["rebind_required"] is True
     assert saved["details"]["host_rebind_after_turn"] is True
     assert writes[0][0]["id"] == "study-1"

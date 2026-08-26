@@ -15,6 +15,8 @@
     const resourceName = host.resourceName;
     const resourceKey = host.resourceKey;
     const resourceButton = host.resourceButton;
+    let liveClock = 0;
+    let liveClockRoot = null;
 
     function timeMs(value) {
       const parsed = Date.parse(String(value || ''));
@@ -22,7 +24,7 @@
     }
     function durationText(startedAt, endedAt) {
       const elapsed = Math.max(0, Number(endedAt || Date.now()) - Number(startedAt || Date.now()));
-      if (elapsed < 1000) return `${elapsed} ms`;
+      if (elapsed < 100) return tr('<0.1s', '<0.1 秒');
       const seconds = elapsed / 1000;
       if (seconds < 60) {
         const value = seconds < 10 ? seconds.toFixed(1) : Math.round(seconds);
@@ -34,6 +36,46 @@
         remainder ? `${minutes}m ${remainder}s` : `${minutes}m`,
         remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分`,
       );
+    }
+    function updateLiveClock() {
+      if (!liveClockRoot || !liveClockRoot.isConnected) {
+        if (liveClock) clearInterval(liveClock);
+        liveClock = 0;
+        liveClockRoot = null;
+        return;
+      }
+      liveClockRoot.querySelectorAll('[data-gpi-live-elapsed]').forEach(node => {
+        node.textContent = durationText(Number(node.dataset.gpiLiveElapsed), Date.now());
+      });
+    }
+    function syncLiveClock(root, running) {
+      liveClockRoot = root || null;
+      updateLiveClock();
+      if (running && !liveClock) liveClock = setInterval(updateLiveClock, 250);
+      if (!running && liveClock) {
+        clearInterval(liveClock);
+        liveClock = 0;
+      }
+    }
+    function appendPublicDelta(activity, delta) {
+      if (!activity || !delta) return;
+      const step = activity.steps.slice().reverse()
+        .find(item => item.kind === 'assistant' && item.status === 'running');
+      if (!step) return;
+      const addition = String(delta);
+      step.publicChars = Number(step.publicChars || 0) + addition.length;
+      step.publicText = (String(step.publicText || '') + addition).slice(-320);
+    }
+    function startTurn(activity, at) {
+      if (!activity) return;
+      const turn = activity.steps.filter(item => item.kind === 'turn').length;
+      activity.steps.push({ id: `turn-${turn}`, kind: 'turn', turn, status: 'running', at, startedAt: at });
+    }
+    function finishTurn(activity, at) {
+      if (!activity) return;
+      const turn = activity.steps.slice().reverse()
+        .find(item => item.kind === 'turn' && item.status === 'running');
+      if (turn) { turn.status = 'complete'; turn.endedAt = at; }
     }
     function stepDuration(step) {
       const started = Number(step && step.startedAt);
@@ -80,7 +122,7 @@
     function toolLabel(name, resource) {
       const labels = {
         easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
-        easyicu_list_data_sources: tr('List registered data sources', '列出已登记数据源'),
+        easyicu_list_data_sources: tr('Check EasyICU data availability', '检查 EasyICU 可用数据'),
         easyicu_inspect_data_package: tr('Review data package', '审阅数据包'),
         easyicu_inspect_workflow: tr('Inspect research workflow', '检查科研流程'),
         easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
@@ -100,6 +142,7 @@
         easyicu_search_literature: tr('Search PubMed literature', '检索 PubMed 文献'),
         easyicu_prepare_idea_handoff: tr('Prepare idea plan', '准备想法计划'),
         easyicu_accept_idea_handoff: tr('Accept selected idea', '接受所选想法'),
+        easyicu_prepare_demo_source: tr('Download and prepare official demo data', '下载并准备官方 Demo 数据'),
         easyicu_start_extraction: tr('Start feature extraction', '启动特征提取'),
         easyicu_run: tr('Start EasyICU run', '启动 EasyICU 运行'),
         easyicu_resume: tr('Resume EasyICU work', '恢复 EasyICU 任务'),
@@ -122,7 +165,7 @@
     function completedToolLabel(name, resource) {
       const labels = {
         easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
-        easyicu_list_data_sources: tr('Listed registered data sources', '已列出已登记数据源'),
+        easyicu_list_data_sources: tr('Checked EasyICU data availability', '已确认 EasyICU 可用数据'),
         easyicu_inspect_data_package: tr('Reviewed data package', '已审阅数据包'),
         easyicu_inspect_workflow: tr('Read research workflow', '已读取科研流程'),
         easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
@@ -142,6 +185,7 @@
         easyicu_search_literature: tr('Searched PubMed literature', '已检索 PubMed 文献'),
         easyicu_prepare_idea_handoff: tr('Prepared idea plan', '已准备想法计划'),
         easyicu_accept_idea_handoff: tr('Accepted selected idea', '已接受所选想法'),
+        easyicu_prepare_demo_source: tr('Started official demo preparation', '已启动官方 Demo 准备'),
         easyicu_start_extraction: tr('Started feature extraction', '已启动特征提取'),
         easyicu_run: tr('Started EasyICU run', '已启动 EasyICU 运行'),
         easyicu_resume: tr('Resumed EasyICU work', '已恢复 EasyICU 任务'),
@@ -169,9 +213,14 @@
       if (step.kind === 'turn') return done
         ? tr(`Model turn ${step.turn + 1} finished`, `模型回合 ${step.turn + 1} 已结束`)
         : tr(`Model turn ${step.turn + 1} is running`, `模型回合 ${step.turn + 1} 进行中`);
-      if (step.kind === 'assistant') return done
-        ? tr(`Model analysis and response phase ${step.phase} finished`, `模型分析与回复阶段 ${step.phase} 已完成`)
-        : tr(`Model is analyzing and composing response phase ${step.phase}`, `模型正在分析并组织回复阶段 ${step.phase}`);
+      if (step.kind === 'assistant') {
+        if (failed) return tr('The model response phase did not complete', '模型回复阶段未完成');
+        if (done && step.publicChars) return tr(`Public response phase ${step.phase} finished`, `公开回复阶段 ${step.phase} 已输出`);
+        if (done && step.stopReason === 'toolUse') return tr(`Next action ${step.phase} prepared`, `下一步操作 ${step.phase} 已就绪`);
+        if (done) return tr(`Model response phase ${step.phase} finished`, `模型回复阶段 ${step.phase} 已完成`);
+        if (step.publicChars) return tr(`Streaming public response phase ${step.phase}`, `正在流式输出公开回复阶段 ${step.phase}`);
+        return tr(`Preparing the next visible action ${step.phase}`, `正在准备下一步可见操作 ${step.phase}`);
+      }
       if (step.kind === 'tool') return failed
         ? tr(`${toolLabel(step.toolName, step.resource)} returned an error`, `${toolLabel(step.toolName, step.resource)} 返回错误`)
         : done ? completedToolLabel(step.toolName, step.resource)
@@ -201,11 +250,26 @@
       if (!resources.length) return '';
       return `<div class="gpi-resource-list" aria-label="${tr('Run artifacts', '运行产物')}">${resources.map(resource => resourceButton(resource)).join('')}</div>`;
     }
+    function localizedStepText(step) {
+      const value = String(step && step.text || '').trim();
+      if (!value) return '';
+      const containsChinese = /[\u3400-\u9fff]/.test(value);
+      return window.EU_LANG === 'zh'
+        ? (containsChinese ? value : '')
+        : (containsChinese ? '' : value);
+    }
     function stepRow(step) {
-      const meta = [stepDuration(step), step.code, step.owner].filter(Boolean).join(' · ');
+      // Raw validator codes and Python/Node owner paths are diagnostics, not
+      // user-facing research progress. Keep them in persisted receipts while
+      // projecting only elapsed time in the ordinary activity timeline.
+      const meta = stepDuration(step);
+      const detail = localizedStepText(step);
+      const publicStream = step.kind === 'assistant' && step.status === 'running' && step.publicText
+        ? `<span class="gpi-activity-public-stream"><em>${tr('Public output', '公开输出')}</em>${esc(step.publicText)}<i aria-hidden="true"></i></span>`
+        : '';
       return `<li class="${esc(step.status || 'complete')}">
         <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
-        <span class="gpi-activity-step-copy">${stepPrimary(step)}${step.text ? `<span>${esc(step.text)}</span>` : ''}${stepResources(step)}${meta ? `<small>${esc(meta)}</small>` : ''}</span>
+        <span class="gpi-activity-step-copy">${stepPrimary(step)}${publicStream}${detail ? `<span>${esc(detail)}</span>` : ''}${stepResources(step)}${meta ? `<small>${esc(meta)}</small>` : ''}</span>
         <span class="gpi-status-pip" aria-hidden="true"></span>
       </li>`;
     }
@@ -225,6 +289,7 @@
             <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
             <span class="gpi-activity-kicker">${esc(kicker)}</span>
             <span class="gpi-activity-title">${esc(title)}</span>
+            <span class="gpi-activity-elapsed" data-gpi-live-elapsed="${Number(row.startedAt || Date.now())}">${esc(durationText(row.startedAt))}</span>
             <span class="gpi-status-pip" aria-hidden="true"></span>
           </div>
           ${liveSteps.length ? `<ol>${liveSteps.map(stepRow).join('')}</ol>` : ''}
@@ -264,7 +329,7 @@
       return rows;
     }
 
-    return Object.freeze({ focusLatest, render, stepLabel, timeMs });
+    return Object.freeze({ appendPublicDelta, finishTurn, focusLatest, render, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EU_GUIDED_PI_ACTIVITY = Object.freeze({ create });

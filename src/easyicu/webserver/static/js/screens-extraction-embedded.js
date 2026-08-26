@@ -3,6 +3,10 @@
   let host = null;
   let options = {};
 
+  function isSourceBinding() {
+    return !!(options.resource && options.resource.entry_mode === 'source_binding');
+  }
+
   function escapeHtml(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, character => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -66,12 +70,50 @@
     );
   }
 
+  function projectSourceBinding(root) {
+    const owner = window.EU_EXTRACTION_NATIVE_OWNER;
+    if (!owner || typeof owner.sourceBindingSnapshot !== 'function') return;
+    const snapshot = owner.sourceBindingSnapshot();
+    const head = root.querySelector('.page-head');
+    if (head) {
+      const title = head.querySelector('h1');
+      const lead = head.querySelector('.lead');
+      if (title) title.textContent = t('Bind data source', '绑定数据来源');
+      if (lead) lead.textContent = t(
+        'Identify the local ICU database only. After you return, tell EasyICU what you want to study; cohort, features, time window, and export settings will be recommended later.',
+        '现在只识别本地 ICU 数据库。返回对话后请告诉 EasyICU 你想研究什么；队列、特征、时间窗和导出设置将在之后推荐。'
+      );
+      Array.from(head.children).slice(2).forEach(node => node.remove());
+    }
+    root.querySelectorAll('.ex-copilot-prefill,[data-ex-sample]').forEach(node => node.remove());
+    if (!snapshot.ready) return;
+    const express = root.querySelector('.express');
+    if (!express) return;
+    const source = snapshot.data_source || {};
+    express.innerHTML = `<div class="cfg-head">
+      <div class="cfg-ico">${icon('db', 17)}</div>
+      <div class="grow"><div class="cfg-h">${t('Data source identified', '已识别数据来源')}</div><div class="cfg-sub">${escapeHtml(source.label || source.database || '—')}</div></div>
+    </div>
+    <div class="cfg-body">
+      <div class="note info"><div class="ico">${icon('shield', 14)}</div><div class="body">
+        <div class="t">${t('No research settings have been chosen yet', '尚未选择任何研究配置')}</div>
+        <div class="d">${t(
+          'EasyICU will first ask for your research question, then recommend the cohort, feature modules, outcome, time window, and export format for your review.',
+          'EasyICU 会先询问你的研究问题，再推荐队列、特征模块、结局、时间窗和导出格式供你审阅。'
+        )}</div>
+      </div></div>
+      <button class="btn primary mt-16" type="button" data-gpi-source-binding-confirm>${icon('arrow', 14)} ${t('Confirm data source and continue', '确认数据来源并继续')}</button>
+    </div>`;
+    root.querySelectorAll('.ex2-divider,.ex2-custom,.handoff').forEach(node => node.remove());
+  }
+
   function paint() {
     const owner = window.EU_EXTRACTION_NATIVE_OWNER;
     if (!host || !host.isConnected || !owner) return;
     const previousScroller = host.querySelector('[data-gpi-extraction-embed]');
     const previousScrollTop = previousScroller ? previousScroller.scrollTop : 0;
     const sourceId = String(options.sourceId || '').trim();
+    const sourceBinding = isSourceBinding();
     const currentReceipt = typeof owner.handoffReceipt === 'function' ? owner.handoffReceipt() : {};
     const resultReady = !!(currentReceipt && currentReceipt.output_dir);
     const syncLabel = resultReady
@@ -85,14 +127,14 @@
         + ' 版已保存本次' + (options.syncReceipt.receipt_kind === 'extraction_result' ? '抽取结果' : '抽取配置')
         + '。下一轮 Copilot 会读取这份结构化状态；本机文件夹路径不会作为模型文字发送。'
     ) : '';
+    const extractionActions = sourceBinding ? '' : `
+      ${owner.isReal() ? '' : `<button class="btn sm" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real local data', '使用本地真实数据')}</button>`}
+      ${sourceId ? `<button class="btn sm" type="button" data-gpi-extraction-download>${icon('download', 12)} ${t('Download data package', '下载数据包')}</button>` : ''}
+      <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon(options.syncReceipt ? 'check' : 'agent', 12)} ${options.syncReceipt ? t('Synced to Copilot', '已同步到 Copilot') : syncLabel}</button>`;
     host.innerHTML = `<div class="gpi-extraction-embed" data-gpi-extraction-embed>
       <div class="gpi-extraction-toolbar">
-        <div><span>${t('Native Data Extraction', '原生数据提取')}</span><strong>${t('The same owner as Classic Workspace', '与经典工作台共用同一个功能 owner')}</strong></div>
-        <div class="row gap-8">
-          ${owner.isReal() ? '' : `<button class="btn sm" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real local data', '使用本地真实数据')}</button>`}
-          ${sourceId ? `<button class="btn sm" type="button" data-gpi-extraction-download>${icon('download', 12)} ${t('Download data package', '下载数据包')}</button>` : ''}
-          <button class="btn sm primary" type="button" data-gpi-extraction-sync>${icon(options.syncReceipt ? 'check' : 'agent', 12)} ${options.syncReceipt ? t('Synced to Copilot', '已同步到 Copilot') : syncLabel}</button>
-        </div>
+        <div><span>${sourceBinding ? t('Local data', '本地数据') : t('Native Data Extraction', '原生数据提取')}</span><strong>${sourceBinding ? t('Bind one source before the research conversation', '开始研究对话前先绑定一个数据来源') : t('The same owner as Classic Workspace', '与经典工作台共用同一个功能 owner')}</strong></div>
+        <div class="row gap-8">${extractionActions}</div>
       </div>
       ${options.syncReceipt ? `<div class="note ok gpi-extraction-sync-receipt" role="status"><div class="ico">${icon('check', 13)}</div><div class="body"><div class="t">${t('Synced to Copilot', '已同步到 Copilot')}</div><div class="d">${escapeHtml(syncReceiptMessage)}</div></div></div>` : ''}
       ${options.syncError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Copilot sync failed', 'Copilot 同步失败')}</div><div class="d">${escapeHtml(options.syncError)}</div></div></div>` : ''}
@@ -100,7 +142,8 @@
       ${jobSummary(options.jobSnapshot)}
       <div class="gpi-extraction-native">${owner.render()}</div>
     </div>`;
-    projectCopilotSetup(host);
+    if (sourceBinding) projectSourceBinding(host);
+    else projectCopilotSetup(host);
     owner.bind(host);
     const scroller = host.querySelector('[data-gpi-extraction-embed]');
     if (scroller && previousScrollTop > 0) scroller.scrollTop = previousScrollTop;
@@ -119,6 +162,25 @@
     if (downloadButton) downloadButton.addEventListener('click', downloadExport);
     const refresh = host.querySelector('[data-gpi-extraction-refresh]');
     if (refresh) refresh.addEventListener('click', refreshJob);
+    const sourceConfirm = host.querySelector('[data-gpi-source-binding-confirm]');
+    if (sourceConfirm) sourceConfirm.addEventListener('click', confirmSourceBinding);
+  }
+
+  function confirmSourceBinding(event) {
+    const button = event.currentTarget;
+    const owner = window.EU_EXTRACTION_NATIVE_OWNER;
+    const copilot = window.EU_GUIDED_PI;
+    if (!owner || typeof owner.bindSourceToCopilot !== 'function'
+        || !copilot || typeof copilot.confirmDataSourceBinding !== 'function') return;
+    button.disabled = true;
+    button.textContent = t('Confirming…', '正在确认…');
+    options.syncError = '';
+    Promise.resolve(owner.bindSourceToCopilot())
+      .then(receipt => copilot.confirmDataSourceBinding(receipt))
+      .catch(error => {
+        options.syncError = String(error && error.message || error);
+        paint();
+      });
   }
 
   function hydrateStudyContext() {
@@ -188,6 +250,9 @@
       hydrateStudyContext();
       if (options.resource && options.resource.state === 'setup' && owner && !owner.isReal()) {
         owner.useRealData();
+      }
+      if (isSourceBinding() && owner && typeof owner.beginSourceBinding === 'function') {
+        owner.beginSourceBinding();
       }
       paint();
     },

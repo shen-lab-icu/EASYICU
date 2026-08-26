@@ -9,6 +9,7 @@ owners' receipts.
 from __future__ import annotations
 
 import hashlib
+import re
 
 from typing import Any, Dict, List, Literal, Mapping, Optional
 
@@ -83,6 +84,64 @@ def _has_mapping(value: Any) -> bool:
     return isinstance(value, Mapping) and bool(value)
 
 
+def _owner_locked_clinical_definition(contract: Mapping[str, Any]) -> bool:
+    """Return whether EasyICU already owns one executable standard profile."""
+
+    return bool(
+        contract.get("definition_locked") is True
+        and str(contract.get("runtime_profile") or "").strip()
+        and str(contract.get("implementation_profile") or "").strip()
+        and _has_mapping(contract.get("locked_core"))
+    )
+
+
+def _missing_clinical_definition_confirmation(study: Mapping[str, Any]) -> str:
+    """Return one unresolved phenotype choice that needs human scientific input."""
+
+    cohort = study.get("cohort")
+    cohort = cohort if isinstance(cohort, Mapping) else {}
+    confirmations = study.get("confirmations")
+    confirmations = confirmations if isinstance(confirmations, Mapping) else {}
+    user_text = " ".join(
+        str(study.get(field) or "")
+        for field in ("question", "purpose", "primary_exposure")
+    ).lower()
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", user_text)
+    for field, contract in cohort.items():
+        clean_field = str(field or "").strip().lower()
+        if not clean_field.endswith("_definition") or not _has_mapping(contract):
+            continue
+        if _owner_locked_clinical_definition(contract):
+            continue
+        phenotype = clean_field.removesuffix("_definition").strip("_")
+        normalized_phenotype = phenotype.replace("_", " ")
+        confirmation_key = f"clinical_definition_{phenotype}"
+        if (
+            normalized_phenotype
+            and normalized_phenotype in normalized_text
+            and confirmations.get(confirmation_key) is not True
+        ):
+            return f"confirmations.{confirmation_key}"
+    return ""
+
+
+def _requires_primary_exposure(study: Mapping[str, Any]) -> bool:
+    """Return whether the stated research intent includes an exposure relation."""
+
+    if str(study.get("primary_exposure") or "").strip():
+        return True
+    intent = " ".join(
+        str(study.get(field) or "") for field in ("question", "purpose")
+    ).casefold()
+    return bool(
+        re.search(
+            r"(?:关系|关联|相关|效应|影响|预测|危险因素|"
+            r"association|associated|relationship|effect|predict|risk factor)",
+            intent,
+        )
+    )
+
+
 def active_export_matches_study(
     study: Optional[Mapping[str, Any]], active_export_path: Any
 ) -> bool:
@@ -102,6 +161,10 @@ def registered_export_matches_study(
     """Return whether the project's exact bound export is still registered."""
 
     study_row: Mapping[str, Any] = study or {}
+    confirmations = study_row.get("confirmations")
+    confirmations = confirmations if isinstance(confirmations, Mapping) else {}
+    if confirmations.get("extraction_completed") is not True:
+        return False
     source = study_row.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     expected = str(source.get("path") or "").strip()
@@ -123,8 +186,13 @@ def _setup_missing(
     execution = raw_execution if isinstance(raw_execution, Mapping) else {}
     raw_window = study.get("time_window")
     time_window = raw_window if isinstance(raw_window, Mapping) else {}
+    raw_confirmations = study.get("confirmations")
+    confirmations = (
+        raw_confirmations if isinstance(raw_confirmations, Mapping) else {}
+    )
     human_outcome = bool(str(study.get("outcome") or "").strip())
     human_exposure = bool(str(study.get("primary_exposure") or "").strip())
+    exposure_required = _requires_primary_exposure(study)
     executable_exposure = bool(
         str(execution.get("primary_exposure") or "").strip()
     )
@@ -132,6 +200,10 @@ def _setup_missing(
     analysis_design_present = _has_mapping(study.get("analysis_design"))
     dependence_finding = study_context_owner.analysis_dependence_finding(dict(study))
     window_finding = study_context_owner.materialization_window_finding(dict(study))
+    clinical_definition_confirmation = _missing_clinical_definition_confirmation(
+        study
+    )
+    feature_window_confirmed = confirmations.get("feature_time_window") is True
     window_hours = time_window.get("hours")
     if window_hours is None:
         window_hours = time_window.get("observation_hours")
@@ -143,8 +215,58 @@ def _setup_missing(
             active_export_present or _has_mapping(study.get("data_source")),
         ),
         ("cohort", _has_mapping(study.get("cohort"))),
-        ("modules", bool(study.get("modules"))),
         ("outcome", human_outcome),
+        *(((("primary_exposure", human_exposure),)) if exposure_required else ()),
+        (
+            "analysis_goal",
+            bool(str(study.get("analysis_goal") or "").strip()),
+        ),
+        *(
+            (("time_window", False),)
+            if not time_window
+            else (
+                ("time_window.hours", window_hours is not None),
+                (
+                    "time_window.anchor",
+                    bool(str(time_window.get("anchor") or "").strip()),
+                ),
+                *(
+                    (("time_window.anchor_supported", False),)
+                    if window_finding is not None
+                    else ()
+                ),
+                *(
+                    (("confirmations.feature_time_window", False),)
+                    if (
+                        window_hours is not None
+                        and bool(str(time_window.get("anchor") or "").strip())
+                        and window_finding is None
+                        and not feature_window_confirmed
+                    )
+                    else ()
+                ),
+            )
+        ),
+        *(
+            (
+                (
+                    "covariates",
+                    str(study.get("covariate_selection") or "").strip()
+                    in {"exact", "planner_selectable"},
+                ),
+            )
+            if exposure_required
+            else ()
+        ),
+        (
+            "export_format",
+            bool(str(study.get("export_format") or "").strip())
+            and confirmations.get("export_format") is True,
+        ),
+        # Finish user-owned scientific choices before EasyICU-owned
+        # implementation readiness. Missing catalog ids must not create a
+        # generic "continue" gate between two key user decisions.
+        ("modules", bool(study.get("modules"))),
         *(
             (("execution_concepts.outcome", executable_outcome),)
             if human_outcome
@@ -164,28 +286,9 @@ def _setup_missing(
             else ()
         ),
         *(
-            (("time_window", False),)
-            if not time_window
-            else (
-                ("time_window.hours", window_hours is not None),
-                (
-                    "time_window.anchor",
-                    bool(str(time_window.get("anchor") or "").strip()),
-                ),
-                *(
-                    (("time_window.anchor_supported", False),)
-                    if window_finding is not None
-                    else ()
-                ),
-            )
-        ),
-        (
-            "export_format",
-            bool(str(study.get("export_format") or "").strip()),
-        ),
-        (
-            "analysis_goal",
-            bool(str(study.get("analysis_goal") or "").strip()),
+            ((clinical_definition_confirmation, False),)
+            if clinical_definition_confirmation
+            else ()
         ),
     )
     for name, present in checks:
@@ -364,6 +467,11 @@ def build_research_workflow_snapshot(
         and str(run_row.get("readiness_status") or "")
         == "awaiting_human_signoff"
     )
+    # A completed local preflight is an owner-issued receipt that the exact
+    # bound registered export was resolved and reviewed.  Treat it as stronger
+    # evidence than a legacy StudyContext extraction flag so prepared-export
+    # reuse cannot fall backward to extraction after preflight succeeds.
+    prepared_export_receipted = bool(active_export_present or preflight_complete)
     pending_review_reason_codes = {
         str(item).strip()
         for item in (run_row.get("pending_review_reason_codes") or [])
@@ -589,7 +697,7 @@ def build_research_workflow_snapshot(
             label="Feature extraction",
             status=(
                 "complete"
-                if active_export_present
+                if prepared_export_receipted
                 else "running"
                 if extraction_running
                 else "ready"
@@ -599,7 +707,7 @@ def build_research_workflow_snapshot(
             owner="easyicu.webserver.routes.jobs",
             reason_code=(
                 "active_export_ready"
-                if active_export_present
+                if prepared_export_receipted
                 else "extraction_running"
                 if extraction_running
                 else "extraction_ready"
@@ -622,7 +730,7 @@ def build_research_workflow_snapshot(
                 else "complete"
                 if has_plan
                 else "ready"
-                if active_export_present and setup_ready
+                if prepared_export_receipted and setup_ready
                 else "blocked"
             ),
             owner="easyicu.research_agent.planning",
@@ -640,7 +748,7 @@ def build_research_workflow_snapshot(
                 else "provider_ready_to_generate_plan"
                 if preflight_complete
                 else "plan_ready"
-                if active_export_present and setup_ready
+                if prepared_export_receipted and setup_ready
                 else "active_export_or_setup_required"
             ),
         ),
@@ -659,7 +767,7 @@ def build_research_workflow_snapshot(
                 else "review_required"
                 if pipeline_attempt_blocked
                 else "ready"
-                if active_export_present and setup_ready
+                if prepared_export_receipted and setup_ready
                 else "blocked"
             ),
             owner="easyicu.research_agent.pipeline",
@@ -681,7 +789,7 @@ def build_research_workflow_snapshot(
                 else "research_pipeline_required"
                 if legacy_full_scaffold
                 else "analysis_ready"
-                if active_export_present and setup_ready
+                if prepared_export_receipted and setup_ready
                 else "active_export_or_setup_required"
             ),
         ),

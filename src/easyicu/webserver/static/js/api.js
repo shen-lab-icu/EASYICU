@@ -467,6 +467,9 @@
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});
   }
+  function authorizePiCopilotDataSource(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/data-source-authorization', body || {});
+  }
   function rebindPiCopilotSession(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/rebind', body || {});
   }
@@ -696,6 +699,7 @@
   window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
   window.EU_API.loadPiCopilotSession = loadPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
+  window.EU_API.authorizePiCopilotDataSource = authorizePiCopilotDataSource;
   window.EU_API.rebindPiCopilotSession = rebindPiCopilotSession;
   window.EU_API.pinPiCopilotPresentation = pinPiCopilotPresentation;
   window.EU_API.archivePiCopilotChildJob = archivePiCopilotChildJob;

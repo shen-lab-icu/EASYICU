@@ -1309,13 +1309,14 @@
     const active = window.EU_SOURCES && window.EU_SOURCES.activeSource ? window.EU_SOURCES.activeSource() : null;
     const resultPath = exportResult && exportResult.out_dir;
     const detectedDatabase = String(exScanResult && exScanResult.db_key || '').trim();
-    const sourcePath = resultPath || '';
-    const sourceLabel = resultPath
-      ? ((active && active.label) || 'EasyICU extraction')
-      : (exExpectedDatabase ? exExpectedDatabase.toUpperCase() : (dataMode() === 'demo' ? 'Demo data' : 'Local EasyICU data'));
+    const sourcePath = resultPath || (active && active.path) || '';
+    const sourceLabel = (active && active.label) || (resultPath
+      ? 'EasyICU extraction'
+      : (exExpectedDatabase ? exExpectedDatabase.toUpperCase() : (dataMode() === 'demo' ? 'Demo data' : 'Local EasyICU data')));
     const modules = (exportRunModules || runModuleKeys(recommended ? 'recommended' : 'custom')).slice();
     return {
       data_source: {
+        source_id: String(active && active.id || ''),
         path: sourcePath,
         label: sourceLabel,
         database: detectedDatabase || exExpectedDatabase || (dataMode() === 'demo' ? 'demo' : ''),
@@ -1801,6 +1802,49 @@
       receipt_kind: result.out_dir ? 'extraction_result' : 'extraction_setup',
     };
   }
+  function sourceBindingSnapshot() {
+    const active = window.EU_SOURCES && window.EU_SOURCES.activeSource
+      ? window.EU_SOURCES.activeSource() : null;
+    const database = String(exScanResult && exScanResult.db_key || exExpectedDatabase || '').trim();
+    const path = String(exPath || active && active.path || '').trim();
+    const label = String(
+      exScanResult && exScanResult.db
+      || active && active.label
+      || database.toUpperCase()
+      || t('Local ICU data', '本地 ICU 数据')
+    ).trim();
+    return {
+      ready: dataMode() === 'real' && exReal === 'ready' && !!path && !!database,
+      data_source: {
+        source_id: String(active && active.id || ''),
+        path,
+        label,
+        database,
+      },
+    };
+  }
+  function bindSourceToCopilot() {
+    const snapshot = sourceBindingSnapshot();
+    const store = window.EU_STUDY_CONTEXT;
+    if (!snapshot.ready || !store || typeof store.update !== 'function' || typeof store.persist !== 'function') {
+      return Promise.reject(new Error(t(
+        'Select and validate a local ICU data folder first.',
+        '请先选择并验证本地 ICU 数据文件夹。'
+      )));
+    }
+    store.update(
+      { data_source: snapshot.data_source },
+      { persist: false, reason: 'extraction-source-binding' },
+    );
+    return Promise.resolve(store.persist()).then(saved => ({
+      id: 'source-binding-' + Date.now(),
+      receipt_kind: 'data_source_binding',
+      database: snapshot.data_source.database,
+      source_label: snapshot.data_source.label,
+      study_context_id: String(saved && saved.id || ''),
+      study_revision: Number(saved && saved.revision || 0),
+    }));
+  }
   function syncExtractionToCopilot() {
     const store = window.EU_STUDY_CONTEXT;
     if (!store || typeof store.handoff !== 'function') {
@@ -2203,8 +2247,20 @@
     isReal: () => dataMode() === 'real',
     isPreparedExport: () => dataMode() === 'real' && exSource === 'module' && exReal === 'ready',
     setupSummary: extractionSetupSummary,
+    sourceBindingSnapshot,
+    bindSourceToCopilot,
     syncToCopilot: syncExtractionToCopilot,
     handoffReceipt: extractionHandoffReceipt,
+    beginSourceBinding() {
+      abandonExtractionContinuity();
+      exView = 'home';
+      exReal = 'connect';
+      exPath = '';
+      exSource = null;
+      exScanResult = null;
+      exScanError = null;
+      exDatabaseMismatch = null;
+    },
     useRealData() {
       if (window.setDataMode) window.setDataMode('real', { force: true });
       else window.EU_DATA = 'real';

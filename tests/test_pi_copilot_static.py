@@ -20,6 +20,14 @@ NODE_APP = STATIC.parent / "pi_copilot" / "node_app"
 def _read(relative: str) -> str:
     return (STATIC / relative).read_text(encoding="utf-8")
 
+
+def test_node_prompt_obeys_owner_order_before_internal_resolution() -> None:
+    prompt = (NODE_APP / "src" / "main.mjs").read_text(encoding="utf-8")
+
+    assert "Workflow-order authority rule" in prompt
+    assert "missing_setup_fields is ordered by the EasyICU owner" in prompt
+    assert "Never offer a generic continue/继续对话 action" in prompt
+
 # The screen modules destructure `esc` from window.EU_HTML at the top of their
 # IIFE, so these Node harnesses have to install the shared escaping owner into
 # the stub window before evaluating a module — the same order index.html uses.
@@ -28,24 +36,27 @@ _ESCAPE_OWNER = _read("js/html-escape.js")
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260824-extraction-receipt1" in index
+    assert "css/guided-pi.css?v=20260825-data-consent3" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
-    assert "css/guided-pi-preview.css?v=20260824-native-scroll1" in index
+    assert "css/guided-pi-preview.css?v=20260825-preview-history1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
     assert "css/guided-pi-literature.css?v=20260812-literature3" in index
     assert "js/screens-guided-pi-literature.js?v=20260812-literature3" in index
     assert "js/screens-guided-pi-markdown.js?v=20260811-message-links1" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20260826-demo-action1" in index
+    assert "js/screens-guided-pi-message-actions.js?v=20260825-message-actions2" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260824-extraction-roundtrip1" in index
-    assert "js/screens-guided-pi-replay.js?v=20260815-mode-resume1" in index
-    assert "js/screens-guided-pi-activity.js?v=20260817-visible-activity2" in index
+    assert "js/screens-guided-pi-preview.js?v=20260825-preview-history1" in index
+    assert "js/screens-guided-pi-replay.js?v=20260825-language-session1" in index
+    assert "js/screens-guided-pi-activity.js?v=20260826-public-activity1" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20260816-one-model-connection1"
+        "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
         in index
     )
     assert "js/screens-guided-pi-project.js?v=20260823-project-owner1" in index
-    assert "js/screens-guided-pi.js?v=20260824-extraction-roundtrip1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20260825-session-data-consent3" in index
+    assert "js/screens-guided-pi.js?v=20260826-public-copy1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
@@ -56,6 +67,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-markdown.js"
     )
     assert index.index("js/screens-guided-pi-markdown.js") < index.index(
+        "js/screens-guided-pi-next-actions.js"
+    )
+    assert index.index("js/screens-guided-pi-next-actions.js") < index.index(
+        "js/screens-guided-pi-message-actions.js"
+    )
+    assert index.index("js/screens-guided-pi-message-actions.js") < index.index(
         "js/screens-guided-pi-demo.js"
     )
     assert index.index("js/screens-guided-pi-demo.js") < index.index(
@@ -74,9 +91,197 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-project.js"
     )
     assert index.index("js/screens-guided-pi-project.js") < index.index(
+        "js/screens-guided-pi-data-consent.js"
+    )
+    assert index.index("js/screens-guided-pi-data-consent.js") < index.index(
         "js/screens-guided-pi.js"
     )
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
+
+
+def test_guided_pi_project_switch_clears_project_scoped_extraction_receipts() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    bind_project = owner.split("function bindProject(project)", 1)[1].split(
+        "function isActive()", 1
+    )[0]
+
+    assert "state.workflowReceipts = [];" in bind_project
+
+
+def test_refresh_hides_intermediate_provider_project_and_activation_panels() -> None:
+    shell = _read("js/screens-guided-pi.js")
+    guided = _read("js/screens-guided.js")
+
+    assert (
+        "const restoring = state.loading || state.projectLoading || "
+        "state.projectDiscoveryLoading"
+    ) in shell
+    assert "restoring\n      ? restoringPanel()" in shell
+    assert "正在恢复当前研究" in shell
+    assert "state.projectLoading = !!next" in shell
+    assert "state.projectLoading = false" in shell
+    assert "function setProjectDiscoveryLoading(active)" in shell
+    assert "return window.EU_API.loadGuidedDrafts" in guided
+    assert "await openGuidedProjectMemory" in guided
+    assert "const draftsReady = loadGuidedDrafts()" in guided
+    assert "Promise.resolve(draftsReady).finally" in guided
+    assert guided.index("piOwner.mount(root.querySelector('#gdPiShell'))") < guided.index(
+        "const draftsReady = loadGuidedDrafts()"
+    )
+    assert "piOwner.setProjectDiscoveryLoading(true)" in guided
+    assert "piOwner.setProjectDiscoveryLoading(false)" in guided
+    assert "正在恢复当前研究" in guided
+
+
+def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> None:
+    owner = _read("js/screens-guided-pi-data-consent.js")
+    shell = _read("js/screens-guided-pi.js")
+    api = _read("js/api.js")
+
+    assert "selection_in_progress" in owner
+    assert "Return to local folder selection" in owner
+    assert "Local data selection is open" in owner
+    assert "No data selected" not in owner
+    assert "Keep chatting; choose data" not in owner
+    assert "Paths remain in the EasyICU host UI" in owner
+    assert "data-gpi-data-source-action" in owner
+    assert "data-gpi-data-demo" not in owner
+    assert "data-gpi-data-planning" not in owner
+    assert '<section class="gpi-data-consent"' in owner
+    assert "<summary>" not in owner
+    assert "authorizePiCopilotDataSource" in shell
+    assert "confirm_selected_source" in shell
+    assert "data-source-authorization" in api
+    assert "window.EU_API.authorizePiCopilotDataSource" in api
+
+    session_panel = shell[
+        shell.index("function sessionPanel()") : shell.index("function demoPanel()")
+    ]
+    send_text = shell[
+        shell.index("async function sendText(text, grantsOverride)") : shell.index(
+            "async function sendMessage()"
+        )
+    ]
+    assert '<div class="gpi-compose">' in session_panel
+    assert "dataConsentRequired ? '' : `<div class=\"gpi-compose\">" not in session_panel
+    assert "DATA_CONSENT.requiresConfirmation" not in send_text
+    assert "Reviewer demo" in session_panel
+    assert "Full demo" not in session_panel
+
+
+def test_pending_data_source_status_is_hidden_until_selection_starts() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-data-consent.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const ctx = {{
+        tr: (en) => en,
+        esc: (value) => String(value),
+        icon: () => '',
+      }};
+      const pending = window.EU_GUIDED_PI_DATA_CONSENT.render({{
+        data_source_authorization: {{status: 'pending', reason: 'local_data_selection_required'}},
+      }}, ctx);
+      const selecting = window.EU_GUIDED_PI_DATA_CONSENT.render({{
+        data_source_authorization: {{status: 'selection_in_progress', reason: 'local_data_selection_required'}},
+      }}, ctx);
+      if (pending !== '') throw new Error('pending data state must not occupy the conversation');
+      if (!selecting.includes('<section class="gpi-data-consent"')) throw new Error('active selection must stay visible');
+      console.log('ok');
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    assert completed.stdout.strip() == "ok"
+
+
+def test_local_source_picker_activates_the_sessions_bound_study_context() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    authorization = owner.split("async function authorizeDataSource(action)", 1)[1].split(
+        "async function stopMessage", 1
+    )[0]
+
+    assert "payload.resource && payload.resource.study_context_id" in authorization
+    assert "state.session.binding.study_context_id" in authorization
+    assert "await store.hydrate({ force: true })" in authorization
+    assert "await store.activate(contextId)" in authorization
+    assert authorization.index("await store.hydrate({ force: true })") < authorization.index(
+        "await store.activate(contextId)"
+    )
+    assert authorization.index("await store.activate(contextId)") < authorization.index(
+        "window.EU_GUIDED_PI_PREVIEW.open"
+    )
+    assert "先描述研究问题" in owner
+    assert "需要读取、抽取或分析数据时" in owner
+
+
+def test_new_conversation_binds_only_a_source_before_model_guided_setup() -> None:
+    extraction = _read("js/screens-extraction.js")
+    embedded = _read("js/screens-extraction-embedded.js")
+    preview = _read("js/screens-guided-pi-preview.js")
+    shell = _read("js/screens-guided-pi.js")
+    guided = _read("js/screens-guided.js")
+
+    source_binding = embedded.split("function projectSourceBinding(root)", 1)[1].split(
+        "function paint()", 1
+    )[0]
+    source_persist = extraction.split("function bindSourceToCopilot()", 1)[1].split(
+        "function syncExtractionToCopilot()", 1
+    )[0]
+
+    assert "entry_mode" in preview and "source_binding" in preview
+    assert "entry_mode === 'source_binding'" in embedded
+    assert "beginSourceBinding" in extraction
+    assert "No research settings have been chosen yet" in source_binding
+    assert "Confirm data source and continue" in source_binding
+    assert "research question" in source_binding
+    assert "Current extraction setup" not in source_binding
+    assert "Start extraction" not in source_binding
+    assert "Save setup to Copilot" not in source_binding
+    assert "data_source: snapshot.data_source" in source_persist
+    assert "cohort" not in source_persist
+    assert "modules" not in source_persist
+    assert "export_format" not in source_persist
+    assert "confirmDataSourceBinding" in shell
+    assert "action: 'confirm_selected_source'" in shell
+    assert "EU_GUIDED_PI_PREVIEW.close()" in shell
+    assert "easyicu:guided-projects-refresh" in shell
+    assert "easyicu:guided-projects-refresh" in guided
+    assert "loadGuidedDrafts(true)" in guided
+
+
+def test_new_session_selection_cannot_be_overwritten_by_a_stale_restore() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    create = owner.split("async function createSession()", 1)[1].split(
+        "async function openSession", 1
+    )[0]
+    open_session = owner.split("async function openSession", 1)[1].split(
+        "function assistantRow", 1
+    )[0]
+    restore = owner.split("async function loadProjectSessions()", 1)[1].split(
+        "async function loadWorkflow", 1
+    )[0]
+
+    assert "const selectionRevision = ++state.sessionSelectionRevision" in create
+    assert "selectionRevision !== state.sessionSelectionRevision" in create
+    assert "expectedSelectionRevision !== state.sessionSelectionRevision" in open_session
+    assert "const selectionRevision = state.sessionSelectionRevision" in restore
+    assert "await openSession(preferred, selectionRevision)" in restore
+    assert "state.sessionSelectionRevision += 1" in owner
+
+
+def test_extraction_handoff_preserves_the_registered_source_identity() -> None:
+    owner = _read("js/screens-extraction.js")
+    snapshot = owner.split("window.EU_EXTRACTION_CONTEXT =", 1)[1].split(
+        "/* Minimal closure adapter", 1
+    )[0]
+
+    assert "const sourcePath = resultPath || (active && active.path) || '';" in snapshot
+    assert "source_id: String(active && active.id || '')" in snapshot
+    assert "const sourceLabel = (active && active.label)" in snapshot
 
 
 def test_conversational_data_workbench_assets_are_route_owned() -> None:
@@ -125,6 +330,72 @@ def test_user_facing_copilot_copy_hides_the_pi_runtime_brand() -> None:
     assert "EasyICU 研究助手" in product_copy
 
 
+def test_data_source_copy_uses_easyicu_availability_and_hides_registry_labels() -> None:
+    prompt_owner = (NODE_APP / "src" / "main.mjs").read_text(encoding="utf-8")
+    activity_owner = _read("js/screens-guided-pi-activity.js")
+
+    assert "recommended_source is a recommendation only" in prompt_owner
+    assert "Use each returned display_label exactly" in prompt_owner
+    assert "MIMIC-IV v3.1" in prompt_owner
+    assert "MIMIC-III v1.4" in prompt_owner
+    assert "never expose registry terminology or internal run labels" in prompt_owner
+    assert "offer the official demo choice" in prompt_owner
+    assert "Official-demo listing fast path" in prompt_owner
+    assert "exactly once without a database filter" in prompt_owner
+    assert "never offer a local or full-database workflow" in prompt_owner
+    assert "call easyicu_prepare_demo_source directly" in prompt_owner
+    assert "never pass an official demo catalog id to bind_source_id" in prompt_owner
+    assert "then ask one source-mode question" not in prompt_owner
+    assert "Confirmed conversation source rule:" in prompt_owner
+    assert "Prepared registered-export reuse rule:" in prompt_owner
+    assert "A database name repeated inside the research question is not a source-change request" in prompt_owner
+    assert "List supported and registered data sources" not in prompt_owner
+    assert "Check EasyICU data availability" in prompt_owner
+    assert "检查 EasyICU 可用数据" in activity_owner
+    assert "已确认 EasyICU 可用数据" in activity_owner
+    assert "列出已登记数据源" not in activity_owner
+    assert "已列出已登记数据源" not in activity_owner
+
+
+def test_model_guidance_keeps_locked_clinical_implementation_off_the_user() -> None:
+    prompt_owner = (NODE_APP / "src" / "main.mjs").read_text(encoding="utf-8")
+    phenotype_rule = prompt_owner.split("Clinical phenotype rule:", 1)[1].split(
+        '",', 1
+    )[0]
+
+    assert "one owner-locked canonical clinical definition" in phenotype_rule
+    assert "do not ask the user to choose its internal windows" in phenotype_rule
+    assert "genuinely unresolved, clinically non-equivalent variant" in phenotype_rule
+    assert "hide internal identifiers" in phenotype_rule
+    assert "User decision burden rule:" in prompt_owner
+    assert "EasyICU owns implementation details" in prompt_owner
+    assert "Question phrasing rule:" in prompt_owner
+    assert "Ordinary outcome semantics rule:" in prompt_owner
+    assert "Semantic consistency rule:" in prompt_owner
+    assert "never ask the user to approve a wording-only synchronization" in prompt_owner
+    assert "ICU mortality means death during that ICU stay" in prompt_owner
+    assert "arbitrary 24-hour, 48-hour, or 72-hour mortality variants" in prompt_owner
+    assert "Next-step choice quality rule:" in prompt_owner
+    assert "instead of adding a duplicate recommendation option" in prompt_owner
+    assert "without Markdown markers" in prompt_owner
+    assert "Simple-decision fast path:" in prompt_owner
+    assert "Final-slot convergence rule:" in prompt_owner
+    assert "Do not call easyicu_start_extraction while workflow" in prompt_owner
+    assert "must not be expanded into an execution-readiness search" in prompt_owner
+    assert "Save an explicit human decision first" in prompt_owner
+    assert "is not by itself authorization to start catalog resolution" in prompt_owner
+    assert "never open with a list of internal missing fields" in prompt_owner
+    assert "Persistence wording rule:" in prompt_owner
+    assert "unless a successful EasyICU mutation receipt occurred" in prompt_owner
+    assert "say only that the user selected or stated the value" in prompt_owner
+    assert "Setup-dialogue authority rule:" in prompt_owner
+    assert "candidate intent rather than confirmation" in prompt_owner
+    assert "resolve the analysis unit and repeated-stay handling before outcome" in prompt_owner
+    assert "Save it only after the user directly confirms that outcome" in prompt_owner
+    assert "Analysis-unit sequencing rule:" in prompt_owner
+    assert "do not bundle the all-stays choice with patient clustering" in prompt_owner
+
+
 def test_activation_initializes_first_use_projects_and_surfaces_failures() -> None:
     owner = _read("js/screens-guided-pi.js")
     project_owner = _read("js/screens-guided-pi-project.js")
@@ -144,7 +415,10 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     assert create.index("confirm_initialization: true") < create.index(
         "createPiCopilotSession"
     )
-    assert "if (expectedProjectId !== projectId()) return;" in create
+    assert (
+        "if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;"
+        in create
+    )
     assert "try { await prepareProject(); }" in load_status
     assert "catch (error) { state.error = errorText(error); }" in load_status
     assert "pi_project_study_context_missing" in project_owner
@@ -216,11 +490,19 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     api = _read("js/api.js")
     assert 'id="gdPiShell"' in guided
     assert 'id="gdLegacyShell"' in guided
-    assert "window.EU_GUIDED_PI.mount" in guided
-    assert (
-        "window.EU_GUIDED_PI = { mount, unmount, setShell, bindProject, isActive, rebind, notifyExtractionHandoff }"
-        in pi_owner
-    )
+    assert "piOwner.mount" in guided
+    assert "window.EU_GUIDED_PI = {" in pi_owner
+    for public_method in (
+        "mount",
+        "unmount",
+        "setShell",
+        "bindProject",
+        "isActive",
+        "rebind",
+        "notifyExtractionHandoff",
+        "confirmDataSourceBinding",
+    ):
+        assert public_method in pi_owner
     assert "new EventSource('/api/jobs/'" in pi_owner
     assert "syncProjectWorkflowAside" in pi_owner
     assert "completed_required_stages" in pi_owner
@@ -274,7 +556,13 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "http://127.0.0.1:8765/#guided" in pi_owner
     assert "gpi-model-options" in provider_owner
     assert 'type="password"' in provider_owner
+    assert 'name="enable_ai"' not in provider_owner
+    assert 'type="checkbox"' not in provider_owner
+    assert "验证并保存连接" in provider_owner
+    assert "科研运行仍需另行确认" in provider_owner
     assert "savePiCopilotProviderConfig" in pi_owner
+    assert "enable_ai: true" in pi_owner
+    assert "data.get('enable_ai')" not in pi_owner
     assert "provider_connection_unverified" in pi_owner
     assert "localStorage.setItem('easyicu_pi_api" not in pi_owner
     assert "keyInput.value = ''" in pi_owner
@@ -331,7 +619,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "private chain-of-thought" in activity_owner
     assert "assistantTextHtml" in pi_owner
     assert (
-        "row.role === 'assistant' ? assistantTextHtml(row.text) : esc(row.text)"
+        "row.role === 'assistant' ? assistantTextHtml(visibleText) : esc(visibleText)"
         in pi_owner
     )
     assert "event.type === 'run_start'" in pi_owner
@@ -401,7 +689,8 @@ def test_existing_project_study_setup_stays_in_bound_pi_conversation() -> None:
     assert "sendText(prompt, ['configure'])" in owner
     assert "event.target.closest('[data-gpi-study-setup]')" in owner
     assert "openStudySetupInConversation();" in owner
-    assert ".then(() => { if (projectId() === next.id) render(); })" in owner
+    assert "state.projectLoading = !!next" in owner
+    assert ".finally(() =>" in owner
     assert "legacy 0/8 aside" in owner
     assert "data-gpi-project-workflow-loading" in owner
     assert "Loading authoritative configuration…" in owner
@@ -416,9 +705,14 @@ def test_scientific_review_continues_as_one_question_in_chat() -> None:
     owner = _read("js/screens-guided-pi.js")
 
     assert "Answer next scientific question" in owner
+    assert "localizedAuthorizationQuestion" in owner
+    assert "OUTCOME_DEFINITION_UNRESOLVED" in owner
+    assert "这项研究应使用哪个当前数据可支持的临床结局及时间范围？" in owner
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in owner
+    assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" in owner
     assert "回答下一个科学问题" in owner
     assert "review.authorization_questions" in owner
-    assert "questions[0].question" in owner
+    assert "localizedAuthorizationQuestion(questions[0])" in owner
     assert "请一次只问我一个尚未解决的科学设定问题" in owner
 
 
@@ -528,6 +822,7 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert ".gpi-preview-frame" in preview_owner
     assert ".gpi-preview-code" in preview_owner
     assert ".gpi-preview-provenance" in preview_owner
+    assert ".gpi-preview-recent" in preview_owner
     assert ".gpi-resource-list" in owner
     assert ".gpi-lit-card" in literature_owner
     assert ".gpi-lit-step" in literature_owner
@@ -635,6 +930,8 @@ def test_pi_frontend_javascript_parses() -> None:
         "js/screens-guided-pi-workbench-preview.js",
         "js/screens-guided-pi-literature.js",
         "js/screens-guided-pi-markdown.js",
+        "js/screens-guided-pi-next-actions.js",
+        "js/screens-guided-pi-message-actions.js",
         "js/screens-guided-pi-demo.js",
         "js/screens-guided-pi-replay.js",
     ):
@@ -652,7 +949,7 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
         pytest.skip("Node is not installed")
     source = _read("js/screens-guided-pi-activity.js")
     script = f"""
-      global.window = {{}};
+      global.window = {{EU_LANG: 'en'}};
       eval({source!r});
       const activity = window.EU_GUIDED_PI_ACTIVITY.create({{
         tr: (en, _zh) => en,
@@ -665,23 +962,57 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
       const html = activity.render({{
         status: 'complete', expanded: true, startedAt: 1000, endedAt: 3500,
         steps: [
-          {{kind: 'assistant', phase: 1, status: 'complete', startedAt: 1000, endedAt: 1500}},
+          {{kind: 'assistant', phase: 1, status: 'complete', publicChars: 8, startedAt: 1000, endedAt: 1500}},
           {{
             kind: 'tool', toolName: 'easyicu_read_project_file', status: 'complete',
             startedAt: 1500, endedAt: 2500, resource: {{name: 'plan.json'}},
+            text: 'Loaded the governed project file.',
             arguments: 'secret-token', reasoning: 'secret-thought',
           }},
           {{kind: 'retry', status: 'complete', label: 'Plan contract retry', startedAt: 2500, endedAt: 2500}},
         ],
       }});
+      const live = {{status: 'running', startedAt: Date.now() - 1200, steps: [
+        {{kind: 'assistant', phase: 2, status: 'running', startedAt: Date.now() - 1200}},
+      ]}};
+      activity.appendPublicDelta(live, 'Visible public answer chunk');
+      const liveHtml = activity.render(live);
+      const turns = {{status: 'complete', startedAt: 1000, endedAt: 3000, steps: []}};
+      activity.startTurn(turns, 1000); activity.finishTurn(turns, 1800);
+      activity.startTurn(turns, 1900); activity.finishTurn(turns, 3000);
+      const turnHtml = activity.render(turns);
+      window.EU_LANG = 'zh';
+      const zhActivity = window.EU_GUIDED_PI_ACTIVITY.create({{
+        tr: (_en, zh) => zh,
+        esc: value => String(value == null ? '' : value),
+        iconHtml: () => '',
+        resourceName: resource => resource && resource.name || '',
+        resourceKey: resource => resource && resource.name || '',
+        resourceButton: (resource, label) => '<button>' + (label || resource.name) + '</button>',
+      }});
+      const zhHtml = zhActivity.render({{
+        status: 'complete', expanded: true, startedAt: 1000, endedAt: 2000,
+        steps: [
+          {{kind: 'tool', toolName: 'easyicu_inspect_context', status: 'complete', text: 'Loaded StudyContext revision 5.'}},
+          {{kind: 'tool', toolName: 'easyicu_inspect_workflow', status: 'complete', text: '已读取科研流程。'}},
+        ],
+      }});
       process.stdout.write(JSON.stringify({{
         activity: html.includes('Activity'),
         expanded: html.includes(' open>'),
-        modelPhase: html.includes('Model analysis and response phase 1 finished'),
+        modelPhase: html.includes('Public response phase 1 finished'),
         readTool: html.includes('Read project file · plan.json'),
         retryLabel: html.includes('Plan contract retry') && !html.includes('undefined'),
-        stepDuration: html.includes('500 ms') && html.includes('1.0s'),
+        stepDuration: html.includes('0.5s') && html.includes('1.0s') && html.includes('<0.1s'),
         totalDuration: html.includes('2.5s'),
+        publicStream: liveHtml.includes('Streaming public response phase 2')
+          && liveHtml.includes('Visible public answer chunk')
+          && liveHtml.includes('data-gpi-live-elapsed'),
+        noZeroMs: !html.includes('0 ms') && !liveHtml.includes('0 ms'),
+        distinctTurns: turnHtml.includes('Model turn 1 finished') && turnHtml.includes('Model turn 2 finished'),
+        englishReceiptVisibleInEnglish: html.includes('Loaded the governed project file.'),
+        mismatchedReceiptHiddenInChinese: !zhHtml.includes('Loaded StudyContext revision 5.')
+          && zhHtml.includes('已读取科研流程。'),
         privacyNotice: html.includes('private chain-of-thought is never displayed'),
         leaked: html.includes('secret-token') || html.includes('secret-thought'),
       }}));
@@ -701,6 +1032,11 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
         "retryLabel": True,
         "stepDuration": True,
         "totalDuration": True,
+        "publicStream": True,
+        "noZeroMs": True,
+        "distinctTurns": True,
+        "englishReceiptVisibleInEnglish": True,
+        "mismatchedReceiptHiddenInChinese": True,
         "privacyNotice": True,
         "leaked": False,
     }
@@ -712,10 +1048,10 @@ def test_pi_project_reopens_latest_session_and_replays_safe_lifecycle() -> None:
     replay = _read("js/screens-guided-pi-replay.js")
     assert "state.session.active_message_job_id" in owner
     assert "watchJob(activeMessageJob)" in owner
-    assert "preferredSessionId(state.sessions, remembered)" in owner
-    assert "preferredSessionId(state.sessions, '', next)" in owner
+    assert "preferredSessionId(state.sessions, remembered, '', uiLanguage())" in owner
+    assert "preferredSessionId(state.sessions, '', next, uiLanguage())" in owner
     assert "loadPiCopilotSessions(100, projectId(), next)" in owner
-    assert "replayOwner.preferredSessionId(matching, '', next)" in owner
+    assert "replayOwner.preferredSessionId(matching, '', next, uiLanguage())" in owner
     assert "await openSession(existingSessionId)" in owner
     assert "session.last_turn_events" in replay
     assert "next_cursor" in replay
@@ -742,9 +1078,10 @@ def test_pi_project_restore_does_not_let_an_empty_session_hide_history() -> None
       eval({source!r});
       const choose = window.EU_GUIDED_PI_REPLAY.preferredSessionId;
       const sessions = [
-        {{ session_id: 'empty-new', agent_mode: 'workspace', message_count: 0, last_message_job_id: null }},
-        {{ session_id: 'workspace-history', agent_mode: 'workspace', message_count: 0, last_message_job_id: 'job-1' }},
-        {{ session_id: 'research-history', agent_mode: 'research', message_count: 3, last_message_job_id: 'job-2' }},
+        {{ session_id: 'empty-new', agent_mode: 'workspace', language: 'en', message_count: 0, last_message_job_id: null }},
+        {{ session_id: 'workspace-history', agent_mode: 'workspace', language: 'en', message_count: 0, last_message_job_id: 'job-1' }},
+        {{ session_id: 'research-history', agent_mode: 'research', language: 'en', message_count: 3, last_message_job_id: 'job-2' }},
+        {{ session_id: 'research-history-zh', agent_mode: 'research', language: 'zh', message_count: 4, last_message_job_id: 'job-3' }},
       ];
       console.log(choose(sessions, 'empty-new'));
       console.log(choose(sessions, 'workspace-history'));
@@ -753,6 +1090,8 @@ def test_pi_project_restore_does_not_let_an_empty_session_hide_history() -> None
       console.log(choose(sessions, '', 'workspace'));
       console.log(choose(sessions, '', 'research'));
       console.log(choose(sessions, 'empty-new', 'workspace'));
+      console.log(choose(sessions, 'research-history-zh', 'research', 'en'));
+      console.log(choose(sessions, '', 'research', 'zh'));
     """
     completed = subprocess.run(
         [node, "--eval", script],
@@ -769,7 +1108,22 @@ def test_pi_project_restore_does_not_let_an_empty_session_hide_history() -> None
         "workspace-history",
         "research-history",
         "workspace-history",
+        "research-history",
+        "research-history-zh",
     ]
+
+
+def test_pi_conversation_language_is_bound_to_the_active_ui_locale() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    replay = _read("js/screens-guided-pi-replay.js")
+    assert "function sessionMatchesUiLanguage" in owner
+    assert "state.sessions.filter(sessionMatchesUiLanguage)" in owner
+    assert "easyicu_pi_copilot_session:' + encodeURIComponent(projectId()) + ':' + uiLanguage()" in owner
+    assert "window.addEventListener('easyicu:languagechange', handleLanguageChange)" in owner
+    assert "if (!sessionMatchesUiLanguage(payload && payload.session))" in owner
+    assert "if (!sessionMatchesUiLanguage(state.session))" in owner
+    assert "requestedLanguage" in replay
+    assert "(!language || sessionLanguage === language)" in replay
 
 
 def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
@@ -1013,6 +1367,8 @@ def test_workspace_resource_button_preserves_checked_preview_digest() -> None:
         in owner
     )
     assert "checked_sha256: element.dataset.gpiResourceDigest" in owner
+    assert 'data-gpi-resource-entry-mode="${esc(resource.entry_mode || \'\')}"' in owner
+    assert "entry_mode: element.dataset.gpiResourceEntryMode" in owner
 
 
 def test_complete_research_demo_reuses_the_unchanged_agent_figure() -> None:
@@ -1193,6 +1549,176 @@ def test_assistant_message_renderer_makes_https_citations_clickable_and_safe() -
     assert "<em>journal</em>" in completed.stdout
 
 
+def test_copilot_next_step_owner_projects_clickable_choices_and_safe_fallback() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-next-actions.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'zh' }};
+      eval({_ESCAPE_OWNER!r});
+      eval({owner!r});
+      const choices = window.EU_GUIDED_PI_NEXT_ACTIONS.project(
+        '已确认 MIMIC-IV v3.1。\\n**下一步：**\\n请选择研究单位。\\n' +
+        '- 所有符合条件的 ICU stays\\n- 每位患者首次 ICU stay'
+      );
+      const fallback = window.EU_GUIDED_PI_NEXT_ACTIONS.project('成人是否定义为 **年龄 ≥18 岁？**');
+      const generic = window.EU_GUIDED_PI_NEXT_ACTIONS.project('研究配置已经保存。');
+      const inline = window.EU_GUIDED_PI_NEXT_ACTIONS.project(
+        '定义已保存。\\n**下一步：请选择主要结局：**\\n- ICU 内死亡\\n- 住院死亡'
+      );
+      const markdownHeading = window.EU_GUIDED_PI_NEXT_ACTIONS.project(
+        'Demo 仅为样本。\\n### 下一步：\\n请选择一个选项：\\n' +
+        '- 选择 MIMIC-IV Demo\\n- 选择 eICU Demo\\n- 继续无数据规划'
+      );
+      console.log(JSON.stringify({{choices, fallback, generic, inline, markdownHeading}}));
+      console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(choices, {{language: 'zh'}}));
+      console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(
+        {{body: '请选择研究单位。', prompt: '', choices: ['首次 ICU stay']}},
+        {{language: 'zh'}}
+      ));
+      console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(markdownHeading, {{language: 'zh'}}));
+      console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(generic, {{language: 'zh'}}));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    assert '"body":"已确认 MIMIC-IV v3.1。"' in completed.stdout
+    assert '"choices":["所有符合条件的 ICU stays","每位患者首次 ICU stay"]' in completed.stdout
+    assert '"prompt":"请选择主要结局："' in completed.stdout
+    assert '"prompt":"请选择主要结局：**"' not in completed.stdout
+    assert '"explicit":false' in completed.stdout
+    assert '"asking":false' in completed.stdout
+    assert 'data-gpi-next-choice="所有符合条件的 ICU stays"' in completed.stdout
+    assert '"choices":["选择 MIMIC-IV Demo","选择 eICU Demo","继续无数据规划"]' in completed.stdout
+    assert 'data-gpi-next-choice="确认并授权本轮准备并注册 MIMIC-IV Demo。"' in completed.stdout
+    assert "下载并准备 MIMIC-IV Demo" in completed.stdout
+    assert 'data-gpi-next-choice="继续无数据规划"' in completed.stdout
+    assert "点击后将作为你的下一条消息发送" in completed.stdout
+    assert "继续对话" in completed.stdout
+    assert "<script>" not in completed.stdout
+
+
+def test_demo_next_step_is_one_click_and_supports_an_existing_local_copy() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-next-actions.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'zh' }};
+      eval({_ESCAPE_OWNER!r});
+      eval({owner!r});
+      const projected = window.EU_GUIDED_PI_NEXT_ACTIONS.project(
+        '官方 Demo 尚未准备。\\n**下一步：**\\n' +
+        '- 授权下载并准备官方 MIMIC-IV Demo\\n' +
+        '- 暂不下载，继续完善研究设计'
+      );
+      console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(projected, {{ language: 'zh' }}));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+
+    assert 'data-gpi-next-grants="extract"' in completed.stdout
+    assert "确认并授权本轮准备并注册" in completed.stdout
+    assert "使用已经下载好的 MIMIC-IV Demo" in completed.stdout
+    assert "打开本地数据选择与扫描流程" in completed.stdout
+    assert "暂不下载，继续完善研究设计" in completed.stdout
+
+
+def test_copilot_public_projection_hides_internal_pi_codes_and_owner_paths() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    activity = _read("js/screens-guided-pi-activity.js")
+
+    assert "function publicAssistantText" in owner
+    assert "pi_action_authorization_required" in owner
+    assert "EasyICU 内部状态" in owner
+    assert "本轮一次性数据准备授权" in owner
+    assert "官方 Demo 准备流程" in owner
+    assert "const meta = stepDuration(step);" in activity
+    assert "step.code, step.owner" not in activity
+    assert "easyicu_prepare_demo_source: tr('Download and prepare official demo data'" in activity
+
+
+def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    css = _read("css/guided-pi.css")
+
+    assert "window.EU_GUIDED_PI_NEXT_ACTIONS" in owner
+    assert "row.complete !== false" in owner
+    assert "row === latestAssistant && !state.busy && !stale" in owner
+    assert "sendText(message, governedNextChoiceGrants(nextChoice, message))" in owner
+    assert "function governedNextChoiceGrants(element, message)" in owner
+    assert "provider_ready_to_generate_plan" in owner
+    assert "event.target.closest('[data-gpi-next-focus]')" in owner
+    assert ".gpi-next-step" in css
+    assert ".gpi-next-actions" in css
+
+
+def test_successful_local_source_action_opens_native_workspace_immediately() -> None:
+    owner = _read("js/screens-guided-pi.js")
+
+    assert "event.code || '') === 'easyicu_local_source_workspace_ready'" in owner
+    assert "resource && resource.kind === 'native_workspace'" in owner
+    assert "window.EU_GUIDED_PI_PREVIEW.open(localWorkspace, projectId())" in owner
+
+
+def test_copilot_message_action_owner_renders_copy_edit_and_latest_retry() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-message-actions.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'zh' }};
+      eval({_ESCAPE_OWNER!r});
+      eval({owner!r});
+      const actions = window.EU_GUIDED_PI_MESSAGE_ACTIONS.create({{
+        tr: (en, zh) => zh,
+        iconHtml: name => `<i>${{name}}</i>`,
+      }});
+      console.log(actions.render(
+        {{id: 'u1', role: 'user', text: '原问题', complete: true}},
+        {{allowEdit: true, canEdit: true}}
+      ).actionsHtml);
+      console.log(actions.render(
+        {{id: 'u1', role: 'user', text: '原问题', complete: true}},
+        {{editing: true, allowEdit: true, canEdit: true}}
+      ).editorHtml);
+      console.log(actions.render(
+        {{id: 'a1', role: 'assistant', text: '回答', complete: true}},
+        {{canRetry: true, retryText: '原问题'}}
+      ).actionsHtml);
+      console.log(actions.render(
+        {{id: 'a0', role: 'assistant', text: '旧回答', complete: true}},
+        {{canRetry: false, retryText: '旧问题'}}
+      ).actionsHtml);
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    assert "data-gpi-message-copy" in completed.stdout
+    assert "data-gpi-message-edit" in completed.stdout
+    assert "原消息会保留；修改内容将作为新消息发送。" in completed.stdout
+    assert completed.stdout.count("data-gpi-message-retry") == 1
+
+
+def test_copilot_message_actions_are_host_wired_without_history_rewrite() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    css = _read("css/guided-pi.css")
+
+    assert "window.EU_GUIDED_PI_MESSAGE_ACTIONS.create" in owner
+    assert "state.editingMessageId === row.id" in owner
+    assert "MESSAGE_ACTIONS.handleClick(event)" in owner
+    assert "MESSAGE_ACTIONS.handleSubmit(event)" in owner
+    message_owner = _read("js/screens-guided-pi-message-actions.js")
+    assert "copyText(row.text)" in message_owner
+    assert "context.sendText(input && input.value)" in message_owner
+    assert "context.sendText(precedingUserText(" in message_owner
+    assert "interactive: row === latestAssistant && !state.busy && !stale" in owner
+    assert ".gpi-message.user .gpi-message-actions{right:0;opacity:0}" in css
+    assert ".gpi-message-editor" in css
+
+
 def test_literature_preview_distinguishes_auxiliary_steps_from_scientific_gaps() -> (
     None
 ):
@@ -1284,6 +1810,68 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
         "1",
         "true",
     ]
+
+
+def test_preview_keeps_bounded_project_scoped_recent_resources() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    preview = _read("js/screens-guided-pi-preview.js")
+    resources = _read("js/screens-guided-pi-resources.js")
+    digest_a = "a" * 64
+    digest_b = "b" * 64
+    script = f"""
+      global.window = {{ EU_LANG: 'en', EU_API: {{}} }};
+      global.document = {{ getElementById() {{ return null; }} }};
+      eval({_ESCAPE_OWNER!r});
+      eval({resources!r});
+      eval({preview!r});
+      const host = {{
+        hidden: false,
+        innerHTML: '',
+        addEventListener() {{}},
+        replaceChildren() {{ this.innerHTML = ''; }},
+      }};
+      window.EU_GUIDED_PI_PREVIEW.mount(host);
+      const first = {{
+        kind: 'webpage', file: 'reports/cohort.html', label: 'Cohort review',
+        media_type: 'text/html', checked_sha256: '{digest_a}',
+      }};
+      const second = {{
+        kind: 'webpage', file: 'reports/timeline.html', label: 'Timeline review',
+        media_type: 'text/html', checked_sha256: '{digest_b}',
+      }};
+      window.EU_GUIDED_PI_PREVIEW.open(first, 'project-a');
+      console.log(String(host.innerHTML.includes('gpi-preview-recent')));
+      window.EU_GUIDED_PI_PREVIEW.open(second, 'project-a');
+      console.log(String(host.innerHTML.includes('Cohort review')));
+      console.log(String(host.innerHTML.includes('Timeline review')));
+      window.EU_GUIDED_PI_PREVIEW.close();
+      window.EU_GUIDED_PI_PREVIEW.open(first, 'project-a');
+      console.log(String(host.innerHTML.includes('Timeline review')));
+      window.EU_GUIDED_PI_PREVIEW.open(first, 'project-b');
+      console.log(String(host.innerHTML.includes('gpi-preview-recent')));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout.splitlines() == ["false", "true", "true", "true", "false"]
+
+
+def test_continuing_a_conversation_does_not_close_the_open_preview() -> None:
+    owner = _read("js/screens-guided-pi.js")
+    send_text = owner.split("async function sendText", 1)[1].split(
+        "async function sendMessage", 1
+    )[0]
+
+    assert "state.currentTurnResources = []" in send_text
+    assert "render();" in send_text
+    assert "EU_GUIDED_PI_PREVIEW.close" not in send_text
+    assert "EU_GUIDED_PI_PREVIEW.clearProject" not in send_text
 
 
 def test_workspace_sidecar_requires_digest_for_edit_and_teaches_safe_egress() -> None:
