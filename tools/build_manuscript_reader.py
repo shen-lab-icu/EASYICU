@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import shutil
@@ -18,12 +19,18 @@ from easyicu.research_agent.authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
 )
+from easyicu.research_agent.execution.runners.landmark_survival_executor import (
+    build_survival_manuscript_projection,
+)
 from easyicu.research_agent.literature import LiteratureBundle
 from easyicu.research_agent.reporting.bibtex import render_bibtex
 from easyicu.research_agent.reporting.latex import scaffold_to_latex
-from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 from easyicu.research_agent.reporting.manuscript_post import (
-    repair_missing_reportable_survival_results,
+    bind_numeric_values,
+    drop_untraceable_numeric_sentences,
+)
+from easyicu.research_agent.reporting.manuscript_projection import (
+    project_owner_issued_manuscript_claims,
 )
 from easyicu.research_agent.reporting.manuscript_quality import (
     repair_reader_structure_from_existing_prose,
@@ -83,16 +90,56 @@ def _prepare_reader_manuscript(
     source_bound: str,
     *,
     per_step_records: list[dict[str, Any]] | None = None,
-) -> tuple[str, tuple[dict[str, str], ...]]:
+) -> tuple[str, tuple[dict[str, Any], ...]]:
     """Apply provider-free reader repairs before provenance is projected."""
 
+    migrated_records = copy.deepcopy(per_step_records or [])
+    migration_repairs: list[dict[str, Any]] = []
+    for record in migrated_records:
+        summary = record.get("step_summary")
+        if not isinstance(summary, dict):
+            continue
+        reporting = summary.get("reportable_survival_results")
+        if not isinstance(reporting, dict):
+            continue
+        if "manuscript_projection" in reporting:
+            continue
+        association = reporting.get("time_varying_adjusted_association")
+        intervals = (
+            association.get("intervals") if isinstance(association, dict) else None
+        )
+        if (
+            record.get("generation_mode") != "deterministic_standard"
+            or record.get("deterministic_standard_analysis")
+            != "signed_landmark_survival_suite"
+            or reporting.get("schema_version") != "easyicu.survival_reporting/1"
+            or reporting.get("execution_owner") != "landmark_survival_executor_v1"
+            or not isinstance(intervals, list)
+            or not intervals
+        ):
+            continue
+        reporting["manuscript_projection"] = build_survival_manuscript_projection(
+            interval_count=len(intervals)
+        )
+        migration_repairs.append(
+            {
+                "reason_code": "legacy_owner_projection_contract_migrated",
+                "step_id": str(record.get("step_id") or ""),
+                "from_schema_version": "easyicu.survival_reporting/1",
+                "projection_schema_version": "easyicu.manuscript_projection/1",
+            }
+        )
     repaired, repairs = repair_reader_structure_from_existing_prose(source_bound)
-    repaired, survival_repairs = repair_missing_reportable_survival_results(
+    repaired, projection_repairs = project_owner_issued_manuscript_claims(
         repaired,
-        per_step_records=per_step_records or [],
+        per_step_records=migrated_records,
     )
     return repaired, tuple(
-        [*(dict(item) for item in repairs), *(dict(item) for item in survival_repairs)]
+        [
+            *(dict(item) for item in repairs),
+            *migration_repairs,
+            *(dict(item) for item in projection_repairs),
+        ]
     )
 
 
@@ -186,10 +233,28 @@ def build_bundle(
     )
 
     unbound = strip_numeric_provenance(prepared_bound)
+    unbound, removed_numeric_sentences = drop_untraceable_numeric_sentences(
+        unbound,
+        evidence=evidence,
+        per_step_records=verified_step_records,
+    )
+    deterministic_repairs = tuple(
+        [
+            *deterministic_repairs,
+            *(
+                {
+                    "reason_code": "strict_untraceable_numeric_sentence_removed",
+                    **dict(item),
+                }
+                for item in removed_numeric_sentences
+            ),
+        ]
+    )
     corrected, binding_map, untraced = bind_numeric_values(
         unbound,
         evidence=evidence,
         enforcement_mode=EvidenceEnforcementMode.STRICT,
+        per_step_records=verified_step_records,
     )
     if untraced:
         raise ValueError(f"unexpected untraced numeric values: {untraced[:8]}")

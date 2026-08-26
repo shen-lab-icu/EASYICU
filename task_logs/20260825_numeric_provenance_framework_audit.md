@@ -93,3 +93,46 @@ submission artifact. A replacement reader may be generated only after the
 generic reportable-result projection contract emits exact owner-issued numeric
 literals and the unchanged strict binder passes. No Provider rerun is required
 for this framework audit.
+
+## Generic projection closure and replacement reader
+
+The survival-only post-processing function was removed. Reporting now owns a
+typed `easyicu.manuscript_projection/1` contract that any deterministic
+`reportable_*_results` block may use. Each claim declares target sections plus
+ordered text/numeric fragments. The renderer resolves only declared paths and
+whitelisted numeric formats; missing paths, missing evidence, unsupported
+formats, absent sections, duplicate claim ids, and non-deterministic producers
+fail closed. It does not choose an estimand or calculate a statistic.
+
+The signed survival executor now emits that shared contract from its own owner
+module. The provider-free reader performs one explicit in-memory compatibility
+migration for frozen `easyicu.survival_reporting/1` artifacts; future runs emit
+the projection directly. The unchanged strict numeric filter removes Writer
+sentences whose thresholds are not registered and retains the exact
+owner-issued p-values.
+
+Replacement artifact:
+
+- directory: `/Volumes/外置硬盘/easyicu_data/figure2_dev9_h1_reader_framework_v8_20260825/`
+- PDF SHA-256: `48d229575799ada924a4a931cc1f2d0226019f0d24c58e798f615513d7c5eb32`
+- corrected manuscript SHA-256: `3c299de4ecece541a47d0cccaf3d5c067224d3b4f2420e299ca2066cd2dee2e5`
+- provenance SHA-256: `f46aeabe560dfca85ceeddee28a7c51adf4afa09d19c6b4c73420d488e1d0a83`
+- 22 numeric claims; zero Provider calls; zero figures; `analysis_only`;
+  publication authorization `false`.
+
+The receipt records removal of the two Writer sentences containing all six
+false ASCII/Unicode p-value thresholds. The replacement uses exact registered
+p-values `2.79869e-08`, `1.64711e-52`, `1.39608e-24`, and `1.69474e-35`.
+RMST CI footnotes carry interval estimand identity without hazard-ratio scale;
+time-varying CI footnotes retain local hazard-ratio scale.
+
+PDF QA: eight A4 pages rendered to PNG and all pages inspected. No clipping,
+overlap, broken glyph, undefined reference, or overfull box was found. LaTeX
+reported only underfull boxes in long monospace provenance lines; the rendered
+pages remain legible. The draft watermark remains. The title/exposure mismatch
+and the scientific blockers from the three-reviewer comparison remain open;
+v8 is a corrected analysis-only reader, not a submission-ready manuscript.
+
+Final focused validation after projection closure: `244 passed, 1 skipped,
+2 deselected`; Ruff and `git diff --check` pass; static architecture/module
+graph/release archive checks are included.

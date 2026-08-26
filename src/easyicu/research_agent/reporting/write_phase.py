@@ -64,6 +64,7 @@ from .manuscript_provenance import (
     ManuscriptProvenanceError,
     build_manuscript_provenance,
 )
+from .manuscript_projection import project_owner_issued_manuscript_claims
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
@@ -80,7 +81,6 @@ from .manuscript_post import (
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
     repair_miscited_numeric_citations,
-    repair_missing_reportable_survival_results,
     repair_single_variant_robustness_metric_prose,
 )
 from .readiness import _is_cosmetic_visual_error, execution_gate_status
@@ -1273,12 +1273,35 @@ def _repair_and_report_common_placeholders(
                     "Repaired common manuscript evidence placeholder(s): "
                     + ", ".join(f"{old}->{new}" for old, new in repairs)
                 ),
-                detail={
-                    "repairs": [{"from": old, "to": new} for old, new in repairs]
-                },
+                detail={"repairs": [{"from": old, "to": new} for old, new in repairs]},
             )
         )
     return repaired
+
+
+def _project_and_report_owner_manuscript_claims(
+    scaffold: str,
+    per_step_records: Sequence[Dict[str, Any]],
+    findings: List[ValidationFinding],
+) -> str:
+    projected, repairs = project_owner_issued_manuscript_claims(
+        scaffold,
+        per_step_records=current_step_records(per_step_records),
+    )
+    if repairs:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    "Projected deterministic owner-issued manuscript claim(s) "
+                    "omitted by Writer; the unchanged STRICT numeric and evidence "
+                    "gates revalidate them."
+                ),
+                detail={"repairs": repairs},
+            )
+        )
+    return projected
 
 
 def _draft_manuscript(
@@ -1513,22 +1536,9 @@ def _draft_manuscript(
         evidence_names=current_evidence_names,
         findings=findings,
     )
-    scaffold, survival_reporting_repairs = repair_missing_reportable_survival_results(
-        scaffold,
-        per_step_records=current_step_records(per_step_records),
+    scaffold = _project_and_report_owner_manuscript_claims(
+        scaffold, per_step_records, findings
     )
-    if survival_reporting_repairs:
-        findings.append(
-            ValidationFinding(
-                validator="evidence_bound_writer",
-                severity="warning",
-                message=(
-                    "Projected the executor-owned RMST result omitted by Writer; "
-                    "the unchanged STRICT numeric and evidence gates revalidate it."
-                ),
-                detail={"repairs": survival_reporting_repairs},
-            )
-        )
     scaffold, removed_unregistered_placeholders = (
         _remove_unregistered_evidence_placeholders(
             scaffold,
