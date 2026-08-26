@@ -2947,7 +2947,7 @@ class EvidenceStore:
                 if abs(candidate) > 1e-9:
                     rel = abs(candidate - canonical) / abs(candidate)
                 else:
-                    rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
+                    rel = float("inf")
                 abs_window = max(
                     display_abs_tol, window * max(abs(candidate), abs(canonical))
                 )
@@ -3116,6 +3116,20 @@ class EvidenceStore:
             record.evidence_id: record
             for record in self.current_verified_records(per_step_records)
         }
+        current_identity_scales: Dict[Tuple[str, str, str], Any] = {}
+        for raw in per_step_records:
+            step_id = str(raw.get("step_id") or "").strip()
+            evidence_id = str(raw.get("step_summary_evidence_id") or "").strip()
+            summary = raw.get("step_summary")
+            if not step_id or not evidence_id or not isinstance(summary, Mapping):
+                continue
+            for path, _literal, _canonical, effect_scale in (
+                _walk_numeric_leaves_with_effect_scale(
+                    summary,
+                    inherited_effect_scale=summary.get("effect_scale"),
+                )
+            ):
+                current_identity_scales[(step_id, evidence_id, path)] = effect_scale
         active_ids_by_step = active_step_evidence_ids_by_step(per_step_records)
         run_level_contracts = {
             "research_context": ("log", "pipeline"),
@@ -3133,6 +3147,18 @@ class EvidenceStore:
                     record_step == claim_step
                     and claim.evidence_id in active_ids_by_step.get(record_step, set())
                 ):
+                    identity_key = (
+                        claim_step,
+                        claim.evidence_id,
+                        claim.source_field,
+                    )
+                    if identity_key in current_identity_scales:
+                        payload = claim.to_dict()
+                        payload.pop("effect_scale", None)
+                        current_scale = current_identity_scales[identity_key]
+                        if current_scale not in (None, ""):
+                            payload["effect_scale"] = current_scale
+                        claim = NumericClaim.from_dict(payload)
                     authoritative.append(claim)
                 continue
 

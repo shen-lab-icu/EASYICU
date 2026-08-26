@@ -154,6 +154,19 @@ def test_near_zero_literal_does_not_match_zero_claim(ra, tmp_path: Path):
     assert binding_map["claim_1"].source_field == "risk_difference.ci_low"
 
 
+def test_scientific_notation_literal_does_not_match_zero_claim(ra, tmp_path: Path):
+    store = _store(ra, tmp_path)
+    store.register_numeric_claim(
+        value="0",
+        canonical=0.0,
+        evidence_id="e_zero",
+        step_id="s1",
+        source_field="zero_count",
+    )
+
+    assert store.find_claim_for_value("1e-52") is None
+
+
 def test_numeric_binder_rejects_claim_from_latest_failed_attempt(
     ra, tmp_path: Path
 ) -> None:

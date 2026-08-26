@@ -1,5 +1,10 @@
 # H1 evidence-bound manuscript repair and top-journal comparison
 
+> Superseded for numeric-provenance validation by `e081003` and
+> `20260825_numeric_provenance_framework_audit.md`. The v7 PDF remains only a
+> historical content-review artifact; use the framework-v8 reader for current
+> analysis-only review.
+
 Date: 2026-08-25 EDT
 
 Task: `FIG2-DEV9-HELDOUT27` / H1 manuscript-only development iteration

@@ -679,6 +679,101 @@ def _render_figure(
     return outputs
 
 
+def build_survival_manuscript_projection(*, interval_count: int) -> dict[str, object]:
+    """Build the reporting projection owned by the signed survival executor."""
+
+    if interval_count <= 0:
+        raise ValueError("survival manuscript projection requires intervals")
+    rmst_fragments = [
+        {"text": "Through "},
+        {"numeric_path": "rmst.tau_days_from_landmark", "format_spec": ".0f"},
+        {
+            "text": (
+                " days after the landmark, the unadjusted Kaplan–Meier plug-in "
+                "restricted mean survival time was "
+            )
+        },
+        {"numeric_path": "rmst.exposed_rmst_days", "format_spec": ".3f"},
+        {"text": " days in the exposed group and "},
+        {"numeric_path": "rmst.comparator_rmst_days", "format_spec": ".3f"},
+        {
+            "text": (
+                " days in the comparator group, an exposed-minus-comparator "
+                "difference of "
+            )
+        },
+        {"numeric_path": "rmst.difference_days", "format_spec": ".3f"},
+        {"text": " days (95% CI, "},
+        {"numeric_path": "rmst.ci_low", "format_spec": ".3f"},
+        {"text": " to "},
+        {"numeric_path": "rmst.ci_high", "format_spec": ".3f"},
+        {"text": "; p = "},
+        {"numeric_path": "rmst.p_value", "format_spec": ".6g"},
+        {"text": ")."},
+    ]
+    interval_fragments = [
+        {
+            "text": (
+                "The adjusted piecewise time-varying association estimates "
+                "for the exposed-versus-comparator contrast were "
+            )
+        }
+    ]
+    for index in range(interval_count):
+        prefix = f"time_varying_adjusted_association.intervals[{index}]"
+        if index:
+            interval_fragments.append({"text": "; "})
+        interval_fragments.extend(
+            [
+                {"text": "days "},
+                {"numeric_path": f"{prefix}.start_days", "format_spec": ".0f"},
+                {"text": "–"},
+                {"numeric_path": f"{prefix}.end_days", "format_spec": ".0f"},
+                {"text": ": hazard ratio "},
+                {"numeric_path": f"{prefix}.hazard_ratio", "format_spec": ".3f"},
+                {"text": " (95% CI, "},
+                {"numeric_path": f"{prefix}.ci_low", "format_spec": ".3f"},
+                {"text": " to "},
+                {"numeric_path": f"{prefix}.ci_high", "format_spec": ".3f"},
+                {"text": "; p = "},
+                {"numeric_path": f"{prefix}.p_value", "format_spec": ".6g"},
+                {"text": ")"},
+            ]
+        )
+    interval_fragments.append(
+        {
+            "text": (
+                ". These interval-specific estimates were retained because "
+                "the proportional-hazards assumption was rejected."
+            )
+        }
+    )
+    return {
+        "schema_version": "easyicu.manuscript_projection/1",
+        "claims": [
+            {
+                "claim_id": "primary_rmst_contrast",
+                "targets": [
+                    {"kind": "abstract_label", "label": "Results"},
+                    {"kind": "markdown_heading", "label": "Primary association"},
+                ],
+                "fragments": rmst_fragments,
+            },
+            {
+                "claim_id": "time_varying_association_intervals",
+                "targets": [
+                    {"kind": "abstract_label", "label": "Results"},
+                    {
+                        "kind": "markdown_heading",
+                        "label": "Sensitivity and subgroup analyses",
+                    },
+                ],
+                "fragments": interval_fragments,
+            },
+        ],
+    }
+
+
 def run_landmark_survival_suite(
     *,
     frame: Any,
@@ -1049,6 +1144,9 @@ def run_landmark_survival_suite(
                     for row in exposure_intervals.itertuples(index=False)
                 ],
             },
+            "manuscript_projection": build_survival_manuscript_projection(
+                interval_count=len(exposure_intervals)
+            ),
         }
 
     out_dir.mkdir(parents=True, exist_ok=True)
