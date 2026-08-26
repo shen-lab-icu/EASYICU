@@ -83,6 +83,7 @@ from .manuscript_post import (
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
     repair_miscited_numeric_citations,
+    repair_single_variant_robustness_metric_prose,
 )
 from .readiness import _is_cosmetic_visual_error, execution_gate_status
 from .writer_evidence import (
@@ -106,6 +107,7 @@ from .reporting_checklist import (
 from .reviewer import run_reviewer_round
 from ..schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
+from ..robustness.panel import load_robustness_panel
 from ..gates.figure_egress import (
     FigureEgressReceiptError,
     register_figure_egress_receipt,
@@ -1300,6 +1302,59 @@ def _render_or_resume_writer_scaffold(
     return scaffold
 
 
+def _rehydrate_step_numeric_authority(
+    *,
+    pipeline: Any,
+    evidence: Any,
+    per_step_records: Sequence[Dict[str, Any]],
+) -> None:
+    """Idempotently reapply the current headline-priority numeric cap."""
+
+    max_leaves = (
+        pipeline._max_numeric_claims_per_step
+        if pipeline._max_numeric_claims_per_step > 0
+        else None
+    )
+    for record in current_step_records(per_step_records):
+        summary = record.get("step_summary")
+        evidence_id = record.get("step_summary_evidence_id")
+        step_id = record.get("step_id")
+        if isinstance(summary, dict) and evidence_id and step_id:
+            evidence.register_step_summary_numerics(
+                step_id=str(step_id),
+                evidence_id=str(evidence_id),
+                summary=summary,
+                max_leaves=max_leaves,
+            )
+
+
+def _repair_robustness_reader_prose(
+    *,
+    scaffold: str,
+    run_dir: Path,
+    findings: List[ValidationFinding],
+) -> str:
+    """Render a single robustness variant as its estimate and interval."""
+
+    repaired, repairs = repair_single_variant_robustness_metric_prose(
+        scaffold,
+        panel=load_robustness_panel(run_dir / "robustness_panel.json"),
+    )
+    if repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_robustness_prose",
+                severity="warning",
+                message=(
+                    "Replaced a one-variant robustness envelope with the "
+                    "registered point estimate and confidence interval."
+                ),
+                detail={"repairs": repairs},
+            )
+        )
+    return repaired
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -1320,6 +1375,11 @@ def _draft_manuscript(
     emit_progress: Callable[..., None],
 ) -> _DraftStageResult:
     """Generate and minimally repair the evidence-aware manuscript scaffold."""
+    _rehydrate_step_numeric_authority(
+        pipeline=pipeline,
+        evidence=evidence,
+        per_step_records=per_step_records,
+    )
     # The evidence store is append-only across resume attempts. Freeze one
     # digest-verified view after the optional literature inputs are registered
     # and use it for every analysis-facing writer consumer; otherwise an old
@@ -1479,6 +1539,11 @@ def _draft_manuscript(
                 },
             )
         )
+    scaffold = _repair_robustness_reader_prose(
+        scaffold=scaffold,
+        run_dir=run_dir,
+        findings=findings,
+    )
     scaffold, placeholder_repairs = _repair_common_writer_placeholders(
         scaffold,
         context=context,

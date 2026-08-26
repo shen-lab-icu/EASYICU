@@ -832,6 +832,107 @@ def test_numeric_sentence_filter_merges_overlapping_rejected_link_spans(
     assert untraced == []
 
 
+def test_single_variant_robustness_prose_uses_point_and_interval_owner() -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.reporting.manuscript_post import (
+        repair_single_variant_robustness_metric_prose,
+    )
+
+    row = SimpleNamespace(
+        spec_id="complete_case",
+        converged=True,
+        point_estimate=0.772091,
+        ci_low=0.750295,
+        ci_high=0.792510,
+        evidence_id="primary_discrimination",
+        notes="metric=AUROC; deterministic DeLong interval",
+    )
+    panel = SimpleNamespace(primary_spec_id="primary", n_variants=1, rows=(row,))
+    repaired, repairs = repair_single_variant_robustness_metric_prose(
+        "The robustness panel reported AUROC values ranging from 0.750 to "
+        "0.793, with a point estimate of 0.772 {evidence:robustness_panel}.",
+        panel=panel,
+    )
+    assert (
+        "AUROC of 0.772091 (95% CI, 0.750295–0.79251) "
+        "{evidence:primary_discrimination}" in repaired
+    )
+    assert "ranging from" not in repaired
+    assert repairs[0]["source"] == "single_variant_robustness_panel"
+
+
+def test_single_variant_robustness_prose_expands_point_only_sentence() -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.reporting.manuscript_post import (
+        repair_single_variant_robustness_metric_prose,
+    )
+
+    row = SimpleNamespace(
+        spec_id="complete_case",
+        converged=True,
+        point_estimate=0.772091,
+        ci_low=0.750295,
+        ci_high=0.792510,
+        evidence_id="primary_discrimination",
+        notes="metric=AUROC; deterministic DeLong interval",
+    )
+    panel = SimpleNamespace(primary_spec_id="primary", n_variants=1, rows=(row,))
+    repaired, repairs = repair_single_variant_robustness_metric_prose(
+        "The complete-case model had an AUROC of 0.772 "
+        "{evidence:robustness_panel}.",
+        panel=panel,
+    )
+    assert "95% CI, 0.750295–0.79251" in repaired
+    assert "{evidence:primary_discrimination}" in repaired
+    assert len(repairs) == 1
+
+
+def test_single_variant_robustness_prose_absorbs_post_period_citation() -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.reporting.manuscript_post import (
+        repair_single_variant_robustness_metric_prose,
+    )
+
+    row = SimpleNamespace(
+        spec_id="complete_case",
+        converged=True,
+        point_estimate=0.772091,
+        ci_low=0.750295,
+        ci_high=0.792510,
+        evidence_id="primary_discrimination",
+        notes="metric=AUROC; deterministic DeLong interval",
+    )
+    panel = SimpleNamespace(primary_spec_id="primary", n_variants=1, rows=(row,))
+    repaired, repairs = repair_single_variant_robustness_metric_prose(
+        "The complete-case model had an AUROC of 0.772. "
+        "{evidence:robustness_panel}",
+        panel=panel,
+    )
+    assert "95% CI, 0.750295–0.79251" in repaired
+    assert "{evidence:robustness_panel}" not in repaired
+    assert len(repairs) == 1
+
+
+def test_manuscript_metric_audit_retains_multiple_values_from_one_step() -> None:
+    from easyicu.research_agent.audits.manuscript_claims import (
+        _AUROC_SUMMARY_KEYS,
+        _BRIER_SUMMARY_KEYS,
+        _all_summary_scalars,
+    )
+
+    summary = {
+        "prediction_robustness_results": [{"auroc": 0.772, "brier_score": 0.144}],
+        "prediction_validation_receipt": {
+            "result": {"summary": {"auroc": 0.763, "brier_score": 0.072}}
+        },
+    }
+    assert _all_summary_scalars([summary], _AUROC_SUMMARY_KEYS) == [0.772, 0.763]
+    assert _all_summary_scalars([summary], _BRIER_SUMMARY_KEYS) == [0.144, 0.072]
+
+
 def test_conflicting_declared_and_source_effect_scales_fail_closed() -> None:
     from easyicu.research_agent.authority.numeric_claim_identity import NumericClaim
 
