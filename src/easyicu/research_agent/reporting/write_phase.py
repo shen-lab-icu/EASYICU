@@ -66,7 +66,11 @@ from .manuscript_provenance import (
 )
 from .manuscript_projection import project_owner_issued_manuscript_claims
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
-from ..literature import LiteratureAgent, LiteratureBundle
+from ..literature import (
+    LiteratureAgent,
+    LiteratureBundle,
+    manuscript_citable_keys,
+)
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
 from ..providers.structured_retry import StructuredResponseFailure
@@ -2349,7 +2353,7 @@ def _publish_and_audit_manuscript(
                     producer="pipeline",
                     generation_mode="system",
                 )
-            if literature is not None and getattr(literature, "citations", None):
+            if manuscript_citable_keys(literature):
                 bib = render_bibtex(literature)
                 bib_path = run_dir / f"{bib_basename}.bib"
                 bib_path.write_text(bib, encoding="utf-8")

@@ -28,7 +28,11 @@ from .bibtex import (
     render_thebibliography_block,
     sanitise_bibtex_key,
 )
-from ..literature import CitationRecord, LiteratureBundle
+from ..literature import (
+    CitationRecord,
+    LiteratureBundle,
+    manuscript_citable_keys,
+)
 
 
 # Map common Markdown constructs → LaTeX. Intentionally small; this is
@@ -310,7 +314,7 @@ def scaffold_to_latex(
     markdown = re.sub(r"\A\s*#\s*(?:\n|\Z)", "", markdown, count=1)
 
     if bibliography is not None:
-        allowed_citation_keys = {record.key for record in bibliography.citations}
+        allowed_citation_keys = set(manuscript_citable_keys(bibliography))
         requested_citation_keys = {
             part.strip().lstrip("@")
             for match in _LITERATURE_CITATION_PATTERN.finditer(markdown)
@@ -417,7 +421,7 @@ def scaffold_to_latex(
             parts.append(_render_body(body, claim_base_url=claim_base_url))
             parts.append("")
 
-    if bibliography is not None and bibliography.citations:
+    if manuscript_citable_keys(bibliography):
         if inline_bibliography:
             block = render_thebibliography_block(bibliography)
             if block:

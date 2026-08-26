@@ -193,7 +193,13 @@ class LiteratureScreeningDecision(BaseModel):
 class LiteratureBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
     research_question: str
-    citations: List[CitationRecord]
+    citations: List[CitationRecord] = Field(
+        ...,
+        description=(
+            "Candidate and curated record universe retained for audit. Use the "
+            "manuscript-citable projection before planning, writing, or export."
+        ),
+    )
     prisma: Optional[Dict[str, int]] = Field(
         default=None,
         description=(
@@ -233,6 +239,40 @@ class LiteratureBundle(BaseModel):
     )
 
 
+def manuscript_citable_records(
+    literature: Optional[LiteratureBundle],
+) -> tuple[CitationRecord, ...]:
+    """Project a candidate bundle into manuscript citation authority.
+
+    Curated records have no retrieval screening decision and remain citable.
+    Retrieved records are citable only when every recorded disposition is an
+    explicit include.  Exclusion or conflicting decisions fail closed while
+    the original candidate stays in the bundle for search-audit provenance.
+    """
+
+    if literature is None:
+        return ()
+    dispositions_by_key: dict[str, set[str]] = {}
+    for decision in literature.screening_decisions:
+        dispositions_by_key.setdefault(decision.citation_key, set()).add(
+            decision.disposition
+        )
+    return tuple(
+        record
+        for record in literature.citations
+        if not dispositions_by_key.get(record.key)
+        or dispositions_by_key[record.key] == {"include"}
+    )
+
+
+def manuscript_citable_keys(
+    literature: Optional[LiteratureBundle],
+) -> tuple[str, ...]:
+    """Return stable keys from :func:`manuscript_citable_records`."""
+
+    return tuple(record.key for record in manuscript_citable_records(literature))
+
+
 class HypothesisBlueprintAgent:
     """Build a literature-aware hypothesis scaffold before planning.
 
@@ -269,7 +309,7 @@ class HypothesisBlueprintAgent:
                 VariableRole.META,
             }
         ]
-        prior_keys = [c.key for c in literature.citations]
+        prior_keys = list(manuscript_citable_keys(literature))
         concept_dependencies = _blueprint_concept_dependencies(
             context=context,
             predictor=predictor,
@@ -740,7 +780,46 @@ class PubMedLiteratureClient:
                 "ICU",
             ),
         )
-        retained = _rank_protocol_search_results(context, records)[: int(retmax)]
+        by_pmid = {record.pmid: record for record in records if record.pmid}
+        ranked_by_query = [
+            _rank_protocol_search_results(
+                context,
+                [by_pmid[pmid] for pmid in ids if pmid in by_pmid],
+            )
+            for ids in ids_by_query
+        ]
+        retained: List[CitationRecord] = []
+        retained_pmids: set[str] = set()
+        offsets = [0 for _ in ranked_by_query]
+        while len(retained) < int(retmax):
+            added = False
+            for index, rows in enumerate(ranked_by_query):
+                while (
+                    offsets[index] < len(rows)
+                    and rows[offsets[index]].pmid in retained_pmids
+                ):
+                    offsets[index] += 1
+                if offsets[index] >= len(rows):
+                    continue
+                added = True
+                record = rows[offsets[index]]
+                offsets[index] += 1
+                retained.append(record)
+                if record.pmid:
+                    retained_pmids.add(record.pmid)
+                if len(retained) >= int(retmax):
+                    break
+            if not added:
+                break
+        if len(retained) < int(retmax):
+            for record in _rank_protocol_search_results(context, records):
+                if record.pmid in retained_pmids:
+                    continue
+                retained.append(record)
+                if record.pmid:
+                    retained_pmids.add(record.pmid)
+                if len(retained) >= int(retmax):
+                    break
         return PubMedContextSearchResult(
             records=retained,
             search_queries=queries,
@@ -1683,6 +1762,44 @@ def build_pubmed_protocol_queries_for_context(
     intent = _study_intent_clause(context.research_question)
     if exposure_or_topic and intent:
         queries.append(" AND ".join((exposure_or_topic, intent, _ICU_FILTER)))
+    if context.primary_exposure and any(
+        marker in (context.research_question or "").casefold()
+        for marker in ("survival", "hazard", "time-to-event", "time to event")
+    ):
+        exposure = _protocol_search_term(context, context.primary_exposure)
+        outcome_variable = context.variable(context.target_outcome or "")
+        outcome_identity = literature_concept_identity(
+            (
+                outcome_variable.source_concept or outcome_variable.name
+                if outcome_variable is not None
+                else context.target_outcome
+            )
+        )
+        outcome = (
+            outcome_identity.canonical_phrase
+            if outcome_identity is not None
+            else _protocol_search_term(context, context.target_outcome)
+        )
+        broad_outcome = ""
+        if "mortality" in outcome.casefold() or "death" in outcome.casefold():
+            broad_outcome = (
+                "(mortality[Title/Abstract] OR death[Title/Abstract])"
+            )
+        elif "survival" in outcome.casefold():
+            broad_outcome = (
+                "(survival[Title/Abstract] OR mortality[Title/Abstract] OR "
+                "death[Title/Abstract])"
+            )
+        if exposure and broad_outcome:
+            queries.append(
+                " AND ".join(
+                    (
+                        f'"{exposure.replace(chr(34), "")}"[Title/Abstract]',
+                        '"time-varying"[Title/Abstract]',
+                        broad_outcome,
+                    )
+                )
+            )
     return list(dict.fromkeys(query for query in queries if query))
 
 
@@ -2093,8 +2210,10 @@ class LiteratureAgent:
         #   URL already existed,
         # * screened = identified - duplicates_removed,
         # * eligible = retrieved records with an explicit include decision,
-        # * included = screened retrieval records accepted into the final
-        #   bundle (not the preset curated references).
+        # * included = screened retrieval records granted explicit citation
+        #   authority (not the preset curated references). Screened-out records
+        #   remain in the candidate bundle for audit but are removed by the
+        #   manuscript-citable projection.
         identified = 0
         duplicates = 0
         retrieved_included_keys: set[str] = set()
@@ -2719,7 +2838,7 @@ def _blueprint_self_critique(
     literature: LiteratureBundle,
 ) -> List[str]:
     critique: List[str] = []
-    if not literature.citations:
+    if not manuscript_citable_records(literature):
         critique.append(
             "No supporting literature keys were available; treat the hypothesis "
             "as exploratory."
@@ -2792,6 +2911,8 @@ __all__ = [
     "LiteratureAuthorityTrace",
     "LiteratureBundle",
     "LiteratureScreeningDecision",
+    "manuscript_citable_keys",
+    "manuscript_citable_records",
     "HypothesisBlueprintAgent",
     "LiteratureAgent",
     "build_preplan_literature_bundle",

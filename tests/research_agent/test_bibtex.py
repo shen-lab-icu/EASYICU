@@ -114,6 +114,59 @@ def test_render_bibtex_empty(ra):
     assert render_bibtex(LiteratureBundle(research_question="x", citations=[])) == ""
 
 
+def test_bibliography_omits_explicitly_excluded_candidates(ra):
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        LiteratureBundle,
+        LiteratureScreeningDecision,
+    )
+    from easyicu.research_agent.reporting.bibtex import (
+        render_bibtex,
+        render_thebibliography_block,
+    )
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
+
+    bundle = LiteratureBundle(
+        research_question="x",
+        citations=[
+            CitationRecord(key="curated_2020", title="Curated.", year="2020"),
+            CitationRecord(key="included_2024", title="Included.", year="2024"),
+            CitationRecord(key="excluded_2025", title="Excluded.", year="2025"),
+        ],
+        screening_decisions=[
+            LiteratureScreeningDecision(
+                citation_key="included_2024",
+                source="pubmed",
+                disposition="include",
+                evidence_role="direct_comparator",
+                rationale="Eligible.",
+            ),
+            LiteratureScreeningDecision(
+                citation_key="excluded_2025",
+                source="pubmed",
+                disposition="exclude",
+                evidence_role="related_context",
+                rationale="Ineligible.",
+            ),
+        ],
+    )
+
+    assert "curated_2020" in render_bibtex(bundle)
+    assert "included_2024" in render_bibtex(bundle)
+    assert "excluded_2025" not in render_bibtex(bundle)
+    assert "excluded_2025" not in render_thebibliography_block(bundle)
+
+    try:
+        scaffold_to_latex(
+            markdown="## Discussion\n\nUnsupported [@excluded_2025].",
+            bibliography=bundle,
+        )
+    except ValueError as exc:
+        assert "excluded_2025" in str(exc)
+    else:
+        raise AssertionError("excluded citation should fail closed")
+
+
 def test_render_bibtex_escapes_field_specials(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
     from easyicu.research_agent.reporting.bibtex import render_bibtex

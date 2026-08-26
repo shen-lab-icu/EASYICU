@@ -226,6 +226,47 @@ def test_protocol_queries_remove_operational_window_suffix(ra):
     assert any('"mechanical ventilation"[Title/Abstract]' in query for query in queries)
 
 
+def test_survival_protocol_adds_broad_time_varying_design_stratum(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Estimate the association between mechanical ventilation and "
+            "28-day mortality with time-to-event methods."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="mech_vent_max",
+                description="mechanical ventilation",
+                source_concept="mech_vent",
+                role="intervention",
+                dtype="int64",
+            ),
+            schema.ConceptDescriptor(
+                name="mort_28d",
+                description="28-day mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="mech_vent_max",
+        target_outcome="mort_28d",
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    dynamics = [query for query in queries if '"time-varying"' in query]
+    assert len(dynamics) == 1
+    assert '"mechanical ventilation"[Title/Abstract]' in dynamics[0]
+    assert "mortality[Title/Abstract] OR death[Title/Abstract]" in dynamics[0]
+    assert '"28-day mortality"' not in dynamics[0]
+
+
 def test_protocol_query_uses_question_topic_and_intent_without_exposure(ra):
     schema = ra.schema
     context = schema.ResearchContext(
@@ -691,6 +732,78 @@ def test_context_strata_preserve_queries_returning_each_record(ra):
     assert paths.count("esearch.fcgi") == len(result.search_queries)
     assert paths.count("esummary.fcgi") == 1
     assert paths.count("efetch.fcgi") == 1
+
+
+def test_context_strata_retain_complementary_query_coverage(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question=(
+            "Estimate the association between mechanical ventilation and "
+            "28-day mortality with time-to-event methods."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="mech_vent",
+                description="mechanical ventilation",
+                source_concept="mech_vent",
+                role="intervention",
+                dtype="int64",
+            ),
+            schema.ConceptDescriptor(
+                name="mort_28d",
+                description="28-day mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="mech_vent",
+        target_outcome="mort_28d",
+    )
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        PubMedLiteratureClient,
+    )
+
+    client = PubMedLiteratureClient()
+
+    def _esearch(query, *, retmax):
+        if '"time-varying"' in query:
+            return ["4"]
+        if "NOT (Review[Publication Type]" in query:
+            return ["2"]
+        if "survival[Title/Abstract] OR hazard[Title/Abstract]" in query:
+            return ["3"]
+        return ["1"]
+
+    records = {
+        "1": CitationRecord(
+            key="strict", title="Mechanical ventilation and 28-day mortality", year="2026", pmid="1"
+        ),
+        "2": CitationRecord(
+            key="observational", title="Mechanical ventilation cohort", year="2026", pmid="2"
+        ),
+        "3": CitationRecord(
+            key="survival", title="Mechanical ventilation survival", year="2026", pmid="3"
+        ),
+        "4": CitationRecord(
+            key="dynamics", title="Time-varying mechanical ventilation and mortality", year="2020", pmid="4"
+        ),
+    }
+
+    client._esearch = _esearch  # type: ignore[method-assign]
+    client._hydrate_ids = (  # type: ignore[method-assign]
+        lambda pmids, **kwargs: [records[pmid] for pmid in pmids]
+    )
+
+    result = client.search_context_strata(context, retmax=4)
+
+    assert {record.pmid for record in result.records} == {"1", "2", "3", "4"}
+    assert result.record_queries["dynamics"] == [
+        next(query for query in result.search_queries if '"time-varying"' in query)
+    ]
 
 
 def test_client_search_returns_empty_on_no_hits(ra):
