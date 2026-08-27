@@ -3738,6 +3738,7 @@ def _publish_native_export_v2(
     max_patients: Optional[int],
     result: Dict,
     concept_projection: Optional[Mapping[str, Sequence[str]]] = None,
+    require_stay_time_bounds: bool = False,
 ) -> Dict[str, object]:
     """Seal completed grouped-module files as one native-v2 package.
 
@@ -3839,6 +3840,22 @@ def _publish_native_export_v2(
         stay_time_upper_bounds = _native_export_stay_time_upper_bounds(
             pd.read_parquet(outcome_source)
         )
+    longitudinal_modules = [
+        module for module in published_modules if module not in {"demographics", "outcome"}
+    ]
+    if require_stay_time_bounds and longitudinal_modules and not stay_time_upper_bounds:
+        raise ValueError(
+            "native_export_v2 requires outcome.parquet with usable los_icu time "
+            "bounds before publishing longitudinal modules; include outcome in "
+            f"the same extraction package (modules={longitudinal_modules})"
+        )
+    time_window_authority = {
+        "required": bool(require_stay_time_bounds),
+        "source": (
+            "outcome.los_icu" if stay_time_upper_bounds else "fallback_only"
+        ),
+        "bounded_stays": int(len(stay_time_upper_bounds)),
+    }
     eicu_tidal_volume_age_lookup = None
     if normalized_database == "eicu" and "ventilator" in published_modules:
         eicu_tidal_volume_age_lookup = _load_eicu_tidal_volume_age_lookup(output_root)
@@ -4132,6 +4149,7 @@ def _publish_native_export_v2(
                 "concepts": len(concept_plan[module]),
                 "concept_ids": concept_plan[module],
                 "physical_concept_ids": requested_concept_plan[module],
+                "producer_rows": source_rows,
                 "rows": published_rows,
                 "physical_schema": physical_schema,
                 "parquet_sha256": parquet_sha256,
@@ -4213,8 +4231,12 @@ def _publish_native_export_v2(
             "time_origin": "icu_admission",
             "time_unit": "h",
             "time_window_policy": (
-                "longitudinal modules: ICU episode with 24h pre/post allowance; "
-                "outcome: stay-level at ICU admission"
+                "longitudinal modules: ICU episode with 24h pre/post allowance "
+                "bound by outcome.los_icu; outcome: stay-level at ICU admission"
+                if stay_time_upper_bounds
+                else "longitudinal modules: 24h pre-admission and 366-day safety "
+                "fallback without outcome.los_icu authority; outcome: stay-level "
+                "at ICU admission"
             ),
             "concept_order": "module_catalog",
             "unavailable_representation": "typed_all_null_placeholder",
@@ -4235,6 +4257,7 @@ def _publish_native_export_v2(
         "module_peak_rss_mb": module_peak_rss_mb,
         "module_peak_working_set_mb": module_peak_working_set_mb,
         "stream_retry_history": list(result.get("stream_retry_history", [])),
+        "time_window_authority": time_window_authority,
         "runtime_provenance": _native_export_runtime_provenance(),
         "unavailable_modules": unavailable_modules,
         "unavailable_concepts": unavailable_concepts,
@@ -4912,6 +4935,7 @@ def extract_database(
             modules=modules,
             max_patients=max_patients,
             result=result,
+            require_stay_time_bounds=True,
         )
 
     total_elapsed = time.time() - t_start
