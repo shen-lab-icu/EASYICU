@@ -1107,6 +1107,19 @@ def _stream_module_batches_to_parquet(
                     reorder=False,
                 )
                 if frame is not None:
+                    if id_col in frame.columns:
+                        outside_batch = frame[id_col].notna() & ~frame[id_col].isin(
+                            batch_ids
+                        )
+                        if bool(outside_batch.any()):
+                            outside_count = int(
+                                frame.loc[outside_batch, id_col].nunique()
+                            )
+                            raise ValueError(
+                                f"{module_name}: streamed batch returned "
+                                f"{outside_count} {id_col} values outside the "
+                                "requested patient partition"
+                            )
                     produced_concepts.update(
                         concept for concept in concepts if concept in frame.columns
                     )
