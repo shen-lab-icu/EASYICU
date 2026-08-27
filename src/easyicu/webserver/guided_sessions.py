@@ -1423,20 +1423,27 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
     )
     cap = max(1, min(int(limit or 20), 100))
     visible_drafts = drafts[:cap]
+    authority = ProjectAuthorityStore()
+    study_ids_by_project = {
+        str(row.get("id") or ""): authority.resolve(str(row.get("id") or ""))
+        for row in visible_drafts
+    }
+    contexts_by_id = study_contexts.get_contexts(
+        [study_id for study_id in study_ids_by_project.values() if study_id]
+    )
     # Old project folders can carry the default ``demo`` flag even after the
     # project is bound to a real registered export through StudyContext.  The
     # rail is a projection, so derive its data-mode label from the current
     # project setup instead of repeating stale creation-time metadata.  No
     # patient rows or host paths are returned.
     projected_drafts: List[Dict[str, Any]] = []
-    authority = ProjectAuthorityStore()
     for row in visible_drafts:
         projected = dict(row)
         setup = read_project_study_setup(str(row.get("id") or ""))
         if setup is not None and setup.data_source:
             projected["data_mode"] = "real"
-        study_id = authority.resolve(str(row.get("id") or ""))
-        study = study_contexts.get_context(study_id) if study_id else None
+        study_id = study_ids_by_project.get(str(row.get("id") or ""))
+        study = contexts_by_id.get(study_id) if study_id else None
         if study and study.get("data_source"):
             projected["data_mode"] = "real"
         history = agent_runs.list_run_history(study_id=study_id, limit=1) if study_id else {}

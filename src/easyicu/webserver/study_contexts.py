@@ -1395,17 +1395,22 @@ def get_context(context_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def existing_context_ids(context_ids: List[str]) -> set[str]:
-    """Return existing identifiers with one bounded store read."""
+def get_contexts(context_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Return selected contexts with one bounded store read."""
     clean_ids = {_identifier(value, field="id") for value in context_ids}
     if not clean_ids:
-        return set()
+        return {}
     with _LOCK:
         return {
-            str(context.get("id"))
+            str(context.get("id")): context
             for context in _contexts_from_raw(_read_raw())
             if context.get("id") in clean_ids
         }
+
+
+def existing_context_ids(context_ids: List[str]) -> set[str]:
+    """Return existing identifiers with one bounded store read."""
+    return set(get_contexts(context_ids))
 
 
 def get_active_context() -> Optional[Dict[str, Any]]:

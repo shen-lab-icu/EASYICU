@@ -1,5 +1,5 @@
 /* Guided Copilot message-action owner.
-   Historical messages are immutable: editing creates an explicit new turn. */
+   Editing creates a new turn; regenerating creates a recoverable Pi branch. */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
@@ -34,8 +34,8 @@
       const edit = role === 'user' && options && options.allowEdit
         ? action('edit', tr('Edit and send as a new message', '编辑并作为新消息发送'), 'edit', !options.canEdit)
         : '';
-      const retry = role === 'assistant' && options && options.canRetry && options.retryText
-        ? action('retry', tr('Ask again', '重新问'), 'refresh', false)
+      const retry = role === 'assistant' && options && options.canRetry && options.retryUserEntryId
+        ? action('retry', tr('Regenerate response', '重新生成回答'), 'refresh', false)
         : '';
       return {
         editorHtml: '',
@@ -79,13 +79,13 @@
       return context.rows().find(row => String(row.id || '') === String(id || ''));
     }
 
-    function precedingUserText(messageId) {
-      let text = '';
+    function precedingUser(messageId) {
+      let user = null;
       for (const row of context.rows()) {
-        if (String(row.id || '') === String(messageId || '')) return text;
-        if (row.role === 'user') text = String(row.text || '');
+        if (String(row.id || '') === String(messageId || '')) return user;
+        if (row.role === 'user') user = row;
       }
-      return '';
+      return null;
     }
 
     function articleId(target) {
@@ -126,7 +126,8 @@
       }
       const retry = event.target.closest('[data-gpi-message-retry]');
       if (retry) {
-        context.sendText(precedingUserText(articleId(retry)));
+        const user = precedingUser(articleId(retry));
+        if (user) context.regenerate(user.entryId, user.text, '', articleId(retry));
         return true;
       }
       return false;

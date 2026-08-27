@@ -76,6 +76,22 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert "details: modelVisible" in entrypoint
     assert "isError: true" in entrypoint
     assert 'error?.code || "pi_host_tool_rejected"' in entrypoint
+    assert 'case "session.regenerate.inspect"' in entrypoint
+    assert 'case "session.regenerate"' in entrypoint
+    assert "record.session.navigateTree(target.entryId" in entrypoint
+    assert "replaced_turn_index: target.turnIndex" in entrypoint
+    assert 'turnIntent === "advance_after_data_source_confirmation"' in entrypoint
+    assert "do not ask the next setup question" in entrypoint
+    assert "one concise data-preparation confirmation, not a study plan" in entrypoint
+    assert "MUST infer and propose one concrete recommended value" in entrypoint
+    assert "none may be omitted, described as unresolved, or deferred" in entrypoint
+    assert "Do not propose or discuss dependence handling" in entrypoint
+    assert "数据准备确认（不是正式研究计划）" in entrypoint
+    assert "do not offer an individual outcome, cohort, or time-window question" in entrypoint
+    assert "do not emit Markdown heading markers such as #, ##, or ###" in entrypoint
+    assert "exactly two hyphen-prefixed Markdown bullets; never use a numbered list" in entrypoint
+    assert "the next unresolved key scientific decision" not in entrypoint
+    assert "pi_regenerate_intent_invalid" in entrypoint
     projection = (APP_DIR / "src" / "event-projection.mjs").read_text(encoding="utf-8")
     assert "details.summary" in projection
     assert 'receipt.status === "blocked"' in projection
@@ -206,6 +222,97 @@ if (outcomes.filter((item) => item === "pi_session_authority_stale").length !== 
         check=False,
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_initial_question_update_uses_host_finalization_without_second_provider_call() -> None:
+    node = shutil.which("node")
+    if not node or not (APP_DIR / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    module = APP_DIR / "src" / "post-tool-finalization.mjs"
+    script = f"""
+      import {{ hostPostToolFinalization }} from {json.dumps(module.as_uri())};
+      const model = {{ api: 'openai-completions', provider: 'test', id: 'test' }};
+      const assistant = {{
+        role: 'assistant',
+        content: [{{
+          type: 'toolCall', id: 'call-1', name: 'easyicu_update_study_context',
+          arguments: {{ question: 'Sepsis-3 prevalence and ICU mortality', cohort: {{ age_min: 18 }} }},
+        }}],
+      }};
+      const toolResult = {{
+        role: 'toolResult', toolCallId: 'call-1', toolName: 'easyicu_update_study_context',
+        isError: false, content: [], details: {{
+          status: 'ok', code: 'study_context_updated', details: {{ workflow: {{
+            next_action_code: 'study_setup_incomplete',
+            missing_setup_fields: ['outcome', 'primary_exposure', 'time_window'],
+            study_setup_receipt: {{ configuration: {{ data_source: {{ database: 'miiv' }} }} }},
+          }} }},
+        }},
+      }};
+      const stream = hostPostToolFinalization(model, {{ messages: [assistant, toolResult] }}, 'zh');
+      if (!stream) throw new Error('expected host finalization');
+      const events = [];
+      for await (const event of stream) events.push(event);
+      const result = await stream.result();
+      console.log(JSON.stringify({{ types: events.map(event => event.type), result }}));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        cwd=APP_DIR,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    payload = json.loads(completed.stdout)
+    assert payload["types"] == [
+        "start",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "done",
+    ]
+    assert payload["result"]["usage"]["totalTokens"] == 0
+    assert "尚未开始数据提取或分析" in payload["result"]["content"][0]["text"]
+
+
+def test_host_finalization_does_not_intercept_later_scientific_updates() -> None:
+    node = shutil.which("node")
+    if not node or not (APP_DIR / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    module = APP_DIR / "src" / "post-tool-finalization.mjs"
+    script = f"""
+      import {{ hostPostToolFinalization }} from {json.dumps(module.as_uri())};
+      const model = {{ api: 'openai-completions', provider: 'test', id: 'test' }};
+      const assistant = {{
+        role: 'assistant',
+        content: [{{
+          type: 'toolCall', id: 'call-2', name: 'easyicu_update_study_context',
+          arguments: {{ outcome: 'ICU mortality', primary_exposure: 'Sepsis-3' }},
+        }}],
+      }};
+      const toolResult = {{
+        role: 'toolResult', toolCallId: 'call-2', toolName: 'easyicu_update_study_context',
+        isError: false, content: [], details: {{
+          status: 'ok', code: 'study_context_updated', details: {{ workflow: {{
+            next_action_code: 'study_setup_incomplete', missing_setup_fields: ['time_window'],
+            study_setup_receipt: {{ configuration: {{ data_source: {{ database: 'miiv' }} }} }},
+          }} }},
+        }},
+      }};
+      console.log(String(hostPostToolFinalization(model, {{ messages: [assistant, toolResult] }}, 'zh')));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        cwd=APP_DIR,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.stdout.strip() == "null"
 
 
 def test_host_reauthorizes_tool_request_and_rejects_unknown_fields(
@@ -791,6 +898,34 @@ def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     assert "projectTranscriptMessage" in source
 
 
+def test_transcript_projection_preserves_entry_ids_after_context_restore() -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is not installed")
+    module = APP_DIR / "src" / "event-projection.mjs"
+    script = f"""
+      import {{ pairTranscriptMessages }} from {json.dumps(module.as_uri())};
+      const restored = [
+        {{ role: "user", content: [{{ type: "text", text: "question" }}] }},
+        {{ role: "assistant", content: [{{ type: "text", text: "answer" }}] }},
+      ];
+      const branch = [
+        {{ entryId: "7entry-user-1", message: structuredClone(restored[0]) }},
+        {{ entryId: "8entry-assistant-1", message: structuredClone(restored[1]) }},
+      ];
+      const projected = pairTranscriptMessages(restored, branch);
+      console.log(JSON.stringify(projected.map(row => row.entryId)));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == ["7entry-user-1", "8entry-assistant-1"]
+
+
 def test_study_context_tool_schema_exposes_every_variance_owner_choice() -> None:
     source = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
     analysis_design = source.split(
@@ -1181,7 +1316,12 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "Use easyicu_inspect_run only when the user asks for status" in entrypoint
     assert "A persisted run_id is historical evidence, not proof of an active job" in entrypoint
     assert "When the workflow reports provider_ready_to_generate_plan" in entrypoint
+    assert "Raw-source convergence rule" in entrypoint
+    assert "never walk the user through cohort, outcome, exposure" in entrypoint
+    assert "include this recommendation inside the consolidated pending setup" in entrypoint
     assert "call easyicu_run exactly once with run_type='full'" in entrypoint
+    assert "When the workflow reports plan_ready" in entrypoint
+    assert "call easyicu_run exactly once with run_type='preflight'" in entrypoint
     assert "run_id_status=pending_pipeline_start" in entrypoint
     assert "save that commitment in typed analysis_design" in entrypoint
     assert "typed analysis_design.analysis_family" in entrypoint
@@ -1196,6 +1336,18 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "covariate_temporal_roles" in entrypoint
     assert "save only an explicit positive choice" in entrypoint
     assert "sensitivity_spec" in entrypoint
+
+
+def test_data_source_transition_regeneration_is_mechanically_read_only() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+
+    transition_guard = '''if (intent === "advance_after_data_source_confirmation") {
+      record.session.setActiveToolsByName([]);
+    }'''
+    assert transition_guard in entrypoint
+    assert entrypoint.index(transition_guard) < entrypoint.index(
+        "await record.session.navigateTree(target.entryId", entrypoint.index("async function regenerateSession")
+    )
 
 
 def test_system_prompt_keeps_declined_optional_sensitivity_out_of_study_context() -> None:
@@ -1231,28 +1383,34 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "userVisiblePromptText(part.text)" in entrypoint
     assert "use at most two short sentences around tool calls" in entrypoint
     assert "ask one direct question and stop" in entrypoint
-    assert "independently answerable scientific decision" in entrypoint
-    assert "Do not bundle cohort, estimand, timing, adjustment" in entrypoint
-    assert "do not recommend model-based or heteroskedasticity-robust variance" in entrypoint
-    assert "offer only the safe_alternatives returned by the host" in entrypoint
+    assert "stop setup questioning and let the host ask whether to generate" in entrypoint
+    assert "Do not write a Research Brief or shadow plan" in entrypoint
+    assert "host-owned plan confirmation card already supplies the next actions" in entrypoint
+    assert "do not write a Next step block, bullet choices, continue action" in entrypoint
+    assert "In a Chinese response, call the artifact 正式研究计划" in entrypoint
+    assert "propose unresolved design choices in agent_plan.json" in entrypoint
+    assert "pause for user review before analysis" in entrypoint
+    assert "Permission to generate a formal plan does not authorize Copilot" in entrypoint
+    assert "If neither path is executable, the plan must fail closed" in entrypoint
     assert "instead of inventing an executable cohort" in entrypoint
     assert "Typed time-window rule" in entrypoint
     assert "set time_window.anchor to the exact canonical value 'ICU admission'" in entrypoint
     assert 'anchor: Type.Optional(Type.Literal("ICU admission"' in entrypoint
     assert "It is not a phenotype's clinical definition anchor" in entrypoint
     assert "never save suspected-infection onset as its physical anchor" in entrypoint
-    assert "never send a questionnaire or numbered list of confirmations" in entrypoint
+    assert "not as a mandatory conversational questionnaire" in entrypoint
     assert "Never hide a blocker or weaken its exact stable code" in entrypoint
 
 
 def test_study_update_guidance_continues_with_model_chosen_scientific_step() -> None:
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
 
-    assert "continue the same reply from its returned post-update study and workflow" in entrypoint
+    assert "continue from its returned workflow" in entrypoint
     assert "make no further tool call for that user message" in entrypoint
     assert "Never expose session rebind, authority invalidation, host lifecycle" in entrypoint
-    assert "Choose one highest-impact unresolved scientific decision dynamically" in entrypoint
-    assert "the host renders the model-authored choices but must not hard-code" in entrypoint
+    assert "stop so the host can show the formal-plan generation confirmation" in entrypoint
+    assert "do not generate a candidate brief or ask another setup question" in entrypoint
+    assert "A repeated selection of the already-bound source is not a new setup decision" in entrypoint
     assert "persist every explicit, unambiguous user-authored slot" in entrypoint
     assert "do not make the user repeat facts from the same message" in entrypoint
     assert "omit only that unresolved field instead of bundling it" in entrypoint
@@ -1261,6 +1419,11 @@ def test_study_update_guidance_continues_with_model_chosen_scientific_step() -> 
     assert "one atomic study update that combines bind_source_id" in entrypoint
     assert "never ask for a generic 'continue'" in entrypoint
     assert "Continue opening the Data Extraction workspace" not in entrypoint
+    assert "EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1" in entrypoint
+    assert "do not call easyicu_inspect_workflow or easyicu_list_data_sources again" in entrypoint
+    assert 'currentTurnOwnerContext(sessionId)' in entrypoint
+    assert 'sessions.get(sessionId)?.session.setActiveToolsByName([])' in entrypoint
+    assert 'record.session.setActiveToolsByName(activeTools)' in entrypoint
 
     update_declaration = entrypoint.split(
         'name: "easyicu_update_study_context"', 1

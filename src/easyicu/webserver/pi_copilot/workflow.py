@@ -472,6 +472,12 @@ def build_research_workflow_snapshot(
     # evidence than a legacy StudyContext extraction flag so prepared-export
     # reuse cannot fall backward to extraction after preflight succeeds.
     prepared_export_receipted = bool(active_export_present or preflight_complete)
+    # Planning starts from the user's question plus an owner-confirmed data
+    # package. The Planner proposes unresolved design choices in its reviewable
+    # plan; Copilot must not fabricate a shadow plan just to fill setup slots.
+    plan_generation_ready = bool(
+        question_ready and prepared_export_receipted and not has_plan
+    )
     pending_review_reason_codes = {
         str(item).strip()
         for item in (run_row.get("pending_review_reason_codes") or [])
@@ -730,7 +736,7 @@ def build_research_workflow_snapshot(
                 else "complete"
                 if has_plan
                 else "ready"
-                if prepared_export_receipted and setup_ready
+                if plan_generation_ready
                 else "blocked"
             ),
             owner="easyicu.research_agent.planning",
@@ -746,9 +752,7 @@ def build_research_workflow_snapshot(
                 else "agent_plan_ready"
                 if has_plan
                 else "provider_ready_to_generate_plan"
-                if preflight_complete
-                else "plan_ready"
-                if prepared_export_receipted and setup_ready
+                if plan_generation_ready
                 else "active_export_or_setup_required"
             ),
         ),
@@ -824,7 +828,11 @@ def build_research_workflow_snapshot(
     # stage.  Counting it as done made analysis-only runs appear as 7/7 even
     # though their interpretation and manuscript were still awaiting review.
     completed = sum(1 for row in required if row.status == "complete")
-    if plan_attention_required or plan_regeneration_required:
+    if (
+        plan_attention_required
+        or plan_regeneration_required
+        or (plan_generation_ready and not idea_blocks_execution)
+    ):
         next_stage = next(row for row in required if row.id == "plan")
     else:
         next_stage = next(

@@ -25,8 +25,12 @@
       if (bindingReceipt && initialized && initialized.binding_receipt) {
         state.project = { ...state.project, binding_receipt: null };
       }
-      await loadWorkflow();
-      if (connectionReady()) await loadProjectSessions();
+      const workflowReady = loadWorkflow().then(render);
+      if (connectionReady()) {
+        await loadProjectSessions(false);
+      } else {
+        await workflowReady;
+      }
     } catch (error) {
       if (expectedProjectId !== projectId()) return;
       if (error && error.code === 'pi_project_initialization_required') {

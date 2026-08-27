@@ -215,6 +215,34 @@ class PiConversationReplayStore:
                     self._write(payload)
                     return
 
+    def supersede_from_turn_index(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+        turn_index: int,
+    ) -> None:
+        """Hide an abandoned conversation branch without deleting its audit rows."""
+        if turn_index < 0:
+            raise ValueError("turn_index must be non-negative")
+        with self._lock:
+            payload = self._read(session_id, project_id)
+            active = [
+                row
+                for row in payload["turns"]
+                if isinstance(row, dict) and not row.get("superseded")
+            ]
+            if turn_index > len(active):
+                raise PiCopilotError(
+                    "pi_replay_branch_invalid",
+                    "The Copilot replay branch is inconsistent with the transcript.",
+                    status_code=409,
+                )
+            for row in active[turn_index:]:
+                row["superseded"] = True
+                row["superseded_at"] = utc_now()
+            self._write(payload)
+
     def archive_child_job(
         self,
         *,
@@ -298,15 +326,20 @@ class PiConversationReplayStore:
     ) -> Dict[str, Any]:
         with self._lock:
             payload = self._read(session_id, project_id)
+        active_turns = [
+            row
+            for row in payload["turns"]
+            if isinstance(row, dict) and not row.get("superseded")
+        ]
         turn_page = self._turn_page(
-            list(payload["turns"]),
+            active_turns,
             cursor=cursor,
             limit=limit,
         )
         digest_payload = {
             "schema_version": payload["schema_version"],
             "updated_at": payload.get("updated_at"),
-            "turns": list(payload["turns"]),
+            "turns": active_turns,
             "child_jobs": list(payload["child_jobs"]),
         }
         public = {

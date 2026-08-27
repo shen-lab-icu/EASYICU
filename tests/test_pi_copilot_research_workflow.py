@@ -1115,6 +1115,42 @@ def test_completed_preflight_advances_to_provider_plan_confirmation() -> None:
     assert plan.reason_code == "provider_ready_to_generate_plan"
 
 
+def test_question_and_confirmed_data_package_offer_planner_before_setup_questionnaire() -> None:
+    study = {
+        "id": "study-planner-first",
+        "question": "Is early peak lactate associated with hospital mortality?",
+        "purpose": "Generate an evidence-bound research plan.",
+        "data_source": {
+            "path": "/private/prepared/source",
+            "database": "miiv",
+        },
+        "cohort": {},
+        "modules": [],
+        "outcome": "",
+        "primary_exposure": "",
+        "analysis_goal": "",
+        "time_window": {},
+        "export_format": "",
+        "confirmations": {"extraction_completed": True},
+    }
+
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run=None,
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert snapshot.current_stage == "plan"
+    assert snapshot.next_action_code == "provider_ready_to_generate_plan"
+    assert "cohort" in snapshot.missing_setup_fields
+    assert "outcome" in snapshot.missing_setup_fields
+    assert by_id["setup"].status == "ready"
+    assert by_id["plan"].status == "ready"
+    assert by_id["analysis"].status == "blocked"
+
+
 def test_completed_preflight_receipt_does_not_fall_back_to_extraction() -> None:
     study = _complete_study()
     study["confirmations"] = {
@@ -2824,6 +2860,53 @@ def test_full_run_cannot_use_mock_as_scientific_output() -> None:
     assert result["code"] == "pi_full_mock_not_scientific"
 
 
+def test_full_run_reports_setup_owner_before_provider_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incomplete = {
+        "id": "study-incomplete",
+        "revision": 3,
+        "question": "What is the aggregate Sepsis-3 prevalence?",
+        "data_source": {"path": "/private/raw/miiv", "database": "mimiciv"},
+        "cohort": {"preset": "adult_icu"},
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: incomplete)
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, *, study_override=None: {
+            "next_action_code": "study_setup_incomplete",
+            "missing_setup_fields": [
+                "outcome",
+                "primary_exposure",
+                "analysis_goal",
+                "time_window",
+                "export_format",
+                "modules",
+            ],
+        },
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-incomplete-plan",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id="study-incomplete",
+                study_revision=3,
+            ),
+        )
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_run", {"run_type": "full"}, context
+    )
+
+    assert result["code"] == "study_setup_incomplete"
+    assert result["owner"] == "easyicu.webserver.pi_copilot.workflow"
+    assert result["details"]["next_action_code"] == "study_setup_incomplete"
+    assert "provider_run" not in json.dumps(result)
+
+
 def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3702,12 +3785,17 @@ def test_guided_project_rail_projects_real_mode_from_authoritative_context(
         "ProjectAuthorityStore",
         lambda: SimpleNamespace(resolve=lambda _project_id: "study-context-source"),
     )
+    context_batch_calls: list[list[str]] = []
     monkeypatch.setattr(
         study_context_owner,
-        "get_context",
-        lambda _study_id: {
-            "id": "study-context-source",
-            "data_source": {"database": "miiv", "label": "MIMIC-IV"},
+        "get_contexts",
+        lambda study_ids: context_batch_calls.append(study_ids)
+        or {
+            study_id: {
+                "id": study_id,
+                "data_source": {"database": "miiv", "label": "MIMIC-IV"},
+            }
+            for study_id in study_ids
         },
     )
     monkeypatch.setattr(agent_runs, "list_run_history", lambda **_kwargs: {"runs": []})
@@ -3717,6 +3805,7 @@ def test_guided_project_rail_projects_real_mode_from_authoritative_context(
     assert payload["drafts"][0]["data_mode"] == "real"
     assert payload["drafts"][0]["workflow_status"] == "configured"
     assert rows[0]["data_mode"] == "unbound", "projection mutated registry metadata"
+    assert context_batch_calls == [["study-context-source"]]
 
 
 def test_guided_project_rail_projects_only_the_visible_limit(

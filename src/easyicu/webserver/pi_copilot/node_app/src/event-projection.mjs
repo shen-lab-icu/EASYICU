@@ -36,6 +36,21 @@ function modelErrorCode(message) {
   return "pi_model_provider_error";
 }
 
+export function pairTranscriptMessages(messages, contextMessages) {
+  const source = Array.isArray(messages) ? messages : [];
+  const context = Array.isArray(contextMessages) ? contextMessages : [];
+  const aligned = source.length === context.length && source.every((message, index) => (
+    String(message?.role || "") === String(context[index]?.message?.role || "")
+  ));
+  if (!aligned) return source.map((message) => ({ message, entryId: "" }));
+  return source.map((message, index) => ({
+    message,
+    // Pi session entry ids are opaque SDK values, not EasyICU stable ids. In
+    // particular they may begin with a digit, so only bound the value here.
+    entryId: boundedText(context[index]?.entryId, 160).trim(),
+  }));
+}
+
 function eventTimestamp(event, { useMessageTimestamp = false } = {}) {
   const value = Number(
     event?.timestamp ?? (useMessageTimestamp ? event?.message?.timestamp : undefined),

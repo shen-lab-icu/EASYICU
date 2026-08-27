@@ -123,6 +123,40 @@ def test_replay_store_pages_from_latest_without_dropping_earlier_turns(
     assert [row["job_id"] for row in previous["turns"]] == [
         f"message-{index:03d}" for index in range(100, 110)
     ]
+
+
+def test_replay_store_hides_superseded_branch_without_deleting_audit_rows(
+    tmp_path: Path,
+) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    for index in range(4):
+        _turn(store, index)
+
+    store.supersede_from_turn_index(
+        session_id="pi-demo",
+        project_id="project-demo",
+        turn_index=1,
+    )
+    _turn(store, 9)
+
+    current = store.snapshot(
+        session_id="pi-demo",
+        project_id="project-demo",
+        limit=10,
+    )
+    assert [row["job_id"] for row in current["turns"]] == [
+        "message-000",
+        "message-009",
+    ]
+    persisted = json.loads(store._path("pi-demo").read_text(encoding="utf-8"))
+    assert [row["job_id"] for row in persisted["turns"]] == [
+        "message-000",
+        "message-001",
+        "message-002",
+        "message-003",
+        "message-009",
+    ]
+    assert all(row.get("superseded") for row in persisted["turns"][1:4])
     with pytest.raises(PiCopilotError, match="cursor") as invalid:
         store.snapshot(
             session_id="pi-demo",
@@ -476,7 +510,7 @@ def test_node_and_browser_owners_use_cursor_pages_without_a_last_100_slice() -> 
     index = (root / "src/easyicu/webserver/static/index.html").read_text(
         encoding="utf-8"
     )
-    assert "function transcriptPage(messages, cursor, limit = 100)" in node
+    assert "function transcriptPage(messages, cursor, limit = 100, manager)" in node
     assert "session.messages.slice(-100)" not in node
     assert 'new Set(["session_id", "transcript_cursor", "transcript_limit"])' in node
     assert "next_cursor" in replay

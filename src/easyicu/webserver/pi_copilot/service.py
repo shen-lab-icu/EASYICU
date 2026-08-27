@@ -1321,6 +1321,7 @@ class PiCopilotService:
         *,
         project_id: str,
         action: str,
+        database: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Confirm one path-free source choice before a research conversation."""
 
@@ -1342,6 +1343,30 @@ class PiCopilotService:
                 "Choose a supported data-source confirmation action.",
                 status_code=422,
             )
+        clean_database = str(database or "").strip()
+        expected_database = None
+        if clean_database:
+            if clean_action != "begin_local_selection":
+                raise PiCopilotError(
+                    "pi_data_source_database_not_allowed",
+                    "A database may be supplied only when local selection begins.",
+                    status_code=422,
+                )
+            try:
+                profile = get_database_profile(clean_database)
+            except KeyError as exc:
+                raise PiCopilotError(
+                    "pi_database_not_supported",
+                    "Choose one exact supported ICU database.",
+                    status_code=422,
+                ) from exc
+            if not profile.is_public:
+                raise PiCopilotError(
+                    "pi_database_not_supported",
+                    "Local selection requires a supported full-database family.",
+                    status_code=422,
+                )
+            expected_database = profile.key
         context_id = self.project_store.assert_matches(
             project_id,
             record.binding.study_context_id,
@@ -1375,6 +1400,7 @@ class PiCopilotService:
                 "resource": extraction_workspace_resource(
                     context,
                     state="setup",
+                    expected_database=expected_database,
                     entry_mode="source_binding",
                 ),
             }
@@ -1495,6 +1521,8 @@ class PiCopilotService:
         project_id: str,
         message: str,
         allowed_actions: Iterable[str] = (),
+        regenerate_user_entry_id: Optional[str] = None,
+        regeneration_intent: Optional[str] = None,
     ) -> Dict[str, Any]:
         record = self._scoped_record(session_id, project_id=project_id)
         self._provider_gate(
@@ -1551,6 +1579,25 @@ class PiCopilotService:
                 details={"actions": unknown_actions},
             )
         self._ensure_open(record)
+        regenerate_target: Optional[Dict[str, Any]] = None
+        if regenerate_user_entry_id:
+            regenerate_target = self._conversation_gateway(
+                record,
+                refresh_account=True,
+            ).request(
+                "session.regenerate.inspect",
+                {
+                    "session_id": record.session_id,
+                    "user_entry_id": str(regenerate_user_entry_id),
+                },
+                timeout=30,
+            )
+            if str(regenerate_target.get("message") or "").strip() != text:
+                raise PiCopilotError(
+                    "pi_regenerate_message_mismatch",
+                    "The regenerate request no longer matches the active transcript.",
+                    status_code=409,
+                )
         tool_context = ToolExecutionContext(
             session=record.model_copy(deep=True),
             user_message=text,
@@ -1584,6 +1631,12 @@ class PiCopilotService:
             started.last_turn_status = "running"
             started.last_turn_allowed_actions = sorted(requested_actions)
             self._save_record(started)
+            if regenerate_target is not None:
+                self.replay_store.supersede_from_turn_index(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    turn_index=int(regenerate_target.get("turn_index") or 0),
+                )
             self.replay_store.start_turn(
                 session_id=record.session_id,
                 project_id=str(record.project_id),
@@ -1630,9 +1683,15 @@ class PiCopilotService:
                         "allowed_actions": sorted(requested_actions),
                     }
                 )
+                method = "session.regenerate" if regenerate_target is not None else "session.prompt"
+                params = {"session_id": record.session_id, "message": text}
+                if regenerate_target is not None:
+                    params["user_entry_id"] = str(regenerate_user_entry_id)
+                    if regeneration_intent:
+                        params["intent"] = str(regeneration_intent)
                 state = conversation_gateway.request(
-                    "session.prompt",
-                    {"session_id": record.session_id, "message": text},
+                    method,
+                    params,
                     timeout=COPILOT_MESSAGE_TIMEOUT_SECONDS,
                     event_sink=emit,
                     tool_context=tool_context,
