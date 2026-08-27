@@ -237,7 +237,7 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "cohort_stays": 200_859,
             "batch_size": 67_000,
             "peak_rss_mb": 6_316.5,
-            "seconds": 490.554,
+            "seconds": 512.467,
         },
         "sepsis3_sofa1": {
             "cohort_stays": 200_859,
