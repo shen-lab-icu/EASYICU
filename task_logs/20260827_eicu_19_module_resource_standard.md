@@ -57,7 +57,7 @@ Five modules require batching at this contract:
 | respiratory | 7,576.3 | 50,000 | 251.704 | 6,252.8 | `respiratory_batch50k` |
 | circulatory | 7,941.3 | 50,000 | 494.721 | 6,172.8 | `circulatory_batch50k` |
 | other_scores | 7,797.5 | 67,000 | 436.285 | 6,512.3 | `other_scores_batch3_retry` |
-| sofa1_score | 7,631.4 | 67,000 | 490.554 | 6,316.5 | `sofa1_score_batch67k_cache1024_98e950b` |
+| sofa1_score | 7,631.4 | 67,000 | 512.467 | 6,316.5 | default-cache timing + conservative peak from `sofa1_score_batch67k_cache1024_98e950b` |
 | sepsis3_sofa1 | 7,475.6 | 67,000 | 586.933 | 6,294.5 | `sepsis3_sofa1_batch67k_dependencies` |
 
 `respiratory` and `circulatory` both crossed the hard stop at 67,000 stays and
@@ -75,7 +75,9 @@ run includes `outcome`, `sepsis_shared`, `sofa1_score` and `sepsis3_sofa1`.
   production interleaved 50,000-stay 251.704 seconds / 6,252.8 MiB. Parquet
   pruning helps, but repeated item-bucket scans and recursive concepts remain
   the larger bottleneck.
-- SOFA cache A/B: 1 GiB completed at 490.554 seconds / 6,316.5 MiB. The 1.5 GiB
+- SOFA production-default 512 MiB cache completed at 512.467 seconds / 6,273.9
+  MiB. The 1 GiB A/B candidate completed at 490.554 seconds / 6,316.5 MiB, a
+  4.3% reduction that is not automatically enabled. The 1.5 GiB
   candidate showed the same remaining first-batch dependency reloads and was
   deliberately terminated at 166.607 seconds / 5,617.0 MiB; it is not a full
   performance result.

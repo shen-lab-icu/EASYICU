@@ -97,12 +97,12 @@ successful measured batch instead:
 | respiratory | stopped at 7,576.3 MiB | 50,000 stays (5 batches) | 251.7 s | 6,252.8 MiB |
 | circulatory | stopped at 7,941.3 MiB | 50,000 stays (5 batches) | 494.7 s | 6,172.8 MiB |
 | other_scores | stopped at 7,797.5 MiB | 67,000 stays (3 batches) | 436.3 s | 6,512.3 MiB |
-| sofa1_score | stopped at 7,631.4 MiB | 67,000 stays (3 batches) | 490.6 s | 6,316.5 MiB |
+| sofa1_score | stopped at 7,631.4 MiB | 67,000 stays (3 batches) | 512.5 s | 6,316.5 MiB |
 | sepsis3_sofa1 | stopped at 7,475.6 MiB | 67,000 stays (3 batches) | 586.9 s | 6,294.5 MiB |
 
 At 8 GiB currently available, selecting any subset of the 14 one-shot modules
 runs each selected module one-shot. Selecting `respiratory` or `circulatory`
-uses 50,000-stay batches; selecting either of the other three batch-only modules
+uses 50,000-stay batches; selecting any of the other three batch-only modules
 uses 67,000-stay batches. A full 19-module request uses the strictest measured
 50,000-stay batch. These measured batch paths show no cleanup warning because
 8 GiB already fits their fastest verified peak plus headroom. A warning appears
@@ -113,9 +113,10 @@ The physical-layout A/B found that contiguous 25,000-stay respiratory batches
 took 234.2 seconds at 6,061.4 MiB versus 251.7 seconds at 6,252.8 MiB for the
 production interleaved 50,000-stay path: only 6.9% faster despite more effective
 Parquet pruning. Increasing the SOFA resolver cache from 512 MiB to 1 GiB was
-safe and reduced the observed run to 490.6 seconds; 1.5 GiB showed no additional
-first-batch reuse and was stopped. These are optimisation diagnostics, not a
-new semantic output contract.
+safe and reduced the observed run from the production-default 512.5 seconds to
+490.6 seconds (4.3%); 1.5 GiB showed no additional first-batch reuse and was
+stopped. The product does not automatically enable the 1 GiB candidate. These
+are optimisation diagnostics, not a new semantic output contract.
 
 ## Evidence and limits
 
