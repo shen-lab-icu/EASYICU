@@ -147,6 +147,22 @@ _STREAM_CALIBRATED_REFERENCE = {
 # currently available is enough for a full MIMIC-IV one-shot.
 _MEASURED_ONESHOT_HEADROOM = 1.10
 _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "eicu": {
+        "demographics": {"cohort_stays": 200_859, "peak_rss_mb": 1_194.6, "seconds": 2.951},
+        "outcome": {"cohort_stays": 200_859, "peak_rss_mb": 1_114.3, "seconds": 2.624},
+        "blood_gas": {"cohort_stays": 200_859, "peak_rss_mb": 1_104.6, "seconds": 7.293},
+        "hematology": {"cohort_stays": 200_859, "peak_rss_mb": 3_024.5, "seconds": 18.537},
+        "chemistry": {"cohort_stays": 200_859, "peak_rss_mb": 5_381.2, "seconds": 38.103},
+        "vasopressors": {"cohort_stays": 200_859, "peak_rss_mb": 5_517.3, "seconds": 21.048},
+        "ventilator": {"cohort_stays": 200_859, "peak_rss_mb": 7_435.9, "seconds": 105.388},
+        "vitals": {"cohort_stays": 200_859, "peak_rss_mb": 5_362.4, "seconds": 158.082},
+        "renal": {"cohort_stays": 200_859, "peak_rss_mb": 6_354.4, "seconds": 438.054},
+        "medications": {"cohort_stays": 200_859, "peak_rss_mb": 7_320.6, "seconds": 175.857},
+        "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
+        "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
+        "sofa2_score": {"cohort_stays": 200_859, "peak_rss_mb": 6_926.6, "seconds": 558.108},
+        "sepsis3_sofa2": {"cohort_stays": 200_859, "peak_rss_mb": 6_268.4, "seconds": 372.807},
+    },
     "miiv": {
         "demographics": {
             "cohort_stays": 94_458,
@@ -187,6 +203,47 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "cohort_stays": 94_458,
             "peak_rss_mb": 3_544.406,
             "seconds": 107.3,
+        },
+    }
+}
+
+# Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
+# separate measured batch profile. A successful batch peak authorises only the
+# recorded batch size (or a smaller one), never an unmeasured one-shot. This is
+# intentionally independent of ``MAX_EXTRACT_CHUNKS``: real eICU evidence shows
+# that respiratory/circulatory need five balanced patient batches at 8 GiB,
+# while three larger batches cross the same hard RSS limit.
+_MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "eicu": {
+        "respiratory": {
+            "cohort_stays": 200_859,
+            "batch_size": 50_000,
+            "peak_rss_mb": 6_252.8,
+            "seconds": 251.704,
+        },
+        "circulatory": {
+            "cohort_stays": 200_859,
+            "batch_size": 50_000,
+            "peak_rss_mb": 6_172.8,
+            "seconds": 494.721,
+        },
+        "other_scores": {
+            "cohort_stays": 200_859,
+            "batch_size": 67_000,
+            "peak_rss_mb": 6_512.3,
+            "seconds": 436.285,
+        },
+        "sofa1_score": {
+            "cohort_stays": 200_859,
+            "batch_size": 67_000,
+            "peak_rss_mb": 6_316.5,
+            "seconds": 490.554,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 200_859,
+            "batch_size": 67_000,
+            "peak_rss_mb": 6_294.5,
+            "seconds": 586.933,
         },
     }
 }
@@ -272,6 +329,47 @@ def _measured_oneshot_requirement(
         selected.append(profile)
     measured_peak_mb = max(float(profile["peak_rss_mb"]) for profile in selected)
     return measured_peak_mb * _MEASURED_ONESHOT_HEADROOM, measured_peak_mb
+
+
+def _measured_batch_recommendation(
+    database: str,
+    modules: Optional[Sequence[str]],
+    num_patients: int,
+) -> Optional[tuple[int, float, float]]:
+    """Return the fastest fully-covered measured batch recommendation.
+
+    The tuple is ``(batch_size, required_available_mb, measured_peak_mb)``.
+    One-shot-profiled modules do not constrain a mixed request's batch size;
+    every requested module must nevertheless have either a one-shot or batch
+    profile so an unmeasured module cannot borrow another module's authority.
+    """
+
+    requested_modules = tuple(dict.fromkeys(str(module) for module in modules or ()))
+    if not requested_modules:
+        return None
+    normalized_database = _normalise_stream_database(database)
+    oneshot_profiles = _MEASURED_ONESHOT_PROFILES.get(normalized_database, {})
+    batch_profiles = _MEASURED_BATCH_PROFILES.get(normalized_database, {})
+    selected_batches = []
+    for module in requested_modules:
+        batch_profile = batch_profiles.get(module)
+        oneshot_profile = oneshot_profiles.get(module)
+        profile = batch_profile or oneshot_profile
+        if profile is None or int(num_patients) > int(profile["cohort_stays"]):
+            return None
+        if batch_profile is not None:
+            selected_batches.append(batch_profile)
+    if not selected_batches:
+        return None
+    batch_size = min(int(profile["batch_size"]) for profile in selected_batches)
+    measured_peak_mb = max(
+        float(profile["peak_rss_mb"]) for profile in selected_batches
+    )
+    return (
+        min(int(num_patients), batch_size),
+        measured_peak_mb * _MEASURED_ONESHOT_HEADROOM,
+        measured_peak_mb,
+    )
 
 
 def _quantize_stream_capacity(capacity: float, quantum: int) -> int:
@@ -465,8 +563,7 @@ def _resolve_stream_batch_size(
         total,
     )
     if (
-        total <= ONESHOT_MAX_PATIENTS
-        and measured_requirement is not None
+        measured_requirement is not None
         and available >= measured_requirement[0]
     ):
         return total
@@ -493,6 +590,24 @@ def _resolve_stream_batch_size(
             * _STREAM_CALIBRATION_QUANTUM
         )
         return min(batch_size, total)
+
+    measured_batch = _measured_batch_recommendation(
+        database,
+        modules,
+        total,
+    )
+    if measured_batch is not None:
+        recommended_batch, required_mb, _ = measured_batch
+        if available >= required_mb:
+            return recommended_batch
+        scaled_capacity = recommended_batch * available / max(1.0, required_mb)
+        return min(
+            recommended_batch,
+            _quantize_stream_capacity(
+                scaled_capacity,
+                _STREAM_BATCH_QUANTUM,
+            ),
+        )
 
     reserve = max(
         float(_STREAM_BATCH_MIN_RESERVE_MB),
@@ -620,6 +735,46 @@ def plan_extraction_resources(
                 f"当前可用内存 {available_gib:.2f} GiB，低于本次提取的实测 "
                 f"one-shot 门槛 {required_gib:.2f} GiB。EasyICU 将按患者分批，"
                 "速度会变慢；关闭占内存程序或清理内存后可恢复最快模式。"
+            ),
+        )
+
+    measured_batch = _measured_batch_recommendation(
+        database,
+        selected_modules,
+        total,
+    )
+    if measured_batch is not None:
+        _, required_mb, measured_peak_mb = measured_batch
+        if available >= required_mb:
+            return ExtractionResourcePlan(
+                mode=mode,
+                reason_code="measured_profile_fastest_safe_batch",
+                batch_size=batch_size,
+                available_memory_mb=available,
+                required_available_memory_mb=required_mb,
+                measured_peak_rss_mb=measured_peak_mb,
+                modules=selected_modules,
+            )
+        available_gib = available / 1024.0
+        required_gib = required_mb / 1024.0
+        return ExtractionResourcePlan(
+            mode=mode,
+            reason_code="measured_profile_insufficient_memory",
+            batch_size=batch_size,
+            available_memory_mb=available,
+            required_available_memory_mb=required_mb,
+            measured_peak_rss_mb=measured_peak_mb,
+            modules=selected_modules,
+            advisory=(
+                f"Available memory {available_gib:.2f} GiB is below the measured "
+                f"fastest-batch threshold {required_gib:.2f} GiB. EasyICU will "
+                "use smaller patient batches, which is slower. Close memory-heavy "
+                "apps or free memory to restore the fastest verified batch size."
+            ),
+            advisory_zh=(
+                f"当前可用内存 {available_gib:.2f} GiB，低于实测最快批次门槛 "
+                f"{required_gib:.2f} GiB。EasyICU 将使用更小的患者批次，速度会变慢；"
+                "关闭占内存程序或清理内存后可恢复最快已验证批次。"
             ),
         )
 
