@@ -884,7 +884,7 @@ def _worker_main(spec_path: Path) -> int:
         from easyicu.api.extraction import (
             EXTRACT_MODULE_ORDER,
             _get_all_patient_ids,
-            _resolve_stream_batch_size,
+            plan_extraction_resources,
         )
 
         imported_package = Path(easyicu.__file__).resolve().parent
@@ -906,12 +906,14 @@ def _worker_main(spec_path: Path) -> int:
         planning_memory_mb = float(
             spec.get("planning_memory_mb", spec["assigned_memory_mb"])
         )
-        planned_batch_size = _resolve_stream_batch_size(
+        resource_plan = plan_extraction_resources(
             database,
+            MODULE_ORDER,
             num_stays,
             requested_batch_size,
             available_memory_mb=planning_memory_mb,
         )
+        planned_batch_size = resource_plan.batch_size
         adaptive_core = bool(spec.get("adaptive_core")) and requested_batch_size is None
         plan = {
             "database": database,
@@ -924,6 +926,7 @@ def _worker_main(spec_path: Path) -> int:
             "assigned_memory_mb": round(float(spec["assigned_memory_mb"]), 1),
             "planning_memory_mb": round(planning_memory_mb, 1),
             "runtime_limits": runtime,
+            "resource_plan": resource_plan.to_dict(),
             "easyicu_git_commit": identity["commit"],
         }
         _atomic_write_json(plan_path, plan)
@@ -967,6 +970,7 @@ def _worker_main(spec_path: Path) -> int:
                 "initial_batch_size": actual_batch_size,
                 "planned_batch_count": math.ceil(num_stays / actual_batch_size),
                 "stream_retry_history": retries,
+                "resource_plan": resource_plan.to_dict(),
             },
             "runtime_limits": runtime,
             "package_receipt": receipt,

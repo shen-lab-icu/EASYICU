@@ -18,6 +18,7 @@
   let exportErr = null;         // terminal export error
   let exportCancelled = null;   // terminal user-requested cancel (partial result payload)
   let exportCohortReport = null; // cohort report from the job's start event (selected / before-cap)
+  let exportResourcePlan = null; // owner-issued one-shot / fallback decision
   let exportCancelRequested = false;
   let exOutputNotice = '';
   let exOutputError = '';
@@ -391,7 +392,7 @@
     abandonExtractionContinuity();
     exportRunMode = runMode;
     exportRunModules = modules;
-    exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false;
+    exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false;
     exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = '';
     exView = 'running'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
@@ -1114,7 +1115,7 @@
         exMerge = config.merge ? 'merged' : 'separate';
         exMaxPatients = Number(config.max_patients || 0);
         if (config.out_dir) exExportDir = config.out_dir;
-        exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportCancelRequested = false;
+        exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportCancelRequested = false;
         exView = 'running';
       } else {
         convJobId = record.job_id;
@@ -1127,11 +1128,15 @@
       if (!message || typeof message !== 'object') return;
       if (record.kind === 'extract') {
         if (exportJobId !== record.job_id) return;
-        if (message.type === 'progress') exportProg = message;
+        if (message.type === 'progress') {
+          exportProg = message;
+          if (message.resource_plan && typeof message.resource_plan === 'object') exportResourcePlan = message.resource_plan;
+        }
         else if (message.type === 'start') {
           // The start event carries the resolved cohort report — the only
           // honest source for 'sampled N of M' truncation disclosure.
           exportCohortReport = message.cohort && typeof message.cohort === 'object' ? message.cohort : null;
+          exportResourcePlan = message.resource_plan && typeof message.resource_plan === 'object' ? message.resource_plan : null;
         }
         else if (message.type === 'cancel_requested') {
           exportCancelRequested = true;
@@ -1696,9 +1701,12 @@
     const cur = p.current || 0, tot = p.total || 0;
     const pct = tot ? Math.round((cur / tot) * 100) : 0;
     const err = !!exportErr;
-    const progressText = p.message || (p.module
+    const progressText = (p.message_zh ? t(p.message || '', p.message_zh) : p.message) || (p.module
       ? `${p.module}${p.rows != null ? ` · ${Number(p.rows).toLocaleString()} ${t('rows', '行')}` : ''}`
       : t('selecting cohort…', '正在选择队列…'));
+    const memoryAdvisory = exportResourcePlan && exportResourcePlan.mode === 'patient_batches'
+      ? t(exportResourcePlan.advisory || '', exportResourcePlan.advisory_zh || exportResourcePlan.advisory || '')
+      : '';
     return `
     <div class="card pad" style="max-width:680px;margin:0 auto;">
       <div class="load-strip">
@@ -1712,6 +1720,7 @@
         : `<div style="height:8px;border-radius:999px;background:var(--surface-2,#eef0f4);overflow:hidden;margin:12px 0 8px;"><div style="height:100%;width:${pct}%;background:var(--accent,#2f7d6b);transition:width .25s;"></div></div>
            <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${p.phase === 'cohort' || p.phase === 'cancel' ? `${escHtml(progressText)}` : `<span class="mono">${escHtml(progressText)}</span>`}</div>
            ${cohortScaleNote() ? `<div style="font-size:11.5px;color:var(--ink-4);margin-top:4px;">${icon('cohort', 11)} ${escHtml(cohortScaleNote())}</div>` : ''}
+           ${memoryAdvisory ? `<div class="note mt-12" style="padding:10px 12px;background:color-mix(in srgb,var(--warn,#b45309) 8%,transparent);border-color:color-mix(in srgb,var(--warn,#b45309) 22%,transparent);"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d" style="font-size:11.5px;margin:0;">${escHtml(memoryAdvisory)}</div></div></div>` : ''}
            <div class="row mt-12" style="justify-content:flex-end;"><button class="btn sm ghost" data-ex-cancel ${exportCancelRequested || !exportJobId ? 'disabled' : ''}>${icon('alert', 13)} ${exportCancelRequested ? t('Cancel requested', '已请求取消') : t('Request cancel', '请求取消')}</button></div>`}
     </div>`;
   }
@@ -1891,7 +1900,7 @@
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
       root.querySelectorAll('[data-ex-open-output]').forEach(b => b.addEventListener('click', () => openExtractionOutput(b.dataset.exOpenOutput || '', b)));
       root.querySelectorAll('[data-ex-sync-guided]').forEach(b => b.addEventListener('click', () => continueInGuidedCopilot(b)));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
       // custom disclosure
       const cust = root.querySelector('[data-ex-custom]');
       if (cust) cust.addEventListener('click', () => { exCustomOpen = !exCustomOpen; repaint(); setTimeout(() => { const el = root.querySelector('.ex2-custom'); if (el && exCustomOpen) el.scrollIntoView ? null : null; }, 0); });

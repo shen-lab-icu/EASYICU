@@ -22,6 +22,7 @@ from easyicu.api.extraction import (
     _interleave_stream_patient_ids,
     _next_stream_retry_batch_size,
     _resolve_stream_batch_size,
+    plan_extraction_resources,
 )
 
 
@@ -214,6 +215,71 @@ def test_explicit_stream_batch_size_always_wins():
         )
         == 25_000
     )
+
+
+def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
+    """1.66-GiB measured peak + 10% headroom fits inside 2 GiB."""
+
+    plan = plan_extraction_resources(
+        "miiv",
+        ["blood_gas"],
+        94_458,
+        available_memory_mb=2 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 94_458
+    assert plan.measured_peak_rss_mb == pytest.approx(1_658.219)
+    assert plan.required_available_memory_mb == pytest.approx(1_824.041)
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
+
+
+def test_measured_module_batches_and_warns_only_below_its_threshold():
+    plan = plan_extraction_resources(
+        "miiv",
+        ["blood_gas"],
+        94_458,
+        available_memory_mb=1_800,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_insufficient_memory"
+    assert plan.batch_size == 48_000
+    assert _n_chunks(94_458, plan.batch_size) == 2
+    assert "1.78 GiB" in plan.advisory
+    assert "1.78 GiB" in plan.advisory_zh
+    assert "速度会变慢" in plan.advisory_zh
+
+
+def test_unmeasured_module_cannot_borrow_a_light_module_fast_path():
+    plan = plan_extraction_resources(
+        "miiv",
+        ["blood_gas", "renal"],
+        94_458,
+        available_memory_mb=2 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "unmeasured_profile_memory_guard"
+    assert plan.required_available_memory_mb == 24 * 1024
+    assert plan.advisory_zh
+
+
+def test_explicit_batch_remains_authoritative_without_cleanup_advisory():
+    plan = plan_extraction_resources(
+        "miiv",
+        ["blood_gas"],
+        94_458,
+        requested_batch_size=10_000,
+        available_memory_mb=64 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "explicit_batch_size"
+    assert plan.batch_size == 10_000
+    assert plan.advisory is None
 
 
 def test_first_measured_batch_can_grow_40k_to_67k():
