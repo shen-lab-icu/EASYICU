@@ -316,6 +316,51 @@ def test_measured_miiv_renal_warns_only_below_its_one_shot_threshold():
     assert plan.advisory_zh
 
 
+def test_measured_mimic_vasopressors_use_one_shot_at_8gib():
+    plan = plan_extraction_resources(
+        "mimic",
+        ["vasopressors"],
+        61_532,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 61_532
+    assert plan.measured_peak_rss_mb == pytest.approx(7_415.4)
+    assert plan.required_available_memory_mb == pytest.approx(8_156.94)
+    assert plan.advisory is None
+
+
+def test_measured_mimic_medications_use_fastest_verified_two_batches():
+    plan = plan_extraction_resources(
+        "mimic",
+        ["medications"],
+        61_532,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 31_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_236.8)
+    assert plan.required_available_memory_mb == pytest.approx(7_960.48)
+    assert plan.advisory is None
+
+
+def test_mimic_full_module_request_remains_guarded_until_last_five_are_measured():
+    plan = plan_extraction_resources(
+        "mimic",
+        list(EXTRACT_MODULES),
+        61_532,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "unmeasured_profile_memory_guard"
+    assert plan.advisory_zh
+
+
 def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
     plan = plan_extraction_resources(
         "eicu",
@@ -351,7 +396,7 @@ def test_measured_module_batches_and_warns_only_below_its_threshold():
 def test_unmeasured_module_cannot_borrow_a_light_module_fast_path():
     plan = plan_extraction_resources(
         "mimic",
-        ["blood_gas", "renal"],
+        ["blood_gas", "other_scores"],
         61_532,
         available_memory_mb=2 * 1024,
     )

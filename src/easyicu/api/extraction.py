@@ -259,6 +259,21 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 7_286.7,
             "seconds": 428.684,
         },
+    },
+    "mimic": {
+        "demographics": {"cohort_stays": 61_532, "peak_rss_mb": 1_008.5, "seconds": 12.177},
+        "outcome": {"cohort_stays": 61_532, "peak_rss_mb": 612.3, "seconds": 1.840},
+        "blood_gas": {"cohort_stays": 61_532, "peak_rss_mb": 1_936.3, "seconds": 8.244},
+        "hematology": {"cohort_stays": 61_532, "peak_rss_mb": 2_637.5, "seconds": 14.076},
+        "chemistry": {"cohort_stays": 61_532, "peak_rss_mb": 2_823.9, "seconds": 24.563},
+        "vasopressors": {"cohort_stays": 61_532, "peak_rss_mb": 7_415.4, "seconds": 111.911},
+        "ventilator": {"cohort_stays": 61_532, "peak_rss_mb": 2_220.9, "seconds": 91.871},
+        "vitals": {"cohort_stays": 61_532, "peak_rss_mb": 6_577.7, "seconds": 68.271},
+        "renal": {"cohort_stays": 61_532, "peak_rss_mb": 6_231.2, "seconds": 210.256},
+        "respiratory": {"cohort_stays": 61_532, "peak_rss_mb": 7_182.0, "seconds": 96.099},
+        "neurological": {"cohort_stays": 61_532, "peak_rss_mb": 6_044.1, "seconds": 39.021},
+        "circulatory": {"cohort_stays": 61_532, "peak_rss_mb": 6_159.8, "seconds": 447.094},
+        "sepsis_shared": {"cohort_stays": 61_532, "peak_rss_mb": 5_659.3, "seconds": 11.110},
     }
 }
 
@@ -300,7 +315,15 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 6_294.5,
             "seconds": 586.933,
         },
-    }
+    },
+    "mimic": {
+        "medications": {
+            "cohort_stays": 61_532,
+            "batch_size": 31_000,
+            "peak_rss_mb": 7_236.8,
+            "seconds": 383.955,
+        },
+    },
 }
 
 
