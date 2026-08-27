@@ -2104,6 +2104,11 @@ def make_export_runner(
         cohort_size = cohort_info["cohort_size"]
         load_kwargs = dict(cohort_info.get("load_kwargs") or {})
         sepsis_load_kwargs = dict(cohort_info.get("sepsis_load_kwargs") or {})
+        resource_plan = api.plan_extraction_resources(
+            database,
+            sel,
+            cohort_size,
+        ).to_dict()
         if getattr(job, "cancel_requested", False):
             return {
                 "out_dir": str(out),
@@ -2124,6 +2129,7 @@ def make_export_runner(
                 "max_patients": max_patients,
                 "cohort_size": cohort_size,
                 "cohort": cohort_info.get("cohort_report"),
+                "resource_plan": resource_plan,
             }
         )
         job.emit(
@@ -2161,6 +2167,7 @@ def make_export_runner(
             if str(value).strip()
         )
         total = len(sel)
+        module_resource_plans: Dict[str, Dict[str, object]] = {}
         with api.keep_cache(database=database, data_path=str(data_path)):
             for i, mod in enumerate(sel, start=1):
                 if getattr(job, "cancel_requested", False):
@@ -2180,7 +2187,30 @@ def make_export_runner(
                 use_sofa2 = any(
                     c.startswith("sofa2") or c == "sep3_sofa2" for c in module_concepts
                 )
+                module_resource_plan = api.plan_extraction_resources(
+                    database,
+                    [mod],
+                    cohort_size,
+                ).to_dict()
+                module_resource_plans[mod] = module_resource_plan
                 module_kwargs = dict(load_kwargs)
+                # Explicitly carry the owner decision into load_concepts so its
+                # legacy estimate cannot silently re-batch a measured fast path.
+                # ``batch_size == cohort_size`` is one scan / one patient batch.
+                module_kwargs["batch_size"] = int(module_resource_plan["batch_size"])
+                if module_resource_plan["mode"] == "patient_batches":
+                    job.emit(
+                        {
+                            "type": "progress",
+                            "phase": "resource",
+                            "current": i - 1,
+                            "total": total,
+                            "module": mod,
+                            "message": module_resource_plan.get("advisory"),
+                            "message_zh": module_resource_plan.get("advisory_zh"),
+                            "resource_plan": module_resource_plan,
+                        }
+                    )
                 if _module_uses_sepsis_kwargs(list(load_plan.source_concepts)):
                     module_kwargs.update(sepsis_load_kwargs)
                 from easyicu.datasource import (
@@ -2348,6 +2378,8 @@ def make_export_runner(
                 ),
                 "modules": {module: concept_plan[module] for module in sel},
             },
+            "resource_plan": resource_plan,
+            "module_resource_plans": module_resource_plans,
             "concept_availability": {
                 "structurally_unavailable_count": len(unavailable_concepts),
                 "structurally_unavailable": unavailable_concepts,
@@ -2390,6 +2422,8 @@ def make_export_runner(
             "feature_definitions_csv": (
                 "feature_definitions.csv" if definition_files else None
             ),
+            "resource_plan": resource_plan,
+            "module_resource_plans": module_resource_plans,
             "column_metadata": metadata_ref.file,
             "column_metadata_sha256": metadata_ref.sha256,
         }
