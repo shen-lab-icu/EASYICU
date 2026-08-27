@@ -366,7 +366,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260825-remove-project1" in index_html
+    assert "js/screens-guided.js?v=20260827-atomic-restore1" in index_html
     assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
 
 
@@ -538,8 +538,8 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260815-compact-rail2" in index_html
-    assert "css/guided-projects.css?v=20260825-remove-project1" in index_html
+    assert "css/guided.css?v=20260827-visual-hierarchy2" in index_html
+    assert "css/guided-projects.css?v=20260827-visual-hierarchy2" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260824-local-open1" in index_html
     assert (
@@ -641,7 +641,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260825-remove-project1" in index_html
+    assert "js/screens-guided.js?v=20260827-atomic-restore1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -2709,9 +2709,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260825-remove-project1" in index_html
-    assert "guided.css?v=20260815-compact-rail2" in index_html
-    assert "guided-projects.css?v=20260825-remove-project1" in index_html
+    assert "screens-guided.js?v=20260827-atomic-restore1" in index_html
+    assert "guided.css?v=20260827-visual-hierarchy2" in index_html
+    assert "guided-projects.css?v=20260827-visual-hierarchy2" in index_html
     assert "gd-name\">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span>" in projects_js
     assert "${t('New / open research folder', '新建/打开研究目录')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
@@ -3496,7 +3496,9 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
     assert "js/screens-extraction-embedded.js?v=20260825-source-binding1" in index_html
-    assert "js/screens-guided-pi.js?v=20260826-public-copy1" in index_html
+    assert "js/screens-guided-pi-starters.js?v=20260827-independent-starters1" in index_html
+    assert "js/screens-guided-pi-header.js?v=20260827-visual-hierarchy2" in index_html
+    assert "js/screens-guided-pi.js?v=20260827-regeneration-in-place1" in index_html
     assert "/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output" in api_js
     assert "window.EU_API.openExtractionOutput = openExtractionOutput" in api_js
     assert "data-ex-open-output" in extraction_js

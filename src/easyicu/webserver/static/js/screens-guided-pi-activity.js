@@ -5,8 +5,9 @@
   'use strict';
 
   const VISIBLE_KINDS = new Set([
-    'submitted', 'agent', 'turn', 'assistant', 'tool', 'pipeline', 'retry', 'compaction',
+    'submitted', 'agent', 'assistant', 'tool', 'pipeline', 'retry', 'compaction',
   ]);
+  const DURATION_KINDS = new Set(['assistant', 'tool', 'pipeline', 'retry', 'compaction']);
 
   function create(host) {
     const tr = host.tr;
@@ -27,7 +28,7 @@
       if (elapsed < 100) return tr('<0.1s', '<0.1 秒');
       const seconds = elapsed / 1000;
       if (seconds < 60) {
-        const value = seconds < 10 ? seconds.toFixed(1) : Math.round(seconds);
+        const value = seconds.toFixed(1);
         return tr(`${value}s`, `${value} 秒`);
       }
       const minutes = Math.floor(seconds / 60);
@@ -78,6 +79,7 @@
       if (turn) { turn.status = 'complete'; turn.endedAt = at; }
     }
     function stepDuration(step) {
+      if (!DURATION_KINDS.has(String(step && step.kind || ''))) return '';
       const started = Number(step && step.startedAt);
       const ended = Number(step && step.endedAt);
       return Number.isFinite(started) && Number.isFinite(ended) && ended >= started
@@ -216,7 +218,7 @@
       if (step.kind === 'assistant') {
         if (failed) return tr('The model response phase did not complete', '模型回复阶段未完成');
         if (done && step.publicChars) return tr(`Public response phase ${step.phase} finished`, `公开回复阶段 ${step.phase} 已输出`);
-        if (done && step.stopReason === 'toolUse') return tr(`Next action ${step.phase} prepared`, `下一步操作 ${step.phase} 已就绪`);
+        if (done && step.stopReason === 'toolUse') return tr(`Model processing phase ${step.phase} finished`, `模型处理阶段 ${step.phase} 已完成`);
         if (done) return tr(`Model response phase ${step.phase} finished`, `模型回复阶段 ${step.phase} 已完成`);
         if (step.publicChars) return tr(`Streaming public response phase ${step.phase}`, `正在流式输出公开回复阶段 ${step.phase}`);
         return tr(`Preparing the next visible action ${step.phase}`, `正在准备下一步可见操作 ${step.phase}`);
@@ -313,7 +315,7 @@
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
           <span class="gpi-activity-kicker">${esc(kicker)}</span>
           <span class="gpi-activity-title">${esc(title)}</span>
-          <span class="gpi-activity-meta">${esc(tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`))}${row.durationKnown === false ? '' : ` · ${esc(durationText(row.startedAt, row.endedAt))}`}</span>
+          <span class="gpi-activity-meta">${esc(tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`))}${row.durationKnown === false ? '' : ` · ${esc(tr(`total ${durationText(row.startedAt, row.endedAt)}`, `总耗时 ${durationText(row.startedAt, row.endedAt)}`))}`}</span>
         </summary>
         <div class="gpi-activity-body">
           ${visibleSteps.length ? `<ol>${visibleSteps.map(stepRow).join('')}</ol>` : ''}

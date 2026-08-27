@@ -697,10 +697,20 @@ def test_local_folder_selection_stays_locked_until_study_source_is_saved(
         "source": None,
         "confirmed_at": None,
     }
+    with pytest.raises(PiCopilotError) as misplaced_database:
+        service.authorize_data_source(
+            session_id,
+            project_id="project-local-selection",
+            action="confirm_selected_source",
+            database="miiv",
+        )
+    assert misplaced_database.value.code == "pi_data_source_database_not_allowed"
+
     selecting = service.authorize_data_source(
         session_id,
         project_id="project-local-selection",
         action="begin_local_selection",
+        database="miiv",
     )
     assert selecting["session"]["data_source_authorization"]["status"] == (
         "selection_in_progress"
@@ -708,6 +718,7 @@ def test_local_folder_selection_stays_locked_until_study_source_is_saved(
     assert selecting["resource"]["kind"] == "native_workspace"
     assert selecting["resource"]["route"] == "extraction"
     assert selecting["resource"]["entry_mode"] == "source_binding"
+    assert selecting["resource"]["expected_database"] == "miiv"
     assert selecting["resource"]["label"] == "Data source setup"
     assert "path" not in selecting["resource"]
 
@@ -2324,6 +2335,14 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
     monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(study))
     monkeypatch.setattr(
         tool_module,
+        "_workflow_snapshot",
+        lambda _context, *, study_override=None: {
+            "next_action_code": "provider_ready_to_generate_plan",
+            "missing_setup_fields": [],
+        },
+    )
+    monkeypatch.setattr(
+        tool_module,
         "_run_rows",
         lambda _context: [
             {
@@ -2400,6 +2419,14 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
         "data_source": {"path": "/private/export", "database": "miiv"},
     }
     monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(study))
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, *, study_override=None: {
+            "next_action_code": "provider_ready_to_generate_plan",
+            "missing_setup_fields": [],
+        },
+    )
     monkeypatch.setattr(
         tool_module,
         "_run_rows",
@@ -2489,6 +2516,14 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
         "active_job_id": None,
     }
     monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(study))
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, *, study_override=None: {
+            "next_action_code": "provider_ready_to_generate_plan",
+            "missing_setup_fields": [],
+        },
+    )
     monkeypatch.setattr(
         tool_module,
         "_run_rows",
@@ -2792,6 +2827,15 @@ def test_registered_data_source_choices_are_path_free(
         "mimic",
         "miiv",
     ]
+    assert result["details"]["selection_policy"][
+        "recommended_source_is_already_available_export"
+    ] is True
+    assert result["details"]["selection_policy"][
+        "alternative_local_directory_requires_registration"
+    ] is True
+    assert result["details"]["selection_policy"][
+        "show_returned_safe_aggregates_for_recommendation"
+    ] is True
     assert "/private/" not in json.dumps(result)
     assert "full export" not in json.dumps(result)
 
@@ -2942,6 +2986,60 @@ def test_conversational_setup_requires_explicit_all_stays_selection(
     )
     assert accepted["code"] == "study_context_updated"
     assert writes[0]["cohort"]["preset"] == "adult_all"
+
+
+def test_opening_question_saves_without_inventing_an_analysis_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-opening-question-authority",
+        "revision": 1,
+        "question": "",
+        "purpose": "",
+        "active_job_id": None,
+        "cohort": {"preset": "all_icu"},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 2},
+    )
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, **_kwargs: {"current_stage": "study_setup"},
+    )
+    session = PiSessionRecord(
+        session_id="pi-opening-question-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "question": "Estimate Sepsis-3 prevalence and its association with ICU mortality.",
+            "purpose": "Estimate prevalence and evaluate an observational association.",
+            "cohort": {"preset": "adult_all", "label": "Adult ICU population"},
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "研究 MIMIC-IV 成人 ICU 人群中 Sepsis-3 的患病率，"
+                "以及 Sepsis-3 与 ICU 死亡的关系。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["question"].startswith("Estimate Sepsis-3 prevalence")
+    assert writes[0]["cohort"]["preset"] == "all_icu"
+    assert result["details"]["omitted_unconfirmed_fields"] == ["cohort.preset"]
 
 
 def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
@@ -4675,6 +4773,14 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
                 "path": "/private/project-export",
                 "database": "miiv",
             },
+        },
+    )
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, *, study_override=None: {
+            "next_action_code": "provider_ready_to_generate_plan",
+            "missing_setup_fields": [],
         },
     )
     context = ToolExecutionContext(

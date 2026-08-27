@@ -5,6 +5,9 @@
   'use strict';
   const { esc } = window.EU_HTML;
   const DATA_CONSENT = window.EU_GUIDED_PI_DATA_CONSENT;
+  const STARTERS = window.EU_GUIDED_PI_STARTERS;
+  const HEADER = window.EU_GUIDED_PI_HEADER;
+  const REGENERATION = window.EU_GUIDED_PI_REGENERATION;
 
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
@@ -18,7 +21,8 @@
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
     workflowReceipts: [], editingMessageId: '', sessionSelectionRevision: 0,
-    pendingLanguageReload: false,
+    pendingLanguageReload: false, regenerating: false, regeneration: null,
+    startupPromise: null, projectPreparePromise: null, projectPrepareId: '',
   };
 
   const ACCESS_MODE_GRANTS = Object.freeze({
@@ -198,11 +202,15 @@
     setEditing: id => { state.editingMessageId = id; },
     renderHost: render,
     sendText,
+    regenerate: regenerateMessage,
     host: () => state.host,
   });
   const { timeMs } = ACTIVITY;
 
   function activeActivity() {
+    if (state.regenerating && state.regeneration && state.regeneration.activity.status === 'running') {
+      return state.regeneration.activity;
+    }
     return state.messages.slice().reverse().find(row => row.role === 'activity' && !row.childJobId && row.status === 'running');
   }
   function ensureActivity(at) {
@@ -267,7 +275,10 @@
       if (text && row.role === 'user') {
         closeHistoryActivity(rowAt);
         turnResources = [];
-        messages.push({ id: 'history-' + index, role: 'user', text, complete: true });
+        messages.push({
+          id: 'history-' + index, role: 'user', text, complete: true,
+          entryId: String(row.entry_id || ''),
+        });
         activity = {
           id: 'history-activity-' + index, role: 'activity', status: 'running',
           startedAt: rowAt, steps: [],
@@ -330,7 +341,11 @@
     replayTurns.forEach((turn, turnIndex) => {
       const replay = Array.isArray(turn && turn.events) ? turn.events : [];
       if (!replay.length) return;
-      const replayStarted = timeMs((turn && turn.started_at) || (replay[0] && replay[0].at));
+      // Replay turn timestamps are receipt-level seconds, while lifecycle event
+      // timestamps retain milliseconds. Use the event envelope for the visible
+      // wall clock so the total reconciles with the exclusive phase durations.
+      const replayStarted = timeMs((replay[0] && replay[0].at) || (turn && turn.started_at));
+      const replayEnded = timeMs((replay[replay.length - 1] && replay[replay.length - 1].at) || (turn && turn.ended_at));
       let replayActivity = historyActivities[replayOffset + turnIndex];
       const isNewReplayActivity = !replayActivity;
       if (!replayActivity) replayActivity = { id: 'saved-activity-' + String((turn && turn.job_id) || replayStarted), role: 'activity', steps: [], expanded: false };
@@ -338,8 +353,10 @@
       replayActivity.status = turnStatus === 'running' ? 'running'
         : (['failed', 'interrupted'].includes(turnStatus) ? 'error'
           : (turnStatus === 'cancelled' ? 'cancelled' : 'complete'));
-      replayActivity.startedAt = replayActivity.startedAt || replayStarted;
-      replayActivity.endedAt = timeMs((turn && turn.ended_at) || (replay[replay.length - 1] && replay[replay.length - 1].at));
+      replayActivity.startedAt = replayActivity.startedAt
+        ? Math.min(Number(replayActivity.startedAt), replayStarted)
+        : replayStarted;
+      replayActivity.endedAt = replayEnded;
       replayActivity.allowedActions = Array.isArray(turn && turn.allowed_actions) ? turn.allowed_actions.slice() : [];
       replay.forEach(event => {
         const at = timeMs(event && event.at);
@@ -541,13 +558,16 @@
       ? nextOwner.render(nextStep, {
         language: window.EU_LANG,
         disabled: state.busy || sessionIsStale(),
+        dataSourceAuthorization: DATA_CONSENT && DATA_CONSENT.authorization(state.session),
+        workflowActionCode: String((state.workflow && state.workflow.next_action_code) || ''),
+        suppressFallback: String((state.workflow && state.workflow.next_action_code) || '') === 'provider_ready_to_generate_plan',
       }) : '';
     const messageActions = MESSAGE_ACTIONS.render(publicRow, {
       editing: state.editingMessageId === row.id,
       allowEdit: Boolean(options && options.allowEdit),
       canEdit: Boolean(options && options.canEdit),
-      canRetry: Boolean(options && options.interactive),
-      retryText: String(options && options.retryText || ''),
+      canRetry: Boolean(options && options.canRetry),
+      retryUserEntryId: String(options && options.retryUserEntryId || ''),
     });
     const contentHtml = messageActions.editorHtml
       || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
@@ -591,21 +611,21 @@
       approve: tr('Confirm extraction', '确认提取'),
     };
     if (code === 'plan_ready') return {
-      code, grants: ['run', 'provider_run'],
-      message: tr('Use the current data package to prepare an evidence-bound analysis plan.', '请基于当前数据包生成证据绑定的分析计划。'),
-      title: tr('The data package is ready. Prepare the evidence-bound analysis plan?', '数据包已就绪，是否生成证据绑定的分析计划？'),
-      note: tr('The Agent may run a local preflight first and will pause again before executing the approved plan.', 'Agent 可以先运行本地预检，并会在执行计划前再次暂停等待批准。'),
-      approve: tr('Prepare plan', '生成计划'),
+      code, grants: ['run'],
+      message: tr('Run the local executability preflight for the approved research brief. Do not generate or claim a formal plan yet.', '请对已确认的研究简报运行本地可执行性预检；此时不要生成或声称已有正式计划。'),
+      title: tr('Study setup is ready. Run the local executability preflight?', '研究设定已就绪，是否运行本地可执行性预检？'),
+      note: tr('This is a deterministic local check. A separate confirmation will authorize the Research Agent Planner only after preflight passes.', '这是确定性的本地检查；预检通过后，才会另行确认是否授权 Research Agent Planner 生成正式计划。'),
+      approve: tr('Run local preflight', '运行本地预检'),
     };
     if (code === 'provider_ready_to_generate_plan') return {
-      code, grants: ['provider_run'],
+      code, grants: ['provider_run', 'literature'],
       message: tr(
-        'I approve the completed local preflight. Start the full Research Agent only to generate the evidence-bound plan, then pause for my plan review.',
-        '我确认本地预检结果。请启动完整 Research Agent 生成证据绑定的分析计划，并停在计划人工审阅门。',
+        'Use the confirmed research question and data package, search the relevant literature, and generate a formal evidence-bound research plan. Pause for my review before any analysis.',
+        '请基于已确认的研究问题和数据包检索相关文献，生成正式、证据绑定的研究计划，并在任何分析开始前停下等待我审阅。',
       ),
-      title: tr('Local preflight passed. Generate the real Research Agent plan?', '本地预检已完成，生成真实 Research Agent 计划吗？'),
-      note: tr('This authorizes one provider planning run. Execution must pause again for your plan approval.', '这会授权一次模型规划；真正执行前必须再次停下等待你的计划批准。'),
-      approve: tr('Generate Agent plan', '生成 Agent 计划'),
+      title: tr('Generate a formal research plan now?', '现在生成正式研究计划吗？'),
+      note: tr('EasyICU will verify the data package, search the literature, and prepare a reviewable plan. It will not start the analysis.', 'EasyICU 将验证数据包、检索文献并生成可审阅的计划，此时不会开始分析。'),
+      approve: tr('Start plan generation', '开始生成研究计划'),
     };
     if (code === 'plan_configuration_superseded' || code === 'plan_review_not_resumable') return {
       code, grants: ['provider_run'],
@@ -633,12 +653,13 @@
         'I approve this exact evidence-bound plan without changing the study configuration. Decline optional study-authority additions for this run, preserve every open scientific finding as a limitation, and resume the current plan.',
         '我批准当前这份证据绑定的计划，不修改研究配置。本轮不新增可选的科学设定；请把所有未闭合的科学问题保留为局限，并继续执行当前计划。',
       ),
-      title: tr('The evidence-bound plan is ready. Continue to analysis?', '证据绑定的计划已准备好，是否继续分析？'),
-      note: tr('Approving resumes this plan only. Scientific and human-review gates remain in force.', '批准只会继续当前计划；科学闸门和人工审阅门禁仍然有效。'),
+      title: tr('The formal Agent Plan is ready. Review the plan and its literature before analysis.', '正式研究计划已生成；请先审阅计划及其文献依据。'),
+      note: tr('Open both review materials below. The literature view shows retrieval provenance, screening rationale, and exact plan-step citation bindings.', '请先打开下方两份审阅材料；文献依据会显示检索来源、筛选理由和每个计划步骤的精确引用绑定。'),
       approve: tr('Approve and continue', '批准并继续'),
+      reviewMaterialsTitle: tr('Required review materials', '计划审阅材料'),
       reviewResources: [
-        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'agent_plan.json', label: tr('Open analysis plan', '打开分析计划'), media_type: 'application/json' },
-        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'literature_evidence.json', label: tr('Open literature bindings', '打开文献绑定'), media_type: 'application/json' },
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'agent_plan.json', label: tr('Preview formal Agent Plan', '预览正式研究计划'), media_type: 'application/json' },
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'literature_evidence.json', label: tr('View literature evidence for this plan', '查看该计划的文献依据'), media_type: 'application/json' },
       ],
     };
     if (code === 'plan_scientific_changes_required') return {
@@ -653,10 +674,11 @@
         '评分与问题清单均已确定性计算并绑定摘要，不能通过“批准本次暂停”来绕过；涉及估计目标或研究权威的修改仍需你明确确认。',
       ),
       approve: tr('Review required changes', '查看并处理问题'),
+      reviewMaterialsTitle: tr('Plan, literature, and scientific review', '计划、文献依据与科学审阅'),
       reviewResources: [
         { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'scientific_plan_review.json', label: tr('Open scientific review', '打开科学审阅'), media_type: 'application/json' },
-        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'agent_plan.json', label: tr('Open proposed plan', '打开候选计划'), media_type: 'application/json' },
-        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'literature_evidence.json', label: tr('Open literature evidence', '打开文献证据'), media_type: 'application/json' },
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'agent_plan.json', label: tr('Preview proposed Agent Plan', '预览候选研究计划'), media_type: 'application/json' },
+        { kind: 'research_artifact', run_id: String((state.session && state.session.binding && state.session.binding.run_id) || ''), artifact: 'literature_evidence.json', label: tr('View literature evidence for this plan', '查看该计划的文献依据'), media_type: 'application/json' },
       ],
     };
     return null;
@@ -692,9 +714,9 @@
       : '';
     return `<section class="gpi-confirmation" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
       <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-      <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small>${scorecard}${remediationLanes ? `<ul class="gpi-confirmation-questions">${remediationLanes}</ul>` : ''}${authorizationQuestions ? `<ul class="gpi-confirmation-questions">${authorizationQuestions}</ul>` : ''}${reviewResources ? `<div class="gpi-confirmation-resources">${reviewResources}</div>` : ''}</div>
+      <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small>${scorecard}${remediationLanes ? `<ul class="gpi-confirmation-questions">${remediationLanes}</ul>` : ''}${authorizationQuestions ? `<ul class="gpi-confirmation-questions">${authorizationQuestions}</ul>` : ''}${reviewResources ? `<div class="gpi-confirmation-resources"><strong>${esc(confirmation.reviewMaterialsTitle || tr('Review materials', '审阅材料'))}</strong>${reviewResources}</div>` : ''}</div>
       <div class="gpi-confirmation-actions">
-        <button class="btn sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer next scientific question', '回答下一个科学问题') : tr('Request changes', '提出修改')}</button>
+        <button class="btn sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer next scientific question', '回答下一个科学问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : tr('Request changes', '提出修改')}</button>
         ${confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>`}
       </div>
     </section>`;
@@ -746,55 +768,64 @@
     const timeline = state.messages.concat(state.workflowReceipts);
     const latestAssistant = timeline.slice().reverse().find(row => row.role === 'assistant' && row.complete !== false);
     let precedingUserText = '';
+    let precedingUserEntryId = '';
     const messages = timeline.map(row => {
-      const html = messageHtml(row, {
+      const displayRow = state.regenerating && REGENERATION
+        ? REGENERATION.project(row, state.regeneration) : row;
+      const html = messageHtml(displayRow, {
         interactive: row === latestAssistant && !state.busy && !stale,
         allowEdit: true,
         canEdit: !state.busy && !stale,
+        canRetry: row.role === 'assistant' && !state.busy && !stale,
         retryText: row.role === 'assistant' ? precedingUserText : '',
+        retryUserEntryId: row.role === 'assistant' ? precedingUserEntryId : '',
       });
-      if (row.role === 'user') precedingUserText = String(row.text || '');
+      if (row.role === 'user') {
+        precedingUserText = String(row.text || '');
+        precedingUserEntryId = String(row.entryId || '');
+      }
       return html;
     }).join('');
+    const emptyResearch = !workspace && !messages;
     const dataConsentHtml = dataConsentRequired
       ? DATA_CONSENT.render(session, { tr, esc, icon: iconHtml })
       : '';
+    const emptyResearchHtml = STARTERS && typeof STARTERS.render === 'function'
+      ? STARTERS.render({ tr, disabled: state.busy || stale })
+      : `<div class="gpi-empty"><strong>${tr('Start with the research question', '先描述研究问题')}</strong></div>`;
     return `
-      <div class="gpi-panel">
-        <header class="gpi-head">
-          <div><div class="gpi-kicker">EASYICU COPILOT · ${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</div><div class="gpi-title">${esc(displaySessionTitle(session.title))} <span class="gpi-live" role="status" aria-live="polite">${state.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
-          <div class="gpi-head-meta">
-            <div class="gpi-mode-switch" role="group" aria-label="${tr('Agent mode', 'Agent 模式')}">
-              <button type="button" data-gpi-mode-switch="research" aria-pressed="${!workspace}">${tr('Research', '研究')}</button>
-              <button type="button" data-gpi-mode-switch="workspace" aria-pressed="${workspace}">${tr('Workspace', '工作区')}</button>
-            </div>
-            ${connection
-              ? `<span title="${tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')}">${esc([connection.provider, connection.model].filter(Boolean).join(' · ') || 'model')}</span>`
-              : `<span title="${tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定')}">${esc([model.id || (state.runtime && state.runtime.model), research.provider, research.model].filter(Boolean).join(' / ') || 'legacy model binding')}</span>`}
-            <button class="btn sm gpi-demo-launch" type="button" data-gpi-demo>${iconHtml('play', 14)} ${tr('Reviewer demo', '审稿流程演示')}</button>
-            <button class="gpi-link" type="button" data-gpi-presentation-pin aria-pressed="${session.pinned_for_presentation ? 'true' : 'false'}">${session.pinned_for_presentation ? tr('Saved for presentation', '已保留演示') : tr('Save for presentation', '保留演示')}</button>
-            <button class="gpi-link" type="button" data-gpi-config>${tr('Model service', '模型服务')}</button>
-            <button class="gpi-link" type="button" data-gpi-new>${tr('New', '新会话')}</button>
-            <button class="gpi-link" type="button" data-gpi-study-setup>${tr('Study setup', '研究配置')}</button>
-          </div>
-        </header>
+      <div class="gpi-panel${emptyResearch ? ' gpi-empty-session' : ''}">
+        ${HEADER.render({
+          tr, esc, icon: iconHtml,
+          projectTitle: displayProjectTitle(state.project && state.project.title, projectId()),
+          sessionTitle: displaySessionTitle(session.title),
+          busy: state.busy,
+          workspace,
+          pinned: Boolean(session.pinned_for_presentation),
+          connectionLabel: connection
+            ? ([connection.provider, connection.model].filter(Boolean).join(' · ') || 'model')
+            : ([model.id || (state.runtime && state.runtime.model), research.provider, research.model].filter(Boolean).join(' / ') || 'legacy model binding'),
+          connectionTitle: connection
+            ? tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')
+            : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),
+        })}
         ${workflowHtml()}
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
         ${dataConsentHtml}
-        <div class="gpi-log" data-gpi-log>
-          ${messages || (dataConsentRequired
-            ? `<div class="gpi-empty"><strong>${tr('Start with the research question', '先描述研究问题')}</strong><span>${tr('Conversation and study design are available now. When data are needed, EasyICU will ask for one explicit local or official-demo choice before any data tool can read them.', '现在即可讨论研究问题与设计；需要读取、抽取或分析数据时，EasyICU 会先请你明确选择本地来源或官方 Demo。')}</span></div>`
-            : workspace
+        <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
+          ${messages || (workspace
               ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
-              : `<div class="gpi-empty"><strong>${tr('Ask about the current study', '询问当前研究')}</strong><span>${tr('EasyICU Copilot can inspect context, plans, runs, validation, artefacts, evidence, and blockers through bounded EasyICU tools.', 'EasyICU 研究助手可通过受限的 EasyICU 工具检查上下文、计划、运行、验证、产物、证据和阻断原因。')}</span></div>`)}
+              : emptyResearchHtml)}
           ${dataConsentRequired ? '' : workflowConfirmationHtml()}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
         <div class="gpi-compose">
-          <textarea data-gpi-input rows="3" maxlength="12000" placeholder="${workspace ? tr('Ask EasyICU Copilot to create or edit a project artifact — do not paste patient rows or identifiers.', '让 EasyICU 研究助手创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Ask EasyICU Copilot about this study — do not paste patient rows or identifiers.', '向 EasyICU 研究助手询问当前研究——请勿粘贴患者行级数据或标识符。')}" ${state.busy || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
-          <div class="gpi-actions">
-            ${accessModeHtml()}
-            ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send ${stale ? 'disabled' : ''}>${tr('Send', '发送')}</button>`}
+          <div class="gpi-compose-card">
+            <textarea data-gpi-input rows="2" maxlength="12000" placeholder="${workspace ? tr('Ask EasyICU Copilot to create or edit a project artifact — do not paste patient rows or identifiers.', '让 EasyICU 研究助手创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Ask EasyICU Copilot about this study — do not paste patient rows or identifiers.', '向 EasyICU 研究助手询问当前研究——请勿粘贴患者行级数据或标识符。')}" ${state.busy || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
+            <div class="gpi-actions">
+              ${accessModeHtml()}
+              ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send ${stale ? 'disabled' : ''}>${tr('Send', '发送')}</button>`}
+            </div>
           </div>
         </div>
     </div>`;
@@ -910,17 +941,20 @@
     const pct = Math.max(0, Math.min(100, Math.round(done / total * 100)));
     const current = stages.find(stage => stage.id === workflow.current_stage)
       || stages.find(stage => stage.status !== 'complete') || stages[stages.length - 1];
+    const currentIndex = Math.max(0, stages.indexOf(current));
+    const next = stages.slice(currentIndex + 1).find(stage => stage.status !== 'complete');
     head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${state.demoMode ? tr('Reviewer demonstration', '审稿人演示') : tr('Project authority', '项目权威状态')}</div><div class="asub">${state.demoMode ? tr('Bounded read-only projection derived from one registered source run.', '从一个登记 source run 派生的有界只读投影。') : tr('Conversation, extraction, analysis, and evidence share this projection.', '对话、提取、分析与证据共用这一份状态。')}</div>`;
     body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
       <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
       <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
       <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段完成')}</span><span>${tr('One project', '同一项目')}</span></div>
+      ${next ? `<div class="gd-pipeline-next"><span>${tr('Next', '下一阶段')}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
     </div>
-    <div class="gd-pipeline-list open" data-gpi-project-workflow-list>${stages.map(stage => {
+    <details class="gd-pipeline-disclosure"><summary><span>${tr('View all workflow stages', '查看完整科研流程')}</span><small>${stages.length}</small></summary><div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
       const status = stage.status === 'complete' ? 'done' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
       const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
       return `<div class="study-item ${status}" title="${esc(stage.reason_code || '')}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}</div><div class="si-v">${esc(reasonText(stage))}</div></div></div>`;
-    }).join('')}</div>`;
+    }).join('')}</div></details>`;
   }
 
   function render() {
@@ -929,8 +963,14 @@
     const setupFocused = !restoring && state.shell !== 'legacy'
       && !state.demoMode
       && (state.showSetup || !connectionReady() || state.projectIssue === 'pi_project_study_context_missing');
+    const emptySessionFocused = !restoring && !setupFocused && state.shell !== 'legacy'
+      && !state.demoMode && Boolean(state.session) && agentMode() !== 'workspace'
+      && state.messages.length === 0 && state.workflowReceipts.length === 0;
     const main = state.host.closest('.gd-main');
-    if (main) main.classList.toggle('gpi-setup-focus', setupFocused);
+    if (main) {
+      main.classList.toggle('gpi-setup-focus', setupFocused);
+      main.classList.toggle('gpi-empty-session-focus', emptySessionFocused);
+    }
     state.host.hidden = false;
     state.host.innerHTML = restoring
       ? restoringPanel()
@@ -1191,7 +1231,7 @@
     finally { state.creating = false; render(); }
   }
 
-  async function openSession(sessionId, selectionRevision) {
+  async function openSession(sessionId, selectionRevision, refreshWorkflow) {
     const expectedProjectId = projectId();
     if (!expectedProjectId) return;
     const expectedSelectionRevision = selectionRevision == null
@@ -1231,11 +1271,12 @@
       reconcileSettledSession();
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
       rememberSession(sessionId); setShell('pi');
-      await loadWorkflow();
+      if (refreshWorkflow !== false) await loadWorkflow();
     } catch (error) { rememberSession(''); state.error = errorText(error); render(); }
   }
 
   function assistantRow() {
+    if (state.regenerating && state.regeneration) return state.regeneration.message;
     let row = state.messages[state.messages.length - 1];
     if (!row || row.role !== 'assistant' || row.complete) {
       row = {
@@ -1253,11 +1294,15 @@
       if (key && !existing.some(item => resourceKey(item) === key)) existing.push(resource);
     });
     state.currentTurnResources = existing.slice(0, 24);
-    const row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
+    const row = state.regenerating && state.regeneration
+      ? state.regeneration.message
+      : state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
     if (row) row.resources = state.currentTurnResources.slice();
   }
   function completeLatestAssistant(stopReason) {
-    const row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
+    const row = state.regenerating && state.regeneration
+      ? state.regeneration.message
+      : state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
     if (row) { row.complete = true; row.stopReason = stopReason || ''; }
   }
   function modelErrorText(code) {
@@ -1567,7 +1612,7 @@
     } catch (e) {}
   }
 
-  async function loadProjectSessions() {
+  async function loadProjectSessions(refreshWorkflow) {
     const expectedProjectId = projectId();
     const selectionRevision = state.sessionSelectionRevision;
     if (!connectionReady() || !expectedProjectId) return;
@@ -1581,7 +1626,7 @@
       : (remembered && state.sessions.some(row => row.session_id === remembered && sessionMatchesUiLanguage(row))
         ? remembered
         : String(state.sessions.find(sessionMatchesUiLanguage)?.session_id || ''));
-    if (preferred) await openSession(preferred, selectionRevision);
+    if (preferred) await openSession(preferred, selectionRevision, refreshWorkflow);
   }
 
   async function reloadSessionsForLanguage() {
@@ -1649,10 +1694,23 @@
   }
 
   async function prepareProject() {
-    return window.EU_GUIDED_PI_PROJECT.prepare({
+    const expectedProjectId = projectId();
+    if (!expectedProjectId) return;
+    if (state.projectPreparePromise && state.projectPrepareId === expectedProjectId) {
+      return state.projectPreparePromise;
+    }
+    const pending = window.EU_GUIDED_PI_PROJECT.prepare({
       state, api, projectId, connectionReady, loadWorkflow,
       loadProjectSessions, render,
     });
+    state.projectPrepareId = expectedProjectId;
+    state.projectPreparePromise = Promise.resolve(pending).finally(() => {
+      if (state.projectPreparePromise !== pendingPromise) return;
+      state.projectPreparePromise = null;
+      state.projectPrepareId = '';
+    });
+    const pendingPromise = state.projectPreparePromise;
+    return pendingPromise;
   }
 
   function bindProject(project) {
@@ -1725,6 +1783,7 @@
       if (row.type === 'pi_event') handlePiEvent(row.event);
       if (row.type === 'end') {
         closeSource(); state.busy = false;
+        const replacedBranch = state.regenerating;
         if (row.status === 'failed') {
           finishActivity('error', null, 'failed');
           state.error = /^pi_model_/.test(String(row.error || ''))
@@ -1736,7 +1795,9 @@
         } else {
           finishActivity('complete', null, 'settled');
         }
-        await refreshSession(true);
+        await refreshSession(!replacedBranch);
+        state.regenerating = false;
+        state.regeneration = null;
         if (state.pendingLanguageReload) {
           await reloadSessionsForLanguage();
           return;
@@ -1777,6 +1838,59 @@
       state.error = errorText(error); render();
     }
   }
+  async function regenerateMessage(userEntryId, text, regenerationIntent, targetMessageId) {
+    if (!state.session || state.busy || sessionIsStale()) return;
+    const entryId = String(userEntryId || '').trim();
+    text = String(text || '').trim();
+    if (!entryId || !text) return;
+    state.editingMessageId = '';
+    state.currentTurnResources = [];
+    state.regeneration = REGENERATION && typeof REGENERATION.create === 'function'
+      ? REGENERATION.create(state.messages, {
+        userEntryId: entryId,
+        targetMessageId: String(targetMessageId || ''),
+        startedAt: Date.now(),
+      }) : null;
+    state.regenerating = true;
+    state.busy = true; state.error = ''; render();
+    try {
+      // Regeneration may replay a reversible study-configuration reply, but it
+      // must never repeat extraction, provider, execution, cancellation, or
+      // workspace-write side effects from an earlier turn.
+      const replayGrants = turnGrants().filter(action => action === 'configure');
+      const payload = await api().regeneratePiCopilotMessage(state.session.session_id, {
+        project_id: projectId(), user_entry_id: entryId,
+        message: text, allowed_actions: replayGrants,
+        ...(regenerationIntent ? { regeneration_intent: regenerationIntent } : {}),
+      });
+      state.jobId = payload.job_id;
+      watchJob(payload.job_id);
+    } catch (error) {
+      state.busy = false;
+      state.regenerating = false;
+      state.regeneration = null;
+      state.error = errorText(error);
+      render();
+    }
+  }
+  async function continueAfterDataSourceConfirmation() {
+    if (!state.session || state.busy || sessionIsStale()) return false;
+    const assistantAt = state.messages.map(row => row.role).lastIndexOf('assistant');
+    if (assistantAt < 0) return false;
+    const user = state.messages.slice(0, assistantAt).reverse().find(row => row.role === 'user');
+    const entryId = String(user && user.entryId || '').trim();
+    const text = String(user && user.text || '').trim();
+    if (!entryId || !text) {
+      state.error = tr(
+        'This restored turn is missing its conversation identifier. Reload the study once; EasyICU will not silently ignore the action.',
+        '当前恢复的对话缺少回合标识。请刷新一次研究；EasyICU 不会再静默忽略这个操作。',
+      );
+      render();
+      return false;
+    }
+    await regenerateMessage(entryId, text, 'advance_after_data_source_confirmation', state.messages[assistantAt].id);
+    return true;
+  }
   async function sendMessage() {
     if (!state.session || state.busy || sessionIsStale()) return;
     const input = state.host.querySelector('[data-gpi-input]');
@@ -1805,6 +1919,19 @@
   }
   function editWorkflow() {
     const workflow = state.workflow || {};
+    const code = String(workflow.next_action_code || '');
+    if (code === 'provider_ready_to_generate_plan') {
+      state.draft = tr(
+        'Before generating the plan, I want to add this research requirement: ',
+        '生成计划前，我想补充以下研究要求：',
+      );
+      render();
+      requestAnimationFrame(() => {
+        const input = state.host && state.host.querySelector('[data-gpi-input]');
+        if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+      });
+      return;
+    }
     const review = workflow.plan_review_summary || {};
     const questions = Array.isArray(review.authorization_questions)
       ? review.authorization_questions.filter(item => item && (item.question || item.code))
@@ -1846,13 +1973,14 @@
     const prompt = studySetupReviewPrompt(state.workflow);
     await sendText(prompt, ['configure']);
   }
-  async function authorizeDataSource(action) {
+  async function authorizeDataSource(action, options) {
     if (!state.session || state.busy || !api().authorizePiCopilotDataSource) return;
+    const database = String(options && options.database || '').trim();
     state.error = '';
     try {
       const payload = await api().authorizePiCopilotDataSource(
         state.session.session_id,
-        { project_id: projectId(), action },
+        { project_id: projectId(), action, ...(database ? { database } : {}) },
       );
       state.session = payload.session || state.session;
       rememberSession(state.session.session_id);
@@ -1971,6 +2099,7 @@
     }
     await loadWorkflow();
     render();
+    if (await continueAfterDataSourceConfirmation()) return true;
     requestAnimationFrame(() => {
       const composer = state.host && state.host.querySelector('[data-gpi-input]');
       if (composer) composer.focus();
@@ -2003,6 +2132,14 @@
       state.error = errorText(error);
     }
     render();
+  }
+
+  function dismissHeaderOverflow(event) {
+    const menu = state.host && state.host.querySelector('.gpi-head-overflow[open]');
+    if (!menu) return;
+    const action = event.target && event.target.closest
+      ? event.target.closest('.gpi-head-overflow-menu button') : null;
+    if (!menu.contains(event.target) || action) menu.removeAttribute('open');
   }
 
   function wire() {
@@ -2071,8 +2208,34 @@
         return;
       }
       if (MESSAGE_ACTIONS.handleClick(event)) return;
+      const starterAction = STARTERS && STARTERS.actionFromEvent(event);
+      if (starterAction && starterAction.kind === 'send') {
+        sendText(starterAction.text, []);
+        return;
+      }
+      if (starterAction && starterAction.kind === 'compose') {
+        state.draft = starterAction.text;
+        render();
+        window.requestAnimationFrame(() => {
+          const input = state.host && state.host.querySelector('[data-gpi-input]');
+          if (!input) return;
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+          input.scrollIntoView({ block: 'nearest' });
+        });
+        return;
+      }
+      if (event.target.closest('[data-gpi-data-source-continue]')) {
+        continueAfterDataSourceConfirmation();
+        return;
+      }
       const nextChoice = event.target.closest('[data-gpi-next-choice]');
       if (nextChoice) {
+        const localDatabase = String(nextChoice.dataset.gpiNextLocalDatabase || '').trim();
+        if (localDatabase) {
+          authorizeDataSource('begin_local_selection', { database: localDatabase });
+          return;
+        }
         const message = nextChoice.dataset.gpiNextChoice;
         sendText(message, governedNextChoiceGrants(nextChoice, message));
         return;
@@ -2121,24 +2284,47 @@
       if (modelList) modelList.replaceChildren();
     });
     state.host.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        const menu = state.host.querySelector('.gpi-head-overflow[open]');
+        if (menu) {
+          menu.removeAttribute('open');
+          const summary = menu.querySelector('summary');
+          if (summary) summary.focus();
+          return;
+        }
+      }
       if (event.target.matches('[data-gpi-input]') && window.EU_COMPOSER_KEYBOARD.enterShouldSend(event)) {
         event.preventDefault(); sendMessage();
       }
     });
     state.host.addEventListener('submit', event => {
       if (MESSAGE_ACTIONS.handleSubmit(event)) return;
+      const nextCustomForm = event.target.closest('[data-gpi-next-custom-form]');
+      if (nextCustomForm) {
+        event.preventDefault();
+        const input = nextCustomForm.querySelector('[data-gpi-next-custom-input]');
+        const message = String((input && input.value) || '').trim();
+        if (message) sendText(message, []);
+        return;
+      }
       const form = event.target.closest('[data-gpi-provider-form]');
       if (!form) return;
       event.preventDefault(); configureProvider(form);
     });
   }
   function mount(host) {
-    if (!host || state.host === host) return;
+    if (!host) return Promise.resolve();
+    if (state.host === host) return state.startupPromise || Promise.resolve();
     closeSource(); closeChildSource(); state.host = host; state.conv = host.closest('.gd-conv'); state.shell = 'pi';
     if (state.conv) state.conv.classList.add('pi-active');
-    wire(); loadStatus();
+    wire(); document.addEventListener('click', dismissHeaderOverflow);
+    state.startupPromise = Promise.resolve(loadStatus()).finally(() => {
+      state.startupPromise = null;
+    });
+    return state.startupPromise;
   }
   function unmount() {
+    document.removeEventListener('click', dismissHeaderOverflow);
     stopCodexPoll(); closeSource(); closeChildSource(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
   window.addEventListener('easyicu:languagechange', handleLanguageChange);

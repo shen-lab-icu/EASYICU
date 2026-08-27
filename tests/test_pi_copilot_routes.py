@@ -215,12 +215,14 @@ def test_data_source_authorization_route_is_project_scoped_and_typed(
         json={
             "project_id": "guided-project-2",
             "action": "begin_local_selection",
+            "database": "miiv",
         },
     )
     assert response.status_code == 200
     assert response.json()["received"] == {
         "project_id": "guided-project-2",
         "action": "begin_local_selection",
+        "database": "miiv",
     }
     assert (
         client.post(
@@ -512,6 +514,34 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
                 "project_id": "guided-project-1",
                 "message": "Inspect",
                 "allowed_actions": ["bash"],
+            },
+        ).status_code
+        == 422
+    )
+
+    regenerated = client.post(
+        "/api/copilot/pi/sessions/pi-test/regenerate",
+        json={
+            "project_id": "guided-project-1",
+            "message": "Original research question",
+            "allowed_actions": ["configure"],
+            "user_entry_id": "entry-user-1",
+            "regeneration_intent": "advance_after_data_source_confirmation",
+        },
+    )
+    assert regenerated.status_code == 200
+    assert (
+        regenerated.json()["received"]["regeneration_intent"]
+        == "advance_after_data_source_confirmation"
+    )
+    assert (
+        client.post(
+            "/api/copilot/pi/sessions/pi-test/regenerate",
+            json={
+                "project_id": "guided-project-1",
+                "message": "Original research question",
+                "user_entry_id": "entry-user-1",
+                "regeneration_intent": "repeat_data_source_question",
             },
         ).status_code
         == 422

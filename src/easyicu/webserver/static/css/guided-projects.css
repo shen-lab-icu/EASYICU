@@ -1,6 +1,6 @@
 /* Owner: Guided Copilot project rail, local-project rows, and its responsive
    shell column allocation. */
-.gd-main.threecol{grid-template-columns:292px minmax(0,1fr) 322px}
+.gd-main.threecol{grid-template-columns:292px minmax(0,1fr) 292px}
 
 .gd-rail{
   min-height:0;display:flex;flex-direction:column;overflow:hidden;
@@ -20,12 +20,12 @@
   width:28px;height:28px;flex:0 0 auto;display:grid;place-items:center;border-radius:8px;
   background:var(--ink);color:#fff
 }
-.gd-rail-brand .gd-name{font-size:12.5px;font-weight:700;letter-spacing:-.01em;white-space:nowrap}
+.gd-rail-brand .gd-name{font-size:13.5px;font-weight:700;letter-spacing:-.01em;white-space:nowrap}
 .gd-folder-controls,.gd-folder-picker{position:relative;min-width:0}
 .gd-newbtn{
   width:100%;min-height:38px;display:flex;align-items:center;gap:7px;padding:0 9px;
   border:1px solid var(--hair-2);border-radius:10px;background:var(--surface);color:var(--ink);
-  box-shadow:var(--shadow-1);font:inherit;font-size:11.5px;font-weight:650;cursor:pointer
+  box-shadow:var(--shadow-1);font:inherit;font-size:12.5px;font-weight:650;cursor:pointer
 }
 .gd-newbtn>svg{flex:0 0 auto}.gd-newbtn>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gd-newbtn:hover,.gd-folder-picker.open .gd-newbtn{
@@ -52,7 +52,7 @@
 .gd-project-heading{
   position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;
   min-height:34px;padding:8px 4px 6px;background:color-mix(in srgb,var(--rail) 82%,var(--surface));
-  color:var(--ink-3);font-size:12px;font-weight:700;letter-spacing:.01em
+  color:var(--ink-3);font-size:12.75px;font-weight:700;letter-spacing:.01em
 }
 .gd-refresh-mini{
   width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;padding:0;
@@ -66,8 +66,8 @@
   border:1px solid var(--hair);border-radius:9px;background:color-mix(in srgb,var(--surface) 72%,transparent)
 }
 .gd-project-summary>svg{margin-top:1px;color:var(--ink-4)}
-.gd-project-summary strong{display:block;color:var(--ink-2);font-size:11.5px;font-weight:650}
-.gd-project-summary span{display:block;margin-top:2px;color:var(--ink-4);font-size:10.5px;line-height:1.4}
+.gd-project-summary strong{display:block;color:var(--ink-2);font-size:12.5px;font-weight:650}
+.gd-project-summary span{display:block;margin-top:3px;color:var(--ink-4);font-size:11.5px;line-height:1.45}
 .gd-empty-local{
   margin:0 2px 4px;padding:11px;border:1px dashed var(--hair-2);border-radius:9px;
   background:color-mix(in srgb,var(--surface) 72%,transparent)
@@ -80,8 +80,8 @@
   position:relative;display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;margin-bottom:2px
 }
 .gd-sess{
-  width:100%;min-height:54px;display:grid;grid-template-columns:10px minmax(0,1fr) auto;
-  align-items:center;gap:9px;padding:8px 10px;border:1px solid transparent;border-radius:9px;
+  width:100%;min-height:60px;display:grid;grid-template-columns:10px minmax(0,1fr) auto;
+  align-items:center;gap:9px;padding:9px 10px;border:1px solid transparent;border-radius:9px;
   background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer
 }
 .gd-sess:hover{background:color-mix(in srgb,var(--surface-2) 74%,transparent)}
@@ -100,13 +100,13 @@
 .gd-sess-body{min-width:0;display:grid;gap:3px}
 .gd-sess .ss-t{
   min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--ink-2);font-size:13px;font-weight:560;line-height:1.3
+  color:var(--ink-2);font-size:14px;font-weight:560;line-height:1.3
 }
 .gd-sess .ss-m{
   min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--ink-4);font-size:11px;line-height:1.3
+  color:var(--ink-4);font-size:12px;line-height:1.35
 }
-.gd-sess .ss-time{align-self:start;padding-top:1px;color:var(--ink-5);font:500 9.5px/1.35 var(--font-mono);white-space:nowrap}
+.gd-sess .ss-time{align-self:start;padding-top:1px;color:var(--ink-5);font:500 10.25px/1.35 var(--font-mono);white-space:nowrap;opacity:.62}
 .gd-sessline:hover .ss-time,.gd-sessline:focus-within .ss-time{opacity:0}
 .gd-sess-action{
   position:absolute;right:7px;top:50%;z-index:1;transform:translateY(-50%) scale(.92);
@@ -143,7 +143,7 @@
 .gd-utilbtn{
   height:32px;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:0 7px;
   border:1px solid var(--hair);border-radius:7px;background:var(--surface);color:var(--ink-3);
-  font:inherit;font-size:11px;font-weight:600;cursor:pointer
+  font:inherit;font-size:11.75px;font-weight:600;cursor:pointer
 }
 .gd-utilbtn:hover{border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-ink)}
 .gd-utilbtn:focus-visible{outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent)}

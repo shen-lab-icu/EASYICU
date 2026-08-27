@@ -826,6 +826,9 @@ def _list_data_sources(
                 "local_folder_paths_stay_host_side": True,
                 "demo_never_implies_full_database": True,
                 "official_demo_only_when_explicitly_requested_if_local_available": True,
+                "recommended_source_is_already_available_export": True,
+                "alternative_local_directory_requires_registration": True,
+                "show_returned_safe_aggregates_for_recommendation": True,
                 "user_facing_availability_term": "EasyICU can use",
             },
         },
@@ -2993,6 +2996,7 @@ def _update_study_context(
         for key in _STUDY_SETUP_FIELDS - {"bind_active_export", "bind_source_id"}
         if key in params
     }
+    omitted_unconfirmed_fields: list[str] = []
     if current:
         patch = _merge_nested_study_patch(current, patch)
     if current and current.get("id"):
@@ -3068,41 +3072,59 @@ def _update_study_context(
             and str(context.user_message or "").strip()
             and not _message_explicitly_selects_all_stays(context.user_message)
         ):
-            return _result(
-                context,
-                status="blocked",
-                code="study_cohort_all_stays_confirmation_required",
-                summary=(
-                    "An adult ICU population does not by itself choose between "
-                    "all eligible stays and one stay per patient."
-                ),
-                owner="easyicu.webserver.study_contexts",
-                details={
-                    "field": "cohort.preset",
-                    "proposed": "adult_all",
-                    "safe_alternatives": ["adult_all", "adult_first"],
-                },
+            other_confirmed_change = any(
+                key in params
+                for key in _STUDY_SETUP_FIELDS
+                - {"cohort", "execution_concepts", "modules", "confirmations"}
             )
+            if other_confirmed_change:
+                _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
+                omitted_unconfirmed_fields.append("cohort.preset")
+            else:
+                return _result(
+                    context,
+                    status="blocked",
+                    code="study_cohort_all_stays_confirmation_required",
+                    summary=(
+                        "An adult ICU population does not by itself choose between "
+                        "all eligible stays and one stay per patient."
+                    ),
+                    owner="easyicu.webserver.study_contexts",
+                    details={
+                        "field": "cohort.preset",
+                        "proposed": "adult_all",
+                        "safe_alternatives": ["adult_all", "adult_first"],
+                    },
+                )
         if (
             normalized_preset == "adult_first"
             and current_preset != "adult_first"
             and not _message_explicitly_selects_first_stay(context.user_message)
         ):
-            return _result(
-                context,
-                status="blocked",
-                code="study_cohort_first_stay_confirmation_required",
-                summary=(
-                    "A first-ICU-stay restriction changes the analysis unit and "
-                    "requires the user's explicit selection."
-                ),
-                owner="easyicu.webserver.study_contexts",
-                details={
-                    "field": "cohort.preset",
-                    "proposed": "adult_first",
-                    "safe_alternatives": ["adult_all", "all_icu"],
-                },
+            other_confirmed_change = any(
+                key in params
+                for key in _STUDY_SETUP_FIELDS
+                - {"cohort", "execution_concepts", "modules", "confirmations"}
             )
+            if other_confirmed_change:
+                _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
+                omitted_unconfirmed_fields.append("cohort.preset")
+            else:
+                return _result(
+                    context,
+                    status="blocked",
+                    code="study_cohort_first_stay_confirmation_required",
+                    summary=(
+                        "A first-ICU-stay restriction changes the analysis unit and "
+                        "requires the user's explicit selection."
+                    ),
+                    owner="easyicu.webserver.study_contexts",
+                    details={
+                        "field": "cohort.preset",
+                        "proposed": "adult_first",
+                        "safe_alternatives": ["adult_all", "all_icu"],
+                    },
+                )
     if (
         params.get("outcome")
         and str(context.user_message or "").strip()
@@ -3702,6 +3724,7 @@ def _update_study_context(
             "workflow": workflow,
             "rebind_required": True,
             "host_rebind_after_turn": True,
+            "omitted_unconfirmed_fields": omitted_unconfirmed_fields,
         },
     )
     context.invalidate_authority("study_context_updated")
@@ -4837,6 +4860,34 @@ def _run(
             summary="Choose either the deterministic preflight or a full Research Agent run.",
             owner="easyicu.webserver.routes.agent",
         )
+    study = _bound_context(context.session.binding)
+    if (
+        run_type == "full"
+        and context.session.binding.study_context_id
+        and study
+        and study.get("id")
+    ):
+        workflow = _workflow_snapshot(context, study_override=study)
+        missing_setup_fields = list(workflow.get("missing_setup_fields") or [])
+        if missing_setup_fields:
+            # Scientific workflow readiness is an owner invariant, not a
+            # provider-permission problem.  Check it before consuming the
+            # one-turn provider grant so an out-of-order model call cannot
+            # expose internal grant names or start a premature Planner run.
+            return _result(
+                context,
+                status="blocked",
+                code="study_setup_incomplete",
+                summary=(
+                    "Complete one review of the proposed study setup and prepare "
+                    "the governed data package before generating the formal research plan."
+                ),
+                owner="easyicu.webserver.pi_copilot.workflow",
+                details={
+                    "next_action_code": workflow.get("next_action_code"),
+                    "missing_setup_fields": missing_setup_fields,
+                },
+            )
     grant_action = "provider_run" if run_type == "full" else "run"
     grant_block = _consume_action(context, grant_action)
     if grant_block is not None:
@@ -4867,7 +4918,6 @@ def _run(
             summary="A full provider analysis requires the session's explicit external-model authorization.",
             owner="easyicu.webserver.provider_gate",
         )
-    study = _bound_context(context.session.binding)
     if not study or not study.get("id"):
         return _result(
             context,

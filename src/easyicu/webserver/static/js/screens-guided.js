@@ -14,6 +14,7 @@
   const { esc, escAttr: attr } = window.EU_HTML;
   const S = (window.SCREENS = window.SCREENS || {});
   const IDEA = window.EU_GUIDED_IDEA;
+  const STARTUP = window.EU_GUIDED_STARTUP;
   const projectTitle = (value, fallback) => window.EU_PRODUCT_LABELS.projectTitle(value, fallback);
 
   /* The idea sub-flow owns its own state and reaches the shell only through
@@ -3208,8 +3209,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         renderThread();
         return;
       }
-      if (usePiSession) bindProjectToPi(result, row);
-      else restoreGuidedProjectThread(result, row, kind);
+      if (usePiSession) return bindProjectToPi(result, row);
+      restoreGuidedProjectThread(result, row, kind);
+      return null;
     }).catch(err => {
       if (!usePiSession) thread = thread.filter(item => !item.typing);
       pushBot(`Could not open project memory: <span class="mono">${esc(err.message || String(err))}</span>`, `无法打开项目记忆：<span class="mono">${esc(err.message || String(err))}</span>`);
@@ -4075,6 +4077,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     reset();
     currentId = 'frontdoor';
     guidedMounted = true;
+    if (STARTUP && STARTUP.begin) STARTUP.begin();
     return true;
   }
 
@@ -4085,7 +4088,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return `
       <div class="gd-shell">
         <h1 class="shell-sr-only" tabindex="-1">${t('Guided Copilot', '研究引导')}</h1>
-        <div class="gd-main threecol">
+        <div class="gd-main threecol ${STARTUP && STARTUP.isActive && STARTUP.isActive() ? 'gd-startup-active' : ''}" ${STARTUP && STARTUP.isActive && STARTUP.isActive() ? 'aria-busy="true"' : ''}>
           ${guidedProjectRenderer('renderShellRail')}
           <div class="gd-conv">
             <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('EasyICU Copilot conversation', 'EasyICU 研究助手对话')}">
@@ -4115,6 +4118,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             </div>
             <div class="gpi-preview-aside" id="gdPreviewAside" hidden></div>
           </aside>
+          ${STARTUP && STARTUP.markup ? STARTUP.markup(t) : ''}
         </div>
         <div id="gdFolderDialogHost"></div>
         <div id="gdRemoveDraftDialogHost"></div>
@@ -4144,17 +4148,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       }
       renderSessions();
       const piOwner = window.EU_GUIDED_PI;
+      let piReady = Promise.resolve();
       if (piOwner && piOwner.mount) {
         if (piOwner.setProjectDiscoveryLoading) piOwner.setProjectDiscoveryLoading(true);
-        piOwner.mount(root.querySelector('#gdPiShell'));
+        piReady = Promise.resolve(piOwner.mount(root.querySelector('#gdPiShell')));
       }
       const draftsReady = loadGuidedDrafts();
-      Promise.resolve(draftsReady).finally(() => {
-        if (!piOwner || !piOwner.mount) return;
+      Promise.allSettled([Promise.resolve(draftsReady), piReady]).finally(() => {
         let projectReady = Promise.resolve();
-        if (selectedGuidedDraft && window.EU_GUIDED_PI.bindProject) {
+        if (selectedGuidedDraft && piOwner && piOwner.bindProject) {
           const bindingReceipt = selectedGuidedDraft.binding_receipt || null;
-          projectReady = Promise.resolve(window.EU_GUIDED_PI.bindProject({
+          projectReady = Promise.resolve(piOwner.bindProject({
             id: selectedGuidedDraft.id,
             title: selectedGuidedDraft.title || selectedGuidedDraft.id,
             binding_receipt: bindingReceipt,
@@ -4162,7 +4166,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (bindingReceipt) delete selectedGuidedDraft.binding_receipt;
         }
         projectReady.finally(() => {
-          if (piOwner.setProjectDiscoveryLoading) piOwner.setProjectDiscoveryLoading(false);
+          if (piOwner && piOwner.setProjectDiscoveryLoading) piOwner.setProjectDiscoveryLoading(false);
+          renderSessions();
+          renderAside();
+          if (STARTUP && STARTUP.finish) STARTUP.finish(root);
         });
       });
       // The global topbar Demo/Real toggle is the source of truth on entry:

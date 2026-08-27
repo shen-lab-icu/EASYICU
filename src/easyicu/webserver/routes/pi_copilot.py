@@ -139,6 +139,11 @@ class PiMessageRequest(BaseModel):
     )
 
 
+class PiRegenerateRequest(PiMessageRequest):
+    user_entry_id: ShortText
+    regeneration_intent: Literal["advance_after_data_source_confirmation"] | None = None
+
+
 class PiDataSourceAuthorizationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -148,6 +153,7 @@ class PiDataSourceAuthorizationRequest(BaseModel):
         "begin_local_selection",
         "confirm_selected_source",
     ]
+    database: Literal["miiv", "mimic", "eicu", "aumc", "hirid", "sic"] | None = None
 
 
 class PiAbortRequest(BaseModel):
@@ -573,6 +579,24 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
         _raise_http(exc)
 
 
+@router.post("/api/copilot/pi/sessions/{session_id}/regenerate")
+def post_pi_copilot_regenerate(
+    session_id: ShortText,
+    body: PiRegenerateRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().send_message(
+            session_id,
+            project_id=body.project_id,
+            message=body.message,
+            allowed_actions=body.allowed_actions,
+            regenerate_user_entry_id=body.user_entry_id,
+            regeneration_intent=body.regeneration_intent,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
 @router.post("/api/copilot/pi/sessions/{session_id}/data-source-authorization")
 def post_pi_copilot_data_source_authorization(
     session_id: ShortText,
@@ -583,6 +607,7 @@ def post_pi_copilot_data_source_authorization(
             session_id,
             project_id=body.project_id,
             action=body.action,
+            database=body.database,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
