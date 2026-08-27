@@ -167,6 +167,7 @@ CONCEPT_DICTIONARY = {
     'height': ('Height', '身高', 'cm'),
     'sex': ('Sex', '性别', ''),
     'weight': ('Weight', '体重', 'kg'),
+    'icu_unit_type': ('ICU Unit Type', 'ICU单元类型', 'category'),
 
     # SOFA-1 评分
     'sofa': ('SOFA Score (Total)', 'SOFA总分', '0-24'),
@@ -580,7 +581,7 @@ CONCEPT_GROUPS_INTERNAL = {
               'bun_creatinine_ratio', 'egfr'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
-    'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
+    'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm', 'icu_unit_type'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
     'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'followup_days_28d', 'followup_days_90d', 'followup_days_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
 }
@@ -731,6 +732,7 @@ CONCEPT_DB_COVERAGE = {
     'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,
     'anion_gap': 6, 'pulse_pressure': 6,
     'age': 6, 'sex': 6, 'weight': 6, 'height': 6, 'death': 6, 'los_icu': 6,
+    'icu_unit_type': 1,
     'sofa': 6, 'sofa2': 6, 'gcs': 6,
     'lact': 5, 'alb': 5, 'crp': 5, 'fio2': 5, 'po2': 5, 'pco2': 5, 'ph': 5,
     'pafi': 5, 'safi': 5, 'urine': 5,

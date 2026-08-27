@@ -556,6 +556,28 @@
    ]
   }
  },
+ "icu_unit_type": {
+  "target": "id_tbl",
+  "class_name": "fct_cncpt",
+  "description": "ICU unit type",
+  "category": "demographics",
+  "sources": {
+   "eicu": [
+    {
+     "table": "patient",
+     "val_var": "unittype",
+     "class_name": "col_itm"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "patient",
+     "val_var": "unittype",
+     "class_name": "col_itm"
+    }
+   ]
+  }
+ },
  "age": {
   "unit": "years",
   "min": 0,
