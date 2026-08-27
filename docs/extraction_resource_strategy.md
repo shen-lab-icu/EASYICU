@@ -51,9 +51,24 @@ not promises for different disks, CPUs, source layouts, or EasyICU revisions.
 | chemistry | 60.3 s | 2,651.5 MiB | 2.85 GiB |
 | ventilator | 78.7 s | 1,633.8 MiB | 1.76 GiB |
 | vitals | 107.3 s | 3,544.4 MiB | 3.81 GiB |
+| renal | 281.7 s | 7,362.0 MiB | 7.91 GiB |
+| respiratory | 73.1 s | 5,077.9 MiB | 5.46 GiB |
+| medications | 88.7 s | 6,749.9 MiB | 7.25 GiB |
+| neurological | 70.9 s | 4,604.9 MiB | 4.95 GiB |
+| circulatory | 334.4 s | 4,721.5 MiB | 5.07 GiB |
+| sepsis_shared | 21.7 s | 4,627.9 MiB | 4.97 GiB |
+| other_scores | 190.6 s | 4,821.9 MiB | 5.18 GiB |
+| sofa1_score | 165.5 s | 6,259.9 MiB | 6.72 GiB |
+| sofa2_score | 437.7 s | 6,315.5 MiB | 6.78 GiB |
+| sepsis3_sofa1 | 267.9 s | 5,749.6 MiB | 6.18 GiB |
+| sepsis3_sofa2 | 428.7 s | 7,286.7 MiB | 7.83 GiB |
 
-Therefore, a user extracting only full-cohort MIMIC-IV `blood_gas` with 2 GiB
-currently available should receive the one-shot fast path and no memory warning.
+All 19 public modules now have full-cohort evidence. At 8 GiB currently
+available, any subset including the complete 19-module selection receives the
+one-shot fast path and no cleanup warning. The strictest module is `renal`,
+which requires 8,098.2 MiB available after applying the 10% headroom rule. A
+user extracting only full-cohort `blood_gas` still needs just 1,824.0 MiB and
+therefore receives one-shot with 2 GiB available.
 
 The eight-module production-shaped one-shot run took 359.7 seconds versus
 522.4 seconds for the corresponding streamed run (1.45x faster), with a maximum
@@ -61,6 +76,13 @@ process-tree RSS of 3,544.4 MiB. The exact-clean ventilator verification at
 commit `59f775e` took 78.7 seconds one-shot versus 197.5 seconds in fixed 5,000
 stay batches; both published 963,266 rows and matched bidirectionally under
 `EXCEPT ALL` (0/0).
+
+The new 8 GiB profiling pass used a 7,447 MiB process-tree hard stop, two
+DuckDB threads and a 2 GiB DuckDB memory limit. All 11 previously unmeasured
+modules completed without triggering the stop. Logs show stable repeated
+bucket scans inside `other_scores`, SOFA-2 and Sepsis-3 dependency graphs.
+Those are code-level I/O/cache optimisation candidates; patient batching would
+repeat the scans and is not the preferred speed fix while one-shot fits.
 
 ## eICU full-cohort measurements under the 8 GiB contract
 
@@ -124,6 +146,10 @@ are optimisation diagnostics, not a new semantic output contract.
   `/Volumes/外置硬盘/tmp/easyicu-light-native-all-c35zNOsy/benchmark_result.json`
 - Exact-clean ventilator one-shot/stream invariance:
   `/Volumes/外置硬盘/tmp/easyicu-ventilator-invariance-fix-59f775e/verification_result.json`
+- MIMIC-IV remaining 11-module 8 GiB receipts:
+  `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/mimiciv/`
+- Persistent MIMIC-IV audit and limitations:
+  `task_logs/20260827_mimiciv_19_module_resource_standard.md`
 - eICU 19-module process-tree receipts and A/B outputs:
   `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/eicu/`
 - Persistent eICU audit and limitations:
@@ -131,7 +157,7 @@ are optimisation diagnostics, not a new semantic output contract.
 
 These measurements support resource selection only for the listed MIMIC-IV and
 eICU modules and cohort ceilings. They do not establish a safe threshold for
-the remaining MIMIC-IV modules or the other four databases. Add a new production
+the other four databases. Add a new production
 profile only after a clean full-cohort run records commit identity, cohort size,
 elapsed time, process-tree peak RSS, output validity, and partition-invariance
 evidence where batching can affect semantics.

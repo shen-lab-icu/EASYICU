@@ -204,6 +204,61 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 3_544.406,
             "seconds": 107.3,
         },
+        "renal": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 7_362.0,
+            "seconds": 281.666,
+        },
+        "respiratory": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 5_077.9,
+            "seconds": 73.137,
+        },
+        "medications": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 6_749.9,
+            "seconds": 88.702,
+        },
+        "neurological": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 4_604.9,
+            "seconds": 70.912,
+        },
+        "circulatory": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 4_721.5,
+            "seconds": 334.370,
+        },
+        "sepsis_shared": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 4_627.9,
+            "seconds": 21.724,
+        },
+        "other_scores": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 4_821.9,
+            "seconds": 190.594,
+        },
+        "sofa1_score": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 6_259.9,
+            "seconds": 165.533,
+        },
+        "sofa2_score": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 6_315.5,
+            "seconds": 437.698,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 5_749.6,
+            "seconds": 267.852,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 94_458,
+            "peak_rss_mb": 7_286.7,
+            "seconds": 428.684,
+        },
     }
 }
 

@@ -283,6 +283,39 @@ def test_measured_eicu_full_module_set_uses_strictest_verified_batch():
     assert plan.advisory is None
 
 
+def test_measured_miiv_full_module_set_uses_one_shot_at_8gib():
+    plan = plan_extraction_resources(
+        "miiv",
+        list(EXTRACT_MODULES),
+        94_458,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 94_458
+    assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
+    assert plan.required_available_memory_mb == pytest.approx(8_098.2)
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
+
+
+def test_measured_miiv_renal_warns_only_below_its_one_shot_threshold():
+    plan = plan_extraction_resources(
+        "miiv",
+        ["renal"],
+        94_458,
+        available_memory_mb=8_000,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_insufficient_memory"
+    assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
+    assert plan.required_available_memory_mb == pytest.approx(8_098.2)
+    assert plan.advisory
+    assert plan.advisory_zh
+
+
 def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
     plan = plan_extraction_resources(
         "eicu",
@@ -317,9 +350,9 @@ def test_measured_module_batches_and_warns_only_below_its_threshold():
 
 def test_unmeasured_module_cannot_borrow_a_light_module_fast_path():
     plan = plan_extraction_resources(
-        "miiv",
+        "mimic",
         ["blood_gas", "renal"],
-        94_458,
+        61_532,
         available_memory_mb=2 * 1024,
     )
 
