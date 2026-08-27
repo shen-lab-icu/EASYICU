@@ -393,6 +393,45 @@ def _estimate_cached_bytes(value: object) -> int:
         return 1024
 
 
+def _requested_dependency_overlap(
+    dictionary: ConceptDictionary,
+    concept_names: Iterable[str],
+) -> List[str]:
+    """Return requested concepts that are dependencies of another request.
+
+    Resolving an ancestor and one of its requested descendants concurrently
+    duplicates the descendant's full source scan before either thread can
+    populate the resolver cache. Keep independent concepts parallel, but
+    serialize a dependency-overlapping request so the existing cache can be
+    reused safely.
+    """
+
+    names = list(dict.fromkeys(concept_names))
+    requested = set(names)
+    overlap: set[str] = set()
+
+    for root in names:
+        visited: set[str] = set()
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            definition = dictionary.get(current)
+            if definition is None:
+                continue
+            dependencies = list(definition.depends_on or [])
+            dependencies.extend(definition.sub_concepts or [])
+            for dependency in dependencies:
+                if dependency != root and dependency in requested:
+                    overlap.add(dependency)
+                if dependency not in visited:
+                    stack.append(dependency)
+
+    return sorted(overlap)
+
+
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
@@ -1555,9 +1594,19 @@ class ConceptResolver:
             
             # 检查是否有共享的子概念（被多个概念引用）
             shared_sub_concepts = [sub for sub, parents in all_sub_concepts.items() if len(parents) > 1]
-            if shared_sub_concepts:
+            requested_dependency_overlap = _requested_dependency_overlap(
+                self.dictionary,
+                names,
+            )
+            if shared_sub_concepts or requested_dependency_overlap:
                 if verbose:
-                    logger.info(f"🔄 检测到共享子概念 {shared_sub_concepts}，使用串行加载以利用缓存")
+                    hazards = sorted(
+                        set(shared_sub_concepts) | set(requested_dependency_overlap)
+                    )
+                    logger.info(
+                        "🔄 检测到依赖重叠概念 %s，使用串行加载以利用缓存",
+                        hazards,
+                    )
                 effective_workers = 1
 
         def _resolve(
