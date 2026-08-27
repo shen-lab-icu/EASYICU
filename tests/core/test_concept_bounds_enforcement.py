@@ -242,6 +242,41 @@ def test_module_extraction_streams_patient_batches_directly_to_parquet(
     assert not (tmp_path / ".test_module.partial.parquet").exists()
 
 
+def test_streamed_module_rejects_rows_outside_the_requested_patient_batch(
+    monkeypatch, tmp_path
+):
+    def fake_load_concepts(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        return pd.DataFrame(
+            {
+                "stay_id": [*ids, 999],
+                "charttime": [0.0] * (len(ids) + 1),
+                "test_signal": [1.0] * (len(ids) + 1),
+            }
+        )
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal"],
+        "miiv",
+        str(tmp_path),
+        {"stay_id": [1, 2]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["saved"] == {}
+    assert manifest["errors"] == [
+        "streamed export(test_module): test_module: streamed batch returned "
+        "1 stay_id values outside the requested patient partition"
+    ]
+    assert not (tmp_path / ".test_module.partial.parquet").exists()
+
+
 def test_streamed_module_grows_later_batches_from_first_measured_peak(
     monkeypatch,
     tmp_path,

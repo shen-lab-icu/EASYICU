@@ -935,8 +935,28 @@ class ConceptResolver:
         if not source_values:
             return patient_ids
         
-        # 加载或使用缓存的 ID 映射表
-        if self._id_mapping_cache is None:
+        # 加载或使用缓存的 ID 映射表。该表是按请求队列过滤的，
+        # 因此不能把“已有缓存”当成“已覆盖所有后续 ID”。流式提取
+        # 会用同一 loader 依次处理互不重叠的队列；首批 5,000 stay 的
+        # partial cache 曾使第二批 stay_id -> subject_id 转换得到空值，
+        # 随后 hospital-table 路径因没有患者过滤而读入近似全库。
+        mapping_columns = [stay_id_col, 'subject_id']
+        mapping_df = self._id_mapping_cache
+        if (
+            mapping_df is None
+            or source_var not in mapping_df.columns
+            or target_id_var not in mapping_df.columns
+        ):
+            missing_source_values = list(dict.fromkeys(source_values))
+            mapping_df = None
+        else:
+            cached_source_values = set(mapping_df[source_var].dropna().tolist())
+            missing_source_values = [
+                value for value in dict.fromkeys(source_values)
+                if value not in cached_source_values
+            ]
+
+        if missing_source_values:
             try:
                 # eICU doesn't use icustays table
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
@@ -953,7 +973,7 @@ class ConceptResolver:
                     FilterSpec(
                         column=source_var,
                         op=FilterOp.IN,
-                        value=source_values,
+                        value=missing_source_values,
                     )
                 ]
                 icustays_table = data_source.load_table(
@@ -963,9 +983,19 @@ class ConceptResolver:
                     verbose=False
                 )
                 if hasattr(icustays_table, 'data'):
-                    self._id_mapping_cache = icustays_table.data[[stay_id_col, 'subject_id']].drop_duplicates()
+                    loaded_mapping = icustays_table.data[mapping_columns].drop_duplicates()
                 else:
-                    self._id_mapping_cache = icustays_table[[stay_id_col, 'subject_id']].drop_duplicates()
+                    loaded_mapping = icustays_table[mapping_columns].drop_duplicates()
+
+                if mapping_df is None or mapping_df.empty:
+                    mapping_df = loaded_mapping
+                elif not loaded_mapping.empty:
+                    mapping_df = pd.concat(
+                        [mapping_df, loaded_mapping],
+                        ignore_index=True,
+                        copy=False,
+                    ).drop_duplicates(subset=mapping_columns, keep='last')
+                self._id_mapping_cache = mapping_df
                     
                 if verbose:
                     if DEBUG_MODE: print(f"   🔗 加载 ID 映射表: {len(self._id_mapping_cache)} 条记录")
@@ -976,11 +1006,17 @@ class ConceptResolver:
         
         # 从映射表中获取目标ID
         mapping_df = self._id_mapping_cache
+        if mapping_df is None:
+            mapping_df = pd.DataFrame(columns=mapping_columns)
+            self._id_mapping_cache = mapping_df
         mask = mapping_df[source_var].isin(source_values)
         target_values = mapping_df.loc[mask, target_id_var].unique().tolist()
-        
+
+        # Always materialize the target key, including the legitimate empty
+        # mapping.  Callers can then emit an explicit empty IN filter instead
+        # of silently omitting the filter and widening to the whole table.
+        patient_ids[target_id_var] = target_values
         if target_values:
-            patient_ids[target_id_var] = target_values
             if verbose:
                 if DEBUG_MODE: print(f"   🔗 ID 转换: {source_var}={len(source_values)}个 → {target_id_var}={len(target_values)}个")
         
@@ -2132,7 +2168,7 @@ class ConceptResolver:
                         id_values = expanded_patient_ids.get(effective_id_var)
                         
                         # DEBUG
-                        if id_values:
+                        if id_values is not None:
                             # ✅ 关键修复：对于 hospital tables（如 labevents），如果使用 subject_id 过滤
                             # 需要在 metadata 中保存原始的 stay_id/icustay_id，供 datasource 在 join 后精确过滤
                             metadata = None
