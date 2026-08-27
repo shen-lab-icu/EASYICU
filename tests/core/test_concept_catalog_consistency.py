@@ -156,7 +156,9 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # 2026-08-22: +three fixed-horizon event/censoring-time companions. 304 -> 307.
     # 2026-09-01: replace 19 historical AKI/strict outputs with 35 explicit
     # public-reference, source-native, and evidence-receipt fields. 307 -> 323.
-    assert len(CONCEPT_DICTIONARY) == 323
+    # 2026-09-04: +eICU ICU-unit type as a typed demographics coordinate.
+    # 323 -> 324.
+    assert len(CONCEPT_DICTIONARY) == 324
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
