@@ -236,6 +236,68 @@ def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
     assert plan.advisory_zh is None
 
 
+def test_measured_eicu_profile_can_authorize_full_cohort_above_legacy_size_cap():
+    plan = plan_extraction_resources(
+        "eicu",
+        ["blood_gas"],
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "one_shot"
+    assert plan.reason_code == "measured_profile_fast_path"
+    assert plan.batch_size == 200_859
+    assert plan.measured_peak_rss_mb == pytest.approx(1_104.6)
+    assert plan.advisory is None
+
+
+def test_measured_eicu_respiratory_uses_fastest_verified_five_batches():
+    plan = plan_extraction_resources(
+        "eicu",
+        ["respiratory"],
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 50_000
+    assert _n_chunks(200_859, plan.batch_size) == 5
+    assert plan.measured_peak_rss_mb == pytest.approx(6_252.8)
+    assert plan.required_available_memory_mb == pytest.approx(6_878.08)
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
+
+
+def test_measured_eicu_full_module_set_uses_strictest_verified_batch():
+    plan = plan_extraction_resources(
+        "eicu",
+        list(EXTRACT_MODULES),
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 50_000
+    assert plan.required_available_memory_mb == pytest.approx(7_163.53)
+    assert plan.advisory is None
+
+
+def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
+    plan = plan_extraction_resources(
+        "eicu",
+        ["respiratory"],
+        200_859,
+        available_memory_mb=6 * 1024,
+    )
+
+    assert plan.reason_code == "measured_profile_insufficient_memory"
+    assert plan.batch_size == 40_000
+    assert "fastest-batch threshold" in plan.advisory
+    assert "最快批次门槛" in plan.advisory_zh
+    assert "速度会变慢" in plan.advisory_zh
+
+
 def test_measured_module_batches_and_warns_only_below_its_threshold():
     plan = plan_extraction_resources(
         "miiv",
