@@ -277,6 +277,73 @@ def test_native_time_axis_uses_los_and_normalises_stay_level_outcomes() -> None:
     assert stay_audit["normalized_stay_level_rows"] == 2
 
 
+def test_native_publication_requires_outcome_bounds_when_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"vitals": ["hr"]})
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "hr": [72.0]}
+    ).to_parquet(tmp_path / "vitals.parquet", index=False)
+
+    with pytest.raises(ValueError, match="outcome.*los_icu.*time bounds"):
+        api._publish_native_export_v2(
+            database="miiv",
+            data_path="/raw/source-must-not-be-read",
+            output_dir=str(tmp_path),
+            modules=["vitals"],
+            max_patients=None,
+            result=_completed_result("vitals"),
+            require_stay_time_bounds=True,
+        )
+
+    assert not (tmp_path / "_manifest.json").exists()
+
+
+def test_native_manifest_distinguishes_producer_and_published_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        api,
+        "EXTRACT_MODULES",
+        {"outcome": ["los_icu"], "vitals": ["hr"]},
+    )
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [0.0], "los_icu": [1.0]}
+    ).to_parquet(tmp_path / "outcome.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 100.0],
+            "hr": [72.0, 80.0],
+        }
+    ).to_parquet(tmp_path / "vitals.parquet", index=False)
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path="/raw/source-must-not-be-read",
+        output_dir=str(tmp_path),
+        modules=["outcome", "vitals"],
+        max_patients=None,
+        result={
+            "modules": {
+                "outcome": {"errors": []},
+                "vitals": {"errors": []},
+            }
+        },
+        require_stay_time_bounds=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    vitals = next(entry for entry in manifest["files"] if entry["module"] == "vitals")
+    assert vitals["producer_rows"] == 2
+    assert vitals["rows"] == 1
+    assert manifest["time_window_authority"] == {
+        "required": True,
+        "source": "outcome.los_icu",
+        "bounded_stays": 1,
+    }
+
+
 def test_native_outcome_preserves_death_time_before_normalising_charttime() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     source = pd.DataFrame(

@@ -52,6 +52,36 @@ def test_bool_auto_aggregation_is_occurrence_not_count_or_majority() -> None:
     assert str(result["rrt"].dtype) == "bool"
 
 
+def test_categorical_first_is_stable_by_source_time_then_value() -> None:
+    rows = [
+        {"stay_id": 1, "charttime": 0.75, "vent_mode": "standby"},
+        {"stay_id": 1, "charttime": 0.25, "vent_mode": "unspecified"},
+        {"stay_id": 1, "charttime": 0.25, "vent_mode": "pressure"},
+    ]
+
+    def aggregate(frame: pd.DataFrame) -> pd.DataFrame:
+        table = ICUTable(
+            data=frame,
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column="vent_mode",
+        )
+        return change_interval(
+            table,
+            interval=pd.Timedelta(hours=1),
+            aggregation="first",
+            time_unit="hours",
+        ).data
+
+    forward = aggregate(pd.DataFrame(rows))
+    reversed_order = aggregate(pd.DataFrame(list(reversed(rows))))
+
+    assert forward[["stay_id", "charttime", "vent_mode"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 0.0, "vent_mode": "pressure"}
+    ]
+    pd.testing.assert_frame_equal(forward, reversed_order)
+
+
 def test_r_style_merge_retains_owner_receipt_sidecars() -> None:
     frame = pd.DataFrame(
         {
