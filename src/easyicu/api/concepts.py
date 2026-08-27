@@ -107,6 +107,34 @@ def _patient_filter_values(patient_ids):
     return list(values)
 
 
+def _restrict_result_to_requested_ids(result, patient_ids):
+    """Enforce an exact caller-supplied ID partition at the public boundary.
+
+    Some source concepts are keyed by hospital admission or subject. Resolving
+    them to ICU stays can legitimately load sibling stays as intermediate
+    context, but those rows must not escape a request explicitly scoped to one
+    stay-ID partition. Apply the restriction after standard and special
+    concepts have been merged so an outer join cannot reintroduce siblings.
+    Frames without the caller's exact ID column are left unchanged because no
+    safe cross-ID inference belongs at this boundary.
+    """
+    if not isinstance(patient_ids, dict) or len(patient_ids) != 1:
+        return result
+    id_col, values = next(iter(patient_ids.items()))
+    requested = set(_patient_filter_values({id_col: values}))
+
+    def _restrict(frame):
+        if not isinstance(frame, pd.DataFrame) or id_col not in frame.columns:
+            return frame
+        return frame.loc[frame[id_col].isin(requested)].reset_index(drop=True)
+
+    if isinstance(result, pd.DataFrame):
+        return _restrict(result)
+    if isinstance(result, dict):
+        return {name: _restrict(frame) for name, frame in result.items()}
+    return result
+
+
 #: Chunk size used for every SOFA-family auto-chunked extraction, on every
 #: host. Fixed rather than memory-tiered: chunk size is an execution parameter
 #: that must not change a clinical score.
@@ -2110,6 +2138,11 @@ def load_concepts(
                             # special frame as-is for this single-concept
                             # case.
                             result = sdf
+
+    # Admission-/subject-keyed concepts may expand to sibling ICU stays while
+    # resolving their source IDs. Keep that context internal: an explicit
+    # stay-ID request is an exact public-output boundary.
+    result = _restrict_result_to_requested_ids(result, patient_ids)
 
     # 🆕 内存优化模式：压缩数据类型
     if memory_efficient:
