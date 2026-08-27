@@ -38,3 +38,12 @@ This closes the exact streamed output boundary and validates outcome
 partition-invariance on full MIMIC-III. It does not yet prove that 31,000 is the
 fastest safe medications batch, establish all 19 MIMIC-III module profiles, or
 provide Qualification12, Held-out27, clinical, causal or publication authority.
+
+## Subsequent resource result
+
+The larger 40,000-stay medications candidate crossed the same hard stop at
+7,458.9 MiB (`stopped_for_rss=true`, exit 137), so 31,000 is now the fastest
+verified safe batch. Thirteen other modules completed one-shot. MIMIC-III is
+therefore 14/19 measured; `other_scores`, `sofa1_score`, `sofa2_score`,
+`sepsis3_sofa1` and `sepsis3_sofa2` remain unmeasured and keep the conservative
+guard.

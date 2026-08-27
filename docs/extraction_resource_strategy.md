@@ -84,6 +84,37 @@ bucket scans inside `other_scores`, SOFA-2 and Sepsis-3 dependency graphs.
 Those are code-level I/O/cache optimisation candidates; patient batching would
 repeat the scans and is not the preferred speed fix while one-shot fits.
 
+## MIMIC-III partial full-cohort measurements under the 8 GiB contract
+
+Scope: 61,532 ICU stays with the same 7,447 MiB hard stop, two DuckDB threads,
+2 GiB DuckDB limit and external output/spill. Thirteen modules have successful
+one-shot evidence and medications has a measured batch profile; the remaining
+five score/Sepsis modules retain the unmeasured guard.
+
+| Module | Time | Peak RSS | Fastest verified mode |
+|---|---:|---:|---|
+| demographics | 12.2 s | 1,008.5 MiB | one-shot |
+| outcome | 1.8 s | 612.3 MiB | one-shot |
+| blood_gas | 8.2 s | 1,936.3 MiB | one-shot |
+| hematology | 14.1 s | 2,637.5 MiB | one-shot |
+| chemistry | 24.6 s | 2,823.9 MiB | one-shot |
+| vasopressors | 111.9 s | 7,415.4 MiB | one-shot |
+| ventilator | 91.9 s | 2,220.9 MiB | one-shot |
+| vitals | 68.3 s | 6,577.7 MiB | one-shot |
+| renal | 210.3 s | 6,231.2 MiB | one-shot |
+| respiratory | 96.1 s | 7,182.0 MiB | one-shot |
+| neurological | 39.0 s | 6,044.1 MiB | one-shot |
+| circulatory | 447.1 s | 6,159.8 MiB | one-shot |
+| sepsis_shared | 11.1 s | 5,659.3 MiB | one-shot |
+| medications | 384.0 s | 7,236.8 MiB | 31,000 stays (2 batches) |
+
+MIMIC-III medications one-shot ended without a worker manifest after an
+observed 6,972.3 MiB lower-bound peak. A 40,000-stay candidate was then stopped
+at 7,458.9 MiB, while 31,000 completed at 7,236.8 MiB. The streamed outcome
+partition defect found during this search was repaired at the public concept
+boundary; the fresh 31,000 + 30,532 package has 61,532 outcome rows and matches
+the one-shot output under bidirectional `EXCEPT ALL=0/0`.
+
 ## eICU full-cohort measurements under the 8 GiB contract
 
 Scope: 200,859 ICU stays, one module per isolated process, two DuckDB threads,
@@ -150,6 +181,9 @@ are optimisation diagnostics, not a new semantic output contract.
   `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/mimiciv/`
 - Persistent MIMIC-IV audit and limitations:
   `task_logs/20260827_mimiciv_19_module_resource_standard.md`
+- MIMIC-III partial receipts and partition repair:
+  `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/mimiciii/`
+  and `task_logs/20260827_mimiciii_partition_boundary_repair.md`
 - eICU 19-module process-tree receipts and A/B outputs:
   `/Volumes/外置硬盘/tmp/easyicu-6db-resource-profile-30f5228-ak9lbI/eicu/`
 - Persistent eICU audit and limitations:
