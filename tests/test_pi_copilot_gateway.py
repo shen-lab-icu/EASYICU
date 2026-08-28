@@ -78,9 +78,12 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert 'error?.code || "pi_host_tool_rejected"' in entrypoint
     assert 'case "session.regenerate.inspect"' in entrypoint
     assert 'case "session.regenerate"' in entrypoint
+    assert '"turn_intent"' in entrypoint
+    assert 'turnIntent,' in entrypoint
     assert "record.session.navigateTree(target.entryId" in entrypoint
     assert "replaced_turn_index: target.turnIndex" in entrypoint
     assert 'turnIntent === "advance_after_data_source_confirmation"' in entrypoint
+    assert 'customType: "easyicu_host_transition"' in entrypoint
     assert "do not ask the next setup question" in entrypoint
     assert "one concise data-preparation confirmation, not a study plan" in entrypoint
     assert "MUST infer and propose one concrete recommended value" in entrypoint
@@ -275,6 +278,86 @@ def test_initial_question_update_uses_host_finalization_without_second_provider_
     ]
     assert payload["result"]["usage"]["totalTokens"] == 0
     assert "尚未开始数据提取或分析" in payload["result"]["content"][0]["text"]
+
+
+def test_initial_question_without_source_stops_at_database_selection() -> None:
+    node = shutil.which("node")
+    if not node or not (APP_DIR / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    module = APP_DIR / "src" / "post-tool-finalization.mjs"
+    script = f"""
+      import {{ hostPostToolFinalization }} from {json.dumps(module.as_uri())};
+      const model = {{ api: 'openai-completions', provider: 'test', id: 'test' }};
+      const sourceAssistant = {{
+        role: 'assistant',
+        content: [{{
+          type: 'toolCall', id: 'call-source', name: 'easyicu_list_data_sources',
+          arguments: {{}},
+        }}],
+      }};
+      const sourceResult = {{
+        role: 'toolResult', toolCallId: 'call-source', toolName: 'easyicu_list_data_sources',
+        isError: false, content: [], details: {{
+          status: 'ok', code: 'easyicu_data_sources_listed', details: {{
+            supported_databases: [
+              {{ database: 'miiv', display_label: 'MIMIC-IV v3.1', reference_release: '3.1' }},
+              {{ database: 'eicu', display_label: 'eICU v2.0', reference_release: '2.0' }},
+              {{ database: 'aumc', display_label: 'AmsterdamUMCdb', reference_release: null }},
+              {{ database: 'hirid', display_label: 'HiRID v1.1.1', reference_release: '1.1.1' }},
+              {{ database: 'mimic', display_label: 'MIMIC-III v1.4', reference_release: '1.4' }},
+              {{ database: 'sic', display_label: 'SICdb v1.0.6', reference_release: '1.0.6' }},
+            ],
+          }},
+        }},
+      }};
+      const updateAssistant = {{
+        role: 'assistant',
+        content: [{{
+          type: 'toolCall', id: 'call-update', name: 'easyicu_update_study_context',
+          arguments: {{ question: 'Is lactate associated with hospital mortality?' }},
+        }}],
+      }};
+      const updateResult = {{
+        role: 'toolResult', toolCallId: 'call-update', toolName: 'easyicu_update_study_context',
+        isError: false, content: [], details: {{
+          status: 'ok', code: 'study_context_updated', details: {{ workflow: {{
+            next_action_code: 'study_setup_incomplete',
+            missing_setup_fields: ['data_source', 'outcome', 'primary_exposure'],
+            study_setup_receipt: {{ configuration: {{ data_source: {{}} }} }},
+          }} }},
+        }},
+      }};
+      const stream = hostPostToolFinalization(model, {{
+        messages: [sourceAssistant, sourceResult, updateAssistant, updateResult],
+      }}, 'zh');
+      if (!stream) throw new Error('expected data-source finalization');
+      const result = await stream.result();
+      console.log(JSON.stringify(result));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        cwd=APP_DIR,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    payload = json.loads(completed.stdout)
+    text = payload["content"][0]["text"]
+    assert payload["usage"]["totalTokens"] == 0
+    assert "当前项目尚未选择本次会话的数据源" in text
+    assert "使用 MIMIC-IV v3.1" in text
+    assert "使用 eICU v2.0" in text
+    assert "使用 AmsterdamUMCdb" in text
+    assert "使用 HiRID v1.1.1" in text
+    assert "使用 MIMIC-III v1.4" in text
+    assert "使用 SICdb v1.0.6" in text
+    assert text.count("\n- 使用 ") == 6
+    assert "目录没有为 AmsterdamUMCdb 声明单一参考版本" in text
+    assert "EasyICU 不会猜测版本" in text
+    assert "主要暴露" not in text
+    assert "主要结局" not in text
 
 
 def test_host_finalization_does_not_intercept_later_scientific_updates() -> None:
@@ -1338,7 +1421,7 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "sensitivity_spec" in entrypoint
 
 
-def test_data_source_transition_regeneration_is_mechanically_read_only() -> None:
+def test_data_source_transition_appends_a_hidden_mechanically_read_only_host_turn() -> None:
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
 
     transition_guard = '''if (intent === "advance_after_data_source_confirmation") {
@@ -1346,8 +1429,25 @@ def test_data_source_transition_regeneration_is_mechanically_read_only() -> None
     }'''
     assert transition_guard in entrypoint
     assert entrypoint.index(transition_guard) < entrypoint.index(
-        "await record.session.navigateTree(target.entryId", entrypoint.index("async function regenerateSession")
+        'customType: "easyicu_host_transition"', entrypoint.index("async function promptSession")
     )
+    prompt_session = entrypoint.split("async function promptSession", 1)[1].split(
+        "function regenerateTarget", 1
+    )[0]
+    assert "sendCustomMessage" in prompt_session
+    assert "navigateTree" not in prompt_session
+
+
+def test_formal_plan_confirmation_is_a_hidden_typed_single_tool_transition() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+
+    prompt_session = entrypoint.split("async function promptSession", 1)[1].split(
+        "function regenerateTarget", 1
+    )[0]
+    assert 'intent === "confirm_formal_plan_generation"' in prompt_session
+    assert 'record.session.setActiveToolsByName(["easyicu_run"])' in prompt_session
+    assert "Call easyicu_run exactly once with run_type='full'" in entrypoint
+    assert "The run owner decides from the bound source" in entrypoint
 
 
 def test_system_prompt_keeps_declined_optional_sensitivity_out_of_study_context() -> None:

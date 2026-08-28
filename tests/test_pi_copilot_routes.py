@@ -507,6 +507,34 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
     assert accepted.status_code == 200
     assert accepted.json()["received"]["allowed_actions"] == ["configure", "run"]
 
+    continued = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "Continue after the confirmed source",
+            "turn_intent": "advance_after_data_source_confirmation",
+        },
+    )
+    assert continued.status_code == 200
+    assert (
+        continued.json()["received"]["message_intent"]
+        == "advance_after_data_source_confirmation"
+    )
+
+    plan_generation = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "Start generating the formal research plan.",
+            "turn_intent": "confirm_formal_plan_generation",
+        },
+    )
+    assert plan_generation.status_code == 200
+    assert (
+        plan_generation.json()["received"]["message_intent"]
+        == "confirm_formal_plan_generation"
+    )
+
     assert (
         client.post(
             "/api/copilot/pi/sessions/pi-test/message",
@@ -523,16 +551,33 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
         "/api/copilot/pi/sessions/pi-test/regenerate",
         json={
             "project_id": "guided-project-1",
-            "message": "Original research question",
-            "allowed_actions": ["configure"],
+            "message": "Start generating the formal research plan.",
+            "allowed_actions": ["provider_run"],
+            "turn_intent": "confirm_formal_plan_generation",
             "user_entry_id": "entry-user-1",
-            "regeneration_intent": "advance_after_data_source_confirmation",
+            "regeneration_intent": "user_edited_message",
         },
     )
     assert regenerated.status_code == 200
     assert (
         regenerated.json()["received"]["regeneration_intent"]
-        == "advance_after_data_source_confirmation"
+        == "user_edited_message"
+    )
+    assert (
+        regenerated.json()["received"]["message_intent"]
+        == "confirm_formal_plan_generation"
+    )
+    assert (
+        client.post(
+            "/api/copilot/pi/sessions/pi-test/regenerate",
+            json={
+                "project_id": "guided-project-1",
+                "message": "Original research question",
+                "user_entry_id": "entry-user-1",
+                "regeneration_intent": "advance_after_data_source_confirmation",
+            },
+        ).status_code
+        == 422
     )
     assert (
         client.post(

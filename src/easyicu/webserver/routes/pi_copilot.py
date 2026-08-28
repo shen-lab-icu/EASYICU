@@ -137,11 +137,19 @@ class PiMessageRequest(BaseModel):
         default_factory=list,
         max_length=9,
     )
+    turn_intent: (
+        Literal[
+            "confirm_formal_plan_generation",
+            "confirm_planner_checkpoint_resume",
+            "advance_after_data_source_confirmation",
+        ]
+        | None
+    ) = None
 
 
 class PiRegenerateRequest(PiMessageRequest):
     user_entry_id: ShortText
-    regeneration_intent: Literal["advance_after_data_source_confirmation"] | None = None
+    regeneration_intent: Literal["user_edited_message"] | None = None
 
 
 class PiDataSourceAuthorizationRequest(BaseModel):
@@ -574,6 +582,7 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
             project_id=body.project_id,
             message=body.message,
             allowed_actions=body.allowed_actions,
+            message_intent=body.turn_intent,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -592,6 +601,7 @@ def post_pi_copilot_regenerate(
             allowed_actions=body.allowed_actions,
             regenerate_user_entry_id=body.user_entry_id,
             regeneration_intent=body.regeneration_intent,
+            message_intent=body.turn_intent,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

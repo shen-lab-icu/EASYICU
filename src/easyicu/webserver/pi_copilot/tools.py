@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
+from typing import Any, Dict, FrozenSet, Iterable, Mapping, Optional, Sequence, Set
 
 from fastapi import HTTPException
 
@@ -2649,6 +2649,7 @@ _STUDY_SETUP_FIELDS = frozenset(
         "covariate_selection",
         "covariate_rationales",
         "covariate_temporal_roles",
+        "covariate_operationalizations",
         "execution_concepts",
         "analysis_design",
         "sensitivity_specs",
@@ -2671,6 +2672,7 @@ _NESTED_STUDY_PATCH_FIELDS = frozenset(
         "analysis_design",
         "covariate_rationales",
         "covariate_temporal_roles",
+        "covariate_operationalizations",
     }
 )
 
@@ -2719,9 +2721,15 @@ def _message_explicitly_selects_primary_outcome(message: str) -> bool:
         re.search(pattern, normalized)
         for pattern in (
             r"主要结局.*?(?:使用|采用|设为|定义为|改为|替换为)",
+            r"(?:确认|同意).*?主要结局.*?(?:为|是|采用|使用)",
             r"(?:使用|采用|设为|改为|替换为).*?(?:死亡|mortality).*?(?:主要)?结局",
             r"结局.*?(?:使用|采用|设为|定义为|改为|替换为).*?(?:死亡|mortality)",
             r"不(?:改成|改为|替换为).*?(?:死亡|mortality)",
+            # The Copilot renders this compact affirmative choice directly
+            # beneath one concrete outcome proposal.  It is an explicit user
+            # decision even though the button text avoids repeating the long
+            # clinical definition.
+            r"^(?:是|确认)[，,\s]*(?:采用|使用|确认)?(?:该|此|上述)?(?:定义|主要结局定义)[。.]?$",
             # A rendered next-step choice is itself an explicit selection even
             # when its button label is a compact noun phrase.  Requiring the
             # user to add a verb after clicking the option makes the same
@@ -2743,9 +2751,11 @@ def _message_explicitly_selects_primary_exposure(message: str) -> bool:
         re.search(pattern, normalized)
         for pattern in (
             r"主要暴露.*?(?:使用|采用|设为|定义为)",
+            r"(?:确认|同意).*?主要暴露.*?(?:为|是|采用|使用)",
             r"(?:使用|采用|设为).*?(?:sepsis|脓毒症).*?(?:定义|作为.*?暴露)",
             r"(?:sepsis|脓毒症).*?(?:定义|版本).*?(?:使用|采用)",
             r"不要使用.*?(?:sofa|sepsis|脓毒症)",
+            r"^(?:是|确认)[，,\s]*(?:采用|使用|确认)?(?:该|此|上述)?(?:定义|主要暴露定义)[。.]?$",
             r"\bprimary[\s_-]+exposure[\s_-]+(?:is|uses?|will[\s_-]+be)\b",
             r"\b(?:use|adopt)[\s_-]+.+?[\s_-]+(?:as[\s_-]+the[\s_-]+)?primary[\s_-]+exposure\b",
             r"\bdo[\s_-]+not[\s_-]+use[\s_-]+.+?(?:sofa|sepsis)\b",
@@ -2794,7 +2804,7 @@ def _message_explicitly_selects_analysis_goal(message: str) -> bool:
             r"(?:分析目标|研究目标).*?(?:患病率|关联|因果|预测|描述)",
             r"(?:分析目标|研究目标).*?(?:同步|替换|改为|更新).*?(?:死亡|mortality|患病率|关联)",
             r"先报告.*?患病率.*?(?:关联|关系)",
-            r"(?:观察性关联|非因果|不要写成因果|不.*?因果效应)",
+            r"(?:观察性关联|非因果|不要写成因果|不作因果解释|不.*?因果效应)",
             r"^(?:描述|报告).*?患病率.*?(?:未调整|协变量调整|调整后).*?关联(?:分析)?(?:\s*[（(]推荐[）)])?$",
             r"^仅(?:描述|报告).*?患病率.*?(?:不分析|不评估).*?(?:死亡)?关联$",
             r"\b(?:analysis|study)[\s_-]+goal\b",
@@ -2926,6 +2936,77 @@ def _merge_nested_study_patch(
     return merged
 
 
+_GATED_SLOT_OMISSION_CODES = {
+    "cohort": "study_cohort_preset_confirmation_required",
+    "outcome": "study_primary_outcome_confirmation_required",
+    "primary_exposure": "study_primary_exposure_confirmation_required",
+    "analysis_goal": "study_analysis_goal_confirmation_required",
+}
+
+
+def _unconfirmed_gated_slots(
+    params: Mapping[str, Any],
+    current: Mapping[str, Any],
+    user_message: str,
+) -> FrozenSet[str]:
+    """Gated slots this turn proposes but does not explicitly select.
+
+    Each confirmation guard below keeps a genuinely confirmed change in the
+    same call and drops only its own unconfirmed slot.  That test must not
+    read a *sibling* candidate slot as the user's confirmation: one research
+    question mentioning Sepsis-3 and ICU mortality proposes outcome,
+    primary_exposure and analysis_goal together, and letting each one vouch
+    for the others made all three take the silent-drop branch, so none could
+    ever be saved and none could ever reach its typed
+    ``*_confirmation_required`` receipt.
+    """
+
+    message = str(user_message or "").strip()
+    if not message:
+        return frozenset()
+    current = current or {}
+    unconfirmed: set[str] = set()
+
+    proposed_cohort = params.get("cohort")
+    if isinstance(proposed_cohort, Mapping) and "preset" in proposed_cohort:
+        proposed_preset = str(proposed_cohort.get("preset") or "").strip().lower()
+        current_preset = str((current.get("cohort") or {}).get("preset") or "").strip()
+        if (
+            proposed_preset
+            and proposed_preset != current_preset
+            and not _message_explicitly_selects_all_stays(message)
+            and not _message_explicitly_selects_first_stay(message)
+        ):
+            unconfirmed.add("cohort")
+
+    for slot, selects_explicitly in (
+        ("outcome", _message_explicitly_selects_primary_outcome),
+        ("primary_exposure", _message_explicitly_selects_primary_exposure),
+        ("analysis_goal", _message_explicitly_selects_analysis_goal),
+    ):
+        proposed = str(params.get(slot) or "").strip()
+        if not proposed or proposed == str(current.get(slot) or "").strip():
+            continue
+        if not selects_explicitly(message):
+            unconfirmed.add(slot)
+
+    return frozenset(unconfirmed)
+
+
+def _has_other_confirmed_change(
+    params: Mapping[str, Any],
+    *,
+    slot_machinery: Set[str],
+    unconfirmed_gated: FrozenSet[str],
+) -> bool:
+    """Whether this call also carries a change the user actually confirmed."""
+
+    return any(
+        key in params
+        for key in _STUDY_SETUP_FIELDS - slot_machinery - unconfirmed_gated
+    )
+
+
 def _restore_unconfirmed_study_slot(
     patch: Dict[str, Any],
     current: Mapping[str, Any],
@@ -2996,7 +3077,29 @@ def _update_study_context(
         for key in _STUDY_SETUP_FIELDS - {"bind_active_export", "bind_source_id"}
         if key in params
     }
+    if isinstance(patch.get("sensitivity_specs"), list):
+        patch["sensitivity_specs"] = [
+            {key: value for key, value in spec.items() if value is not None}
+            if isinstance(spec, Mapping)
+            else spec
+            for spec in patch["sensitivity_specs"]
+        ]
     omitted_unconfirmed_fields: list[str] = []
+    unconfirmed_omissions: list[Dict[str, str]] = []
+    unconfirmed_gated = _unconfirmed_gated_slots(
+        params, current or {}, context.user_message
+    )
+
+    def _record_unconfirmed_omission(slot: str, field: str) -> None:
+        """Make one silently dropped slot visible in the typed receipt."""
+
+        if field in omitted_unconfirmed_fields:
+            return
+        omitted_unconfirmed_fields.append(field)
+        unconfirmed_omissions.append(
+            {"field": field, "code": _GATED_SLOT_OMISSION_CODES[slot]}
+        )
+
     if current:
         patch = _merge_nested_study_patch(current, patch)
     if current and current.get("id"):
@@ -3072,14 +3175,19 @@ def _update_study_context(
             and str(context.user_message or "").strip()
             and not _message_explicitly_selects_all_stays(context.user_message)
         ):
-            other_confirmed_change = any(
-                key in params
-                for key in _STUDY_SETUP_FIELDS
-                - {"cohort", "execution_concepts", "modules", "confirmations"}
+            other_confirmed_change = _has_other_confirmed_change(
+                params,
+                slot_machinery={
+                    "cohort",
+                    "execution_concepts",
+                    "modules",
+                    "confirmations",
+                },
+                unconfirmed_gated=unconfirmed_gated,
             )
             if other_confirmed_change:
                 _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
-                omitted_unconfirmed_fields.append("cohort.preset")
+                _record_unconfirmed_omission("cohort", "cohort.preset")
             else:
                 return _result(
                     context,
@@ -3101,14 +3209,19 @@ def _update_study_context(
             and current_preset != "adult_first"
             and not _message_explicitly_selects_first_stay(context.user_message)
         ):
-            other_confirmed_change = any(
-                key in params
-                for key in _STUDY_SETUP_FIELDS
-                - {"cohort", "execution_concepts", "modules", "confirmations"}
+            other_confirmed_change = _has_other_confirmed_change(
+                params,
+                slot_machinery={
+                    "cohort",
+                    "execution_concepts",
+                    "modules",
+                    "confirmations",
+                },
+                unconfirmed_gated=unconfirmed_gated,
             )
             if other_confirmed_change:
                 _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
-                omitted_unconfirmed_fields.append("cohort.preset")
+                _record_unconfirmed_omission("cohort", "cohort.preset")
             else:
                 return _result(
                     context,
@@ -3132,13 +3245,19 @@ def _update_study_context(
         != str((current or {}).get("outcome") or "").strip()
         and not _message_explicitly_selects_primary_outcome(context.user_message)
     ):
-        other_confirmed_change = any(
-            key in params
-            for key in _STUDY_SETUP_FIELDS
-            - {"outcome", "execution_concepts", "modules", "confirmations"}
+        other_confirmed_change = _has_other_confirmed_change(
+            params,
+            slot_machinery={
+                "outcome",
+                "execution_concepts",
+                "modules",
+                "confirmations",
+            },
+            unconfirmed_gated=unconfirmed_gated,
         )
         if other_confirmed_change:
             _restore_unconfirmed_study_slot(patch, current or {}, slot="outcome")
+            _record_unconfirmed_omission("outcome", "outcome")
         else:
             return _result(
                 context,
@@ -3158,15 +3277,21 @@ def _update_study_context(
         != str((current or {}).get("primary_exposure") or "").strip()
         and not _message_explicitly_selects_primary_exposure(context.user_message)
     ):
-        other_confirmed_change = any(
-            key in params
-            for key in _STUDY_SETUP_FIELDS
-            - {"primary_exposure", "execution_concepts", "modules", "confirmations"}
+        other_confirmed_change = _has_other_confirmed_change(
+            params,
+            slot_machinery={
+                "primary_exposure",
+                "execution_concepts",
+                "modules",
+                "confirmations",
+            },
+            unconfirmed_gated=unconfirmed_gated,
         )
         if other_confirmed_change:
             _restore_unconfirmed_study_slot(
                 patch, current or {}, slot="primary_exposure"
             )
+            _record_unconfirmed_omission("primary_exposure", "primary_exposure")
         else:
             return _result(
                 context,
@@ -3186,13 +3311,16 @@ def _update_study_context(
         != str((current or {}).get("analysis_goal") or "").strip()
         and not _message_explicitly_selects_analysis_goal(context.user_message)
     ):
-        other_confirmed_change = any(
-            key in params for key in _STUDY_SETUP_FIELDS - {"analysis_goal"}
+        other_confirmed_change = _has_other_confirmed_change(
+            params,
+            slot_machinery={"analysis_goal"},
+            unconfirmed_gated=unconfirmed_gated,
         )
         if other_confirmed_change:
             _restore_unconfirmed_study_slot(
                 patch, current or {}, slot="analysis_goal"
             )
+            _record_unconfirmed_omission("analysis_goal", "analysis_goal")
         else:
             return _result(
                 context,
@@ -3222,6 +3350,7 @@ def _update_study_context(
         patch["covariate_selection"] = "exact"
         patch["covariate_rationales"] = {}
         patch["covariate_temporal_roles"] = {}
+        patch["covariate_operationalizations"] = {}
         prior_execution = (current or {}).get("execution_concepts")
         proposed_execution = patch.get("execution_concepts")
         if isinstance(proposed_execution, Mapping) or isinstance(
@@ -3294,6 +3423,10 @@ def _update_study_context(
         reject_sensitive_message(str(covariate))
     for rationale in (patch.get("covariate_rationales") or {}).values():
         reject_sensitive_message(str(rationale))
+    for operational in (
+        patch.get("covariate_operationalizations") or {}
+    ).values():
+        reject_sensitive_message(str(operational))
     for spec in patch.get("sensitivity_specs") or []:
         if isinstance(spec, Mapping):
             for variable in spec.get("execution_variables") or []:
@@ -3710,14 +3843,25 @@ def _update_study_context(
             },
         )
     workflow = _workflow_snapshot(context, study_override=updated)
+    summary = (
+        f"Saved typed StudyContext revision {int(updated.get('revision') or 0)} "
+        "and projected the post-update workflow for the next scientific decision."
+    )
+    if omitted_unconfirmed_fields:
+        # A dropped scientific slot must never read as a clean success.  The
+        # model can only explain the gap to the user when the omission and its
+        # reason code travel in the same receipt as the write.
+        summary += (
+            " NOT saved this turn: "
+            + ", ".join(omitted_unconfirmed_fields)
+            + ". Those slots stay unset because the turn only mentions them as "
+            "candidate intent; ask the user to select each one explicitly."
+        )
     result = _result(
         context,
         status="ok",
         code="study_context_updated",
-        summary=(
-            f"Saved typed StudyContext revision {int(updated.get('revision') or 0)} "
-            "and projected the post-update workflow for the next scientific decision."
-        ),
+        summary=summary,
         owner="easyicu.webserver.study_contexts",
         details={
             "study": project_study_context(updated),
@@ -3725,6 +3869,7 @@ def _update_study_context(
             "rebind_required": True,
             "host_rebind_after_turn": True,
             "omitted_unconfirmed_fields": omitted_unconfirmed_fields,
+            "unconfirmed_omissions": unconfirmed_omissions,
         },
     )
     context.invalidate_authority("study_context_updated")
@@ -3911,17 +4056,41 @@ def _search_literature(
             if not str(value or "").strip()
         ]
         if missing_scope:
+            # The Planner -- not Copilot -- chooses the exposure and outcome, so
+            # before a plan exists these fields are empty *by design*.  Blocking
+            # here is still correct (plan-authority literature must cite exact
+            # concepts), but a bare refusal made Pi conclude the plan itself was
+            # impossible and stop.  Name the owning next step instead, so an
+            # unplanned study is routed to the Planner rather than dead-ended.
+            plan_workflow = _workflow_snapshot(context, study_override=study)
+            plan_ready = (
+                str(plan_workflow.get("next_action_code") or "")
+                == "provider_ready_to_generate_plan"
+            )
+            summary = (
+                "Bind the study exposure and outcome to exact source concepts "
+                "before searching literature for Plan authority. Broad Idea "
+                "Mining literature must use an accepted idea handoff instead."
+            )
+            if plan_ready:
+                summary = (
+                    "Plan-authority literature is produced by the EasyICU Planner "
+                    "run, which also chooses the exposure and outcome this search "
+                    "would need. Do not ask the user to supply them: start the "
+                    "formal research plan instead. This is not a data or "
+                    "permission failure."
+                )
             return _result(
                 context,
                 status="blocked",
                 code="literature_study_scope_incomplete",
-                summary=(
-                    "Bind the study exposure and outcome to exact source concepts "
-                    "before searching literature for Plan authority. Broad Idea "
-                    "Mining literature must use an accepted idea handoff instead."
-                ),
+                summary=summary,
                 owner="easyicu.webserver.literature_authority",
-                details={"missing_fields": missing_scope},
+                details={
+                    "missing_fields": missing_scope,
+                    "next_action_code": plan_workflow.get("next_action_code"),
+                    "plan_generation_ready": plan_ready,
+                },
             )
     grant_block = _consume_action(context, "literature")
     if grant_block is not None:
@@ -4828,6 +4997,112 @@ def _account_environment_for_research_provider(
         )
 
 
+# Launch rejections that mean "an EasyICU step has not run yet", not "the
+# request was malformed".  These need a next action, otherwise Pi reports them
+# as an unrecoverable data problem and stops.
+_RUN_SUBMISSION_NEXT_STEP_SUMMARIES = {
+    "research_pipeline_manifest_required": (
+        "The bound directory is a converted ICU database, not a prepared "
+        "EasyICU export package, so the Research Agent has nothing "
+        "manifest-backed to bind its evidence to. This is not a bad data "
+        "source and not a permission problem: run easyicu_start_extraction to "
+        "prepare an export package from it first, then generate the plan. Do "
+        "not ask the user to re-pick or validate their folder."
+    ),
+    "no_export_files": (
+        "The bound directory carries no readable EasyICU export files yet. Run "
+        "easyicu_start_extraction to prepare the package before planning."
+    ),
+}
+
+
+def _development_resume_source_job_id(
+    context: ToolExecutionContext,
+    study: Mapping[str, Any],
+) -> str:
+    """Return one owned Planner checkpoint job for an unchanged study.
+
+    The development efficiency budget deliberately stops a long progressive
+    plan after a bounded provider turn and preserves its validated prefix.  A
+    user-authorized retry should continue that prefix, not spend the next turn
+    regenerating it.  All other terminal failures remain fresh-run only.
+    """
+
+    latest = _select_run(context)
+    if not latest:
+        return ""
+    resumable_reasons = {
+        "research_pipeline_planner_efficiency_budget_exhausted",
+        "research_pipeline_plan_contract_exhausted",
+        "research_pipeline_progressive_compile_failed",
+    }
+    candidates = [latest]
+    if str(latest.get("gate_reason") or "") == "data_foundation_blocked":
+        # A metadata-only Planner continuation used to be routed through the
+        # generic full-run adapter when the terminal checkpoint had already
+        # compiled but failed the host article gate.  That adapter leaves an
+        # empty data-foundation projection newer than the still-valid Planner
+        # checkpoint.  It is evidence of the failed adapter call, not a plan
+        # authority, and must not hide the unchanged resumable checkpoint.
+        candidates.extend(
+            row
+            for row in _run_rows(context)
+            if str(row.get("run_id") or "")
+            != str(latest.get("run_id") or "")
+        )
+    latest = next(
+        (
+            row
+            for row in candidates
+            if str(row.get("gate_reason") or "") in resumable_reasons
+        ),
+        None,
+    )
+    if not latest:
+        return ""
+    if str(latest.get("run_status") or "") != "failed":
+        return ""
+    if latest.get("development_planner_checkpoint_available") is not True:
+        # The workflow projection and the launch adapter must agree on resume
+        # eligibility.  A contract-exhausted run can fail before the first
+        # checkpoint exists; forwarding its job id would turn an explicit
+        # fresh-plan confirmation into a resume request that the lower owner
+        # must reject.
+        return ""
+    study_id = str(study.get("id") or "").strip()
+    if not study_id or str(latest.get("study_id") or "") != study_id:
+        return ""
+    planned_digest = str(
+        latest.get("scientific_configuration_sha256") or ""
+    ).strip()
+    if (
+        len(planned_digest) != 64
+        or planned_digest
+        != study_contexts.scientific_configuration_sha256(dict(study))
+    ):
+        return ""
+    match = re.fullmatch(
+        r"run_([A-Za-z0-9][A-Za-z0-9_-]{0,79})",
+        str(latest.get("run_id") or ""),
+    )
+    if match is None:
+        return ""
+    project_dir = Path(str(latest.get("project_dir") or "")).expanduser()
+    expected_root = research_pipeline_project_root(study_id).resolve()
+    try:
+        resolved_project = project_dir.resolve(strict=True)
+        resolved_project.relative_to(expected_root)
+    except (FileNotFoundError, OSError, ValueError):
+        return ""
+    # ProjectWorkspace owns ``<project-root>/<study-id>/run_<job>``.  The
+    # lower run owner revalidates the exact slug and checkpoint chain; this
+    # selector only proves that the candidate is one bounded child run inside
+    # the current Copilot project root.
+    if resolved_project.parent.parent != expected_root:
+        return ""
+    return match.group(1)
+
+
 def _run(
     context: ToolExecutionContext,
     params: Mapping[str, Any],
@@ -4868,8 +5143,15 @@ def _run(
         and study.get("id")
     ):
         workflow = _workflow_snapshot(context, study_override=study)
-        missing_setup_fields = list(workflow.get("missing_setup_fields") or [])
-        if missing_setup_fields:
+        # Only the fields the user owns -- the bound question and an identified
+        # data source -- may block plan generation.  The Planner decides cohort,
+        # exposure, outcome, window, modules and analysis design and presents
+        # them for review, so requiring them here forced Copilot to interrogate
+        # the user for the very choices the plan exists to make.
+        planning_prerequisites_missing = list(
+            workflow.get("planning_prerequisites_missing") or []
+        )
+        if planning_prerequisites_missing:
             # Scientific workflow readiness is an owner invariant, not a
             # provider-permission problem.  Check it before consuming the
             # one-turn provider grant so an out-of-order model call cannot
@@ -4879,13 +5161,16 @@ def _run(
                 status="blocked",
                 code="study_setup_incomplete",
                 summary=(
-                    "Complete one review of the proposed study setup and prepare "
-                    "the governed data package before generating the formal research plan."
+                    "Bind the research question and confirm a data source before "
+                    "generating the formal research plan."
                 ),
                 owner="easyicu.webserver.pi_copilot.workflow",
                 details={
                     "next_action_code": workflow.get("next_action_code"),
-                    "missing_setup_fields": missing_setup_fields,
+                    "planning_prerequisites_missing": planning_prerequisites_missing,
+                    "missing_setup_fields": list(
+                        workflow.get("missing_setup_fields") or []
+                    ),
                 },
             )
     grant_action = "provider_run" if run_type == "full" else "run"
@@ -4952,6 +5237,12 @@ def _run(
     # this adapter does not reconstruct its validation or JobManager behavior.
     from easyicu.webserver.routes.agent import submit_agent_run
 
+    development_resume_source_job_id = (
+        _development_resume_source_job_id(context, study)
+        if run_type == "full"
+        else ""
+    )
+
     try:
         submitted = submit_agent_run(
             {
@@ -4987,16 +5278,37 @@ def _run(
                     if plan_revision_source_run_id
                     else {}
                 ),
+                **(
+                    {
+                        "development_resume_source_job_id": (
+                            development_resume_source_job_id
+                        )
+                    }
+                    if development_resume_source_job_id
+                    else {}
+                ),
             },
             account_environment=account_environment,
+            metadata_only_planning_authorized=run_type == "full",
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
+        submission_code = str(detail.get("error") or "easyicu_run_submission_blocked")
+        # A single generic sentence for every launch rejection erased the
+        # owner's own diagnosis, so Pi had to guess a cause and wrote prose the
+        # user could not act on.  Carry the owning message through, and give the
+        # one rejection that is a missing *step* rather than a bad request its
+        # own next action.
+        summary = _bounded_model_text(detail.get("message"), 400) or (
+            "The existing EasyICU run submission boundary rejected the request."
+        )
+        if submission_code in _RUN_SUBMISSION_NEXT_STEP_SUMMARIES:
+            summary = _RUN_SUBMISSION_NEXT_STEP_SUMMARIES[submission_code]
         return _result(
             context,
             status="blocked",
-            code=str(detail.get("error") or "easyicu_run_submission_blocked"),
-            summary="The existing EasyICU run submission boundary rejected the request.",
+            code=submission_code,
+            summary=summary,
             owner="easyicu.webserver.routes.agent",
             details={
                 key: detail.get(key)
@@ -5020,7 +5332,13 @@ def _run(
             else "easyicu_run_submitted"
         ),
         summary=(
-            f"Submitted full EasyICU Research Agent job {submitted.get('job_id')}."
+            (
+                "Submitted an EasyICU Research Agent Planner continuation "
+                f"job {submitted.get('job_id')} from validated checkpoint job "
+                f"{development_resume_source_job_id}."
+            )
+            if run_type == "full" and development_resume_source_job_id
+            else f"Submitted full EasyICU Research Agent job {submitted.get('job_id')}."
             if run_type == "full"
             else f"Submitted deterministic EasyICU preflight job {submitted.get('job_id')}."
         ),
@@ -5042,6 +5360,15 @@ def _run(
             # time.  This explicit state prevents a historical bound run id
             # from being presented as the identity of the new job.
             "run_id_status": "pending_pipeline_start",
+            **(
+                {
+                    "development_resume_source_job_id": (
+                        development_resume_source_job_id
+                    )
+                }
+                if development_resume_source_job_id
+                else {}
+            ),
         },
     )
     context.invalidate_authority("easyicu_run_submitted")
@@ -5266,6 +5593,11 @@ def _request_replan(
         and planned_digest
         and planned_digest == current_digest
         and live_review.get("plan_approval_allowed") is not False
+        and (
+            "operator_plan_approval_required" not in pending_codes
+            or str(live_review.get("budget_mode") or "full_reviewed")
+            == "full_reviewed"
+        )
     )
     fresh_run_required = bool(same_study_plan and not current_review_is_resumable)
     preflight_only_history = bool(

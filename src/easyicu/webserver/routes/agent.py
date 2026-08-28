@@ -56,6 +56,30 @@ def _server_research_pipeline_budget_mode() -> str:
     )
 
 
+def _research_pipeline_budget_mode_for_source(
+    *,
+    prepared_manifest: Optional[Path],
+    metadata_only_planning_authorized: bool,
+) -> str:
+    """Keep the development execution switch from forcing premature execution.
+
+    Copilot may authorize a Planner run before an export package exists.  The
+    server switch permits reviewed execution once a package is present; it does
+    not turn a plan-generation click into a manifest requirement.
+    """
+
+    # A manifest-backed package is already eligible for reviewed execution.
+    # Starting it as a planner-only canary produces a plan whose approval can
+    # never enter Execute, even though the required data authority is present.
+    # Keep catalog-only planning canary-safe, but make a prepared package
+    # reviewable/executable without requiring a hidden development env switch.
+    if prepared_manifest is not None:
+        return "full_reviewed"
+    if metadata_only_planning_authorized and prepared_manifest is None:
+        return "planner_canary"
+    return _server_research_pipeline_budget_mode()
+
+
 def _provider_environment_for_agent_run(
     *,
     credential_source: str,
@@ -126,6 +150,7 @@ def submit_agent_run(
     body: Dict[str, Any],
     *,
     account_environment: Optional[Mapping[str, str]] = None,
+    metadata_only_planning_authorized: bool = False,
 ) -> dict:
     """Start a registry-backed local Research Agent run.
 
@@ -195,11 +220,18 @@ def submit_agent_run(
             )
         source = (study_context or {}).get("data_source")
         database = source.get("database") if isinstance(source, Mapping) else None
-        try:
-            dataio.validate_research_pipeline_source(path, database=database)
-        except dataio.ExportCohortError as exc:
-            raise HTTPException(status_code=400, detail=exc.detail) from exc
-        budget_mode = _server_research_pipeline_budget_mode()
+        prepared_manifest = dataio.prepared_export_manifest_path(
+            Path(path).expanduser()
+        )
+        budget_mode = _research_pipeline_budget_mode_for_source(
+            prepared_manifest=prepared_manifest,
+            metadata_only_planning_authorized=metadata_only_planning_authorized,
+        )
+        if budget_mode == "full_reviewed" or prepared_manifest is not None:
+            try:
+                dataio.validate_research_pipeline_source(path, database=database)
+            except dataio.ExportCohortError as exc:
+                raise HTTPException(status_code=400, detail=exc.detail) from exc
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = body_bool(body, "external_llm_opt_in")
     literature_search_authorized = body_bool(
@@ -286,6 +318,13 @@ def submit_agent_run(
             if plan_revision_source_run_id:
                 runner_kwargs["plan_revision_source_run_id"] = (
                     plan_revision_source_run_id
+                )
+            execution_resume_source_run_id = str(
+                body.get("execution_resume_source_run_id") or ""
+            ).strip()
+            if execution_resume_source_run_id:
+                runner_kwargs["execution_resume_source_run_id"] = (
+                    execution_resume_source_run_id
                 )
             development_resume_source_job_id = str(
                 body.get("development_resume_source_job_id") or ""
