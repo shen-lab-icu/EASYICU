@@ -45,6 +45,31 @@
     return '';
   }
 
+  function databaseChoiceKey(value) {
+    const choice = plainLabel(value);
+    if (/mimic[\s-]*(?:iv|4)\b/i.test(choice)) return 'miiv';
+    if (/mimic[\s-]*(?:iii|3)\b/i.test(choice)) return 'mimic';
+    if (/\beicu\b/i.test(choice)) return 'eicu';
+    if (/\b(?:amsterdamumcdb|aumc)\b/i.test(choice)) return 'aumc';
+    if (/\bhirid\b/i.test(choice)) return 'hirid';
+    if (/\b(?:sicdb|sic)\b/i.test(choice)) return 'sic';
+    return '';
+  }
+
+  function isDatabaseCatalogChoices(choices) {
+    if (!Array.isArray(choices) || choices.length < 2) return false;
+    const keys = choices.map(databaseChoiceKey);
+    return keys.every(Boolean) && new Set(keys).size === keys.length;
+  }
+
+  function isPreparedRegisteredExportChoice(value) {
+    const choice = plainLabel(value);
+    if (!databaseChoiceKey(choice)) return false;
+    const recommended = /(?:推荐|已准备|准备好的)|(?:recommended|prepared)/i.test(choice);
+    const registeredExport = /(?:EasyICU.{0,12}(?:导出|数据包)|数据导出|本地导出)|(?:EasyICU.{0,12}(?:export|package)|registered[\s-]+export|data[\s-]+export)/i.test(choice);
+    return recommended && registeredExport;
+  }
+
   function choiceAction(value, language) {
     const choice = plainLabel(value);
     const consolidatedSetupAcceptance = language === 'zh'
@@ -60,6 +85,11 @@
         message: choice,
         grants: [],
       };
+    }
+    // A registered EasyICU export is selected through the source catalog and
+    // bound by source_id. It is not a raw folder-selection/extraction action.
+    if (isPreparedRegisteredExportChoice(choice)) {
+      return { label: choice, message: choice, grants: ['configure'] };
     }
     const localDatabase = localSourceDatabase(choice);
     if (localDatabase) {
@@ -97,7 +127,8 @@
   }
 
   function includeLocalDemoChoice(choices, language) {
-    const rows = choices.slice(0, 4);
+    const limit = isDatabaseCatalogChoices(choices) ? 6 : 4;
+    const rows = choices.slice(0, limit);
     const subject = rows.map(demoSubject).find(Boolean);
     if (!subject || rows.some(choice => /(?:已经|已|本地).{0,8}(?:下载|准备|保存)|already[\s-]+(?:downloaded|prepared)|local[\s-]+(?:copy|folder)/i.test(choice))) {
       return rows;
@@ -105,22 +136,52 @@
     const localChoice = language === 'zh'
       ? `使用已经下载好的 ${subject}`
       : `Use an already downloaded ${subject}`;
-    if (rows.length < 4) rows.splice(Math.min(1, rows.length), 0, localChoice);
-    return rows.slice(0, 4);
+    if (rows.length < limit) rows.splice(Math.min(1, rows.length), 0, localChoice);
+    return rows.slice(0, limit);
   }
 
   function isDataSourceStep(step) {
     return Boolean(step && Array.isArray(step.choices) && step.choices.some((value) => {
       const choice = plainLabel(value);
       return Boolean(localSourceDatabase(choice) || demoSubject(choice))
+        || Boolean(databaseChoiceKey(choice))
         || /(?:数据来源|数据源|数据导出|数据库)|(?:data[\s-]+source|database|data[\s-]+export)/i.test(choice);
     }));
   }
 
   function isFormalPlanChoice(value) {
     const choice = plainLabel(value);
+    if (/(?:暂不|不生成|取消|停止)|(?:do\s+not|don't|not\s+now|cancel|stop)/i.test(choice)) return false;
     return /(?:正式研究计划|研究计划|分析计划)|(?:formal\s+(?:research\s+)?plan|research\s+agent\s+(?:analysis\s+)?plan)/i.test(choice)
       && /(?:生成|开始|提交|授权)|(?:generate|start|submit|authorize)/i.test(choice);
+  }
+
+  function isScientificPlanRevisionChoice(value) {
+    const choice = plainLabel(value);
+    if (/(?:暂不|取消|停止)|(?:do\s+not|don't|not\s+now|cancel|stop)/i.test(choice)) return false;
+    return /(?:修订|重新提交|重新发送)|(?:revise|resubmit|send\s+again)/i.test(choice);
+  }
+
+  const GOVERNED_PLAN_WORKFLOWS = new Set([
+    'provider_ready_to_generate_plan',
+    'plan_configuration_superseded',
+    'plan_scientific_changes_required',
+    'plan_review_not_resumable',
+    'failed_pipeline_requires_fresh_plan',
+    'planner_checkpoint_resume_available',
+    // A candidate plan waiting for data preparation may still be explicitly
+    // replaced. This creates a fresh plan run; it never approves or executes
+    // the existing candidate.
+    'plan_execution_upgrade_required',
+  ]);
+
+  function governedPlanGrants(value, workflowActionCode) {
+    const code = String(workflowActionCode || '');
+    if (!GOVERNED_PLAN_WORKFLOWS.has(code)) return [];
+    const isPlanAction = isFormalPlanChoice(value)
+      || (code === 'plan_scientific_changes_required' && isScientificPlanRevisionChoice(value));
+    if (!isPlanAction) return [];
+    return ['provider_run'];
   }
 
   function confirmedSourceLabel(authorization) {
@@ -150,13 +211,14 @@
       const choices = [];
       for (const line of lines.slice(headingAt + 1)) {
         const match = line.match(CHOICE);
-        if (match && choices.length < 4) {
+        if (match && choices.length < 6) {
           const label = plainLabel(match[1]);
           if (label && !choices.includes(label)) choices.push(label);
         } else if (line.trim() && !choices.length) {
           promptLines.push(plainPrompt(line));
         }
       }
+      if (!isDatabaseCatalogChoices(choices) && choices.length > 4) choices.length = 4;
       return {
         body: lines.slice(0, headingAt).join('\n').trim(),
         prompt: promptLines.join(' ').trim(),
@@ -174,6 +236,30 @@
     };
   }
 
+  /* What of a next-step block belongs in the message body.
+
+     A block with no choices is not a next step at all -- it is the model
+     narrating what EasyICU will do next ("EasyICU 将继续执行规划，并在审核闸门
+     处暂停"). Labelling that "下一步" put a third meaning on a word that already
+     meant two things on the same screen, so fold it back into ordinary prose. */
+  function bodyText(step) {
+    if (!step) return '';
+    if (step.choices.length) return step.body;
+    return [step.body, step.prompt].filter(Boolean).join('\n\n');
+  }
+
+  /* Options offered by an earlier turn are history, not an offer. Rendering
+     them as bullets under a "下一步" heading made four dead lists look exactly
+     like the one live card on the same screen. */
+  function renderPast(step, language) {
+    if (!step || !step.choices.length) return '';
+    const heading = language === 'zh' ? '当时提供的选项' : 'Options offered then';
+    const items = step.choices
+      .map((choice) => `<li>${esc(plainLabel(choice))}</li>`)
+      .join('');
+    return `<section class="gpi-next-step is-past" aria-label="${heading}"><strong>${heading}</strong><ul class="gpi-next-past">${items}</ul></section>`;
+  }
+
   function render(step, options) {
     if (!step) return '';
     if (options && options.suppressFallback && !step.explicit) return '';
@@ -187,8 +273,8 @@
     if (prematurePlanChoice && authorization && authorization.status === 'confirmed') {
       const heading = language === 'zh' ? '先确认数据准备要求' : 'Confirm data-preparation requirements first';
       const detail = language === 'zh'
-        ? '当前只确认数据准备所需的最少信息，不会提前生成研究计划。正式计划将在数据包与本地预检就绪后单独生成并交你审核。'
-        : 'Only the minimum inputs for data preparation are confirmed here. The formal plan is generated and reviewed separately after the data package and local preflight are ready.';
+        ? '当前这一步只确认数据来源与最少准备要求。确认研究问题和数据库后，即可先依据能力目录生成正式计划并交你审核；不必等待全量数据提取。'
+        : 'This step confirms only the data source and minimum preparation requirements. Once the question and database are identified, EasyICU can generate the formal plan from its capability catalog for review without waiting for a full extraction.';
       const action = disabled
         ? (language === 'zh' ? '正在汇总数据准备要求…' : 'Consolidating data-preparation requirements…')
         : (language === 'zh' ? '查看数据准备确认' : 'Review data-preparation confirmation');
@@ -238,9 +324,18 @@
             : '';
           return `<button type="button" data-gpi-next-choice="${esc(action.message)}"${grants}${localSource} ${disabled ? 'disabled' : ''}><span>${esc(action.label)}</span><b aria-hidden="true">→</b></button>`;
         }).join('') + customChoice
-      : `<button type="button" data-gpi-next-focus ${disabled ? 'disabled' : ''}>${step.asking ? (language === 'zh' ? '回答这个问题' : 'Answer this question') : (language === 'zh' ? '继续对话' : 'Continue')} <b aria-hidden="true">→</b></button>`;
-    return `<section class="gpi-next-step" aria-label="${title}"><strong>${title}</strong><p>${esc(prompt)}</p><div class="gpi-next-actions">${controls}</div></section>`;
+      : step.asking
+        ? `<button type="button" data-gpi-next-focus ${disabled ? 'disabled' : ''}>${language === 'zh' ? '回答这个问题' : 'Answer this question'} <b aria-hidden="true">→</b></button>`
+        : '';
+    // With no choices and no question there is nothing to offer: the old
+    // generic "继续对话" button only moved the cursor into the composer sitting
+    // directly beneath it, which is also what the shared prompt's workflow-order
+    // rule forbids. Keep the note, drop the empty affordance.
+    const actions = controls
+      ? `<div class="gpi-next-actions">${controls}</div>`
+      : '';
+    return `<section class="gpi-next-step" aria-label="${title}"><strong>${title}</strong><p>${esc(prompt)}</p>${actions}</section>`;
   }
 
-  window.EU_GUIDED_PI_NEXT_ACTIONS = { project, render };
+  window.EU_GUIDED_PI_NEXT_ACTIONS = { bodyText, project, render, renderPast, governedPlanGrants };
 })();

@@ -2513,7 +2513,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function renderAside() {
     const host = document.getElementById('gdAsideBody');
-    if (!host) return;
+    if (!host || piProjectShellActive()) return; // Copilot owns this panel while mounted
     host.innerHTML = renderStudyPipelineSummary() + renderStudyItemList() + renderOutputs(host);
   }
   function normalizedStudyRows() {

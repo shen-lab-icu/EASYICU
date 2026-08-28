@@ -483,6 +483,274 @@
       <div class="gpi-manuscript-layout"><article class="gpi-manuscript-article">${article || `<p>${esc(t('No reader blocks are available.', '没有可用的文章阅读内容。'))}</p>`}</article><aside class="gpi-claim-drawer" aria-live="polite"><div class="gpi-claim-empty" data-gpi-claim-empty>${esc(t('Click a highlighted number in the article to inspect its exact source.', '点击正文中高亮的数字，查看其准确来源。'))}</div>${panels}</aside></div>
     </div>`;
   }
+  function scientificFindingCopy(row) {
+    const code = String(row && row.code || '');
+    const known = {
+      SCIENTIFIC_CAPABILITY_NOT_REPORTABLE: [
+        'Upgrade the analysis method', '升级分析方法',
+        'The current diagnostic-only capability will be replaced by a formally validated analysis capability.',
+        '当前计划仅支持诊断性描述，EasyICU 会改用经过正式验证的分析能力。',
+      ],
+      DESIGN_ANALOGUE_NOT_ESTABLISHED: [
+        'Find a comparable ICU study design', '补充可参照的 ICU 研究设计',
+        'EasyICU will search for a clinically and methodologically comparable study and retain the source-backed screening decision.',
+        'EasyICU 将继续检索临床主题与方法均可参照的研究，并保留有来源依据的筛选记录。',
+      ],
+      OUTCOME_DEFINITION_UNRESOLVED: [
+        'Planner will define the primary outcome', 'Planner 将补全主要结局定义',
+        'EasyICU must propose one clinically meaningful endpoint and observation horizon in the revised candidate plan.',
+        'EasyICU 需要在修订版候选计划中提出临床含义明确的结局及观察时间范围。',
+      ],
+      ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED: [
+        'Planner will propose sensitivity analyses', 'Planner 将提出敏感性分析',
+        'EasyICU must propose study-appropriate executable checks in the revised candidate plan for one complete review.',
+        'EasyICU 需要在修订版候选计划中提出适合本研究的可执行检查，供你一次性完整审阅。',
+      ],
+      FIGURE_ROLE_COVERAGE_INCOMPLETE: [
+        'Add data-quality and distribution figures', '补齐数据质量与分布图',
+        'The revised plan will include source-data-bound figures for the missing article roles.',
+        '修订版计划会为缺失的文章角色补充与源数据绑定的图件。',
+      ],
+      FIGURE_CHART_TYPES_TOO_NARROW: [
+        'Broaden the figure strategy', '扩展图表表达方式',
+        'The revised plan will use complementary chart families instead of repeating one generic overview.',
+        '修订版计划会采用互补的图表类型，而不是重复单一概览图。',
+      ],
+      NOVELTY_NOT_ESTABLISHED: [
+        'Verify the novelty position', '核对研究创新性',
+        'EasyICU will compare the proposed study with direct comparators before making any novelty claim.',
+        'EasyICU 会先与直接可比研究进行来源可追溯的比较，再判断能否提出创新性主张。',
+      ],
+    };
+    const copy = known[code];
+    return {
+      title: copy ? t(copy[0], copy[1]) : String(row && (row.message || row.code) || t('Unresolved review item', '待处理审阅项')),
+      detail: copy ? t(copy[2], copy[3]) : String(row && (row.remediation || '') || ''),
+    };
+  }
+  function scientificDecisionQuestion(row) {
+    const code = String(row && row.code || '');
+    const known = {
+      OUTCOME_DEFINITION_UNRESOLVED: t(
+        'Which available clinical endpoint and time horizon should this study use?',
+        '这项研究应采用哪个临床结局，以及多长的观察时间范围？',
+      ),
+      ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED: t(
+        'Which executable sensitivity analyses should be prespecified for this study?',
+        '这项研究需要预先设定哪些可执行的敏感性分析？',
+      ),
+      POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED: t(
+        'Should the revised study use a landmark or time-varying design, or remain descriptive?',
+        '修订后的研究应采用 landmark／时变设计，还是仅保留描述性分析？',
+      ),
+      ADJUSTMENT_SET_NOT_USER_CONFIRMED: t(
+        'Do you approve the proposed baseline adjustment set?',
+        '你是否批准建议的基线调整变量？',
+      ),
+    };
+    return known[code] || String(row && (row.authorization_question || row.message) || '');
+  }
+  function plannerOwnedScientificFinding(row) {
+    return new Set([
+      'OUTCOME_DEFINITION_UNRESOLVED',
+      'ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED',
+    ]).has(String(row && row.code || ''));
+  }
+  function scientificPlanReviewView(payload) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const findings = Array.isArray(p.findings) ? p.findings : [];
+    const decisions = findings.filter(row => row && !plannerOwnedScientificFinding(row) && (row.requires_user_authorization || row.remediation_route === 'study_authority_change'));
+    const automatic = findings.filter(row => row && (row.remediation_route === 'agent_plan_revision' || plannerOwnedScientificFinding(row)));
+    const evidence = findings.filter(row => row && (row.remediation_route === 'external_evidence' || row.remediation_route === 'independent_review'));
+    const firstDecision = decisions[0] || null;
+    const firstDecisionCopy = firstDecision ? scientificFindingCopy(firstDecision) : null;
+    const laterDecisions = decisions.slice(1);
+    const findingList = rows => rows.map(row => {
+      const copy = scientificFindingCopy(row);
+      return `<li><strong>${esc(copy.title)}</strong><span>${esc(copy.detail)}</span></li>`;
+    }).join('');
+    const bindingSteps = p.facts && p.facts.literature_design_bindings
+      && Array.isArray(p.facts.literature_design_bindings.steps)
+      ? p.facts.literature_design_bindings.steps : [];
+    const citationMap = new Map();
+    bindingSteps.forEach(step => {
+      (Array.isArray(step.citations) ? step.citations : []).forEach(row => {
+        const key = String(row.citation_key || row.title || '');
+        if (key && !citationMap.has(key)) citationMap.set(key, row);
+      });
+    });
+    const citations = Array.from(citationMap.values()).slice(0, 6);
+    const citationCards = citations.map(row => `<article><strong>${esc(row.title || row.citation_key || '')}</strong><span>${esc(row.year || '')}</span><p>${esc(row.application || '')}</p></article>`).join('');
+    const approvalAllowed = p.approval_allowed === true;
+    const waiting = !approvalAllowed && decisions.length > 0;
+    return `<div class="ag-artifact-readable ag-science-review">
+      <header class="ag-science-review-hero">
+        <div><div class="eyebrow">${esc(t('Plan review', '计划审阅'))}</div><h2>${esc(waiting
+          ? t(`${decisions.length} decisions remain before analysis`, `计划还差 ${decisions.length} 个决定`)
+          : approvalAllowed ? t('The plan is ready for approval', '计划已可进入批准') : t('EasyICU needs to revise this candidate plan', 'EasyICU 需要修订这份候选计划'))}</h2><p>${esc(waiting
+          ? t('Answer one question at a time. EasyICU will handle the plan repair and evidence work.', '一次只回答一个问题。计划修订和补充证据由 EasyICU 处理。')
+          : t('Endpoint, sensitivity design, plan structure, and evidence follow-up are system-owned proposal work. Review the revised complete plan instead of designing them here.', '结局定义、敏感性分析、计划结构和补证都属于系统的方案工作；你应审阅修订后的完整计划，不必在这里替系统设计。'))}</p></div>
+        <span class="ag-science-review-state ${approvalAllowed ? 'is-ready' : 'is-waiting'}">${esc(approvalAllowed ? t('Ready', '可批准') : t('Analysis paused', '分析已暂停'))}</span>
+      </header>
+      ${firstDecision ? `<section class="ag-science-review-section is-current"><div class="ag-science-review-heading"><div><span>${esc(t('Do this now', '现在只做这一步'))}</span><strong>${esc(firstDecisionCopy.title)}</strong></div><em>1</em></div><div class="ag-science-current-question"><p>${esc(scientificDecisionQuestion(firstDecision))}</p><span>${esc(t('Use “Answer decision 1” in the conversation to reply.', '在左侧对话中点击「回答第 1 项」。'))}</span></div>${laterDecisions.length ? `<div class="ag-science-later"><span>${esc(t('Later', '稍后'))}</span><strong>${esc(scientificFindingCopy(laterDecisions[0]).title)}</strong><small>${esc(t('EasyICU will ask after the first answer is saved.', '第 1 项保存后，EasyICU 再询问这一项。'))}</small></div>` : ''}</section>` : ''}
+      <details class="ag-science-review-details"><summary><span>${esc(t('EasyICU will handle', 'EasyICU 会自动处理'))}</span><strong>${esc(t(`${automatic.length + evidence.length} plan and evidence items`, `${automatic.length + evidence.length} 项计划修订与补证`))}</strong><em>${esc(t('No action needed now', '现在不需你处理'))}</em></summary><div class="ag-science-lanes">
+        <article><div><strong>${esc(t('Plan revision', '计划修订'))}</strong><span>${esc(t(`${automatic.length} items`, `${automatic.length} 项`))}</span></div><ul>${findingList(automatic)}</ul></article>
+        <article><div><strong>${esc(t('Evidence follow-up', '证据补充'))}</strong><span>${esc(t(`${evidence.length} items`, `${evidence.length} 项`))}</span></div><ul>${findingList(evidence)}</ul></article>
+      </div></details>
+      ${citationCards ? `<details class="ag-science-review-details"><summary><span>${esc(t('Methods references', '方法学依据'))}</span><strong>${esc(t(`${citations.length} references already used`, `已使用 ${citations.length} 篇方法学文献`))}</strong><em>${esc(t('Optional', '可选查看'))}</em></summary><div class="ag-science-citations">${citationCards}</div></details>` : ''}
+      <p class="ag-science-review-audit">${esc(t('Raw scores, finding codes, and digest-bound details remain available in the JSON audit view.', '原始评分、问题代码和摘要绑定细节仍保留在 JSON 审计视图中。'))}</p>
+    </div>`;
+  }
+  function agentPlanAnalysisLabel(value) {
+    const labels = {
+      data_quality_audit: t('Data-quality audit', '数据质量审计'),
+      descriptive: t('Descriptive study', '描述性研究'),
+      descriptive_epidemiology: t('Descriptive epidemiology', '描述性流行病学'),
+      association: t('Association analysis', '关联分析'),
+      regression: t('Regression analysis', '回归分析'),
+      prediction: t('Prediction study', '预测研究'),
+      survival: t('Time-to-event analysis', '生存／时间结局分析'),
+    };
+    return labels[String(value || '').toLowerCase()] || t('Study analysis', '研究分析');
+  }
+  function agentPlanOutputLabel(value) {
+    const raw = String(value || '');
+    const labels = {
+      'artifact:analysis_cohort': t('Analysis cohort', '分析队列'),
+      'table:cohort_flow': t('Cohort flow', '队列流程'),
+      'table:baseline_table': t('Baseline summary', '基线特征汇总'),
+      'table:descriptive_quality_summary': t('Descriptive summary', '描述性汇总'),
+      'table:measurement_process_audit': t('Measurement audit', '测量过程审计'),
+      'table:measurement_audit': t('Measurement availability', '变量可用性与缺失情况'),
+      'table:measurement_missingness': t('Measurement completeness', '测量完整性'),
+      'table:measurement_process': t('Measurement process', '测量过程'),
+      'table:adjusted_association_estimates': t('Adjusted association estimates', '校正后关联估计'),
+      'table:absolute_risk_context': t('Absolute-risk context', '绝对风险概览'),
+      'statistic:primary_or': t('Primary odds ratio', '主要比值比'),
+      'statistic:complete_case_n': t('Complete-case sample size', '完整病例数'),
+      'table:robustness_summary': t('Robustness summary', '稳健性汇总'),
+      'log:missingness_strategy_notes': t('Missing-data strategy', '缺失数据处理说明'),
+      'table:robustness_matrix': t('Robustness matrix', '稳健性分析矩阵'),
+      'figure:overview': t('Study overview figure', '研究概览图'),
+      'figure:cohort_flow': t('Cohort flow figure', '队列流程图'),
+      'figure:robustness_plot': t('Robustness figure', '稳健性分析图'),
+      'figure:data_quality': t('Data-quality figure', '数据质量图'),
+    };
+    return labels[raw] || raw.replace(/^(?:artifact|table|figure):/, '').replace(/[_-]+/g, ' ');
+  }
+  function agentPlanVariableLabel(value, labels) {
+    const raw = String(value || '');
+    const canonical = {
+      lact: t('Lactate', '乳酸'), death: t('In-hospital death', '院内死亡'),
+      age: t('Age', '年龄'), sex: t('Sex', '性别'), adm: t('Admission type', '入院类型'),
+      sofa: t('SOFA score', 'SOFA 评分'), los_icu: t('ICU length of stay', 'ICU 住院时长'),
+      hr: t('Heart rate', '心率'), map: t('Mean arterial pressure', '平均动脉压'),
+      ph: t('Blood pH', '血液酸碱度（pH）'), crea: t('Creatinine', '肌酐'),
+      bili: t('Bilirubin', '胆红素'), plt: t('Platelet count', '血小板计数'),
+      gcs: t('Glasgow Coma Scale', '格拉斯哥昏迷评分'),
+      wbc: t('White blood cell count', '白细胞计数'),
+    };
+    return labels[raw] || canonical[raw.toLowerCase()] || raw.replace(/[_-]+/g, ' ');
+  }
+  function agentPlanAssociationText(kind, raw) {
+    const value = String(raw || '').trim();
+    if (window.EU_LANG === 'zh' && kind === 'primary_method' && /logistic/i.test(value)) {
+      return '使用多变量二分类逻辑回归，估计校正后的关联强度和不确定性。';
+    }
+    if (window.EU_LANG !== 'zh' || /[\u3400-\u9fff]/.test(value)) return value || '—';
+    const copy = {
+      decision_reason: '选择这套设计，是因为它直接回答当前的关联问题，并同时报告校正后关联、绝对风险和稳健性分析，但不把观察性结果解释为因果关系。',
+      estimand: '估计主要暴露与主要结局之间、经预先指定协变量校正后的关联强度。',
+      time_zero: '以每次 ICU 住院记录及该次住院中已记录的主要暴露测量作为研究起点。',
+      observation_window: '从研究起点观察至本次住院结局被记录。',
+      primary_method: '使用预先明确变量编码的多变量 Logistic 回归，估计校正后的关联及其不确定性。',
+      supports: '可以回答当前 ICU 数据中，主要暴露与主要结局之间关联的方向、大小和不确定性。',
+      cannot_prove: '不能证明因果关系，也不能排除未测量混杂、选择偏倚或测量误差。',
+    };
+    return copy[kind] || value || '—';
+  }
+  function agentPlanStepIntent(step) {
+    if (String(step && step.method || '') === 'visualization') {
+      const outputs = Array.isArray(step && step.expected_outputs) ? step.expected_outputs : [];
+      if (outputs.includes('figure:cohort_flow')) {
+        return t(
+          'Draw the cohort inclusion and exclusion flow from the registered cohort-flow table.',
+          '根据已登记的队列流程表绘制纳入与排除流程图。',
+        );
+      }
+      return t(
+        'Create a source-data-bound figure from the planned results, with an auditable data table and vector export.',
+        '根据计划产物生成与源数据绑定的图件，并保留可审计数据表和矢量版本。',
+      );
+    }
+    if (window.EU_LANG === 'zh') {
+      const intents = {
+        cohort_accounting: '先说明纳入多少次 ICU 住院、排除多少以及最终分析分母。',
+        baseline_context: '汇总研究人群的基本特征；正式分组将在提取数据后按计划确定。',
+        measurement_audit: '检查乳酸、院内死亡和拟调整变量的可用性与缺失情况。',
+        primary_adjusted_association: '估计乳酸水平与院内死亡之间预先设定的校正后关联。',
+        primary_adjusted_model: '估计乳酸水平与院内死亡之间预先设定的校正后关联，并报告效应大小和不确定性。',
+        absolute_risk_context: '同时展示乳酸分布和院内死亡的绝对风险，帮助解释主要关联结果。',
+        robustness_replay: '按预先设定的敏感性方案复核乳酸与院内死亡关联是否稳健。',
+      };
+      const localized = intents[String(step && step.step_id || '')];
+      if (localized) return localized;
+    }
+    return String(step && (step.intent || step.title || step.name) || t('Complete this planned analysis step.', '完成这一项计划分析。'));
+  }
+  function agentPlanView(payload) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const labels = p.display_labels && typeof p.display_labels === 'object' ? p.display_labels : {};
+    const designSelection = p.design_selection && typeof p.design_selection === 'object' ? p.design_selection : {};
+    const candidates = Array.isArray(designSelection.candidates) ? designSelection.candidates : [];
+    const selected = candidates.find(row => row && row.disposition === 'selected') || candidates[0] || {};
+    const recommendation = Array.isArray(selected.reviewable_plan) && selected.reviewable_plan.length === 6
+      ? selected.reviewable_plan : null;
+    const steps = Array.isArray(p.steps) ? p.steps : [];
+    const robustness = Array.isArray(p.robustness_specs) ? p.robustness_specs : [];
+    const endpoint = p.endpoint && typeof p.endpoint === 'object' ? p.endpoint : null;
+    const required = Array.isArray(selected.required_variables) ? selected.required_variables : [];
+    const visibleVariables = required.filter(value => !/(?:^|_)id$/i.test(String(value || ''))).slice(0, 10);
+    const citations = Array.from(new Set([
+      ...(Array.isArray(selected.literature_citation_keys) ? selected.literature_citation_keys : []),
+      ...steps.flatMap(step => Array.isArray(step && step.literature_citation_keys) ? step.literature_citation_keys : []),
+    ].filter(Boolean)));
+    const gaps = [];
+    if (!recommendation) gaps.push(t('The Planner has not yet produced a complete reviewable recommendation.', 'Planner 尚未给出完整、可审阅的推荐方案。'));
+    if (!endpoint) gaps.push(t('The primary outcome still lacks an executable definition and observation horizon.', '主要结局尚缺可执行定义和观察时间范围。'));
+    if (!robustness.length) gaps.push(t('The sensitivity-analysis proposal has not yet been formed.', '敏感性分析方案尚未形成。'));
+    if (String(p.analysis_type || '') === 'data_quality_audit') gaps.push(t('This version answers data readiness only; it does not yet answer the stated association question.', '这一版只能回答数据是否可用，还不能回答原研究问题中的关联。'));
+    const planReady = gaps.length === 0;
+    const stepCards = steps.map((step, index) => {
+      const outputs = Array.isArray(step && step.expected_outputs) ? step.expected_outputs : [];
+      return `<li><span>${index + 1}</span><div><strong>${esc(agentPlanStepIntent(step))}</strong>${outputs.length ? `<small>${esc(t('Planned output', '计划产物'))}：${outputs.map(value => esc(agentPlanOutputLabel(value))).join(' · ')}</small>` : ''}</div></li>`;
+    }).join('');
+    const variableChips = visibleVariables.map(value => `<span>${esc(agentPlanVariableLabel(value, labels))}</span>`).join('');
+    const literatureSummary = citations.length
+      ? `<span>${esc(t(`${citations.length} bound sources`, `已绑定 ${citations.length} 篇计划依据`))}</span>`
+      : '';
+    const associationCopy = String(selected.analysis_type || p.analysis_type || '').includes('association');
+    const planText = (kind, value) => associationCopy ? agentPlanAssociationText(kind, value) : (String(value || '').trim() || '—');
+    const recommendationCards = recommendation ? [
+      [t('Population and analysis unit', '研究人群与分析单位'), recommendation[0]],
+      [t('Exposure definition and timing', '暴露定义、时间窗与汇总方式'), recommendation[1]],
+      [t('Outcome and follow-up', '结局定义与随访范围'), recommendation[2]],
+      [t('Adjustment and model', '调整变量与主要模型'), recommendation[3]],
+      [t('Missing-data strategy', '缺失数据处理'), recommendation[4]],
+      [t('Sensitivity and feasibility checks', '敏感性分析与数据可行性检查'), recommendation[5]],
+    ].map(([label, value]) => `<article><small>${esc(label)}</small><p>${esc(String(value || '').trim() || '—')}</p></article>`).join('') : '';
+    return `<div class="ag-artifact-readable ag-plan-reader">
+      <header class="ag-plan-hero"><div><div class="eyebrow">${esc(t('Candidate research plan', '候选研究计划'))}</div><h2>${esc(p.research_question || t('Research question not recorded', '尚未记录研究问题'))}</h2><p>${esc(t('This is a proposal for review. No patient-data analysis has started.', '这是供审阅的候选方案，尚未开始患者数据分析。'))}</p></div><span class="ag-plan-state ${planReady ? 'is-ready' : 'is-revision'}">${esc(planReady ? t('Ready to review', '待你审阅') : t('Needs EasyICU revision', '待 EasyICU 修订'))}</span></header>
+      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>01</span><div><small>${esc(t('Chosen design', '设计选择'))}</small><h3>${esc(agentPlanAnalysisLabel(selected.analysis_type || p.analysis_type))}</h3></div></div><p class="ag-plan-lead">${esc(planText('decision_reason', selected.decision_reason || p.rationale || t('The design rationale is not yet available.', '尚未给出设计理由。')))}</p><div class="ag-plan-design-grid"><article><small>${esc(t('Target quantity', '要估计什么'))}</small><p>${esc(planText('estimand', selected.estimand))}</p></article><article><small>${esc(t('Study start', '研究起点'))}</small><p>${esc(planText('time_zero', selected.time_zero))}</p></article><article><small>${esc(t('Observation window', '观察范围'))}</small><p>${esc(planText('observation_window', selected.observation_window))}</p></article><article><small>${esc(t('Primary method', '主要方法'))}</small><p>${esc(planText('primary_method', selected.primary_method))}</p></article></div><div class="ag-plan-boundaries"><article><strong>${esc(t('What this design can answer', '这套设计能回答'))}</strong><p>${esc(planText('supports', selected.supports))}</p></article><article><strong>${esc(t('What it cannot prove', '这套设计不能证明'))}</strong><p>${esc(planText('cannot_prove', selected.cannot_prove))}</p></article></div></section>
+      ${recommendation ? `<section class="ag-plan-section"><div class="ag-plan-section-head"><span>02</span><div><small>${esc(t('Planner recommendation for review', 'Planner 推荐方案（待审阅）'))}</small><h3>${esc(t('Recommended definitions before analysis', '先给方案，再由你修改或批准'))}</h3></div></div><p class="ag-plan-lead">${esc(t('These choices are proposed by EasyICU, not yet confirmed by the researcher.', '以下内容由 EasyICU 先行推荐，尚未视为研究者确认。'))}</p><div class="ag-plan-design-grid">${recommendationCards}</div></section>` : ''}
+      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>${recommendation ? '03' : '02'}</span><div><small>${esc(t('Study ingredients', '研究要素'))}</small><h3>${esc(t('Variables named in the candidate plan', '候选计划涉及的变量'))}</h3></div></div><div class="ag-plan-chips">${variableChips || `<span>${esc(t('Not yet specified', '尚未明确'))}</span>`}</div>${endpoint ? `<p class="ag-plan-note"><strong>${esc(t('Primary outcome', '主要结局'))}：</strong>${esc(agentPlanVariableLabel(endpoint.name, labels))}</p>` : ''}</section>
+      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>${recommendation ? '04' : '03'}</span><div><small>${esc(t('Analysis path', '分析路径'))}</small><h3>${esc(t(`${steps.length} planned steps`, `共 ${steps.length} 个步骤`))}</h3></div></div><ol class="ag-plan-steps">${stepCards || `<li><span>—</span><div><strong>${esc(t('No analysis steps are present.', '尚未形成分析步骤。'))}</strong></div></li>`}</ol></section>
+      ${gaps.length ? `<section class="ag-plan-section is-gap"><div class="ag-plan-section-head"><span>!</span><div><small>${esc(t('EasyICU must revise', 'EasyICU 需要修订'))}</small><h3>${esc(t('Why this version is not ready for approval', '为什么这一版还不能批准'))}</h3></div></div><ul>${gaps.map(value => `<li>${esc(value)}</li>`).join('')}</ul><p>${esc(t('These are Planner responsibilities. The researcher reviews the revised complete plan instead of filling these implementation details one by one.', '这些属于 Planner 的职责。研究者应审阅修订后的完整计划，而不是逐项替系统填写实现细节。'))}</p></section>` : ''}
+      <details class="ag-plan-details"><summary>${esc(t('Why this design was chosen', '查看完整设计理由'))}</summary><p>${esc(planText('decision_reason', p.rationale || selected.decision_reason))}</p></details>
+      ${literatureSummary ? `<section class="ag-plan-literature"><div><strong>${esc(t('Literature used by this plan', '本计划使用的文献依据'))}</strong><small>${esc(t('Open “Literature evidence” for source, screening, and exact step bindings.', '具体来源、筛选理由及步骤绑定请打开「文献依据」。'))}</small></div><div>${literatureSummary}</div></section>` : ''}
+      <p class="ag-plan-audit">${esc(t('Internal ids, methods, inputs, outputs, and the full immutable payload remain in the JSON audit view.', '内部标识、方法、输入输出及完整不可变内容仍保留在 JSON 审计视图中。'))}</p>
+    </div>`;
+  }
   function artifactStructuredView(name, payload) {
     const n = String(name || '').toLowerCase();
     const p = payload && typeof payload === 'object' ? payload : {};
@@ -490,6 +758,8 @@
     if (String(p.schema_version || '') === 'easyicu.manuscript-provenance/1') {
       return manuscriptProvenanceView(p);
     }
+    if (n === 'agent_plan.json') return agentPlanView(p);
+    if (n === 'scientific_plan_review.json') return scientificPlanReviewView(p);
     const sections = [];
     const summary = artifactSummaryRows(
       p,
@@ -497,69 +767,6 @@
     );
     if (summary.length) {
       sections.push(artifactTable(t('Readable artifact summary', '可读产物摘要'), [t('Field', '字段'), t('Value', '值')], summary));
-    }
-    if (n === 'scientific_plan_review.json') {
-      const dimensionLabels = {
-        literature: t('Literature relevance and recency', '文献相关性与时效性'),
-        novelty: t('Novelty position', '创新性定位'),
-        literature_to_plan: t('Literature-to-plan route', '文献到计划的借鉴链'),
-        icu_clinical_design: t('ICU clinical design', 'ICU 临床设计'),
-        statistical_design: t('Statistical design', '统计设计'),
-        robustness: t('Robustness', '稳健性'),
-        figures: t('Figure strategy', '图件策略'),
-        content_completeness: t('Article content completeness', '文章内容完整度'),
-      };
-      const dimensions = p.dimension_scores && typeof p.dimension_scores === 'object'
-        ? Object.entries(p.dimension_scores) : [];
-      const scoreInterpretation = p.facts && p.facts.score_interpretation
-        && typeof p.facts.score_interpretation === 'object'
-        ? p.facts.score_interpretation : {};
-      sections.push(artifactTable(
-        t('Assessment boundary', '评分边界'),
-        [t('Item', '项目'), t('Meaning', '含义')],
-        [
-          [t('Scope', '范围'), p.review_scope || 'pre_execution_plan'],
-          [t('Rendered figures assessed', '是否审阅实际渲染图'), p.rendered_outputs_assessed ? t('yes', '是') : t('no — N/A before execution', '否——执行前不适用')],
-          [t('Figure score', '图件评分'), scoreInterpretation.figures || t('Planned role coverage only.', '仅表示计划角色覆盖。')],
-          [t('Content score', '内容评分'), scoreInterpretation.content_completeness || t('Planned article-role coverage only.', '仅表示计划中的文章角色覆盖。')],
-        ]
-      ));
-      sections.push(artifactTable(
-        t('Top-journal plan scorecard', '顶刊计划多维评分'),
-        [t('Dimension', '维度'), t('Score', '评分'), t('Status', '状态')],
-        dimensions.map(([key, value]) => [
-          dimensionLabels[key] || key,
-          `${Number(value || 0)} / 100`,
-          Number(value || 0) >= 90 ? t('strong', '较强') : Number(value || 0) >= 70 ? t('needs review', '需复核') : t('weak / blocked', '薄弱 / 阻断'),
-        ]),
-        t('No dimension scores are present.', '没有逐维度评分。')
-      ));
-      const findings = Array.isArray(p.findings) ? p.findings : [];
-      sections.push(artifactTable(
-        t('Required changes before analysis', '分析前必须处理的问题'),
-        [t('Severity', '级别'), t('Owner lane', '责任通道'), t('Finding', '问题'), t('Why it matters', '影响'), t('Minimal remediation', '最小修复')],
-        findings.map(row => [row.severity || '', row.remediation_route || 'unclassified', row.code || '', row.message || '', row.remediation || '']),
-        t('No blockers or major findings.', '没有 blocker 或 major 问题。')
-      ));
-      const bindingSteps = p.facts && p.facts.literature_design_bindings
-        && Array.isArray(p.facts.literature_design_bindings.steps)
-        ? p.facts.literature_design_bindings.steps : [];
-      const bindingRows = [];
-      bindingSteps.forEach(step => {
-        (Array.isArray(step.citations) ? step.citations : []).forEach(row => {
-          bindingRows.push([
-            step.step_id || '', row.title || row.citation_key || '',
-            Array.isArray(row.design_elements) ? row.design_elements.join(', ') : '',
-            row.application || '', row.divergence || '',
-          ]);
-        });
-      });
-      sections.push(artifactTable(
-        t('What each article actually contributes to the plan', '每篇文献具体如何影响计划'),
-        [t('Step', '步骤'), t('Article', '文章'), t('Design element', '设计要素'), t('Applied as', '具体应用'), t('Deliberate divergence', '主动偏离')],
-        bindingRows,
-        t('No typed literature-to-design bindings are present.', '没有结构化的文献到设计绑定。')
-      ));
     }
     if (String(p.schema_version || '') === 'easyicu.data-package-review/1') {
       const denominator = p.denominator && typeof p.denominator === 'object' ? p.denominator : {};

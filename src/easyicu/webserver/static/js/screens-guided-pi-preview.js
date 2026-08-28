@@ -20,6 +20,7 @@
     recentResources: [],
     evidenceTabs: [],
     activeEvidenceId: '',
+    workflowContext: {},
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -175,6 +176,35 @@
     }
     return JSON.stringify(resource || {});
   }
+  function safeJobContext(value) {
+    const job = value && typeof value === 'object' ? value : {};
+    return {
+      present: Boolean(job.present),
+      kind: String(job.kind || '').slice(0, 80),
+      status: String(job.status || '').slice(0, 40),
+      error_code: String(job.error_code || '').slice(0, 120),
+      progress: (Array.isArray(job.progress) ? job.progress : []).slice(-24).map(row => ({
+        step: String((row && row.step) || '').slice(0, 80),
+        current: Number((row && row.current) || 0),
+        total: Number((row && row.total) || 0),
+      })),
+    };
+  }
+  function safeWorkflowContext(value) {
+    const context = value && typeof value === 'object' ? value : {};
+    return {
+      nextActionCode: String(context.nextActionCode || '').slice(0, 120),
+      currentRunId: String(context.currentRunId || '').slice(0, 160),
+      activeJob: safeJobContext(context.activeJob),
+      failedJob: safeJobContext(context.failedJob),
+    };
+  }
+  function setWorkflowContext(value) {
+    const next = safeWorkflowContext(value);
+    if (JSON.stringify(next) === JSON.stringify(state.workflowContext)) return;
+    state.workflowContext = next;
+    if (state.resource) render();
+  }
   function rememberResource(resource) {
     const key = resourceKey(resource);
     state.recentResources = [resource]
@@ -309,7 +339,10 @@
       const literature = window.EU_GUIDED_PI_LITERATURE;
       body = state.resource.artifact === 'literature_evidence.json'
         && literature && typeof literature.renderArtifact === 'function'
-        ? literature.renderArtifact(state.payload || {})
+        ? literature.renderArtifact(state.payload || {}, {
+          ...state.workflowContext,
+          runId: state.resource.run_id,
+        })
         : renderer && typeof renderer.artifactStructuredView === 'function'
           ? renderer.artifactStructuredView(state.resource.artifact, state.payload || {})
         : `<pre class="gpi-preview-code" tabindex="0"><code>${esc(JSON.stringify(state.payload || {}, null, 2))}</code></pre>`;
@@ -490,13 +523,14 @@
       if (ticket === state.request) { state.loading = false; render(); }
     }
   }
-  function open(resource, projectId) {
+  function open(resource, projectId, workflowContext) {
     const safe = safeResource(resource);
     const project = String(projectId || '').trim();
     if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
     if (state.projectId && project && state.projectId !== project) state.recentResources = [];
     state.resource = safe;
     state.projectId = project;
+    state.workflowContext = safeWorkflowContext(workflowContext);
     rememberResource(safe);
     state.artifact = null;
     state.payload = null;
@@ -516,7 +550,7 @@
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }
-  function clearProject() { close(); state.projectId = ''; state.recentResources = []; }
+  function clearProject() { close(); state.projectId = ''; state.recentResources = []; state.workflowContext = {}; }
   function mount(host) {
     if (!host) return;
     state.host = host;
@@ -588,5 +622,5 @@
     else render();
   }
 
-  window.EU_GUIDED_PI_PREVIEW = { mount, open, close, clearProject };
+  window.EU_GUIDED_PI_PREVIEW = { mount, open, close, clearProject, setWorkflowContext };
 })();

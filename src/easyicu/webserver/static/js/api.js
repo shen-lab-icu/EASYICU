@@ -307,6 +307,9 @@
   function startAgentRun(body) {
     return postJSON('/api/jobs/agent-run', body || {});
   }
+  function submitAgentRunReview(body) {
+    return postJSON('/api/jobs/agent-run-review', body || {});
+  }
   function loadActiveStudyContext() {
     return getJSON('/api/study-contexts/active');
   }
@@ -663,6 +666,7 @@
   window.EU_API.logoutCodexAuth = logoutCodexAuth;
   window.EU_API.saveAgentProviderConfig = saveAgentProviderConfig;
   window.EU_API.startAgentRun = startAgentRun;
+  window.EU_API.submitAgentRunReview = submitAgentRunReview;
   window.EU_API.loadActiveStudyContext = loadActiveStudyContext;
   window.EU_API.listStudyContexts = listStudyContexts;
   window.EU_API.loadStudyContext = loadStudyContext;

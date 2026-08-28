@@ -2,9 +2,20 @@
 (function () {
   let host = null;
   let options = {};
+  let sourceBindingCoordinate = '';
 
   function isSourceBinding() {
     return !!(options.resource && options.resource.entry_mode === 'source_binding');
+  }
+
+  function bindingCoordinate() {
+    const resource = options.resource && typeof options.resource === 'object'
+      ? options.resource : {};
+    return [
+      String(resource.study_context_id || ''),
+      String(resource.expected_database || ''),
+      String(options.sourceId || ''),
+    ].join(':');
   }
 
   function escapeHtml(value) {
@@ -215,7 +226,11 @@
     button.disabled = true;
     button.textContent = t('Syncing…', '正在同步…');
     options.syncError = '';
-    return Promise.resolve(owner.syncToCopilot()).then(receipt => {
+    const store = window.EU_STUDY_CONTEXT;
+    const refreshed = store && typeof store.refreshActiveFromServer === 'function'
+      ? store.refreshActiveFromServer()
+      : Promise.resolve();
+    return Promise.resolve(refreshed).then(() => owner.syncToCopilot()).then(receipt => {
       const copilot = window.EU_GUIDED_PI;
       const rebound = copilot && typeof copilot.rebind === 'function' ? copilot.rebind() : null;
       return Promise.resolve(rebound).then(() => {
@@ -252,7 +267,17 @@
         owner.useRealData();
       }
       if (isSourceBinding() && owner && typeof owner.beginSourceBinding === 'function') {
-        owner.beginSourceBinding();
+        const coordinate = bindingCoordinate();
+        // Registering a prepared export refreshes the whole shell.  That
+        // remount must preserve the just-validated folder so the user can
+        // confirm it; reset only when a genuinely different study/source
+        // binding flow is mounted.
+        if (coordinate !== sourceBindingCoordinate) {
+          owner.beginSourceBinding();
+          sourceBindingCoordinate = coordinate;
+        }
+      } else {
+        sourceBindingCoordinate = '';
       }
       paint();
     },

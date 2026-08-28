@@ -124,7 +124,7 @@
     function toolLabel(name, resource) {
       const labels = {
         easyicu_workspace_status: tr('Check workspace status', '检查工作区状态'),
-        easyicu_list_data_sources: tr('Check EasyICU data availability', '检查 EasyICU 可用数据'),
+        easyicu_list_data_sources: tr('Check the EasyICU data-source catalog', '检查 EasyICU 数据源目录'),
         easyicu_inspect_data_package: tr('Review data package', '审阅数据包'),
         easyicu_inspect_workflow: tr('Inspect research workflow', '检查科研流程'),
         easyicu_inspect_context: tr('Inspect study context', '读取研究配置'),
@@ -167,7 +167,7 @@
     function completedToolLabel(name, resource) {
       const labels = {
         easyicu_workspace_status: tr('Checked workspace status', '已检查工作区状态'),
-        easyicu_list_data_sources: tr('Checked EasyICU data availability', '已确认 EasyICU 可用数据'),
+        easyicu_list_data_sources: tr('Checked the EasyICU data-source catalog', '已检查 EasyICU 数据源目录'),
         easyicu_inspect_data_package: tr('Reviewed data package', '已审阅数据包'),
         easyicu_inspect_workflow: tr('Read research workflow', '已读取科研流程'),
         easyicu_inspect_context: tr('Read study setup', '已读取研究配置'),
@@ -207,6 +207,44 @@
       const file = resourceName(resource);
       return file ? `${label} · ${file}` : label;
     }
+    /* Pipeline progress arrives with an English prose label written by the
+       runner plus the structured fields it was built from. Passing the prose
+       through put lines like "Step 10/13 started: assemble_visual_displays."
+       into a Chinese UI -- 20 live rows, all English, most carrying an
+       internal step id. Compose the line from the structured fields instead,
+       and humanize the step id rather than printing the identifier. */
+    function humanizeStepId(value) {
+      return String(value || '')
+        .replace(/^[0-9]+[_-]/, '')
+        .replace(/[_-]+/g, ' ')
+        .trim()
+        .slice(0, 80);
+    }
+
+    function pipelineEventLabel(event) {
+      const type = String((event && event.type) || '');
+      if (type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
+      if (type === 'cancel_requested') return tr('Cancellation requested', '已请求取消任务');
+      const current = Number(event && event.current);
+      const total = Number(event && event.total);
+      const counted = Number.isFinite(current) && Number.isFinite(total) && total > 0;
+      const name = humanizeStepId(event && event.step);
+      // `planning` is emitted by several independent structured-generation
+      // calls. Their 1/3, 2/3 counters are retry attempts for one component,
+      // not monotonic progress for the whole plan. Showing them as a shared
+      // step counter made the UI appear to move backwards (2/3 -> 1/3).
+      if (name === 'planning') {
+        if (String(event && event.status) === 'complete') {
+          return tr('A research-plan component passed validation', '一项研究计划组成部分已通过校验');
+        }
+        return tr('Generating research-plan components', '正在生成研究计划的组成部分');
+      }
+      if (counted && name) return tr(`Step ${current}/${total} · ${name}`, `第 ${current}/${total} 步 · ${name}`);
+      if (counted) return tr(`Step ${current}/${total}`, `第 ${current}/${total} 步`);
+      if (name) return name;
+      return tr('EasyICU research pipeline updated', 'EasyICU 科研流程已更新');
+    }
+
     function stepLabel(step) {
       const done = step.status === 'complete';
       const failed = step.status === 'error';
@@ -283,16 +321,19 @@
       const failed = row && (row.status === 'error' || row.status === 'cancelled');
       const kicker = tr('Activity', '执行明细');
       if (running) {
-        const title = latest && latest.kind !== 'submitted'
-          ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步');
+        const title = row.runningTitle || (latest && latest.kind !== 'submitted'
+          ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
+        const note = tr(
+          'Still running. You can wait here; EasyICU will ask when review or confirmation is needed.',
+          '任务仍在进行。请在这里等待；需要审阅或确认时 EasyICU 会明确提示。',
+        );
         const liveSteps = visibleSteps.slice(-20);
-        return `<div class="gpi-activity-running" role="status">
+        return `<div class="gpi-activity-running" role="status" aria-live="polite" aria-busy="true">
           <div class="gpi-activity-live">
-            <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(activityIcon(latest), 15)}</span>
-            <span class="gpi-activity-kicker">${esc(kicker)}</span>
-            <span class="gpi-activity-title">${esc(title)}</span>
+            <span class="gpi-running-spinner" aria-hidden="true"></span>
+            <span class="gpi-activity-kicker">${esc(tr('In progress', '正在进行'))}</span>
+            <span class="gpi-activity-title"><strong>${esc(title)}</strong><small>${esc(note)}</small></span>
             <span class="gpi-activity-elapsed" data-gpi-live-elapsed="${Number(row.startedAt || Date.now())}">${esc(durationText(row.startedAt))}</span>
-            <span class="gpi-status-pip" aria-hidden="true"></span>
           </div>
           ${liveSteps.length ? `<ol>${liveSteps.map(stepRow).join('')}</ol>` : ''}
         </div>`;
@@ -308,8 +349,10 @@
               ? tr(`Used ${toolSteps.length} EasyICU tools`, `已使用 ${toolSteps.length} 个 EasyICU 工具`)
               : tr('Answered without using tools', '仅回答，未执行操作'));
       const title = failed ? tr('This turn needs attention', '本轮需要处理') : completedTitle;
-      const open = failed || row.expanded === true ? 'open' : '';
-      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}" ${open}>
+      // Finished failures expose their status in the summary but keep verbose
+      // diagnostic receipts collapsed. Persisted rows from older builds may
+      // still carry expanded=true, so terminal rendering must not trust it.
+      return `<details class="gpi-activity ${failed ? 'error' : 'complete'}">
         <summary>
           <span class="gpi-activity-glyph" aria-hidden="true">${iconHtml(failed ? 'alert' : activityIcon(toolSteps[0] || pipelineSteps[0] || latest), 15)}</span>
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
@@ -323,15 +366,23 @@
         </div>
       </details>`;
     }
+    /* A finished turn collapses. Its summary line already carries what a
+       researcher needs -- which tools ran and how long the turn took -- while
+       the expanded body is sub-second lifecycle detail written for debugging.
+       Leaving the newest turn open put two screens of "已读取科研流程 0.6 秒"
+       between the question and the answer. A running turn still expands, so
+       progress stays visible; a failed summary remains clickable when someone
+       needs its diagnostic receipts. */
     function focusLatest(rows) {
-      const activities = rows.filter(row => row && row.role === 'activity');
-      activities.forEach(row => { if (row.status !== 'running') row.expanded = false; });
-      const latest = activities[activities.length - 1];
-      if (latest && latest.status !== 'running') latest.expanded = true;
+      rows.forEach(row => {
+        if (row && row.role === 'activity' && row.status !== 'running') {
+          row.expanded = false;
+        }
+      });
       return rows;
     }
 
-    return Object.freeze({ appendPublicDelta, finishTurn, focusLatest, render, startTurn, stepLabel, syncLiveClock, timeMs });
+    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EU_GUIDED_PI_ACTIVITY = Object.freeze({ create });

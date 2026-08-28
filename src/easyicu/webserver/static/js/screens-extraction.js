@@ -2116,8 +2116,16 @@
         startScan(b.dataset.exSrc);
       }));
       const useDataBtn = root.querySelector('[data-ex-usedata]'); if (useDataBtn) useDataBtn.addEventListener('click', () => {
-        if (exSource === 'module') rememberExportPath(exPath);
-        exReal = 'ready'; repaint();
+        useDataBtn.disabled = true;
+        const registered = exSource === 'module'
+          ? rememberExportPath(exPath)
+          : Promise.resolve(null);
+        Promise.resolve(registered).then(() => {
+          exReal = 'ready';
+          repaint();
+        }).catch(() => {
+          useDataBtn.disabled = false;
+        });
       });
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
       const resumeBtn = root.querySelector('[data-ex-resume]'); if (resumeBtn) resumeBtn.addEventListener('click', () => { resumeConvert(); });

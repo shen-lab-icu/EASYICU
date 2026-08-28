@@ -1,0 +1,36 @@
+/* Owner: researcher-readable projection of agent_plan.json.
+   Execution coordinates remain in the JSON audit view; this file owns only
+   the candidate-plan reading hierarchy shared by Guided Copilot and Monitor. */
+.ag-plan-reader{color:var(--ink-2);background:var(--surface)}
+.ag-plan-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:22px;padding:26px 28px;border-bottom:1px solid var(--hair);background:linear-gradient(140deg,color-mix(in srgb,var(--accent) 7%,var(--surface)),var(--surface) 68%)}
+.ag-plan-hero h2{max-width:780px;margin:6px 0 8px;color:var(--ink);font-size:22px;line-height:1.38;letter-spacing:-.018em}
+.ag-plan-hero p{margin:0;color:var(--ink-3);font-size:13.5px;line-height:1.6}
+.ag-plan-state{flex:0 0 auto;padding:7px 11px;border:1px solid color-mix(in srgb,var(--ok) 34%,var(--hair));border-radius:999px;background:color-mix(in srgb,var(--ok) 8%,var(--surface));color:var(--ink-2);font-size:12px;font-weight:700;white-space:nowrap}
+.ag-plan-state.is-revision{border-color:color-mix(in srgb,var(--warn) 38%,var(--hair));background:color-mix(in srgb,var(--warn) 9%,var(--surface))}
+.ag-plan-section{padding:24px 28px;border-bottom:1px solid var(--hair)}
+.ag-plan-section-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:15px}
+.ag-plan-section-head>span{display:grid;flex:0 0 auto;width:30px;height:30px;place-items:center;border-radius:9px;background:var(--surface-2);color:var(--ink-3);font-size:11px;font-weight:750}
+.ag-plan-section-head small,.ag-plan-section-head h3{display:block}.ag-plan-section-head small{margin-bottom:2px;color:var(--ink-4);font-size:11px;font-weight:750;letter-spacing:.055em;text-transform:uppercase}
+.ag-plan-section-head h3{margin:0;color:var(--ink);font-size:17px;line-height:1.35}
+.ag-plan-lead{max-width:900px;margin:0 0 18px;color:var(--ink-2);font-size:14px;line-height:1.72}
+.ag-plan-design-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.ag-plan-design-grid article{min-width:0;padding:14px 15px;border:1px solid var(--hair-2);border-radius:10px;background:var(--surface-2)}
+.ag-plan-design-grid small{display:block;margin-bottom:5px;color:var(--ink-4);font-size:11px;font-weight:700}.ag-plan-design-grid p{margin:0;color:var(--ink-2);font-size:13px;line-height:1.58}
+.ag-plan-boundaries{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+.ag-plan-boundaries article{padding:15px;border-left:3px solid color-mix(in srgb,var(--ok) 60%,var(--hair));border-radius:4px 9px 9px 4px;background:color-mix(in srgb,var(--ok) 4%,var(--surface))}.ag-plan-boundaries article+article{border-left-color:color-mix(in srgb,var(--warn) 64%,var(--hair));background:color-mix(in srgb,var(--warn) 5%,var(--surface))}
+.ag-plan-boundaries strong{display:block;color:var(--ink);font-size:13px}.ag-plan-boundaries p{margin:5px 0 0;color:var(--ink-3);font-size:12.5px;line-height:1.6}
+.ag-plan-chips{display:flex;flex-wrap:wrap;gap:7px}.ag-plan-chips span,.ag-plan-literature>div:last-child span{padding:6px 9px;border:1px solid var(--hair-2);border-radius:999px;background:var(--surface-2);color:var(--ink-2);font-size:12px}
+.ag-plan-note{margin:13px 0 0;color:var(--ink-3);font-size:12.5px}.ag-plan-note strong{color:var(--ink-2)}
+.ag-plan-steps{display:grid;gap:0;margin:0;padding:0;list-style:none;counter-reset:none}
+.ag-plan-steps li{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;padding:13px 0;border-top:1px solid var(--hair)}.ag-plan-steps li:first-child{padding-top:0;border-top:0}
+.ag-plan-steps li>span{display:grid;width:27px;height:27px;place-items:center;border:1px solid var(--hair-2);border-radius:50%;color:var(--ink-3);font-size:11px;font-weight:750}
+.ag-plan-steps strong,.ag-plan-steps small{display:block}.ag-plan-steps strong{color:var(--ink-2);font-size:13.5px;line-height:1.58}.ag-plan-steps small{margin-top:5px;color:var(--ink-4);font-size:11.5px;line-height:1.5}
+.ag-plan-section.is-gap{background:color-mix(in srgb,var(--warn) 5%,var(--surface))}.ag-plan-section.is-gap .ag-plan-section-head>span{background:color-mix(in srgb,var(--warn) 16%,var(--surface));color:var(--ink)}
+.ag-plan-section.is-gap ul{display:grid;gap:7px;margin:0 0 12px;padding-left:20px;color:var(--ink-2);font-size:13px;line-height:1.55}.ag-plan-section.is-gap>p{margin:0;color:var(--ink-3);font-size:12.5px;line-height:1.6}
+.ag-plan-details{padding:17px 28px;border-bottom:1px solid var(--hair)}.ag-plan-details summary{cursor:pointer;color:var(--ink-2);font-size:13px;font-weight:700}.ag-plan-details p{margin:12px 0 2px;color:var(--ink-3);font-size:13px;line-height:1.7}
+.ag-plan-literature{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:20px 28px;border-bottom:1px solid var(--hair)}.ag-plan-literature strong,.ag-plan-literature small{display:block}.ag-plan-literature strong{color:var(--ink);font-size:13px}.ag-plan-literature small{max-width:560px;margin-top:4px;color:var(--ink-4);font-size:11.5px;line-height:1.5}.ag-plan-literature>div:last-child{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px}
+.ag-plan-audit{margin:0;padding:13px 28px;color:var(--ink-4);font-size:11.5px;line-height:1.5}
+
+@media(max-width:760px){
+  .ag-plan-hero{flex-direction:column;padding:20px}.ag-plan-state{align-self:flex-start}.ag-plan-section{padding:20px}.ag-plan-design-grid,.ag-plan-boundaries{grid-template-columns:1fr}.ag-plan-details{padding:16px 20px}.ag-plan-literature{display:block;padding:18px 20px}.ag-plan-literature>div:last-child{justify-content:flex-start;margin-top:12px}.ag-plan-audit{padding:13px 20px}
+}

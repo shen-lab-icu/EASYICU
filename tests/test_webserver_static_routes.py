@@ -116,28 +116,34 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_SETTINGS.language = l" in i18n_js
     assert "window.EU_API.saveSetting('language', l)" in i18n_js
     assert "window.dispatchEvent(new CustomEvent('easyicu:languagechange'" in i18n_js
-    assert (
-        "window.addEventListener('easyicu:languagechange', refreshLanguage)" in dock_js
-    )
     assert "window.EUPageGuide = { open, close, toggle, refreshLanguage }" in dock_js
-    assert (
-        "return route === 'guided' || route === 'agent';"
-        in dock_js
-    )
     assert "window.setLang(val);" in settings_js
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260824-local-open1" in index_html
+    assert "js/api.js?v=20260828-plan-review1" in index_html
 
 
-def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
+def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
+    """The launcher is gone; the shell entry points that used it are not.
+
+    The floating #cpFab sat on top of the composer's own send control on the
+    guided route, and the route it opened is the page the user is already on.
+    app.js still opens the one #guided conversation from [data-cpopen] and
+    Cmd/Ctrl+K through EUPageGuide, so the hook must outlive the button.
+    """
+
     dock_css = _static_css("dock.css")
+    dock_js = _static_js("copilot-dock.js")
+    app_js = _static_js("app.js")
 
-    assert (
-        "#cpFab{ right: 14px; bottom: calc(76px + env(safe-area-inset-bottom)); }"
-        in dock_css
-    )
+    assert "#cpFab" not in dock_css
+    assert "cpFab" not in dock_js
+    assert "document.body.appendChild(fab)" not in dock_js
+    assert "window.EUPageGuide = { open, close, toggle, refreshLanguage }" in dock_js
+    assert "window.EUCopilot = window.EUPageGuide" in dock_js
+    assert "window.EUPageGuide || window.EUCopilot" in app_js
+    assert "data-cpopen" in app_js
 
 
 def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
@@ -158,8 +164,6 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     # Monitor must not add an agent-specific conversation opener.
     assert "Agent guide" not in agent_js
     assert "data-cpopen" not in agent_js
-    assert "Open EasyICU Copilot" in dock_js
-    assert "打开 EasyICU 研究助手" in dock_js
     assert "function open()" in dock_js
     assert "location.hash = '#guided'" in dock_js
     assert "The historical page-guide dock intentionally is not constructed" in dock_js
@@ -184,9 +188,9 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Continue in Copilot" not in agent_js
     assert "Open Copilot" not in help_js
 
-    assert "css/dock.css?v=20260625-stage99" in index_html
+    assert "css/dock.css?v=20260827-no-fab1" in index_html
     assert "js/app.js?v=20260826-copilot-home1" in index_html
-    assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
+    assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction.js?v=20260825-source-binding1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
@@ -356,8 +360,9 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "htmlOf(t.html)" in guided_js
     assert "你好，我是<strong>研究引导</strong>" in guided_js
     assert "脚本化演示流程" in guided_js
-    assert "打开 EasyICU 研究助手" in dock_js
-    assert "研究助手" in dock_js
+    # The launcher that carried these labels is removed; the shell entry in
+    # app.js is now the only labelled opener.
+    assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
         "js/screens-guided-projects.js?v=20260825-remove-project1" in index_html
@@ -366,8 +371,8 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260827-atomic-restore1" in index_html
-    assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
+    assert "js/screens-guided.js?v=20260827-aside-owner1" in index_html
+    assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
 def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
@@ -404,8 +409,8 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20260824-local-open1" in index_html
-    assert "js/copilot-dock.js?v=20260824-single-copilot1" in index_html
+    assert "js/api.js?v=20260828-plan-review1" in index_html
+    assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
 def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> (
@@ -538,10 +543,10 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260827-visual-hierarchy2" in index_html
-    assert "css/guided-projects.css?v=20260827-visual-hierarchy2" in index_html
-    assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260824-local-open1" in index_html
+    assert "css/guided.css?v=20260827-type-scale1" in index_html
+    assert "css/guided-projects.css?v=20260827-type-scale1" in index_html
+    assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
+    assert "js/api.js?v=20260828-plan-review1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260825-remove-project1" in index_html
     )
@@ -641,7 +646,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260827-atomic-restore1" in index_html
+    assert "js/screens-guided.js?v=20260827-aside-owner1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -918,7 +923,28 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260825-manuscript-reader1" in index_html
+    assert "js/screens-agent-render.js?v=20260828-plan-reader5" in index_html
+    assert "css/agent-plan.css?v=20260828-plan-reader1" in index_html
+
+
+def test_candidate_plan_styles_have_one_explicit_owner() -> None:
+    plan_css = _static_css("agent-plan.css")
+    review_css = _static_css("agent-scientific-review.css")
+    agent_css = _static_css("agent.css")
+
+    for selector in (
+        ".ag-plan-reader",
+        ".ag-plan-hero",
+        ".ag-plan-design-grid",
+        ".ag-plan-steps",
+        ".ag-plan-section.is-gap",
+    ):
+        assert selector in plan_css
+        assert selector not in review_css
+        assert selector not in agent_css
+    for foreign_route in ("crossdb", "patient", "cohort", "settings"):
+        assert foreign_route not in plan_css.lower()
+    assert "!important" not in plan_css
 
 
 def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
@@ -2414,7 +2440,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260824-local-open1" in index_html
+    assert "api.js?v=20260828-plan-review1" in index_html
     assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2703,15 +2729,15 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260824-local-open1" in index_html
+    assert "api.js?v=20260828-plan-review1" in index_html
     assert "screens-guided-projects.js?v=20260825-remove-project1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260827-atomic-restore1" in index_html
-    assert "guided.css?v=20260827-visual-hierarchy2" in index_html
-    assert "guided-projects.css?v=20260827-visual-hierarchy2" in index_html
+    assert "screens-guided.js?v=20260827-aside-owner1" in index_html
+    assert "guided.css?v=20260827-type-scale1" in index_html
+    assert "guided-projects.css?v=20260827-type-scale1" in index_html
     assert "gd-name\">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span>" in projects_js
     assert "${t('New / open research folder', '新建/打开研究目录')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
@@ -3497,15 +3523,17 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
     assert "js/screens-extraction-embedded.js?v=20260825-source-binding1" in index_html
     assert "js/screens-guided-pi-starters.js?v=20260827-independent-starters1" in index_html
-    assert "js/screens-guided-pi-header.js?v=20260827-visual-hierarchy2" in index_html
-    assert "js/screens-guided-pi.js?v=20260827-regeneration-in-place1" in index_html
+    assert "js/screens-guided-pi-header.js?v=20260827-type-scale1" in index_html
+    assert "js/screens-guided-pi.js?v=20260828-plan-resubmit1" in index_html
     assert "/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output" in api_js
     assert "window.EU_API.openExtractionOutput = openExtractionOutput" in api_js
     assert "data-ex-open-output" in extraction_js
     assert "column_metadata" in extraction_js
     assert "syncToCopilot: syncExtractionToCopilot" in extraction_js
     assert "notifyExtractionHandoff" in embedded_js
-    assert "role: 'workflow_receipt'" in guided_js
+    assert "role: 'workflow_receipt'" in _static_js(
+        "screens-guided-pi-data-binding.js"
+    )
     assert "row.receipt_kind === 'extraction_result'" in guided_js
     assert "Extraction setup saved" in guided_js
     assert "No extraction has been claimed yet." in guided_js

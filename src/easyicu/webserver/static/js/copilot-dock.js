@@ -1,20 +1,12 @@
 /* EasyICU Copilot shell entry.
    There is one user-visible conversation: the Pi AgentSession mounted at
-   #guided. The historical page-guide dock intentionally is not constructed;
-   EUPageGuide remains only as a compatibility alias for existing shell hooks. */
+   #guided. The historical page-guide dock intentionally is not constructed,
+   and neither is a floating launcher: it overlapped the composer's own send
+   control on the guided route. EUPageGuide remains the shell hook that app.js
+   uses for [data-cpopen] affordances and the Cmd/Ctrl+K shortcut. */
 (function () {
-  let fab = null;
-
-  function tx(en, zh) {
-    return window.t ? window.t(en, zh) : en;
-  }
-
   function routeOf() {
     return (location.hash || '#entry').slice(1);
-  }
-
-  function shouldHideFab(route) {
-    return route === 'guided' || route === 'agent';
   }
 
   function focusComposer() {
@@ -37,28 +29,13 @@
     open();
   }
 
-  function refreshLanguage() {
-    if (!fab) return;
-    fab.setAttribute('aria-label', tx('Open EasyICU Copilot', '打开 EasyICU 研究助手'));
-    fab.innerHTML = `<span class="fab-mk">${icon('spark', 14)}</span> ${tx('EasyICU Copilot', '研究助手')}`;
-    fab.hidden = shouldHideFab(routeOf());
-  }
-
-  function build() {
-    fab = document.createElement('button');
-    fab.id = 'cpFab';
-    fab.type = 'button';
-    document.body.appendChild(fab);
-    fab.addEventListener('click', open);
-    window.addEventListener('hashchange', refreshLanguage);
-    window.addEventListener('easyicu:languagechange', refreshLanguage);
-  }
+  // Kept so existing shell hooks can call it after a language change; there is
+  // no longer a launcher label to relabel.
+  function refreshLanguage() {}
 
   function init() {
-    build();
     window.EUPageGuide = { open, close, toggle, refreshLanguage };
     window.EUCopilot = window.EUPageGuide;
-    refreshLanguage();
   }
 
   if (document.readyState === 'loading') {
