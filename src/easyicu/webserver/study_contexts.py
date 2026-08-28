@@ -65,6 +65,7 @@ _CONTEXT_FIELDS = {
     "covariate_selection",
     "covariate_rationales",
     "covariate_temporal_roles",
+    "covariate_operationalizations",
     "execution_concepts",
     "analysis_design",
     "sensitivity_specs",
@@ -155,8 +156,14 @@ _TIME_WINDOW_SCHEMA = {
     "label": "text",
 }
 _EXECUTION_CONCEPT_FIELDS = frozenset(
-    {"outcome", "primary_exposure", "covariates"}
+    {
+        "outcome",
+        "primary_exposure",
+        "primary_exposure_aggregation",
+        "covariates",
+    }
 )
+_PRIMARY_EXPOSURE_AGGREGATIONS = frozenset({"max", "min", "mean", "first"})
 _ANALYSIS_DESIGN_FIELDS = frozenset(
     {"analysis_family", "analysis_unit", "variance_estimator", "cluster_unit"}
 )
@@ -217,6 +224,7 @@ _LITERATURE_SCOPE_FIELDS_V2 = (
     "covariate_selection",
     "covariate_rationales",
     "covariate_temporal_roles",
+    "covariate_operationalizations",
     "execution_concepts",
     "analysis_design",
     "sensitivity_specs",
@@ -798,6 +806,29 @@ def normalize_covariate_temporal_roles(value: Any) -> Dict[str, str]:
     return result
 
 
+def normalize_covariate_operationalizations(value: Any) -> Dict[str, str]:
+    """Normalize user-reviewed scientific-name to materialized-column bindings."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > _MAX_COLLECTION_ITEMS:
+        raise StudyContextError(
+            {
+                "error": "invalid_study_context_field_type",
+                "field": "covariate_operationalizations",
+                "expected": "object[string]",
+            }
+        )
+    result: Dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = _identifier(raw_key, field="covariate_operationalizations.key")
+        result[key] = _identifier(
+            raw_value,
+            field=f"covariate_operationalizations.{key}",
+        )
+    return result
+
+
 def normalize_execution_concepts(value: Any) -> Dict[str, Any]:
     """Normalize exact source-concept identifiers separately from UI labels."""
 
@@ -828,6 +859,28 @@ def normalize_execution_concepts(value: Any) -> Dict[str, Any]:
                 raw,
                 field=f"execution_concepts.{field}",
             )
+    raw_aggregation = value.get("primary_exposure_aggregation")
+    if raw_aggregation not in (None, ""):
+        aggregation = _identifier(
+            raw_aggregation,
+            field="execution_concepts.primary_exposure_aggregation",
+        )
+        if aggregation not in _PRIMARY_EXPOSURE_AGGREGATIONS:
+            raise StudyContextError(
+                {
+                    "error": "study_primary_exposure_aggregation_unsupported",
+                    "field": "execution_concepts.primary_exposure_aggregation",
+                    "allowed": sorted(_PRIMARY_EXPOSURE_AGGREGATIONS),
+                }
+            )
+        if not result.get("primary_exposure"):
+            raise StudyContextError(
+                {
+                    "error": "study_primary_exposure_required_for_aggregation",
+                    "field": "execution_concepts.primary_exposure",
+                }
+            )
+        result["primary_exposure_aggregation"] = aggregation
     if "covariates" in value:
         raw_covariates = value.get("covariates")
         if not isinstance(raw_covariates, list) or len(raw_covariates) > _MAX_COLLECTION_ITEMS:
@@ -1039,6 +1092,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "covariate_selection": "planner_selectable",
         "covariate_rationales": {},
         "covariate_temporal_roles": {},
+        "covariate_operationalizations": {},
         "execution_concepts": {},
         "analysis_design": {},
         "sensitivity_specs": [],
@@ -1112,6 +1166,12 @@ def _sanitize_patch(
     if "covariate_temporal_roles" in raw:
         patch["covariate_temporal_roles"] = normalize_covariate_temporal_roles(
             raw.get("covariate_temporal_roles")
+        )
+    if "covariate_operationalizations" in raw:
+        patch["covariate_operationalizations"] = (
+            normalize_covariate_operationalizations(
+                raw.get("covariate_operationalizations")
+            )
         )
     if "execution_concepts" in raw:
         patch["execution_concepts"] = normalize_execution_concepts(
@@ -1253,7 +1313,10 @@ def _validate_covariate_decision_contract(context: Dict[str, Any]) -> None:
     roster = set(context.get("covariates") or [])
     rationale_keys = set((context.get("covariate_rationales") or {}).keys())
     temporal_keys = set((context.get("covariate_temporal_roles") or {}).keys())
-    unbound = sorted((rationale_keys | temporal_keys) - roster)
+    operational_keys = set(
+        (context.get("covariate_operationalizations") or {}).keys()
+    )
+    unbound = sorted((rationale_keys | temporal_keys | operational_keys) - roster)
     if unbound:
         raise StudyContextError(
             {
@@ -1263,7 +1326,7 @@ def _validate_covariate_decision_contract(context: Dict[str, Any]) -> None:
             }
         )
     if context.get("covariate_selection") != "exact" and (
-        rationale_keys or temporal_keys
+        rationale_keys or temporal_keys or operational_keys
     ):
         raise StudyContextError(
             {
@@ -1741,6 +1804,7 @@ def build_agent_context_binding(
                 "covariate_selection",
                 "covariate_rationales",
                 "covariate_temporal_roles",
+                "covariate_operationalizations",
                 "execution_concepts",
                 "analysis_design",
                 "sensitivity_specs",
@@ -1860,6 +1924,7 @@ __all__ = [
     "list_contexts",
     "normalize_path",
     "normalize_analysis_design",
+    "normalize_covariate_operationalizations",
     "normalize_sensitivity_specs",
     "normalize_execution_concepts",
     "validate_context_update",

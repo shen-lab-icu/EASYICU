@@ -155,9 +155,10 @@ class WebReviewRecoveryRecord(BaseModel):
                 "easyicu.web-review-recovery/4",
                 "easyicu.web-review-recovery/5",
             }
+            and self.budget_mode == "full_reviewed"
             and not self.prepared_package_binding
         ):
-            raise ValueError("Web review recovery requires a package binding")
+            raise ValueError("Reviewed execution recovery requires a package binding")
         payload = self.model_dump(mode="json", exclude={"record_sha256"})
         if self.schema_version == "easyicu.web-review-recovery/1":
             payload.pop("pipeline_config_sha256", None)
@@ -231,9 +232,12 @@ class WebReviewRecoverySeed(BaseModel):
                 "easyicu.web-review-recovery-seed/3",
                 "easyicu.web-review-recovery-seed/4",
             }
+            and self.budget_mode == "full_reviewed"
             and not self.prepared_package_binding
         ):
-            raise ValueError("Web review recovery seed requires a package binding")
+            raise ValueError(
+                "Reviewed execution recovery seed requires a package binding"
+            )
         if self.schema_version == "easyicu.web-review-recovery-seed/1":
             payload.pop("budget_mode", None)
         if self.schema_version not in {

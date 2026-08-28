@@ -84,6 +84,11 @@ class FakeGateway:
         self.calls.append((method, dict(params), kwargs.get("tool_context")))
         if kwargs.get("tool_context") is not None:
             self.tool_contexts.append(kwargs["tool_context"])
+        if method == "session.regenerate.inspect":
+            return {
+                "message": "Original research question",
+                "turn_index": 0,
+            }
         session_id = str(params.get("session_id") or "")
         return {
             "session_id": session_id,
@@ -525,6 +530,44 @@ def test_new_research_session_allows_planning_but_blocks_data_tools_until_confir
         confirmed["session"]["data_source_authorization"]["confirmation_mode"]
         == "reuse_project_source"
     )
+
+
+def test_edited_plan_turn_keeps_edit_and_host_transition_intents_separate(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-edited-plan-turn",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-edited-plan-turn",
+        message="Start generating the formal research plan.",
+        allowed_actions=["provider_run"],
+        regenerate_user_entry_id="entry-user-1",
+        regeneration_intent="user_edited_message",
+        message_intent="confirm_formal_plan_generation",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    regenerate = next(
+        params
+        for method, params, _context in reversed(gateway.calls)
+        if method == "session.regenerate"
+    )
+    assert regenerate["intent"] == "user_edited_message"
+    assert regenerate["turn_intent"] == "confirm_formal_plan_generation"
 
 
 def test_explicit_prepared_source_choice_confirms_same_session_after_binding(
@@ -2368,7 +2411,7 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
     monkeypatch.setattr(
         agent_routes,
         "submit_agent_run",
-        lambda payload, *, account_environment=None: (
+        lambda payload, *, account_environment=None, metadata_only_planning_authorized=False: (
             submitted.append(dict(payload))
             or {
                 "job_id": "job-fresh-plan",
@@ -2446,7 +2489,7 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
     monkeypatch.setattr(
         agent_routes,
         "submit_agent_run",
-        lambda payload, *, account_environment=None: (
+        lambda payload, *, account_environment=None, metadata_only_planning_authorized=False: (
             submitted.append(dict(payload))
             or {
                 "job_id": "job-terminal-retry",
@@ -2546,7 +2589,7 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
     monkeypatch.setattr(
         agent_routes,
         "submit_agent_run",
-        lambda payload, *, account_environment=None: (
+        lambda payload, *, account_environment=None, metadata_only_planning_authorized=False: (
             submitted.append(dict(payload))
             or {
                 "job_id": "job-fresh-after-bridge-failure",
@@ -2624,7 +2667,7 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
     monkeypatch.setattr(
         agent_routes,
         "submit_agent_run",
-        lambda payload, *, account_environment=None: submitted.append(dict(payload)),
+        lambda payload, *, account_environment=None, metadata_only_planning_authorized=False: submitted.append(dict(payload)),
     )
     context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -3122,6 +3165,31 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     assert writes[-1]["outcome"] == "院内死亡（本次住院期间死亡）"
     assert writes[-1]["question"] == "研究 Sepsis-3 与院内死亡的关系。"
 
+    accepted_rendered_affirmation = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"outcome": "24 小时 landmark 后至出院期间发生的院内死亡"},
+        ToolExecutionContext(
+            session=session,
+            user_message="是，采用该定义",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted_rendered_affirmation["code"] == "study_context_updated"
+    assert writes[-1]["outcome"] == "24 小时 landmark 后至出院期间发生的院内死亡"
+
+    accepted_explicit_reconfirmation = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"outcome": "24 小时 landmark 后至出院期间发生的院内死亡"},
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "请重新确认主要结局为“24 小时 landmark 后至出院期间发生的院内死亡”"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted_explicit_reconfirmation["code"] == "study_context_updated"
+
     accepted_compact_choice = tool_module.execute_tool(
         "easyicu_update_study_context",
         {
@@ -3148,6 +3216,17 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
         ),
     )
     assert accepted_exposure["code"] == "study_context_updated"
+
+    accepted_rendered_exposure_affirmation = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"primary_exposure": "入 ICU 后 0–24 小时内最高的有效乳酸值"},
+        ToolExecutionContext(
+            session=session,
+            user_message="是，采用该定义",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted_rendered_exposure_affirmation["code"] == "study_context_updated"
 
 
 def test_conversational_setup_keeps_confirmed_outcome_when_model_bundles_exposure(
@@ -3252,6 +3331,135 @@ def test_conversational_setup_does_not_bundle_all_stays_with_clustering(
     assert writes == []
 
 
+def test_sibling_candidate_slots_never_confirm_each_other(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One question proposing outcome + exposure + goal must still block.
+
+    Regression: each slot counted its unconfirmed siblings as "another
+    confirmed change", so all three took the silent-drop branch and the tool
+    returned a bare ``ok`` for a write that persisted nothing.
+    """
+
+    current = {
+        "id": "study-sibling-candidate-authority",
+        "revision": 3,
+        "question": "在 MIMIC-IV 成人 ICU 人群中，Sepsis-3 的患病率是多少？",
+        "active_job_id": None,
+        "cohort": {"label": "成人 ICU 人群", "age_min": 18},
+        "outcome": "",
+        "primary_exposure": "",
+        "analysis_goal": "",
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 4},
+    )
+    session = PiSessionRecord(
+        session_id="pi-sibling-candidate-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    blocked = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "outcome": "ICU mortality（ICU住院期间死亡）",
+            "primary_exposure": "Sepsis-3",
+            "analysis_goal": "描述 Sepsis-3 的患病率，并评估其与 ICU 死亡的关联。",
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "我的 ICU 研究问题是：我想研究 MIMIC-IV 成人 ICU 人群中 "
+                "Sepsis-3 的患病率，以及 Sepsis-3 与 ICU 死亡的关系。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert blocked["status"] == "blocked"
+    assert blocked["code"] == "study_primary_outcome_confirmation_required"
+    assert writes == []
+
+
+def test_dropped_scientific_slots_are_named_in_the_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A confirmed change keeps the write, but omissions must be stated."""
+
+    current = {
+        "id": "study-omission-receipt-authority",
+        "revision": 3,
+        "question": "",
+        "active_job_id": None,
+        "cohort": {},
+        "outcome": "",
+        "primary_exposure": "",
+        "analysis_goal": "",
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 4},
+    )
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, **_kwargs: {"current_stage": "study_setup"},
+    )
+    session = PiSessionRecord(
+        session_id="pi-omission-receipt-authority",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "question": "Estimate Sepsis-3 prevalence and its ICU mortality association.",
+            "outcome": "ICU mortality",
+            "primary_exposure": "Sepsis-3",
+        },
+        ToolExecutionContext(
+            session=session,
+            user_message=(
+                "我想研究 MIMIC-IV 成人 ICU 人群中 Sepsis-3 的患病率，"
+                "以及 Sepsis-3 与 ICU 死亡的关系。"
+            ),
+            allowed_actions={"configure"},
+        ),
+    )
+
+    # The explicitly written question is a real confirmed change and lands.
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["question"].startswith("Estimate Sepsis-3 prevalence")
+    # The two candidate slots do not.
+    assert writes[0].get("outcome", "") == ""
+    assert writes[0].get("primary_exposure", "") == ""
+    # And the receipt says so, with a typed reason code per dropped slot.
+    details = result["details"]
+    assert details["omitted_unconfirmed_fields"] == ["outcome", "primary_exposure"]
+    assert details["unconfirmed_omissions"] == [
+        {"field": "outcome", "code": "study_primary_outcome_confirmation_required"},
+        {
+            "field": "primary_exposure",
+            "code": "study_primary_exposure_confirmation_required",
+        },
+    ]
+    assert "NOT saved this turn" in result["summary"]
+    assert "outcome" in result["summary"]
+
+
 def test_conversational_setup_requires_direct_analysis_goal_choice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3312,6 +3520,17 @@ def test_conversational_setup_requires_direct_analysis_goal_choice(
     )
     assert compact_choice["code"] == "study_context_updated"
     assert writes[-1]["analysis_goal"] == "Adjusted observational association"
+
+    explicit_noncausal_goal = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"analysis_goal": "乳酸与死亡的描述性及预后关联"},
+        ToolExecutionContext(
+            session=session,
+            user_message="评估描述性和预后关联，不作因果解释。",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert explicit_noncausal_goal["code"] == "study_context_updated"
 
     synchronized_wording = tool_module.execute_tool(
         "easyicu_update_study_context",
@@ -3920,6 +4139,34 @@ def test_conversational_setup_binds_verified_execution_concepts(
         "outcome",
         "sepsis3_sofa2",
     ]
+
+
+def test_execution_concepts_keep_source_identity_and_typed_exposure_aggregation() -> None:
+    normalized = tool_module.study_contexts.normalize_execution_concepts(
+        {
+            "outcome": "death",
+            "primary_exposure": "lact",
+            "primary_exposure_aggregation": "max",
+            "covariates": ["age", "sex", "charlson"],
+        }
+    )
+
+    assert normalized == {
+        "outcome": "death",
+        "primary_exposure": "lact",
+        "primary_exposure_aggregation": "max",
+        "covariates": ["age", "sex", "charlson"],
+    }
+    with pytest.raises(tool_module.study_contexts.StudyContextError) as caught:
+        tool_module.study_contexts.normalize_execution_concepts(
+            {
+                "primary_exposure": "lact",
+                "primary_exposure_aggregation": "median",
+            }
+        )
+    assert caught.value.detail["error"] == (
+        "study_primary_exposure_aggregation_unsupported"
+    )
 
 
 def test_conversational_setup_surfaces_repeated_stay_dependence_gate(
@@ -4667,6 +4914,60 @@ def test_rejected_sensitivity_does_not_consume_configure_grant(
     ]
 
 
+def test_study_update_accepts_linear_per_unit_and_strips_optional_nulls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-1",
+        "revision": 5,
+        "question": "Is lactate associated with mortality?",
+        "active_job_id": None,
+    }
+    session = PiSessionRecord(
+        session_id="pi-test",
+        binding=AuthorityBinding(study_context_id="study-1", study_revision=5),
+    )
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    writes = []
+
+    def upsert(raw, **kwargs):
+        writes.append(dict(raw))
+        return {**current, **raw, "revision": 6}
+
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context", upsert)
+    execution = ToolExecutionContext(
+        session=session,
+        allowed_actions=frozenset({"configure"}),
+        user_message="Use a linear per-unit lactate sensitivity analysis.",
+    )
+
+    saved = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            "sensitivity_specs": [
+                {
+                    "spec_id": "lactate_linear_per_unit",
+                    "axis": "functional_form",
+                    "strategy": "linear_per_unit",
+                    "execution_variables": ["lact_max"],
+                    "landmark_hours": None,
+                    "event_time_variable": None,
+                    "observation_duration_variable": None,
+                    "observation_duration_unit": None,
+                }
+            ]
+        },
+        execution,
+    )
+
+    assert saved["code"] == "study_context_updated"
+    written = writes[0]["sensitivity_specs"][0]
+    assert written["spec_id"] == "lactate_linear_per_unit"
+    assert written["axis"] == "functional_form"
+    assert written["strategy"] == "linear_per_unit"
+    assert written["execution_variables"] == ["lact_max"]
+
+
 def test_unsupported_runtime_design_does_not_consume_configure_grant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4748,7 +5049,12 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
 ) -> None:
     submitted_bodies = []
 
-    def submit(body, *, account_environment=None):
+    def submit(
+        body,
+        *,
+        account_environment=None,
+        metadata_only_planning_authorized=False,
+    ):
         assert account_environment is None
         submitted_bodies.append(dict(body))
         return {

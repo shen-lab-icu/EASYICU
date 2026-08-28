@@ -490,8 +490,20 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "") {
   const currentContext = receipts.length
     ? `\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n${boundedText(JSON.stringify(receipts), 24000)}`
     : "";
-  const transition = turnIntent === "advance_after_data_source_confirmation"
-    ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has just confirmed the study's data source outside the model transcript. Treat the current owner workflow receipt as authoritative. Do not ask the user to choose, confirm, download, or inspect a data source again. If the workflow reports provider_ready_to_generate_plan, acknowledge readiness in at most two short sentences and stop so the host can show the formal-plan controls. Otherwise the confirmed source is a raw database directory rather than a prepared EasyICU data package: do not ask the next setup question and do not start a sequential questionnaire. Replace the earlier answer with one concise data-preparation confirmation, not a study plan. Include only the minimum user-owned inputs needed to prepare data: population and analysis unit, target exposure or phenotype, target outcome semantics, and outer feature window. You MUST infer and propose one concrete recommended value for every one of those four inputs from the user's research question and current owner context; none may be omitted, described as unresolved, or deferred to the formal plan. EasyICU owns implementation modules, executable concept identifiers, and export format. Do not propose or discuss dependence handling, adjustment variables, statistical models, sensitivity analyses, literature rationale, or other formal-plan content. Use the bold localized title '数据准备确认（不是正式研究计划）' or 'Data preparation confirmation (not the formal research plan)'. Add one short sentence explaining that the later formal research plan covers methods and evidence, is generated separately after the data package and local preflight are ready, and requires its own review; never say that the formal plan will determine or complete any of the four data-preparation inputs. Use ordinary bullets; do not emit Markdown heading markers such as #, ##, or ###. Finish with a standalone bold localized Next step heading, one short prompt, and exactly two hyphen-prefixed Markdown bullets; never use a numbered list. The first bullet must be one complete acceptance sentence that restates all four concrete data-preparation inputs and authorizes preparing the data. The second bullet must offer changing one data-preparation requirement. Neither choice may offer generating, starting, or deferring anything to the formal plan. Nothing may follow those two bullets. Do not call a tool during this transition and do not offer an individual outcome, cohort, or time-window question."
+  // The host, not the model, selects this branch: it already holds the owner
+  // workflow receipt.  Leaving both branches in one prompt let the model drift
+  // into the data-preparation questionnaire even when the Planner was ready.
+  const transitionWorkflowCode = String(
+    receipts?.[0]?.details?.workflow?.next_action_code || "",
+  );
+  const transition = turnIntent === "confirm_formal_plan_generation"
+    ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user activated the host-owned provider_ready_to_generate_plan control. Call easyicu_run exactly once with run_type='full', then stop after the submission receipt. The run owner decides from the bound source whether this is metadata-only planning or a prepared-package run. Do not inspect an older run, ask setup questions, request extraction, repeat the confirmation, or explain internal authorization and budget mechanics."
+    : turnIntent === "confirm_planner_checkpoint_resume"
+    ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user confirmed the host-owned planner_checkpoint_resume_available control. Call easyicu_request_replan exactly once with a concise reason that the unchanged study must continue from its validated development Planner checkpoint, then stop after the submission receipt. Do not inspect the old run, explain its blocker, start a fresh plan, ask for a path or job id, or claim that analysis ran. The host owns checkpoint selection and validation."
+    : turnIntent === "advance_after_data_source_confirmation"
+    ? (transitionWorkflowCode === "provider_ready_to_generate_plan"
+      ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has just confirmed the study's data source outside the model transcript. Treat the current owner workflow receipt as authoritative. Do not ask the user to choose, confirm, download, or inspect a data source again. The workflow reports provider_ready_to_generate_plan: acknowledge readiness in at most two short sentences and stop so the host can show the formal-plan controls. Do not ask a setup question, do not start a sequential questionnaire, and do not propose cohort, exposure, outcome, window, module or export values yourself -- the Research Agent Planner decides those and presents them with their rationale for the user's review. Do not call a tool during this transition."
+      : "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has just confirmed the study's data source outside the model transcript. Treat the current owner workflow receipt as authoritative. Do not ask the user to choose, confirm, download, or inspect a data source again. Otherwise the confirmed source is a raw database directory rather than a prepared EasyICU data package: do not ask the next setup question and do not start a sequential questionnaire. Replace the earlier answer with one concise data-preparation confirmation, not a study plan. Include only the minimum user-owned inputs needed to prepare data: population and analysis unit, target exposure or phenotype, target outcome semantics, and outer feature window. You MUST infer and propose one concrete recommended value for every one of those four inputs from the user's research question and current owner context; none may be omitted, described as unresolved, or deferred to the formal plan. EasyICU owns implementation modules, executable concept identifiers, and export format. Do not propose or discuss dependence handling, adjustment variables, statistical models, sensitivity analyses, literature rationale, or other formal-plan content. Use the bold localized title '数据准备确认（不是正式研究计划）' or 'Data preparation confirmation (not the formal research plan)'. Add one short sentence explaining that the later formal research plan covers methods and evidence, is generated separately after the data package and local preflight are ready, and requires its own review; never say that the formal plan will determine or complete any of the four data-preparation inputs. Use ordinary bullets; do not emit Markdown heading markers such as #, ##, or ###. Finish with a standalone bold localized Next step heading, one short prompt, and exactly two hyphen-prefixed Markdown bullets; never use a numbered list. The first bullet must be one complete acceptance sentence that restates all four concrete data-preparation inputs and authorizes preparing the data. The second bullet must offer changing one data-preparation requirement. Neither choice may offer generating, starting, or deferring anything to the formal plan. Nothing may follow those two bullets. Do not call a tool during this transition and do not offer an individual outcome, cohort, or time-window question.")
     : "";
   return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${transition}`;
 }
@@ -540,6 +552,7 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "Current-turn owner-context rule: when EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1 supplies a fresh workflow receipt or data-source catalog receipt, treat it exactly as the corresponding EasyICU tool result for this user message and do not call easyicu_inspect_workflow or easyicu_list_data_sources again. This hidden context is host-owned, path-free, and removed from the visible user transcript.",
       "Treat every scientific question as one ordinary research project and one ordinary conversation. Never propose or create evaluation dashboards, question-batch controls, or user-facing internal evaluation labels. Evaluation orchestration and scoring stay outside the Copilot product surface; inside Copilot, use only the user's scientific wording and the normal governed workflow.",
       "Data-source confirmation rule: when the user names only an ambiguous database family or omits the database, call easyicu_list_data_sources without a database argument and ask one direct choice before any cohort, distribution, timeline, comparison, or download tool. When the user names one unambiguous supported database product and EasyICU supports only one reference release for it, call easyicu_list_data_sources directly with that database key; do not make a catalog-only call first. Use each returned display_label exactly, including the v before a reference release. For the bare family name MIMIC, the first reply must say it is ambiguous between MIMIC-III v1.4 and MIMIC-IV v3.1, briefly name the full supported database/reference-release catalog returned by the tool, and ask only which exact database the user means. Never treat a bound, active, demo, or sample source as implicit consent for a newly named database request.",
+      "Database-choice completeness rule: when easyicu_list_data_sources returns supported_databases and the user must choose a database, present every returned row as its own clickable choice -- currently all six -- without grouping, truncating, or preferring a subset. This is the sole exception to the ordinary 2-to-4 next-step choice limit. Use each exact display_label. When reference_release is null, state that the catalog does not declare a single reference release and never invent a version.",
       "A pending conversation data-source confirmation never blocks ordinary question refinement, study design, idea mining, or literature discussion. Naming a database in a research question does not authorize EasyICU to bind or read a source. After the user chooses an exact database, call easyicu_list_data_sources with that database key only when data selection is the current next step. Its recommended_source is a recommendation only. When recommended_source.availability is available_in_easyicu, describe it in the user's language as an already available EasyICU data export that can be used directly after confirmation; use its exact label and include only returned safe aggregates such as aggregate.stays and module_count when present. Label that choice recommended, and contrast it with one clearly different action to choose and register another local data directory. Never describe the already available export as a file the user still needs to locate or download. Offer the official demo choice only when the user has no suitable local data or asks for it. Never bind a source until the user explicitly selects it. Say that EasyICU supports the canonical database and reference release; never expose registry terminology or internal run labels in user-facing copy.",
       "Official-demo listing fast path: when the user asks to see or list official demos but explicitly says not to download or use one yet, call easyicu_list_data_sources exactly once without a database filter, present only the returned official-demo choices and their limitations, and stop. The final clickable choices may contain only each exact official demo plus one option to continue study planning without data; never offer a local or full-database workflow to a user who says they have no local data. Do not query the source catalog again or prepare, download, bind, extract, or analyse a demo until the user explicitly chooses and authorizes the required next action.",
       "When study setup lacks a data source, call easyicu_list_data_sources and present its path-free canonical database availability. Clearly label demos as demo-only and never describe a demo result as the full database. An official demo catalog id is preparation input, not a registered export: after the user explicitly authorizes downloading and preparing that demo, call easyicu_prepare_demo_source directly and never pass an official demo catalog id to bind_source_id. Bind the resulting registered export only after its terminal receipt. For an already registered exact source_id, or when the tool authorizes its recommended registered source for the exact database request, bind it with easyicu_update_study_context.bind_source_id; never guess a source path, version, database, size, or source_id.",
@@ -548,6 +561,7 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "Prepared registered-export reuse rule: when the user explicitly chooses or reaffirms an EasyICU-prepared registered export, bind its exact returned source_id through easyicu_update_study_context even when the same path is already present. That successful owner binding records the prepared export receipt for this study. Continue to data-package review and planning; do not call easyicu_start_extraction, request a raw source directory, or reopen the local-folder workflow unless the user explicitly chose raw local files or asked to rebuild the export.",
       "Source-discovery sequencing rule: never batch easyicu_list_data_sources with easyicu_update_study_context in one assistant tool-call message because the exact returned source_id is not available when arguments are authored. Wait for the source receipt, then make one atomic study update that combines bind_source_id with every other owner-ready field from the user's message. Do not save those fields first and attempt a second source-binding update in the same user message.",
       "Keep user-facing study labels separate from execution identity. Save an explicit human decision first in outcome, primary_exposure, covariates, cohort, analysis_design, or the relevant semantic field without inventing execution_concepts. Resolve execution identity later, only when an executable concept is actually required for extraction or analysis readiness: then call easyicu_list_source_concepts for the selected source and modules and save only exact returned identifiers in execution_concepts. Never guess, normalize, or translate a concept id yourself.",
+      "Repeated-measure exposure aggregation rule: when the user explicitly selects max, min, mean, or first for the primary exposure, save that exact choice as execution_concepts.primary_exposure_aggregation together with the exact source concept returned by easyicu_list_source_concepts. The source concept id and aggregation are separate typed coordinates; never invent a suffixed concept id such as lact_max yourself. Never set an aggregation merely because one would make execution possible.",
       "Concept lookup is just in time, not prefetch. A user's plain-language answer is not by itself authorization to start catalog resolution. Before formal plan generation, do not resolve or describe execution concepts merely to make setup look complete. The Research Agent Planner may inspect owner-projected source capabilities while preparing its plan; exact execution identities remain EasyICU-owned and must be validated before analysis. Never ask the user to choose implementation ids or modules.",
       "Concept-catalog convergence rule: resolve one related configuration decision with one bounded easyicu_list_source_concepts call by requesting all relevant available modules together. The tool's canonical_alternatives rows are owner-issued exact identifiers with their metadata; do not call the catalog again solely to reconfirm one of them. A later call is appropriate only for a different user decision or a previously unrequested module.",
       "Final-slot convergence rule: when the current direct answer resolves the last user-owned setup slot and the conversation already has a confirmed exact source, do not save that semantic answer before resolving EasyICU-owned execution identity. First make one bounded easyicu_list_source_concepts call for all relevant modules, then make one atomic easyicu_update_study_context call that combines the user's exact semantic choice with only the catalog-returned required modules and execution_concepts. If the catalog exposes clinically non-equivalent alternatives that genuinely require consent, ask that one key clinical choice and stop; after the user chooses, perform the lookup if still needed and converge through one atomic update. Never update the StudyContext and then attempt a concept lookup in the same turn, because the successful update invalidates the prior authority binding.",
@@ -577,6 +591,7 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "When the workflow reports provider_ready_to_generate_plan, no inspectable provider plan exists yet. If the user confirms the Generate Agent plan prompt, call easyicu_run exactly once with run_type='full' under the current provider-run grant, report the new submission job_id, and stop. Do not inspect, approve, resume, or reinterpret the completed preflight run; it is readiness evidence only.",
       "When the workflow reports plan_configuration_superseded or plan_review_not_resumable and the user asks for a new plan, call easyicu_request_replan. It may start a fresh full ResearchAgentPipeline run under a new run id and the current StudyContext digest; it never edits or reuses the old plan. Stop after the submission receipt so the new run can pause at its own human plan-review gate.",
       "When the workflow reports failed_pipeline_requires_fresh_plan, treat the terminal failed run as immutable history rather than the current answer. If the user confirms the fresh-plan prompt, call easyicu_request_replan and stop after its submission receipt. If they have not confirmed, ask one direct question; do not keep interpreting the failed run or expose unvalidated numbers.",
+      "When the workflow reports planner_checkpoint_resume_available, the development Planner stopped at a bounded planning failure after preserving a validated checkpoint for the unchanged study. If the user confirms the continue-plan prompt, call easyicu_request_replan exactly once and stop after its submission receipt. The host will bind the owned checkpoint; do not describe this as a fresh plan, do not ask the user for a path or job id, and do not claim that analysis ran.",
       workspaceMode
         ? "For a webpage, calculator, dashboard, or interactive artifact: load the web-prototype skill, list files, write or edit the artifact, read it back, run the static check, and prepare its web preview. Label simulated formulas and values as unvalidated demo content."
         : "Treat a scientific question as the start of a governed research workflow. Inspect the typed StudyContext first and map only facts the user actually supplied. Once the question and owner-confirmed data package are available, stop setup questioning and let the host ask whether to generate the formal research plan. Do not write a Research Brief or shadow plan. The Research Agent Planner must search the authorized literature, propose unresolved design choices in agent_plan.json, and pause for user review before analysis.",
@@ -674,6 +689,10 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
   const executionConcepts = Type.Object({
     outcome: optionalText(80),
     primary_exposure: optionalText(80),
+    primary_exposure_aggregation: Type.Optional(Type.Union([
+      Type.Literal("max"), Type.Literal("min"),
+      Type.Literal("mean"), Type.Literal("first"),
+    ])),
     covariates: Type.Optional(
       Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { maxItems: 64 }),
     ),
@@ -711,6 +730,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       Type.Literal("alternate_window"), Type.Literal("first_stay"),
       Type.Literal("non_readmission_restriction"), Type.Literal("cluster_robust"),
       Type.Literal("mixed_effects"), Type.Literal("restricted_cubic_spline"),
+      Type.Literal("linear_per_unit"),
       Type.Literal("fractional_polynomial"), Type.Literal("categorical"),
       Type.Literal("complete_case"), Type.Literal("multiple_imputation"),
       Type.Literal("inverse_probability_weighting"),
@@ -722,9 +742,20 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
         description: "Exact owner-issued source concept identifiers. At least one is required for first_stay, non_readmission_restriction, all functional-form and missing-data strategies, and alternate_definition; use identifiers returned by easyicu_list_source_concepts, never display labels.",
       }),
     ),
-    landmark_hours: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 8760 })),
+    landmark_hours: Type.Optional(Type.Union([
+      Type.Number({ exclusiveMinimum: 0, maximum: 8760 }), Type.Null(),
+    ])),
     require_alive_at_landmark: Type.Optional(Type.Boolean()),
     exclude_negative_event_times: Type.Optional(Type.Boolean()),
+    event_time_variable: Type.Optional(Type.Union([
+      Type.String({ minLength: 1, maxLength: 80 }), Type.Null(),
+    ])),
+    observation_duration_variable: Type.Optional(Type.Union([
+      Type.String({ minLength: 1, maxLength: 80 }), Type.Null(),
+    ])),
+    observation_duration_unit: Type.Optional(Type.Union([
+      Type.Literal("hours"), Type.Literal("days"), Type.Null(),
+    ])),
   }, { additionalProperties: false });
   const tools = [
     hostTool(sessionId, { name: "easyicu_workspace_status", label: "EasyICU workspace status", description: "Inspect the current EasyICU workspace and authoritative study/run binding without reading patient rows or source paths.", parameters: empty }),
@@ -767,6 +798,10 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
           Type.Literal("baseline_static"),
           Type.Literal("at_or_before_time_zero"),
         ]),
+      )),
+      covariate_operationalizations: Type.Optional(Type.Record(
+        Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" }),
+        Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" }),
       )),
       execution_concepts: Type.Optional(executionConcepts),
       analysis_design: Type.Optional(analysisDesign),
@@ -1055,9 +1090,13 @@ async function createSession(params) {
 }
 
 async function promptSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "message", "streaming_behavior"]), "pi_prompt_invalid");
+  assertExactKeys(params, new Set(["session_id", "message", "streaming_behavior", "intent"]), "pi_prompt_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
+  const intent = boundedText(params.intent, 80).trim();
+  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation") {
+    throw Object.assign(new Error("unsupported message intent"), { code: "pi_message_intent_invalid" });
+  }
   const record = sessions.get(sessionId);
   if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
   if (!message) throw Object.assign(new Error("message is required"), { code: "pi_message_required" });
@@ -1068,8 +1107,25 @@ async function promptSession(requestId, params) {
   activeRequestBySession.set(sessionId, requestId);
   const activeTools = record.session.getActiveToolNames();
   try {
+    if (intent === "confirm_formal_plan_generation") {
+      record.session.setActiveToolsByName(["easyicu_run"]);
+    } else if (intent === "confirm_planner_checkpoint_resume") {
+      record.session.setActiveToolsByName(["easyicu_request_replan"]);
+    } else if (intent === "advance_after_data_source_confirmation") {
+      record.session.setActiveToolsByName([]);
+    }
     const ownerContext = await currentTurnOwnerContext(sessionId);
-    await record.session.prompt(modelPrompt(message, record.language, ownerContext));
+    const prompt = modelPrompt(message, record.language, ownerContext, intent);
+    if (intent === "advance_after_data_source_confirmation") {
+      await record.session.sendCustomMessage({
+        customType: "easyicu_host_transition",
+        content: prompt,
+        display: false,
+        details: { intent },
+      }, { triggerTurn: true });
+    } else {
+      await record.session.prompt(prompt);
+    }
     return sessionState(record);
   } finally {
     record.session.setActiveToolsByName(activeTools);
@@ -1102,7 +1158,7 @@ function regenerateTarget(record, userEntryId) {
 }
 
 async function regenerateSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "user_entry_id", "message", "intent"]), "pi_regenerate_invalid");
+  assertExactKeys(params, new Set(["session_id", "user_entry_id", "message", "intent", "turn_intent"]), "pi_regenerate_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const record = sessions.get(sessionId);
   if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
@@ -1112,31 +1168,39 @@ async function regenerateSession(requestId, params) {
   const target = regenerateTarget(record, params.user_entry_id);
   const supplied = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
-  if (intent && intent !== "advance_after_data_source_confirmation") {
+  const turnIntent = boundedText(params.turn_intent, 80).trim();
+  if (intent && intent !== "user_edited_message") {
     throw Object.assign(new Error("unsupported regenerate intent"), { code: "pi_regenerate_intent_invalid" });
   }
-  if (!supplied || supplied !== target.message) {
+  if (turnIntent && turnIntent !== "confirm_formal_plan_generation" && turnIntent !== "confirm_planner_checkpoint_resume") {
+    throw Object.assign(new Error("unsupported regenerate turn intent"), { code: "pi_message_intent_invalid" });
+  }
+  if (turnIntent && intent !== "user_edited_message") {
+    throw Object.assign(new Error("regenerate turn intent requires an explicit user edit"), { code: "pi_regenerate_intent_invalid" });
+  }
+  // Regenerating re-runs exactly what the user said, so a drifted transcript is
+  // a conflict.  An explicit user edit is the opposite: the text is meant to
+  // differ, and navigateTree below rewinds to this turn so everything after it
+  // is replaced instead of appended to the bottom of the conversation.
+  const editedTurn = intent === "user_edited_message";
+  if (!supplied || (!editedTurn && supplied !== target.message)) {
     throw Object.assign(new Error("regenerate message does not match the active transcript"), { code: "pi_regenerate_message_mismatch" });
   }
   record.budgetGuard.beginMessage();
   activeRequestBySession.set(sessionId, requestId);
   const activeTools = record.session.getActiveToolNames();
   try {
-    // This regeneration is a host-owned projection transition, not a new
-    // user-authorized research turn.  Keeping mutation tools active here let
-    // the model persist inferred setup fields and then offer a formal Plan
-    // even while the workflow owner still reported study_setup_incomplete.
-    // Make the transition mechanically read-only; the next visible user
-    // choice starts a fresh governed turn with its own explicit authority.
-    if (intent === "advance_after_data_source_confirmation") {
-      record.session.setActiveToolsByName([]);
-    }
     const navigation = await record.session.navigateTree(target.entryId, { summarize: false });
     if (navigation.cancelled) {
       throw Object.assign(new Error("regenerate branch navigation was cancelled"), { code: "pi_regenerate_cancelled" });
     }
     const ownerContext = await currentTurnOwnerContext(sessionId);
-    await record.session.prompt(modelPrompt(target.message, record.language, ownerContext, intent));
+    await record.session.prompt(modelPrompt(
+      editedTurn ? supplied : target.message,
+      record.language,
+      ownerContext,
+      turnIntent,
+    ));
     return { ...sessionState(record), replaced_turn_index: target.turnIndex };
   } finally {
     record.session.setActiveToolsByName(activeTools);

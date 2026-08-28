@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from .contracts import PiCopilotError
+from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
 
 MAX_PROJECTION_BYTES = 32_768
 MAX_TEXT_CHARS = 2_000
@@ -177,6 +178,12 @@ def project_study_context(
                     40,
                 )
             ),
+            "covariate_operationalizations": {
+                _bounded_text(key, 80): _bounded_text(value, 80)
+                for key, value in dict(
+                    context.get("covariate_operationalizations") or {}
+                ).items()
+            },
             "execution_concepts": {
                 **(
                     {"outcome": _bounded_text(execution_concepts.get("outcome"), 80)}
@@ -190,6 +197,16 @@ def project_study_context(
                         )
                     }
                     if execution_concepts.get("primary_exposure")
+                    else {}
+                ),
+                **(
+                    {
+                        "primary_exposure_aggregation": _bounded_text(
+                            execution_concepts.get("primary_exposure_aggregation"),
+                            16,
+                        )
+                    }
+                    if execution_concepts.get("primary_exposure_aggregation")
                     else {}
                 ),
                 "covariates": [
@@ -225,6 +242,9 @@ def project_study_context(
                         "landmark_hours",
                         "require_alive_at_landmark",
                         "exclude_negative_event_times",
+                        "event_time_variable",
+                        "observation_duration_variable",
+                        "observation_duration_unit",
                     )
                     if spec.get(key) is not None
                 }
@@ -279,6 +299,10 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     for event in events[-20:]:
         if not isinstance(event, Mapping):
             continue
+        if str(event.get("type") or "") == "end":
+            # Terminal state is projected once below; a raw end event created
+            # a second content-free "end" row in the conversation timeline.
+            continue
         label = _bounded_text(event.get("label"), 240)
         if label:
             try:
@@ -306,6 +330,19 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     result = snapshot.get("result")
     result = result if isinstance(result, Mapping) else {}
     run_id = stable_code(result.get("run_id"))
+    gate = result.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    diagnostic_only = (
+        str(gate.get("status") or "") == "blocked"
+        and not bool(result.get("human_review_pending"))
+    )
+    diagnostic_artifacts = {
+        "run_context.json",
+        "quality_gate.json",
+        "scientific_readiness.json",
+        "source_run_manifest.json",
+        "evidence_ledger.json",
+    }
     artifacts = result.get("artifacts")
     artifacts = artifacts if isinstance(artifacts, list) else []
     artifact_refs = []
@@ -314,6 +351,8 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             continue
         name = _bounded_text(row.get("name"), 160)
         digest = _bounded_text(row.get("sha256"), 64).lower()
+        if diagnostic_only and name not in diagnostic_artifacts:
+            continue
         if (
             not run_id
             or not name
@@ -348,8 +387,6 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 ),
             }
         )
-    gate = result.get("gate")
-    gate = gate if isinstance(gate, Mapping) else {}
     return ensure_safe_projection(
         {
             "present": True,
@@ -522,6 +559,53 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             **({"checked_sha256": checked_digest} if kind == "webpage" else {}),
         }
     return None
+
+
+def project_transcript(
+    rows: Any, *, limit: int = 200
+) -> list[Dict[str, Any]]:
+    """Bound the transcript and strip machine-facing identifiers from replies.
+
+    Assistant turns have machine-facing identifiers removed. User turns remain
+    verbatim except for exact, known host-generated legacy action text that was
+    previously persisted under the user role.
+    """
+
+    if not isinstance(rows, list):
+        return []
+    projected: list[Dict[str, Any]] = []
+    for row in rows[:limit]:
+        if not isinstance(row, Mapping):
+            continue
+        role = str(row.get("role") or "")
+        if role not in {"assistant", "user"}:
+            projected.append(dict(row))
+            continue
+        content = row.get("content")
+        if not isinstance(content, list):
+            projected.append(dict(row))
+            continue
+        blocks: list[Any] = []
+        for block in content:
+            if (
+                isinstance(block, Mapping)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ):
+                blocks.append(
+                    {
+                        **block,
+                        "text": (
+                            sanitize_user_visible_text(block["text"])
+                            if role == "assistant"
+                            else project_user_turn_text(block["text"])
+                        ),
+                    }
+                )
+                continue
+            blocks.append(block)
+        projected.append({**row, "content": blocks})
+    return projected
 
 
 def project_pi_replay_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -789,6 +873,7 @@ def stable_code(value: Any) -> Optional[str]:
 
 
 __all__ = [
+    "project_transcript",
     "bounded_json_projection",
     "ensure_safe_projection",
     "path_digest",

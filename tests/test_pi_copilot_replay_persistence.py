@@ -393,6 +393,51 @@ def test_archived_child_job_carries_artifact_refs_not_private_result(tmp_path: P
     assert "/private" not in json.dumps(projected)
 
 
+def test_blocked_job_projects_diagnostics_not_empty_analysis_artifacts() -> None:
+    digest = "c" * 64
+    projected = project_job(
+        {
+            "id": "child-blocked",
+            "kind": "agent-run",
+            "status": "done",
+            "events": [
+                {"seq": 1, "type": "progress", "step": "data_foundation"},
+                {"seq": 2, "type": "end", "status": "done"},
+            ],
+            "result": {
+                "run_id": "run_blocked",
+                "human_review_pending": False,
+                "gate": {
+                    "status": "blocked",
+                    "reason": "data_foundation_blocked",
+                    "reportable": False,
+                },
+                "artifacts": [
+                    {"name": name, "sha256": digest, "size": 2}
+                    for name in (
+                        "run_context.json",
+                        "quality_gate.json",
+                        "agent_plan.json",
+                        "literature_evidence.json",
+                        "figure_gallery.json",
+                        "source_run_manifest.json",
+                        "evidence_ledger.json",
+                    )
+                ],
+            },
+        }
+    )
+
+    assert [row["step"] for row in projected["progress"]] == ["data_foundation"]
+    assert projected["gate_reason_code"] == "data_foundation_blocked"
+    assert {row["artifact"] for row in projected["artifact_refs"]} == {
+        "run_context.json",
+        "quality_gate.json",
+        "source_run_manifest.json",
+        "evidence_ledger.json",
+    }
+
+
 def test_service_forwards_transcript_cursor_and_pages_replay(tmp_path: Path) -> None:
     gateway = _Gateway(tmp_path)
     service = PiCopilotService(
@@ -516,7 +561,10 @@ def test_node_and_browser_owners_use_cursor_pages_without_a_last_100_slice() -> 
     assert "next_cursor" in replay
     assert "loadPiCopilotSession(sessionId, project" in replay
     assert "screens-guided-pi-replay.js" in index
-    guided = (
-        root / "src/easyicu/webserver/static/js/screens-guided-pi.js"
+    # The background-job watch moved to its own owner when the Copilot shell
+    # was split; the projection this test locks travels with it.
+    childjob = (
+        root / "src/easyicu/webserver/static/js/screens-guided-pi-childjob.js"
     ).read_text(encoding="utf-8")
-    assert "resources: Array.isArray(job.artifact_refs) ? job.artifact_refs : []" in guided
+    assert "resources: Array.isArray(job.artifact_refs) ? job.artifact_refs : []" in childjob
+    assert "screens-guided-pi-childjob.js" in index

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from typing import Any, Dict, List, Literal, Mapping, Optional
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,6 +69,9 @@ class ResearchWorkflowSnapshot(BaseModel):
     current_stage: str
     next_action_code: str
     missing_setup_fields: List[str] = Field(default_factory=list, max_length=16)
+    planning_prerequisites_missing: List[str] = Field(
+        default_factory=list, max_length=8
+    )
     stages: List[ResearchWorkflowStage] = Field(min_length=8, max_length=8)
     completed_required_stages: int = Field(ge=0, le=7)
     required_stage_count: Literal[7] = 7
@@ -78,6 +81,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     )
     study_setup_receipt: StudySetupReceipt
     plan_review_summary: Optional[Mapping[str, Any]] = None
+    plan_execution_ready: bool = False
 
 
 def _has_mapping(value: Any) -> bool:
@@ -177,6 +181,50 @@ def registered_export_matches_study(
         and str(row.get("path") or "").strip() == expected
         for row in (registry_row.get("sources") or [])
     )
+
+
+# Plan generation needs only what the user owns: a bound question and a data
+# source EasyICU has identified.  Every other setup field is a scientific design
+# choice the Research Agent Planner proposes in its reviewable plan, so gating
+# plan generation on them turned Copilot into a slot-by-slot questionnaire and
+# forced the cohort to be frozen before the plan that should define it.  They
+# still gate extraction and analysis, which execute the reviewed plan.
+_PLANNING_PREREQUISITE_FIELDS = frozenset({"question", "data_source"})
+
+# These are Planner proposal fields, not pre-plan setup questions.  The
+# researcher reviews the complete candidate plan; they should not have to
+# invent an endpoint contract or a sensitivity implementation before seeing
+# that plan.  Full execution still requires the reviewed proposal to be
+# promoted into typed StudyContext authority.
+_PLANNER_PROPOSAL_FINDING_CODES = frozenset(
+    {
+        "OUTCOME_DEFINITION_UNRESOLVED",
+        "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
+        "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+    }
+)
+
+
+def _identified_data_source(study: Mapping[str, Any]) -> bool:
+    """Whether the study is bound to a data source EasyICU has identified."""
+
+    source = study.get("data_source")
+    if not isinstance(source, Mapping):
+        return False
+    return bool(str(source.get("database") or "").strip())
+
+
+def _planning_prerequisites_missing(
+    missing_setup_fields: Sequence[str],
+) -> List[str]:
+    """The subset of missing setup fields that genuinely blocks planning."""
+
+    return [
+        field
+        for field in missing_setup_fields
+        if str(field).split(".", 1)[0] in _PLANNING_PREREQUISITE_FIELDS
+    ]
 
 
 def _setup_missing(
@@ -339,6 +387,12 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
         if isinstance(raw_temporal_roles, Mapping)
         else {}
     )
+    raw_operationalizations = study.get("covariate_operationalizations")
+    covariate_operationalizations = (
+        dict(raw_operationalizations)
+        if isinstance(raw_operationalizations, Mapping)
+        else {}
+    )
     raw_confirmations = study.get("confirmations")
     confirmations = (
         dict(raw_confirmations)
@@ -368,6 +422,7 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
         ).strip(),
         "covariate_rationales": covariate_rationales,
         "covariate_temporal_roles": covariate_temporal_roles,
+        "covariate_operationalizations": covariate_operationalizations,
         "execution_concepts": execution_concepts,
         "analysis_design": analysis_design,
         "sensitivity_specs": [
@@ -472,13 +527,35 @@ def build_research_workflow_snapshot(
     # evidence than a legacy StudyContext extraction flag so prepared-export
     # reuse cannot fall backward to extraction after preflight succeeds.
     prepared_export_receipted = bool(active_export_present or preflight_complete)
-    # Planning starts from the user's question plus an owner-confirmed data
-    # package. The Planner proposes unresolved design choices in its reviewable
-    # plan; Copilot must not fabricate a shadow plan just to fill setup slots.
-    plan_generation_ready = bool(
-        question_ready and prepared_export_receipted and not has_plan
+    # Planning starts from the user's question plus a data source EasyICU has
+    # identified -- a prepared export or a bound, identified local database.
+    # The Planner proposes the unresolved design choices in its reviewable
+    # plan; Copilot must not fabricate a shadow plan just to fill setup slots,
+    # and the cohort must not be frozen before the plan that defines it.
+    planning_data_ready = bool(
+        prepared_export_receipted or _identified_data_source(study_row)
     )
-    pending_review_reason_codes = {
+    planning_prerequisites_missing = _planning_prerequisites_missing(missing)
+    plan_generation_ready = bool(
+        question_ready
+        and planning_data_ready
+        and not planning_prerequisites_missing
+        and not has_plan
+    )
+    review_authority = (
+        plan_review_authority
+        if isinstance(plan_review_authority, Mapping)
+        else {}
+    )
+    authority_requests = review_authority.get("requests")
+    authority_reason_codes = {
+        str(item.get("reason_code") or "").strip()
+        for item in (
+            authority_requests if isinstance(authority_requests, list) else []
+        )
+        if isinstance(item, Mapping) and str(item.get("reason_code") or "").strip()
+    }
+    pending_review_reason_codes = authority_reason_codes or {
         str(item).strip()
         for item in (run_row.get("pending_review_reason_codes") or [])
         if str(item).strip()
@@ -494,11 +571,6 @@ def build_research_workflow_snapshot(
         has_plan
         and str(run_row.get("run_status") or "") == "human_review_pending"
         and active_plan_review_codes
-    )
-    review_authority = (
-        plan_review_authority
-        if isinstance(plan_review_authority, Mapping)
-        else {}
     )
     raw_scientific_review = review_authority.get("scientific_plan_review")
     raw_scientific_review = (
@@ -520,6 +592,27 @@ def build_research_workflow_snapshot(
         if isinstance(raw_remediation_buckets, Mapping)
         else {}
     )
+    def projected_remediation_codes(route: str) -> List[str]:
+        values = raw_remediation_buckets.get(route)
+        rows = [
+            str(code)[:120]
+            for code in (values if isinstance(values, list) else [])[:40]
+            if str(code).strip()
+        ]
+        if route == "study_authority_change":
+            return [
+                code for code in rows if code not in _PLANNER_PROPOSAL_FINDING_CODES
+            ]
+        if route == "agent_plan_revision":
+            proposal_codes = [
+                str(item.get("code") or "")[:120]
+                for item in review_findings[:40]
+                if isinstance(item, Mapping)
+                and str(item.get("code") or "") in _PLANNER_PROPOSAL_FINDING_CODES
+            ]
+            return list(dict.fromkeys([*rows, *proposal_codes]))[:40]
+        return rows
+
     plan_review_summary = (
         {
             "status": str(raw_scientific_review.get("status") or "")[:40],
@@ -551,18 +644,12 @@ def build_research_workflow_snapshot(
                 for item in review_findings[:40]
                 if isinstance(item, Mapping)
                 and bool(item.get("requires_user_authorization"))
+                and str(item.get("code") or "")
+                not in _PLANNER_PROPOSAL_FINDING_CODES
                 and str(item.get("authorization_question") or "").strip()
             ],
             "remediation_buckets": {
-                route: [
-                    str(code)[:120]
-                    for code in (
-                        raw_remediation_buckets.get(route)
-                        if isinstance(raw_remediation_buckets.get(route), list)
-                        else []
-                    )[:40]
-                    if str(code).strip()
-                ]
+                route: projected_remediation_codes(route)
                 for route in (
                     "agent_plan_revision",
                     "study_authority_change",
@@ -597,10 +684,17 @@ def build_research_workflow_snapshot(
         and review_authority_available
         and plan_configuration_matches
     )
+    plan_execution_ready = bool(
+        plan_review_pending
+        and str(review_authority.get("budget_mode") or "full_reviewed")
+        != "planner_canary"
+    )
     live_plan_reason = (
         "plan_scientific_changes_required"
         if "plan_scientific_changes_required" in active_plan_review_codes
         else "operator_plan_approval_required"
+        if plan_execution_ready
+        else "plan_execution_upgrade_required"
     )
     plan_review_reason_code = (
         live_plan_reason
@@ -646,11 +740,37 @@ def build_research_workflow_snapshot(
         and not analysis_running
         and not plan_review_declared
     )
+    failed_execution_retry_available = bool(
+        failed_pipeline_regeneration_required
+        and has_plan
+        and has_evidence
+        and str(run_row.get("gate_reason") or "")
+        in {
+            "research_agent_pipeline_failed_closed",
+            "research_pipeline_execution_failed",
+        }
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest == current_scientific_digest
+    )
+    planner_checkpoint_resume_available = bool(
+        failed_pipeline_regeneration_required
+        and str(run_row.get("gate_reason") or "")
+        in {
+            "research_pipeline_planner_efficiency_budget_exhausted",
+        }
+        and bool(run_row.get("development_planner_checkpoint_available"))
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest == current_scientific_digest
+    )
     plan_regeneration_required = bool(
         plan_regeneration_required or failed_pipeline_regeneration_required
     )
     plan_regeneration_reason_code = (
-        "failed_pipeline_requires_fresh_plan"
+        "planner_checkpoint_resume_available"
+        if planner_checkpoint_resume_available
+        else "failed_pipeline_execution_retry_available"
+        if failed_execution_retry_available
+        else "failed_pipeline_requires_fresh_plan"
         if failed_pipeline_regeneration_required
         else plan_review_reason_code
     )
@@ -849,11 +969,13 @@ def build_research_workflow_snapshot(
     return ResearchWorkflowSnapshot(
         current_stage=next_stage.id,
         next_action_code=next_action,
+        planning_prerequisites_missing=planning_prerequisites_missing,
         missing_setup_fields=missing,
         stages=stages,
         completed_required_stages=completed,
         study_setup_receipt=_safe_study_setup_receipt(study_row),
         plan_review_summary=plan_review_summary,
+        plan_execution_ready=plan_execution_ready,
     )
 
 

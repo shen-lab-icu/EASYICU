@@ -107,6 +107,50 @@ def test_recovery_record_round_trips_and_is_removable(tmp_path) -> None:
     assert get_record("run_a", path=path) is None
 
 
+def test_planner_only_recovery_seed_does_not_claim_package_authority() -> None:
+    seed = WebReviewRecoverySeed.create(
+        wrapper_dir="/private/project/run_job",
+        study={"id": "study_a", "question": "A question"},
+        scientific_configuration_sha256="a" * 64,
+        provider_meta={"provider": "openai", "external": True},
+        provider_public={"provider": "openai", "model": "model-a"},
+        credential_source="pi_verified",
+        budget_mode="planner_canary",
+        prepared_package_binding=None,
+        pipeline_config={"workdir": "/private/project/run_job/pipeline"},
+        pipeline_config_sha256="c" * 64,
+        acquisition_projection={"selected_concepts": ["lact", "death"]},
+        hard_stop_ledger_path="/private/project/run_job/.runtime/ledger.json",
+        hard_stop_task_id="web-job-a",
+        hard_stop_declaration_sha256="b" * 64,
+        created_at=1.0,
+    )
+
+    assert seed.prepared_package_binding is None
+    assert seed.budget_mode == "planner_canary"
+
+
+def test_reviewed_execution_recovery_seed_requires_package_authority() -> None:
+    with pytest.raises(ValueError, match="requires a package binding"):
+        WebReviewRecoverySeed.create(
+            wrapper_dir="/private/project/run_job",
+            study={"id": "study_a", "question": "A question"},
+            scientific_configuration_sha256="a" * 64,
+            provider_meta={"provider": "openai", "external": True},
+            provider_public={"provider": "openai", "model": "model-a"},
+            credential_source="pi_verified",
+            budget_mode="full_reviewed",
+            prepared_package_binding=None,
+            pipeline_config={"workdir": "/private/project/run_job/pipeline"},
+            pipeline_config_sha256="c" * 64,
+            acquisition_projection={"selected_concepts": ["lact", "death"]},
+            hard_stop_ledger_path="/private/project/run_job/.runtime/ledger.json",
+            hard_stop_task_id="web-job-a",
+            hard_stop_declaration_sha256="b" * 64,
+            created_at=1.0,
+        )
+
+
 def test_recovery_record_tampering_fails_closed(tmp_path) -> None:
     path = tmp_path / "review-index.json"
     put_record(_record(), path=path)
@@ -613,9 +657,15 @@ def test_rejection_recovery_does_not_rebuild_provider(
         ),
     )
 
+    local_hard_stop = object()
+
     class _Ledger:
-        def __init__(self, **_kwargs) -> None:
-            raise AssertionError("rejection recovery must not reopen the provider ledger")
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["resume_existing"] is True
+
+        def start_task(self, task_id):
+            assert task_id == record.hard_stop_task_id
+            return local_hard_stop
 
     captured_llm = object()
     captured_hard_stop = object()
@@ -641,7 +691,7 @@ def test_rejection_recovery_does_not_rebuild_provider(
 
     assert entry is not None
     assert captured_llm is None
-    assert captured_hard_stop is None
+    assert captured_hard_stop is local_hard_stop
     assert entry.provider == record.provider_public
 
 

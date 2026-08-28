@@ -39,6 +39,37 @@ function confirmedDataSource(workflow) {
   return Boolean(source && typeof source === "object" && (source.database || source.label));
 }
 
+function latestDataSourceCatalog(context) {
+  const messages = Array.isArray(context?.messages) ? context.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const result = messages[index];
+    if (
+      result?.role !== "toolResult"
+      || result.toolName !== "easyicu_list_data_sources"
+      || result.isError === true
+    ) continue;
+    const receipt = result.details && typeof result.details === "object"
+      ? result.details
+      : {};
+    if (receipt.status === "ok" && receipt.code === "easyicu_data_sources_listed") {
+      return receipt.details && typeof receipt.details === "object"
+        ? receipt.details
+        : {};
+    }
+  }
+  return {};
+}
+
+function initialQuestionSaveNeedsDataSourceSelection(update) {
+  const args = update?.call?.arguments;
+  const workflow = update?.receipt?.details?.workflow;
+  const missing = workflow?.missing_setup_fields;
+  if (!args || typeof args !== "object" || !Array.isArray(missing)) return false;
+  return Boolean(String(args.question || "").trim())
+    && !confirmedDataSource(workflow)
+    && missing.includes("data_source");
+}
+
 function initialQuestionSaveNeedsDataPreparation(update) {
   const args = update?.call?.arguments;
   const workflow = update?.receipt?.details?.workflow;
@@ -73,6 +104,38 @@ function completedStream(message) {
   return stream;
 }
 
+function boundedLabel(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function dataSourceSelectionText(language, catalog) {
+  const rows = Array.isArray(catalog?.supported_databases)
+    ? catalog.supported_databases.filter((row) => row && typeof row === "object")
+    : [];
+  const choices = rows
+    .map((row) => boundedLabel(row.display_label || row.label))
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((label) => language === "zh" ? `- 使用 ${label}` : `- Use ${label}`);
+  const missingReleaseLabels = rows
+    .filter((row) => row.reference_release === null)
+    .map((row) => boundedLabel(row.display_label || row.label))
+    .filter(Boolean);
+  if (!choices.length) {
+    choices.push(...(language === "zh"
+      ? ["- 查看并选择 EasyICU 支持的数据库", "- 选择并绑定其他本地 ICU 数据源"]
+      : ["- View and choose a supported EasyICU database", "- Choose and bind another local ICU data source"]));
+  }
+  const releaseNote = missingReleaseLabels.length
+    ? (language === "zh"
+      ? `目录没有为 ${missingReleaseLabels.join("、")} 声明单一参考版本，因此按规范名称显示，EasyICU 不会猜测版本。\n\n`
+      : `The catalog does not declare a single reference release for ${missingReleaseLabels.join(", ")}, so EasyICU shows the canonical name and does not invent a version.\n\n`)
+    : "";
+  return language === "zh"
+    ? `研究问题已保存。当前项目尚未选择本次会话的数据源；在确认具体数据源前，EasyICU 不会继续定义研究设计或生成正式研究计划。\n\n${releaseNote}**下一步：**请先选择数据库：\n${choices.join("\n")}`
+    : `The research question is saved. This project has not selected a data source for the conversation; EasyICU will not continue defining the study design or generate the formal research plan until a specific source is confirmed.\n\n${releaseNote}**Next step:** Choose the database first:\n${choices.join("\n")}`;
+}
+
 /**
  * Finalize the narrow initial-question save path from the typed EasyICU receipt.
  * The first provider call still interprets the user's question and invokes the
@@ -81,6 +144,12 @@ function completedStream(message) {
  */
 export function hostPostToolFinalization(model, context, language) {
   const update = latestStudyContextUpdate(context);
+  if (initialQuestionSaveNeedsDataSourceSelection(update)) {
+    return completedStream(finalizedMessage(
+      model,
+      dataSourceSelectionText(language, latestDataSourceCatalog(context)),
+    ));
+  }
   if (!initialQuestionSaveNeedsDataPreparation(update)) return null;
   const text = language === "zh"
     ? "研究问题和当前研究设置已保存；尚未开始数据提取或分析。\n\n**下一步：**请选择数据来源操作：\n- 使用当前已确认的数据来源"

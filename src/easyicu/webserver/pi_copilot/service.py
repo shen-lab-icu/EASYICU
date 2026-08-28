@@ -56,7 +56,13 @@ from .project_authority import (
     ProjectStudyContextMigrationReceipt,
 )
 from .provider_config import PiProviderConfigStore
-from .projections import project_job, project_pi_replay_event, reject_sensitive_message
+from .projections import (
+    project_job,
+    project_pi_replay_event,
+    project_transcript,
+    reject_sensitive_message,
+)
+from .user_visible_text import sanitize_user_visible_text
 from .replay_store import PiConversationReplayStore
 from .run_authority import (
     latest_bound_run_id,
@@ -1523,6 +1529,7 @@ class PiCopilotService:
         allowed_actions: Iterable[str] = (),
         regenerate_user_entry_id: Optional[str] = None,
         regeneration_intent: Optional[str] = None,
+        message_intent: Optional[str] = None,
     ) -> Dict[str, Any]:
         record = self._scoped_record(session_id, project_id=project_id)
         self._provider_gate(
@@ -1592,7 +1599,14 @@ class PiCopilotService:
                 },
                 timeout=30,
             )
-            if str(regenerate_target.get("message") or "").strip() != text:
+            # Regenerating must re-run exactly what the user said, so a drifted
+            # transcript is a conflict.  An explicit user edit is the opposite
+            # operation: the text is meant to change, and the branch rewinds to
+            # this turn so everything after it is replaced rather than appended.
+            if (
+                regeneration_intent != "user_edited_message"
+                and str(regenerate_target.get("message") or "").strip() != text
+            ):
                 raise PiCopilotError(
                     "pi_regenerate_message_mismatch",
                     "The regenerate request no longer matches the active transcript.",
@@ -1647,6 +1661,18 @@ class PiCopilotService:
             def emit(event: Dict[str, Any]) -> None:
                 if job.cancel_requested:
                     return
+                # Best effort on the live stream: a token split across two
+                # deltas still slips through, but the authoritative transcript
+                # replaces this text at turn end and is sanitized in full. Done
+                # here rather than in the shared job event transport, which
+                # carries every kind of job and must not learn a Copilot rule.
+                if event.get("type") == "text_delta" and isinstance(
+                    event.get("delta"), str
+                ):
+                    event = {
+                        **event,
+                        "delta": sanitize_user_visible_text(event["delta"]),
+                    }
                 job.emit({"type": "pi_event", "event": event})
                 projected = project_pi_replay_event(event)
                 if projected is None:
@@ -1685,6 +1711,10 @@ class PiCopilotService:
                 )
                 method = "session.regenerate" if regenerate_target is not None else "session.prompt"
                 params = {"session_id": record.session_id, "message": text}
+                if message_intent:
+                    params[
+                        "turn_intent" if regenerate_target is not None else "intent"
+                    ] = str(message_intent)
                 if regenerate_target is not None:
                     params["user_entry_id"] = str(regenerate_user_entry_id)
                     if regeneration_intent:
@@ -2574,11 +2604,11 @@ class PiCopilotService:
                 if isinstance(state.get("enabled_tools"), list)
                 else []
             ),
-            "transcript": (
-                list(state.get("transcript") or [])[:200]
-                if isinstance(state.get("transcript"), list)
-                else []
-            ),
+            # One boundary for every user-facing reply: identifiers that only
+            # mean something to the model or a developer never reach the
+            # browser, and therefore never reach the next-step buttons the
+            # front end parses out of this same text.
+            "transcript": project_transcript(state.get("transcript")),
             "transcript_page": (
                 dict(state.get("transcript_page") or {})
                 if isinstance(state.get("transcript_page"), Mapping)

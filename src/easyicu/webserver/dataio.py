@@ -2954,8 +2954,7 @@ def validate_research_pipeline_source(
             {"database": requested},
         ) from exc
 
-    candidates = (path / "_manifest.json", path / "easyicu_export_manifest.json")
-    if not any(item.exists() for item in candidates):
+    if prepared_export_manifest_path(path) is None:
         raw_files = sorted(
             item.suffix.lower()
             for item in path.iterdir()
@@ -3048,6 +3047,21 @@ def validate_research_pipeline_source(
         "path": str(path),
         "binding": binding,
     }
+
+
+def prepared_export_manifest_path(path: Path) -> Optional[Path]:
+    """Return the export-package manifest in ``path``, or None if absent.
+
+    One public answer to "is this directory a prepared EasyICU export package
+    rather than a converted raw database", so callers stop re-listing the
+    marker filenames.
+    """
+
+    for name in _MODULE_MANIFESTS:
+        candidate = path / name
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _read_export_manifest(path: Path) -> Dict[str, Any]:
