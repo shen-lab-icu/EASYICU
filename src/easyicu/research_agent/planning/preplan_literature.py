@@ -22,19 +22,30 @@ def prepare_preplan_literature(
     tavily_retmax: int,
     tavily_include_domains: Sequence[str],
     bound_seed: Optional[LiteratureBundle] = None,
+    reuse_bound_seed_exact: bool = False,
 ) -> LiteratureBundle:
     """Retrieve, persist, and register the pre-plan literature authority."""
-    bundle = build_preplan_literature_bundle(
-        context,
-        enable_pubmed=enable_pubmed,
-        pubmed_email=pubmed_email,
-        pubmed_api_key=pubmed_api_key,
-        enable_tavily=enable_tavily,
-        tavily_api_key=tavily_api_key,
-        tavily_retmax=tavily_retmax,
-        tavily_include_domains=tavily_include_domains,
-        bound_seed=bound_seed,
-    )
+    if reuse_bound_seed_exact:
+        if bound_seed is None or (
+            bound_seed.research_question.strip()
+            != context.research_question.strip()
+        ):
+            raise ValueError(
+                "exact literature replay requires a question-matched bound seed"
+            )
+        bundle = bound_seed
+    else:
+        bundle = build_preplan_literature_bundle(
+            context,
+            enable_pubmed=enable_pubmed,
+            pubmed_email=pubmed_email,
+            pubmed_api_key=pubmed_api_key,
+            enable_tavily=enable_tavily,
+            tavily_api_key=tavily_api_key,
+            tavily_retmax=tavily_retmax,
+            tavily_include_domains=tavily_include_domains,
+            bound_seed=bound_seed,
+        )
     bundle_path = run_dir / "preplan_literature_bundle.json"
     bundle_path.write_text(bundle.model_dump_json(indent=2), encoding="utf-8")
     if evidence.get("preplan_literature_bundle") is None:

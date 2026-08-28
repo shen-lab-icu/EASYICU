@@ -385,6 +385,9 @@ class PipelineConfig:
         Union[str, Path]
     ] = None
     development_progressive_resume_checkpoint_sha256: Optional[str] = None
+    # Resume must see the exact literature authority that was hashed into the
+    # checkpoint. Repeating a live search could change that authority.
+    development_progressive_resume_reuse_bound_literature: bool = False
     # Explicit non-paper execution of one previously locked AnalysisPlan.  The
     # exact JSON bytes are digest-bound, then revalidated and shaped by the
     # current host before any step runs.  This is deliberately separate from
@@ -723,6 +726,20 @@ class PipelineConfig:
             ):
                 raise ValueError(
                     "development progressive resume checkpoint SHA-256 is invalid"
+                )
+        if self.development_progressive_resume_reuse_bound_literature:
+            if not all(value is not None for value in progressive_resume_values):
+                raise ValueError(
+                    "exact resume literature replay requires a progressive "
+                    "resume checkpoint"
+                )
+            if self.bound_preplan_literature is None:
+                raise ValueError(
+                    "exact resume literature replay requires bound literature"
+                )
+            if self.enable_pubmed or self.enable_tavily:
+                raise ValueError(
+                    "exact resume literature replay cannot repeat a live search"
                 )
         locked_plan_values = (
             self.development_locked_analysis_plan_path,

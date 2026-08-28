@@ -301,6 +301,115 @@ def ensure_primary_result_figure_step(
     ]
 
 
+def ensure_landmark_association_composite_figure_step(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Append the registered four-panel landmark association renderer.
+
+    The signed landmark runtime publishes complementary tables rather than one
+    overloaded result table. Once the plan has unique owners for the exact
+    curve, absolute-risk, robustness, and measurement-process products,
+    selecting their registered renderer is presentation plumbing rather than
+    a new scientific decision.
+    """
+
+    sources = (
+        "table:landmark_rcs_curve",
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    )
+    owners = {
+        source: [
+            str(step.step_id)
+            for step in plan.steps
+            if source in {str(output) for output in step.expected_outputs}
+        ]
+        for source in sources
+    }
+    if any(len(step_ids) != 1 for step_ids in owners.values()):
+        return plan, []
+    curve_owner = next(
+        step
+        for step in plan.steps
+        if str(step.step_id) == owners["table:landmark_rcs_curve"][0]
+    )
+    if (
+        curve_owner.planned_analysis_role != "primary"
+        or _method_head(str(curve_owner.method or ""))
+        != "signed_landmark_restricted_cubic_spline"
+        or _dedicated_renderer_consumes_exact_sources(plan.steps, sources=sources)
+    ):
+        return plan, []
+
+    steps = list(plan.steps)
+    figure_output = _next_figure_output(steps, "figure:landmark_association")
+    figure_step = AnalysisStep(
+        step_id=_next_step_id(steps, "landmark_association_figure"),
+        planned_analysis_role="auxiliary",
+        intent=(
+            "Render the exact signed landmark association curve, absolute-risk "
+            "context, robustness summary, and measurement-process audit using "
+            "their registered deterministic composite contract. Do not refit "
+            "a model, change denominators, or scan run files."
+        ),
+        method="visualization",
+        inputs=list(sources),
+        expected_outputs=[figure_output],
+        icu_rule_refs=["visualization_rule", "missingness_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=source, mode="all_rows")
+            for source in sources
+        ],
+        figure_panels=[
+            panel.bind(figure_output=figure_output)
+            for panel in landmark_association_composite_panels(sources)
+        ],
+    )
+    return plan.model_copy(update={"steps": [*steps, figure_step]}), [
+        ValidationFinding(
+            validator="landmark_association_figure_contract",
+            severity="warning",
+            message=(
+                "Bound the signed landmark analysis to its exact deterministic "
+                "four-panel article figure."
+            ),
+            detail={
+                "reason_code": "landmark_association_composite_figure_bound",
+                "appended_step_id": figure_step.step_id,
+                "inputs": list(sources),
+                "producer_step_ids": owners,
+                "figure_output": figure_output,
+            },
+        )
+    ]
+
+
+def select_deterministic_result_renderers(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Run the ordered result-renderer selection passes in one call.
+
+    Which deterministic renderers a result plan receives, and in what order, is
+    figure-shaping policy owned here -- not pipeline orchestration.  Order
+    matters: the single-result pass claims a plan that has one primary product,
+    so the four-panel landmark composite is offered afterwards to the plans the
+    first pass declined.  The pipeline asks for the selection once instead of
+    re-stating the sequence at its call site.
+    """
+
+    findings: list[ValidationFinding] = []
+    for select in (
+        ensure_primary_result_figure_step,
+        ensure_landmark_association_composite_figure_step,
+    ):
+        plan, pass_findings = select(plan=plan)
+        findings.extend(pass_findings)
+    return plan, findings
+
+
 def ensure_descriptive_context_figure_step(
     *,
     plan: AnalysisPlan,
@@ -953,6 +1062,8 @@ __all__ = [
     "ensure_descriptive_context_figure_step",
     "ensure_cohort_accounting_figure_step",
     "ensure_data_quality_figure_step",
+    "ensure_landmark_association_composite_figure_step",
     "ensure_primary_result_figure_step",
+    "select_deterministic_result_renderers",
     "step_declares_audit_panel",
 ]

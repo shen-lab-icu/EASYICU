@@ -37,6 +37,7 @@ was triggered and whether it converged.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -83,6 +84,10 @@ class StructuredRetryProgress:
     attempt: int
     total_attempts: int
     error_class: Optional[str] = None
+    validation_stage: Optional[str] = None
+    validation_issues: Optional[List[Dict[str, Any]]] = None
+    violation_sha256: Optional[str] = None
+    reason_code: Optional[str] = None
 
 
 def _notify_progress(
@@ -263,6 +268,25 @@ class StructuredAttempt:
     validation_stage: Optional[str] = None
     validation_issues: Optional[List[Dict[str, Any]]] = None
     violation_sha256: Optional[str] = None
+    reason_code: Optional[str] = None
+
+
+def _safe_declared_reason_code(exc: BaseException) -> Optional[str]:
+    """Project only an owner-declared, closed-form diagnostic reason code."""
+
+    diagnostic = getattr(exc, "easyicu_safe_diagnostic", None)
+    if not isinstance(diagnostic, Mapping):
+        return None
+    owner = str(diagnostic.get("owner") or "").strip()
+    if owner not in {
+        "easyicu.planning.progressive_compiler_v1",
+        "easyicu.schema_validation_v1",
+    }:
+        return None
+    reason_code = str(diagnostic.get("reason_code") or "").strip()
+    if re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code) is None:
+        return None
+    return reason_code
 
 
 def safe_provider_error_category(value: Any) -> Optional[str]:
@@ -369,6 +393,7 @@ def safe_structured_attempt_metadata(
             raw_validation_stage = source.get("validation_stage")
             raw_validation_issues = source.get("validation_issues")
             raw_violation_sha256 = source.get("violation_sha256")
+            raw_reason_code = source.get("reason_code")
         else:
             attempt_index = _bounded_int(item.attempt, minimum=0, default=0) + 1
             raw_chars = item.raw_chars
@@ -379,6 +404,7 @@ def safe_structured_attempt_metadata(
             raw_validation_stage = item.validation_stage
             raw_validation_issues = item.validation_issues
             raw_violation_sha256 = item.violation_sha256
+            raw_reason_code = item.reason_code
         error_class = safe_provider_error_category(raw_error)
         finish_reason = safe_provider_finish_reason(raw_finish)
         usage = {
@@ -410,6 +436,9 @@ def safe_structured_attempt_metadata(
             char in "0123456789abcdef" for char in violation_sha256
         ):
             row["violation_sha256"] = violation_sha256
+        reason_code = str(raw_reason_code or "").strip()
+        if re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
+            row["reason_code"] = reason_code
         projected.append(row)
     return projected
 
@@ -742,6 +771,7 @@ def call_llm_with_structured_retry(
             rendered_failure = render_parse_failure(exc)
             validation_stage = infer_validation_stage(exc)
             validation_issues = safe_validation_issues(exc)
+            reason_code = _safe_declared_reason_code(exc)
             attempts.append(
                 StructuredAttempt(
                     attempt=i,
@@ -755,6 +785,7 @@ def call_llm_with_structured_retry(
                     validation_stage=validation_stage,
                     validation_issues=validation_issues,
                     violation_sha256=violation_sha256(rendered_failure),
+                    reason_code=reason_code,
                 )
             )
             _notify_progress(
@@ -765,6 +796,10 @@ def call_llm_with_structured_retry(
                     attempt=i + 1,
                     total_attempts=total_attempts,
                     error_class=exc.__class__.__name__,
+                    validation_stage=validation_stage,
+                    validation_issues=validation_issues,
+                    violation_sha256=violation_sha256(rendered_failure),
+                    reason_code=reason_code,
                 ),
             )
             last_exc = exc

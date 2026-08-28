@@ -99,6 +99,49 @@ def test_review_artifact_rejects_resume_time_scientific_identity_drift(
     assert exc_info.value.path == tmp_path / "scientific_plan_review.json"
 
 
+def test_execution_resume_reuses_approved_review_when_only_validator_output_changed(
+    tmp_path: Path,
+) -> None:
+    evidence = EvidenceStore(tmp_path)
+    approved = _review(status="analysis_only", approval_allowed=True)
+    persist_or_validate_scientific_plan_review(
+        run_dir=tmp_path,
+        evidence=evidence,
+        current_review=approved,
+    )
+    recomputed = approved.model_copy(
+        update={"score": 90, "dimension_scores": {"study_design": 90}, "findings": []}
+    )
+
+    resumed, _ = persist_or_validate_scientific_plan_review(
+        run_dir=tmp_path,
+        evidence=evidence,
+        current_review=recomputed,
+        reuse_existing_review=True,
+    )
+
+    assert resumed == approved
+
+
+def test_execution_resume_rejects_review_binding_drift(tmp_path: Path) -> None:
+    evidence = EvidenceStore(tmp_path)
+    persist_or_validate_scientific_plan_review(
+        run_dir=tmp_path,
+        evidence=evidence,
+        current_review=_review(),
+    )
+
+    with pytest.raises(ScientificPlanReviewArtifactError) as exc_info:
+        persist_or_validate_scientific_plan_review(
+            run_dir=tmp_path,
+            evidence=evidence,
+            current_review=_review(plan_sha256="e" * 64),
+            reuse_existing_review=True,
+        )
+
+    assert exc_info.value.code == "scientific_plan_review_binding_drift"
+
+
 @pytest.mark.parametrize(
     ("status", "approval_allowed", "severity", "reason"),
     [

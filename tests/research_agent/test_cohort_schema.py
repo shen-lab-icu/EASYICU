@@ -1027,6 +1027,79 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
     ]
 
 
+def test_materialize_binds_exported_count_companion_for_count_predicate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent.cohort import schema as cohort_schema
+
+    monkeypatch.setattr(
+        cohort_contract,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(
+            cohort_schema.ConceptPredicate(
+                concept_id="canonical_signal",
+                time_window=cohort_schema.TimeWindow("icu_admit", 0, 24),
+                aggregation="count",
+                op=">=",
+                value=1,
+            ),
+        ),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "exported_signal_n": [2, 0, 3],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_n",
+            source_concept="canonical_signal",
+            role="meta",
+            analysis_window="icu_admission[0,24]h",
+        ),
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(definition, ["exported_signal_n"]),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "applied"
+    assert result["n_cohort"] == 2
+    assert pd.read_parquet(tmp_path / "cohort_analysis.parquet")[
+        "stay_id"
+    ].tolist() == [1, 3]
+    provenance = json.loads(
+        (tmp_path / "cohort_analysis_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["predicate_column_bindings"] == [
+        {
+            "concept_id": "canonical_signal",
+            "column": "exported_signal_n",
+            "basis": "planner_declared_context_input_source_concept",
+            "predicate_contracts": [
+                {
+                    "aggregation": "count",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0,
+                        "end_offset_hours": 24,
+                    },
+                }
+            ],
+        }
+    ]
+
+
 def test_cohort_namespace_product_preserves_planner_column_binding(
     tmp_path: Path,
     monkeypatch,

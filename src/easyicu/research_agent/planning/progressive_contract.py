@@ -28,6 +28,7 @@ ProgressiveModuleId = Literal[
     "exposure_outcome_distribution",
     "measurement_audit",
     "adjusted_association",
+    "absolute_risk_context",
     "robustness_replay",
     "custom_analysis",
     "visualization",
@@ -65,6 +66,7 @@ def progressive_module_ids_for_analysis_types(
             if module
             not in {
                 "adjusted_association",
+                "absolute_risk_context",
                 "robustness_replay",
                 "custom_analysis",
                 "visualization",
@@ -113,10 +115,22 @@ PROGRESSIVE_HOST_COMPILED_OUTPUTS: Mapping[
     "adjusted_association": (
         ("table:adjusted_association_estimates", "adjusted_association_estimates"),
     ),
+    "absolute_risk_context": (
+        ("table:absolute_risk_context", "absolute_risk_context"),
+    ),
     "robustness_replay": (
         ("table:robustness_matrix", "robustness_matrix"),
         ("table:robustness_summary", "robustness_summary"),
     ),
+}
+PROGRESSIVE_ARTICLE_ROLES: Mapping[str, frozenset[str]] = {
+    "cohort_definition": frozenset({"cohort_accounting"}),
+    "table_one": frozenset({"baseline_context"}),
+    "exposure_outcome_distribution": frozenset({"descriptive_result"}),
+    "measurement_audit": frozenset({"data_quality"}),
+    "adjusted_association": frozenset({"primary_estimand"}),
+    "absolute_risk_context": frozenset({"descriptive_result"}),
+    "robustness_replay": frozenset({"robustness"}),
 }
 TableOneMode = Literal["independent_inference", "descriptive_smd_only"]
 OutcomeType = Literal["binary", "continuous"]
@@ -450,6 +464,26 @@ class ProgressivePlanOutline(BaseModel):
         ]
         if len(primary) > 1:
             raise ValueError("progressive outline may declare at most one primary step")
+        if self.analysis_type == "association_study":
+            primary_adjusted = [
+                step.step_id
+                for step in self.steps
+                if step.planned_analysis_role == "primary"
+                and step.module_id == "adjusted_association"
+            ]
+            for step in self.steps:
+                if not (
+                    step.planned_analysis_role == "sensitivity"
+                    and step.module_id == "custom_analysis"
+                ):
+                    continue
+                if len(primary_adjusted) != 1 or primary_adjusted[0] not in set(
+                    step.depends_on
+                ):
+                    raise ValueError(
+                        "association custom sensitivity steps must follow and "
+                        "depend directly on the primary adjusted_association step"
+                    )
         return self
 
 
@@ -535,6 +569,10 @@ class ProgressiveSkeletonStep(BaseModel):
                 raise ValueError(
                     "adjusted_association requires exposure, outcome, type, and terms"
                 )
+        if self.module_id == "absolute_risk_context" and not (
+            self.primary_exposure and self.outcome
+        ):
+            raise ValueError("absolute_risk_context requires exposure and outcome")
         if self.module_id == "exposure_outcome_distribution":
             required = (
                 self.primary_exposure,
@@ -862,6 +900,7 @@ __all__ = [
     "ProgressivePlanOutline",
     "ProgressivePlannerCheckpoint",
     "ProgressivePlanSkeleton",
+    "PROGRESSIVE_ARTICLE_ROLES",
     "PROGRESSIVE_HOST_COMPILED_OUTPUTS",
     "ProgressiveProductRef",
     "ProgressiveRobustnessIntent",

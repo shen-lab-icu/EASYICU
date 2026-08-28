@@ -60,6 +60,24 @@ def test_agent_selects_concepts_and_reports_coverage():
     assert "sofa2" in sel.coverage.available
 
 
+def test_agent_canonicalizes_unambiguous_case_only_catalog_ids():
+    sel = DataFoundationAgent(
+        _stub(
+            '{"selected_concepts": ["lact", "pH", "death"], '
+            '"inclusion_exclusion": [], "rationale": "baseline labs"}'
+        )
+    ).select_concepts(
+        question="lactate and mortality",
+        catalog=_catalog("lact", "ph", "death"),
+        target_outcome="death",
+    )
+
+    assert sel.selected_concepts == ["lact", "ph", "death"]
+    assert sel.coverage is not None
+    assert sel.coverage.sufficient is True
+    assert sel.coverage.missing == []
+
+
 def test_agent_empty_or_garbage_response_is_safe():
     sel = DataFoundationAgent(_stub("garbage")).select_concepts(
         question="q", catalog=_catalog("death")

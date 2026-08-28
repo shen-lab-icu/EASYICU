@@ -1001,6 +1001,9 @@ def _run_preplan_literature_and_hypothesis(
                 tavily_retmax=self._tavily_retmax,
                 tavily_include_domains=self._tavily_include_domains,
                 bound_seed=self._bound_preplan_literature,
+                reuse_bound_seed_exact=(
+                    self._development_resume_reuse_bound_literature
+                ),
             )
             if self._config.require_literature_design_authority:
                 _literature_design.validate_preplan_literature_design_authority(
@@ -1388,6 +1391,9 @@ class ResearchAgentPipeline:
             LiteratureBundle.model_validate(config.bound_preplan_literature)
             if config.bound_preplan_literature is not None
             else None
+        )
+        self._development_resume_reuse_bound_literature = bool(
+            config.development_progressive_resume_reuse_bound_literature
         )
         self._bound_plan_revision_contract = str(
             config.bound_plan_revision_contract or ""
@@ -2505,12 +2511,10 @@ class ResearchAgentPipeline:
             # ensure a declared audit/robustness panel, since that evidence is
             # produced (locked robustness specs, data-quality summaries) but the
             # plan often never presents it.
-            plan, primary_figure_findings = (
-                _figure_plan.ensure_primary_result_figure_step(
-                    plan=plan,
-                )
+            plan, result_renderer_findings = (
+                _figure_plan.select_deterministic_result_renderers(plan=plan)
             )
-            findings.extend(primary_figure_findings)
+            findings.extend(result_renderer_findings)
             plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
                 plan=plan,
                 context=context,
@@ -2760,6 +2764,7 @@ class ResearchAgentPipeline:
                 require_reportable_capability=(
                     self._config.require_reportable_scientific_capability
                 ),
+                reuse_existing_review=reused_prior_plan,
             )
             findings.append(review_gate.finding)
         write_locked_cohort_definition(

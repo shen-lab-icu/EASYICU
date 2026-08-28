@@ -105,6 +105,20 @@ def test_planner_retry_projection_exposes_only_bounded_progress() -> None:
             attempt=2,
             total_attempts=3,
             error_class="private-validator-detail",
+            validation_stage="schema_validation",
+            validation_issues=[
+                {
+                    "location": ["steps", 2, "outcome", "private-coordinate"],
+                    "issue_type": "missing",
+                    "input_shape": {
+                        "kind": "mapping",
+                        "keys": ["steps", "private-input-key"],
+                        "key_count": 2,
+                    },
+                }
+            ],
+            violation_sha256="a" * 64,
+            reason_code="progressive_outline_owner_missing",
         )
     )
 
@@ -118,8 +132,25 @@ def test_planner_retry_projection_exposes_only_bounded_progress() -> None:
         "total": 3,
         "status": "running",
         "run_id": "run-safe",
+        "validation_stage": "schema_validation",
+        "validation_issues": [
+            {
+                "location": ["steps", 2, "outcome", "<other>"],
+                "issue_type": "missing",
+                "input_shape": {
+                    "kind": "mapping",
+                    "keys": ["<other>", "steps"],
+                    "key_count": 2,
+                },
+            }
+        ],
+        "validation_issue_count": 1,
+        "violation_sha256": "a" * 64,
+        "reason_code": "progressive_outline_owner_missing",
     }
     assert "private-validator-detail" not in repr(observed)
+    assert "private-coordinate" not in repr(observed)
+    assert "private-input-key" not in repr(observed)
 
 
 def test_runtime_authority_pair_preserves_the_owner_error() -> None:

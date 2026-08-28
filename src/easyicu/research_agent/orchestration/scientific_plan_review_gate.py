@@ -196,6 +196,7 @@ def persist_or_validate_scientific_plan_review(
     run_dir: Path,
     evidence: EvidenceStore,
     current_review: PlanScientificReview,
+    reuse_existing_review: bool = False,
 ) -> tuple[PlanScientificReview, Path]:
     """Register a new exact review or revalidate the bound resume artifact."""
 
@@ -226,6 +227,26 @@ def persist_or_validate_scientific_plan_review(
             path=path,
             detail=str(exc),
         ) from exc
+    if reuse_existing_review:
+        binding_fields = (
+            "context_sha256",
+            "plan_sha256",
+            "literature_sha256",
+            "figure_strategy_sha256",
+        )
+        if any(
+            getattr(existing_review, field) != getattr(current_review, field)
+            for field in binding_fields
+        ):
+            raise ScientificPlanReviewArtifactError(
+                code="scientific_plan_review_binding_drift",
+                path=path,
+                detail=(
+                    "the existing review no longer binds the exact current "
+                    "context, plan, literature, and figure strategy"
+                ),
+            )
+        return existing_review, path
     if existing_review.model_dump(
         mode="json", exclude={"generated_at"}
     ) != current_review.model_dump(mode="json", exclude={"generated_at"}):
@@ -295,6 +316,7 @@ def prepare_scientific_plan_review_gate(
     run_dir: Path,
     evidence: EvidenceStore,
     require_reportable_capability: bool = False,
+    reuse_existing_review: bool = False,
 ) -> ScientificPlanReviewGate:
     """Build, bind, and project the exact review offered to a human."""
 
@@ -309,6 +331,7 @@ def prepare_scientific_plan_review_gate(
         run_dir=run_dir,
         evidence=evidence,
         current_review=current_review,
+        reuse_existing_review=reuse_existing_review,
     )
     return ScientificPlanReviewGate(
         review=review,

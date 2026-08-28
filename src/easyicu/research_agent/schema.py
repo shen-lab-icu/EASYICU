@@ -658,6 +658,14 @@ class UserPreferences(BaseModel):
             "covariate. Post-time-zero measurements cannot satisfy this contract."
         ),
     )
+    covariate_operationalizations: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "User-reviewed mapping from each scientific covariate identity to "
+            "the exact materialized analysis column. Omit identities whose "
+            "source and operational column names are identical."
+        ),
+    )
     # Optional landmark / immortal-time origin (hours) for time-to-event
     # designs. Consumed by the deterministic survival runner; ``None`` means
     # "use the skill's case-neutral default" (24h) rather than a study-specific
@@ -693,18 +701,24 @@ class UserPreferences(BaseModel):
     def _covariate_decisions_match_exact_roster(self) -> "UserPreferences":
         rationale_keys = set(self.covariate_rationales)
         temporal_keys = set(self.covariate_temporal_roles)
+        operational_keys = set(self.covariate_operationalizations)
         roster = set(self.covariates)
-        if rationale_keys - roster or temporal_keys - roster:
+        if rationale_keys - roster or temporal_keys - roster or operational_keys - roster:
             raise ValueError(
-                "covariate rationale/temporal-role keys must belong to covariates"
+                "covariate decision keys must belong to covariates"
             )
         if self.covariate_selection != "exact" and (
-            rationale_keys or temporal_keys
+            rationale_keys or temporal_keys or operational_keys
         ):
             raise ValueError(
-                "covariate rationales and temporal roles require "
+                "covariate rationales, temporal roles, and operationalizations require "
                 "covariate_selection='exact'"
             )
+        if any(
+            not str(value or "").strip()
+            for value in self.covariate_operationalizations.values()
+        ):
+            raise ValueError("covariate operationalizations must be non-empty names")
         return self
 
 

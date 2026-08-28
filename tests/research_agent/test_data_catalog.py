@@ -19,6 +19,7 @@ from easyicu.research_agent.acquisition.catalog import (
     _methodology_tag,
     assess_coverage,
     build_available_catalog,
+    build_database_capability_catalog,
 )
 
 
@@ -119,6 +120,18 @@ def test_build_available_catalog_from_export_dir(tmp_path):
     ids = set(cat.ids())
     assert {"lact", "sofa2"} <= ids
     assert "stay_id" not in ids and "charttime" not in ids
+
+
+def test_database_capability_catalog_uses_metadata_without_export_io(monkeypatch):
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.index_export_package",
+        lambda _path: (_ for _ in ()).throw(AssertionError("patient export read")),
+    )
+
+    catalog = build_database_capability_catalog("mimiciv")
+
+    assert catalog.source == "easyicu-database-capability:miiv"
+    assert {"lact", "sep3", "death"} <= set(catalog.ids())
 
 
 def test_legacy_catalog_marks_sofa2_sepsis_as_explicit_only(

@@ -252,9 +252,11 @@ def test_data_quality_article_contract_stays_measurement_only(ra):
 @pytest.mark.parametrize(
     "product",
     [
+        "table:measurement_audit",
         "table:measurement_missingness",
         "table:measurement_process",
         "table:measurement_source",
+        "table:measurement_quality_audit",
     ],
 )
 def test_article_contract_recognises_typed_measurement_audit_products(
@@ -662,6 +664,38 @@ def test_nonprimary_output_prefixes_do_not_satisfy_primary_estimand_role(ra):
             ],
         )
         assert "primary_estimand" not in roles_covered_by_plan(decoy, contract), prefix
+
+
+def test_signed_landmark_curve_is_a_primary_estimand_product(ra):
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    context = _context(
+        ra,
+        "Estimate an adjusted landmark association and report the analytic cohort.",
+        exposure="x",
+    )
+    contract = build_article_analysis_contract(context)
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            AnalysisStep(
+                step_id="adjusted_primary",
+                planned_analysis_role="primary",
+                intent="Estimate the signed landmark spline association.",
+                method="signed_landmark_restricted_cubic_spline",
+                expected_outputs=[
+                    "table:landmark_rcs_curve",
+                    "table:landmark_rcs_contrasts",
+                ],
+            )
+        ],
+    )
+
+    assert "primary_estimand" in roles_covered_by_plan(plan, contract)
 
 
 def test_sensitivity_role_cannot_cover_primary_estimand_plan_or_artifact(ra, tmp_path):

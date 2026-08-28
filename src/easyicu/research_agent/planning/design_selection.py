@@ -24,6 +24,16 @@ _POST_RESULT_SELECTION = re.compile(
 )
 
 
+REVIEWABLE_PLAN_ITEM_ORDER = (
+    "population_and_unit",
+    "exposure_and_timing",
+    "outcome_and_followup",
+    "adjustment_and_model",
+    "missing_data",
+    "sensitivity_and_feasibility",
+)
+
+
 class ResearchDesignCandidate(BaseModel):
     """One pre-result design alternative for the same research question."""
 
@@ -46,6 +56,7 @@ class ResearchDesignCandidate(BaseModel):
     figure_role: str = Field(min_length=8, max_length=400)
     supports: str = Field(min_length=8, max_length=500)
     cannot_prove: str = Field(min_length=8, max_length=500)
+    reviewable_plan: list[str] | None = None
     disposition: Literal["selected", "rejected"]
     decision_reason: str = Field(min_length=12, max_length=600)
 
@@ -180,6 +191,26 @@ def validate_research_design_selection(
             "the selected candidate analysis type must equal the outline analysis type",
             path="design_selection.candidates.disposition",
         )
+    if selection.selected.reviewable_plan is None:
+        raise ResearchDesignSelectionError(
+            "design_selection_reviewable_plan_missing",
+            "the selected design must include a complete Planner recommendation "
+            "for researcher review before approval",
+            path="design_selection.candidates.reviewable_plan",
+        )
+    if (
+        len(selection.selected.reviewable_plan) != len(REVIEWABLE_PLAN_ITEM_ORDER)
+        or any(
+            len(" ".join(str(value or "").split())) < 8
+            for value in selection.selected.reviewable_plan
+        )
+    ):
+        raise ResearchDesignSelectionError(
+            "design_selection_reviewable_plan_incomplete",
+            "reviewable_plan must contain six substantive recommendations in "
+            "the owner-declared order",
+            path="design_selection.candidates.reviewable_plan",
+        )
     allowed_variable_set = set(allowed_variables)
     unavailable_variables = sorted(
         {
@@ -232,6 +263,7 @@ def validate_research_design_selection(
 
 
 __all__ = [
+    "REVIEWABLE_PLAN_ITEM_ORDER",
     "ResearchDesignCandidate",
     "ResearchDesignSelection",
     "ResearchDesignSelectionError",

@@ -66,3 +66,17 @@ def test_sensitivity_ids_are_unique() -> None:
     }
     with pytest.raises(ValueError, match="spec_id values must be unique"):
         normalize_prespecified_sensitivities([payload, payload])
+
+
+def test_linear_per_unit_is_a_typed_functional_form_sensitivity() -> None:
+    spec = PrespecifiedSensitivitySpec.model_validate(
+        {
+            "spec_id": "lactate_linear_per_mmol",
+            "axis": "functional_form",
+            "strategy": "linear_per_unit",
+            "execution_variables": ["lact_max"],
+        }
+    )
+
+    assert spec.strategy == "linear_per_unit"
+    assert spec.execution_variables == ("lact_max",)

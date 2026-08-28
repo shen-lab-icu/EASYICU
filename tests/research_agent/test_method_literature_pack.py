@@ -64,6 +64,37 @@ def test_a_curated_only_bundle_reports_no_search_instead_of_a_prisma_flow() -> N
     assert "no search was performed" in provenance.note
 
 
+def test_lactate_question_does_not_inherit_the_sepsis3_definition_paper() -> None:
+    bundle = build_preplan_literature_bundle(
+        _context(
+            research_question=(
+                "Is ICU lactate associated with in-hospital mortality?"
+            ),
+            variables=[
+                {
+                    "name": "lact",
+                    "description": "lactate",
+                    "role": "lab",
+                    "dtype": "float64",
+                    "source_concept": "lact",
+                },
+                {
+                    "name": "death",
+                    "description": "in-hospital mortality",
+                    "role": "outcome",
+                    "dtype": "int64",
+                    "source_concept": "death",
+                },
+            ],
+            primary_exposure="lact",
+            target_outcome="death",
+        )
+    )
+
+    keys = {row.key for row in bundle.citations}
+    assert "singer_sepsis3_2016" not in keys
+
+
 def test_an_enabled_source_still_gets_a_real_prisma_flow() -> None:
     """The honesty fix must not disable reporting for runs that did search."""
 

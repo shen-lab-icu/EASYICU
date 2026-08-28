@@ -46,6 +46,7 @@ from ..schema import (
     TableOneSpec,
     TableOneVariableSpec,
 )
+from ..research_context.typed import declared_domain_for_variable
 from .analysis_types import (
     canonical_analysis_family,
     get_analysis_type,
@@ -105,6 +106,7 @@ _MODULE_OUTPUT_ROLES: Mapping[str, frozenset[str]] = {
     "adjusted_association": frozenset(
         {"adjusted_association_estimates", "adjusted_association_model"}
     ),
+    "absolute_risk_context": frozenset({"absolute_risk_context"}),
     "robustness_replay": frozenset(
         {
             "robustness_matrix",
@@ -127,6 +129,7 @@ _METHOD_BY_MODULE: Mapping[str, str] = {
     "exposure_outcome_distribution": "descriptive",
     "measurement_audit": "missing_data",
     "adjusted_association": "adjusted_association_models",
+    "absolute_risk_context": "absolute_risk_context",
     "robustness_replay": "robustness_sensitivity",
     "visualization": "visualization",
     "report": "scientific_reporting",
@@ -143,6 +146,7 @@ _COHORT_FRAME_ONLY_MODULES = frozenset(
     {
         "cohort_definition",
         "table_one",
+        "absolute_risk_context",
         "exposure_outcome_distribution",
         "measurement_audit",
         "adjusted_association",
@@ -411,7 +415,41 @@ def _compile_robustness_intents(
     return compiled
 
 
+def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
+    """Recognise the one provisional baseline shape promised to the Planner.
+
+    When metadata-only planning has no closed grouping domain, the outline
+    contract permits one auxiliary custom step to own baseline context until
+    post-extraction re-planning.  The model may describe that already-closed
+    shape with the historical ``artifact:baseline_context`` spelling; project
+    it onto the registered cohort-summary table instead of sending the same
+    non-scientific product-name repair back to the model forever.
+    """
+
+    return (
+        step.module_id == "custom_analysis"
+        and step.planned_analysis_role == "auxiliary"
+        and step.scientific_action_id is None
+        and step.custom_method
+        in {
+            "continuous_baseline_summary",
+            "descriptive_cohort_summary",
+            "overall_baseline_context_summary",
+        }
+        and len(step.outputs) == 1
+        and step.outputs[0].semantic_role == "custom"
+        and step.outputs[0].product_id
+        in {
+            "artifact:baseline_context",
+            "artifact:baseline_context_summary",
+            "table:cohort_summary",
+        }
+    )
+
+
 def _canonical_outputs(step: ProgressiveSkeletonStep) -> list[tuple[str, str]]:
+    if _is_ungrouped_baseline_summary(step):
+        return [("table:cohort_summary", "custom")]
     standard = list(PROGRESSIVE_HOST_COMPILED_OUTPUTS.get(step.module_id, ()))
     declared = [(item.product_id, item.semantic_role) for item in step.outputs]
     by_product: dict[str, str] = {}
@@ -1057,12 +1095,16 @@ def _compile_model_terms(
     compiled: list[ModelTermSpec] = []
     for index, item in enumerate(step.model_terms):
         observed = observed_levels_for(name=item.name, variables=dict(variables))
+        declared, _declared_basis = declared_domain_for_variable(
+            variables[item.name]
+        )
+        closed_domain = observed or list(declared or ())
         if item.coding == "continuous":
             levels = None
             reference = None
             transform = "identity"
         elif item.coding == "ordinal_linear":
-            if len(observed) < 2:
+            if len(closed_domain) < 2:
                 raise _fail(
                     "progressive_model_levels_unavailable",
                     f"ordinal term {item.name!r} has no closed ordered domain",
@@ -1070,13 +1112,13 @@ def _compile_model_terms(
                     step_index=step_index,
                     path=f"model_terms[{index}]",
                 )
-            levels = [level_spelling(value) for value in observed]
+            levels = [level_spelling(value) for value in closed_domain]
             reference = None
             transform = "declared_level_index"
         else:
             minimum = 2
-            if len(observed) < minimum or (
-                item.coding == "binary" and len(observed) != 2
+            if len(closed_domain) < minimum or (
+                item.coding == "binary" and len(closed_domain) != 2
             ):
                 raise _fail(
                     "progressive_model_levels_unavailable",
@@ -1085,9 +1127,9 @@ def _compile_model_terms(
                     step_index=step_index,
                     path=f"model_terms[{index}]",
                 )
-            levels = [level_spelling(value) for value in observed]
+            levels = [level_spelling(value) for value in closed_domain]
             reference_value = _level_at(
-                observed,
+                closed_domain,
                 item.reference_level_index,
                 label=f"model_terms[{index}].reference_level_index",
                 step=step,
@@ -1313,6 +1355,10 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
+    if step.module_id == "absolute_risk_context":
+        raw_names.extend(
+            value for value in (step.primary_exposure, step.outcome) if value
+        )
     visualization_raw_names = [
         name for name in raw_names if name not in reserved_coordinates
     ]
@@ -1746,8 +1792,26 @@ def _compile_one_step(
     method = (
         "ordinal_stratified_descriptive_analysis"
         if ordered_stratified_contract
+        else "descriptive_cohort_summary"
+        if _is_ungrouped_baseline_summary(step)
         else step.custom_method or _METHOD_BY_MODULE[step.module_id]
     )
+    sensitivity_spec_ids = list(step.sensitivity_spec_ids)
+    if step.module_id == "robustness_replay":
+        # Foundation robustness intents are already validated, typed host
+        # authority.  The model chooses the replay step layout, but it must not
+        # be able to orphan one of those intents merely by omitting its id from
+        # the step materialization.  Preserve any separately prespecified
+        # timing/functional-form ids and mechanically close the foundation ids
+        # onto their registered replay owner.
+        sensitivity_spec_ids = list(
+            dict.fromkeys(
+                [
+                    *sensitivity_spec_ids,
+                    *(intent.spec_id for intent in skeleton.robustness_intents),
+                ]
+            )
+        )
     kwargs: dict[str, Any] = {
         "step_id": step.step_id,
         "planned_analysis_role": step.planned_analysis_role,
@@ -1757,7 +1821,7 @@ def _compile_one_step(
         "method": method,
         "scientific_action_id": step.scientific_action_id,
         "icu_rule_refs": [],
-        "sensitivity_spec_ids": list(step.sensitivity_spec_ids),
+        "sensitivity_spec_ids": sensitivity_spec_ids,
         "literature_citation_keys": citation_keys,
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,

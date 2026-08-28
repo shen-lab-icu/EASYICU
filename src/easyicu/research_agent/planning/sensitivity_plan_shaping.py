@@ -28,6 +28,7 @@ from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
 
 _PREFERRED_METHOD_BY_STRATEGY = {
     "restricted_cubic_spline": "restricted_cubic_spline_sensitivity",
+    "linear_per_unit": "linear_per_unit_sensitivity",
     "fractional_polynomial": "fractional_polynomial_sensitivity",
     "categorical": "categorical_functional_form_sensitivity",
     "complete_case": "complete_case_sensitivity",

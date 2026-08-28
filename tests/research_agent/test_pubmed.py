@@ -149,6 +149,88 @@ def test_protocol_query_uses_primary_exposure_and_outcome_not_benchmark_instruct
     assert "intensive care" in query.lower() or "icu" in query.lower()
 
 
+def test_protocol_queries_include_title_focused_direct_study_stratum(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact", description="lactate", source_concept="lact",
+                role="lab", dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death", description="in hospital mortality",
+                source_concept="death", role="outcome", dtype="int64",
+            ),
+        ],
+        primary_exposure="lact",
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import (
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    title_query = next(query for query in queries if '"lactate"[Title]' in query)
+    assert '"hospital mortality"[Title]' in title_query
+    assert '"critically ill"[Title]' in title_query
+    assert "[Title/Abstract]" not in title_query
+
+
+def test_protocol_ranking_prefers_unselected_icu_lactate_over_ratio_and_pediatric_hits(
+    ra,
+):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact", description="lactate", source_concept="lact",
+                role="lab", dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death", description="hospital mortality",
+                source_concept="death", role="outcome", dtype="int64",
+            ),
+        ],
+        primary_exposure="lact",
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        _rank_protocol_search_results,
+    )
+
+    rows = [
+        CitationRecord(
+            key="ratio", year="2025",
+            title="Lactate albumin ratio predicts hospital mortality in ICU",
+        ),
+        CitationRecord(
+            key="pediatric", year="2025",
+            title="Lactate predicts hospital mortality in pediatric ICU patients",
+        ),
+        CitationRecord(
+            key="general", year="2020",
+            title=(
+                "Lactate indices as predictors of in-hospital mortality in "
+                "unselected critically ill patients"
+            ),
+        ),
+    ]
+
+    ranked = _rank_protocol_search_results(context, rows)
+
+    assert ranked[0].key == "general"
+
+
 def test_protocol_query_uses_clinical_identity_not_materialized_column(ra):
     schema = ra.schema
     ctx = schema.ResearchContext(
@@ -184,7 +266,7 @@ def test_protocol_query_uses_clinical_identity_not_materialized_column(ra):
     assert "sep3 sofa2" not in query.casefold()
     assert '"Sepsis-3"[Title/Abstract]' in query
     assert '"SOFA"[Title/Abstract]' in query
-    assert '"mortality"[Title/Abstract]' in query
+    assert '"hospital mortality"[Title/Abstract]' in query
 
 
 def test_protocol_queries_remove_operational_window_suffix(ra):
@@ -417,6 +499,49 @@ def test_prepare_preplan_literature_persists_and_registers_bundle(ra, tmp_path):
     record = evidence.records["preplan_literature_bundle"]
     assert record["producer"] == "hypothesis_blueprint"
     assert record["generation_mode"] == "deterministic_skill"
+
+
+def test_prepare_preplan_literature_reuses_resume_authority_exactly(ra, tmp_path):
+    schema = ra.schema
+    from easyicu.research_agent.literature import LiteratureBundle
+    from easyicu.research_agent.planning.preplan_literature import (
+        prepare_preplan_literature,
+    )
+
+    context = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[],
+    )
+    seed = LiteratureBundle(
+        research_question=context.research_question,
+        citations=[],
+        prisma={"identified": 8, "duplicates_removed": 0, "screened": 8,
+                "eligible": 3, "included": 3},
+    )
+    evidence = _RecordingEvidence()
+
+    observed = prepare_preplan_literature(
+        context=context,
+        run_dir=tmp_path,
+        evidence=evidence,
+        enable_pubmed=False,
+        pubmed_email=None,
+        pubmed_api_key=None,
+        enable_tavily=False,
+        tavily_api_key=None,
+        tavily_retmax=5,
+        tavily_include_domains=(),
+        bound_seed=seed,
+        reuse_bound_seed_exact=True,
+    )
+
+    assert observed == seed
+    assert LiteratureBundle.model_validate_json(
+        (tmp_path / "preplan_literature_bundle.json").read_text(encoding="utf-8")
+    ) == seed
 
 
 # ---------------------------------------------------------------------------
@@ -804,6 +929,129 @@ def test_context_strata_retain_complementary_query_coverage(ra):
     assert result.record_queries["dynamics"] == [
         next(query for query in result.search_queries if '"time-varying"' in query)
     ]
+
+
+def test_context_strata_preserve_bounded_candidate_depth_per_query(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact_max",
+                description="lactate",
+                source_concept="lact",
+                role="lab",
+                dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="hospital mortality",
+                source_concept="hospital_mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="lact_max",
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import CitationRecord, PubMedLiteratureClient
+
+    client = PubMedLiteratureClient()
+    direct_pmid = "31179840"
+    strict_ids = [f"s{index}" for index in range(15)]
+    title_ids = [f"t{index}" for index in range(10)] + [direct_pmid] + ["t11"]
+    observational_ids = [f"o{index}" for index in range(15)]
+
+    def _esearch(query, *, retmax):
+        if "[Title]" in query:
+            return title_ids[:retmax]
+        if "NOT (Review[Publication Type]" in query:
+            return observational_ids[:retmax]
+        return strict_ids[:retmax]
+
+    records = {
+        pmid: CitationRecord(
+            key=pmid,
+            title=f"Lactate dehydrogenase cohort {pmid}",
+            year="2026",
+            pmid=pmid,
+        )
+        for pmid in (*strict_ids, *title_ids, *observational_ids)
+    }
+    records[direct_pmid] = CitationRecord(
+        key="serum_lactate_mortality",
+        title=(
+            "Serum Lactate as an Independent Predictor of In-Hospital "
+            "Mortality in Intensive Care Patients"
+        ),
+        year="2020",
+        pmid=direct_pmid,
+    )
+    hydrated: list[str] = []
+    client._esearch = _esearch  # type: ignore[method-assign]
+
+    def _hydrate(pmids, **_kwargs):
+        hydrated.extend(pmids)
+        return [records[pmid] for pmid in pmids]
+
+    client._hydrate_ids = _hydrate  # type: ignore[method-assign]
+
+    result = client.search_context_strata(context, retmax=5)
+
+    assert direct_pmid in hydrated
+    assert direct_pmid in {record.pmid for record in result.records}
+
+
+def test_context_ranking_prefers_declared_lactate_over_ratio_variant(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="adult ICU", database="miiv", n_patients=10, n_stays=10
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact_max",
+                description="blood lactate level",
+                source_concept="lact",
+                role="lab",
+                dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                description="hospital mortality",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        primary_exposure="lact_max",
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import CitationRecord, _rank_protocol_search_results
+
+    direct = CitationRecord(
+        key="direct",
+        title=(
+            "Serum Lactate as an Independent Predictor of In-Hospital "
+            "Mortality in Intensive Care Patients"
+        ),
+        year="2020",
+        pmid="31179840",
+    )
+    ratio = CitationRecord(
+        key="ratio",
+        title=(
+            "Lactate-Albumin Ratio Predicts In-Hospital Mortality in "
+            "Critically Ill Patients"
+        ),
+        year="2026",
+        pmid="ratio",
+    )
+
+    assert _rank_protocol_search_results(context, [ratio, direct])[0] == direct
 
 
 def test_client_search_returns_empty_on_no_hits(ra):
@@ -1887,4 +2135,41 @@ def test_exposure_used_only_as_eligibility_does_not_become_comparator(ra):
     assert decision.population_match is True
     assert decision.outcome_match is True
     assert decision.exposure_match is False
+    assert decision.disposition == "exclude"
+
+
+def test_icu_transfer_outcome_does_not_make_ward_cohort_an_icu_comparator(ra):
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        screen_source_backed_direct_comparator,
+    )
+
+    record = CitationRecord(
+        key="ward_lactate_clearance",
+        title=(
+            "Lactate clearance in ward patients and subsequent ICU transfer "
+            "or in-hospital mortality"
+        ),
+        year="2021",
+        relevance=(
+            "Study-design excerpt: Ward patients with intermediate lactate "
+            "levels were followed for subsequent intensive care unit transfer "
+            "and hospital mortality. The association between lactate clearance "
+            "and hospital mortality was estimated."
+        ),
+        publication_types=["Observational Study"],
+    )
+
+    decision = screen_source_backed_direct_comparator(
+        exposure="lactate",
+        outcome="hospital mortality",
+        adult_required=False,
+        record=record,
+        source="pubmed",
+        query="focused query",
+    )
+
+    assert decision.exposure_match is True
+    assert decision.outcome_match is True
+    assert decision.population_match is False
     assert decision.disposition == "exclude"

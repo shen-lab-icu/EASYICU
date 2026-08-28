@@ -127,6 +127,30 @@ def test_structured_retry_projects_safe_attempt_lifecycle_without_model_payload(
     assert all(not hasattr(event, "raw_response") for event in events)
 
 
+def test_structured_retry_projects_bounded_validation_coordinates():
+    class Probe(BaseModel):
+        value: int
+
+    events = []
+    client = ScriptedMockLLMClient(['{"value": "invalid"}', '{"value": 7}'])
+
+    out = call_llm_with_structured_retry(
+        client,
+        [LLMMessage(role="user", content="give json")],
+        parser=Probe.model_validate_json,
+        role="planner",
+        max_retries=1,
+        progress_callback=events.append,
+    )
+
+    assert out.value == 7
+    rejected = events[1]
+    assert rejected.validation_stage == "schema_validation"
+    assert rejected.validation_issues
+    assert rejected.violation_sha256
+    assert "invalid" not in repr(rejected)
+
+
 def test_structured_retry_raises_after_exhausting_retries():
     client = ScriptedMockLLMClient(["bad-1", "bad-2", "bad-3"])
     with pytest.raises(StructuredResponseFailure) as ctx:

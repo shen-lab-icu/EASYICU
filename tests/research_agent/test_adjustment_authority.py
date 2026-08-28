@@ -105,6 +105,50 @@ def test_exact_adjustment_set_accepts_only_the_exact_ordered_roster() -> None:
         )
 
 
+def test_exact_adjustment_set_accepts_value_aggregation_of_same_concept() -> None:
+    validate_plan_against_adjustment_authority(
+        plan=_plan(["age", "sex", "charlson_first"]),
+        context=_context(
+            selection="exact",
+            covariates=["age", "sex", "charlson"],
+        ),
+    )
+
+
+def test_exact_operationalization_locks_one_materialized_value_column() -> None:
+    context = _context(
+        selection="exact",
+        covariates=["age", "sex", "charlson"],
+    )
+    context.user_preferences.covariate_operationalizations = {
+        "charlson": "charlson_first"
+    }
+    validate_plan_against_adjustment_authority(
+        plan=_plan(["age", "sex", "charlson_first"]), context=context
+    )
+    with pytest.raises(AdjustmentAuthorityError):
+        validate_plan_against_adjustment_authority(
+            plan=_plan(["age", "sex", "charlson_max"]), context=context
+        )
+
+
+@pytest.mark.parametrize(
+    "companion",
+    ["charlson_n", "charlson_measured", "charlson_first_time"],
+)
+def test_exact_adjustment_set_rejects_non_value_materialized_companion(
+    companion: str,
+) -> None:
+    with pytest.raises(AdjustmentAuthorityError):
+        validate_plan_against_adjustment_authority(
+            plan=_plan(["age", "sex", companion]),
+            context=_context(
+                selection="exact",
+                covariates=["age", "sex", "charlson"],
+            ),
+        )
+
+
 def test_planner_selectable_adjustment_set_preserves_existing_behavior() -> None:
     validate_plan_against_adjustment_authority(
         plan=_plan(["age", "sex"]),

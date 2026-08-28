@@ -288,6 +288,18 @@ def test_e2_plan_and_runtime_are_bound_to_one_signed_contract(tmp_path: Path) ->
     )
     assert assessment.scientific_validator_available
     assert assessment.claim_ceiling == "reportable"
+    assert effect_output_authorized(
+        plan.steps[0],
+        step_record={
+            "deterministic_standard_analysis": LANDMARK_SPLINE_ANALYSIS_KIND,
+            "deterministic_standard_selection_reason": (
+                "signed_landmark_spline_contract_preflight"
+            ),
+            "standard_executor_candidates": {
+                "claimed_by": LANDMARK_SPLINE_ANALYSIS_KIND
+            },
+        },
+    )
 
     drifted_step = plan.steps[0].model_copy(
         update={"method": "linear_logistic_regression"}
@@ -994,6 +1006,18 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
                         }
                     ],
                 },
+                {
+                    "step_id": "06_article_display",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the primary association with article context.",
+                    "inputs": [
+                        "table:absolute_risk_context",
+                        "table:adjusted_association_estimates",
+                        "table:robustness_summary",
+                    ],
+                    "expected_outputs": ["figure:article_display"],
+                    "method": "visualization",
+                },
             ],
         }
     )
@@ -1013,7 +1037,12 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
         "strategy": "complete_case",
         "variables": list(authority.model_complete_case_columns),
     }
-    figure = bound.steps[4]
+    robustness_figure = bound.steps[4]
+    assert robustness_figure.inputs == [
+        "statistic:primary_or",
+        "table:robustness_summary",
+    ]
+    figure = bound.steps[5]
     assert figure.inputs == [
         authority.curve_product,
         "table:absolute_risk_context",
