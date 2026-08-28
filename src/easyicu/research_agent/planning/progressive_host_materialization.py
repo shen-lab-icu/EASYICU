@@ -212,17 +212,20 @@ def normalize_progressive_cohort_identity(
     if step.module_id != "cohort_definition":
         return materialization
     identity = _cohort_row_identity(context, step.raw_inputs)
+    if identity is None:
+        return materialization
     declared_ids = {name for name in step.raw_inputs if name in context.cohort.id_columns}
-    if len(declared_ids) <= 1 or identity is None:
+    normalized_inputs = [
+        name
+        for name in step.raw_inputs
+        if name not in declared_ids or name == identity
+    ]
+    if identity not in normalized_inputs:
+        normalized_inputs.insert(0, identity)
+    if normalized_inputs == step.raw_inputs:
         return materialization
     normalized_step = step.model_copy(
-        update={
-            "raw_inputs": [
-                name
-                for name in step.raw_inputs
-                if name not in declared_ids or name == identity
-            ]
-        }
+        update={"raw_inputs": normalized_inputs}
     )
     return materialization.model_copy(update={"step": normalized_step})
 
@@ -236,8 +239,8 @@ def _cohort_row_identity(
     declared_ids = tuple(
         name for name in raw_inputs if name in context.cohort.id_columns
     )
-    if len(declared_ids) <= 1:
-        return declared_ids[0] if declared_ids else None
+    if len(declared_ids) == 1:
+        return declared_ids[0]
 
     provenance = context.cohort.provenance
     if provenance.get("analysis_unit") != "icu_stay":
@@ -248,9 +251,14 @@ def _cohort_row_identity(
     proven_stay_ids = tuple(
         name
         for name in stay_ids
-        if isinstance(name, str) and name in declared_ids
+        if isinstance(name, str) and name in context.cohort.id_columns
     )
-    return proven_stay_ids[0] if len(proven_stay_ids) == 1 else None
+    if len(proven_stay_ids) != 1:
+        return None
+    proven = proven_stay_ids[0]
+    if declared_ids and proven not in declared_ids:
+        return None
+    return proven
 
 
 def host_materialize_progressive_step(
@@ -298,6 +306,8 @@ def host_materialize_progressive_step(
             for name in raw
             if name not in declared_ids or name == identity
         ]
+        if identity is not None and identity not in cohort_raw:
+            cohort_raw.insert(0, identity)
         skeleton = _common_step(
             outline_step,
             raw_inputs=cohort_raw,

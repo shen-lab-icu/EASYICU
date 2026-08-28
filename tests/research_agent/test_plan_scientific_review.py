@@ -20,6 +20,7 @@ from easyicu.research_agent.literature import (
 from easyicu.research_agent.planning.figure_strategy import (
     build_article_figure_strategy,
 )
+from easyicu.research_agent.planning.design_selection import ResearchDesignSelection
 from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
 from easyicu.research_agent.planning.dependence_authority import (
     DependenceAuthorityError,
@@ -30,6 +31,7 @@ from easyicu.research_agent.planning.scientific_review import (
     _endpoint_resolved,
     _sensitivity_facts,
     build_plan_scientific_review,
+    remediation_route_for_finding,
     repeated_unit_design_closed,
     render_agent_plan_revision_contract,
     render_plan_scientific_guardrails,
@@ -183,6 +185,81 @@ def test_locked_complete_case_replay_credits_exact_typed_sensitivity_id() -> Non
     assert facts["typed_executable"] == ["missing"]
 
 
+def test_signed_landmark_primary_credits_its_typed_runtime_coordinates() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                sensitivity_specs=[
+                    {
+                        "spec_id": "landmark_24h_primary",
+                        "axis": "timing",
+                        "strategy": "landmark",
+                        "landmark_hours": 24,
+                        "require_alive_at_landmark": True,
+                        "exclude_negative_event_times": True,
+                        "event_time_variable": "death_time",
+                        "observation_duration_variable": "los_icu",
+                        "observation_duration_unit": "days",
+                    },
+                    {
+                        "spec_id": "peak_lactate_rcs_primary",
+                        "axis": "functional_form",
+                        "strategy": "restricted_cubic_spline",
+                        "execution_variables": ["exposure"],
+                    },
+                    {
+                        "spec_id": "linear_per_unit_sensitivity",
+                        "axis": "functional_form",
+                        "strategy": "linear_per_unit",
+                        "execution_variables": ["exposure"],
+                    },
+                ],
+            )
+        }
+    )
+    base = _plan()
+    primary = next(
+        step for step in base.steps if step.planned_analysis_role == "primary"
+    ).model_copy(
+        update={
+            "method": "signed_landmark_restricted_cubic_spline",
+            "inputs": [
+                "artifact:analysis_cohort",
+                "exposure",
+                "death",
+                "death_time",
+                "los_icu",
+                "age",
+            ],
+            "expected_outputs": [
+                "table:landmark_rcs_curve",
+                "table:landmark_rcs_contrasts",
+                "table:landmark_linear_sensitivity",
+            ],
+            "model_requirements": [],
+            "sensitivity_spec_ids": [],
+        }
+    )
+    plan = base.model_copy(
+        update={
+            "steps": [
+                primary if step.planned_analysis_role == "primary" else step
+                for step in base.steps
+            ]
+        }
+    )
+
+    facts = _sensitivity_facts(context, plan)
+
+    assert facts["missing_spec_ids"] == []
+    assert facts["executed_spec_ids"] == [
+        "landmark_24h_primary",
+        "linear_per_unit_sensitivity",
+        "peak_lactate_rcs_primary",
+    ]
+
+
 def _binding(key: str, element: str, application: str) -> LiteratureDesignBinding:
     return LiteratureDesignBinding(
         citation_key=key,
@@ -282,6 +359,68 @@ def _plan(*, typed_bindings: bool = True) -> AnalysisPlan:
             ),
         ],
     )
+
+
+def _legacy_design_selection_without_reviewable_plan() -> ResearchDesignSelection:
+    common = {
+        "analysis_type": "association_study",
+        "time_zero": "Start of the sealed ICU episode.",
+        "observation_window": "Observe through the hospital encounter.",
+        "required_variables": ["exposure", "death"],
+        "assumptions": ["The declared timing is valid."],
+        "literature_citation_keys": [],
+        "novelty_positioning": "Tests the question in the sealed ICU cohort.",
+        "figure_role": "Display the estimate with uncertainty.",
+    }
+    return ResearchDesignSelection.model_validate(
+        {
+            "candidates": [
+                {
+                    **common,
+                    "design_id": "adjusted_primary",
+                    "estimand": "Adjusted exposure contrast for in-hospital death.",
+                    "primary_method": "Adjusted logistic association model",
+                    "supports": "A prespecified adjusted association estimate.",
+                    "cannot_prove": "A causal effect without stronger identification.",
+                    "disposition": "selected",
+                    "decision_reason": "This design directly answers the declared association question.",
+                },
+                {
+                    **common,
+                    "design_id": "crude_alternative",
+                    "estimand": "Unadjusted exposure contrast for in-hospital death.",
+                    "primary_method": "Unadjusted descriptive contrast",
+                    "supports": "A descriptive exposure-group difference.",
+                    "cannot_prove": "An adjusted or causal exposure effect.",
+                    "disposition": "rejected",
+                    "decision_reason": "Reject because the primary question requires confounding control.",
+                },
+            ]
+        }
+    )
+
+
+def test_review_blocks_legacy_selected_design_without_complete_recommendation() -> None:
+    plan = _plan().model_copy(
+        update={"design_selection": _legacy_design_selection_without_reviewable_plan()}
+    )
+
+    review = build_plan_scientific_review(
+        context=_context(),
+        plan=plan,
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(_context()),
+    )
+
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "REVIEWABLE_PLAN_SPECIFICATION_MISSING"
+    )
+    assert finding.severity == "blocker"
+    assert finding.requires_user_authorization is False
+    assert remediation_route_for_finding(finding) == "agent_plan_revision"
+    assert review.approval_allowed is False
 
 
 def test_formal_review_blocks_an_analysis_only_primary_capability() -> None:

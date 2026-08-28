@@ -202,7 +202,10 @@ def _registered_figure_adjustment_authority(
         if not isinstance(receipt, Mapping):
             continue
         schema_version = str(receipt.get("schema_version") or "").strip()
-        if not re.fullmatch(r"easyicu\.[a-z0-9_]+_runtime_receipt/1", schema_version):
+        if not re.fullmatch(
+            r"easyicu\.[a-z0-9_]+_runtime_receipt/[1-9][0-9]*",
+            schema_version,
+        ):
             continue
         promoted_columns = receipt.get("promoted_adjustment_columns")
         if isinstance(promoted_columns, list) and all(

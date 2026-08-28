@@ -409,6 +409,25 @@ def test_step_summary_fraction_scale_does_not_bound_counts_in_metric_record() ->
     assert findings == []
 
 
+def test_step_summary_fraction_scale_does_not_inherit_risk_into_grid_row_count() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(
+            step_id="04_landmark_spline",
+            intent="Report adjusted absolute risk.",
+        ),
+        step_summary={
+            "scientific_runtime_receipt": {
+                "adjusted_absolute_risk": {
+                    "method": "marginal_standardization",
+                    "grid_rows": 41,
+                }
+            }
+        },
+    )
+
+    assert findings == []
+
+
 def test_step_summary_fraction_scale_does_not_inherit_into_percent_leaf() -> None:
     findings = StepSummaryFractionValidator().audit(
         step=AnalysisStep(step_id="04_incidence", intent="Report absolute risk."),

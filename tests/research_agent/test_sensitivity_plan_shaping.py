@@ -177,3 +177,34 @@ def test_missing_typed_functional_form_becomes_explicit_analysis_only_step() -> 
     )
     assert again == shaped
     assert repeated == []
+
+
+def test_missing_linear_per_unit_becomes_explicit_analysis_only_step() -> None:
+    context = _context()
+    preferences = UserPreferences.model_validate(
+        {
+            **context.user_preferences.model_dump(mode="json"),
+            "sensitivity_specs": [
+                {
+                    "spec_id": "exposure_linear_per_unit",
+                    "axis": "functional_form",
+                    "strategy": "linear_per_unit",
+                    "execution_variables": ["exposure"],
+                }
+            ],
+        }
+    )
+    context = context.model_copy(update={"user_preferences": preferences})
+
+    shaped, findings = ensure_prespecified_sensitivity_steps(
+        plan=_plan(),
+        context=context,
+    )
+
+    step = next(
+        item for item in shaped.steps
+        if item.step_id == "sensitivity_exposure_linear_per_unit"
+    )
+    assert step.method == "linear_per_unit_sensitivity"
+    assert step.expected_outputs == ["table:sensitivity_exposure_linear_per_unit"]
+    assert findings[0].detail["strategy"] == "linear_per_unit"

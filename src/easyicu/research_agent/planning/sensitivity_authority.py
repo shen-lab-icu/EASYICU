@@ -30,6 +30,7 @@ SensitivityStrategy = Literal[
     "cluster_robust",
     "mixed_effects",
     "restricted_cubic_spline",
+    "linear_per_unit",
     "fractional_polynomial",
     "categorical",
     "complete_case",
@@ -50,7 +51,12 @@ _STRATEGIES_BY_AXIS: dict[str, frozenset[str]] = {
         }
     ),
     "functional_form": frozenset(
-        {"restricted_cubic_spline", "fractional_polynomial", "categorical"}
+        {
+            "restricted_cubic_spline",
+            "linear_per_unit",
+            "fractional_polynomial",
+            "categorical",
+        }
     ),
     "missing_data": frozenset(
         {"complete_case", "multiple_imputation", "inverse_probability_weighting"}
@@ -71,6 +77,9 @@ EXECUTABLE_METHODS_BY_STRATEGY: dict[str, frozenset[str]] = {
     "mixed_effects": frozenset({"mixed_effects_association", "mixed_effects_regression"}),
     "restricted_cubic_spline": frozenset(
         {"signed_landmark_restricted_cubic_spline", "restricted_cubic_spline_sensitivity"}
+    ),
+    "linear_per_unit": frozenset(
+        {"signed_landmark_restricted_cubic_spline", "linear_per_unit_sensitivity"}
     ),
     "fractional_polynomial": frozenset({"fractional_polynomial_sensitivity"}),
     "categorical": frozenset({"categorical_functional_form_sensitivity"}),
@@ -101,6 +110,11 @@ class PrespecifiedSensitivitySpec(BaseModel):
     landmark_hours: float | None = Field(default=None, gt=0, le=24 * 365)
     require_alive_at_landmark: bool = False
     exclude_negative_event_times: bool = False
+    event_time_variable: str | None = Field(default=None, min_length=1, max_length=80)
+    observation_duration_variable: str | None = Field(
+        default=None, min_length=1, max_length=80
+    )
+    observation_duration_unit: Literal["hours", "days"] | None = None
 
     @model_validator(mode="after")
     def _closed_strategy(self) -> "PrespecifiedSensitivitySpec":
@@ -118,6 +132,24 @@ class PrespecifiedSensitivitySpec(BaseModel):
             for value in variables
         ):
             raise ValueError("execution_variables must be owner-issued identifiers")
+        landmark_variables = tuple(
+            value
+            for value in (
+                self.event_time_variable,
+                self.observation_duration_variable,
+            )
+            if value is not None
+        )
+        if any(
+            not value[0].isalnum()
+            or any(
+                char
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+                for char in value
+            )
+            for value in landmark_variables
+        ):
+            raise ValueError("landmark variables must be owner-issued identifiers")
         if self.strategy == "landmark":
             if self.landmark_hours is None:
                 raise ValueError("landmark sensitivity requires landmark_hours")
@@ -127,10 +159,23 @@ class PrespecifiedSensitivitySpec(BaseModel):
             self.strategy != "landmark"
         ):
             raise ValueError("landmark eligibility flags require landmark strategy")
+        if self.strategy != "landmark" and (
+            landmark_variables or self.observation_duration_unit is not None
+        ):
+            raise ValueError(
+                "event time and observation duration coordinates require landmark strategy"
+            )
+        if (self.observation_duration_variable is None) != (
+            self.observation_duration_unit is None
+        ):
+            raise ValueError(
+                "landmark observation duration variable and unit must be declared together"
+            )
         if self.strategy in {
             "non_readmission_restriction",
             "first_stay",
             "restricted_cubic_spline",
+            "linear_per_unit",
             "fractional_polynomial",
             "categorical",
             "complete_case",
@@ -141,6 +186,29 @@ class PrespecifiedSensitivitySpec(BaseModel):
             raise ValueError(f"{self.strategy} sensitivity requires execution_variables")
         object.__setattr__(self, "execution_variables", variables)
         return self
+
+    @property
+    def source_materialization_variables(self) -> tuple[str, ...]:
+        """Source concepts needed in addition to the configured primary inputs.
+
+        Event time is an operational companion emitted by the outcome owner,
+        whereas observation duration is a separately exported source concept.
+        Keeping that distinction here prevents Web materialization from asking
+        the source catalog for a derived ``death_time``-style column.
+        """
+
+        return tuple(
+            dict.fromkeys(
+                (
+                    *self.execution_variables,
+                    *(
+                        (self.observation_duration_variable,)
+                        if self.observation_duration_variable is not None
+                        else ()
+                    ),
+                )
+            )
+        )
 
 
 def normalize_prespecified_sensitivities(

@@ -134,6 +134,11 @@ def _bind_step_module_shape(
                 "outcome_type",
             )
             properties["model_terms"]["minItems"] = 1
+        elif locked_module_id == "absolute_risk_context":
+            required_non_null = (
+                "primary_exposure",
+                "outcome",
+            )
         elif locked_module_id == "exposure_outcome_distribution":
             required_non_null = (
                 "primary_exposure",

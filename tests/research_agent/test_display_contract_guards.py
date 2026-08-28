@@ -24,7 +24,9 @@ from easyicu.research_agent.planning.figure_plan_shaping import (
     ensure_cohort_accounting_figure_step,
     ensure_data_quality_figure_step,
     ensure_descriptive_context_figure_step,
+    ensure_landmark_association_composite_figure_step,
     ensure_primary_result_figure_step,
+    select_deterministic_result_renderers,
     step_declares_audit_panel,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -159,6 +161,7 @@ def test_deterministic_cohort_renderer_gets_digest_bound_panel_contract() -> Non
             "figure_output": "figure:cohort_flow",
             "article_role": "cohort_accounting",
             "chart_type": "cohort_flow",
+            "placement": "main",
             "source_products": ["table:cohort_flow"],
         }
     ]
@@ -279,6 +282,7 @@ def test_grouped_distribution_draft_is_normalized_to_point_range() -> None:
             "figure_output": "figure:age_distribution",
             "article_role": "distribution",
             "chart_type": "point_range",
+            "placement": "main",
             "source_products": ["table:distribution_prevalence"],
         }
     ]
@@ -372,6 +376,131 @@ def test_association_gets_unique_descriptive_context_renderer() -> None:
     assert repeated == []
 
 
+def test_signed_landmark_association_gets_source_bound_composite_renderer() -> None:
+    steps = [
+        AnalysisStep(
+            step_id="measurement_audit",
+            planned_analysis_role="auxiliary",
+            intent="Audit the landmark measurement process.",
+            method="missing_data",
+            expected_outputs=["table:measurement_process_audit"],
+        ),
+        AnalysisStep(
+            step_id="adjusted_primary",
+            planned_analysis_role="primary",
+            intent="Estimate the signed landmark spline association.",
+            method="signed_landmark_restricted_cubic_spline",
+            expected_outputs=[
+                "table:landmark_rcs_curve",
+                "table:landmark_rcs_contrasts",
+            ],
+        ),
+        AnalysisStep(
+            step_id="absolute_risk_context",
+            planned_analysis_role="secondary",
+            intent="Report adjusted absolute-risk context.",
+            method="absolute_risk_context",
+            expected_outputs=["table:absolute_risk_context"],
+        ),
+        AnalysisStep(
+            step_id="robustness_replay",
+            planned_analysis_role="sensitivity",
+            intent="Replay the prespecified robustness authority.",
+            method="robustness_sensitivity",
+            expected_outputs=["table:robustness_summary"],
+        ),
+    ]
+    plan = AnalysisPlan(
+        research_question="Estimate a landmark association.",
+        steps=steps,
+    )
+
+    shaped, findings = ensure_landmark_association_composite_figure_step(plan=plan)
+
+    figure = shaped.steps[-1]
+    assert figure.inputs == [
+        "table:landmark_rcs_curve",
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    ]
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "data_quality",
+    ]
+    assert len({panel.chart_type for panel in figure.figure_panels}) == 4
+    assert findings[0].detail["reason_code"] == (
+        "landmark_association_composite_figure_bound"
+    )
+
+    again, repeated = ensure_landmark_association_composite_figure_step(plan=shaped)
+    assert again == shaped
+    assert repeated == []
+
+
+def test_result_renderer_selection_keeps_its_order_in_one_owner_call() -> None:
+    """The pipeline asks once; this owner decides which renderers and in what
+    order.  The single-result pass must run first so the four-panel landmark
+    composite is only offered to the plans it declined."""
+
+    steps = [
+        AnalysisStep(
+            step_id="measurement_audit",
+            planned_analysis_role="auxiliary",
+            intent="Audit the landmark measurement process.",
+            method="missing_data",
+            expected_outputs=["table:measurement_process_audit"],
+        ),
+        AnalysisStep(
+            step_id="adjusted_primary",
+            planned_analysis_role="primary",
+            intent="Estimate the signed landmark spline association.",
+            method="signed_landmark_restricted_cubic_spline",
+            expected_outputs=[
+                "table:landmark_rcs_curve",
+                "table:landmark_rcs_contrasts",
+            ],
+        ),
+        AnalysisStep(
+            step_id="absolute_risk_context",
+            planned_analysis_role="secondary",
+            intent="Report adjusted absolute-risk context.",
+            method="absolute_risk_context",
+            expected_outputs=["table:absolute_risk_context"],
+        ),
+        AnalysisStep(
+            step_id="robustness_replay",
+            planned_analysis_role="sensitivity",
+            intent="Replay the prespecified robustness authority.",
+            method="robustness_sensitivity",
+            expected_outputs=["table:robustness_summary"],
+        ),
+    ]
+    plan = AnalysisPlan(
+        research_question="Estimate a landmark association.",
+        steps=steps,
+    )
+
+    grouped, grouped_findings = select_deterministic_result_renderers(plan=plan)
+
+    sequential, sequential_findings = ensure_primary_result_figure_step(plan=plan)
+    sequential, landmark_findings = (
+        ensure_landmark_association_composite_figure_step(plan=sequential)
+    )
+    sequential_findings = [*sequential_findings, *landmark_findings]
+
+    assert grouped == sequential
+    assert [finding.detail["reason_code"] for finding in grouped_findings] == [
+        finding.detail["reason_code"] for finding in sequential_findings
+    ]
+
+    again, repeated = select_deterministic_result_renderers(plan=grouped)
+    assert again == grouped
+    assert repeated == []
+
+
 def test_counts_only_primary_figure_has_no_interval_panel() -> None:
     primary = AnalysisStep.model_validate(
         {
@@ -455,6 +584,7 @@ def test_typed_measurement_alias_is_normalized_to_availability_panel() -> None:
             "figure_output": "figure:missingness_data_quality",
             "article_role": "data_quality",
             "chart_type": "availability_panel",
+            "placement": "main",
             "source_products": ["table:missingness_data_quality"],
         }
     ]

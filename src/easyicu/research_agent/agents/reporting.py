@@ -48,10 +48,20 @@ def _project_writer_evidence_digest(
     section_name: str,
     evidence_digest: Optional[str],
 ) -> str:
-    """Project result-heavy evidence away from non-result section calls."""
+    """Project the lossless evidence subset required by one manuscript role."""
 
     digest = str(evidence_digest or "")
     if str(section_name).strip().casefold() in {"abstract", "results"}:
+        methods_marker = "\n## EXECUTED METHOD BOUNDARY"
+        numeric_marker = "\n## numeric citation authority"
+        if methods_marker in digest and numeric_marker in digest:
+            before_methods, methods_and_after = digest.split(methods_marker, 1)
+            _, numeric_and_after = methods_and_after.split(numeric_marker, 1)
+            return (
+                before_methods.rstrip()
+                + numeric_marker
+                + numeric_and_after
+            )
         return digest
     marker = "\n## secondary numbers"
     if marker not in digest:

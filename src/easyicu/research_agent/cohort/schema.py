@@ -315,6 +315,13 @@ def _column_aggregation_matches(name: str, aggregation: str) -> bool:
 
     normalized_name = str(name or "").strip().casefold()
     normalized_aggregation = str(aggregation or "").strip().casefold()
+    if normalized_aggregation == "count":
+        # EasyICU's materialized concept contract names the observation-count
+        # companion ``<concept>_n``.  It is the exact executable form of a
+        # cohort predicate with ``aggregation='count'``; requiring only the
+        # literal ``_count`` suffix makes valid exported count authority
+        # impossible to bind.
+        return normalized_name.endswith(("_count", "_n"))
     return bool(
         normalized_aggregation in ALLOWED_CTAS_AGGREGATIONS
         and normalized_name.endswith(f"_{normalized_aggregation}")
@@ -475,16 +482,28 @@ def _planner_declared_context_column_bindings(
         return {}
 
     descriptors_by_source: Dict[str, list[Any]] = {}
+    predicate_aggregations_by_concept: Dict[str, set[str]] = {}
+    for predicate in (*definition.inclusion, *definition.exclusion):
+        predicate_aggregations_by_concept.setdefault(
+            predicate.concept_id,
+            set(),
+        ).add(str(predicate.aggregation or "").strip().casefold())
     for descriptor in getattr(context, "variables", ()) or ():
         name = str(getattr(descriptor, "name", "") or "").strip()
         source_concept = str(getattr(descriptor, "source_concept", "") or "").strip()
         role = getattr(descriptor, "role", "")
         role_value = str(getattr(role, "value", role) or "").strip().casefold()
+        count_companion = bool(
+            source_concept
+            and predicate_aggregations_by_concept.get(source_concept) == {"count"}
+            and _column_aggregation_matches(name, "count")
+        )
         if (
             not name
             or not source_concept
             or name not in declared_inputs
-            or role_value in {"id", "meta", "time"}
+            or role_value in {"id", "time"}
+            or (role_value == "meta" and not count_companion)
         ):
             continue
         descriptors_by_source.setdefault(source_concept, []).append(descriptor)

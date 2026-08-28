@@ -604,7 +604,7 @@ def test_primary_figure_adjustment_label_uses_registered_runtime_receipt(
     receipt_path.write_text(
         json.dumps(
             {
-                "schema_version": "easyicu.model_runtime_receipt/1",
+                "schema_version": "easyicu.model_runtime_receipt/2",
                 "adjustment_columns": ["age", "sex"],
             }
         ),

@@ -19,6 +19,22 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 
+# A repeated concept is materialized into explicit value summaries before the
+# Planner sees it.  Those suffixes change representation, not the user-owned
+# covariate identity.  Measurement/count/time companions are deliberately not
+# included: ``charlson_n`` or ``charlson_measured`` is not the Charlson score.
+_VALUE_AGGREGATION_SUFFIXES = ("_first", "_mean", "_max", "_min")
+
+
+def _matches_declared_covariate(declared: str, observed: str) -> bool:
+    if observed == declared:
+        return True
+    return any(
+        observed == f"{declared}{suffix}"
+        for suffix in _VALUE_AGGREGATION_SUFFIXES
+    )
+
+
 class AdjustmentAuthorityError(ValueError):
     """A plan changed a user-locked adjustment set."""
 
@@ -33,6 +49,7 @@ class AdjustmentSetAuthority:
     covariates: tuple[str, ...]
     rationales: tuple[tuple[str, str], ...] = ()
     temporal_roles: tuple[tuple[str, str], ...] = ()
+    operationalizations: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_context(cls, context: Any) -> "AdjustmentSetAuthority":
@@ -55,6 +72,9 @@ class AdjustmentSetAuthority:
             )
         rationales = getattr(preferences, "covariate_rationales", {}) or {}
         temporal_roles = getattr(preferences, "covariate_temporal_roles", {}) or {}
+        operationalizations = (
+            getattr(preferences, "covariate_operationalizations", {}) or {}
+        )
         return cls(
             selection=selection,
             covariates=covariates,
@@ -64,7 +84,27 @@ class AdjustmentSetAuthority:
                 for name in covariates
                 if name in temporal_roles
             ),
+            operationalizations=tuple(
+                (name, str(operationalizations[name]))
+                for name in covariates
+                if name in operationalizations
+            ),
         )
+
+    @property
+    def operational_covariates(self) -> tuple[str, ...]:
+        mapping = dict(self.operationalizations)
+        return tuple(mapping.get(name, name) for name in self.covariates)
+
+    @property
+    def operational_rationales(self) -> dict[str, str]:
+        mapping = dict(self.operationalizations)
+        return {mapping.get(name, name): value for name, value in self.rationales}
+
+    @property
+    def operational_temporal_roles(self) -> dict[str, str]:
+        mapping = dict(self.operationalizations)
+        return {mapping.get(name, name): value for name, value in self.temporal_roles}
 
     def validate_plan(self, plan: Any) -> None:
         """Require every declared fitted model to honor an exact roster.
@@ -78,6 +118,7 @@ class AdjustmentSetAuthority:
             return
 
         mismatches: list[str] = []
+        operationalizations = dict(self.operationalizations)
         for step in getattr(plan, "steps", ()) or ():
             step_id = str(getattr(step, "step_id", "") or "<unnamed>")
             for requirement in getattr(step, "model_requirements", ()) or ():
@@ -87,7 +128,19 @@ class AdjustmentSetAuthority:
                     if declared is None
                     else tuple(str(value or "").strip() for value in declared)
                 )
-                if observed != self.covariates:
+                roster_matches = (
+                    observed is not None
+                    and len(observed) == len(self.covariates)
+                    and all(
+                        (
+                            actual == operationalizations[expected]
+                            if expected in operationalizations
+                            else _matches_declared_covariate(expected, actual)
+                        )
+                        for expected, actual in zip(self.covariates, observed)
+                    )
+                )
+                if not roster_matches:
                     mismatches.append(
                         f"{step_id}/{getattr(requirement, 'requirement_id', '<unnamed>')}: "
                         f"declared={list(observed) if observed is not None else None!r}"

@@ -841,10 +841,31 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             }
             <= set(step.inputs)
         ]
+        article_composite_candidates = [
+            step
+            for step in broad_composite_candidates
+            if {
+                generic_parent,
+                "table:absolute_risk_context",
+                "table:robustness_summary",
+            }
+            <= set(step.inputs)
+        ]
+        # Prefer the broad article display over a dedicated robustness figure.
+        # Both consume ``table:robustness_summary`` and therefore used to make
+        # the candidate set ambiguous.  The article display is the unique
+        # figure that also consumes the generic primary result and absolute-risk
+        # context; after authority binding it can be mechanically upgraded to
+        # the exact four-panel signed renderer.  Preserve the historical
+        # single-figure fallback when no article display exists.
         composite_candidates = (
             exact_composite_candidates
-            if exact_composite_candidates
-            else broad_composite_candidates
+            if len(exact_composite_candidates) == 1
+            else (
+                article_composite_candidates
+                if len(article_composite_candidates) == 1
+                else broad_composite_candidates
+            )
         )
         composite_step_id = (
             composite_candidates[0].step_id if len(composite_candidates) == 1 else None

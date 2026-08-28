@@ -33,6 +33,7 @@ from ..research_context.temporal_semantics import (
 )
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy
+from .adjustment_authority import AdjustmentSetAuthority
 from .dependence_authority import (
     context_patient_group_authority,
     dependence_matches_context,
@@ -736,6 +737,31 @@ def _sensitivity_facts(
                     and method in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
                 ):
                     executed_spec_ids.add(spec_id)
+            # A signed runtime method is the host-bound implementation of the
+            # exact StudyContext digest. Its primary step may execute typed
+            # landmark, spline, and linear contracts without mislabelling the
+            # primary estimator as a separate sensitivity step. Credit only
+            # strategies explicitly supported by that signed method and only
+            # when their source coordinates are present in the governed step.
+            # Ordinary Planner prose and generic method names never reach this
+            # branch.
+            if method == "signed_landmark_restricted_cubic_spline":
+                step_inputs = set(step.inputs)
+                for spec_id, spec in typed_specs.items():
+                    if method not in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]:
+                        continue
+                    required_inputs = set(spec.execution_variables)
+                    if spec.strategy == "landmark":
+                        required_inputs.update(
+                            value
+                            for value in (
+                                spec.event_time_variable,
+                                spec.observation_duration_variable,
+                            )
+                            if value
+                        )
+                    if required_inputs.issubset(step_inputs):
+                        executed_spec_ids.add(spec_id)
         else:
             protocol_only.update(axes)
     replay_steps = [
@@ -1107,20 +1133,49 @@ def build_plan_scientific_review(
     patient_identity = patient_identity_available(context)
     covariates = model_covariates(plan)
     preferences = context.user_preferences
+    adjustment_authority = AdjustmentSetAuthority.from_context(context)
+    if not covariates and any(
+        step.planned_analysis_role == "primary"
+        and _method_head(step) == "signed_landmark_restricted_cubic_spline"
+        for step in plan.steps
+    ):
+        # This method can appear only after the digest-bound runtime owner has
+        # replaced the generic primary step. Its exact adjustment columns are
+        # therefore the operational projection of the sealed StudyContext,
+        # not an inference from plan inputs or available data.
+        covariates = adjustment_authority.operational_covariates
     covariate_selection = (
         preferences.covariate_selection if preferences is not None else "planner_selectable"
     )
-    covariate_rationales = dict(
-        getattr(preferences, "covariate_rationales", {}) or {}
-    )
-    covariate_temporal_roles = dict(
-        getattr(preferences, "covariate_temporal_roles", {}) or {}
-    )
+    covariate_rationales = adjustment_authority.operational_rationales
+    covariate_temporal_roles = adjustment_authority.operational_temporal_roles
     capability_assessment = assess_scientific_capability(
         analysis_type=plan.analysis_type,
         context=context,
         plan=plan,
     )
+    selected_design = (
+        plan.design_selection.selected if plan.design_selection is not None else None
+    )
+    if selected_design is not None and selected_design.reviewable_plan is None:
+        findings.append(
+            PlanScientificFinding(
+                code="REVIEWABLE_PLAN_SPECIFICATION_MISSING",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The selected design does not contain a complete Planner-owned "
+                    "recommendation for researcher review."
+                ),
+                evidence_refs=["analysis_plan.json.design_selection"],
+                remediation=(
+                    "Generate a fresh candidate plan that recommends the cohort "
+                    "and analysis unit, exposure timing and aggregation, outcome "
+                    "follow-up, adjustment/model, missing-data strategy, and "
+                    "sensitivity plus feasibility checks before requesting approval."
+                ),
+            )
+        )
     if (
         require_reportable_capability
         and not capability_assessment.claim_ceiling_allows_reportable

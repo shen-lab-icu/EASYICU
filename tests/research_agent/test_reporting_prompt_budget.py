@@ -96,7 +96,10 @@ def test_writer_non_result_section_uses_role_scoped_evidence_projection() -> Non
     digest = (
         "RUN_CONTEXT\n"
         + "x" * 20_000
+        + "\n## EXECUTED METHOD BOUNDARY\n"
+        + "methods-only" * 300
         + "\n## host-authorized scientific claims\n{claim:step.result}\n"
+        + "\n## numeric citation authority\n{evidence:primary_result}\n"
         + "\n## secondary numbers\n"
         + "y" * 70_000
     )
@@ -104,7 +107,11 @@ def test_writer_non_result_section_uses_role_scoped_evidence_projection() -> Non
 
     assert "{claim:step.result}" in projected
     assert "## secondary numbers" not in projected
-    assert _project_writer_evidence_digest("Results", digest) == digest
+    results_projection = _project_writer_evidence_digest("Results", digest)
+    assert "## EXECUTED METHOD BOUNDARY" not in results_projection
+    assert "methods-only" not in results_projection
+    assert "## numeric citation authority" in results_projection
+    assert "## secondary numbers" in results_projection
 
     llm = PatternScriptedMockLLMClient([], default="## Methods\n\nComplete.")
     WriterAgent(llm)._call_section(

@@ -90,6 +90,33 @@ def _extract_json(raw: str) -> Optional[dict]:
     return None
 
 
+def _canonicalize_catalog_selection(
+    values: Sequence[object], catalog: AvailableCatalog
+) -> List[str]:
+    """Bind model-returned concept ids to the catalog's canonical spelling.
+
+    Concept ids are host-owned identifiers. A model may return a clinically
+    conventional spelling such as ``pH`` even though the catalog exposes
+    ``ph``. Accept an unambiguous case-only variant, while preserving unknown
+    or ambiguous values so the coverage owner can still fail closed.
+    """
+
+    exact = {concept.concept_id for concept in catalog.concepts}
+    folded: Dict[str, List[str]] = {}
+    for concept_id in exact:
+        folded.setdefault(concept_id.casefold(), []).append(concept_id)
+    canonical: List[str] = []
+    for raw in values:
+        value = str(raw).strip()
+        if not value:
+            continue
+        matches = folded.get(value.casefold(), [])
+        resolved = value if value in exact or len(matches) != 1 else matches[0]
+        if resolved not in canonical:
+            canonical.append(resolved)
+    return canonical
+
+
 @dataclass
 class ConceptSelection:
     """The agent's chosen concepts + its intended cohort, plus the verdict."""
@@ -169,7 +196,7 @@ class DataFoundationAgent:
                 "Concept selection JSON must contain a selected_concepts list."
             )
             raw_selected = []
-        selected = [str(c) for c in (raw_selected or []) if str(c).strip()]
+        selected = _canonicalize_catalog_selection(raw_selected or [], catalog)
         raw_inclusion = data.get("inclusion_exclusion") or []
         if not isinstance(raw_inclusion, list):
             if not selection_error:

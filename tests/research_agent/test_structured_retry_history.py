@@ -293,6 +293,34 @@ def test_safe_attempt_projection_excludes_response_message_and_extra_usage() -> 
     assert secret not in str(projected)
 
 
+def test_safe_attempt_projection_keeps_owner_declared_reason_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _OwnerFailure(ValueError):
+        easyicu_safe_diagnostic = {
+            "owner": "easyicu.planning.progressive_compiler_v1",
+            "reason_code": "progressive_outline_owner_missing",
+        }
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.providers.structured_retry.authorized_complete",
+        lambda *_args, **_kwargs: "{}",
+    )
+
+    with pytest.raises(StructuredResponseFailure) as raised:
+        call_llm_with_structured_retry(
+            object(),
+            [],
+            parser=lambda _raw: (_ for _ in ()).throw(_OwnerFailure("private")),
+            role="planner",
+            max_retries=0,
+        )
+
+    projected = safe_structured_attempt_metadata(raised.value.attempts)
+    assert projected[0]["reason_code"] == "progressive_outline_owner_missing"
+    assert "private" not in repr(projected)
+
+
 def test_structured_failure_captures_safe_provider_metadata_per_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

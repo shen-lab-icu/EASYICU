@@ -76,8 +76,11 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "table_one",
         "baseline characteristics",
         "baseline_characteristics",
+        "cohort summary",
+        "cohort_summary",
     ),
     "data_quality": (
+        "data_quality_audit",
         "audit",
         "missingness",
         "measurement",
@@ -88,8 +91,11 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "missingness_profile",
         "data_quality_source_status",
         "measurement_missingness",
+        "measurement_audit",
         "measurement_process",
         "measurement_source",
+        "measurement_quality",
+        "measurement_quality_audit",
     ),
     "primary_estimand": (
         "relationship",
@@ -98,6 +104,8 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "effect estimate",
         "forest plot",
         "adjusted_association_estimates",
+        "landmark_rcs_curve",
+        "landmark_rcs_contrasts",
     ),
     # Keep these aliases role-specific. Bare words such as ``specification`` or
     # ``alternative`` occur in ordinary model-review prose and previously made
