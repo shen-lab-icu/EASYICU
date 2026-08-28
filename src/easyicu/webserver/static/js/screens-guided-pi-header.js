@@ -3,10 +3,22 @@
 (function () {
   'use strict';
 
+  /* A new conversation inherits its project's name, so the kicker and the
+     title were printing the same string twice, eight pixels apart. The session
+     title also carries a mode suffix ("New local study · 研究"), so an exact
+     match is not enough -- name the project above the title only when the
+     title does not already contain it. */
+  function kickerText(options) {
+    const project = String(options.projectTitle || '').trim();
+    const session = String(options.sessionTitle || '').trim();
+    if (!project || (session && session.indexOf(project) >= 0)) return 'EASYICU COPILOT';
+    return `EASYICU COPILOT · ${project}`;
+  }
+
   function render(options) {
     const { tr, esc, icon } = options;
     return `<header class="gpi-head">
-      <div class="gpi-head-title"><div class="gpi-kicker">EASYICU COPILOT · ${esc(options.projectTitle)}</div><div class="gpi-title">${esc(options.sessionTitle)} <span class="gpi-live" role="status" aria-live="polite">${options.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
+      <div class="gpi-head-title"><div class="gpi-kicker">${esc(kickerText(options))}</div><div class="gpi-title" title="${esc(options.sessionTitle)}">${esc(options.sessionTitle)} <span class="gpi-live" role="status" aria-live="polite">${options.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
       <div class="gpi-head-meta">
         <div class="gpi-mode-switch" role="group" aria-label="${tr('Agent mode', 'Agent 模式')}">
           <button type="button" data-gpi-mode-switch="research" aria-pressed="${!options.workspace}">${tr('Research', '研究')}</button>

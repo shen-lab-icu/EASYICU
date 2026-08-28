@@ -32,6 +32,29 @@
       }
       return name(resource);
     }
+    /* Which artifacts a researcher opens first, and one message's resource
+       list ranked by that order. Ranking is resource identity work -- it uses
+       the same ``key`` that de-duplicates them -- so it belongs here rather
+       than inline in the screen shell. */
+    const PREFERRED_ARTIFACTS = [
+      'system_validation_report.html', 'system_validation_report.pdf',
+      'system_validation_report.json', 'result_tables.json', 'figure_gallery.json',
+      'manuscript_scaffold.pdf', 'manuscript_draft.json', 'agent_plan.json',
+      'literature_evidence.json', 'evidence_ledger.json', 'quality_gate.json',
+    ];
+    function rank(resource) {
+      const position = PREFERRED_ARTIFACTS.indexOf(String((resource && resource.artifact) || ''));
+      return position < 0 ? PREFERRED_ARTIFACTS.length : position;
+    }
+    function forMessage(row, limit) {
+      const rows = Array.isArray(row && row.resources) ? row.resources : [];
+      return rows
+        .filter(resource => key(resource))
+        .filter((resource, index, all) => all.findIndex(item => key(item) === key(resource)) === index)
+        .sort((left, right) => rank(left) - rank(right))
+        .slice(0, Number.isFinite(limit) ? limit : 8);
+    }
+
     function kind(resource) {
       const supported = new Set([
         'demo_document', 'demo_artifact', 'data_package_review',
@@ -99,7 +122,7 @@
       };
     }
 
-    return { name, key, label, button, fromButton };
+    return { name, key, label, button, forMessage, fromButton };
   }
 
   window.EU_GUIDED_PI_RESOURCES = { create };

@@ -1,5 +1,7 @@
 /* Guided Copilot message-action owner.
-   Editing creates a new turn; regenerating creates a recoverable Pi branch. */
+   Editing and regenerating both rewind to the target turn and create a
+   recoverable Pi branch: an edited turn replaces everything after it rather
+   than appending a new message to the bottom of the conversation. */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
@@ -24,7 +26,7 @@
         return {
           editorHtml: `<form class="gpi-message-editor" data-gpi-message-edit-form="${esc(id)}">
             <textarea rows="3" maxlength="12000" aria-label="${tr('Edit message', '编辑消息')}">${esc(text)}</textarea>
-            <div class="gpi-message-editor-foot"><small>${tr('The original stays in history; your edit is sent as a new message.', '原消息会保留；修改内容将作为新消息发送。')}</small><span><button type="button" data-gpi-message-edit-cancel>${tr('Cancel', '取消')}</button><button type="submit">${tr('Send edit', '发送修改')}</button></span></div>
+            <div class="gpi-message-editor-foot"><small>${tr('Replies after this message are replaced. The original branch stays recoverable in history.', '这条之后的回答会被替换；原分支仍保留在历史中可恢复。')}</small><span><button type="button" data-gpi-message-edit-cancel>${tr('Cancel', '取消')}</button><button type="submit">${tr('Send edit', '发送修改')}</button></span></div>
           </form>`,
           actionsHtml: '',
         };
@@ -32,7 +34,7 @@
 
       const copy = action('copy', tr('Copy message', '复制消息'), 'copy', false);
       const edit = role === 'user' && options && options.allowEdit
-        ? action('edit', tr('Edit and send as a new message', '编辑并作为新消息发送'), 'edit', !options.canEdit)
+        ? action('edit', tr('Edit and resend from here', '编辑并从这里重新发送'), 'edit', !options.canEdit)
         : '';
       const retry = role === 'assistant' && options && options.canRetry && options.retryUserEntryId
         ? action('retry', tr('Regenerate response', '重新生成回答'), 'refresh', false)
@@ -133,12 +135,40 @@
       return false;
     }
 
+    function followingAssistantId(id) {
+      const list = context.rows();
+      const at = list.findIndex(row => String(row.id || '') === String(id || ''));
+      if (at < 0) return '';
+      const next = list.slice(at + 1).find(row => row.role === 'assistant');
+      return next ? String(next.id || '') : '';
+    }
+
     function handleSubmit(event) {
       const form = event.target.closest('[data-gpi-message-edit-form]');
       if (!form) return false;
       event.preventDefault();
       const input = form.querySelector('textarea');
-      context.sendText(input && input.value);
+      const text = String((input && input.value) || '').trim();
+      if (!text) return true;
+      const id = form.dataset.gpiMessageEditForm;
+      const row = messageById(id);
+      const entryId = String((row && row.entryId) || '').trim();
+      context.setEditing('');
+      // A host plan action can acquire a persisted transcript entry after a
+      // refresh.  Route it by its governed action identity before using the
+      // generic conversation-regeneration path; otherwise the model merely
+      // replays the sentence and never starts a new Planner run.
+      if (
+        row && typeof context.resubmitHostGenerated === 'function'
+        && context.resubmitHostGenerated(row, text)
+      ) return true;
+      if (!entryId) {
+        // Other projected messages still fall back to an ordinary message so
+        // an edit is never silently dropped.
+        context.sendText(text);
+        return true;
+      }
+      context.regenerate(entryId, text, 'user_edited_message', followingAssistantId(id));
       return true;
     }
 

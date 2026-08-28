@@ -13,7 +13,7 @@
   const PERSISTED_FIELDS = [
     'id', 'title', 'question', 'purpose', 'data_source', 'crossdb_selection', 'cohort', 'modules',
     'outcome', 'primary_exposure', 'covariates', 'covariate_selection',
-    'covariate_rationales', 'covariate_temporal_roles', 'execution_concepts',
+    'covariate_rationales', 'covariate_temporal_roles', 'covariate_operationalizations', 'execution_concepts',
     'analysis_design', 'sensitivity_specs', 'time_window', 'comparator',
     'export_format', 'analysis_goal', 'current_stage', 'last_route',
     'active_job_id', 'confirmations', 'idea_handoff',
@@ -55,7 +55,8 @@
     hours: 'number', observation_hours: 'number', anchor: 'text', preset: 'text', label: 'text',
   };
   const EXECUTION_CONCEPTS_SCHEMA = {
-    outcome: 'text', primary_exposure: 'text', covariates: 'text_list',
+    outcome: 'text', primary_exposure: 'text', primary_exposure_aggregation: 'text',
+    covariates: 'text_list',
   };
   const ANALYSIS_DESIGN_SCHEMA = {
     analysis_family: 'text', analysis_unit: 'text', variance_estimator: 'text', cluster_unit: 'text',
@@ -184,6 +185,13 @@
       if (typeof raw.landmark_hours === 'number' && Number.isFinite(raw.landmark_hours)) {
         row.landmark_hours = raw.landmark_hours;
       }
+      ['event_time_variable', 'observation_duration_variable'].forEach(key => {
+        const value = metadataText(raw[key], 80);
+        if (value) row[key] = value;
+      });
+      if (raw.observation_duration_unit === 'hours' || raw.observation_duration_unit === 'days') {
+        row.observation_duration_unit = raw.observation_duration_unit;
+      }
       return row;
     }).filter(row => row.spec_id && row.axis && row.strategy);
   }
@@ -244,6 +252,7 @@
       covariate_selection: ['planner_selectable', 'exact'].includes(text(raw.covariate_selection)) ? text(raw.covariate_selection) : 'planner_selectable',
       covariate_rationales: Object.fromEntries(Object.entries(cleanObject(raw.covariate_rationales)).slice(0, 64).filter(([key, value]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(key) && typeof value === 'string').map(([key, value]) => [key, metadataText(value, 500)]).filter(([, value]) => value)),
       covariate_temporal_roles: Object.fromEntries(Object.entries(cleanObject(raw.covariate_temporal_roles)).slice(0, 64).filter(([key, value]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(key) && ['baseline_static', 'at_or_before_time_zero'].includes(value))),
+      covariate_operationalizations: Object.fromEntries(Object.entries(cleanObject(raw.covariate_operationalizations)).slice(0, 64).filter(([key, value]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(key) && typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value))),
       execution_concepts: cleanSchemaObject(raw.execution_concepts, EXECUTION_CONCEPTS_SCHEMA),
       analysis_design: cleanSchemaObject(raw.analysis_design, ANALYSIS_DESIGN_SCHEMA),
       sensitivity_specs: cleanSensitivitySpecs(raw.sensitivity_specs),
@@ -639,6 +648,30 @@
     return hydratePromise;
   }
 
+  function refreshActiveFromServer() {
+    const contextId = text(activeContext && activeContext.id);
+    const api = window.EU_API;
+    if (!contextId || !api || typeof api.loadStudyContext !== 'function') {
+      return Promise.reject(new Error('StudyContext refresh is unavailable'));
+    }
+    const refreshRequest = () => api.loadStudyContext(contextId).then(response => {
+      const saved = responseContext(response);
+      if (!saved || text(saved.id) !== contextId) {
+        throw new Error('StudyContext refresh returned a different context');
+      }
+      revision += 1;
+      activeContext = normalize(saved);
+      rememberContext(activeContext);
+      writeCache(activeContext);
+      setDirty(contextId, false);
+      setSync('synced');
+      emit('refreshed-from-server');
+      return clone(activeContext);
+    });
+    persistQueue = persistQueue.catch(() => null).then(refreshRequest);
+    return persistQueue;
+  }
+
   window.EU_STUDY_CONTEXT = {
     STORAGE_KEY,
     EVENT_NAME,
@@ -647,6 +680,7 @@
     activate,
     status,
     hydrate,
+    refreshActiveFromServer,
     patchContext,
     prepare,
     update,

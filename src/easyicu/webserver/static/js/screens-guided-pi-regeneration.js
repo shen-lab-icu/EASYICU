@@ -60,5 +60,15 @@
     return row;
   }
 
-  window.EU_GUIDED_PI_REGENERATION = Object.freeze({ create, project });
+  function visibleRows(rows, regeneration) {
+    const source = Array.isArray(rows) ? rows : [];
+    if (!regeneration) return source;
+    const targetMessageId = String(regeneration.targetMessageId || '');
+    const targetIndex = source.findIndex(row => (
+      row && row.role === 'assistant' && String(row.id || '') === targetMessageId
+    ));
+    return targetIndex < 0 ? source : source.slice(0, targetIndex + 1);
+  }
+
+  window.EU_GUIDED_PI_REGENERATION = Object.freeze({ create, project, visibleRows });
 })();

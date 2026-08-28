@@ -105,19 +105,47 @@
   function childJobPresentation(job, tr) {
     const translate = typeof tr === 'function' ? tr : (en => en);
     const reviewPending = Boolean(job && job.human_review_pending);
+    const gateBlocked = !reviewPending && String(job && job.gate_status || '') === 'blocked';
+    const gateReason = String(job && job.gate_reason_code || '');
+    const errorCode = String(job && job.error_code || '');
+    // Only a genuine historical Planner efficiency-budget stop is presented
+    // as resumable. Contract/compiler failures are failures, not a normal
+    // pause, and must never produce a misleading "continue" affordance.
+    const plannerCheckpointSaved = errorCode
+      === 'research_pipeline_planner_efficiency_budget_exhausted';
+    const planFoundationBlocked = gateBlocked && gateReason === 'data_foundation_blocked';
     const created = Number(job && job.created_at_epoch);
     const finished = Number(job && job.finished_at_epoch);
     return {
-      expanded: reviewPending,
+      // A pending review does not need its build log unfolded. The attention
+      // signal is the review card below the activity -- which states the
+      // decision and carries the buttons -- while the expanded body is 22
+      // lines of "Plan draft 1/3 passed contract validation" that pushed that
+      // card off screen. The summary keeps the title, step count and duration,
+      // and a failed turn still opens because there the detail is the answer.
+      expanded: false,
       durationKnown: Number.isFinite(created) && Number.isFinite(finished) && finished >= created,
       startedAt: Number.isFinite(created) ? created * 1000 : null,
       endedAt: Number.isFinite(finished) ? finished * 1000 : null,
       title: reviewPending
         ? translate('Analysis plan ready for review', '分析计划已就绪，等待审阅')
-        : '',
+        : plannerCheckpointSaved
+          ? translate('Planner saved a validated checkpoint', '规划器已保存验证检查点')
+        : planFoundationBlocked
+          ? translate('Research plan was not generated', '研究计划未生成')
+          : gateBlocked
+            ? translate('EasyICU task did not pass its scientific gate', 'EasyICU 科研任务未通过')
+            : '',
       terminalLabel: reviewPending
         ? translate('Plan contract passed; analysis is paused for human review', '计划合同已通过；分析已暂停，等待人工审阅')
-        : '',
+        : plannerCheckpointSaved
+          ? translate('A validated checkpoint was saved; continue to finish the plan', '已保存验证检查点；可继续完成研究计划')
+        : planFoundationBlocked
+          ? translate('Research plan was not generated because data preparation did not pass', '研究计划未生成：数据准备未通过')
+          : gateBlocked
+            ? translate('The scientific gate blocked this task', '科学闸门已阻止本次任务')
+            : '',
+      blocked: gateBlocked || plannerCheckpointSaved,
     };
   }
 
