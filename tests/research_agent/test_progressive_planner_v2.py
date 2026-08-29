@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,7 @@ from easyicu.research_agent.agents.progressive_planner import (
     _parse_model,
     _parse_step_materialization,
     _preserve_literature_roster_across_targeted_repair,
+    _preserve_non_targeted_coordinates_across_literature_repair,
     _sealed_cohort_predicate_binding_rows,
     _step_materialization_shape_contract,
     _validate_progressive_method_binding_scope,
@@ -1488,6 +1490,38 @@ def test_targeted_repair_preserves_untouched_sealed_literature_bindings() -> Non
         "dependence",
     ]
     assert merged.step.literature_bindings[-1] == previous.step.literature_bindings[-1]
+
+
+def test_literature_only_repair_preserves_valid_parent_product_input() -> None:
+    source = _payload()
+    outline = ProgressivePlanOutline.model_validate(_outline_payload(source))
+    previous_payload = _materialization_payloads(source)[5]
+    previous_payload["step"]["sensitivity_spec_ids"] = ["flexible_form"]
+    previous = ProgressiveStepMaterialization.model_validate(previous_payload)
+    current_payload = deepcopy(previous_payload)
+    current_payload["step"]["product_inputs"] = []
+    current_payload["step"]["literature_bindings"] = [
+        {
+            "citation_key": key,
+            "design_elements": ["reporting"],
+            "application": f"Apply the sealed {key} source to this sensitivity.",
+            "divergence": None,
+        }
+        for key in outline.steps[5].literature_citation_keys
+    ]
+    current = ProgressiveStepMaterialization.model_validate(current_payload)
+
+    merged = _preserve_non_targeted_coordinates_across_literature_repair(
+        current=current,
+        previous=previous,
+        compiler_observation={
+            "path": "literature_bindings",
+            "reason_code": "progressive_step_literature_roster_mismatch",
+        },
+    )
+
+    assert merged.step.product_inputs == previous.step.product_inputs
+    assert merged.step.literature_bindings == current.step.literature_bindings
 
 
 def test_progressive_step_rejects_method_source_scope_overclaim_locally() -> None:

@@ -244,6 +244,33 @@ def _preserve_literature_roster_across_targeted_repair(
     )
 
 
+def _preserve_non_targeted_coordinates_across_literature_repair(
+    *,
+    current: ProgressiveStepMaterialization,
+    previous: ProgressiveStepMaterialization | None,
+    compiler_observation: Mapping[str, Any] | None,
+) -> ProgressiveStepMaterialization:
+    """Limit a literature-only retry to the compiler-owned repair path.
+
+    Some providers answer a focused literature-roster finding by rebuilding the
+    whole step and dropping already-valid product inputs.  The compiler finding
+    is path-scoped, so a retry for ``literature_bindings`` must retain every
+    other coordinate from the immediately preceding attempt.  The merged step
+    is compiled again normally; this preserves fail-closed validation while
+    preventing an unrelated regression from consuming the final repair turn.
+    """
+
+    if previous is None or previous.step.step_id != current.step.step_id:
+        return current
+    observation_path = str((compiler_observation or {}).get("path") or "").strip()
+    if observation_path != "literature_bindings":
+        return current
+    repaired_step = previous.step.model_copy(
+        update={"literature_bindings": list(current.step.literature_bindings)}
+    )
+    return current.model_copy(update={"step": repaired_step})
+
+
 def _validate_progressive_method_binding_scope(
     materialization: ProgressiveStepMaterialization,
     *,
@@ -3121,6 +3148,13 @@ class ProgressivePlannerAgent:
                     self.last_compile_failure_attempts[-1].materialization
                     if self.last_compile_failure_attempts
                     else None
+                )
+                materialization = (
+                    _preserve_non_targeted_coordinates_across_literature_repair(
+                        current=materialization,
+                        previous=prior_materialization,
+                        compiler_observation=compiler_observation,
+                    )
                 )
                 materialization = _preserve_literature_roster_across_targeted_repair(
                     current=materialization,
