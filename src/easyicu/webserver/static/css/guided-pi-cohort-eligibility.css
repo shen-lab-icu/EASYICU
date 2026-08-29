@@ -1,0 +1,56 @@
+/* Owner: Guided Copilot primary-cohort confirmation card only. */
+.gpi-cohort-eligibility {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+.gpi-cohort-eligibility-head {
+  display: grid;
+  gap: 4px;
+}
+
+.gpi-cohort-eligibility-head small,
+.gpi-cohort-options small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.gpi-cohort-contract {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px 14px;
+  margin: 0;
+  padding: 10px 12px 10px 28px;
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.gpi-cohort-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.gpi-cohort-options .btn {
+  display: grid;
+  height: auto;
+  min-height: 58px;
+  gap: 3px;
+  justify-items: start;
+  padding: 10px 12px;
+  text-align: left;
+  white-space: normal;
+}
+
+.gpi-cohort-option-contract {
+  width: 100%;
+  grid-template-columns: 1fr;
+  margin-top: 5px;
+  text-align: left;
+}

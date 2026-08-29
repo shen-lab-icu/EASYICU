@@ -116,6 +116,16 @@ class CodexLoginRequest(BaseModel):
     flow: Literal["browser", "device_code"] = "browser"
 
 
+class PiCohortEligibilitySelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    option_id: ShortText
+    expected_revision: int = Field(ge=1)
+    primary_cohort_contract_sha256: Sha256Text
+    selection_event_id: Sha256Text
+
+
 class PiMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -605,6 +615,28 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
             message=body.message,
             allowed_actions=body.allowed_actions,
             message_intent=body.turn_intent,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/api/copilot/pi/sessions/{session_id}/cohort-eligibility-selection"
+)
+def post_pi_copilot_cohort_eligibility_selection(
+    session_id: ShortText,
+    body: PiCohortEligibilitySelectionRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().confirm_cohort_eligibility(
+            session_id,
+            project_id=body.project_id,
+            option_id=body.option_id,
+            expected_revision=body.expected_revision,
+            primary_cohort_contract_sha256=(
+                body.primary_cohort_contract_sha256
+            ),
+            selection_event_id=body.selection_event_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

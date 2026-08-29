@@ -2725,39 +2725,6 @@ def _message_explicitly_selects_all_stays(message: str) -> bool:
     )
 
 
-def _message_explicitly_selects_eligibility_option(
-    message: str, option_id: str
-) -> bool:
-    """Require the user turn to cover every axis in one canonical option."""
-
-    normalized = str(message or "").casefold()
-    adult = bool(
-        re.search(r"(?:成人|年[龄齡].{0,8}(?:18|十八)|\badults?\b|\bage\s*(?:>=|≥|at least)\s*18\b)", normalized)
-    )
-    minimum_24h = bool(
-        re.search(r"(?:24\s*(?:小时|小時|h(?:ours?)?)|(?:至少|不短于|≥|>=).{0,8}24)", normalized)
-    )
-    no_filter = bool(
-        re.search(
-            r"(?:不设|不設|没有|沒有|无需|無需|no|without).{0,12}(?:资格|資格|纳排|納排|筛选|篩選|eligibility|filter)",
-            normalized,
-        )
-    )
-    if option_id == "adults_first_admission":
-        return adult and _message_explicitly_selects_first_stay(normalized)
-    if option_id == "adults_all_admissions":
-        return adult and _message_explicitly_selects_all_stays(normalized)
-    if option_id == "adults_first_admission_min_stay":
-        return (
-            adult
-            and minimum_24h
-            and _message_explicitly_selects_first_stay(normalized)
-        )
-    if option_id == "no_eligibility_filter":
-        return no_filter and _message_explicitly_selects_all_stays(normalized)
-    return False
-
-
 def _message_explicitly_selects_primary_outcome(message: str) -> bool:
     """Return whether this turn chooses, rather than merely mentions, an outcome."""
 
@@ -3108,6 +3075,17 @@ def _update_study_context(
             summary="The bound StudyContext no longer exists; no replacement context was created.",
             owner="easyicu.webserver.study_contexts",
         )
+    if current is None and isinstance(params.get("cohort"), Mapping):
+        return _result(
+            context,
+            status="blocked",
+            code="cohort_eligibility_study_context_required",
+            summary=(
+                "The host must allocate and bind a StudyContext before a cohort "
+                "proposal can be saved or confirmed."
+            ),
+            owner="easyicu.webserver.study_contexts",
+        )
     if current and current.get("active_job_id"):
         return _result(
             context,
@@ -3213,11 +3191,6 @@ def _update_study_context(
         normalized_cohort = dict(patch.get("cohort") or {})
         normalized_cohort["preset"] = normalized_preset
         patch["cohort"] = normalized_cohort
-        normalized_proposal = dict(proposed_cohort)
-        normalized_proposal["preset"] = normalized_preset
-        selected_eligibility_option = cohort_eligibility.option_id_for_patch(
-            normalized_proposal
-        )
         current_preset = str(((current or {}).get("cohort") or {}).get("preset") or "")
         if (
             normalized_preset == "adult_all"
@@ -3238,7 +3211,6 @@ def _update_study_context(
             if other_confirmed_change:
                 _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
                 _record_unconfirmed_omission("cohort", "cohort.preset")
-                selected_eligibility_option = ""
             else:
                 return _result(
                     context,
@@ -3273,7 +3245,6 @@ def _update_study_context(
             if other_confirmed_change:
                 _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
                 _record_unconfirmed_omission("cohort", "cohort.preset")
-                selected_eligibility_option = ""
             else:
                 return _result(
                     context,
@@ -3290,37 +3261,6 @@ def _update_study_context(
                         "safe_alternatives": ["adult_all", "all_icu"],
                     },
                 )
-        if selected_eligibility_option:
-            if not _message_explicitly_selects_eligibility_option(
-                context.user_message, selected_eligibility_option
-            ):
-                return _result(
-                    context,
-                    status="blocked",
-                    code="cohort_eligibility_confirmation_required",
-                    summary=(
-                        "The proposed cohort matches a canonical eligibility option, "
-                        "but the current user turn did not explicitly select every "
-                        "axis in that option."
-                    ),
-                    owner="easyicu.webserver.pi_copilot.cohort_eligibility",
-                    details={
-                        "field": "cohort",
-                        "option_id": selected_eligibility_option,
-                    },
-                )
-            patch["cohort"] = cohort_eligibility.apply_option_to_cohort(
-                patch.get("cohort"), selected_eligibility_option
-            )
-            patch["cohort_eligibility_authority"] = (
-                cohort_eligibility.confirmation_authority_for_option(
-                    selected_eligibility_option,
-                    study_context_id=(current or {}).get("id")
-                    or binding.study_context_id,
-                    study_context_revision=int((current or {}).get("revision") or 0)
-                    + 1,
-                )
-            )
     if (
         params.get("outcome")
         and str(context.user_message or "").strip()
@@ -3848,17 +3788,11 @@ def _update_study_context(
     # Configure grant.  A rejected typed proposal is not a mutation; consuming
     # the grant here used to prevent Pi from correcting a mechanical schema
     # error in the same turn.
-    cohort_authority_write = bool(patch.get("cohort_eligibility_authority"))
     try:
         patch = study_contexts.validate_context_update(
             patch,
             current_context=current,
             lifecycle_write=False,
-            **(
-                {"_server_cohort_eligibility_authority_write": True}
-                if cohort_authority_write
-                else {}
-            ),
         )
     except study_contexts.StudyContextError as exc:
         return _result(
@@ -3907,11 +3841,6 @@ def _update_study_context(
             expected_revision=(int(current.get("revision") or 0) if current else None),
             require_revision=bool(current),
             lifecycle_write=False,
-            **(
-                {"_server_cohort_eligibility_authority_write": True}
-                if cohort_authority_write
-                else {}
-            ),
         )
     except study_contexts.StudyContextError as exc:
         return _result(

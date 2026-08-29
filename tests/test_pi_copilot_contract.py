@@ -2139,7 +2139,13 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
 
 def test_current_user_explicit_extraction_confirmation_is_host_granted(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        settings,
+        "load_settings",
+        lambda: {"ai_enabled": True, "language": "en"},
+    )
     gateway = FakeGateway()
     service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
     session_id = service.create_session(
@@ -2221,7 +2227,15 @@ def test_provider_error_marks_message_job_failed_without_raw_network_detail(
     assert record.active_message_job_id is None
 
 
-def test_conversation_prompt_uses_bounded_host_deadline(tmp_path: Path) -> None:
+def test_conversation_prompt_uses_bounded_host_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings,
+        "load_settings",
+        lambda: {"ai_enabled": True, "language": "en"},
+    )
     prompt_timeouts: list[float | None] = []
 
     class DeadlineGateway(FakeGateway):

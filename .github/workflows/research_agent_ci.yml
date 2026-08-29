@@ -51,12 +51,18 @@ jobs:
       - name: Install architecture test dependency
         run: python -m pip install "pytest>=7.0"
 
-      - name: Enforce architecture ratchets
-        run: |
-          python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
-          python tools/research_agent_module_graph.py \
-            --diff tools/arch_baselines/research_agent_module_graph.json
-          pytest tests/test_arch_measure.py tests/test_research_agent_module_graph.py -q -m ""
+      - name: Enforce execution-phase architecture ratchet
+        run: python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
+
+      - name: Enforce research-agent module graph ratchet
+        if: ${{ !cancelled() }}
+        run: >-
+          python tools/research_agent_module_graph.py
+          --diff tools/arch_baselines/research_agent_module_graph.json
+
+      - name: Run architecture contract tests
+        if: ${{ !cancelled() }}
+        run: pytest tests/test_arch_measure.py tests/test_research_agent_module_graph.py -q -m ""
 
   test:
     name: research_agent tests (py${{ matrix.python-version }})

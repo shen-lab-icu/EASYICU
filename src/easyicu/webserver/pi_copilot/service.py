@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -26,6 +27,7 @@ from easyicu.webserver import (
     agent_runs,
     guided_sessions,
     jobs,
+    primary_cohort,
     provider_gate,
     settings,
     sources,
@@ -41,6 +43,7 @@ from easyicu.webserver.copilot_data_workbench import (
 from .plan_projection import (
     project_plan_reader_fields,
 )
+from . import cohort_eligibility
 from .contracts import (
     MAX_MESSAGE_CHARS,
     AuthorityBinding,
@@ -180,6 +183,10 @@ class PiCopilotService:
         self._pending_retirements: Dict[str, PiSessionRecord] = {}
         self._replay_child_watchers: set[tuple[str, str]] = set()
         self._project_initialization_locks: Dict[str, threading.RLock] = {}
+        # Outstanding browser coordinates are deliberately process-local. A
+        # restart invalidates every unconsumed option instead of accepting a
+        # stale click against newly loaded scientific state.
+        self._cohort_selection_secret = secrets.token_bytes(32)
         workspace_base = Path(
             getattr(
                 self.gateway,
@@ -635,6 +642,86 @@ class PiCopilotService:
             identity_sha256=digest,
             study_revision=int(context.get("revision") or 0),
         )
+
+    def _cohort_selection_event_id(
+        self,
+        record: PiSessionRecord,
+        context: Mapping[str, Any],
+        option: Mapping[str, Any],
+        *,
+        purpose: str = "event",
+    ) -> str:
+        payload = {
+            "schema_version": cohort_eligibility.SELECTION_EVENT_SCHEMA_VERSION,
+            "purpose": str(purpose),
+            "session_id": record.session_id,
+            "study_context_id": str(context.get("id") or ""),
+            "expected_revision": int(context.get("revision") or 0),
+            "user_turn_id": self._cohort_selection_user_turn_id(record, context),
+            "option_id": str(option.get("id") or ""),
+            "primary_cohort_contract_sha256": str(
+                option.get("primary_cohort_contract_sha256") or ""
+            ),
+        }
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hmac.new(
+            self._cohort_selection_secret,
+            encoded,
+            hashlib.sha256,
+        ).hexdigest()
+
+    @staticmethod
+    def _cohort_selection_user_turn_id(
+        record: PiSessionRecord,
+        context: Mapping[str, Any],
+    ) -> str:
+        return str(
+            record.last_message_job_id
+            or (
+                f"host_revision_{record.session_id}_"
+                f"{int(context.get('revision') or 0)}"
+            )
+        )
+
+    def _cohort_eligibility_selection_projection(
+        self,
+        record: PiSessionRecord,
+    ) -> Dict[str, Any]:
+        """Return host-issued option coordinates; never project them to Pi."""
+
+        context_id = str(record.binding.study_context_id or "").strip()
+        if record.agent_mode == "workspace" or not context_id:
+            return {"present": False}
+        context = study_contexts.get_context(context_id)
+        if context is None:
+            return {"present": False}
+        proposal = cohort_eligibility.eligibility_proposal(context)
+        options = []
+        for option in proposal.get("options") or []:
+            projected = dict(option)
+            projected["expected_revision"] = int(context.get("revision") or 0)
+            projected["selection_event_id"] = self._cohort_selection_event_id(
+                record,
+                context,
+                option,
+            )
+            options.append(projected)
+        return {
+            "present": True,
+            "stated": bool(proposal.get("stated")),
+            "selection_state": proposal.get("selection_state"),
+            "authority_status": proposal.get("authority_status"),
+            "blocker_code": proposal.get("blocker_code"),
+            "primary_cohort_contract": proposal.get("primary_cohort_contract"),
+            "primary_cohort_contract_sha256": proposal.get(
+                "primary_cohort_contract_sha256"
+            ),
+            "options": options,
+        }
 
     @classmethod
     def _new_session_data_authorization(
@@ -2063,6 +2150,163 @@ class PiCopilotService:
             ),
         }
 
+    def confirm_cohort_eligibility(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        option_id: str,
+        expected_revision: int,
+        primary_cohort_contract_sha256: str,
+        selection_event_id: str,
+    ) -> Dict[str, Any]:
+        """Consume one host-rendered cohort option without a provider turn."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        stale = self._stale_details(record)
+        if stale.get("stale"):
+            raise PiCopilotError(
+                "pi_session_authority_stale",
+                "The StudyContext changed before this cohort option was selected.",
+                status_code=409,
+                details=stale,
+            )
+        context_id = str(record.binding.study_context_id or "").strip()
+        context = study_contexts.get_context(context_id) if context_id else None
+        if context is None:
+            raise PiCopilotError(
+                "cohort_eligibility_study_context_required",
+                "The host must allocate and bind a StudyContext before eligibility confirmation.",
+                status_code=409,
+            )
+        if context.get("active_job_id"):
+            raise PiCopilotError(
+                "study_context_active_job_conflict",
+                "Cohort eligibility cannot change while an EasyICU job is active.",
+                status_code=409,
+            )
+        current_revision = int(context.get("revision") or 0)
+        if expected_revision != current_revision:
+            raise PiCopilotError(
+                "cohort_eligibility_selection_revision_conflict",
+                "The displayed cohort option is stale; reload the current contract.",
+                status_code=409,
+                details={
+                    "expected_revision": expected_revision,
+                    "current_revision": current_revision,
+                },
+            )
+        try:
+            options = cohort_eligibility.selection_options_for_study(context)
+        except primary_cohort.PrimaryCohortContractError as exc:
+            raise PiCopilotError(
+                exc.code,
+                "The current primary-cohort contract is not executable.",
+                status_code=409,
+                details={"field": "cohort", **dict(exc.detail)},
+            ) from exc
+        selected = next(
+            (
+                option
+                for option in options
+                if str(option.get("id") or "") == str(option_id or "").strip()
+            ),
+            None,
+        )
+        if selected is None:
+            raise PiCopilotError(
+                "cohort_eligibility_option_unknown",
+                "The selected cohort option is not available for the current contract.",
+                status_code=409,
+            )
+        canonical_digest = str(
+            selected.get("primary_cohort_contract_sha256") or ""
+        )
+        if canonical_digest != str(primary_cohort_contract_sha256 or ""):
+            raise PiCopilotError(
+                "cohort_eligibility_selection_scope_mismatch",
+                "The selected cohort preview no longer matches current execution semantics.",
+                status_code=409,
+            )
+        expected_event_id = self._cohort_selection_event_id(
+            record,
+            context,
+            selected,
+        )
+        if not hmac.compare_digest(
+            expected_event_id,
+            str(selection_event_id or ""),
+        ):
+            raise PiCopilotError(
+                "cohort_eligibility_selection_event_invalid",
+                "The cohort confirmation was not issued by the current host session.",
+                status_code=409,
+            )
+        one_use_grant_id = self._cohort_selection_event_id(
+            record,
+            context,
+            selected,
+            purpose="one_use_grant",
+        )
+        actor_id_sha256 = hashlib.sha256(
+            f"local_interactive_user:{record.session_id}".encode("utf-8")
+        ).hexdigest()
+        event = cohort_eligibility.build_selection_event(
+            option_id=option_id,
+            study_context_id=context_id,
+            expected_revision=current_revision,
+            session_id=record.session_id,
+            user_turn_id=self._cohort_selection_user_turn_id(record, context),
+            event_id=expected_event_id,
+            one_use_grant_id=one_use_grant_id,
+            primary_cohort_contract_sha256=canonical_digest,
+            actor_id_sha256=actor_id_sha256,
+        )
+        target_cohort = cohort_eligibility.selection_cohort_for_option(
+            context,
+            option_id,
+        )
+        authority = cohort_eligibility.confirmation_authority_for_option(
+            option_id,
+            study_context_id=context_id,
+            study_context_revision=current_revision + 1,
+            current_cohort=context.get("cohort") or {},
+            selection_event=event,
+        )
+        try:
+            updated = study_contexts.upsert_context(
+                {
+                    "id": context_id,
+                    "cohort": target_cohort,
+                    "cohort_eligibility_authority": authority,
+                },
+                expected_revision=current_revision,
+                require_revision=True,
+                lifecycle_write=False,
+                _server_cohort_eligibility_authority_write=True,
+            )
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(exc.detail.get("error") or "cohort_eligibility_update_blocked"),
+                "The StudyContext owner rejected the cohort confirmation.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        record.binding = self._binding_for_context(
+            updated,
+            run_id=record.binding.run_id,
+        )
+        self._save_record(record)
+        return {
+            "ok": True,
+            "status": "confirmed",
+            "code": "cohort_eligibility_confirmed",
+            "study_context_id": context_id,
+            "study_context_revision": int(updated.get("revision") or 0),
+            "receipt_id": authority["receipt_id"],
+            "selection": self._cohort_eligibility_selection_projection(record),
+        }
+
     def _assert_project_initialized(self, project_id: str) -> str:
         clean = str(project_id or "").strip()
         if not clean or not self.project_store.resolve(clean):
@@ -2886,6 +3130,11 @@ class PiCopilotService:
             "binding": record.binding.model_dump(mode="json"),
             "data_source_authorization": record.data_source_authorization.model_dump(
                 mode="json"
+            ),
+            # Browser-only host coordinates. Pi/model projections never
+            # receive the event ids that can mint eligibility authority.
+            "cohort_eligibility_selection": (
+                self._cohort_eligibility_selection_projection(record)
             ),
             "research_provider": record.research_provider.public_projection(),
             "model_connection": (

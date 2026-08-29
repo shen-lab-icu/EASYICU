@@ -40,8 +40,8 @@ from easyicu.concept_output_sources import (
 )
 from easyicu.databases import normalize_database_key
 from easyicu.outcome_availability import structural_outcome_unavailability
-from easyicu.webserver.input_validation import parse_bool
 from easyicu.webserver import entity_ids as entity_id_contract
+from easyicu.webserver import primary_cohort
 
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
@@ -69,7 +69,9 @@ _EXPORT_METADATA_FILES = {
     "feature_definitions.json",
 }
 _NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
-DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30
+DEFAULT_OBSERVATION_WINDOW_HOURS = (
+    primary_cohort.DEFAULT_OBSERVATION_WINDOW_HOURS
+)
 _WORKSPACE_SAMPLE_LIMIT = 500
 
 _COHORT_PROGRESS_MESSAGES = {
@@ -521,29 +523,16 @@ def _is_presence_rate_module(module: object) -> bool:
     return _presence_rate_kind(module) is not None
 
 
-_SUPPORTED_COHORT_PRESETS = {
-    "all_icu",
-    "adult_first",
-    "adult_all",
-    "sepsis3",
-    "aki",
-    "ventilation",
-    "vasopressor",
-    "respiratory",
-    "icd",
-}
+_SUPPORTED_COHORT_PRESETS = set(primary_cohort.SUPPORTED_COHORT_PRESETS)
 
 
 def normalize_export_cohort_preset(value: Any) -> str:
     """Return one canonical Data Extraction cohort preset or fail closed."""
 
-    preset = str(value or "").strip().lower()
-    if preset not in _SUPPORTED_COHORT_PRESETS:
-        raise ExportCohortError(
-            "unsupported_cohort_preset",
-            {"preset": preset, "supported": sorted(_SUPPORTED_COHORT_PRESETS)},
-        )
-    return preset
+    try:
+        return primary_cohort.normalize_preset(value)
+    except primary_cohort.PrimaryCohortContractError as exc:
+        raise ExportCohortError(exc.code, exc.detail) from exc
 
 
 _ICD_SUPPORTED_DATABASES = {"miiv", "mimic", "miii", "eicu"}
@@ -1329,105 +1318,17 @@ def _coerce_int(
 
 
 def _split_icd_tokens(raw: Any) -> List[str]:
-    import re
-
-    tokens: List[str] = []
-    values = raw if isinstance(raw, (list, tuple, set)) else [raw]
-    for value in values:
-        text = str(value or "").upper().replace("，", ",").replace("；", ";")
-        for part in re.split(r"[\s,;]+", text):
-            token = part.strip().replace(".", "")
-            if not token:
-                continue
-            if "-" in token:
-                start, end = [p.strip() for p in token.split("-", 1)]
-                if (
-                    len(start) == len(end)
-                    and len(start) >= 2
-                    and start[:-2] == end[:-2]
-                    and start[-2:].isdigit()
-                    and end[-2:].isdigit()
-                ):
-                    prefix = start[:-2]
-                    lo, hi = int(start[-2:]), int(end[-2:])
-                    if 0 <= hi - lo <= 50:
-                        tokens.extend(
-                            f"{prefix}{i:02d}" for i in range(lo, hi + 1)
-                        )
-                        continue
-            tokens.append(token)
-    seen: Set[str] = set()
-    out: List[str] = []
-    for token in tokens:
-        if token not in seen:
-            seen.add(token)
-            out.append(token)
-    return out[:64]
+    return list(primary_cohort.normalize_diagnosis_tokens(raw))
 
 
 def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = cohort if isinstance(cohort, dict) else {}
-    has_explicit_contract = isinstance(cohort, dict) and bool(cohort)
-    preset = normalize_export_cohort_preset(
-        raw.get("preset") or ("adult_first" if has_explicit_contract else "all_icu")
-    )
-
-    include = _split_icd_tokens(
-        raw.get("icd_include")
-        or raw.get("include_diagnoses")
-        or raw.get("include")
-        or ""
-    )
-    exclude = _split_icd_tokens(
-        raw.get("icd_exclude")
-        or raw.get("exclude_diagnoses")
-        or raw.get("exclude")
-        or ""
-    )
     try:
-        icd_enabled = (
-            parse_bool(raw.get("icd_enabled"), default=False) or preset == "icd"
-        )
-        exclude_readmissions = parse_bool(
-            raw.get("exclude_readmissions"), default=preset == "adult_first"
-        )
-    except ValueError as exc:
-        raise ExportCohortError(
-            "invalid_cohort_boolean",
-            {"fields": ["icd_enabled", "exclude_readmissions"]},
-        ) from exc
-    if not icd_enabled:
-        include = []
-        exclude = []
-    if preset == "icd" and not include and not exclude:
-        raise ExportCohortError("empty_icd_filter", {"preset": preset})
-
-    age_min = _coerce_int(
-        raw.get("age_min"), 18 if preset == "adult_first" else 0, 0, 120
-    )
-    age_max = _coerce_int(raw.get("age_max"), 100, 0, 120)
-    if age_min > age_max:
-        age_min, age_max = age_max, age_min
-    if preset == "adult_first":
-        age_min = max(18, age_min)
-    min_los = _coerce_int(raw.get("min_icu_los_hours"), 0, 0, 24 * 30)
-    window = _coerce_int(
-        raw.get("observation_window_hours"),
-        DEFAULT_OBSERVATION_WINDOW_HOURS,
-        1,
-        DEFAULT_OBSERVATION_WINDOW_HOURS,
-    )
-
+        normalized = primary_cohort.normalize_execution_cohort(raw)
+    except primary_cohort.PrimaryCohortContractError as exc:
+        raise ExportCohortError(exc.code, exc.detail) from exc
     return {
-        "preset": preset,
-        "age_min": age_min,
-        "age_max": age_max,
-        "min_icu_los_hours": min_los,
-        "observation_window_hours": window,
-        "exclude_readmissions": exclude_readmissions,
-        "icd_enabled": icd_enabled,
-        "icd_include": include,
-        "icd_exclude": exclude,
+        **normalized,
         "sepsis_definition": _normalize_sepsis_definition(raw.get("sepsis_definition")),
     }
 

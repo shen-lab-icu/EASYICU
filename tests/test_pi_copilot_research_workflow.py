@@ -69,6 +69,48 @@ def _request() -> Request:
     )
 
 
+def _confirmed_cohort_decision(
+    option_id: str,
+    *,
+    study_context_id: str,
+    study_context_revision: int,
+    current_cohort: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    base = dict(current_cohort or {})
+    target = cohort_eligibility.selection_cohort_for_option(
+        {"cohort": base}, option_id
+    )
+    scope = study_context_owner.normalize_primary_cohort_scope(
+        {"cohort": target}
+    )
+    session_id = f"pi-{study_context_id}"
+    seed = (
+        f"{session_id}:{study_context_id}:{study_context_revision - 1}:"
+        f"{option_id}:{scope.sha256}"
+    )
+    event = cohort_eligibility.build_selection_event(
+        option_id=option_id,
+        study_context_id=study_context_id,
+        expected_revision=study_context_revision - 1,
+        session_id=session_id,
+        user_turn_id=f"turn-{session_id}",
+        event_id=hashlib.sha256(f"event:{seed}".encode()).hexdigest(),
+        one_use_grant_id=hashlib.sha256(f"grant:{seed}".encode()).hexdigest(),
+        primary_cohort_contract_sha256=scope.sha256,
+        actor_id_sha256=hashlib.sha256(f"actor:{session_id}".encode()).hexdigest(),
+        selected_at="2026-08-29T12:00:00Z",
+    )
+    authority = cohort_eligibility.confirmation_authority_for_option(
+        option_id,
+        study_context_id=study_context_id,
+        study_context_revision=study_context_revision,
+        current_cohort=base,
+        selection_event=event,
+        confirmed_at="2026-08-29T12:00:00Z",
+    )
+    return target, authority
+
+
 def test_typed_selected_design_requires_complete_reviewable_recommendation() -> None:
     legacy = {
         "design_selection": {
@@ -104,10 +146,12 @@ def test_typed_selected_design_requires_complete_reviewable_recommendation() -> 
 
 
 def _complete_study() -> dict[str, Any]:
-    cohort = {
-        **cohort_eligibility.cohort_patch_for_option("no_eligibility_filter"),
-        "max_patients": 2000,
-    }
+    cohort, authority = _confirmed_cohort_decision(
+        "no_eligibility_filter",
+        study_context_id="study-workflow",
+        study_context_revision=4,
+        current_cohort={"max_patients": 2000},
+    )
     return {
         "id": "study-workflow",
         "revision": 4,
@@ -117,14 +161,7 @@ def _complete_study() -> dict[str, Any]:
             "database": "mimiciv",
         },
         "cohort": cohort,
-        "cohort_eligibility_authority": (
-            cohort_eligibility.confirmation_authority_for_option(
-                "no_eligibility_filter",
-                study_context_id="study-workflow",
-                study_context_revision=4,
-                confirmed_at="2026-08-29T12:00:00Z",
-            )
-        ),
+        "cohort_eligibility_authority": authority,
         "modules": ["vitals", "outcome"],
         "outcome": "In-hospital mortality",
         "primary_exposure": "heart_rate",
@@ -555,22 +592,16 @@ def test_workflow_keeps_typed_execution_decisions_in_setup_gate() -> None:
     )
     assert conflated_snapshot.missing_setup_fields == ["time_window.anchor_supported"]
 
+    repeated_cohort, repeated_authority = _confirmed_cohort_decision(
+        "adults_all_admissions",
+        study_context_id="study-workflow",
+        study_context_revision=4,
+        current_cohort={"max_patients": 2000},
+    )
     unaddressed_repeats = {
         **_complete_study(),
-        "cohort": {
-            **cohort_eligibility.cohort_patch_for_option(
-                "adults_all_admissions"
-            ),
-            "max_patients": 2000,
-        },
-        "cohort_eligibility_authority": (
-            cohort_eligibility.confirmation_authority_for_option(
-                "adults_all_admissions",
-                study_context_id="study-workflow",
-                study_context_revision=4,
-                confirmed_at="2026-08-29T12:00:00Z",
-            )
-        ),
+        "cohort": repeated_cohort,
+        "cohort_eligibility_authority": repeated_authority,
     }
     dependence_snapshot = build_research_workflow_snapshot(
         study=unaddressed_repeats,
@@ -2105,26 +2136,22 @@ def test_completed_preflight_advances_to_provider_plan_confirmation() -> None:
 
 
 def test_question_and_confirmed_data_package_offer_planner_before_setup_questionnaire() -> None:
+    cohort, authority = _confirmed_cohort_decision(
+        "no_eligibility_filter",
+        study_context_id="study-planner-first",
+        study_context_revision=2,
+    )
     study = {
         "id": "study-planner-first",
-        "revision": 1,
+        "revision": 2,
         "question": "Is early peak lactate associated with hospital mortality?",
         "purpose": "Generate an evidence-bound research plan.",
         "data_source": {
             "path": "/private/prepared/source",
             "database": "miiv",
         },
-        "cohort": cohort_eligibility.cohort_patch_for_option(
-            "no_eligibility_filter"
-        ),
-        "cohort_eligibility_authority": (
-            cohort_eligibility.confirmation_authority_for_option(
-                "no_eligibility_filter",
-                study_context_id="study-planner-first",
-                study_context_revision=1,
-                confirmed_at="2026-08-29T12:00:00Z",
-            )
-        ),
+        "cohort": cohort,
+        "cohort_eligibility_authority": authority,
         "modules": [],
         "outcome": "",
         "primary_exposure": "",
@@ -4006,6 +4033,11 @@ def test_planner_owned_design_choices_do_not_block_plan_generation(
     because the Planner is forbidden to invent the study denominator.
     """
 
+    cohort, authority = _confirmed_cohort_decision(
+        "no_eligibility_filter",
+        study_context_id="study-planner-owned",
+        study_context_revision=3,
+    )
     monkeypatch.setattr(
         tool_module,
         "_bound_context",
@@ -4014,17 +4046,8 @@ def test_planner_owned_design_choices_do_not_block_plan_generation(
             "revision": 3,
             "question": "What is the aggregate Sepsis-3 prevalence?",
             "data_source": {"path": "/private/raw/miiv", "database": "mimiciv"},
-            "cohort": cohort_eligibility.cohort_patch_for_option(
-                "no_eligibility_filter"
-            ),
-            "cohort_eligibility_authority": (
-                cohort_eligibility.confirmation_authority_for_option(
-                    "no_eligibility_filter",
-                    study_context_id="study-planner-owned",
-                    study_context_revision=3,
-                    confirmed_at="2026-08-29T12:00:00Z",
-                )
-            ),
+            "cohort": cohort,
+            "cohort_eligibility_authority": authority,
         },
     )
     monkeypatch.setattr(
