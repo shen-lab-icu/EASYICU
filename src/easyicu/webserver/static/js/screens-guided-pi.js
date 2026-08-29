@@ -225,6 +225,12 @@
   const workflowConfirmation = CONFIRMATION.workflowConfirmation;
   const workflowConfirmationHtml = CONFIRMATION.workflowConfirmationHtml;
   const localizedAuthorizationQuestion = CONFIRMATION.localizedAuthorizationQuestion;
+  const COHORT_ELIGIBILITY = window.EU_GUIDED_PI_COHORT_ELIGIBILITY.create({
+    tr, esc,
+    session: () => state.session,
+    busy: () => state.busy || Boolean(state.childJobId),
+    sessionIsStale,
+  });
   const MESSAGE_ACTIONS = window.EU_GUIDED_PI_MESSAGE_ACTIONS.create({
     tr, iconHtml,
     rows: () => state.messages.concat(state.workflowReceipts),
@@ -620,6 +626,7 @@
               : emptyResearchHtml)}
           ${workspace ? '' : RUN_OUTCOME.render(state.latestRun, state.workflow)}
           ${dataConsentHtml}
+          ${dataConsentRequired ? '' : COHORT_ELIGIBILITY.render()}
           ${dataConsentRequired ? '' : workflowConfirmationHtml()}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
@@ -1570,6 +1577,28 @@
     const text = String((input && input.value) || state.draft || '').trim();
     await sendText(text);
   }
+  async function confirmCohortEligibility(selection) {
+    if (!selection || !state.session || state.busy || state.childJobId || sessionIsStale()) return;
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      await api().confirmPiCopilotCohortEligibility(state.session.session_id, {
+        project_id: projectId(),
+        option_id: selection.option_id,
+        expected_revision: selection.expected_revision,
+        primary_cohort_contract_sha256: selection.primary_cohort_contract_sha256,
+        selection_event_id: selection.selection_event_id,
+      });
+      await refreshSession(true);
+      await loadWorkflow();
+    } catch (error) {
+      state.error = errorText(error);
+    } finally {
+      state.busy = false;
+      render();
+    }
+  }
   async function confirmWorkflowAction() {
     const confirmation = workflowConfirmation();
     if (!confirmation) return;
@@ -1925,6 +1954,8 @@
       if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
       if (event.target.closest('[data-gpi-confirm-reject]')) { rejectWorkflowAction(); return; }
       if (event.target.closest('[data-gpi-confirm-edit]')) { editWorkflow(); return; }
+      const cohortSelection = COHORT_ELIGIBILITY.actionFromEvent(event);
+      if (cohortSelection) { confirmCohortEligibility(cohortSelection); return; }
       const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);
       if (dataSourceAction) { authorizeDataSource(dataSourceAction); return; }
       if (event.target.closest('[data-gpi-data-demo]')) {

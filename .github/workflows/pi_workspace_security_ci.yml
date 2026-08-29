@@ -7,8 +7,11 @@ on:
       - "src/easyicu/webserver/routes/pi_copilot.py"
       - "src/easyicu/webserver/agent_runs.py"
       - "src/easyicu/webserver/agent_pipeline_runs.py"
+      - "src/easyicu/webserver/dataio.py"
+      - "src/easyicu/webserver/primary_cohort.py"
       - "src/easyicu/webserver/study_contexts.py"
       - "src/easyicu/webserver/static/css/guided-pi*.css"
+      - "src/easyicu/webserver/static/js/api.js"
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
       - "src/easyicu/webserver/static/js/screens-agent-render.js"
       - "src/easyicu/webserver/static/index.html"
@@ -24,8 +27,11 @@ on:
       - "src/easyicu/webserver/routes/pi_copilot.py"
       - "src/easyicu/webserver/agent_runs.py"
       - "src/easyicu/webserver/agent_pipeline_runs.py"
+      - "src/easyicu/webserver/dataio.py"
+      - "src/easyicu/webserver/primary_cohort.py"
       - "src/easyicu/webserver/study_contexts.py"
       - "src/easyicu/webserver/static/css/guided-pi*.css"
+      - "src/easyicu/webserver/static/js/api.js"
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
       - "src/easyicu/webserver/static/js/screens-agent-render.js"
       - "src/easyicu/webserver/static/index.html"
@@ -75,6 +81,9 @@ jobs:
           node --check src/easyicu/webserver/pi_copilot/node_app/src/main.mjs
           node --check src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs
           node --check src/easyicu/webserver/pi_copilot/node_app/src/shell-budget.mjs
+          node --check src/easyicu/webserver/static/js/api.js
+          node --check src/easyicu/webserver/static/js/screens-guided-pi.js
+          node --check src/easyicu/webserver/static/js/screens-guided-pi-cohort-eligibility.js
 
       - name: Run research artifact renderer security vectors
         if: ${{ !cancelled() }}

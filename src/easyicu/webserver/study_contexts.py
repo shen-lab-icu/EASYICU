@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from easyicu.research_agent.planning.sensitivity_authority import (
     normalize_prespecified_sensitivities,
 )
-from easyicu.webserver import state_paths
+from easyicu.webserver import primary_cohort, state_paths
 
 _CONFIG_PATH = state_paths.state_root() / "webserver_study_contexts.json"
 _LOCK = threading.RLock()
@@ -119,10 +119,11 @@ _COHORT_NUMBER_FIELDS = {
 }
 _COHORT_BOOL_FIELDS = {"exclude_readmissions", "icd_enabled"}
 _COHORT_LIST_FIELDS = {"include_diagnoses", "exclude_diagnoses"}
+# Compatibility projection for callers that display raw StudyContext fields.
+# Scientific scope and invalidation no longer consume this roster; they use
+# ``normalize_primary_cohort_scope`` below, which is shared with execution.
 COHORT_ELIGIBILITY_FIELDS = (
-    "age_min",
-    "age_max",
-    "min_icu_los_hours",
+    *primary_cohort.ADMISSION_ELIGIBILITY_FIELDS[:-1],
     "include_diagnoses",
     "exclude_diagnoses",
     "exclude_readmissions",
@@ -223,6 +224,7 @@ _COHORT_ELIGIBILITY_AUTHORITY_SCHEMA = {
     "receipt_id": "text",
     "decision_sha256": "text",
     "cohort_scope_sha256": "text",
+    "primary_cohort_contract_sha256": "text",
     "study_context_id": "text",
     "study_context_revision": "number",
     "selection_state": "text",
@@ -233,6 +235,12 @@ _COHORT_ELIGIBILITY_AUTHORITY_SCHEMA = {
     "minimum_icu_duration_hours": "number",
     "origin": "text",
     "confirmed_by": "text",
+    "confirmed_actor_id_sha256": "text",
+    "session_id": "text",
+    "user_turn_id": "text",
+    "confirmation_event_schema_version": "text",
+    "selection_event_id": "text",
+    "one_use_grant_id": "text",
     "confirmed_at": "text",
     "stated_fields": "text_list",
 }
@@ -740,47 +748,27 @@ def _cohort(value: Any) -> Dict[str, Any]:
 
 
 def primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
-    """Compile the StudyContext cohort to the pipeline's closed mode roster.
-
-    StudyContext owns the structured cohort fields, so every consumer asks this
-    function instead of maintaining a mirrored field list. Descriptive labels
-    never authorize row filtering.
-    """
+    """Compile the StudyContext through Data Extraction's semantic owner."""
 
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
-    if cohort.get("exclude_readmissions") is True:
-        return "predicate_filtered"
-    fields = tuple(
-        field
-        for field in COHORT_ELIGIBILITY_FIELDS
-        if field != "exclude_readmissions"
-    )
-    if any(cohort.get(field) not in (None, "", []) for field in fields):
-        return "predicate_filtered"
-    return "all_input_rows"
+    return primary_cohort.normalize_primary_cohort_scope(cohort).selection_mode
+
+
+def normalize_primary_cohort_scope(
+    study: Mapping[str, Any],
+) -> primary_cohort.NormalizedPrimaryCohortScope:
+    """Return the canonical executed queue contract for one StudyContext."""
+
+    raw = study.get("cohort")
+    cohort = raw if isinstance(raw, Mapping) else {}
+    return primary_cohort.normalize_primary_cohort_scope(cohort)
 
 
 def cohort_eligibility_scope_sha256(study: Mapping[str, Any]) -> str:
-    """Digest exactly the cohort coordinates covered by eligibility consent."""
+    """Digest the normalized execution semantics, never a raw field roster."""
 
-    raw = study.get("cohort")
-    cohort = raw if isinstance(raw, Mapping) else {}
-    scope = {
-        "preset": str(cohort.get("preset") or "").strip(),
-        "fields": {
-            field: cohort.get(field)
-            for field in COHORT_ELIGIBILITY_FIELDS
-            if field in cohort
-        },
-    }
-    encoded = json.dumps(
-        scope,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return normalize_primary_cohort_scope(study).sha256
 
 
 def _confirmations(value: Any) -> Dict[str, bool]:
@@ -1294,6 +1282,8 @@ def _sanitize_patch(
                 "receipt_id",
                 "decision_sha256",
                 "cohort_scope_sha256",
+                "primary_cohort_contract_sha256",
+                "study_context_id",
                 "study_context_revision",
                 "selection_state",
                 "option_id",
@@ -1301,7 +1291,14 @@ def _sanitize_patch(
                 "repeated_admission_policy",
                 "origin",
                 "confirmed_by",
+                "confirmed_actor_id_sha256",
+                "session_id",
+                "user_turn_id",
+                "confirmation_event_schema_version",
+                "selection_event_id",
+                "one_use_grant_id",
                 "confirmed_at",
+                "stated_fields",
             }
             missing = sorted(required - set(authority))
             if missing:
@@ -1312,7 +1309,14 @@ def _sanitize_patch(
                         "fields": missing,
                     }
                 )
-            for field in ("decision_sha256", "cohort_scope_sha256"):
+            for field in (
+                "decision_sha256",
+                "cohort_scope_sha256",
+                "primary_cohort_contract_sha256",
+                "confirmed_actor_id_sha256",
+                "selection_event_id",
+                "one_use_grant_id",
+            ):
                 digest = str(authority.get(field) or "")
                 if not re.fullmatch(r"[a-f0-9]{64}", digest):
                     raise StudyContextError(
@@ -1726,45 +1730,40 @@ def upsert_context(
         proposed_context = {**dict(current or {}), **patch}
         proposed_authority = patch.get("cohort_eligibility_authority")
         if isinstance(proposed_authority, dict) and proposed_authority:
-            authority_study_id = str(
-                proposed_authority.get("study_context_id") or ""
-            ).strip()
-            authority_revision = int(
-                proposed_authority.get("study_context_revision") or 0
-            )
-            authority_scope = str(
-                proposed_authority.get("cohort_scope_sha256") or ""
-            ).strip()
-            if authority_study_id and authority_study_id != context_id:
-                raise StudyContextError(
-                    {
-                        "error": "cohort_eligibility_authority_study_mismatch",
-                        "field": "cohort_eligibility_authority.study_context_id",
-                    }
+            # The receipt owner validates the complete contract. Persistence
+            # does not maintain a second, partial interpretation of it.
+            from easyicu.webserver.pi_copilot import cohort_eligibility
+
+            validation_context = {
+                **proposed_context,
+                "id": context_id,
+                "revision": current_revision + 1,
+            }
+            try:
+                cohort_eligibility.validate_authority_payload(
+                    validation_context,
+                    expected_revision=current_revision + 1,
                 )
-            if authority_revision != current_revision + 1:
+            except cohort_eligibility.CohortEligibilityAuthorityError as exc:
+                raise StudyContextError(exc.detail) from exc
+            except primary_cohort.PrimaryCohortContractError as exc:
                 raise StudyContextError(
-                    {
-                        "error": "cohort_eligibility_authority_revision_mismatch",
-                        "field": "cohort_eligibility_authority.study_context_revision",
-                        "expected_revision": current_revision + 1,
-                    }
-                )
-            if authority_scope != cohort_eligibility_scope_sha256(proposed_context):
-                raise StudyContextError(
-                    {
-                        "error": "cohort_eligibility_authority_scope_mismatch",
-                        "field": "cohort_eligibility_authority.cohort_scope_sha256",
-                    }
-                )
+                    {"error": exc.code, "field": "cohort", **dict(exc.detail)}
+                ) from exc
         elif current is not None and "cohort" in patch:
             current_authority = current.get("cohort_eligibility_authority")
-            if (
-                isinstance(current_authority, dict)
-                and current_authority
-                and cohort_eligibility_scope_sha256(current)
-                != cohort_eligibility_scope_sha256(proposed_context)
-            ):
+            try:
+                scope_changed = bool(
+                    isinstance(current_authority, dict)
+                    and current_authority
+                    and cohort_eligibility_scope_sha256(current)
+                    != cohort_eligibility_scope_sha256(proposed_context)
+                )
+            except primary_cohort.PrimaryCohortContractError as exc:
+                raise StudyContextError(
+                    {"error": exc.code, "field": "cohort", **dict(exc.detail)}
+                ) from exc
+            if scope_changed:
                 # Eligibility consent is valid only for the exact cohort scope.
                 # Clear it in the same CAS write that changes the cohort so an
                 # old decision cannot authorize a new denominator.
@@ -2133,6 +2132,7 @@ __all__ = [
     "get_context",
     "handoff_context",
     "list_contexts",
+    "normalize_primary_cohort_scope",
     "normalize_path",
     "primary_cohort_selection_mode",
     "normalize_analysis_design",
