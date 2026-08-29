@@ -530,6 +530,62 @@ def test_new_research_session_allows_planning_but_blocks_data_tools_until_confir
         confirmed["session"]["data_source_authorization"]["confirmation_mode"]
         == "reuse_project_source"
     )
+    assert (
+        confirmed["session"]["data_source_authorization"]["extraction_scope"]
+        == "reuse_prepared_full"
+    )
+
+
+def test_data_preparation_choice_distinguishes_study_required_and_full_extract(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json", gateway=FakeGateway()
+    )
+    study_session = service.create_session(
+        project_id="project-study-required-data",
+        external_llm_opt_in=True,
+    )["session"]
+
+    study_choice = service.authorize_data_source(
+        study_session["session_id"],
+        project_id="project-study-required-data",
+        action="use_study_required_data",
+    )
+
+    assert study_choice["resource"] is None
+    assert (
+        study_choice["session"]["data_source_authorization"]["extraction_scope"]
+        == "study_required"
+    )
+
+    full_session = service.create_session(
+        project_id="project-study-required-data",
+        external_llm_opt_in=True,
+    )["session"]
+    selection = service.authorize_data_source(
+        full_session["session_id"],
+        project_id="project-study-required-data",
+        action="begin_full_data_selection",
+    )
+
+    assert selection["resource"]["entry_mode"] == "source_binding"
+    assert selection["resource"]["extraction_scope"] == "all_supported"
+    assert (
+        selection["session"]["data_source_authorization"]["extraction_scope"]
+        == "all_supported"
+    )
+
+    confirmed = service.authorize_data_source(
+        full_session["session_id"],
+        project_id="project-study-required-data",
+        action="confirm_selected_source",
+    )
+
+    assert confirmed["resource"]["state"] == "setup"
+    assert confirmed["resource"]["extraction_scope"] == "all_supported"
+    assert "entry_mode" not in confirmed["resource"]
 
 
 def test_edited_plan_turn_keeps_edit_and_host_transition_intents_separate(

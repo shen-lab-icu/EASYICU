@@ -32,7 +32,7 @@
         );
         host.setSession(payload.session || host.session());
         rememberSession(host.session().session_id);
-        if (action === 'begin_local_selection') {
+        if (action === 'begin_local_selection' || action === 'begin_full_data_selection') {
           const contextId = String(
             payload.resource && payload.resource.study_context_id
             || host.session() && host.session().binding && host.session().binding.study_context_id
@@ -122,11 +122,14 @@
       host.setSession(payload.session || host.session());
       rememberSession(host.session().session_id);
       document.dispatchEvent(new CustomEvent('easyicu:guided-projects-refresh'));
-      if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
+      if (payload.resource && window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
+        window.EU_GUIDED_PI_PREVIEW.open(payload.resource, projectId());
+      } else if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.close) {
         window.EU_GUIDED_PI_PREVIEW.close();
       }
       await loadWorkflow();
       render();
+      if (payload.resource) return true;
       if (await continueAfterDataSourceConfirmation()) return true;
       requestAnimationFrame(() => {
         const composer = host.root() && host.root().querySelector('[data-gpi-input]');

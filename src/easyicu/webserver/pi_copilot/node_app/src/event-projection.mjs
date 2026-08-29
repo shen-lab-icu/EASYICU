@@ -200,7 +200,10 @@ function projectedResource(value) {
     const jobId = safeJobId(value.job_id);
     const sourceId = safeStableId(value.source_id);
     const expectedDatabase = boundedText(value.expected_database, 40).trim().toLowerCase();
+    const entryMode = boundedText(value.entry_mode, 40).trim();
+    const extractionScope = boundedText(value.extraction_scope, 40).trim();
     const allowedDatabases = new Set(["miiv", "mimic", "eicu", "aumc", "hirid", "sic"]);
+    const allowedScopes = new Set(["study_required", "all_supported", "reuse_prepared_full"]);
     if (
       route !== "extraction"
       || !studyContextId
@@ -209,6 +212,8 @@ function projectedResource(value) {
       || !["setup", "running", "review"].includes(state)
       || (sourceId && !/^src_[a-f0-9]{12}$/.test(sourceId))
       || (expectedDatabase && !allowedDatabases.has(expectedDatabase))
+      || (entryMode && entryMode !== "source_binding")
+      || (extractionScope && !allowedScopes.has(extractionScope))
     ) return undefined;
     return {
       kind: "native_workspace",
@@ -221,6 +226,8 @@ function projectedResource(value) {
       ...(jobId ? { job_id: jobId } : {}),
       ...(sourceId ? { source_id: sourceId } : {}),
       ...(expectedDatabase ? { expected_database: expectedDatabase } : {}),
+      ...(entryMode ? { entry_mode: entryMode } : {}),
+      ...(extractionScope ? { extraction_scope: extractionScope } : {}),
     };
   }
   const file = safeRelativeFile(value.file);

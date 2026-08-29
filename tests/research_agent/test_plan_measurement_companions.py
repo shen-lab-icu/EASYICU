@@ -333,3 +333,46 @@ def test_current_plan_authority_selects_immutable_closure_evidence(tmp_path):
         "plan_path": authority.relative_path,
         "current_plan_authority": authority.to_dict(),
     }
+
+
+def test_signed_scientific_runtime_inputs_are_not_reclosed_after_review():
+    context = ResearchContext(
+        research_question="Relate an early measurement to an outcome.",
+        cohort=CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[
+            ConceptDescriptor(name="signal_max", dtype="float64"),
+            ConceptDescriptor(name="signal_measured", dtype="int64"),
+            ConceptDescriptor(name="signal_n", dtype="int64"),
+            ConceptDescriptor(name="outcome", dtype="int64"),
+        ],
+    )
+    step = AnalysisStep(
+        step_id="primary",
+        intent="Estimate the prespecified association.",
+        method="signed_landmark_restricted_cubic_spline",
+        inputs=["artifact:analysis_cohort", "signal_max", "outcome"],
+        expected_outputs=["table:primary_effect"],
+        icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[step],
+    )
+
+    closed, findings = close_measurement_companion_inputs(
+        plan=plan,
+        context=context,
+    )
+
+    assert closed is plan
+    assert closed.steps[0].inputs == [
+        "artifact:analysis_cohort",
+        "signal_max",
+        "outcome",
+    ]
+    assert findings == []

@@ -415,7 +415,7 @@ def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() 
     assert "'/api/workspaces/download'" in api
 
     index = (static_root / "index.html").read_text()
-    assert 'screens-extraction-embedded.js?v=20260825-source-binding1' in index
+    assert 'screens-extraction-embedded.js?v=20260829-data-scope1' in index
     assert index.index("screens-extraction.js") < index.index("screens-extraction-embedded.js")
 
     node_main = (

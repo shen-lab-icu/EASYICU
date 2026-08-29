@@ -1341,7 +1341,9 @@ class PiCopilotService:
         clean_action = str(action or "").strip()
         if clean_action not in {
             "reuse_project_source",
+            "use_study_required_data",
             "begin_local_selection",
+            "begin_full_data_selection",
             "confirm_selected_source",
         }:
             raise PiCopilotError(
@@ -1352,7 +1354,10 @@ class PiCopilotService:
         clean_database = str(database or "").strip()
         expected_database = None
         if clean_database:
-            if clean_action != "begin_local_selection":
+            if clean_action not in {
+                "begin_local_selection",
+                "begin_full_data_selection",
+            }:
                 raise PiCopilotError(
                     "pi_data_source_database_not_allowed",
                     "A database may be supplied only when local selection begins.",
@@ -1393,11 +1398,17 @@ class PiCopilotService:
                 status_code=404,
             )
 
-        if clean_action == "begin_local_selection":
+        if clean_action in {"begin_local_selection", "begin_full_data_selection"}:
+            extraction_scope = (
+                "all_supported"
+                if clean_action == "begin_full_data_selection"
+                else "study_required"
+            )
             record.data_source_authorization = PiSessionDataSourceAuthorization(
                 status="selection_in_progress",
                 reason="local_data_selection_required",
                 confirmation_mode="select_local_source",
+                extraction_scope=extraction_scope,
             )
             self._save_record(record)
             return {
@@ -1408,6 +1419,7 @@ class PiCopilotService:
                     state="setup",
                     expected_database=expected_database,
                     entry_mode="source_binding",
+                    extraction_scope=extraction_scope,
                 ),
             }
 
@@ -1433,6 +1445,7 @@ class PiCopilotService:
                 ),
             )
             confirmation_mode = "select_local_source"
+            extraction_scope = record.data_source_authorization.extraction_scope
         else:
             stale = self._stale_details(record)
             if stale.get("stale"):
@@ -1443,10 +1456,16 @@ class PiCopilotService:
                     details=stale,
                 )
             confirmation_mode = "reuse_project_source"
+            extraction_scope = (
+                "study_required"
+                if clean_action == "use_study_required_data"
+                else "reuse_prepared_full"
+            )
         record.data_source_authorization = PiSessionDataSourceAuthorization(
             status="confirmed",
             reason=None,
             confirmation_mode=confirmation_mode,
+            extraction_scope=extraction_scope,
             source=source,
             confirmed_at=utc_now(),
         )
@@ -1454,7 +1473,16 @@ class PiCopilotService:
         return {
             "ok": True,
             "session": self._public_session(record),
-            "resource": None,
+            "resource": (
+                extraction_workspace_resource(
+                    context,
+                    state="setup",
+                    expected_database=source.database,
+                    extraction_scope="all_supported",
+                )
+                if extraction_scope == "all_supported"
+                else None
+            ),
         }
 
     def _confirm_registered_source_selected_in_turn(

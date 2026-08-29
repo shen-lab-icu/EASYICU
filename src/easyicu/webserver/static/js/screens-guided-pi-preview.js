@@ -130,7 +130,9 @@
       const sourceId = String(value.source_id || '').trim();
       const expectedDatabase = String(value.expected_database || '').trim();
       const entryMode = String(value.entry_mode || '').trim();
+      const extractionScope = String(value.extraction_scope || '').trim();
       const supportedDatabases = new Set(['miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic']);
+      const supportedScopes = new Set(['study_required', 'all_supported', 'reuse_prepared_full']);
       if (route !== 'extraction' || !['setup', 'running', 'review'].includes(state)) return null;
       if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(studyContextId)) return null;
       if (!Number.isInteger(studyRevision) || studyRevision < 0) return null;
@@ -138,6 +140,7 @@
       if (sourceId && !/^src_[a-f0-9]{12}$/.test(sourceId)) return null;
       if (expectedDatabase && !supportedDatabases.has(expectedDatabase)) return null;
       if (entryMode && entryMode !== 'source_binding') return null;
+      if (extractionScope && !supportedScopes.has(extractionScope)) return null;
       return {
         kind: 'native_workspace', route, state,
         study_context_id: studyContextId, study_revision: studyRevision,
@@ -149,6 +152,7 @@
         ...(sourceId ? { source_id: sourceId.slice(0, 80) } : {}),
         ...(expectedDatabase ? { expected_database: expectedDatabase } : {}),
         ...(entryMode ? { entry_mode: entryMode } : {}),
+        ...(extractionScope ? { extraction_scope: extractionScope } : {}),
       };
     }
     const file = String(value.file || '').trim().replace(/\\/g, '/');

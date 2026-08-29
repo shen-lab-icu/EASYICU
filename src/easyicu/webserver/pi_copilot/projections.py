@@ -506,7 +506,10 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
         job_id = stable_code(value.get("job_id"))
         source_id = stable_code(value.get("source_id"))
         expected_database = stable_code(value.get("expected_database"))
+        entry_mode = stable_code(value.get("entry_mode"))
+        extraction_scope = stable_code(value.get("extraction_scope"))
         allowed_databases = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
+        allowed_scopes = {"study_required", "all_supported", "reuse_prepared_full"}
         if (
             route != "extraction"
             or not study_id
@@ -515,6 +518,8 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             or state not in {"setup", "running", "review"}
             or (source_id and not re.fullmatch(r"src_[a-f0-9]{12}", source_id))
             or (expected_database and expected_database not in allowed_databases)
+            or (entry_mode and entry_mode != "source_binding")
+            or (extraction_scope and extraction_scope not in allowed_scopes)
         ):
             return None
         return {
@@ -527,6 +532,8 @@ def _project_replay_resource(value: Any) -> Optional[Dict[str, Any]]:
             "media_type": "application/vnd.easyicu.native-workspace",
             **({"job_id": job_id} if job_id else {}),
             **({"source_id": source_id} if source_id else {}),
+            **({"entry_mode": entry_mode} if entry_mode else {}),
+            **({"extraction_scope": extraction_scope} if extraction_scope else {}),
             **(
                 {"expected_database": expected_database}
                 if expected_database

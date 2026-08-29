@@ -9,6 +9,7 @@ or naming closure evidence independently.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -42,6 +43,19 @@ _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
     "_min",
     "_sum",
 )
+
+_SCIENTIFIC_RUNTIME_CONTRACT_REF = re.compile(
+    r"^scientific_runtime_contract:[0-9a-f]{64}$"
+)
+
+
+def _has_fixed_scientific_runtime_input_roster(step: AnalysisStep) -> bool:
+    """Return whether a signed runtime owns the step's exact public inputs."""
+
+    return any(
+        _SCIENTIFIC_RUNTIME_CONTRACT_REF.fullmatch(str(ref or ""))
+        for ref in (step.icu_rule_refs or ())
+    )
 
 @dataclass(frozen=True)
 class RegisteredPlanInputClosure:
@@ -110,7 +124,9 @@ def close_measurement_companion_inputs(
         # This host-owned contract already fixes the exact exposure/outcome
         # roster. Suffix closure would infer new mandatory scientific inputs
         # that its executor neither selected nor consumes.
-        if has_fixed_ordered_stratified_input_roster(step):
+        if has_fixed_ordered_stratified_input_roster(
+            step
+        ) or _has_fixed_scientific_runtime_input_roster(step):
             revised_steps.append(step)
             continue
         seen = set(inputs)

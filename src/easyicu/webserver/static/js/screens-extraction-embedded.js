@@ -3,6 +3,7 @@
   let host = null;
   let options = {};
   let sourceBindingCoordinate = '';
+  let extractionScopeCoordinate = '';
 
   function isSourceBinding() {
     return !!(options.resource && options.resource.entry_mode === 'source_binding');
@@ -278,6 +279,17 @@
         }
       } else {
         sourceBindingCoordinate = '';
+      }
+      const scope = String(options.resource && options.resource.extraction_scope || '');
+      const scopeCoordinate = [
+        String(options.resource && options.resource.study_context_id || ''),
+        String(options.resource && options.resource.study_revision || ''),
+        scope,
+      ].join(':');
+      if (scope && scopeCoordinate !== extractionScopeCoordinate
+          && owner && typeof owner.applyExtractionScope === 'function') {
+        owner.applyExtractionScope(scope);
+        extractionScopeCoordinate = scopeCoordinate;
       }
       paint();
     },
