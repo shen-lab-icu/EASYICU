@@ -723,6 +723,11 @@ def build_research_workflow_snapshot(
         and has_outputs
         and (gate_status == "analysis_only" or executed_analysis_validated)
     )
+    # A completed, validated full run is a stronger downstream receipt than
+    # legacy blank setup slots. The approved Agent plan owns the exact study
+    # design used for execution, so an older StudyContext must not pull the
+    # visible workflow backward from result interpretation to setup.
+    setup_receipted = bool(setup_ready or analysis_complete)
     pipeline_attempt_blocked = bool(
         full_run
         and pipeline_run
@@ -811,11 +816,15 @@ def build_research_workflow_snapshot(
             id="setup",
             label="Study setup",
             status="complete"
-            if setup_ready
+            if setup_receipted
             else ("ready" if question_ready else "blocked"),
             owner="easyicu.webserver.study_contexts",
             reason_code=(
-                "study_setup_complete" if setup_ready else "study_setup_incomplete"
+                "approved_plan_setup_receipt"
+                if analysis_complete and not setup_ready
+                else "study_setup_complete"
+                if setup_ready
+                else "study_setup_incomplete"
             ),
         ),
         ResearchWorkflowStage(

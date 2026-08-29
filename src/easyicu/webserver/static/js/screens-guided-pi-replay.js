@@ -108,6 +108,7 @@
     const gateBlocked = !reviewPending && String(job && job.gate_status || '') === 'blocked';
     const gateReason = String(job && job.gate_reason_code || '');
     const errorCode = String(job && job.error_code || '');
+    const analysisComplete = Boolean(job && job.analysis_results_available);
     // Only a genuine historical Planner efficiency-budget stop is presented
     // as resumable. Contract/compiler failures are failures, not a normal
     // pause, and must never produce a misleading "continue" affordance.
@@ -129,6 +130,8 @@
       endedAt: Number.isFinite(finished) ? finished * 1000 : null,
       title: reviewPending
         ? translate('Analysis plan ready for review', '分析计划已就绪，等待审阅')
+        : analysisComplete
+          ? translate('Analysis complete; publication review remains', '分析已完成；仍需完成投稿审阅')
         : plannerCheckpointSaved
           ? translate('Planner saved a validated checkpoint', '规划器已保存验证检查点')
         : planFoundationBlocked
@@ -138,6 +141,8 @@
             : '',
       terminalLabel: reviewPending
         ? translate('Plan contract passed; analysis is paused for human review', '计划合同已通过；分析已暂停，等待人工审阅')
+        : analysisComplete
+          ? translate('Validated results, figures, and draft are ready to review', '已生成并验证结果、图表和文章草稿，可继续查看')
         : plannerCheckpointSaved
           ? translate('A validated checkpoint was saved; continue to finish the plan', '已保存验证检查点；可继续完成研究计划')
         : planFoundationBlocked
@@ -145,7 +150,7 @@
           : gateBlocked
             ? translate('The scientific gate blocked this task', '科学闸门已阻止本次任务')
             : '',
-      blocked: gateBlocked || plannerCheckpointSaved,
+      blocked: (gateBlocked && !analysisComplete) || plannerCheckpointSaved,
     };
   }
 

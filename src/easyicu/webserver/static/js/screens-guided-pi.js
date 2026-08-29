@@ -16,7 +16,7 @@
     showSetup: false, availableModels: [], project: null,
     researchProvider: 'codex', researchModel: '', codexAuth: null,
     codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
-    projectInitialization: null, projectIssue: '', workflow: null,
+    projectInitialization: null, projectIssue: '', workflow: null, latestRun: null,
     projectLoading: false, projectDiscoveryLoading: false,
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
@@ -205,6 +205,9 @@
   const resourceKey = RESOURCE_OWNER.key;
   const resourceLabel = RESOURCE_OWNER.label;
   const resourceButton = RESOURCE_OWNER.button;
+  const RUN_OUTCOME = window.EU_GUIDED_PI_RUN_OUTCOME.create({
+    tr, esc, iconHtml, resourceButton,
+  });
   const ACTIVITY = window.EU_GUIDED_PI_ACTIVITY.create({
     tr, esc, iconHtml, resourceName, resourceKey, resourceButton,
   });
@@ -610,6 +613,7 @@
           ${messages || (workspace
               ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
               : emptyResearchHtml)}
+          ${workspace ? '' : RUN_OUTCOME.render(state.latestRun, state.workflow)}
           ${dataConsentHtml}
           ${dataConsentRequired ? '' : workflowConfirmationHtml()}
         </div>
@@ -1285,6 +1289,7 @@
       const payload = await api().loadPiCopilotProjectWorkflow(expectedProjectId);
       if (expectedProjectId !== projectId()) return;
       state.workflow = payload && payload.workflow ? payload.workflow : null;
+      state.latestRun = payload && payload.latest_run ? payload.latest_run : { present: false };
       if (state.workflow) state.workflow.active_job = (payload && payload.active_job) || { present: false };
       reconcileDurableWrapupActivity();
       hydrateProjectedJob(payload && payload.active_job);
@@ -1297,7 +1302,10 @@
         watchChildJob(String(activeJob.job_id), code);
       }
     } catch (error) {
-      if (expectedProjectId === projectId()) state.workflow = null;
+      if (expectedProjectId === projectId()) {
+        state.workflow = null;
+        state.latestRun = null;
+      }
     }
   }
 

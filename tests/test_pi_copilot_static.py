@@ -2868,6 +2868,7 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "operator_plan_approved" in aside_owner
     assert "validated_analysis_complete" in aside_owner
     assert "validated_analysis_ready" in aside_owner
+    assert "approved_plan_setup_receipt" in aside_owner
     assert "interpretation_complete" in aside_owner
     assert "evidence_bound_interpretation_ready" in aside_owner
     assert "manuscript_draft_ready_for_review" in aside_owner
@@ -4050,6 +4051,24 @@ def test_literature_preview_receives_current_workflow_status_from_guided_owner()
     assert "runId: state.resource.run_id" in preview
     assert "修订版计划未通过科学合同" in confirmation
     assert "患者分析尚未开始" in confirmation
+
+
+def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
+    guided = _read("js/screens-guided-pi.js")
+    replay = _read("js/screens-guided-pi-replay.js")
+    owner = _read("js/screens-guided-pi-run-outcome.js")
+    index = _read("index.html")
+
+    assert "state.latestRun = payload && payload.latest_run" in guided
+    assert "RUN_OUTCOME.render(state.latestRun, state.workflow)" in guided
+    assert "analysis_results_available" in replay
+    assert "分析已完成；仍需完成投稿审阅" in replay
+    assert "分析已完成，可以查看结果" in owner
+    assert "result_tables.json" in owner
+    assert "figure_gallery.json" in owner
+    assert "manuscript_draft.json" in owner
+    assert "screens-guided-pi-run-outcome.js" in index
+    assert "guided-pi-run-outcome.css" in index
 
 
 def test_workspace_preview_hard_codes_unvalidated_authority_and_iframe_sandbox() -> (

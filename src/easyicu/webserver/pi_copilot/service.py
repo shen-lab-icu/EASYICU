@@ -59,6 +59,7 @@ from .provider_config import PiProviderConfigStore
 from .projections import (
     project_job,
     project_pi_replay_event,
+    project_run_outcome,
     project_transcript,
     reject_sensitive_message,
 )
@@ -2111,11 +2112,18 @@ class PiCopilotService:
             latest_run=latest_run,
             plan_review_authority=plan_review_authority,
         )
+        latest_run_outcome = {"present": False}
+        if latest_run:
+            review = agent_runs.read_run_review(
+                str(latest_run.get("project_dir") or "")
+            )
+            latest_run_outcome = project_run_outcome(review)
         return {
             "ok": True,
             "project_id": clean,
             "workflow": snapshot.model_dump(mode="json"),
             "active_job": project_job(active_job),
+            "latest_run": latest_run_outcome,
         }
 
     def get_workspace_preview(

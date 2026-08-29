@@ -2013,6 +2013,52 @@ def test_validated_analysis_advances_even_when_publication_gate_stays_closed() -
     assert by_id["manuscript"].status == "review_required"
 
 
+def test_validated_analysis_receipt_does_not_fall_back_to_legacy_blank_setup() -> None:
+    study = {
+        "id": "study-legacy-blank-setup",
+        "revision": 7,
+        "question": "Is lactate associated with in-hospital mortality?",
+        "data_source": {"path": "/private/prepared/source", "database": "miiv"},
+        "cohort": {"label": "ICU patients"},
+        "modules": [],
+        "outcome": "",
+        "analysis_goal": "",
+        "time_window": {},
+        "export_format": "",
+        "confirmations": {"extraction_completed": True},
+    }
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_id": "run-complete-analysis",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "gate_checks": {
+                "execution_complete": True,
+                "analysis_validated": True,
+                "numeric_verified": True,
+            },
+            "artifact_names": [
+                "agent_plan.json",
+                "evidence_ledger.json",
+                "result_tables.json",
+                "figure_gallery.json",
+                "manuscript_draft.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert by_id["setup"].status == "complete"
+    assert by_id["setup"].reason_code == "approved_plan_setup_receipt"
+    assert snapshot.current_stage == "interpretation"
+    assert snapshot.next_action_code == "evidence_bound_interpretation_ready"
+
+
 def test_completed_preflight_advances_to_provider_plan_confirmation() -> None:
     snapshot = build_research_workflow_snapshot(
         study=_complete_study(),
