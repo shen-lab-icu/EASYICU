@@ -77,6 +77,7 @@ _CONTEXT_FIELDS = {
     "last_route",
     "active_job_id",
     "confirmations",
+    "cohort_eligibility_authority",
     "idea_handoff",
     "literature_authority",
 }
@@ -118,6 +119,14 @@ _COHORT_NUMBER_FIELDS = {
 }
 _COHORT_BOOL_FIELDS = {"exclude_readmissions", "icd_enabled"}
 _COHORT_LIST_FIELDS = {"include_diagnoses", "exclude_diagnoses"}
+COHORT_ELIGIBILITY_FIELDS = (
+    "age_min",
+    "age_max",
+    "min_icu_los_hours",
+    "include_diagnoses",
+    "exclude_diagnoses",
+    "exclude_readmissions",
+)
 _SEPSIS_SCHEMA = {
     "record_scope": "text",
     "runtime_profile": "text",
@@ -209,6 +218,24 @@ _LITERATURE_AUTHORITY_SCHEMA = {
     "searched_at": "text",
     "study_configuration_sha256": "text",
 }
+_COHORT_ELIGIBILITY_AUTHORITY_SCHEMA = {
+    "schema_version": "text",
+    "receipt_id": "text",
+    "decision_sha256": "text",
+    "cohort_scope_sha256": "text",
+    "study_context_id": "text",
+    "study_context_revision": "number",
+    "selection_state": "text",
+    "option_id": "text",
+    "selection_mode": "text",
+    "repeated_admission_policy": "text",
+    "minimum_age": "number",
+    "minimum_icu_duration_hours": "number",
+    "origin": "text",
+    "confirmed_by": "text",
+    "confirmed_at": "text",
+    "stated_fields": "text_list",
+}
 _LITERATURE_AUTHORITY_V2 = "easyicu.web-literature-authority/2"
 _LITERATURE_AUTHORITY_V3 = "easyicu.web-literature-authority/3"
 _LITERATURE_SCOPE_FIELDS_V2 = (
@@ -237,6 +264,7 @@ _LITERATURE_SCOPE_FIELDS_V2 = (
 )
 _SCIENTIFIC_CONFIGURATION_FIELDS = (
     *_LITERATURE_SCOPE_FIELDS_V2,
+    "cohort_eligibility_authority",
     "literature_authority",
 )
 
@@ -711,6 +739,50 @@ def _cohort(value: Any) -> Dict[str, Any]:
     return _schema_object(value, field="cohort", schema=schema)
 
 
+def primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
+    """Compile the StudyContext cohort to the pipeline's closed mode roster.
+
+    StudyContext owns the structured cohort fields, so every consumer asks this
+    function instead of maintaining a mirrored field list. Descriptive labels
+    never authorize row filtering.
+    """
+
+    raw = study.get("cohort")
+    cohort = raw if isinstance(raw, Mapping) else {}
+    if cohort.get("exclude_readmissions") is True:
+        return "predicate_filtered"
+    fields = tuple(
+        field
+        for field in COHORT_ELIGIBILITY_FIELDS
+        if field != "exclude_readmissions"
+    )
+    if any(cohort.get(field) not in (None, "", []) for field in fields):
+        return "predicate_filtered"
+    return "all_input_rows"
+
+
+def cohort_eligibility_scope_sha256(study: Mapping[str, Any]) -> str:
+    """Digest exactly the cohort coordinates covered by eligibility consent."""
+
+    raw = study.get("cohort")
+    cohort = raw if isinstance(raw, Mapping) else {}
+    scope = {
+        "preset": str(cohort.get("preset") or "").strip(),
+        "fields": {
+            field: cohort.get(field)
+            for field in COHORT_ELIGIBILITY_FIELDS
+            if field in cohort
+        },
+    }
+    encoded = json.dumps(
+        scope,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _confirmations(value: Any) -> Dict[str, bool]:
     if value is None:
         return {}
@@ -1042,6 +1114,7 @@ def validate_context_update(
     *,
     current_context: Optional[Mapping[str, Any]] = None,
     lifecycle_write: bool = True,
+    _server_cohort_eligibility_authority_write: bool = False,
 ) -> Dict[str, Any]:
     """Validate and normalize one proposed update without mutating the store.
 
@@ -1053,7 +1126,12 @@ def validate_context_update(
     checking and validates again under the store lock.
     """
 
-    patch = _sanitize_patch(raw_context)
+    patch = _sanitize_patch(
+        raw_context,
+        allow_cohort_eligibility_authority=(
+            _server_cohort_eligibility_authority_write
+        ),
+    )
     current = dict(current_context or {})
     if current and not lifecycle_write:
         for field in ("current_stage", "last_route", "active_job_id"):
@@ -1104,6 +1182,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "last_route": "entry",
         "active_job_id": None,
         "confirmations": {},
+        "cohort_eligibility_authority": {},
         "idea_handoff": {},
         "literature_authority": {},
         "created_at": timestamp,
@@ -1115,6 +1194,7 @@ def _sanitize_patch(
     raw: Any,
     *,
     allow_literature_authority: bool = False,
+    allow_cohort_eligibility_authority: bool = False,
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise StudyContextError({"error": "study_context_body_required"})
@@ -1195,6 +1275,82 @@ def _sanitize_patch(
         )
     if "confirmations" in raw:
         patch["confirmations"] = _confirmations(raw.get("confirmations"))
+    if "cohort_eligibility_authority" in raw:
+        if not allow_cohort_eligibility_authority:
+            raise StudyContextError(
+                {
+                    "error": "study_cohort_eligibility_authority_server_owned",
+                    "field": "cohort_eligibility_authority",
+                }
+            )
+        authority = _schema_object(
+            raw.get("cohort_eligibility_authority"),
+            field="cohort_eligibility_authority",
+            schema=_COHORT_ELIGIBILITY_AUTHORITY_SCHEMA,
+        )
+        if authority:
+            required = {
+                "schema_version",
+                "receipt_id",
+                "decision_sha256",
+                "cohort_scope_sha256",
+                "study_context_revision",
+                "selection_state",
+                "option_id",
+                "selection_mode",
+                "repeated_admission_policy",
+                "origin",
+                "confirmed_by",
+                "confirmed_at",
+            }
+            missing = sorted(required - set(authority))
+            if missing:
+                raise StudyContextError(
+                    {
+                        "error": "cohort_eligibility_authority_incomplete",
+                        "field": "cohort_eligibility_authority",
+                        "fields": missing,
+                    }
+                )
+            for field in ("decision_sha256", "cohort_scope_sha256"):
+                digest = str(authority.get(field) or "")
+                if not re.fullmatch(r"[a-f0-9]{64}", digest):
+                    raise StudyContextError(
+                        {
+                            "error": "invalid_cohort_eligibility_authority_digest",
+                            "field": f"cohort_eligibility_authority.{field}",
+                        }
+                    )
+            revision = authority.get("study_context_revision")
+            if (
+                isinstance(revision, bool)
+                or not isinstance(revision, int)
+                or revision < 1
+            ):
+                raise StudyContextError(
+                    {
+                        "error": "invalid_cohort_eligibility_authority_revision",
+                        "field": "cohort_eligibility_authority.study_context_revision",
+                    }
+                )
+            if authority.get("selection_state") not in {"confirmed", "declined"}:
+                raise StudyContextError(
+                    {
+                        "error": "invalid_cohort_eligibility_selection_state",
+                        "field": "cohort_eligibility_authority.selection_state",
+                    }
+                )
+            if authority.get("selection_mode") not in {
+                "all_input_rows",
+                "predicate_filtered",
+            }:
+                raise StudyContextError(
+                    {
+                        "error": "invalid_cohort_eligibility_selection_mode",
+                        "field": "cohort_eligibility_authority.selection_mode",
+                    }
+                )
+        patch["cohort_eligibility_authority"] = authority
     if "idea_handoff" in raw:
         handoff = _schema_object(
             raw.get("idea_handoff"),
@@ -1290,6 +1446,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
         patch = _sanitize_patch(
             {field: row[field] for field in _CONTEXT_FIELDS if field in row},
             allow_literature_authority=True,
+            allow_cohort_eligibility_authority=True,
         )
         context_id = patch.pop("id")
         created_at = (
@@ -1500,10 +1657,14 @@ def upsert_context(
     require_revision: bool = False,
     lifecycle_write: bool = True,
     _server_literature_authority_write: bool = False,
+    _server_cohort_eligibility_authority_write: bool = False,
 ) -> Dict[str, Any]:
     patch = _sanitize_patch(
         raw_context,
         allow_literature_authority=_server_literature_authority_write,
+        allow_cohort_eligibility_authority=(
+            _server_cohort_eligibility_authority_write
+        ),
     )
     if expected_revision is not None and (
         isinstance(expected_revision, bool)
@@ -1562,6 +1723,52 @@ def upsert_context(
                     "field": "active_job_id",
                 }
             )
+        proposed_context = {**dict(current or {}), **patch}
+        proposed_authority = patch.get("cohort_eligibility_authority")
+        if isinstance(proposed_authority, dict) and proposed_authority:
+            authority_study_id = str(
+                proposed_authority.get("study_context_id") or ""
+            ).strip()
+            authority_revision = int(
+                proposed_authority.get("study_context_revision") or 0
+            )
+            authority_scope = str(
+                proposed_authority.get("cohort_scope_sha256") or ""
+            ).strip()
+            if authority_study_id and authority_study_id != context_id:
+                raise StudyContextError(
+                    {
+                        "error": "cohort_eligibility_authority_study_mismatch",
+                        "field": "cohort_eligibility_authority.study_context_id",
+                    }
+                )
+            if authority_revision != current_revision + 1:
+                raise StudyContextError(
+                    {
+                        "error": "cohort_eligibility_authority_revision_mismatch",
+                        "field": "cohort_eligibility_authority.study_context_revision",
+                        "expected_revision": current_revision + 1,
+                    }
+                )
+            if authority_scope != cohort_eligibility_scope_sha256(proposed_context):
+                raise StudyContextError(
+                    {
+                        "error": "cohort_eligibility_authority_scope_mismatch",
+                        "field": "cohort_eligibility_authority.cohort_scope_sha256",
+                    }
+                )
+        elif current is not None and "cohort" in patch:
+            current_authority = current.get("cohort_eligibility_authority")
+            if (
+                isinstance(current_authority, dict)
+                and current_authority
+                and cohort_eligibility_scope_sha256(current)
+                != cohort_eligibility_scope_sha256(proposed_context)
+            ):
+                # Eligibility consent is valid only for the exact cohort scope.
+                # Clear it in the same CAS write that changes the cohort so an
+                # old decision cannot authorize a new denominator.
+                patch["cohort_eligibility_authority"] = {}
         timestamp = _now()
         context = (
             dict(current)
@@ -1816,6 +2023,7 @@ def build_agent_context_binding(
                 "last_route",
                 "active_job_id",
                 "confirmations",
+                "cohort_eligibility_authority",
                 "idea_handoff",
                 "literature_authority",
             )
@@ -1831,6 +2039,7 @@ def _scientific_fields_sha256(
     sanitized = _sanitize_patch(
         {key: context.get(key) for key in fields},
         allow_literature_authority=True,
+        allow_cohort_eligibility_authority=True,
     )
     encoded = json.dumps(
         sanitized,
@@ -1912,17 +2121,20 @@ def scientific_configuration_sha256(context: Dict[str, Any]) -> str:
 
 
 __all__ = [
+    "COHORT_ELIGIBILITY_FIELDS",
     "StudyContextError",
     "analysis_dependence_finding",
     "materialization_window_finding",
     "bind_literature_authority",
     "build_agent_context_binding",
     "clear_active_job_if",
+    "cohort_eligibility_scope_sha256",
     "get_active_context",
     "get_context",
     "handoff_context",
     "list_contexts",
     "normalize_path",
+    "primary_cohort_selection_mode",
     "normalize_analysis_design",
     "normalize_covariate_operationalizations",
     "normalize_sensitivity_specs",

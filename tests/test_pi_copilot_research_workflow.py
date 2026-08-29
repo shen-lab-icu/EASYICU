@@ -38,6 +38,7 @@ from easyicu.webserver.literature_projection import (
     project_run_literature,
 )
 from easyicu.webserver.pi_copilot import tools as tool_module
+from easyicu.webserver.pi_copilot import cohort_eligibility
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     PiCopilotError,
@@ -103,6 +104,10 @@ def test_typed_selected_design_requires_complete_reviewable_recommendation() -> 
 
 
 def _complete_study() -> dict[str, Any]:
+    cohort = {
+        **cohort_eligibility.cohort_patch_for_option("no_eligibility_filter"),
+        "max_patients": 2000,
+    }
     return {
         "id": "study-workflow",
         "revision": 4,
@@ -111,7 +116,15 @@ def _complete_study() -> dict[str, Any]:
             "path": "/private/prepared/source",
             "database": "mimiciv",
         },
-        "cohort": {"preset": "adult_icu", "max_patients": 2000},
+        "cohort": cohort,
+        "cohort_eligibility_authority": (
+            cohort_eligibility.confirmation_authority_for_option(
+                "no_eligibility_filter",
+                study_context_id="study-workflow",
+                study_context_revision=4,
+                confirmed_at="2026-08-29T12:00:00Z",
+            )
+        ),
         "modules": ["vitals", "outcome"],
         "outcome": "In-hospital mortality",
         "primary_exposure": "heart_rate",
@@ -291,14 +304,8 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
         assert contract == ""
 
 
-def test_identified_local_database_makes_the_plan_generatable() -> None:
-    """A bound, identified local database is enough to plan from.
-
-    The user owns one decision -- which data -- and the Planner owns the
-    scientific design.  Requiring a prepared export first meant the cohort,
-    outcome and exposure had to be frozen by a Copilot questionnaire before the
-    plan that is supposed to define them could even start.
-    """
+def test_identified_local_database_still_requires_eligibility_confirmation() -> None:
+    """A source and a population mention do not authorize a denominator."""
 
     raw_bound = build_research_workflow_snapshot(
         study={
@@ -317,11 +324,11 @@ def test_identified_local_database_makes_the_plan_generatable() -> None:
         latest_run=None,
     )
 
-    assert raw_bound.planning_prerequisites_missing == []
+    assert raw_bound.planning_prerequisites_missing == ["cohort_eligibility"]
     plan_stage = next(row for row in raw_bound.stages if row.id == "plan")
-    assert plan_stage.status == "ready"
-    assert plan_stage.reason_code == "provider_ready_to_generate_plan"
-    # The design choices stay outstanding -- the plan is what resolves them.
+    assert plan_stage.status == "blocked"
+    assert plan_stage.reason_code == "cohort_eligibility_confirmation_required"
+    assert raw_bound.next_action_code == "cohort_eligibility_confirmation_required"
     assert "outcome" in raw_bound.missing_setup_fields
     assert "modules" in raw_bound.missing_setup_fields
 
@@ -340,7 +347,10 @@ def test_plan_still_blocked_without_a_data_source() -> None:
         latest_run=None,
     )
 
-    assert unbound.planning_prerequisites_missing == ["data_source"]
+    assert unbound.planning_prerequisites_missing == [
+        "data_source",
+        "cohort_eligibility",
+    ]
     plan_stage = next(row for row in unbound.stages if row.id == "plan")
     assert plan_stage.status == "blocked"
 
@@ -357,6 +367,7 @@ def test_workflow_projection_advances_only_from_owner_receipts() -> None:
         "question",
         "data_source",
         "cohort",
+        "cohort_eligibility",
         "outcome",
         "analysis_goal",
         "time_window",
@@ -547,9 +558,19 @@ def test_workflow_keeps_typed_execution_decisions_in_setup_gate() -> None:
     unaddressed_repeats = {
         **_complete_study(),
         "cohort": {
-            **_complete_study()["cohort"],
-            "exclude_readmissions": False,
+            **cohort_eligibility.cohort_patch_for_option(
+                "adults_all_admissions"
+            ),
+            "max_patients": 2000,
         },
+        "cohort_eligibility_authority": (
+            cohort_eligibility.confirmation_authority_for_option(
+                "adults_all_admissions",
+                study_context_id="study-workflow",
+                study_context_revision=4,
+                confirmed_at="2026-08-29T12:00:00Z",
+            )
+        ),
     }
     dependence_snapshot = build_research_workflow_snapshot(
         study=unaddressed_repeats,
@@ -2086,13 +2107,24 @@ def test_completed_preflight_advances_to_provider_plan_confirmation() -> None:
 def test_question_and_confirmed_data_package_offer_planner_before_setup_questionnaire() -> None:
     study = {
         "id": "study-planner-first",
+        "revision": 1,
         "question": "Is early peak lactate associated with hospital mortality?",
         "purpose": "Generate an evidence-bound research plan.",
         "data_source": {
             "path": "/private/prepared/source",
             "database": "miiv",
         },
-        "cohort": {},
+        "cohort": cohort_eligibility.cohort_patch_for_option(
+            "no_eligibility_filter"
+        ),
+        "cohort_eligibility_authority": (
+            cohort_eligibility.confirmation_authority_for_option(
+                "no_eligibility_filter",
+                study_context_id="study-planner-first",
+                study_context_revision=1,
+                confirmed_at="2026-08-29T12:00:00Z",
+            )
+        ),
         "modules": [],
         "outcome": "",
         "primary_exposure": "",
@@ -2112,7 +2144,8 @@ def test_question_and_confirmed_data_package_offer_planner_before_setup_question
     by_id = {row.id: row for row in snapshot.stages}
     assert snapshot.current_stage == "plan"
     assert snapshot.next_action_code == "provider_ready_to_generate_plan"
-    assert "cohort" in snapshot.missing_setup_fields
+    assert "cohort" not in snapshot.missing_setup_fields
+    assert "cohort_eligibility" not in snapshot.missing_setup_fields
     assert "outcome" in snapshot.missing_setup_fields
     assert by_id["setup"].status == "ready"
     assert by_id["plan"].status == "ready"
@@ -3916,15 +3949,61 @@ def test_full_run_reports_setup_owner_before_provider_authorization(
     assert "provider_run" not in json.dumps(result)
 
 
+def test_full_run_requires_server_receipted_eligibility_before_provider_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = {
+        "id": "study-unconfirmed-eligibility",
+        "revision": 3,
+        "question": "What is the aggregate Sepsis-3 prevalence?",
+        "data_source": {"path": "/private/raw/miiv", "database": "mimiciv"},
+        # A legacy preset is a value, not proof that the researcher chose it.
+        "cohort": {"preset": "adult_icu"},
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: study)
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, *, study_override=None: {
+            "next_action_code": "cohort_eligibility_confirmation_required",
+            "planning_prerequisites_missing": ["cohort_eligibility"],
+            "missing_setup_fields": ["cohort_eligibility", "outcome", "modules"],
+        },
+    )
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-unconfirmed-eligibility",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id="study-unconfirmed-eligibility",
+                study_revision=3,
+            ),
+        )
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_run", {"run_type": "full"}, context
+    )
+
+    assert result["code"] == "cohort_eligibility_confirmation_required"
+    assert result["owner"] == (
+        "easyicu.webserver.pi_copilot.cohort_eligibility"
+    )
+    assert result["details"]["eligibility"]["selection_state"] == (
+        "legacy_unconfirmed"
+    )
+    assert "provider_run" not in json.dumps(result)
+
+
 def test_planner_owned_design_choices_do_not_block_plan_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The plan decides cohort/outcome/exposure; they must not gate it.
+    """The plan proposes outcome/exposure details after eligibility is settled.
 
     Regression: the full-run gate required every setup slot, so Copilot had to
-    interrogate the user for outcome, exposure, cohort, window and modules
-    before a plan could be generated -- freezing the cohort before the plan
-    that is supposed to define it.
+    interrogate the user for outcome, exposure, window and modules before a
+    plan could be generated. Eligibility is the narrow pre-plan exception
+    because the Planner is forbidden to invent the study denominator.
     """
 
     monkeypatch.setattr(
@@ -3935,6 +4014,17 @@ def test_planner_owned_design_choices_do_not_block_plan_generation(
             "revision": 3,
             "question": "What is the aggregate Sepsis-3 prevalence?",
             "data_source": {"path": "/private/raw/miiv", "database": "mimiciv"},
+            "cohort": cohort_eligibility.cohort_patch_for_option(
+                "no_eligibility_filter"
+            ),
+            "cohort_eligibility_authority": (
+                cohort_eligibility.confirmation_authority_for_option(
+                    "no_eligibility_filter",
+                    study_context_id="study-planner-owned",
+                    study_context_revision=3,
+                    confirmed_at="2026-08-29T12:00:00Z",
+                )
+            ),
         },
     )
     monkeypatch.setattr(

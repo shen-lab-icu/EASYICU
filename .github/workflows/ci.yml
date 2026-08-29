@@ -71,6 +71,9 @@ jobs:
           pip install -e ".[dev,webapp]"
           pip install "openai>=1.40.0"
 
+      - name: Compile Python source and tests
+        run: python -m compileall -q src tests
+
       - name: Run lint gate
         run: ruff check src tests
 

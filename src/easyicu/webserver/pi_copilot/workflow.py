@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from easyicu.webserver import study_contexts as study_context_owner
 
+from . import cohort_eligibility
+
 WorkflowStatus = Literal[
     "blocked",
     "ready",
@@ -183,13 +185,13 @@ def registered_export_matches_study(
     )
 
 
-# Plan generation needs only what the user owns: a bound question and a data
-# source EasyICU has identified.  Every other setup field is a scientific design
-# choice the Research Agent Planner proposes in its reviewable plan, so gating
-# plan generation on them turned Copilot into a slot-by-slot questionnaire and
-# forced the cohort to be frozen before the plan that should define it.  They
-# still gate extraction and analysis, which execute the reviewed plan.
-_PLANNING_PREREQUISITE_FIELDS = frozenset({"question", "data_source"})
+# Plan generation needs the question, an identified data source, and the one
+# population decision the Planner is forbidden to invent. Other design fields
+# remain Planner proposals reviewed later; eligibility is a researcher-owned
+# contract and therefore blocks even metadata-only candidate planning.
+_PLANNING_PREREQUISITE_FIELDS = frozenset(
+    {"question", "data_source", "cohort_eligibility"}
+)
 
 # These are Planner proposal fields, not pre-plan setup questions.  The
 # researcher reviews the complete candidate plan; they should not have to
@@ -263,6 +265,7 @@ def _setup_missing(
             active_export_present or _has_mapping(study.get("data_source")),
         ),
         ("cohort", _has_mapping(study.get("cohort"))),
+        ("cohort_eligibility", cohort_eligibility.eligibility_stated(study)),
         ("outcome", human_outcome),
         *(((("primary_exposure", human_exposure),)) if exposure_required else ()),
         (
@@ -399,6 +402,7 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
         if isinstance(raw_confirmations, Mapping)
         else {}
     )
+    eligibility_authority = cohort_eligibility.validated_authority(study) or {}
     configuration: Dict[str, Any] = {
         "question": str(study.get("question") or "").strip(),
         "purpose": str(study.get("purpose") or "").strip(),
@@ -435,6 +439,7 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
         "export_format": str(study.get("export_format") or "").strip(),
         "analysis_goal": str(study.get("analysis_goal") or "").strip(),
         "confirmations": confirmations,
+        "cohort_eligibility_authority": eligibility_authority,
     }
     configured_fields = [
         key for key, value in configuration.items() if bool(value)
@@ -529,13 +534,19 @@ def build_research_workflow_snapshot(
     prepared_export_receipted = bool(active_export_present or preflight_complete)
     # Planning starts from the user's question plus a data source EasyICU has
     # identified -- a prepared export or a bound, identified local database.
-    # The Planner proposes the unresolved design choices in its reviewable
-    # plan; Copilot must not fabricate a shadow plan just to fill setup slots,
-    # and the cohort must not be frozen before the plan that defines it.
+    # The Planner proposes unresolved analysis choices in its reviewable plan;
+    # Copilot must not fabricate a shadow plan just to fill setup slots. The
+    # denominator-changing eligibility choice is the deliberate exception: it
+    # is researcher-owned and must be receipted before candidate planning.
     planning_data_ready = bool(
         prepared_export_receipted or _identified_data_source(study_row)
     )
     planning_prerequisites_missing = _planning_prerequisites_missing(missing)
+    eligibility_confirmation_required = bool(
+        "cohort_eligibility" in planning_prerequisites_missing
+        and question_ready
+        and planning_data_ready
+    )
     plan_generation_ready = bool(
         question_ready
         and planning_data_ready
@@ -824,6 +835,8 @@ def build_research_workflow_snapshot(
                 if analysis_complete and not setup_ready
                 else "study_setup_complete"
                 if setup_ready
+                else "cohort_eligibility_confirmation_required"
+                if eligibility_confirmation_required
                 else "study_setup_incomplete"
             ),
         ),
@@ -882,6 +895,8 @@ def build_research_workflow_snapshot(
                 if has_plan
                 else "provider_ready_to_generate_plan"
                 if plan_generation_ready
+                else "cohort_eligibility_confirmation_required"
+                if eligibility_confirmation_required
                 else "active_export_or_setup_required"
             ),
         ),
