@@ -43,7 +43,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-literature.css?v=20260828-literature-reader2" in index
     assert "js/screens-guided-pi-literature.js?v=20260828-literature-search1" in index
     assert "js/screens-guided-pi-markdown.js?v=20260827-readable-reply1" in index
-    assert "js/screens-guided-pi-next-actions.js?v=20260828-plan-resubmit1" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20260829-compact-choices1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20260828-plan-resubmit1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260828-regeneration-branch2" in index
     assert "js/screens-guided-pi-starters.js?v=20260827-independent-starters1" in index
@@ -3417,11 +3417,17 @@ def test_copilot_next_step_owner_projects_clickable_choices_and_safe_fallback() 
         '- 使用 AmsterdamUMCdb\\n- 使用 HiRID v1.1.1\\n' +
         '- 使用 MIMIC-III v1.4\\n- 使用 SICdb v1.0.6'
       );
+      const compactDatabases = window.EU_GUIDED_PI_NEXT_ACTIONS.project(
+        '请选择一个确切的数据库版本。\\n**下一步：**\\n' +
+        '-选择 MIMIC-IV v3.1\\n-选择 eICU v2.0\\n' +
+        '-选择 AmsterdamUMCdb\\n-选择 HiRID v1.1.1\\n' +
+        '-选择 MIMIC-III v1.4\\n-选择 SICdb v1.0.6'
+      );
       const genericSix = window.EU_GUIDED_PI_NEXT_ACTIONS.project(
         '请选择一项。\\n**下一步：**\\n' +
         '- 选项一\\n- 选项二\\n- 选项三\\n- 选项四\\n- 选项五\\n- 选项六'
       );
-      console.log(JSON.stringify({{choices, fallback, generic, inline, markdownHeading, databases, genericSix}}));
+      console.log(JSON.stringify({{choices, fallback, generic, inline, markdownHeading, databases, compactDatabases, genericSix}}));
       console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(choices, {{language: 'zh'}}));
       console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(
         {{body: '请选择研究单位。', prompt: '', choices: ['首次 ICU stay']}},
@@ -3430,6 +3436,7 @@ def test_copilot_next_step_owner_projects_clickable_choices_and_safe_fallback() 
       console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(markdownHeading, {{language: 'zh'}}));
       console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(localSource, {{language: 'zh'}}));
       console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(databases, {{language: 'zh'}}));
+      console.log('COMPACT=' + window.EU_GUIDED_PI_NEXT_ACTIONS.render(compactDatabases, {{language: 'zh'}}));
       console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render({{
         body: '待确认的研究设定',
         prompt: '请选择一项：',
@@ -3469,6 +3476,9 @@ def test_copilot_next_step_owner_projects_clickable_choices_and_safe_fallback() 
     assert '"choices":["使用 MIMIC-IV v3.1","使用 eICU v2.0","使用 AmsterdamUMCdb","使用 HiRID v1.1.1","使用 MIMIC-III v1.4","使用 SICdb v1.0.6"]' in completed.stdout
     assert 'data-gpi-next-choice="使用 MIMIC-III v1.4"' in completed.stdout
     assert 'data-gpi-next-choice="使用 SICdb v1.0.6"' in completed.stdout
+    assert '"compactDatabases":{"body":"请选择一个确切的数据库版本。","prompt":"","choices":["选择 MIMIC-IV v3.1","选择 eICU v2.0","选择 AmsterdamUMCdb","选择 HiRID v1.1.1","选择 MIMIC-III v1.4","选择 SICdb v1.0.6"]' in completed.stdout
+    assert 'COMPACT=<section class="gpi-next-step"' in completed.stdout
+    assert 'data-gpi-next-choice="选择 MIMIC-IV v3.1"' in completed.stdout
     assert '"choices":["选项一","选项二","选项三","选项四"]' in completed.stdout
     assert '"选项五"' not in completed.stdout
     assert 'data-gpi-next-resolved-source' in completed.stdout
