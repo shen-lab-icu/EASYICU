@@ -235,9 +235,36 @@ def _accounting_completeness(frame: pd.DataFrame) -> str:
     )
 
 
+def _unfiltered_universe(frame: pd.DataFrame) -> bool:
+    """Is the single stage the whole bound universe, with nothing excluded?
+
+    A one-row ledger has two very different causes and the figure used to
+    report only the pessimistic one. When the row IS the universe row and it
+    excluded nobody, the ledger is not missing upstream attrition -- it is
+    recording that no eligibility filter was applied, so every bound input row
+    is the analysis cohort. Saying "upstream attrition unavailable" there
+    reports a gap that does not exist and hides the fact a reader most needs:
+    this study declared no inclusion or exclusion criterion.
+    """
+
+    if len(frame) != 1:
+        return False
+    row = frame.iloc[0]
+    if str(row.get("predicate_kind") or "").strip().casefold() != "universe":
+        return False
+    try:
+        return int(row.get("n_excluded") or 0) == 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
     if not complete:
-        return ["Analysis denominator only"]
+        return [
+            "All bound input rows"
+            if _unfiltered_universe(frame)
+            else "Analysis denominator only"
+        ]
     labels: list[str] = []
     for index, row in frame.iterrows():
         kind = str(row.get("predicate_kind") or "").strip()
@@ -278,6 +305,7 @@ def run_cohort_flow_figure(
     frame = _verified_flow(path, binding)
     completeness = _accounting_completeness(frame)
     complete = completeness == COHORT_ACCOUNTING_COMPLETE
+    unfiltered_universe = (not complete) and _unfiltered_universe(frame)
     display_labels = _display_labels(frame, complete=complete)
     source = frame.copy()
     source.insert(0, "accounting_completeness", completeness)
@@ -317,38 +345,51 @@ def run_cohort_flow_figure(
                 fontsize=7,
             )
     else:
+        # A ONE-STAGE FLOW IS STILL A FLOW.
+        #
+        # This branch used to switch the axes off and centre three lines of
+        # text, so a manuscript figure slot shipped a caption card. The stage
+        # is real and countable, so it is drawn on the same axis the
+        # multi-stage ledger uses; what changes is only how many stages there
+        # are, and the note underneath says which of the two one-row cases
+        # this is.
         denominator = int(frame.iloc[0]["n_remaining"])
-        ax.set_axis_off()
-        ax.text(
-            0.5,
-            0.68,
-            "Analysis denominator only",
-            ha="center",
-            va="center",
-            fontsize=11,
-            fontweight="bold",
-            color=PALETTE_CLINICAL["baseline"],
-            transform=ax.transAxes,
+        unfiltered = unfiltered_universe
+        # A lone bar drawn at the multi-stage height fills the panel; keep it
+        # at the thickness a stage has when the ledger has several.
+        bar = ax.barh(
+            [0], [denominator], height=0.42, color=PALETTE_CLINICAL["blue"]
+        )[0]
+        ax.set_yticks([0])
+        ax.set_yticklabels(display_labels)
+        ax.set_ylim(-0.9, 0.9)
+        ax.invert_yaxis()
+        ax.set_xlabel("ICU stays remaining")
+        ax.set_title(
+            "Cohort accounting · single stage",
+            loc="left",
         )
-        ax.text(
-            0.5,
-            0.47,
-            f"n = {denominator:,} ICU stays",
-            ha="center",
+        ax.grid(axis="x", color=PALETTE_CLINICAL["neutral_light"], linewidth=0.6)
+        ax.annotate(
+            f"{denominator:,}",
+            (bar.get_width(), bar.get_y() + bar.get_height() / 2),
+            xytext=(5, 0),
+            textcoords="offset points",
             va="center",
-            fontsize=16,
-            color=PALETTE_CLINICAL["blue"],
-            transform=ax.transAxes,
+            fontsize=7,
         )
-        ax.text(
-            0.5,
-            0.27,
-            "Upstream attrition unavailable",
-            ha="center",
-            va="center",
-            fontsize=8,
+        ax.annotate(
+            "No eligibility filter was applied: every bound input row is the\n"
+            "analysis cohort."
+            if unfiltered
+            else "Upstream eligibility and attrition are not recorded in the\n"
+            "bound ledger.",
+            xy=(0.0, -0.24),
+            xycoords="axes fraction",
+            va="top",
+            ha="left",
+            fontsize=7,
             color=PALETTE_CLINICAL["neutral"],
-            transform=ax.transAxes,
         )
     fig.tight_layout()
     contract = make_figure_contract(
@@ -357,8 +398,16 @@ def run_cohort_flow_figure(
             "The figure reproduces the sequential source-to-final denominator "
             "ledger from the digest-verified cohort-flow table."
             if complete
-            else "The bound cohort-flow table proves only the final analysis "
-            "denominator; upstream eligibility and attrition are unavailable."
+            else (
+                "The bound cohort-flow table records one stage: no eligibility "
+                "filter was applied, so every bound input row is the analysis "
+                "cohort. Attrition upstream of the bound universe is outside "
+                "this ledger."
+                if unfiltered_universe
+                else "The bound cohort-flow table proves only the final "
+                "analysis denominator; upstream eligibility and attrition are "
+                "unavailable."
+            )
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -367,7 +416,13 @@ def run_cohort_flow_figure(
             {
                 "panel_id": COHORT_FLOW_FIGURE_PANELS[0].panel_id,
                 "title": (
-                    "Cohort accounting" if complete else "Analysis denominator only"
+                    "Cohort accounting"
+                    if complete
+                    else (
+                        "Cohort accounting · single stage"
+                        if unfiltered_universe
+                        else "Analysis denominator only"
+                    )
                 ),
                 "role": COHORT_FLOW_FIGURE_PANELS[0].article_role,
                 "claim": (
