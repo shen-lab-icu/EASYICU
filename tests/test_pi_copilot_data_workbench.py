@@ -14,6 +14,7 @@ from easyicu.webserver.copilot_data_workbench import (
     build_snapshot,
 )
 from easyicu.webserver.pi_copilot import tools as tool_owner
+from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     PiCopilotError,
@@ -155,6 +156,84 @@ def test_snapshot_store_is_project_scoped_digest_bound_and_path_free(tmp_path: P
             payload={"source_path": "/private/mimic"},
         )
     assert blocked.value.code == "copilot_data_workbench_path_forbidden"
+
+
+def test_completed_analysis_prepares_native_feature_workbench_from_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export = tmp_path / "export"
+    export.mkdir()
+    wrapper = tmp_path / "wrapper"
+    run_id = "run_completed"
+    run_dir = wrapper / "pipeline" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "analysis_plan.json").write_text(
+        json.dumps(
+            {
+                "design_selection": {
+                    "candidates": [
+                        {
+                            "disposition": "selected",
+                            "required_variables": [
+                                "stay_id",
+                                "lact_max",
+                                "death",
+                            ],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = CopilotDataWorkbenchSnapshotStore(tmp_path / "snapshots")
+    service = object.__new__(PiCopilotService)
+    service.project_store = type(
+        "ProjectStore", (), {"resolve": lambda _self, _project: "study-a"}
+    )()
+    service.data_workbench_snapshot_store = store
+    service._assert_project_initialized = lambda project_id: project_id
+    service._latest_run_id = lambda _study_id, project_id: run_id
+    service._research_run_row = lambda _project_id, _run_id: {
+        "project_dir": str(wrapper)
+    }
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.service.study_contexts.get_context",
+        lambda _study_id: {
+            "id": "study-a",
+            "data_source": {"path": str(export), "database": "miiv"},
+        },
+    )
+    monkeypatch.setattr(
+        "easyicu.webserver.dataio.describe_export_source",
+        lambda _path: {
+            "files": [
+                {"module": "blood_gas", "columns": ["stay_id", "lact"]},
+                {"module": "outcome", "columns": ["stay_id", "death"]},
+            ]
+        },
+    )
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "easyicu.webserver.cohort_review.cohort_review_summary",
+        lambda body: calls.append(dict(body)) or _cohort_payload(),
+    )
+
+    prepared = service.prepare_data_workbench_snapshot(project_id="project-a")
+
+    assert calls == [
+        {
+            "source_path": str(export),
+            "selected_features": ["blood_gas:lact", "outcome:death"],
+        }
+    ]
+    resource = prepared["resource"]
+    assert resource["kind"] == "data_workbench_snapshot"
+    assert resource["view"] == "feature_distribution"
+    snapshot = store.load(
+        project_id="project-a", digest=resource["snapshot_sha256"]
+    )
+    assert snapshot["payload"]["summary"]["cohort_size"] == 120
 
 
 def test_selected_feature_distributions_are_bounded_stay_level_aggregates() -> None:

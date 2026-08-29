@@ -35,6 +35,7 @@ from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
 from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
     CopilotDataWorkbenchSnapshotStore,
+    build_snapshot as build_data_workbench_snapshot,
 )
 
 from .contracts import (
@@ -2346,6 +2347,163 @@ class PiCopilotService:
                 "human_signoff": "not_applicable",
                 "browser_only": True,
                 "model_visible_patient_payload": False,
+            },
+        }
+
+    def prepare_data_workbench_snapshot(self, *, project_id: str) -> Dict[str, Any]:
+        """Seal a native Cohort Workbench view for the project's bound source.
+
+        Cohort Review remains the scientific/data owner.  This method only
+        resolves plan-named columns against export metadata and persists the
+        owner's aggregate payload behind browser-only immutable coordinates.
+        """
+
+        clean = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean)
+        study = (
+            study_contexts.get_context(study_context_id) if study_context_id else None
+        )
+        if not study:
+            raise PiCopilotError(
+                "pi_data_workbench_study_not_found",
+                "The research project has no bound StudyContext.",
+                status_code=404,
+            )
+        source = study.get("data_source") if isinstance(study.get("data_source"), Mapping) else {}
+        source_path = str(source.get("path") or "").strip()
+        if not source_path:
+            raise PiCopilotError(
+                "pi_data_workbench_source_not_bound",
+                "The research project has no bound EasyICU data source.",
+                status_code=409,
+            )
+
+        from easyicu.webserver import cohort_review, dataio
+
+        requested_variables: list[str] = []
+        run_id = self._latest_run_id(study_context_id, project_id=clean)
+        if run_id:
+            try:
+                row = self._research_run_row(clean, run_id)
+                wrapper = Path(str(row.get("project_dir") or "")).resolve()
+                plan_path = (wrapper / "pipeline" / run_id / "analysis_plan.json").resolve()
+                if plan_path.parent.parent == (wrapper / "pipeline").resolve():
+                    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                    candidates = ((plan.get("design_selection") or {}).get("candidates") or [])
+                    selected = next(
+                        (
+                            candidate
+                            for candidate in candidates
+                            if isinstance(candidate, Mapping)
+                            and candidate.get("disposition") == "selected"
+                        ),
+                        {},
+                    )
+                    requested_variables = [
+                        str(value or "").strip().lower()
+                        for value in (selected.get("required_variables") or [])
+                        if str(value or "").strip()
+                    ][:12]
+            except (OSError, ValueError, TypeError, json.JSONDecodeError, PiCopilotError):
+                requested_variables = []
+
+        description = dataio.describe_export_source(source_path)
+        files = [row for row in (description.get("files") or []) if isinstance(row, Mapping)]
+        suffixes = ("_maximum", "_minimum", "_median", "_mean", "_max", "_min")
+        identifier_columns = {
+            "stay_id",
+            "subject_id",
+            "hadm_id",
+            "icustay_id",
+            "patientunitstayid",
+        }
+        feature_ids: list[str] = []
+        for requested in requested_variables:
+            if requested in identifier_columns:
+                continue
+            aliases = [requested]
+            aliases.extend(
+                requested[: -len(suffix)]
+                for suffix in suffixes
+                if requested.endswith(suffix) and len(requested) > len(suffix)
+            )
+            match = next(
+                (
+                    f"{row.get('module')}:{column}"
+                    for alias in aliases
+                    for row in files
+                    for column in (row.get("columns") or [])
+                    if str(column).strip().lower() == alias
+                    and str(row.get("module") or "").strip()
+                ),
+                "",
+            )
+            if match and match not in feature_ids:
+                feature_ids.append(match)
+            if len(feature_ids) >= 4:
+                break
+
+        try:
+            body: Dict[str, Any] = {"source_path": source_path}
+            if feature_ids:
+                body["selected_features"] = feature_ids
+            owner_payload = cohort_review.cohort_review_summary(body)
+            snapshot_payload = {
+                key: owner_payload.get(key)
+                for key in (
+                    "source",
+                    "summary",
+                    "groups",
+                    "feature_catalog",
+                    "feature_selection",
+                    "selected_feature_distributions",
+                    "coverage",
+                    "quality",
+                    "survival_analysis",
+                    "blocked_features",
+                    "provenance",
+                )
+            }
+            snapshot = build_data_workbench_snapshot(
+                project_id=clean,
+                view="feature_distribution" if feature_ids else "cohort_summary",
+                title="Analysis data and feature distributions" if feature_ids else "Cohort review",
+                payload=snapshot_payload,
+                privacy=(
+                    owner_payload.get("privacy")
+                    if isinstance(owner_payload.get("privacy"), Mapping)
+                    else {}
+                ),
+            )
+            self.data_workbench_snapshot_store.persist(snapshot)
+        except cohort_review.CohortReviewError as exc:
+            reason = str((exc.detail or {}).get("error") or "cohort_review_blocked")
+            raise PiCopilotError(
+                reason,
+                "The Cohort Review owner could not prepare this analysis-data view.",
+                status_code=409,
+                details={"owner": "easyicu.webserver.cohort_review"},
+            ) from exc
+        except CopilotDataWorkbenchError as exc:
+            raise PiCopilotError(
+                exc.code,
+                exc.message,
+                status_code=409,
+                details=exc.details,
+            ) from exc
+        return {
+            "ok": True,
+            "resource": {
+                "kind": "data_workbench_snapshot",
+                "view": str(snapshot.get("view") or ""),
+                "snapshot_sha256": str(snapshot.get("snapshot_sha256") or ""),
+                "label": "Analysis data preview",
+                "media_type": "application/json",
+            },
+            "governance": {
+                "claim_ceiling": "descriptive_review",
+                "reportable": False,
+                "browser_only": True,
             },
         }
 
