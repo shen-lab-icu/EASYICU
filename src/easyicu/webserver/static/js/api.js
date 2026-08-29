@@ -529,6 +529,13 @@
       {},
     );
   }
+  function preparePiCopilotDataWorkbenchSnapshot(projectId) {
+    return postJSON(
+      '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/data-workbench-snapshot/prepare',
+      {},
+    );
+  }
   function loadPiCopilotDataWorkbenchSnapshot(projectId, snapshotSha256) {
     return getJSON(
       '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
@@ -733,6 +740,7 @@
   window.EU_API.loadPiCopilotResearchEvidence = loadPiCopilotResearchEvidence;
   window.EU_API.loadPiCopilotDataPackageReview = loadPiCopilotDataPackageReview;
   window.EU_API.preparePiCopilotDataPackageReview = preparePiCopilotDataPackageReview;
+  window.EU_API.preparePiCopilotDataWorkbenchSnapshot = preparePiCopilotDataWorkbenchSnapshot;
   window.EU_API.loadPiCopilotDataWorkbenchSnapshot = loadPiCopilotDataWorkbenchSnapshot;
   window.EU_API.piCopilotResearchDocumentUrl = piCopilotResearchDocumentUrl;
   window.EU_API.createPageGuideSession = createPageGuideSession;

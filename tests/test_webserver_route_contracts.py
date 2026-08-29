@@ -164,6 +164,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "get_pi_copilot_data_workbench_snapshot",
     ),
     (
+        "POST",
+        "/api/copilot/pi/projects/{project_id}/data-workbench-snapshot/prepare",
+        "post_pi_copilot_data_workbench_snapshot_prepare",
+    ),
+    (
         "GET",
         "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}",
         "get_pi_copilot_research_document",

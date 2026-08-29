@@ -206,7 +206,12 @@
   const resourceLabel = RESOURCE_OWNER.label;
   const resourceButton = RESOURCE_OWNER.button;
   const RUN_OUTCOME = window.EU_GUIDED_PI_RUN_OUTCOME.create({
-    tr, esc, iconHtml, resourceButton,
+    tr, esc, iconHtml, resourceButton, api, projectId,
+    canPreview: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
+    preview: () => window.EU_GUIDED_PI_PREVIEW,
+    workflowContext: previewWorkflowContext,
+    errorText,
+    onError: value => { state.error = value; render(); },
   });
   const ACTIVITY = window.EU_GUIDED_PI_ACTIVITY.create({
     tr, esc, iconHtml, resourceName, resourceKey, resourceButton,
@@ -1915,6 +1920,8 @@
       if (event.target.closest('[data-gpi-create]')) { createSession(); return; }
       const previewPlanData = event.target.closest('[data-gpi-confirm-preview-data]');
       if (previewPlanData) { previewApprovedPlanDataPackage(previewPlanData); return; }
+      const previewAnalysisData = event.target.closest('[data-gpi-run-outcome-data]');
+      if (previewAnalysisData) { RUN_OUTCOME.openData(previewAnalysisData); return; }
       if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
       if (event.target.closest('[data-gpi-confirm-reject]')) { rejectWorkflowAction(); return; }
       if (event.target.closest('[data-gpi-confirm-edit]')) { editWorkflow(); return; }

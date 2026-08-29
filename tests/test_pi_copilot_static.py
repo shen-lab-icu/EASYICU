@@ -4066,7 +4066,10 @@ def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
     assert "分析已完成，可以查看结果" in owner
     assert "result_tables.json" in owner
     assert "figure_gallery.json" in owner
-    assert "manuscript_draft.json" in owner
+    assert "manuscript_provenance.json" in owner
+    assert "data-gpi-run-outcome-data" in owner
+    assert "preparePiCopilotDataWorkbenchSnapshot" in owner
+    assert "RUN_OUTCOME.openData(previewAnalysisData)" in guided
     assert "screens-guided-pi-run-outcome.js" in index
     assert "guided-pi-run-outcome.css" in index
 

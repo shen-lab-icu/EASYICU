@@ -512,6 +512,16 @@ def get_pi_copilot_data_workbench_snapshot(
         _raise_http(exc)
 
 
+@router.post("/api/copilot/pi/projects/{project_id}/data-workbench-snapshot/prepare")
+def post_pi_copilot_data_workbench_snapshot_prepare(project_id: ShortText) -> dict:
+    try:
+        return get_pi_copilot_service().prepare_data_workbench_snapshot(
+            project_id=project_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
 @router.get(
     "/api/copilot/pi/projects/{project_id}/runs/{run_id}/documents/{document_name}"
 )
