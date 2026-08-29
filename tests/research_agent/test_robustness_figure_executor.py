@@ -260,6 +260,118 @@ def test_the_entrypoint_does_not_re_derive_ownership():
     assert "figure_product='robustness_plot'" in code
 
 
+def test_an_interval_too_narrow_to_see_is_printed_not_left_bare(tmp_path):
+    """A real interval that renders inside its own marker reads as no interval.
+
+    These are the three rows a recorded run actually drew. Two are
+    high-vs-reference contrasts spanning 1.60-1.72; the third is a per-unit
+    contrast whose interval is four orders of magnitude tighter, so on the
+    shared axis it collapsed to a bare point. The figure then showed a variant
+    with an apparently missing interval next to two with full ones, which is
+    the opposite of what the matrix recorded.
+    """
+    rows = [
+        {
+            "spec_id": "signed_upper_boundary_contrast",
+            "effect_scale": "OR",
+            "point_estimate": "1.656151776524735",
+            "ci_low": "1.5986202812198484",
+            "ci_high": "1.7157537278290238",
+            "converged": "True",
+            "estimability_status": "estimated",
+            "axis": "primary",
+            "membership_n": "44095",
+            "membership_executable": "True",
+            "modeled_analytic_n": "44095",
+            "notes": "",
+        },
+        {
+            "spec_id": "signed_linear_functional_form_sensitivity",
+            "effect_scale": "OR",
+            "point_estimate": "0.9999975870226232",
+            "ci_low": "0.9999781605874776",
+            "ci_high": "1.0000170138351634",
+            "converged": "True",
+            "estimability_status": "estimated",
+            "axis": "functional_form",
+            "membership_n": "44095",
+            "membership_executable": "True",
+            "modeled_analytic_n": "44095",
+            "notes": "",
+        },
+        {
+            "spec_id": "complete_case_lactate",
+            "effect_scale": "OR",
+            "point_estimate": "1.656151776524735",
+            "ci_low": "1.5986202812198484",
+            "ci_high": "1.7157537278290238",
+            "converged": "True",
+            "estimability_status": "estimated",
+            "axis": "missing",
+            "membership_n": "44095",
+            "membership_executable": "True",
+            "modeled_analytic_n": "44095",
+            "notes": "",
+        },
+    ]
+    run_dir, manifest = _write_bound_matrix(tmp_path, rows)
+    summary = run_robustness_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id="07_robustness_sensitivity_figure",
+        figure_product="robustness_plot",
+    )
+
+    assert summary["status"] == "ok"
+    contract = json.loads(
+        (tmp_path / "out" / "robustness_plot.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    metadata = contract["panels"][0]["metadata"]
+    # only the sub-resolution row is named, and it is named
+    assert metadata["sub_axis_resolution_rows"] == [
+        "signed_linear_functional_form_sensitivity"
+    ]
+    note = contract["statistics_note"]
+    note = note if isinstance(note, str) else " ".join(note)
+    assert "narrower than the axis resolution" in note
+    assert "signed linear functional form sensitivity" in note
+
+
+def test_the_figure_says_whether_a_shared_effect_axis_was_authorized(tmp_path):
+    """A shared effect scale is not a shared question.
+
+    The planning owner refuses to authorize one axis from `effect_scale`
+    alone, because a per-unit OR and a high-vs-reference OR carry the same
+    scale while answering different questions. This renderer draws them on one
+    axis anyway -- the producer does not yet emit the identity columns the
+    assessment needs -- so the verdict has to travel with the figure instead of
+    being assumed away.
+    """
+    run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
+    run_robustness_figure(
+        out_dir=tmp_path / "out",
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id="07_robustness_sensitivity_figure",
+        figure_product="robustness_plot",
+    )
+    contract = json.loads(
+        (tmp_path / "out" / "robustness_plot.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    metadata = contract["panels"][0]["metadata"]
+    assert metadata["effect_axis_comparability_authorized"] is False
+    assert metadata["effect_axis_reason_code"]
+    assert "estimand_id" in metadata["effect_axis_missing_identity_columns"]
+    note = contract["statistics_note"]
+    note = note if isinstance(note, str) else " ".join(note)
+    assert "not authorized as directly comparable" in note
+
+
 def test_it_renders_the_real_grid_and_labels_what_did_not_converge(tmp_path):
     run_dir, manifest = _write_bound_matrix(tmp_path, _REAL_ROWS)
     summary = run_robustness_figure(

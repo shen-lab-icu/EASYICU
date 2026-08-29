@@ -149,6 +149,48 @@ def test_exact_cohort_flow_selects_and_renders_without_llm(tmp_path: Path) -> No
     assert (out_dir / "cohort_accounting.figure_contract.json").is_file()
 
 
+def test_a_single_stage_that_is_not_the_universe_still_reports_the_gap(
+    tmp_path: Path,
+) -> None:
+    """The honest wording depends on which one-row case this is.
+
+    A lone universe row that excluded nobody records "no filter was applied".
+    A lone row that is not the universe, or that did exclude rows, leaves the
+    stages before it genuinely unaccounted, and must keep saying so.
+    """
+    step = _step()
+    singleton = pd.DataFrame(
+        [[0, "inclusion", 120_000, 25_542, 94_458]],
+        columns=[
+            "step_order",
+            "predicate_kind",
+            "n_before",
+            "n_excluded",
+            "n_remaining",
+        ],
+    )
+    run_dir, manifest, _binding_row = _binding(tmp_path, frame=singleton)
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+
+    run_cohort_flow_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=step.step_id,
+        figure_product="cohort_accounting",
+    )
+
+    source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
+    assert source["display_label"].tolist() == ["Analysis denominator only"]
+    contract = json.loads(
+        (out_dir / "cohort_accounting.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "upstream eligibility and attrition are " in contract["core_claim"].lower()
+    assert "no eligibility filter" not in contract["core_claim"].lower()
+
+
 def test_single_denominator_is_not_promoted_to_complete_cohort_accounting(
     tmp_path: Path,
 ) -> None:
@@ -181,7 +223,11 @@ def test_single_denominator_is_not_promoted_to_complete_cohort_accounting(
     assert summary["upstream_attrition_available"] is False
     assert summary["rendering_mode"] == "denominator_only_node"
     source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
-    assert source["display_label"].tolist() == ["Analysis denominator only"]
+    # The single stage IS the whole bound universe with nobody excluded, so
+    # the figure names that fact instead of reporting a gap that does not
+    # exist. The non-promotion guarantees above are what this test protects,
+    # and they are unchanged.
+    assert source["display_label"].tolist() == ["All bound input rows"]
     assert source["n_remaining"].tolist() == [94_458]
     contract = json.loads(
         (out_dir / "cohort_accounting.figure_contract.json").read_text(
@@ -194,9 +240,9 @@ def test_single_denominator_is_not_promoted_to_complete_cohort_accounting(
         COHORT_ACCOUNTING_DENOMINATOR_ONLY
     )
     assert "must not be described as complete" in panel["review_risk"]
-    assert "upstream eligibility and attrition are unavailable" in contract[
-        "core_claim"
-    ].lower()
+    claim = contract["core_claim"].lower()
+    assert "no eligibility filter was applied" in claim
+    assert "every bound input row is the analysis cohort" in claim
 
 
 def test_owner_and_runner_fail_closed_on_widening_or_arithmetic_drift(
