@@ -332,9 +332,20 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     run_id = stable_code(result.get("run_id"))
     gate = result.get("gate")
     gate = gate if isinstance(gate, Mapping) else {}
+    gate_checks = {
+        str(item.get("id") or "").strip(): bool(item.get("passed"))
+        for item in (gate.get("checks") or [])
+        if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+    }
+    analysis_results_available = bool(
+        gate_checks.get("execution_complete") is True
+        and gate_checks.get("analysis_validated") is True
+        and gate_checks.get("numeric_verified") is True
+    )
     diagnostic_only = (
         str(gate.get("status") or "") == "blocked"
         and not bool(result.get("human_review_pending"))
+        and not analysis_results_available
     )
     diagnostic_artifacts = {
         "run_context.json",
@@ -403,8 +414,55 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "artifact_refs": artifact_refs,
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
+            "execution_complete": gate_checks.get("execution_complete") is True,
+            "analysis_validated": gate_checks.get("analysis_validated") is True,
+            "numeric_verified": gate_checks.get("numeric_verified") is True,
+            "evidence_complete": gate_checks.get("evidence_complete") is True,
+            "analysis_results_available": analysis_results_available,
             "reportable": bool(gate.get("reportable")),
             "human_review_pending": bool(result.get("human_review_pending")),
+        }
+    )
+
+
+def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Project a durable, path-free completed-run result for Guided Copilot."""
+
+    if not isinstance(review, Mapping) or not review.get("ok"):
+        return {"present": False}
+    gate = review.get("gate")
+    gate = gate if isinstance(gate, Mapping) else {}
+    projection = project_job(
+        {
+            "id": review.get("run_id"),
+            "kind": "agent-run",
+            "status": "done",
+            "result": {
+                "run_id": review.get("run_id"),
+                "gate": gate,
+                "artifacts": review.get("artifacts") or [],
+                "human_review_pending": False,
+            },
+        }
+    )
+    return ensure_safe_projection(
+        {
+            key: value
+            for key, value in projection.items()
+            if key
+            in {
+                "present",
+                "run_id",
+                "artifact_refs",
+                "gate_status",
+                "gate_reason_code",
+                "execution_complete",
+                "analysis_validated",
+                "numeric_verified",
+                "evidence_complete",
+                "analysis_results_available",
+                "reportable",
+            }
         }
     )
 

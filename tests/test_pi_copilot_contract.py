@@ -434,6 +434,89 @@ def test_project_workflow_prefers_newer_project_pipeline_run(
     assert selected == ["run-pipeline-plan"]
 
 
+def test_project_workflow_exposes_validated_analysis_results_when_publication_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-a", "study-a")
+    study = {
+        "id": "study-a",
+        "revision": 4,
+        "question": "Is lactate associated with in-hospital mortality?",
+        "data_source": {"path": "/private/export", "database": "mimiciv"},
+        "cohort": {"preset": "adult_icu"},
+        "confirmations": {"extraction_completed": True},
+    }
+    run_row = {
+        "run_id": "run-analysis-ready",
+        "project_dir": "/private/run-wrapper",
+        "run_type": "full",
+        "engine": "easyicu.research_agent.pipeline",
+        "gate_status": "blocked",
+        "gate_reason": "research_agent_pipeline_failed_closed",
+        "gate_checks": {
+            "execution_complete": True,
+            "analysis_validated": True,
+            "numeric_verified": True,
+        },
+        "artifact_names": [
+            "agent_plan.json",
+            "result_tables.json",
+            "figure_gallery.json",
+            "manuscript_draft.json",
+            "source_run_manifest.json",
+        ],
+    }
+    monkeypatch.setattr(service_module.study_contexts, "get_context", lambda _: study)
+    monkeypatch.setattr(service_module.sources, "load_registry", lambda: {"active_path": None})
+    monkeypatch.setattr(
+        service_module,
+        "list_bound_run_history",
+        lambda **_: [run_row],
+    )
+    monkeypatch.setattr(service_module.agent_pipeline_runs, "pending_review", lambda _: None)
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_review",
+        lambda _: {
+            "ok": True,
+            "run_id": "run-analysis-ready",
+            "gate": {
+                "status": "blocked",
+                "reason": "research_agent_pipeline_failed_closed",
+                "reportable": False,
+                "checks": [
+                    {"id": "execution_complete", "passed": True},
+                    {"id": "analysis_validated", "passed": True},
+                    {"id": "numeric_verified", "passed": True},
+                    {"id": "evidence_complete", "passed": False},
+                ],
+            },
+            "artifacts": [
+                {"name": "result_tables.json", "sha256": "a" * 64, "bytes": 40},
+                {"name": "figure_gallery.json", "sha256": "b" * 64, "bytes": 50},
+                {"name": "manuscript_draft.json", "sha256": "c" * 64, "bytes": 60},
+            ],
+        },
+    )
+
+    payload = service.get_project_workflow(project_id="project-a")
+
+    latest = payload["latest_run"]
+    assert latest["analysis_results_available"] is True
+    assert latest["gate_status"] == "blocked"
+    assert [row["artifact"] for row in latest["artifact_refs"]] == [
+        "result_tables.json",
+        "figure_gallery.json",
+        "manuscript_draft.json",
+    ]
+    assert "/private/" not in json.dumps(payload)
+
+
 @pytest.fixture
 def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     current = {
@@ -795,6 +878,7 @@ def test_local_folder_selection_stays_locked_until_study_source_is_saved(
         "confirmation_mode": None,
         "source": None,
         "confirmed_at": None,
+        "extraction_scope": "reuse_prepared_full",
     }
     with pytest.raises(PiCopilotError) as misplaced_database:
         service.authorize_data_source(
