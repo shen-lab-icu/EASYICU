@@ -2713,6 +2713,13 @@ def _message_explicitly_selects_all_stays(message: str) -> bool:
             r"\ball[\s_-]+eligible[\s_-]+(?:adult[\s_-]+)?icu[\s_-]+stays?\b",
             r"\b(?:include|retain)[\s_-]+(?:repeated|repeat|readmission)[\s_-]+(?:icu[\s_-]+)?stays?\b",
             r"\bnot[\s_-]+(?:restricted[\s_-]+to[\s_-]+)?(?:the[\s_-]+)?first[\s_-]+icu[\s_-]+stay\b",
+            # The canonical wording of the eligibility option that means this.
+            # Copilot now puts the choice to the user as a named option
+            # (cohort_eligibility.adults_all_admissions); picking it by its own
+            # label is an explicit selection, and refusing it here would make
+            # the offered answer unusable.
+            r"(?:全部|所有).{0,4}(?:icu|重症监护).{0,4}(?:入住|住院)",
+            r"\b(?:every|all)[\s_-]+icu[\s_-]+admissions?\b",
         )
     )
 

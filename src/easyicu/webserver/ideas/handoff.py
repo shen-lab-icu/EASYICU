@@ -255,11 +255,19 @@ def _selection_mode(plan: Mapping[str, Any]) -> DiscoverySelectionMode:
 
 
 def _inclusion_criteria(plan: Mapping[str, Any]) -> list[str]:
+    """State the idea's own cohort wording, and claim nothing when it has none.
+
+    The fallback used to assert "Adult ICU cohort", which is an eligibility
+    criterion no one chose: the handoff carries it to the Planner as a bound
+    inclusion contract, so an idea that never mentioned age arrived claiming an
+    adult restriction the export may not apply. Eligibility is the
+    researcher's decision -- Copilot asks for it in study setup -- so an idea
+    with no cohort wording declares no criterion here.
+    """
+
     cohort = plan.get("cohort") or {}
     default = str(cohort.get("default") or "").strip()
-    if default:
-        return [default]
-    return ["Adult ICU cohort from the active prepared EasyICU export."]
+    return [default] if default else []
 
 
 def _prior_art_payload(

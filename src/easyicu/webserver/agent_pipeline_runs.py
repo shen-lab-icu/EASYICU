@@ -2701,7 +2701,29 @@ def _research_user_preferences(
     return preferences
 
 
+def _diagnosis_criteria(cohort: Mapping[str, Any], key: str, prefix: str) -> List[str]:
+    values = cohort.get(key)
+    if not isinstance(values, list):
+        return []
+    clean = [_clean_text(item, 120) for item in values[:20]]
+    clean = [item for item in clean if item]
+    return [f"{prefix}: {', '.join(clean)}"] if clean else []
+
+
 def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
+    """Compile only the criteria that say who ENTERS the cohort.
+
+    Everything the researcher set used to arrive here, exclusions included:
+    ``exclude_diagnoses`` was sent as "exclude diagnoses: ..." inside the
+    inclusion list, and a readmission exclusion as "first eligible ICU stay per
+    patient". The ResearchContext has carried an ``exclusion_criteria`` field
+    the whole time -- the CLI fills it from ``--exclusion`` and the outbound
+    Planner context publishes it as ``exclusion_contract`` -- so the Web caller
+    was the only consumer that had no exclusion channel. Across 52 recorded
+    plans not one carried a single exclusion predicate, and a cohort-flow
+    figure cannot draw an exclusion stage that was never declared as one.
+    """
+
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
     rows: List[str] = []
@@ -2717,18 +2739,21 @@ def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     minimum_los = cohort.get("min_icu_los_hours")
     if minimum_los is not None:
         rows.append(f"minimum ICU length of stay: {minimum_los} hours")
+    rows.extend(_diagnosis_criteria(cohort, "include_diagnoses", "include diagnoses"))
+    return rows[:32]
+
+
+def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
+    """Compile the criteria that say who is REMOVED from the cohort."""
+
+    raw = study.get("cohort")
+    cohort = raw if isinstance(raw, Mapping) else {}
+    rows: List[str] = []
     if cohort.get("exclude_readmissions") is True:
-        rows.append("first eligible ICU stay per patient")
-    for key, prefix in (
-        ("include_diagnoses", "include diagnoses"),
-        ("exclude_diagnoses", "exclude diagnoses"),
-    ):
-        values = cohort.get(key)
-        if isinstance(values, list):
-            clean = [_clean_text(item, 120) for item in values[:20]]
-            clean = [item for item in clean if item]
-            if clean:
-                rows.append(f"{prefix}: {', '.join(clean)}")
+        rows.append(
+            "readmissions after the first eligible ICU stay per patient"
+        )
+    rows.extend(_diagnosis_criteria(cohort, "exclude_diagnoses", "exclude diagnoses"))
     return rows[:32]
 
 
@@ -2757,6 +2782,12 @@ def _primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
     if any(cohort.get(field) not in (None, "", []) for field in explicit_filter_fields):
         return "predicate_filtered"
     return "all_input_rows"
+
+
+#: Public name for the same policy. Copilot's eligibility question has to say
+#: what the study would run as, and re-deriving that from the cohort fields is
+#: how two layers drift apart; it reads this instead.
+primary_cohort_selection_mode = _primary_cohort_selection_mode
 
 
 def _progress(job: Any, *, step: str, label: str, **extra: Any) -> None:
@@ -3759,6 +3790,7 @@ def _write_projection(
         "summary": run_context["summary"],
         "cohort": {
             "criteria": _inclusion_criteria(study),
+            "exclusion_criteria": _exclusion_criteria(study),
             "target_outcome": _target_outcome(study),
             "time_window_hours": _projection_time_window_hours(study),
         },
@@ -5369,6 +5401,7 @@ def make_research_pipeline_run_runner(
                 endpoint=acquisition.endpoint,
                 primary_exposure=resolved_primary_exposure,
                 inclusion_criteria=_inclusion_criteria(study),
+                exclusion_criteria=_exclusion_criteria(study),
                 id_columns=(
                     [patient_grouping.output_identity_column]
                     if patient_grouping is not None
