@@ -2133,7 +2133,7 @@ def test_scientific_plan_review_has_a_readable_multidimensional_preview() -> Non
     assert ".ag-science-lanes" in review_css
     assert ".ag-science-review" not in agent_css
     assert "css/agent-scientific-review.css?v=20260828-science-review3" in index
-    assert "css/agent-plan.css?v=20260828-plan-reader1" in index
+    assert "css/agent-plan.css?v=20260829-plan-flow1" in index
     confirmation_owner = _read("js/screens-guided-pi-confirmation.js")
     assert "plan_review_summary" in confirmation_owner
     assert "gpi-confirmation-review-status" in confirmation_owner
@@ -2318,7 +2318,437 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
     assert "strobe 2007" not in html
 
 
-def test_candidate_association_plan_localizes_provider_prose_for_readers() -> None:
+def test_plan_step_notes_never_assert_another_study_subject() -> None:
+    """A step note must describe the method, not the study. Keying canned
+    prose off step_id made every plan that reused a step id claim the same
+    exposure and outcome, so a ventilation study rendered as a lactate study.
+    The plan's own wording is authoritative; when it is not in the reader's
+    language the note falls back to a variable-free method description and
+    the original wording is kept verbatim next to it."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable renderer contract")
+    renderer = _read("js/screens-agent-render.js")
+
+    payload = {
+        "analysis_type": "association_study",
+        "research_question": "机械通气时长与 ICU 转出去向的关系",
+        "design_selection": {"candidates": [{"disposition": "selected"}]},
+        "steps": [
+            {"step_id": "measurement_audit", "method": "missing_data", "intent": "Audit ventilation-duration coverage.", "expected_outputs": ["table:m"]},
+            {"step_id": "primary_adjusted_association", "method": "logistic", "intent": "Estimate the association.", "expected_outputs": ["table:p"]},
+            {"step_id": "robustness_replay", "method": "robustness_sensitivity", "intent": "Replay.", "expected_outputs": ["table:r"]},
+            {"step_id": "cohort_accounting", "method": "cohort_definition_and_attrition", "intent": "", "expected_outputs": ["table:cohort_flow"]},
+        ],
+    }
+    script = f"""
+global.window = {{
+  EU_LANG: 'zh',
+  EU_HTML: {{ esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'), escAttr: value => String(value ?? '') }},
+  t: (en, zh) => zh,
+  icon: () => '',
+}};
+eval({json.dumps(renderer)});
+process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
+"""
+    html = subprocess.run(
+        [node, "-e", script], check=True, capture_output=True, text=True
+    ).stdout
+
+    # no variable, outcome, score, or database from any other study appears
+    for foreign in ("乳酸", "院内死亡", "lactate", "SOFA", "sepsis", "MIMIC", "eICU"):
+        assert foreign not in html, foreign
+    # method-family notes stand in, and they name no variable
+    assert "检查本计划所需变量的测量覆盖与缺失情况" in html
+    assert "按预先设定的调整变量估计校正后关联" in html
+    assert "按预先规定的敏感性设定复核主要结论是否稳健" in html
+    # a step with no stated intent still gets a true method description
+    assert "统计纳入与排除的记录数，确定最终分析分母" in html
+    # the plan's own wording is preserved, not discarded
+    assert "计划原文" in html
+    for stated in ("Audit ventilation-duration coverage.", "Estimate the association.", "Replay."):
+        assert stated in html
+
+
+def test_plan_reader_prefers_the_owner_compiled_phase() -> None:
+    """The run phase is study semantics, so the reader reads the value the
+    planning layer compiled (`planned_phase`, stamped by the Copilot artifact
+    projection) instead of rebuilding it from method names. The local
+    heuristic survives only for payloads that carry no compiled phase -- demo
+    fixtures, hand-built previews, an artifact served by an older host."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable renderer contract")
+    renderer = _read("js/screens-agent-render.js")
+
+    def stages(steps: list[dict]) -> dict[str, list[str]]:
+        payload = {
+            "research_question": "Q",
+            "design_selection": {"candidates": [{"disposition": "selected"}]},
+            "steps": steps,
+        }
+        script = f"""
+global.window = {{
+  EU_LANG: 'zh',
+  EU_HTML: {{ esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'), escAttr: value => String(value ?? '') }},
+  t: (en, zh) => zh,
+  icon: () => '',
+}};
+eval({json.dumps(renderer)});
+process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
+"""
+        html = subprocess.run(
+            [node, "-e", script], check=True, capture_output=True, text=True
+        ).stdout
+        found: dict[str, list[str]] = {}
+        for block in html.split('<li class="ag-plan-flow-stage is-')[1:]:
+            found[block[: block.index('"')]] = re.findall(r"<b>(\d+)</b>", block)
+        return found
+
+    # every compiled phase maps to a stage
+    compiled = stages([
+        {"step_id": "a", "method": "x", "planned_phase": "cohort"},
+        {"step_id": "b", "method": "x", "planned_phase": "data_check"},
+        {"step_id": "c", "method": "x", "planned_phase": "analysis"},
+        {"step_id": "d", "method": "x", "planned_phase": "robustness"},
+        {"step_id": "e", "method": "x", "planned_phase": "reporting"},
+        {"step_id": "f", "method": "x", "planned_phase": "support"},
+    ])
+    assert compiled == {
+        "population": ["1"],
+        "quality": ["2"],
+        "primary": ["3"],
+        "robustness": ["4"],
+        "figure": ["5"],
+        "support": ["6"],
+    }
+
+    # the compiled phase wins over both the method text and the role, because
+    # the layer that compiled it saw more than either
+    overridden = stages([
+        {
+            "step_id": "g",
+            "method": "table_one_baseline_audit",
+            "planned_analysis_role": "auxiliary",
+            "planned_phase": "analysis",
+        }
+    ])
+    assert overridden == {"primary": ["1"]}
+
+    # no compiled phase: the local fallback still refuses to promote an
+    # auxiliary step into a result
+    legacy = stages([
+        {
+            "step_id": "h",
+            "method": "descriptive_counts_of_exposure_outcome",
+            "planned_analysis_role": "auxiliary",
+        }
+    ])
+    assert legacy == {"support": ["1"]}
+
+    # an unknown phase value is ignored rather than trusted blindly
+    unknown = stages([
+        {"step_id": "i", "method": "cohort_definition_and_attrition", "planned_phase": "nonsense"}
+    ])
+    assert unknown == {"population": ["1"]}
+
+
+def test_plan_stage_placement_never_contradicts_the_planner_role() -> None:
+    """Root-cause guard. Every contradiction found in this reader came from the
+    same habit: the Web layer re-deriving study semantics from free text that
+    the Planner had already compiled into a typed field. `planned_analysis_role`
+    is Planner-owned and the pipeline gates on it (schema.py
+    PlannedAnalysisRole), so the reader may never place a step somewhere the
+    role denies. The role answers "which step carries the claim", not "which
+    phase is this" - cohort building, data checks, and figures are all
+    `auxiliary` - so the method heuristic resolves only that remaining
+    question, and can never promote an auxiliary step into a result."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable renderer contract")
+    renderer = _read("js/screens-agent-render.js")
+
+    def stages(steps: list[dict]) -> dict[str, list[str]]:
+        payload = {
+            "research_question": "Q",
+            "design_selection": {"candidates": [{"disposition": "selected"}]},
+            "steps": steps,
+        }
+        script = f"""
+global.window = {{
+  EU_LANG: 'zh',
+  EU_HTML: {{ esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'), escAttr: value => String(value ?? '') }},
+  t: (en, zh) => zh,
+  icon: () => '',
+}};
+eval({json.dumps(renderer)});
+process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
+"""
+        html = subprocess.run(
+            [node, "-e", script], check=True, capture_output=True, text=True
+        ).stdout
+        found: dict[str, list[str]] = {}
+        for block in html.split('<li class="ag-plan-flow-stage is-')[1:]:
+            key = block[: block.index('"')]
+            found[key] = re.findall(r"<b>(\d+)</b>", block)
+        return found
+
+    # the method text looks like a result, but the plan calls it auxiliary:
+    # it must not be shown as the study's main analysis
+    demoted = stages([
+        {"step_id": "x", "method": "descriptive_counts_of_exposure_outcome", "planned_analysis_role": "auxiliary", "expected_outputs": ["table:a"]},
+        {"step_id": "y", "method": "adjusted_association_model", "planned_analysis_role": "primary", "expected_outputs": ["table:b"]},
+    ])
+    assert demoted["support"] == ["1"]
+    assert demoted["primary"] == ["2"]
+
+    # the method text looks like a data check, but the plan calls it primary
+    promoted = stages([
+        {"step_id": "q", "method": "table_one_primary_result", "planned_analysis_role": "primary", "expected_outputs": ["table:c"]},
+    ])
+    assert promoted["primary"] == ["1"]
+    assert "quality" not in promoted
+
+    # a sensitivity step whose wording never says "sensitivity" still lands
+    # in the robustness stage
+    sensitivity = stages([
+        {"step_id": "z", "method": "alternative_exposure_coding", "planned_analysis_role": "sensitivity", "expected_outputs": ["table:d"]},
+    ])
+    assert sensitivity["robustness"] == ["1"]
+
+    # secondary results are results, not checks
+    secondary = stages([
+        {"step_id": "s", "method": "absolute_risk_context", "planned_analysis_role": "secondary", "expected_outputs": ["table:e"]},
+    ])
+    assert secondary["primary"] == ["1"]
+
+    # plans that state no role (older runs, fixtures) still fold by method
+    legacy = stages([
+        {"step_id": "c", "method": "cohort_definition_and_attrition", "expected_outputs": ["table:cohort_flow"]},
+        {"step_id": "p", "method": "descriptive_counts", "expected_outputs": ["table:e"]},
+    ])
+    assert legacy["population"] == ["1"]
+    assert legacy["primary"] == ["2"]
+
+
+def test_plan_stage_folding_holds_across_study_designs() -> None:
+    """Stage assignment is method-driven, so designs the flow map was not
+    built against still fold correctly: a survival study reaches the main
+    analysis, and a descriptive study's counts step is its result, not a
+    data check."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable renderer contract")
+    renderer = _read("js/screens-agent-render.js")
+
+    def render(steps: list[dict]) -> str:
+        payload = {
+            "research_question": "Q",
+            "design_selection": {"candidates": [{"disposition": "selected"}]},
+            "steps": steps,
+        }
+        script = f"""
+global.window = {{
+  EU_LANG: 'zh',
+  EU_HTML: {{ esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'), escAttr: value => String(value ?? '') }},
+  t: (en, zh) => zh,
+  icon: () => '',
+}};
+eval({json.dumps(renderer)});
+process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
+"""
+        return subprocess.run(
+            [node, "-e", script], check=True, capture_output=True, text=True
+        ).stdout
+
+    survival = render([
+        {"step_id": "primary_survival", "method": "cox_proportional_hazards", "expected_outputs": ["table:hazard_ratios"]},
+        {"step_id": "ph_sensitivity", "method": "proportional_hazards_sensitivity", "expected_outputs": ["table:ph"]},
+        {"step_id": "km_figure", "method": "visualization", "expected_outputs": ["figure:km_plot"]},
+    ])
+    assert "时间结局分析" in survival
+    assert "is-primary" in survival and "is-robustness" in survival and "is-figure" in survival
+
+    prediction = render([
+        {"step_id": "model_development", "method": "prediction_discrimination_calibration", "expected_outputs": ["table:auroc"]},
+    ])
+    assert "预测模型" in prediction
+    assert "is-primary" in prediction
+
+    # a counts-only study's distribution step is the result, not a data check
+    descriptive = render([
+        {"step_id": "prevalence", "method": "descriptive_counts", "expected_outputs": ["table:prevalence"]},
+    ])
+    assert "ag-plan-flow-stage is-primary" in descriptive
+    assert "ag-plan-flow-stage is-quality" not in descriptive
+    assert "描述性分布" in descriptive
+
+    # ...but an audit that happens to be described as descriptive stays a check
+    audit = render([
+        {"step_id": "descriptive_quality_summary", "method": "measurement_audit", "expected_outputs": ["table:q"]},
+    ])
+    assert "ag-plan-flow-stage is-quality" in audit
+
+    # an unmapped output key still tells the reader what kind of thing it is
+    assert "图件 · km plot" in survival
+    assert "结果表 · auroc" in prediction
+
+
+def test_candidate_agent_plan_leads_with_a_stage_flow_map() -> None:
+    """A generated plan is a flat list of typed steps (often 8-12). The reader
+    must see the shape of the run before any prose, so the analysis-path
+    section leads with a stage flow map and folds the per-step wording into a
+    collapsed detail list. Stage assignment is method-driven and case-neutral."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable renderer contract")
+    renderer = _read("js/screens-agent-render.js")
+    plan_css = _read("css/agent-plan.css")
+
+    payload = {
+        "analysis_type": "association_study",
+        "research_question": "研究问题",
+        "endpoint": {"name": "death", "kind": "binary"},
+        "robustness_specs": [{"id": "complete_case"}],
+        "design_selection": {"candidates": [{"disposition": "selected"}]},
+        "steps": [
+            {
+                "step_id": "cohort_accounting",
+                "method": "cohort_definition_and_attrition",
+                "expected_outputs": ["artifact:analysis_cohort", "table:cohort_flow"],
+            },
+            {"step_id": "baseline_context", "method": "table_one", "expected_outputs": ["table:baseline_table"]},
+            {
+                "step_id": "measurement_quality",
+                "method": "missing_data",
+                "expected_outputs": ["table:measurement_process_audit", "table:measurement_missingness"],
+            },
+            {
+                "step_id": "primary_landmark_association",
+                "method": "signed_landmark_restricted_cubic_spline",
+                "expected_outputs": [
+                    "table:landmark_rcs_curve",
+                    "table:landmark_rcs_contrasts",
+                    "table:landmark_linear_sensitivity",
+                    "table:landmark_adjusted_absolute_risk",
+                    "table:landmark_population_flow",
+                    "log:landmark_scientific_runtime_receipt",
+                ],
+            },
+            {
+                "step_id": "sensitivity_planner_proposed_exposure_rcs",
+                "method": "restricted_cubic_spline_sensitivity",
+                "expected_outputs": ["table:sensitivity_planner_proposed_exposure_rcs"],
+            },
+            {"step_id": "absolute_risk_context", "method": "absolute_risk_context", "expected_outputs": ["table:absolute_risk_context"]},
+            {"step_id": "robustness_suite", "method": "robustness_sensitivity", "expected_outputs": ["table:robustness_summary"]},
+            {"step_id": "robustness_suite_figure", "method": "visualization", "expected_outputs": ["figure:robustness_plot"]},
+            {"step_id": "09_cohort_accounting_figure", "method": "visualization", "expected_outputs": ["figure:cohort_flow"]},
+            {"step_id": "10_data_quality_figure", "method": "visualization", "expected_outputs": ["figure:data_quality"]},
+        ],
+    }
+    script = f"""
+global.window = {{
+  EU_HTML: {{ esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'), escAttr: value => String(value ?? '') }},
+  t: (en, zh) => zh,
+  icon: () => '',
+}};
+eval({json.dumps(renderer)});
+process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
+"""
+    html = subprocess.run(
+        [node, "-e", script], check=True, capture_output=True, text=True
+    ).stdout
+
+    # the flow map replaces the flat list as the default reading surface
+    assert '<ol class="ag-plan-flow">' in html
+    assert "共 10 个步骤 · 5 个阶段" in html
+    for stage in (
+        "ag-plan-flow-stage is-population",
+        "ag-plan-flow-stage is-quality",
+        "ag-plan-flow-stage is-primary",
+        "ag-plan-flow-stage is-robustness",
+        "ag-plan-flow-stage is-figure",
+    ):
+        assert stage in html
+    assert html.count('class="ag-plan-flow-stage') == 5
+    # figure steps are stage 5 even though their ids mention the earlier stages
+    assert html.index("is-robustness") < html.index("is-figure")
+    # every step keeps a localized short title, none leaks an internal step id
+    for title in (
+        "队列与分母账本",
+        "基线特征表",
+        "测量覆盖与缺失审计",
+        "主关联分析（landmark 起点）",
+        "敏感性分析 · 暴露形式设定",
+        "绝对风险背景",
+        "稳健性复核",
+        "稳健性分析图",
+        "队列流程图",
+        "数据质量图",
+    ):
+        assert title in html
+    for internal in ("step_id", "robustness_suite_figure", "signed_landmark", "10_data_quality_figure"):
+        assert internal not in html
+    # per-step prose is preserved but folded away
+    assert '<details class="ag-plan-step-detail">' in html
+    assert "逐步说明 · 共 10 步" in html
+    # long output rosters are capped instead of printed as one chain
+    assert '<span class="is-more">+2</span>' in html
+    # the whole plan is summarized before any prose
+    assert '<div class="ag-plan-glance">' in html
+    assert "个计划步骤" in html and "个阶段" in html
+    # the flow styles have one explicit owner
+    for selector in (".ag-plan-flow", ".ag-plan-flow-stage", ".ag-plan-glance", ".ag-plan-step-detail"):
+        assert selector in plan_css
+
+
+def test_long_readable_artifacts_lead_with_a_section_index() -> None:
+    """A readable artifact with many sections cannot be understood without
+    scrolling it end to end, so the generic view leads with a section index."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable renderer contract")
+    renderer = _read("js/screens-agent-render.js")
+    agent_css = _read("css/agent.css")
+    plan_css = _read("css/agent-plan.css")
+
+    payload = {
+        "schema_version": "easyicu.web-pipeline-result-tables/1",
+        "table_count": 3,
+        "tables": [
+            {"label": f"Result table {index}", "headers": ["a"], "rows": [["1"]]}
+            for index in range(1, 4)
+        ],
+    }
+    script = f"""
+global.window = {{
+  EU_HTML: {{ esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'), escAttr: value => String(value ?? '') }},
+  t: (en, zh) => zh,
+  icon: () => '',
+}};
+eval({json.dumps(renderer)});
+process.stdout.write(window.AGENT_RENDER.artifactStructuredView('result_tables.json', {json.dumps(payload)}));
+"""
+    html = subprocess.run(
+        [node, "-e", script], check=True, capture_output=True, text=True
+    ).stdout
+
+    assert '<nav class="ag-artifact-contents"' in html
+    assert "本产物共 4 个区块" in html
+    assert html.index("ag-artifact-contents") < html.index("Result table 1")
+    assert ".ag-artifact-contents" in agent_css
+    assert ".ag-artifact-contents" not in plan_css
+
+
+def test_candidate_plan_glosses_provider_prose_without_replacing_it() -> None:
+    """Design-level fields carry the plan's own answers. The retired copy was
+    keyed on the field NAME, so it asserted an ICU-stay time zero and a
+    logistic primary method for every association plan - false for the
+    landmark design this very payload describes. A gloss is now allowed only
+    where it is derivable from `analysis_type` or from an unambiguous method
+    token in the plan's own wording, and the wording is always kept beside
+    it."""
     node = shutil.which("node")
     if not node:
         pytest.skip("node is required for the executable renderer contract")
@@ -2335,8 +2765,10 @@ def test_candidate_association_plan_localizes_provider_prose_for_readers() -> No
                     "analysis_type": "association_study",
                     "decision_reason": "Selected because it directly addresses the association question.",
                     "estimand": "The adjusted association between lactate and death.",
-                    "time_zero": "The available ICU stay record.",
-                    "observation_window": "Through the in-hospital outcome.",
+                    # a landmark start: the retired canned copy claimed an
+                    # ICU-stay time zero for every association plan
+                    "time_zero": "A prespecified 24-hour ICU landmark for each stay.",
+                    "observation_window": "From the landmark through in-hospital discharge or death.",
                     "primary_method": "Covariate-adjusted logistic association model.",
                     "supports": "The strength and uncertainty of the association.",
                     "cannot_prove": "It cannot prove causality.",
@@ -2391,8 +2823,13 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
     ).stdout
 
     for text in (
-        "选择这套设计，是因为它直接回答当前的关联问题",
-        "多变量二分类逻辑回归",
+        # rationale, time zero, and observation window have no derivable gloss,
+        # so the plan's own wording stands alone rather than being invented
+        "Selected because it directly addresses the association question.",
+        "A prespecified 24-hour ICU landmark",
+        # the method gloss summarizes the plan's own wording, and says so
+        "计划写明的方法：多变量 Logistic 回归",
+        "计划原文",
         "乳酸",
         "院内死亡",
         "入院类型",
@@ -2401,9 +2838,13 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
         "血液酸碱度（pH）",
         "肌酐",
         "胆红素",
-        "检查乳酸、院内死亡和拟调整变量的可用性与缺失情况",
+        # the step note describes the METHOD and names no variable; the
+        # plan's own English wording is preserved verbatim beside it
+        "检查本计划所需变量的测量覆盖与缺失情况",
+        "计划原文",
+        "Audit measurement completeness.",
         "变量可用性与缺失情况",
-        "报告效应大小和不确定性",
+        "报告效应大小与不确定性",
         "校正后关联估计",
         "Planner 推荐方案（待审阅）",
         "先给方案，再由你修改或批准",
@@ -2414,15 +2855,16 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
     ):
         assert text in html
     assert "Planner 尚未给出完整、可审阅的推荐方案" not in html
-    for raw in (
-        "Selected because",
-        "The adjusted association",
-        "Audit measurement completeness",
-        "lact</span>",
-        "death</span>",
-        "measurement audit",
-        "strobe 2007",
+    # nothing asserts a time zero, observation window, or model family that
+    # the plan did not itself state
+    for invented in (
+        "以每次 ICU 住院记录及该次住院中已记录的主要暴露测量作为研究起点",
+        "从研究起点观察至本次住院结局被记录",
+        "使用预先明确变量编码的多变量 Logistic 回归",
+        "并同时报告校正后关联、绝对风险和稳健性分析",
     ):
+        assert invented not in html
+    for raw in ("lact</span>", "death</span>", "measurement audit", "strobe 2007"):
         assert raw not in html
 
 

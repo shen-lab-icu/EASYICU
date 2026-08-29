@@ -686,7 +686,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
-    assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
+    assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -883,7 +883,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "sendPiCopilotMessage" in guided_js
     assert "easyicu_run_submitted" in guided_js
     assert "data-gpi-provider-form" in provider_js
-    assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
+    assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
 
 
@@ -923,8 +923,8 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260828-plan-reader5" in index_html
-    assert "css/agent-plan.css?v=20260828-plan-reader1" in index_html
+    assert "js/screens-agent-render.js?v=20260829-plan-flow1" in index_html
+    assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
 
 def test_candidate_plan_styles_have_one_explicit_owner() -> None:
@@ -1091,7 +1091,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert ".ag-wrap .ag-q-section + .ag-q-section" in agent_question_css
     assert ".ag-wrap .ag-req-list" in agent_question_css
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
-    assert "css/agent.css?v=20260817-project-monitor-states2" in index_html
+    assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?v=20260823-run-history-authority1" in index_html
 
     for name in (
