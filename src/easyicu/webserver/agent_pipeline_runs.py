@@ -2518,6 +2518,8 @@ def _planner_landmark_spline_proposal(
         }
     )
     execution = dict(proposed.get("execution_concepts") or {})
+    execution["outcome"] = target
+    execution["primary_exposure"] = primary_exposure
     execution["covariates"] = list(covariates)
     proposed["execution_concepts"] = execution
     return _PlannerScientificProposal(
@@ -3887,6 +3889,12 @@ def _write_projection(
             }
             for request in pending.requests
         ]
+    system_validation_applicable = bool(
+        run_dir is not None
+        and axes.get("execution_complete")
+        and not axes.get("manuscript_ready")
+        and not axes.get("paper_authorized")
+    )
     source_manifest = {
         "schema_version": "easyicu.web-research-pipeline-projection/1",
         "engine": "easyicu.research_agent.pipeline",
@@ -3914,11 +3922,9 @@ def _write_projection(
         "draft_pdf_available": any(
             row.get("name") == "manuscript_scaffold.pdf" for row in manuscript_documents
         ),
-        "system_validation_report_available": bool(
-            run_dir is not None and axes.get("execution_complete")
-        ),
+        "system_validation_report_available": system_validation_applicable,
         "system_validation_document_count": (
-            1 if run_dir is not None and axes.get("execution_complete") else 0
+            1 if system_validation_applicable else 0
         ),
         "provider": {
             key: provider.get(key)
@@ -3977,11 +3983,7 @@ def _write_projection(
         payloads["manuscript_pdf_receipt.json"] = pdf_receipt
     system_validation_html: Optional[str] = None
     privacy_scan = _projection_privacy_scan(payloads)
-    if (
-        privacy_scan["passed"]
-        and run_dir is not None
-        and axes.get("execution_complete")
-    ):
+    if privacy_scan["passed"] and system_validation_applicable:
         system_report = build_system_validation_report(
             run_id=run_id,
             projections=payloads,
@@ -4709,13 +4711,28 @@ def make_research_pipeline_run_runner(
             "primary_exposure_source_concept": None,
         }
     else:
+        # A package-bound Planner proposal is already a typed, ephemeral
+        # candidate for the plan the operator is about to review.  Its exact
+        # outcome/exposure coordinates must therefore drive the bounded
+        # pre-plan materialization as well as the runtime projection.  Using
+        # only persisted StudyContext fields here drops those coordinates when
+        # the user correctly deferred them to Planner, producing an exposure-
+        # only universe and failing before the candidate Plan can be shown.
+        foundation_target = (
+            _target_outcome(candidate_planning_study)
+            if planner_scientific_proposal is not None
+            else configured_target
+        )
+        foundation_primary_exposure = (
+            _primary_exposure(candidate_planning_study)
+            if planner_scientific_proposal is not None
+            else configured_primary_exposure
+        )
         foundation_profile = _data_foundation_profile(
             export_path=export_path,
             study=candidate_planning_study,
-            # Question-derived planning coordinates are proposals, not an
-            # authority to materialize data before the Plan is reviewed.
-            target=configured_target,
-            primary_exposure=configured_primary_exposure,
+            target=foundation_target,
+            primary_exposure=foundation_primary_exposure,
             covariates=covariates,
             sensitivity_specs=sensitivity_specs,
         )

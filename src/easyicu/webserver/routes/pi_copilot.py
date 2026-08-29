@@ -158,7 +158,9 @@ class PiDataSourceAuthorizationRequest(BaseModel):
     project_id: ShortText
     action: Literal[
         "reuse_project_source",
+        "use_study_required_data",
         "begin_local_selection",
+        "begin_full_data_selection",
         "confirm_selected_source",
     ]
     database: Literal["miiv", "mimic", "eicu", "aumc", "hirid", "sic"] | None = None

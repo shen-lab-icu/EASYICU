@@ -53,7 +53,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert (
         "js/screens-guided-pi-evidence-preview.js?v=20260825-evidence-preview1" in index
     )
-    assert "js/screens-guided-pi-preview.js?v=20260828-history-status2" in index
+    assert "js/screens-guided-pi-preview.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-replay.js?v=20260828-edit-plan1" in index
     assert "js/screens-guided-pi-activity.js?v=20260828-failure-history2" in index
     assert (
@@ -61,8 +61,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         in index
     )
     assert "js/screens-guided-pi-project.js?v=20260827-conversation-first1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20260827-project-source-confirm1" in index
-    assert "js/screens-guided-pi-data-binding.js?v=20260827-data-binding-owner2" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20260829-data-scope1" in index
+    assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260828-execution-retry1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260828-plan-review1" in index
     assert "js/screens-guided-pi.js?v=20260828-plan-resubmit1" in index
@@ -340,6 +340,9 @@ def test_pending_data_source_status_is_hidden_until_selection_starts() -> None:
       if (pending !== '') throw new Error('pending data state must not occupy the conversation');
       if (!selecting.includes('<section class="gpi-data-consent"')) throw new Error('active selection must stay visible');
       if (!reusable.includes('data-gpi-data-source-action="reuse_project_source"')) throw new Error('bound project source must be confirmable');
+      if (!reusable.includes('data-gpi-data-source-action="use_study_required_data"')) throw new Error('study-required preparation must be offered');
+      if (!reusable.includes('data-gpi-data-source-action="begin_full_data_selection"')) throw new Error('full extraction must be offered');
+      if (!reusable.includes('Prepare only study-required data (recommended)')) throw new Error('recommended scope must be explicit');
       if (!reusable.includes('MIMIC-IV v3.1')) throw new Error('bound source identity must be path free and visible');
       console.log('ok');
     """
@@ -417,7 +420,7 @@ def test_data_binding_owner_executes_local_picker_and_preserves_its_host_contrac
         workflowReceipts: () => receipts,
         setWorkflowReceipts: value => {{ receipts = value; }},
       }});
-      await binding.authorizeDataSource('begin_local_selection', {{database: 'miiv'}});
+      await binding.authorizeDataSource('begin_full_data_selection', {{database: 'miiv'}});
       binding.notifyExtractionHandoff({{id: 'receipt-1', database: 'miiv'}});
       api.authorizePiCopilotDataSource = async () => {{ throw new Error('picker failed'); }};
       await binding.authorizeDataSource('begin_local_selection', {{database: 'miiv'}});
@@ -427,7 +430,7 @@ def test_data_binding_owner_executes_local_picker_and_preserves_its_host_contrac
         [node, "--eval", script], check=True, capture_output=True, text=True
     )
     payload = json.loads(completed.stdout)
-    assert "authorize:begin_local_selection:miiv" in payload["calls"]
+    assert "authorize:begin_full_data_selection:miiv" in payload["calls"]
     assert "remember:session-1" in payload["calls"]
     assert "hydrate" in payload["calls"]
     assert "activate:context-1" in payload["calls"]

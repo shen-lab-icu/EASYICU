@@ -176,6 +176,9 @@ class PiSessionDataSourceAuthorization(BaseModel):
     confirmation_mode: Optional[
         Literal["reuse_project_source", "select_local_source", "legacy_session"]
     ] = "legacy_session"
+    extraction_scope: Literal[
+        "study_required", "all_supported", "reuse_prepared_full"
+    ] = "reuse_prepared_full"
     source: Optional[PiSessionDataSourceReference] = None
     confirmed_at: Optional[str] = None
 

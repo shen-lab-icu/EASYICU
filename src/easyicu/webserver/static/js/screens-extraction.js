@@ -2259,6 +2259,13 @@
     bindSourceToCopilot,
     syncToCopilot: syncExtractionToCopilot,
     handoffReceipt: extractionHandoffReceipt,
+    applyExtractionScope(scope) {
+      if (scope === 'all_supported') {
+        setAllModules(true);
+        exShowAllMods = true;
+        exCustomOpen = true;
+      }
+    },
     beginSourceBinding() {
       abandonExtractionContinuity();
       exView = 'home';

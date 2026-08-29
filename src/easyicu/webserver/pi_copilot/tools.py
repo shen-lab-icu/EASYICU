@@ -395,6 +395,7 @@ def extraction_workspace_resource(
     source_id: Any = None,
     expected_database: Any = None,
     entry_mode: Any = None,
+    extraction_scope: Any = None,
 ) -> Dict[str, Any]:
     """Project the native Extraction owner without exposing its host paths."""
 
@@ -416,6 +417,9 @@ def extraction_workspace_resource(
     if str(entry_mode or "").strip() == "source_binding":
         resource["entry_mode"] = "source_binding"
         resource["label"] = "Data source setup"
+    clean_scope = str(extraction_scope or "").strip()
+    if clean_scope in {"study_required", "all_supported", "reuse_prepared_full"}:
+        resource["extraction_scope"] = clean_scope
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     database = str(expected_database or source.get("database") or "").strip()

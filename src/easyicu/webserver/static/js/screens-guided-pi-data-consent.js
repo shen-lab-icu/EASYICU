@@ -28,13 +28,14 @@
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Project data-source confirmation', '确认当前项目数据源')}">
         <span class="gpi-data-consent-icon">${ctx.icon('shield', 16)}</span>
         <div class="gpi-data-consent-body">
-          <strong>${ctx.tr('Use the validated data source already bound to this project?', '使用当前项目已验证的数据源吗？')}</strong>
+          <strong>${ctx.tr('How should EasyICU prepare data for this study?', '这项研究要如何准备数据？')}</strong>
           <p>${ctx.esc(label || ctx.tr('Validated project source', '已验证的项目数据源'))}</p>
           <div class="gpi-data-consent-actions">
-            <button class="btn primary" type="button" data-gpi-data-source-action="reuse_project_source">${ctx.tr('Use current project source', '使用当前项目数据源')}</button>
-            <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another local source', '选择其他本地数据源')}</button>
+            <button class="btn primary" type="button" data-gpi-data-source-action="use_study_required_data">${ctx.tr('Prepare only study-required data (recommended)', '只准备本研究需要的数据（推荐）')}</button>
+            <button class="btn" type="button" data-gpi-data-source-action="begin_full_data_selection">${ctx.tr('Extract all supported data', '提取全部支持数据')}</button>
+            <button class="btn" type="button" data-gpi-data-source-action="reuse_project_source">${ctx.tr('Reuse the previous complete package', '使用之前的完整数据包')}</button>
           </div>
-          <small>${ctx.tr('This confirms only the path-free source identity for this conversation; it does not start extraction or analysis.', '这只确认本次对话使用的数据源身份，不会启动提取或分析。')}</small>
+          <small>${ctx.tr('The recommended option plans first and materializes only named concepts. Full extraction opens the local extraction owner. Reuse starts no new extraction.', '推荐项会先生成计划，再只物化计划点名的概念；全量提取会打开本地提取功能；复用不会启动新的提取。')}</small>
         </div>
       </section>`;
     }

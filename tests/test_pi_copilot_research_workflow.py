@@ -903,6 +903,11 @@ def test_plan_first_package_proposes_closed_landmark_runtime_without_mutating_st
     }
     assert proposal.covariates == ("age", "sex")
     assert proposal.study["covariate_selection"] == "exact"
+    assert proposal.study["execution_concepts"] == {
+        "outcome": "death",
+        "primary_exposure": "lact",
+        "covariates": ["age", "sex"],
+    }
     landmark, spline = proposal.sensitivity_specs
     assert landmark.strategy == "landmark"
     assert landmark.landmark_hours == 24
@@ -4443,6 +4448,38 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     assert report["authority_class"] == "engineering_validation_only"
     assert report["publication_authorized"] is False
     assert (wrapper / "system_validation_report.html").is_file()
+
+
+def test_pipeline_projection_does_not_build_engineering_report_for_manuscript_run(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "manuscript-run"
+    _write_real_pipeline_fixture(
+        run_dir,
+        manuscript="# Results\nThe evidence-bound manuscript is ready for review.",
+    )
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["readiness"]["manuscript_ready"] = True
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    wrapper = tmp_path / "web-projection"
+
+    agent_pipeline_runs._write_projection(
+        wrapper_dir=wrapper,
+        study=_complete_study(),
+        provider={"provider": "openai", "model": "test-model"},
+        acquisition=_acquisition_receipt(),
+        run_dir=run_dir,
+    )
+
+    source_manifest = json.loads(
+        (wrapper / "source_run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert source_manifest["readiness"]["manuscript_ready"] is True
+    assert source_manifest["system_validation_report_available"] is False
+    assert source_manifest["system_validation_document_count"] == 0
+    assert not (wrapper / "system_validation_report.json").exists()
+    assert not (wrapper / "system_validation_report.html").exists()
+    assert (wrapper / "manuscript_draft.json").is_file()
 
 
 def test_pending_plan_reason_survives_projection_and_run_history(
