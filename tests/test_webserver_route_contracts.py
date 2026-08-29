@@ -154,6 +154,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "get_pi_copilot_data_package_review",
     ),
     (
+        "POST",
+        "/api/copilot/pi/projects/{project_id}/data-package-review/prepare",
+        "post_pi_copilot_data_package_review_prepare",
+    ),
+    (
         "GET",
         "/api/copilot/pi/projects/{project_id}/data-workbench-snapshot",
         "get_pi_copilot_data_workbench_snapshot",
@@ -169,6 +174,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "POST",
         "/api/copilot/pi/sessions/{session_id}/message",
         "post_pi_copilot_message",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/regenerate",
+        "post_pi_copilot_regenerate",
     ),
     (
         "POST",

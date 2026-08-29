@@ -75,6 +75,66 @@ def _sealed_snapshot(**extra: object) -> dict:
     return payload
 
 
+def test_plan_bound_preview_uses_exact_cohort_metadata_without_results(tmp_path) -> None:
+    cohort_file = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "lact_max": [2.1, None, 4.2],
+            "death": [0, 1, 0],
+            "age": [66, 72, 59],
+        }
+    ).to_parquet(cohort_file, index=False)
+    plan_file = tmp_path / "agent_plan.json"
+    plan_file.write_text(
+        json.dumps(
+            {
+                "endpoint": {"name": "death"},
+                "design_selection": {
+                    "candidates": [
+                        {
+                            "disposition": "selected",
+                            "required_variables": [
+                                "stay_id",
+                                "lact_max",
+                                "death",
+                                "age",
+                            ],
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    study = {
+        "id": "study-plan-bound",
+        "revision": 4,
+        "data_source": {"database": "miiv", "label": "MIMIC-IV v3.1"},
+        "cohort": {"label": "ICU stays"},
+    }
+
+    payload = review_owner.build_plan_bound_data_package_review(
+        study,
+        cohort_file=cohort_file,
+        plan_file=plan_file,
+    )
+
+    assert payload["review_stage"] == "post_plan"
+    assert payload["status"] == "ready_for_analysis"
+    assert payload["denominator"] == {
+        "analysis_unit": "icu_stay",
+        "count": 3,
+        "basis": "plan_bound_cohort_parquet_metadata",
+    }
+    lactate = next(row for row in payload["concepts"] if row["concept_id"] == "lact_max")
+    assert lactate["availability_status"] == "partial"
+    assert lactate["evaluable_count"] == 2
+    assert lactate["missing_count"] == 1
+    assert payload["analysis_results_withheld"] is True
+    assert str(tmp_path) not in json.dumps(payload)
+
+
 def test_legacy_event_absence_is_not_misreported_as_missing(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

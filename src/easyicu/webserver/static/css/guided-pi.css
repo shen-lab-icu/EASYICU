@@ -259,6 +259,8 @@
 .gpi-confirmation.is-science-review .gpi-confirmation-actions{grid-column:2;justify-content:flex-start}
 .gpi-confirmation-review-status{margin-top:11px;padding:11px 12px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--hair-2));border-radius:10px;background:color-mix(in srgb,var(--accent) 5%,var(--paper))}
 .gpi-confirmation-review-status strong{font-size:14px}.gpi-confirmation-review-status span{display:block;margin-top:5px;color:var(--ink-3);font-size:12.5px;line-height:1.5}
+.gpi-confirmation-data-status{margin-top:11px;padding:11px 12px;border:1px solid color-mix(in srgb,#35845c 30%,var(--hair-2));border-radius:10px;background:color-mix(in srgb,#35845c 7%,var(--paper))}
+.gpi-confirmation-data-status strong{font-size:14px;color:color-mix(in srgb,#256c49 88%,var(--ink-1))}.gpi-confirmation-data-status span{display:block;margin-top:3px;color:var(--ink-3);font-size:12.5px}.gpi-confirmation-data-status small{margin-top:6px;color:var(--ink-3);font-size:12.5px}
 .gpi-confirmation-actions{display:flex;align-items:center;gap:7px}
 
 /* Timeline structure adapted from pi-gui's MIT-licensed timeline-item/timeline.css.
