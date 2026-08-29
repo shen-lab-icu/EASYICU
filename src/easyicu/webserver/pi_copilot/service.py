@@ -38,6 +38,9 @@ from easyicu.webserver.copilot_data_workbench import (
     build_snapshot as build_data_workbench_snapshot,
 )
 
+from .plan_projection import (
+    project_plan_reader_fields,
+)
 from .contracts import (
     MAX_MESSAGE_CHARS,
     AuthorityBinding,
@@ -2600,6 +2603,10 @@ class PiCopilotService:
                 details={"artifact": clean_artifact},
             )
         payload = self._browser_artifact_payload(loaded.get("payload") or {})
+        # Stamp the research-agent's own compiled plan semantics so the reader
+        # never re-derives them from free-text method names. Projection only:
+        # the persisted artefact and its plan_sha256 are untouched.
+        payload = project_plan_reader_fields(clean_artifact, payload)
         encoded = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         if len(encoded) > MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES:
             raise PiCopilotError(
