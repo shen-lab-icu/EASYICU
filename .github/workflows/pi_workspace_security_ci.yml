@@ -6,11 +6,14 @@ on:
       - "src/easyicu/webserver/pi_copilot/**"
       - "src/easyicu/webserver/routes/pi_copilot.py"
       - "src/easyicu/webserver/agent_runs.py"
+      - "src/easyicu/webserver/agent_pipeline_runs.py"
+      - "src/easyicu/webserver/study_contexts.py"
       - "src/easyicu/webserver/static/css/guided-pi*.css"
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
       - "src/easyicu/webserver/static/js/screens-agent-render.js"
       - "src/easyicu/webserver/static/index.html"
       - "tests/test_pi_copilot_*.py"
+      - "tests/test_web_cohort_exclusion_binding.py"
       - "tests/js/agent_render_security.test.js"
       - "tools/qa_pi_workspace_preview_security.py"
       - "tools/qa_native_fastapi_patient_drilldown.py"
@@ -20,11 +23,14 @@ on:
       - "src/easyicu/webserver/pi_copilot/**"
       - "src/easyicu/webserver/routes/pi_copilot.py"
       - "src/easyicu/webserver/agent_runs.py"
+      - "src/easyicu/webserver/agent_pipeline_runs.py"
+      - "src/easyicu/webserver/study_contexts.py"
       - "src/easyicu/webserver/static/css/guided-pi*.css"
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
       - "src/easyicu/webserver/static/js/screens-agent-render.js"
       - "src/easyicu/webserver/static/index.html"
       - "tests/test_pi_copilot_*.py"
+      - "tests/test_web_cohort_exclusion_binding.py"
       - "tests/js/agent_render_security.test.js"
       - "tools/qa_pi_workspace_preview_security.py"
       - "tools/qa_native_fastapi_patient_drilldown.py"
@@ -52,18 +58,16 @@ jobs:
           pip install -e ".[dev,webapp]" playwright
           python -m playwright install --with-deps chromium
 
+      - name: Compile Python source and tests
+        run: python -m compileall -q src tests
+
       - name: Run scoped Pi contract tests
         run: |
+          # Auto-discover every Pi Copilot owner test so a new contract file
+          # cannot exist in the repository while remaining invisible to CI.
           pytest -q -m "" \
-            tests/test_pi_copilot_routes.py \
-            tests/test_pi_copilot_workspace.py \
-            tests/test_pi_copilot_contract.py \
-            tests/test_pi_copilot_static.py \
-            tests/test_pi_copilot_gateway.py \
-            tests/test_pi_copilot_provider_config.py \
-            tests/test_pi_copilot_install.py \
-            tests/test_pi_copilot_multiprocess_locking.py \
-            tests/test_pi_copilot_security_workflow.py
+            tests/test_pi_copilot_*.py \
+            tests/test_web_cohort_exclusion_binding.py
 
       - name: Parse-check Pi sidecar owners
         if: ${{ !cancelled() }}

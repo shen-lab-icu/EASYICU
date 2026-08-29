@@ -2768,20 +2768,7 @@ def _primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
     row is the prespecified denominator.
     """
 
-    raw = study.get("cohort")
-    cohort = raw if isinstance(raw, Mapping) else {}
-    explicit_filter_fields = (
-        "age_min",
-        "age_max",
-        "min_icu_los_hours",
-        "include_diagnoses",
-        "exclude_diagnoses",
-    )
-    if cohort.get("exclude_readmissions") is True:
-        return "predicate_filtered"
-    if any(cohort.get(field) not in (None, "", []) for field in explicit_filter_fields):
-        return "predicate_filtered"
-    return "all_input_rows"
+    return study_context_owner.primary_cohort_selection_mode(study)
 
 
 #: Public name for the same policy. Copilot's eligibility question has to say

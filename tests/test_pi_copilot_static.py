@@ -65,12 +65,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260829-post-plan-data1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260828-plan-review1" in index
-    assert "js/screens-guided-pi.js?v=20260829-post-plan-data1" in index
+    assert "js/screens-guided-pi.js?v=20260829-analysis-previews1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260829-post-plan-data1" in index
+    assert "js/api.js?v=20260829-analysis-previews1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -3779,7 +3779,7 @@ def test_literature_reader_translates_plan_bindings_for_chinese_readers() -> Non
     source = _read("js/screens-guided-pi-literature.js")
     script = f"""
       global.window = {{ EU_LANG: 'zh' }};
-      eval({ _ESCAPE_OWNER!r });
+      eval({_ESCAPE_OWNER!r});
       eval({source!r});
       const html = window.EU_GUIDED_PI_LITERATURE.renderArtifact({{
         direct_comparator_count: 1,
@@ -4682,7 +4682,7 @@ def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependenc
         STATIC.parents[3] / ".github" / "workflows" / "pi_workspace_security_ci.yml"
     ).read_text(encoding="utf-8")
     assert '"tools/qa_native_fastapi_patient_drilldown.py"' in workflow
-    assert "tests/test_pi_copilot_install.py" in workflow
+    assert "tests/test_pi_copilot_*.py" in workflow
     assert '"src/easyicu/webserver/agent_runs.py"' in workflow
     assert '"src/easyicu/webserver/static/js/screens-agent-render.js"' in workflow
     assert '"tests/js/agent_render_security.test.js"' in workflow

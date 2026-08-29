@@ -11,8 +11,7 @@ WORKFLOW = (
 def test_pi_security_gate_runs_multiprocess_and_workflow_regressions() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "tests/test_pi_copilot_multiprocess_locking.py" in workflow
-    assert "tests/test_pi_copilot_security_workflow.py" in workflow
+    assert "tests/test_pi_copilot_*.py" in workflow
 
 
 def test_pi_security_proofs_are_not_skipped_after_scoped_pytest_failure() -> None:
