@@ -8,7 +8,11 @@
   const { esc } = window.EU_HTML;
 
   const NEXT_STEP = /^\s*(?:#{1,6}\s*)?(?:\*\*|__)?(?:下一步|Next step)\s*[:：]\s*(?:\*\*|__)?\s*(.*)$/i;
-  const CHOICE = /^\s*[-*]\s+(.+?)\s*$/;
+  // Model-authored Chinese lists occasionally omit the Markdown separator
+  // (`-选择 MIMIC-IV` instead of `- 选择 MIMIC-IV`).  This parser owns only
+  // the bounded lines after an explicit next-step heading, so accept both
+  // forms while still rejecting repeated rule markers such as `---`.
+  const CHOICE = /^\s*[-*](?![-*])\s*(.+?)\s*$/;
 
   function plainLabel(value) {
     return String(value || '')
