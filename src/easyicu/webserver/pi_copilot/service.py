@@ -2238,6 +2238,69 @@ class PiCopilotService:
             },
         }
 
+    def prepare_data_package_review(self, *, project_id: str) -> Dict[str, Any]:
+        """Seal a current aggregate-only package review for browser preview."""
+
+        clean = self._assert_project_initialized(project_id)
+        study_context_id = self.project_store.resolve(clean)
+        study = (
+            study_contexts.get_context(study_context_id) if study_context_id else None
+        )
+        if not study:
+            raise PiCopilotError(
+                "pi_data_package_study_not_found",
+                "The research project has no bound StudyContext.",
+                status_code=404,
+            )
+        from easyicu.webserver.data_package_review import (
+            DataPackageReviewError,
+            build_plan_bound_data_package_review,
+            build_registered_data_package_review,
+        )
+
+        try:
+            payload = None
+            run_id = self._latest_run_id(study_context_id, project_id=clean)
+            if run_id:
+                try:
+                    row = self._research_run_row(clean, run_id)
+                    wrapper = Path(str(row.get("project_dir") or "")).resolve()
+                    plan_run = (wrapper / "pipeline" / run_id).resolve()
+                    if plan_run.parent == (wrapper / "pipeline").resolve():
+                        payload = build_plan_bound_data_package_review(
+                            study,
+                            cohort_file=plan_run / "cohort.parquet",
+                            plan_file=plan_run / "analysis_plan.json",
+                        )
+                except (PiCopilotError, DataPackageReviewError):
+                    payload = None
+            if payload is None:
+                payload = build_registered_data_package_review(study)
+            self.review_snapshot_store.persist(payload)
+        except DataPackageReviewError as exc:
+            raise PiCopilotError(
+                exc.code,
+                exc.message,
+                status_code=409,
+                details=exc.details,
+            ) from exc
+        return {
+            "ok": True,
+            "resource": {
+                "kind": "data_package_review",
+                "study_context_id": str(study_context_id),
+                "study_revision": int(study.get("revision") or 0),
+                "review_sha256": str(payload.get("review_sha256") or ""),
+                "label": "Analysis data preview",
+                "media_type": "application/json",
+            },
+            "governance": {
+                "claim_ceiling": "pre_analysis_review",
+                "reportable": False,
+                "analysis_results_withheld": True,
+            },
+        }
+
     def get_data_workbench_snapshot(
         self,
         *,

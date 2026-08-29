@@ -5797,6 +5797,17 @@ def test_project_data_package_preview_is_revision_and_digest_bound(
         lambda _study: dict(review_payload),
     )
 
+    prepared = service.prepare_data_package_review(project_id="project-a")
+    assert prepared["resource"] == {
+        "kind": "data_package_review",
+        "study_context_id": "study-a",
+        "study_revision": 7,
+        "review_sha256": review_digest,
+        "label": "Analysis data preview",
+        "media_type": "application/json",
+    }
+    assert prepared["governance"]["analysis_results_withheld"] is True
+
     payload = service.get_data_package_review(
         project_id="project-a",
         study_revision=7,
@@ -5817,6 +5828,72 @@ def test_project_data_package_preview_is_revision_and_digest_bound(
             project_id="project-a", study_revision=7, review_sha256="e" * 64
         )
     assert drift.value.code == "pi_data_package_review_digest_mismatch"
+
+
+def test_project_data_package_preview_uses_plan_bound_analysis_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-a", "study-a")
+    study = {"id": "study-a", "revision": 7, "data_source": {"database": "miiv"}}
+    monkeypatch.setattr(service_module.study_contexts, "get_context", lambda _id: study)
+    monkeypatch.setattr(
+        service,
+        "_latest_run_id",
+        lambda _study_id, *, project_id: "run-plan",
+    )
+    wrapper = tmp_path / "wrapper"
+    monkeypatch.setattr(
+        service,
+        "_research_run_row",
+        lambda _project_id, _run_id: {"project_dir": str(wrapper)},
+    )
+    from easyicu.webserver import data_package_review as review_owner
+
+    captured: dict[str, Path] = {}
+    payload = {
+        "schema_version": "easyicu.data-package-review/2",
+        "study_context_id": "study-a",
+        "study_context_revision": 7,
+        "review_stage": "post_plan",
+        "status": "ready_for_analysis",
+        "source": {"database": "miiv"},
+        "privacy": {"raw_rows_returned": False, "host_paths_returned": False},
+        "analysis_results_withheld": True,
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    payload["review_sha256"] = digest
+
+    def _build(_study: dict, *, cohort_file: Path, plan_file: Path) -> dict:
+        captured["cohort_file"] = cohort_file
+        captured["plan_file"] = plan_file
+        return dict(payload)
+
+    monkeypatch.setattr(review_owner, "build_plan_bound_data_package_review", _build)
+    monkeypatch.setattr(
+        review_owner,
+        "build_registered_data_package_review",
+        lambda _study: pytest.fail("must not fall back from a valid Plan-bound preview"),
+    )
+
+    prepared = service.prepare_data_package_review(project_id="project-a")
+
+    assert prepared["resource"]["review_sha256"] == digest
+    assert captured == {
+        "cohort_file": wrapper / "pipeline" / "run-plan" / "cohort.parquet",
+        "plan_file": wrapper / "pipeline" / "run-plan" / "analysis_plan.json",
+    }
 
 
 def test_unknown_tool_arguments_and_missing_plan_keep_owner_codes(

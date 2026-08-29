@@ -12,6 +12,7 @@ import json
 import os
 import tempfile
 import threading
+import statistics
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -750,9 +751,205 @@ def build_registered_data_package_review(
     return payload
 
 
+def build_plan_bound_data_package_review(
+    study: Mapping[str, Any],
+    *,
+    cohort_file: Path,
+    plan_file: Path,
+) -> Dict[str, Any]:
+    """Build a result-blind preview of the exact cohort bound to a Plan.
+
+    Only Parquet metadata is read: row count, column names, types, and null
+    counts. Values, event rates, group comparisons, and effect estimates never
+    cross this boundary.
+    """
+
+    study_id = str(study.get("id") or "").strip()
+    if not study_id:
+        raise DataPackageReviewError(
+            "data_package_study_required",
+            "A bound StudyContext is required to review the analysis cohort.",
+        )
+    cohort_path = Path(cohort_file)
+    plan_path = Path(plan_file)
+    if (
+        not cohort_path.is_file()
+        or cohort_path.is_symlink()
+        or not plan_path.is_file()
+        or plan_path.is_symlink()
+    ):
+        raise DataPackageReviewError(
+            "plan_bound_data_preview_files_unavailable",
+            "The exact Plan-bound cohort preview files are unavailable.",
+        )
+    try:
+        if plan_path.stat().st_size > 2 * 1024 * 1024:
+            raise DataPackageReviewError(
+                "plan_bound_data_preview_plan_too_large",
+                "The Plan exceeds the bounded data-preview contract.",
+            )
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if not isinstance(plan, Mapping):
+            raise ValueError("plan_not_object")
+        import pyarrow.parquet as pq
+
+        parquet = pq.ParquetFile(cohort_path)
+    except DataPackageReviewError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise DataPackageReviewError(
+            "plan_bound_data_preview_unreadable",
+            "The exact Plan-bound cohort metadata could not be read.",
+            details={"error_type": type(exc).__name__},
+        ) from exc
+
+    denominator = int(parquet.metadata.num_rows or 0)
+    if denominator <= 0:
+        raise DataPackageReviewError(
+            "plan_bound_data_preview_empty",
+            "The exact Plan-bound cohort has no rows.",
+        )
+    columns = list(parquet.schema_arrow.names)
+    selected_design = next(
+        (
+            row
+            for row in ((plan.get("design_selection") or {}).get("candidates") or [])
+            if isinstance(row, Mapping) and row.get("disposition") == "selected"
+        ),
+        {},
+    )
+    required = {
+        str(value).strip()
+        for value in (selected_design.get("required_variables") or [])
+        if str(value).strip()
+    }
+    endpoint = str((plan.get("endpoint") or {}).get("name") or "").strip()
+    missing_required = sorted(required.difference(columns))
+    concepts: list[Dict[str, Any]] = []
+    coverages: list[float] = []
+    partial_count = 0
+    for index, name in enumerate(columns):
+        null_counts: list[int] = []
+        for row_group in range(parquet.metadata.num_row_groups):
+            stats = parquet.metadata.row_group(row_group).column(index).statistics
+            value = stats.null_count if stats is not None else None
+            if isinstance(value, int):
+                null_counts.append(value)
+        null_count = sum(null_counts) if len(null_counts) == parquet.metadata.num_row_groups else None
+        evaluable = denominator - null_count if null_count is not None else None
+        availability = "ready" if null_count == 0 else "partial" if null_count is not None else "semantic_review_required"
+        if availability == "partial":
+            partial_count += 1
+        if evaluable is not None:
+            coverages.append(evaluable / denominator * 100)
+        concepts.append(
+            {
+                "study_role": (
+                    "outcome"
+                    if name == endpoint
+                    else "plan_input"
+                    if name in required
+                    else "supporting_variable"
+                ),
+                "concept_id": name,
+                "module": "analysis_cohort",
+                "column_role": str(parquet.schema_arrow.field(name).type),
+                "availability_status": availability,
+                "reason_code": (
+                    "plan_bound_column_complete"
+                    if null_count == 0
+                    else "plan_bound_column_has_missing_values"
+                    if null_count is not None
+                    else "plan_bound_null_count_unavailable"
+                ),
+                "evaluable_count": evaluable,
+                "denominator_count": denominator,
+                "missing_count": null_count,
+            }
+        )
+
+    source_config = study.get("data_source")
+    source_config = source_config if isinstance(source_config, Mapping) else {}
+    payload: Dict[str, Any] = {
+        "schema_version": "easyicu.data-package-review/2",
+        "review_stage": "post_plan",
+        "status": "blocked" if missing_required else "ready_for_analysis",
+        "code": (
+            "plan_bound_data_preview_missing_required_columns"
+            if missing_required
+            else "plan_bound_data_preview_ready"
+        ),
+        "study_context_id": study_id,
+        "study_context_revision": int(study.get("revision") or 0),
+        "source": {
+            "database": str(source_config.get("database") or ""),
+            "label": _safe_label(
+                source_config.get("label"), database=source_config.get("database")
+            ),
+        },
+        "denominator": {
+            "analysis_unit": "icu_stay" if "stay_id" in columns else "analysis_row",
+            "count": denominator,
+            "basis": "plan_bound_cohort_parquet_metadata",
+        },
+        "cohort_review": {
+            "label": str((study.get("cohort") or {}).get("label") or "")[:1000]
+            if isinstance(study.get("cohort"), Mapping)
+            else "",
+            "time_window": dict(study.get("time_window") or {})
+            if isinstance(study.get("time_window"), Mapping)
+            else {},
+        },
+        "configured_modules": [
+            {"module": "analysis_cohort", "availability_status": "ready"}
+        ],
+        "concepts": concepts,
+        "blocking_findings": [
+            f"plan_required_column_missing:{name}" for name in missing_required
+        ],
+        "quality": {
+            "modules_ok": 1,
+            "modules_warn": 0,
+            "modules_bad": 0,
+            "modules_unknown": 0,
+            "watchlist_count": partial_count,
+            "median_coverage_pct": round(statistics.median(coverages), 1)
+            if coverages
+            else None,
+        },
+        "analysis_results_withheld": True,
+        "result_fields_withheld": [
+            "event_counts",
+            "event_rates",
+            "group_comparisons",
+            "effect_estimates",
+        ],
+        "privacy": {
+            "raw_rows_returned": False,
+            "direct_identifiers_returned": False,
+            "host_paths_returned": False,
+            "secrets_returned": False,
+        },
+        "provenance": {
+            "owner": "easyicu.webserver.data_package_review",
+            "inputs": [
+                "plan_bound_cohort_parquet_metadata",
+                "approved_candidate_plan",
+                "typed_study_context",
+            ],
+        },
+    }
+    digest_payload = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    payload["review_sha256"] = hashlib.sha256(digest_payload).hexdigest()
+    return payload
+
+
 __all__ = [
     "DataPackageReviewError",
     "DataPackageReviewSnapshotStore",
+    "build_plan_bound_data_package_review",
     "build_registered_data_package_review",
     "verify_path_free_snapshot",
 ]

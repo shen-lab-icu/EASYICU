@@ -29,6 +29,22 @@
     return ['ready', 'partial', 'not_extracted', 'semantic_review_required'].includes(String(value || ''))
       ? String(value) : 'unknown';
   }
+  function roleLabel(value) {
+    const labels = {
+      outcome: tr('Outcome', '结局'),
+      plan_input: tr('Plan input', '计划变量'),
+      supporting_variable: tr('Supporting variable', '辅助变量'),
+    };
+    return labels[String(value || '')] || String(value || '');
+  }
+  function reasonLabel(value) {
+    const labels = {
+      plan_bound_column_complete: tr('Complete for all analysis rows', '全部分析记录均有值'),
+      plan_bound_column_has_missing_values: tr('Some analysis rows are missing values', '部分分析记录缺少数值'),
+      plan_bound_null_count_unavailable: tr('Missingness requires review', '缺失情况需要进一步检查'),
+    };
+    return labels[String(value || '')] || String(value || '');
+  }
   function conceptRows(payload) {
     const rows = Array.isArray(payload && payload.concepts) ? payload.concepts : [];
     const query = view.query.trim().toLowerCase();
@@ -70,8 +86,8 @@
         const pct = denominator && evaluable != null ? percent(evaluable / denominator * 100) : percent(row.physical_coverage_pct);
         const coverage = pct == null ? tr('Owner receipt required', '需要 owner 回执') : `${pct.toFixed(1)}%`;
         return `<div class="gpi-wb-row" role="row">
-          <span><strong>${esc(row.concept_id || tr('Unnamed concept', '未命名概念'))}</strong><small>${esc(row.study_role || '')}${row.module ? ` · ${esc(row.module)}` : ''}</small></span>
-          <span><em class="gpi-wb-status ${statusClass(row.availability_status)}">${esc(statusLabel(row.availability_status))}</em><small>${esc(row.reason_code || '')}</small></span>
+          <span><strong>${esc(row.concept_id || tr('Unnamed concept', '未命名概念'))}</strong><small>${esc(roleLabel(row.study_role))}${row.module ? ` · ${esc(row.module)}` : ''}</small></span>
+          <span><em class="gpi-wb-status ${statusClass(row.availability_status)}">${esc(statusLabel(row.availability_status))}</em><small>${esc(reasonLabel(row.reason_code))}</small></span>
           <span><b>${esc(coverage)}</b>${pct == null ? '' : `<i class="gpi-wb-meter"><u style="width:${pct.toFixed(2)}%"></u></i>`}</span>
         </div>`;
       }).join('')}
@@ -86,20 +102,22 @@
     const denominator = payload && payload.denominator && number(payload.denominator.count);
     const modules = Array.isArray(payload && payload.configured_modules) ? payload.configured_modules : [];
     const concepts = Array.isArray(payload && payload.concepts) ? payload.concepts : [];
-    const ready = concepts.filter(row => row && row.availability_status === 'ready').length;
+    const readyCount = concepts.filter(row => row && row.availability_status === 'ready').length;
     const quality = payload && payload.quality && typeof payload.quality === 'object' ? payload.quality : {};
     const cohort = payload && payload.cohort_review && typeof payload.cohort_review === 'object' ? payload.cohort_review : {};
     const source = payload && payload.source && typeof payload.source === 'object' ? payload.source : {};
+    const postPlan = payload && payload.review_stage === 'post_plan';
+    const isReady = payload && ['ready_for_plan', 'ready_for_analysis'].includes(payload.status);
     return `<section class="gpi-wb" data-gpi-workbench>
-      <header class="gpi-wb-intro"><div><span class="gpi-wb-eyebrow">${esc(tr('Embedded data workbench', '嵌入式数据工作台'))}</span><h3>${esc(tr('Screen the analysis package without leaving the conversation', '无需离开对话即可审阅分析数据包'))}</h3><p>${esc(tr('This is a read-only projection of the registered export. It cannot silently change the cohort or reveal analysis results.', '这是已登记数据源的只读投影，不能静默修改队列，也不会提前泄露分析结果。'))}</p></div><em class="${payload && payload.status === 'ready_for_plan' ? 'ready' : 'blocked'}">${esc(payload && payload.status === 'ready_for_plan' ? tr('Ready for plan', '可进入计划') : tr('Review blocked', '审阅受阻'))}</em></header>
+      <header class="gpi-wb-intro"><div><span class="gpi-wb-eyebrow">${esc(tr('Embedded data workbench', '嵌入式数据工作台'))}</span><h3>${esc(tr('Screen the analysis package without leaving the conversation', '无需离开对话即可审阅分析数据包'))}</h3><p>${esc(postPlan ? tr('This read-only view comes from the exact cohort bound to the candidate Plan. It shows only Parquet metadata and never reveals analysis results.', '这是候选计划精确绑定队列的只读视图，只展示 Parquet 元数据，不会提前泄露分析结果。') : tr('This is a read-only projection of the registered export. It cannot silently change the cohort or reveal analysis results.', '这是已登记数据源的只读投影，不能静默修改队列，也不会提前泄露分析结果。'))}</p></div><em class="${isReady ? 'ready' : 'blocked'}">${esc(isReady ? (postPlan ? tr('Analysis data ready', '分析数据已准备') : tr('Ready for plan', '可进入计划')) : tr('Review blocked', '审阅受阻'))}</em></header>
       <div class="gpi-wb-cards">
         ${summaryCard(tr('Analysis denominator', '分析分母'), denominator == null ? '—' : denominator.toLocaleString(), payload && payload.denominator && payload.denominator.analysis_unit)}
-        ${summaryCard(tr('Configured modules', '已配置模块'), modules.length, modules.filter(row => row && row.availability_status === 'ready').length + ' ' + tr('ready', '可用'))}
-        ${summaryCard(tr('Execution concepts', '执行概念'), `${ready}/${concepts.length}`, tr('fully available', '完全可用'))}
+        ${summaryCard(postPlan ? tr('Analysis datasets', '分析数据集') : tr('Configured modules', '已配置模块'), modules.length, modules.filter(row => row && row.availability_status === 'ready').length + ' ' + tr('ready', '可用'))}
+        ${summaryCard(postPlan ? tr('Data columns', '数据字段') : tr('Execution concepts', '执行概念'), `${readyCount}/${concepts.length}`, tr('fully available', '完全可用'))}
         ${summaryCard(tr('Quality watchlist', '质量关注项'), Number(quality.watchlist_count || 0), quality.median_coverage_pct == null ? '' : `${tr('median coverage', '中位覆盖')} ${quality.median_coverage_pct}%`)}
       </div>
       <div class="gpi-wb-context"><div><span>${esc(tr('Registered source', '已登记数据源'))}</span><strong>${esc(source.label || source.database || 'EasyICU')}</strong></div><div><span>${esc(tr('Cohort', '队列'))}</span><strong>${esc(cohort.label || tr('Bound StudyContext cohort', 'StudyContext 已绑定队列'))}</strong></div></div>
-      <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(tr('Module quality', '模块质量'))}</h4><p>${esc(tr('Aggregate availability only; no event rates or effect estimates.', '仅展示聚合可用性，不展示事件率或效应量。'))}</p></div></div>${qualityStrip(payload)}${moduleList(payload)}</section>
+      <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(postPlan ? tr('Data completeness', '数据完整性') : tr('Module quality', '模块质量'))}</h4><p>${esc(tr('Aggregate availability only; no event rates or effect estimates.', '仅展示聚合可用性，不展示事件率或效应量。'))}</p></div></div>${qualityStrip(payload)}${moduleList(payload)}</section>
       <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(tr('Execution-concept screening', '执行概念筛选'))}</h4><p>${esc(tr('Filter this view locally. Scientific filter changes must be proposed and confirmed in chat.', '此处筛选只改变视图；科学筛选修改必须回到对话提出并确认。'))}</p></div></div>
         <div class="gpi-wb-controls"><label><span>${esc(tr('Find concept', '查找概念'))}</span><input type="search" data-gpi-wb-query value="${esc(view.query)}" placeholder="${esc(tr('Role, concept, module…', '角色、概念、模块…'))}" /></label><label><span>${esc(tr('Status', '状态'))}</span><select data-gpi-wb-status><option value="all">${esc(tr('All', '全部'))}</option>${['ready', 'partial', 'semantic_review_required', 'not_extracted'].map(value => `<option value="${value}" ${view.status === value ? 'selected' : ''}>${esc(statusLabel(value))}</option>`).join('')}</select></label></div>
         <div data-gpi-wb-results>${conceptTable(payload)}</div>

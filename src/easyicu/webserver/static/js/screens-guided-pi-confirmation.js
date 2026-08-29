@@ -18,6 +18,26 @@
     const resourceButton = host.resourceButton;
     const sessionIsStale = host.sessionIsStale;
 
+    function preparedDataStatus() {
+      const authorization = (host.session() && host.session().data_source_authorization) || {};
+      const scope = String(authorization.extraction_scope || '');
+      const source = authorization.source || {};
+      const sourceLabel = String(source.label || source.reference_release || source.database || '').trim();
+      const titles = {
+        reuse_prepared_full: tr('Previously prepared complete data package is ready', '已复用之前准备好的完整数据包'),
+        all_supported: tr('Complete data package is ready', '完整数据包已准备完成'),
+        study_required: tr('Study-specific data package is ready', '本研究所需数据已准备完成'),
+      };
+      return {
+        title: titles[scope] || tr('The analysis data package is ready', '分析数据包已准备完成'),
+        sourceLabel,
+        detail: tr(
+          'Approval will not repeat extraction. EasyICU will start the approved analysis; result tables, charts, and the evidence-bound article will appear as the run completes.',
+          '批准后不会重新提取数据；EasyICU 将直接执行已批准的分析，结果表、图表和证据绑定文章会随运行逐步生成。',
+        ),
+      };
+    }
+
     function workflowConfirmation() {
       const workflow = host.workflow() || {};
       const code = String(workflow.next_action_code || '');
@@ -136,7 +156,8 @@
         ),
         title: tr('The formal Agent Plan is ready. Review the plan and its literature before analysis.', '正式研究计划已生成；请先审阅计划及其文献依据。'),
         note: tr('Open both review materials below. The literature view shows retrieval provenance, screening rationale, and exact plan-step citation bindings.', '请先打开下方两份审阅材料；文献依据会显示检索来源、筛选理由和每个计划步骤的精确引用绑定。'),
-        approve: tr('Approve and continue', '批准并继续'),
+        approve: tr('Approve plan and start analysis', '批准计划并开始分析'),
+        dataStatus: preparedDataStatus(),
         reject: tr('Reject this plan', '拒绝当前计划'),
         rejectMessage: tr(
           'I reject this exact current plan and keep it as immutable history. Do not execute it and do not change the study configuration. Submit only the rejected review decision; a replacement plan must be started as a separate governed action.',
@@ -235,10 +256,14 @@
               `${remediationCounts.automatic + remediationCounts.evidence} 项计划修订与补证由系统负责；这里不需要回答科学设定问题。`,
             ))}</span></div>`
         : '';
+      const dataStatus = confirmation.dataStatus
+        ? `<div class="gpi-confirmation-data-status"><strong>${esc(confirmation.dataStatus.title)}</strong>${confirmation.dataStatus.sourceLabel ? `<span>${esc(confirmation.dataStatus.sourceLabel)}</span>` : ''}<small>${esc(confirmation.dataStatus.detail)}</small></div>`
+        : '';
       return `<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small>${reviewStatus}${reviewResources ? `<details class="gpi-confirmation-resources"><summary>${esc(tr('View the plan and references', '查看候选计划与依据'))}</summary><div>${reviewResources}</div></details>` : ''}</div>
+        <div><strong>${esc(confirmation.title)}</strong><small>${esc(confirmation.note)}</small>${dataStatus}${reviewStatus}${reviewResources ? `<details class="gpi-confirmation-resources"><summary>${esc(tr('View the plan and references', '查看候选计划与依据'))}</summary><div>${reviewResources}</div></details>` : ''}</div>
         <div class="gpi-confirmation-actions">
+          ${confirmation.dataStatus ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${confirmation.code === 'plan_scientific_changes_required' && !decisionCount ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer decision 1', '回答第 1 项') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : tr('Request changes', '提出修改')}</button>`}
           ${confirmation.rejectMessage ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
           ${confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>`}

@@ -95,6 +95,17 @@ class FakeService:
             "governance": {"claim_ceiling": "analysis_only"},
         }
 
+    def prepare_data_package_review(self, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "received": kwargs,
+            "resource": {
+                "kind": "data_package_review",
+                "study_revision": 7,
+                "review_sha256": "a" * 64,
+            },
+        }
+
     def get_research_document(self, **kwargs) -> dict:
         return {
             "content": b"<!doctype html><title>System validation</title>",
@@ -400,6 +411,20 @@ def test_project_research_evidence_route_requires_id_and_digest(monkeypatch) -> 
         "evidence/../secret?expected_sha256=bad"
     )
     assert invalid.status_code in {404, 422}
+
+
+def test_project_data_package_prepare_route_returns_preview_resource(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/copilot/pi/projects/guided-project-2/data-package-review/prepare"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["received"] == {"project_id": "guided-project-2"}
+    assert response.json()["resource"]["kind"] == "data_package_review"
 
 
 def test_system_validation_document_route_is_fixed_and_engineering_only(

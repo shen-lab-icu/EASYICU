@@ -36,7 +36,7 @@ _ESCAPE_OWNER = _read("js/html-escape.js")
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260828-child-stop1" in index
+    assert "css/guided-pi.css?v=20260829-post-plan-data1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260827-type-scale1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
@@ -49,7 +49,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-starters.js?v=20260827-independent-starters1" in index
     assert "js/screens-guided-pi-header.js?v=20260827-type-scale1" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
-    assert "js/screens-guided-pi-workbench-preview.js?v=20260813-workbench1" in index
+    assert "js/screens-guided-pi-workbench-preview.js?v=20260829-post-plan-data2" in index
     assert (
         "js/screens-guided-pi-evidence-preview.js?v=20260825-evidence-preview1" in index
     )
@@ -63,14 +63,14 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260827-conversation-first1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20260828-execution-retry1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20260829-post-plan-data1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260828-plan-review1" in index
-    assert "js/screens-guided-pi.js?v=20260828-plan-resubmit1" in index
+    assert "js/screens-guided-pi.js?v=20260829-post-plan-data1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260828-plan-review1" in index
+    assert "js/api.js?v=20260829-post-plan-data1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -808,6 +808,10 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "计划审阅材料" in confirmation_owner
     assert "预览正式研究计划" in confirmation_owner
     assert "查看该计划的文献依据" in confirmation_owner
+    assert "已复用之前准备好的完整数据包" in confirmation_owner
+    assert "批准后不会重新提取数据" in confirmation_owner
+    assert "先预览分析数据" in confirmation_owner
+    assert "批准计划并开始分析" in confirmation_owner
     assert "失败关闭运行的只读产物" in confirmation_owner
     assert "预览上一版候选计划" in confirmation_owner
     assert "查看上一版文献快照" in confirmation_owner
@@ -948,6 +952,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "PHI-safe summaries" in provider_owner
     assert "patient rows, credentials, or arbitrary host files" in pi_owner
     assert "data-gpi-confirm-action" in pi_owner
+    assert "data-gpi-confirm-preview-data" in pi_owner
     assert "data-gpi-confirm-reject" in pi_owner
     assert "本次只提交“拒绝”审核决定" in confirmation_owner
     assert "data-gpi-demo" in pi_owner
@@ -996,6 +1001,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
         "piCopilotWorkspacePreviewUrl",
         "loadPiCopilotResearchArtifact",
         "loadPiCopilotDataPackageReview",
+        "preparePiCopilotDataPackageReview",
     ):
         assert method in api
     assert "fetch(" not in pi_owner
@@ -2777,6 +2783,11 @@ def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
     assert "data-gpi-wb-status" in workbench
     assert "typed proposal" in workbench
     assert "effect estimates" in workbench
+    assert "分析数据已准备" in workbench
+    assert "候选计划精确绑定队列" in workbench
+    assert "数据字段" in workbench
+    assert "全部分析记录均有值" in workbench
+    assert "部分分析记录缺少数值" in workbench
     assert ".gpi-wb" in css
     assert ".patient-" not in css
     assert ".cohort-" not in css

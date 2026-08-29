@@ -1589,6 +1589,35 @@
           : '',
     );
   }
+  async function previewApprovedPlanDataPackage(button) {
+    if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
+    if (!api().preparePiCopilotDataPackageReview || !window.EU_GUIDED_PI_PREVIEW || !window.EU_GUIDED_PI_PREVIEW.open) {
+      state.error = tr('The data preview is temporarily unavailable. Refresh this project and try again.', '数据预览暂时不可用，请刷新当前项目后重试。');
+      render();
+      return;
+    }
+    const original = button ? button.textContent : '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = tr('Preparing preview…', '正在准备预览…');
+    }
+    try {
+      const payload = await api().preparePiCopilotDataPackageReview(projectId());
+      const resource = payload && payload.resource;
+      if (!resource) throw new Error(tr('EasyICU did not return a data preview.', 'EasyICU 未返回可预览的数据包。'));
+      resource.label = tr('Analysis data preview', '分析数据预览');
+      window.EU_GUIDED_PI_PREVIEW.open(resource, projectId(), previewWorkflowContext());
+      state.error = '';
+    } catch (error) {
+      state.error = errorText(error);
+      render();
+    } finally {
+      if (button && button.isConnected) {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+  }
   async function rejectWorkflowAction() {
     const confirmation = workflowConfirmation();
     if (!confirmation || !confirmation.rejectMessage) return;
@@ -1610,7 +1639,7 @@
     const approved = decision === 'approved';
     state.messages.push({
       id: 'plan-review-' + Date.now(), role: 'user', complete: true,
-      text: approved ? tr('Approve and continue', '批准并继续') : tr('Reject this plan', '拒绝当前计划'),
+      text: approved ? tr('Approve plan and start analysis', '批准计划并开始分析') : tr('Reject this plan', '拒绝当前计划'),
     });
     state.busy = true;
     state.error = '';
@@ -1876,6 +1905,8 @@
       if (event.target.closest('[data-gpi-study-setup]')) { openStudySetupInConversation(); return; }
       if (event.target.closest('[data-gpi-legacy]')) { setShell('legacy'); return; }
       if (event.target.closest('[data-gpi-create]')) { createSession(); return; }
+      const previewPlanData = event.target.closest('[data-gpi-confirm-preview-data]');
+      if (previewPlanData) { previewApprovedPlanDataPackage(previewPlanData); return; }
       if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
       if (event.target.closest('[data-gpi-confirm-reject]')) { rejectWorkflowAction(); return; }
       if (event.target.closest('[data-gpi-confirm-edit]')) { editWorkflow(); return; }
