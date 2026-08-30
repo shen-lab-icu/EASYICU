@@ -13,6 +13,7 @@
     loading: false,
     error: '',
     requestSeq: 0,
+    query: '',
   };
 
   function reset() {
@@ -121,6 +122,63 @@
     if (config && typeof config.repaint === 'function') config.repaint();
   }
 
+  function numberLabel(value) {
+    const numeric = Number(value || 0);
+    return Number.isFinite(numeric) ? numeric.toLocaleString() : '0';
+  }
+
+  function enhanceTableDashboard(root, config) {
+    const picker = root && root.querySelector('[data-pt-table-picker]');
+    const drill = config && typeof config.drill === 'function' ? config.drill() : null;
+    const modules = drill && drill.data_tables && Array.isArray(drill.data_tables.modules)
+      ? drill.data_tables.modules
+      : (Array.isArray(drill && drill.module_profiles) ? drill.module_profiles : []);
+    if (!picker || !modules.length || root.querySelector('[data-pt-table-dashboard]')) return;
+    const rows = modules
+      .filter(row => row && row.module)
+      .map(row => ({ module: String(row.module), rows: Math.max(0, Number(row.rows || row.records || 0)) }))
+      .sort((a, b) => b.rows - a.rows);
+    const total = rows.reduce((sum, row) => sum + row.rows, 0) || 1;
+    let cumulative = 0;
+    const dashboard = document.createElement('section');
+    dashboard.className = 'pt-table-dashboard';
+    dashboard.dataset.ptTableDashboard = '';
+    dashboard.innerHTML = `
+      <div class="pt-table-search">
+        <div>
+          <b>${window.EU_LANG === 'zh' ? '搜索原始数据表' : 'Search source tables'}</b>
+          <span>${window.EU_LANG === 'zh' ? '按模块名筛选，下面保留原始字段和真实记录。' : 'Filter by module; raw columns and source-backed records remain below.'}</span>
+        </div>
+        <label><span aria-hidden="true">⌕</span><input type="search" data-pt-table-search value="${String(state.query).replace(/"/g, '&quot;')}" placeholder="${window.EU_LANG === 'zh' ? '搜索模块，例如 vitals' : 'Search modules, e.g. vitals'}"></label>
+      </div>
+      <div class="pt-pareto" data-pt-module-pareto>
+        <div class="pt-pareto-head"><div><b>${window.EU_LANG === 'zh' ? '模块观测规模' : 'Module observation volume'}</b><span>${window.EU_LANG === 'zh' ? '柱长为记录数，右侧为累计记录贡献' : 'Bars show records; right labels show cumulative contribution'}</span></div><strong>${numberLabel(total)} ${window.EU_LANG === 'zh' ? '条记录' : 'records'}</strong></div>
+        <div class="pt-pareto-rows">
+          ${rows.slice(0, 12).map(row => {
+            cumulative += row.rows;
+            const share = row.rows / total * 100;
+            const cumulativePct = cumulative / total * 100;
+            return `<button type="button" data-pt-pareto-module="${row.module.replace(/"/g, '&quot;')}"><span class="pt-pareto-name">${row.module}</span><span class="pt-pareto-track"><i style="width:${Math.max(1, share).toFixed(1)}%"></i></span><b>${numberLabel(row.rows)}</b><em>${cumulativePct.toFixed(1)}%</em></button>`;
+          }).join('')}
+        </div>
+      </div>`;
+    picker.parentNode.insertBefore(dashboard, picker);
+    const input = dashboard.querySelector('[data-pt-table-search]');
+    const filter = () => {
+      state.query = String(input && input.value || '').trim().toLowerCase();
+      picker.querySelectorAll('[data-pt-table-module]').forEach(button => {
+        button.hidden = Boolean(state.query) && !button.textContent.toLowerCase().includes(state.query);
+      });
+    };
+    if (input) input.addEventListener('input', filter);
+    dashboard.querySelectorAll('[data-pt-pareto-module]').forEach(button => button.addEventListener('click', () => {
+      const target = Array.from(picker.querySelectorAll('[data-pt-table-module]'))
+        .find(candidate => candidate.dataset.ptTableModule === button.dataset.ptParetoModule);
+      if (target) target.click();
+    }));
+    filter();
+  }
+
   function restoreFocus(target) {
     if (!target || typeof document === 'undefined') return;
     let element = null;
@@ -199,6 +257,7 @@
 
   function bind(root, config) {
     if (!root) return;
+    enhanceTableDashboard(root, config);
     root.querySelectorAll('[data-pt-table-module]').forEach(button => button.addEventListener('click', event => {
       event.preventDefault();
       const module = button.dataset.ptTableModule;

@@ -159,6 +159,60 @@
     return 'ok';
   }
 
+  function quantile(values, probability) {
+    const sorted = values.map(asNumber).filter(value => value != null).sort((a, b) => a - b);
+    if (!sorted.length) return null;
+    const position = (sorted.length - 1) * probability;
+    const lower = Math.floor(position);
+    const remainder = position - lower;
+    return sorted[lower + 1] == null ? sorted[lower] : sorted[lower] + remainder * (sorted[lower + 1] - sorted[lower]);
+  }
+
+  function renderDistributionLatest(drill, helpers) {
+    const source = drill && drill.trajectory_review && drill.trajectory_review.single_entity;
+    const rows = (Array.isArray(source && source.signals) ? source.signals : [])
+      .map(signal => {
+        const values = (Array.isArray(signal && signal.values) ? signal.values : []).map(asNumber).filter(value => value != null);
+        if (values.length < 4) return null;
+        const minimum = Math.min(...values);
+        const maximum = Math.max(...values);
+        const span = maximum - minimum || 1;
+        const pct = value => Math.max(0, Math.min(100, (value - minimum) / span * 100));
+        return {
+          signal,
+          values,
+          minimum,
+          maximum,
+          q1: quantile(values, .25),
+          median: quantile(values, .5),
+          q3: quantile(values, .75),
+          latest: values[values.length - 1],
+          pct,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 6);
+    if (!rows.length) return '';
+    return `<section class="pt-distribution-latest mt-16" data-patient-distribution-latest>
+      <div class="pt-distribution-head">
+        <div><div class="eyebrow">${hEsc(helpers, hT(helpers, 'Distribution · latest value', '分布—末值图'))}</div><h2>${hEsc(helpers, hT(helpers, 'Within-patient value distributions', '单患者多变量分布与末值'))}</h2><p>${hEsc(helpers, hT(helpers, 'Each row summarizes the bounded observed values for one signal. The diamond is the latest recorded value; this view intentionally contains no second time trajectory.', '每行汇总一个信号的有界观测值；菱形标记最后一次记录值。本图刻意不重复时间轨迹。'))}</p></div>
+        <span class="pill ok">${hEsc(helpers, (source && (source.selected_label || source.selected_ref)) || hT(helpers, 'selected entity', '已选实体'))}</span>
+      </div>
+      <div class="pt-distribution-rows">
+        ${rows.map(row => {
+          const label = row.signal.name || row.signal.label || row.signal.feature;
+          const unit = row.signal.unit || '';
+          return `<div class="pt-distribution-row" data-patient-distribution-feature="${hEsc(helpers, row.signal.feature || label)}">
+            <div class="pt-distribution-name"><b>${hEsc(helpers, label)}</b><span>${hEsc(helpers, row.signal.feature || '')} · n=${hFmtInt(helpers, row.values.length)}</span></div>
+            <div class="pt-boxplot" aria-label="${hEsc(helpers, `${label}: ${row.minimum} to ${row.maximum}`)}"><i class="whisker"></i><i class="box" style="left:${row.pct(row.q1).toFixed(2)}%;width:${Math.max(1.5, row.pct(row.q3) - row.pct(row.q1)).toFixed(2)}%"></i><i class="median" style="left:${row.pct(row.median).toFixed(2)}%"></i><i class="latest" style="left:${row.pct(row.latest).toFixed(2)}%"></i></div>
+            <div class="pt-distribution-values"><span>${hFmtNum(helpers, row.minimum, 1)}</span><b>${hFmtNum(helpers, row.latest, 1)}${unit ? ` ${hEsc(helpers, unit)}` : ''}</b><span>${hFmtNum(helpers, row.maximum, 1)}</span></div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="pt-distribution-legend"><span><i class="box"></i>${hEsc(helpers, hT(helpers, 'IQR', '四分位距'))}</span><span><i class="median"></i>${hEsc(helpers, hT(helpers, 'median', '中位数'))}</span><span><i class="latest"></i>${hEsc(helpers, hT(helpers, 'latest', '末值'))}</span></div>
+    </section>`;
+  }
+
   function renderCaseReview(selected, summaryCards, sections, drill, helpers) {
     const totalSignals = (sections || []).reduce((acc, section) => acc + Number(section.available_count || 0), 0);
     const activeSections = (sections || []).filter(section => Number(section.available_count || 0) > 0);
@@ -197,140 +251,30 @@
   }
 
   function renderMissingnessCoverage(drill, helpers) {
-    const rows = moduleAuditRows(drill);
+    const quality = drill && drill.quality_metrics || {};
+    const summary = quality.summary || {};
+    const eventPattern = /(outcome|death|sepsis|sep3|vasopressor|ventilat|infection|culture)/i;
+    const rows = (Array.isArray(quality.features) ? quality.features : [])
+      .filter(row => row && !eventPattern.test(`${row.feature || ''} ${row.module || ''}`))
+      .map(row => ({ ...row, missing: clampPct(row.missing_pct), records: Math.max(1, Number(row.records || 0)) }))
+      .filter(row => row.missing != null && Number.isFinite(row.records));
     if (!rows.length) return '';
-    const summary = (drill && drill.summary) || {};
-    const fullEntities = asNumber(summary.entities != null ? summary.entities : summary.stays);
-    const reviewEntities = asNumber(summary.review_entities);
-    const boundedReview = summary.review_scope === 'browser_bounded_entity_sample'
-      && reviewEntities != null
-      && fullEntities != null
-      && reviewEntities < fullEntities;
-    const denominator = cohortDenominator(drill, rows);
-    const coverageRows = rows
-      .map(item => {
-        const coverage = clampPct(item.coverage_pct);
-        if (coverage == null) return null;
-        return Object.assign({}, item, {
-          coverage_pct: coverage,
-          missing_pct: Math.max(0, 100 - coverage),
-          is_presence_rate: isPresenceRateRow(item),
-        });
-      })
-      .filter(Boolean);
-    const trueMissingRows = coverageRows
-      .filter(item => !item.is_presence_rate)
-      .sort((a, b) => (b.missing_pct || 0) - (a.missing_pct || 0));
-    const presenceRows = coverageRows
-      .filter(item => item.is_presence_rate)
-      .sort((a, b) => (b.coverage_pct || 0) - (a.coverage_pct || 0));
-    const inventoryOnlyCount = rows.length - coverageRows.length;
-    const medianCoverage = median(trueMissingRows.map(item => item.coverage_pct));
-    const topMissing = trueMissingRows.length ? trueMissingRows[0].missing_pct : null;
-    const watchCount = trueMissingRows.filter(item => (item.missing_pct || 0) >= 10).length;
-    const visibleMissing = trueMissingRows.slice(0, 8);
-    const visiblePresence = presenceRows.slice(0, 6);
-    const denomText = boundedReview
-      ? `${hFmtInt(helpers, reviewEntities)} ${hT(helpers, 'reviewed', '已审阅')} / ${hFmtInt(helpers, fullEntities)} ${hT(helpers, 'full', '完整队列')}`
-      : (denominator ? `${hFmtInt(helpers, denominator)} ${hT(helpers, 'entities', '实体')}` : hT(helpers, 'active export', '当前导出'));
-    const scopeDescription = boundedReview
-      ? hT(
-        helpers,
-        'Computed coverage uses the bounded browser review sample, not the full export cohort. The full cohort denominator remains visible for context; the currently selected patient is not the denominator.',
-        '当前覆盖率以浏览器有界审阅样本计算，并非基于完整导出队列。完整队列分母会同时显示作为背景；当前所选患者不是分母。',
-      )
-      : hT(
-        helpers,
-        'Computed coverage uses the review denominator shown here, not the currently selected patient. Event or exposure modules are labelled separately and are not treated as missingness.',
-        '当前覆盖率使用此处显示的审阅分母计算，不以当前所选患者为分母。事件或暴露模块单独标注，不当作缺失率。',
-      );
-    const denominatorLabel = boundedReview
-      ? hT(helpers, 'coverage denominator: bounded browser review sample', '覆盖率分母：浏览器有界审阅样本')
-      : hT(helpers, 'coverage denominator: current review entities', '覆盖率分母：当前审阅实体');
-    return `
-      <section class="pt-missingness-workbench mt-16" data-patient-overview-missingness>
-        <div class="pt-missingness-head">
-          <div>
-            <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Missingness audit · cohort context', '缺失率审计 · 队列背景'))}</div>
-            <h2>${hEsc(helpers, hT(helpers, 'Missingness and coverage', '缺失率与覆盖率'))}</h2>
-            <p>${hEsc(helpers, scopeDescription)}</p>
-          </div>
-          <span class="pill ok">${hEsc(helpers, denomText)}</span>
-        </div>
-        <div class="pt-missingness-stat-grid">
-          <div>
-            <span>${hEsc(helpers, hT(helpers, 'Audited availability modules', '已审计可用性模块'))}</span>
-            <b>${hFmtInt(helpers, trueMissingRows.length)}</b>
-          </div>
-          <div>
-            <span>${hEsc(helpers, hT(helpers, 'Median coverage', '覆盖率中位数'))}</span>
-            <b>${medianCoverage == null ? '—' : hFmtPct(helpers, medianCoverage)}</b>
-          </div>
-          <div>
-            <span>${hEsc(helpers, hT(helpers, 'Highest missingness', '最高缺失率'))}</span>
-            <b>${topMissing == null ? '—' : hFmtPct(helpers, topMissing)}</b>
-          </div>
-          <div>
-            <span>${hEsc(helpers, hT(helpers, 'Watchlist modules', '需关注模块'))}</span>
-            <b>${hFmtInt(helpers, watchCount)}</b>
-          </div>
-        </div>
-        <div class="pt-missingness-body">
-          <div class="pt-missingness-panel">
-            <div class="pt-missingness-panel-head">
-              <b>${hEsc(helpers, hT(helpers, 'Top module missingness', '模块缺失率排行'))}</b>
-              <span>${hEsc(helpers, denominatorLabel)}</span>
-            </div>
-            <div class="pt-missingness-list">
-              ${visibleMissing.length ? visibleMissing.map(item => {
-                const label = moduleDisplayLabel(item, helpers);
-                const coverage = clampPct(item.coverage_pct) || 0;
-                const missingPct = Math.max(0, 100 - coverage);
-                const tone = missingSeverity(missingPct);
-                const entities = asNumber(item.entities);
-                const width = Math.max(2, Math.min(100, missingPct));
-                return `
-                  <div class="pt-missingness-row ${tone}" data-patient-missingness-module="${hEsc(helpers, item.module || label)}">
-                    <div class="pt-missingness-name">
-                      <b>${hEsc(helpers, label)}</b>
-                      <span class="mono">${hEsc(helpers, item.module || '')}</span>
-                    </div>
-                    <div class="pt-missingness-track" aria-hidden="true"><i style="width:${width}%;"></i></div>
-                    <div class="pt-missingness-metric">
-                      <span>${hEsc(helpers, hT(helpers, 'missing', '缺失'))}</span>
-                      <b>${hFmtPct(helpers, missingPct)}</b>
-                    </div>
-                    <div class="pt-missingness-metric">
-                      <span>${hEsc(helpers, hT(helpers, 'coverage', '覆盖'))}</span>
-                      <b>${hFmtPct(helpers, coverage)}</b>
-                    </div>
-                    <div class="pt-missingness-meta">${Number.isFinite(entities) ? hFmtInt(helpers, entities) : '—'} / ${denominator ? hFmtInt(helpers, denominator) : '—'} · ${hFmtInt(helpers, item.feature_count || item.review_features || 0)} ${hEsc(helpers, hT(helpers, 'features', '特征'))}</div>
-                  </div>`;
-              }).join('') : `
-                <div class="pt-missingness-empty">${hEsc(helpers, hT(helpers, 'No true missingness module is available in this payload.', '当前载荷没有可计算真实缺失率的模块。'))}</div>`}
-            </div>
-          </div>
-          ${visiblePresence.length ? `
-            <div class="pt-presence-panel" data-patient-presence-rate-modules>
-              <div class="pt-missingness-panel-head">
-                <b>${hEsc(helpers, hT(helpers, 'Event / exposure prevalence', '事件 / 暴露发生率'))}</b>
-                <span>${hEsc(helpers, hT(helpers, 'not missingness', '不是缺失率'))}</span>
-              </div>
-              <div class="pt-presence-list">
-                ${visiblePresence.map(item => {
-                  const label = moduleDisplayLabel(item, helpers);
-                  return `
-                    <div class="pt-presence-row">
-                      <span>${hEsc(helpers, label)}</span>
-                      <b>${hFmtPct(helpers, clampPct(item.coverage_pct) || 0)}</b>
-                      <em>${hEsc(helpers, String(item.metric_kind || hT(helpers, 'presence rate', '发生率')))}</em>
-                    </div>`;
-                }).join('')}
-              </div>
-            </div>` : ''}
-        </div>
-        <div class="pt-missingness-note">${hEsc(helpers, hT(helpers, 'Clinical flags such as Sepsis-3, outcome, vasopressor exposure, or ventilation prevalence describe event occurrence. They are deliberately excluded from the missingness watchlist.', 'Sepsis-3、结局、血管活性药物暴露、机械通气等临床标志描述事件发生；这里刻意不把它们放进缺失率风险列表。'))}${inventoryOnlyCount ? ` ${hEsc(helpers, hT(helpers, `${hFmtInt(helpers, inventoryOnlyCount)} modules have inventory metadata only; entity coverage was not computed and they are excluded from these percentages.`, `${hFmtInt(helpers, inventoryOnlyCount)} 个模块仅有文件清单元数据；未计算实体覆盖率，因此不纳入这些百分比。`))}` : ''}</div>
-      </section>`;
+    const maxLog = Math.max(1, ...rows.map(row => Math.log10(row.records)));
+    const labelled = rows.slice().sort((a, b) => b.missing - a.missing).slice(0, 8);
+    const width = 860; const height = 390; const left = 70; const right = 28; const top = 28; const bottom = 56;
+    const x = value => left + value / 100 * (width - left - right);
+    const y = records => top + (1 - Math.log10(records) / maxLog) * (height - top - bottom);
+    return `<section class="pt-missingness-workbench mt-16" data-patient-missing-record-scatter>
+      <div class="pt-missingness-head"><div><div class="eyebrow">${hEsc(helpers, hT(helpers, 'Missingness · record volume', '缺失—记录散点'))}</div><h2>${hEsc(helpers, hT(helpers, 'Feature-level missingness and observation volume', '特征层面的缺失率与记录量'))}</h2><p>${hEsc(helpers, hT(helpers, 'Each point is a measured feature from the active export. Event and exposure prevalence are excluded because absence of an event is not missing data.', '每个点都是当前导出中的实测特征；事件与暴露发生率被排除，因为“事件未发生”不等于数据缺失。'))}</p></div><span class="pill ok">${hFmtInt(helpers, rows.length)} ${hEsc(helpers, hT(helpers, 'features', '个特征'))}</span></div>
+      <div class="pt-missing-scatter"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${hEsc(helpers, hT(helpers, 'Missingness by record count', '缺失率与记录量散点图'))}">
+        ${[0,25,50,75,100].map(tick => `<line x1="${x(tick)}" x2="${x(tick)}" y1="${top}" y2="${height-bottom}" class="grid"></line><text x="${x(tick)}" y="${height-25}" class="axis" text-anchor="middle">${tick}%</text>`).join('')}
+        ${Array.from({length:Math.floor(maxLog)+1},(_,tick)=>`<line x1="${left}" x2="${width-right}" y1="${y(10 ** tick)}" y2="${y(10 ** tick)}" class="grid"></line><text x="${left-12}" y="${y(10 ** tick)+4}" class="axis" text-anchor="end">10${tick ? `<tspan baseline-shift="super" font-size="10">${tick}</tspan>` : ''}</text>`).join('')}
+        ${rows.map(row => { const show = labelled.includes(row); const label = row.name || row.feature; return `<g><circle cx="${x(row.missing).toFixed(1)}" cy="${y(row.records).toFixed(1)}" r="${show ? 6 : 4}" class="${row.missing >= 30 ? 'bad' : row.missing >= 10 ? 'warn' : 'ok'}"><title>${hEsc(helpers, `${label}: ${row.missing}% missing, ${row.records} records`)}</title></circle>${show ? `<text x="${(x(row.missing)+8).toFixed(1)}" y="${(y(row.records)-7).toFixed(1)}" class="point-label">${hEsc(helpers, label)}</text>` : ''}</g>`; }).join('')}
+        <text x="${(left+width-right)/2}" y="${height-5}" class="axis-title" text-anchor="middle">${hEsc(helpers, hT(helpers, 'Missing values (%)', '缺失率 (%)'))}</text><text x="16" y="${(top+height-bottom)/2}" class="axis-title" text-anchor="middle" transform="rotate(-90 16 ${(top+height-bottom)/2})">${hEsc(helpers, hT(helpers, 'Records (log scale)', '记录数（对数尺度）'))}</text>
+      </svg></div>
+      <div class="pt-cleaning-receipt" data-patient-cleaning-receipt><div><span>${hEsc(helpers, hT(helpers, 'Cleaning receipt', '清洗回执'))}</span><b>${hFmtInt(helpers, summary.total_records || 0)} ${hEsc(helpers, hT(helpers, 'records audited', '条记录已审计'))}</b></div><div><span>${hEsc(helpers, hT(helpers, 'Post-cleaning duplicate-time rate', '清洗后重复时间戳率'))}</span><b>${hFmtPct(helpers, summary.weighted_duplicate_time_pct || 0)}</b></div><div><span>${hEsc(helpers, hT(helpers, 'Post-rule out-of-range rate', '规则处理后越界率'))}</span><b>${hFmtPct(helpers, summary.weighted_out_of_physio_pct || 0)}</b></div></div>
+      <p class="pt-missingness-note">${hEsc(helpers, hT(helpers, 'The receipt verifies the configured post-cleaning state; it does not re-label resolved duplicates or out-of-range source values as new problems.', '回执核验的是清洗后的状态，不会把已经解决的重复时间戳或越界源值重新包装成“新问题”。'))}</p>
+    </section>`;
   }
 
   function renderSignalCard(card, helpers) {
@@ -439,8 +383,7 @@
     const drill = payload && payload.drill;
     return [
       renderCaseReview(selected, summaryCards, sections, drill, helpers),
-      renderCategorySummary(sections, helpers),
-      renderModuleLedger(drill, helpers),
+      renderDistributionLatest(drill, helpers),
     ].join('');
   }
 

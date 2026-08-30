@@ -4,6 +4,13 @@
   gap:14px;
   margin:12px 0 14px;
 }
+
+.cohort-coverage-forest{margin-top:16px;border:1px solid var(--hair);border-radius:var(--r-2);background:var(--surface);padding:15px}
+.cohort-forest-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.cohort-forest-head b{display:block;font-size:15px}.cohort-forest-head span{display:block;margin-top:5px;color:var(--ink-4);font-size:13px;line-height:1.45}.cohort-forest-head strong{font:700 13px/1.2 var(--mono);white-space:nowrap}
+.cohort-forest-axis{display:grid;grid-template-columns:repeat(5,1fr);margin:14px 126px 4px 190px;color:var(--ink-4);font:12px/1 var(--mono)}.cohort-forest-axis span{text-align:center}.cohort-forest-axis span:first-child{text-align:left}.cohort-forest-axis span:last-child{text-align:right}
+.cohort-forest-rows{display:grid;gap:4px}.cohort-forest-row{display:grid;grid-template-columns:180px minmax(300px,1fr) 116px;align-items:center;gap:10px;min-height:44px}.cohort-forest-row>div:first-child b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cohort-forest-row>div:first-child span{display:block;color:var(--ink-4);font-size:11.5px}.cohort-forest-row>strong{text-align:right;font:700 13px/1.2 var(--mono)}.cohort-forest-row>strong small{display:block;margin-top:3px;color:var(--ink-4);font-size:11px;font-weight:500}
+.cohort-forest-track{position:relative;height:28px;background:repeating-linear-gradient(90deg,var(--hair) 0,var(--hair) 1px,transparent 1px,transparent 25%)}.cohort-forest-track::after{content:"";position:absolute;left:0;right:0;top:13px;height:1px;background:var(--hair-strong)}.cohort-forest-track .ci{position:absolute;top:11px;z-index:1;height:5px;border-radius:99px;background:var(--accent)}.cohort-forest-track .point{position:absolute;top:7px;z-index:2;width:13px;height:13px;border:3px solid var(--surface);border-radius:50%;background:var(--accent);box-shadow:0 0 0 1px var(--accent);transform:translateX(-6px)}
+.cohort-coverage-details>summary{cursor:pointer;color:var(--ink-3);font-size:13px;font-weight:700}.cohort-table-one th,.cohort-table-one td,.cohort-coverage-details th,.cohort-coverage-details td{font-size:13px;line-height:1.45;padding-top:11px;padding-bottom:11px}
 .surv-outcome-grid{
   display:grid;
   gap:8px;
@@ -31,7 +38,7 @@
 }
 .surv-outcome-card span{
   color:var(--ink-2);
-  font-size:12px;
+  font-size:13px;
   font-weight:700;
   line-height:1.25;
 }
@@ -47,7 +54,7 @@
 .surv-outcome-card em{
   color:var(--ink-4);
   font-family:var(--font-mono);
-  font-size:10.5px;
+  font-size:12px;
   font-style:normal;
   font-weight:600;
   line-height:1.35;
@@ -56,7 +63,7 @@
 .surv-label{
   color:var(--ink-4);
   font-family:var(--font-mono);
-  font-size:10.5px;
+  font-size:12px;
   font-weight:700;
   letter-spacing:.06em;
   margin-bottom:7px;
@@ -84,14 +91,14 @@
   text-align:left;
 }
 .surv-segments .seg-btn span{
-  font-size:12px;
+  font-size:13px;
   font-weight:700;
   line-height:1.25;
 }
 .surv-segments .seg-btn b{
   color:var(--ink-4);
   font-family:var(--font-mono);
-  font-size:10.5px;
+  font-size:12px;
   font-weight:600;
 }
 .surv-segments .seg-btn.active{
@@ -126,7 +133,7 @@
 }
 .surv-head p{
   color:var(--ink-4);
-  font-size:12px;
+  font-size:13px;
   line-height:1.45;
   margin:0;
 }
@@ -141,7 +148,7 @@
 .surv-logrank small{
   color:var(--ink-4);
   display:block;
-  font-size:11px;
+  font-size:12px;
 }
 .surv-logrank strong{
   color:var(--ink-1);

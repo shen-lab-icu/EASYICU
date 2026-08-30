@@ -129,6 +129,14 @@
       const retry = event.target.closest('[data-gpi-message-retry]');
       if (retry) {
         const user = precedingUser(articleId(retry));
+        // Retrying the answer to a host-owned plan action must invoke the same
+        // governed plan starter as editing/resubmitting that action. Sending
+        // it through generic conversation regeneration drops the one-turn
+        // provider authority and lets the model misroute into setup dialogue.
+        if (
+          user && typeof context.resubmitHostGenerated === 'function'
+          && context.resubmitHostGenerated(user, user.text)
+        ) return true;
         if (user) context.regenerate(user.entryId, user.text, '', articleId(retry));
         return true;
       }

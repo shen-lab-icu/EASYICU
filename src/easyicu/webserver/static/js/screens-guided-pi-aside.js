@@ -30,9 +30,9 @@
         const receipt = host.project() && host.project().binding_receipt;
         const revision = receipt && Number.isInteger(receipt.study_context_revision)
           ? ` · r${receipt.study_context_revision}` : '';
-        head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${tr('Project authority', '项目权威状态')}</div><div class="asub">${tr('Loading the bound StudyContext workflow.', '正在读取已绑定的 StudyContext 流程。')}</div>`;
+        head.innerHTML = `<div class="at">${tr('Research progress', '研究进度')}</div><div class="asub">${tr('Loading this project’s saved progress.', '正在读取当前项目的进度。')}</div>`;
         body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite">
-          <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Bound project', '已绑定项目')}</div><strong>${esc(displayProjectTitle(host.project() && host.project().title, projectId()))}${esc(revision)}</strong><div class="gd-pipeline-value">${tr('Loading authoritative configuration…', '正在读取权威配置…')}</div></div></div>
+          <div class="gd-pipeline-summary-head"><div><strong>${esc(displayProjectTitle(host.project() && host.project().title, projectId()))}${esc(revision)}</strong><div class="gd-pipeline-value">${tr('Loading project progress…', '正在读取项目进度…')}</div></div></div>
         </div>`;
         return;
       }
@@ -61,6 +61,7 @@
         plan_scientific_changes_required: tr('The scientific plan review requires a new study/plan version before analysis', '科学计划审阅要求先形成新的研究/计划版本，当前不能继续分析'),
         plan_configuration_superseded: tr('The study configuration changed; the old plan is superseded and cannot be approved', '研究配置已变化；旧计划已失效，不能再批准'),
         plan_review_not_resumable: tr('The old plan no longer has a live resume authority and must be regenerated', '旧计划的可恢复执行权限已失效，必须重新生成'),
+        scientific_plan_review_policy_stale: tr('The scientific review policy changed; regenerate the plan while keeping the prepared data', '科学审阅规则已更新；保留已准备数据并重新生成计划'),
         operator_plan_approved: tr('Digest-bound plan approved by the user', '摘要绑定计划已由用户批准'),
         analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
         validated_analysis_required: tr('Validated analysis is required first', '需要先完成并验证分析'),
@@ -92,17 +93,17 @@
         || stages.find(stage => stage.status !== 'complete') || stages[stages.length - 1];
       const currentIndex = Math.max(0, stages.indexOf(current));
       const next = stages.slice(currentIndex + 1).find(stage => stage.status !== 'complete');
-      head.innerHTML = `<div class="eyebrow">${tr('One EasyICU workflow', '统一 EasyICU 科研流程')}</div><div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Project authority', '项目权威状态')}</div><div class="asub">${host.demoMode() ? tr('Bounded read-only projection derived from one registered source run.', '从一个登记 source run 派生的有界只读投影。') : tr('Conversation, extraction, analysis, and evidence share this projection.', '对话、提取、分析与证据共用这一份状态。')}</div>`;
+      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Research progress', '研究进度')}</div><div class="asub">${host.demoMode() ? tr('Read-only view of one registered run.', '一个已登记运行的只读预览。') : tr('Question, data, plan, and results stay together in this project.', '问题、数据、计划与结果都保存在当前项目中。')}</div>`;
       body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
         <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
         <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
-        <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段完成')}</span><span>${tr('One project', '同一项目')}</span></div>
-        ${next ? `<div class="gd-pipeline-next"><span>${tr('Next', '下一阶段')}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
+        <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('stages complete', '个阶段已完成')}</span></div>
+        ${next ? `<div class="gd-pipeline-next"><span>${tr('Next step', '下一步')}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
       </div>
-      <details class="gd-pipeline-disclosure" open><summary><span>${tr('View all workflow stages', '查看完整科研流程')}</span><small>${stages.length}</small></summary><div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
+      <details class="gd-pipeline-disclosure" open><summary><span>${tr('All research stages', '全部研究阶段')}</span><small>${stages.length}</small></summary><div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
         const status = stage.status === 'complete' ? 'done' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
         const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
-        return `<div class="study-item ${status}" title="${esc(stage.reason_code || '')}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}</div><div class="si-v">${esc(reasonText(stage))}</div></div></div>`;
+        return `<div class="study-item ${status}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}</div></div></div>`;
       }).join('')}</div></details>`;
     }
 

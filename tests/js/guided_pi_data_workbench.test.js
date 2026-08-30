@@ -27,6 +27,7 @@ global.EU_VIZ_EMBEDDED_WORKBENCH = {
 
 load('src/easyicu/webserver/static/js/screens-guided-pi-resources.js');
 load('src/easyicu/webserver/static/js/screens-guided-pi-data-preview.js');
+load('src/easyicu/webserver/static/js/screens-guided-pi-workbench-preview.js');
 
 test('data workbench resource keeps only immutable coordinates in the button', () => {
   const owner = global.EU_GUIDED_PI_RESOURCES.create({ esc: global.EU_HTML.esc });
@@ -79,4 +80,32 @@ test('patient preview delegates without exposing direct identifier labels', () =
   assert.match(html, /Entity 3/);
   assert.match(html, /data-native-workbench="patient_timeline"/);
   assert.doesNotMatch(html, /stay_id|subject_id|hadm_id/);
+});
+
+test('pre-analysis readiness view distinguishes source coverage from executed analysis', () => {
+  global.EU_LANG = 'zh';
+  const host = { innerHTML: '', querySelector() { return null; } };
+  global.EU_GUIDED_PI_WORKBENCH_PREVIEW.mount(host, {
+    review_stage: 'post_plan',
+    status: 'ready_for_analysis',
+    denominator: { count: 94458, analysis_unit: 'ICU stay' },
+    configured_modules: [{ module: 'blood_gas', availability_status: 'ready' }],
+    concepts: [
+      { concept_id: 'lact_max', study_role: 'plan_input', availability_status: 'partial', denominator_count: 100, evaluable_count: 53 },
+      { concept_id: 'death', study_role: 'outcome', availability_status: 'ready', denominator_count: 100, evaluable_count: 100 },
+    ],
+    quality: { modules_ok: 1, watchlist_count: 1, median_coverage_pct: 76.5 },
+    source: { label: 'MIMIC-IV v3.1' },
+  });
+
+  assert.match(host.innerHTML, /分析前数据准备检查/);
+  assert.match(host.innerHTML, /它不是最终分析队列/);
+  assert.match(host.innerHTML, /批准后才会执行/);
+  assert.match(host.innerHTML, /生成最终分析队列/);
+  assert.match(host.innerHTML, /执行缺失数据处理/);
+  assert.match(host.innerHTML, /计划变量覆盖情况/);
+  assert.match(host.innerHTML, /lact_max/);
+  assert.match(host.innerHTML, /53\.0%/);
+  assert.doesNotMatch(host.innerHTML, /分析数据已准备/);
+  global.EU_LANG = 'en';
 });

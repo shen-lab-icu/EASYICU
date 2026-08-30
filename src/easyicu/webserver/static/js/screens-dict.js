@@ -7,6 +7,11 @@
 
   let dictSearch = '';
   let dictCat = 'all';   // 'all' | group key
+  let dictSelected = null;
+  let dictSelectedDb = null;
+  let dictLineage = null;
+  let dictLineageLoading = false;
+  let dictLineageError = '';
 
   function L(en, zh) { return t(en, zh); }
   function html(v) {
@@ -112,15 +117,53 @@
     const body = rows.map(({ k, group }) => {
       const d = descOf(k);
       return `
-      <div class="dict-row">
+      <button type="button" class="dict-row dict-concept-row ${dictSelected === k ? 'selected' : ''}" data-dict-concept="${html(k)}" aria-pressed="${dictSelected === k ? 'true' : 'false'}">
         <span class="dc-code mono">${k}</span>
         <span class="dc-name"><span class="dn-t">${window.EU_LANG === 'zh' ? zhOf(k) : nameOf(k)}</span>${d ? `<span class="dn-d">${d}</span>` : ''}</span>
         <span class="dc-unit mono">${unitOf(k)}</span>
         <span class="dc-cov">${covBadge(k)}</span>
         ${dictCat === 'all' ? `<span class="dc-cat">${groupNameOf(group)}</span>` : ''}
-      </div>`;
+      </button>`;
     }).join('');
     return `<div class="dict-table">${head}${body}</div>`;
+  }
+
+  function field(value) { return value == null || value === '' ? L('not declared', '未声明') : String(value); }
+  function selector(mapping) {
+    const values = Array.isArray(mapping.selector_values) ? mapping.selector_values : [];
+    if (!mapping.selector_field || !values.length) return L('no row selector declared', '未声明行选择条件');
+    const shown = values.slice(0, 4).join(', ');
+    return `${mapping.selector_field} ∈ {${shown}${values.length > 4 ? ', …' : ''}}`;
+  }
+  function mappingSummary(lane) {
+    return (lane.mappings || []).map(mapping => `${field(mapping.table)}.${field(mapping.value_field)}`).join(' + ');
+  }
+  function lineagePanel() {
+    if (!dictSelected) return '';
+    if (dictLineageLoading) return `<section class="dict-lineage"><div class="state loading"><span class="spin"></span><div class="t">${L('Loading declared lineage…', '正在加载声明的血缘…')}</div></div></section>`;
+    if (dictLineageError) return `<section class="dict-lineage"><div class="note warn"><div class="body"><div class="t">${L('Lineage unavailable', '血缘暂不可用')}</div><div class="d">${html(dictLineageError)}</div></div></div></section>`;
+    if (!dictLineage) return '';
+    const lanes = dictLineage.lanes || [];
+    if (!lanes.length) return `<section class="dict-lineage"><div class="note info"><div class="body"><div class="t">${L('No raw-source mapping declared', '未声明原始来源映射')}</div><div class="d">${L('This concept may be derived or rule-based. No table or field is inferred.', '该概念可能是派生或规则输出；这里不会猜测表或字段。')}</div></div></div></section>`;
+    const active = lanes.find(lane => lane.database === dictSelectedDb) || lanes[0];
+    dictSelectedDb = active.database;
+    const canonical = dictLineage.canonical || {};
+    const primary = active.mappings[0] || {};
+    const callbacks = Array.from(new Set((active.mappings || []).map(mapping => mapping.callback).filter(Boolean)));
+    const steps = [
+      [L('Source table', '来源表'), (active.mappings || []).map(mapping => field(mapping.table)).join(' + ')],
+      [L('Row selection', '行选择'), (active.mappings || []).map(selector).join('；')],
+      [L('Raw fields', '原始字段'), `${L('value', '值')} ${field(primary.value_field)} · ${L('unit', '单位')} ${field(primary.unit_field)} · ${L('time', '时间')} ${field(primary.time_field)}`],
+      [L('Transformation', '转换处理'), callbacks.length ? callbacks.join('；') : L('No dictionary callback declared; identity cannot be assumed beyond the declared fields.', '字典未声明回调；除已声明字段外，不假定额外处理。')],
+      [L('Bounds', '边界'), `${canonical.minimum == null ? '−∞' : canonical.minimum} – ${canonical.maximum == null ? '+∞' : canonical.maximum}`],
+      [L('Canonical output', '标准输出'), `${dictLineage.concept}${canonical.unit ? ` · ${canonical.unit}` : ''}`],
+    ];
+    return `<section class="dict-lineage" data-dict-lineage>
+      <div class="dict-lineage-head"><div><div class="eyebrow">${L('Feature provenance', '特征血缘')}</div><h2>${html(window.EU_LANG === 'zh' ? zhOf(dictLineage.concept) : dictLineage.name)} <span class="mono">${html(dictLineage.concept)}</span></h2><p>${L('Declared catalog mappings only. Fields marked “not declared” are left explicit instead of guessed.', '仅展示字典声明的映射；未声明的字段保持明确空缺，不做猜测。')}</p></div><span class="pill ok">${lanes.length} ${L('databases', '个数据库')}</span></div>
+      <div class="dict-lineage-tabs" role="tablist">${lanes.map(lane=>`<button type="button" class="${lane.database===active.database?'active':''}" data-dict-lineage-db="${html(lane.database)}">${html(lane.label)}</button>`).join('')}</div>
+      <div class="dict-audit-track" data-dict-audit-track>${steps.map(([label,value],index)=>`<div class="dict-audit-step"><i>${index+1}</i><div><b>${html(label)}</b><span>${html(value)}</span></div></div>`).join('')}</div>
+      <div class="dict-lineage-lanes" data-dict-lineage-lanes>${lanes.map((lane,index)=>`<article style="--dict-lane-color:${window.EU_PALETTE.color(index)}"><div><i></i><b>${html(lane.label)}</b><span>${html(lane.database)}</span></div><strong>${html(mappingSummary(lane))}</strong><em>${html(Array.from(new Set((lane.mappings||[]).map(mapping=>mapping.callback).filter(Boolean))).join('；') || L('no callback declared', '未声明回调'))}</em><small>→ ${html(dictLineage.concept)}${canonical.unit?` · ${html(canonical.unit)}`:''}</small></article>`).join('')}</div>
+    </section>`;
   }
 
   function catChips() {
@@ -183,6 +226,7 @@
       ${catChips()}
 
       <div id="dictResults">${resultsHtml(rows)}</div>
+      <div id="dictLineage">${lineagePanel()}</div>
       <div class="nextbar mt-16">
         <div class="nb-ico">${icon('arrow', 16)}</div>
         <div class="grow"><div class="nb-t">${t('Found the concepts you need?', '找到需要的概念了？')}</div><div class="nb-d">${t('These concepts become columns of your dataset — select their modules in Data Extraction.', '这些概念会成为你数据表的列 —— 到「数据抽取」勾选它们所属的模块。')}</div></div>
@@ -200,6 +244,10 @@
         if (res) res.innerHTML = resultsHtml(matchedRows());
         if (clr) clr.style.display = dictSearch ? '' : 'none';
       };
+      const paintLineage = () => {
+        const panel = document.getElementById('dictLineage');
+        if (panel) panel.innerHTML = lineagePanel();
+      };
       if (input) {
         input.addEventListener('input', () => {
           dictSearch = input.value;
@@ -214,6 +262,28 @@
       root.querySelectorAll('[data-dict-cat]').forEach(b => b.addEventListener('click', () => {
         dictCat = b.dataset.dictCat; window.__euRender();
       }));
+      root.addEventListener('click', async event => {
+        const dbButton = event.target.closest('[data-dict-lineage-db]');
+        if (dbButton) { dictSelectedDb = dbButton.dataset.dictLineageDb; paintLineage(); return; }
+        const conceptButton = event.target.closest('[data-dict-concept]');
+        if (!conceptButton) return;
+        dictSelected = conceptButton.dataset.dictConcept;
+        dictSelectedDb = null;
+        dictLineage = null;
+        dictLineageError = '';
+        dictLineageLoading = true;
+        paintResults(); paintLineage();
+        try {
+          const api = window.EU_API;
+          if (!api || typeof api.loadConceptLineage !== 'function') throw new Error(L('Lineage API is unavailable.', '血缘 API 不可用。'));
+          dictLineage = await api.loadConceptLineage(dictSelected);
+        } catch (error) {
+          dictLineageError = String(error && error.message || error);
+        } finally {
+          dictLineageLoading = false;
+          paintResults(); paintLineage();
+        }
+      });
     },
   };
 })();

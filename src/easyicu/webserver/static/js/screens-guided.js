@@ -324,6 +324,9 @@
     guidedFrontdoorSeedText = null;
     guidedFolderMenuOpen = false;
     guidedDraftRemoval = null;
+    if (window.EU_GUIDED_PROJECTS && window.EU_GUIDED_PROJECTS.setProjectManagement) {
+      window.EU_GUIDED_PROJECTS.setProjectManagement(false);
+    }
     guidedFolderDialogMode = null;
     guidedFolderSeedTitle = 'New local study';
     guidedDraftFolderSlug = '';
@@ -2667,7 +2670,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }
     guidedDrafts = { loading: true, error: null, data: guidedDrafts.data || null };
     renderSessions();
-    return window.EU_API.loadGuidedDrafts({ limit: 20 }).then(async data => {
+    return window.EU_API.loadGuidedDrafts({ limit: 100 }).then(async data => {
       guidedDrafts = { loading: false, error: null, data: data };
       renderSessions();
       if (guidedFolderDialogMode) renderGuidedFolderDialog();
@@ -2698,67 +2701,85 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function renderGuidedDraftRemovalDialog() {
     guidedProjectRenderer('renderDraftRemovalDialog');
   }
+  function rerenderProjectRailKeepingScroll() {
+    const before = document.getElementById('gdSessions');
+    const top = before ? before.scrollTop : 0;
+    renderSessions();
+    const after = document.getElementById('gdSessions');
+    if (after) after.scrollTop = top;
+  }
   function closeGuidedDraftRemovalDialog() {
     if (guidedDraftRemoval && guidedDraftRemoval.busy) return;
     guidedDraftRemoval = null;
     renderGuidedDraftRemovalDialog();
   }
-  function removeLocalGuidedDraft(row) {
-    if (!row || !row.id || !window.EU_API || !window.EU_API.removeGuidedDraft) return;
-    guidedDraftRemoval = { row, trashProjectFolder: false, busy: false, error: null };
+  function removeLocalGuidedDraft(rowOrRows) {
+    const rows = (Array.isArray(rowOrRows) ? rowOrRows : [rowOrRows]).filter(row => row && row.id);
+    if (!rows.length || !window.EU_API || !window.EU_API.removeGuidedDraft) return;
+    guidedDraftRemoval = { row: rows[0], rows, trashProjectFolder: false, busy: false, error: null };
     renderGuidedDraftRemovalDialog();
   }
-  function confirmLocalGuidedDraftRemoval() {
+  async function confirmLocalGuidedDraftRemoval() {
     if (!guidedDraftRemoval || guidedDraftRemoval.busy) return;
-    const row = guidedDraftRemoval.row;
-    if (!row || !row.id || !window.EU_API || !window.EU_API.removeGuidedDraft) return;
-    const title = projectTitle(row.title, row.question || t('Guided project', '研究项目'));
+    const rows = Array.isArray(guidedDraftRemoval.rows) && guidedDraftRemoval.rows.length
+      ? guidedDraftRemoval.rows
+      : [guidedDraftRemoval.row].filter(Boolean);
+    if (!rows.length || !window.EU_API || !window.EU_API.removeGuidedDraft) return;
     const trashProjectFolder = !!guidedDraftRemoval.trashProjectFolder;
     guidedDraftRemoval.busy = true;
     guidedDraftRemoval.error = null;
     renderGuidedDraftRemovalDialog();
-    window.EU_API.removeGuidedDraft({
-      draft_id: row.id,
-      project_dir: row.project_dir,
-      delete_project_folder: false,
-      trash_project_folder: trashProjectFolder,
-      trash_confirmation: trashProjectFolder ? row.id : null,
-    }).then(result => {
-      if (!result || result.ok === false) {
-        throw new Error((result && (result.reason || result.error)) || 'remove_failed');
-      }
-      if (trashProjectFolder && !result.project_folder_trashed) {
-        throw new Error('project_folder_trash_not_confirmed');
-      }
-      if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
-        if (window.EU_GUIDED_PROJECT_CONTINUITY) {
-          window.EU_GUIDED_PROJECT_CONTINUITY.forget(row.id);
+    let completed = 0;
+    try {
+      for (const row of rows) {
+        const result = await window.EU_API.removeGuidedDraft({
+          draft_id: row.id,
+          project_dir: row.project_dir,
+          delete_project_folder: false,
+          trash_project_folder: trashProjectFolder,
+          trash_confirmation: trashProjectFolder ? row.id : null,
+        });
+        if (!result || result.ok === false) {
+          throw new Error((result && (result.reason || result.error)) || 'remove_failed');
         }
-        selectedGuidedDraft = null;
-        if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
-          window.EU_GUIDED_PI.bindProject(null);
+        if (trashProjectFolder && !result.project_folder_trashed) {
+          throw new Error('project_folder_trash_not_confirmed');
+        }
+        completed += 1;
+        if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
+          if (window.EU_GUIDED_PROJECT_CONTINUITY) window.EU_GUIDED_PROJECT_CONTINUITY.forget(row.id);
+          selectedGuidedDraft = null;
+          if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) window.EU_GUIDED_PI.bindProject(null);
         }
       }
-      guidedDrafts = { loading: false, error: null, data: result.drafts ? { drafts: result.drafts } : null };
+      if (window.EU_GUIDED_PROJECTS && window.EU_GUIDED_PROJECTS.setProjectManagement) {
+        window.EU_GUIDED_PROJECTS.setProjectManagement(false);
+      }
       guidedDraftRemoval = null;
       renderGuidedDraftRemovalDialog();
       loadGuidedDrafts(true);
       pushBot(
         trashProjectFolder
-          ? `Removed <strong>${esc(title)}</strong> from EasyICU and moved its local project folder to the system trash.`
-          : `Removed <strong>${esc(title)}</strong> from the Guided project list. The project folder on disk was left untouched.`,
+          ? `Removed <strong>${completed}</strong> project${completed === 1 ? '' : 's'} from EasyICU and moved the local project folder${completed === 1 ? '' : 's'} to the system trash.`
+          : `Removed <strong>${completed}</strong> project${completed === 1 ? '' : 's'} from the Guided project list. Local project folders were left untouched.`,
         trashProjectFolder
-          ? `已从 EasyICU 移除 <strong>${esc(title)}</strong>，并将其本地项目文件夹移到系统废纸篓。`
-          : `已从研究项目列表移除 <strong>${esc(title)}</strong>。磁盘上的项目文件夹没有改动。`,
+          ? `已从 EasyICU 移除 <strong>${completed}</strong> 个项目，并将其本地项目文件夹移到系统废纸篓。`
+          : `已从研究项目列表移除 <strong>${completed}</strong> 个项目。磁盘上的项目文件夹没有改动。`,
       );
       renderSessions();
       renderThread();
-    }).catch(err => {
+    } catch (err) {
       if (!guidedDraftRemoval) return;
       guidedDraftRemoval.busy = false;
-      guidedDraftRemoval.error = err.message || String(err);
+      guidedDraftRemoval.error = completed
+        ? t(
+          `${completed} of ${rows.length} projects were processed before the operation stopped. ${err.message || String(err)}`,
+          `操作停止前已处理 ${rows.length} 个项目中的 ${completed} 个。${err.message || String(err)}`,
+        )
+        : (err.message || String(err));
       renderGuidedDraftRemovalDialog();
-    });
+      loadGuidedDrafts(true);
+    }
   }
   function guidedBackendContext() {
     const src = activeExportSource();
@@ -3462,6 +3483,21 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (!mod || typeof mod[name] !== 'function') return fallback || '';
     return mod[name](guidedProjectContext());
   }
+  function guidedProjectRailClass() {
+    const mod = window.EU_GUIDED_PROJECTS;
+    return mod && mod.isProjectRailCollapsed && mod.isProjectRailCollapsed()
+      ? 'gd-project-rail-collapsed'
+      : '';
+  }
+  function guidedPanelRenderer(name, fallback) {
+    const mod = window.EU_GUIDED_PANELS;
+    if (!mod || typeof mod[name] !== 'function') return fallback || '';
+    return mod[name]({ t, icon });
+  }
+  function guidedContextAsideClass() {
+    const mod = window.EU_GUIDED_PANELS;
+    return mod && typeof mod.contextAsideClass === 'function' ? mod.contextAsideClass() : '';
+  }
   function renderGuidedFolderControls() {
     guidedProjectRenderer('renderFolderControls');
   }
@@ -4088,7 +4124,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return `
       <div class="gd-shell">
         <h1 class="shell-sr-only" tabindex="-1">${t('Guided Copilot', '研究引导')}</h1>
-        <div class="gd-main threecol ${STARTUP && STARTUP.isActive && STARTUP.isActive() ? 'gd-startup-active' : ''}" ${STARTUP && STARTUP.isActive && STARTUP.isActive() ? 'aria-busy="true"' : ''}>
+        <div class="gd-main threecol ${guidedProjectRailClass()} ${guidedContextAsideClass()} ${STARTUP && STARTUP.isActive && STARTUP.isActive() ? 'gd-startup-active' : ''}" ${STARTUP && STARTUP.isActive && STARTUP.isActive() ? 'aria-busy="true"' : ''}>
           ${guidedProjectRenderer('renderShellRail')}
           <div class="gd-conv">
             <div class="gd-pi-shell" id="gdPiShell" aria-label="${t('EasyICU Copilot conversation', 'EasyICU 研究助手对话')}">
@@ -4110,11 +4146,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               </div>
             </div>
           </div>
+          ${guidedPanelRenderer('renderContextAsideRestore')}
           <aside class="gd-aside" id="gdContextAside">
+            ${guidedPanelRenderer('renderContextAsideCollapse')}
             <div class="gd-study-aside" id="gdStudyAside">
               <div class="gd-aside-head"><div class="eyebrow">${t('Building your study', '正在搭建你的研究')}</div><div class="at">${t('Study workspace', '研究工作区')}</div><div class="asub">${t('Assembles as we talk · edit any step', '随对话逐步组装 · 任意步骤可编辑')}</div></div>
               <div class="gd-aside-body" id="gdAsideBody"></div>
-              <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">${t('Evidence-bound', '证据绑定')}</div><div class="d" style="font-size:10.5px;">${t('Draft stays gated until checks pass.', '草稿在检查通过前保持受限。')}</div></div></div></div>
             </div>
             <div class="gpi-preview-aside" id="gdPreviewAside" hidden></div>
           </aside>
@@ -4668,6 +4705,35 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const stEl = e.target.closest('[data-study]');
         if (stEl) { jumpToStep(stEl.dataset.study); return; }
         // sessions rail
+        const projectOwner = window.EU_GUIDED_PROJECTS;
+        const projectRailToggle = e.target.closest('[data-project-rail-toggle]');
+        if (projectRailToggle && projectOwner && projectOwner.setProjectRailCollapsed) {
+          const collapsed = !(projectOwner.isProjectRailCollapsed && projectOwner.isProjectRailCollapsed());
+          projectOwner.setProjectRailCollapsed(collapsed);
+          const main = document.querySelector('.gd-main');
+          if (main) main.classList.toggle('gd-project-rail-collapsed', collapsed);
+          return;
+        }
+        const contextAsideToggle = e.target.closest('[data-context-aside-toggle]');
+        const panelOwner = window.EU_GUIDED_PANELS;
+        if (contextAsideToggle && panelOwner && panelOwner.setContextAsideCollapsed) {
+          const collapsed = !(panelOwner.isContextAsideCollapsed && panelOwner.isContextAsideCollapsed());
+          panelOwner.setContextAsideCollapsed(collapsed, document.querySelector('.gd-main'));
+          return;
+        }
+        const manageProjects = e.target.closest('[data-project-manage]');
+        if (manageProjects && projectOwner && projectOwner.setProjectManagement) {
+          projectOwner.setProjectManagement(!projectOwner.isProjectManagementActive());
+          rerenderProjectRailKeepingScroll();
+          return;
+        }
+        const removeSelectedProjects = e.target.closest('[data-remove-selected-projects]');
+        if (removeSelectedProjects && projectOwner && projectOwner.selectedProjects) {
+          const activeId = selectedGuidedDraft && selectedGuidedDraft.id;
+          const rows = projectOwner.selectedProjects(localDraftRows(), activeId);
+          if (rows.length) removeLocalGuidedDraft(rows);
+          return;
+        }
         const refreshDrafts = e.target.closest('[data-refreshdrafts]');
         if (refreshDrafts) { loadGuidedDrafts(true); return; }
         const removeDraftEl = e.target.closest('[data-remove-localdraft]');
@@ -4680,6 +4746,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (localDraftEl) {
           const row = localDraftRows()[Number(localDraftEl.dataset.localdraft || -1)];
           if (!row) return;
+          if (projectOwner && projectOwner.isProjectManagementActive && projectOwner.isProjectManagementActive()) {
+            if (!selectedGuidedDraft || row.id !== selectedGuidedDraft.id) {
+              const activeId = selectedGuidedDraft && selectedGuidedDraft.id;
+              const alreadySelected = projectOwner.selectedProjects(localDraftRows(), activeId).some(item => item.id === row.id);
+              projectOwner.toggleProjectSelection(row, !alreadySelected);
+              rerenderProjectRailKeepingScroll();
+            }
+            return;
+          }
           selectedGuidedDraft = row;
           selectedGuidedRun = null;
           openGuidedProjectMemory(row, localDraftEl, 'draft');
@@ -4905,6 +4980,21 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);
       });
       shell.addEventListener('change', (e) => {
+        const projectOwner = window.EU_GUIDED_PROJECTS;
+        const selectedProject = e.target.closest('[data-select-localdraft]');
+        if (selectedProject && projectOwner && projectOwner.toggleProjectSelection) {
+          const row = localDraftRows()[Number(selectedProject.dataset.selectLocaldraft || -1)];
+          if (row) projectOwner.toggleProjectSelection(row, !!selectedProject.checked);
+          rerenderProjectRailKeepingScroll();
+          return;
+        }
+        const selectAllProjects = e.target.closest('[data-select-all-projects]');
+        if (selectAllProjects && projectOwner && projectOwner.selectAllProjects) {
+          const activeId = selectedGuidedDraft && selectedGuidedDraft.id;
+          projectOwner.selectAllProjects(localDraftRows(), activeId, !!selectAllProjects.checked);
+          rerenderProjectRailKeepingScroll();
+          return;
+        }
         const removeProjectFolder = e.target.closest('[data-remove-project-folder]');
         if (removeProjectFolder && guidedDraftRemoval && !guidedDraftRemoval.busy) {
           guidedDraftRemoval.trashProjectFolder = !!removeProjectFolder.checked;

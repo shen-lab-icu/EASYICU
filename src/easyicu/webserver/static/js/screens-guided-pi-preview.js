@@ -20,6 +20,7 @@
     recentResources: [],
     evidenceTabs: [],
     activeEvidenceId: '',
+    activeClaimId: '',
     workflowContext: {},
   };
 
@@ -257,6 +258,9 @@
     const study = document.getElementById('gdStudyAside');
     const aside = document.getElementById('gdContextAside');
     const main = aside && aside.closest('.gd-main');
+    if (open && window.EU_GUIDED_PANELS && window.EU_GUIDED_PANELS.setContextAsideCollapsed) {
+      window.EU_GUIDED_PANELS.setContextAsideCollapsed(false, main);
+    }
     if (study) study.hidden = !!open;
     if (state.host) state.host.hidden = !open;
     if (aside) aside.classList.toggle('gpi-preview-open', !!open);
@@ -306,6 +310,7 @@
   function render() {
     if (!state.host || !state.resource) return;
     setAsideOpen(true);
+    const selectedEvidence = activeEvidenceTab();
     const tabs = isLiteratureSource() ? '' : isStructuredArtifact() ? `
       <div class="gpi-preview-tabs" role="tablist" aria-label="${tr('Artifact views', '产物视图')}">
         ${isDataPackageReview() || isDataWorkbenchSnapshot() ? `<button type="button" role="tab" data-gpi-preview-mode="workbench" aria-selected="${state.mode === 'workbench'}">${icon('grid', 14)} ${tr('Workbench', '数据工作台')}</button>` : ''}
@@ -366,7 +371,9 @@
         : (state.artifact && state.artifact.text != null ? state.artifact.text : '');
       body = `<pre class="gpi-preview-code" tabindex="0"><code>${esc(text)}</code></pre>`;
     }
-    const selectedEvidence = activeEvidenceTab();
+    if (state.mode === 'evidence' && selectedEvidence && state.activeClaimId) {
+      body = `<div class="gpi-evidence-stack">${body}<div class="gpi-evidence-actions"><span>${tr('Need the audit trail?', '需要核对审计链路？')}</span><button type="button" data-gpi-evidence-audit="${esc(state.activeClaimId)}">${tr('Open full evidence lineage', '打开完整证据链')}</button></div></div>`;
+    }
     const reference = state.mode === 'evidence' && selectedEvidence
       ? `${state.resource.run_id} · ${selectedEvidence.evidenceId}`
       : isDataPackageReview()
@@ -427,6 +434,8 @@
     const sha256 = String(button.dataset.evidenceSha256 || '').trim().toLowerCase();
     if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return;
     const renderer = window.EU_GUIDED_PI_EVIDENCE_PREVIEW;
+    const claimPanel = typeof button.closest === 'function' ? button.closest('[data-gpi-claim-panel]') : null;
+    state.activeClaimId = String(button.dataset.gpiClaim || (claimPanel && claimPanel.dataset.gpiClaimPanel) || state.activeClaimId || '').trim();
     const label = String(button.dataset.evidenceLabel || evidenceId).slice(0, 160);
     const kind = String(button.dataset.evidenceKind || 'artifact').slice(0, 80);
     const locator = {
@@ -544,6 +553,7 @@
     state.activeEvidenceId = '';
     state.error = '';
     state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
+    state.activeClaimId = '';
     render();
     if (state.mode !== 'web' && state.mode !== 'source' && state.mode !== 'document') loadResource();
   }
@@ -551,6 +561,7 @@
     state.request += 1;
     state.resource = null; state.artifact = null; state.payload = null; state.studyContext = null; state.governance = null; state.error = ''; state.loading = false;
     state.evidenceTabs = []; state.activeEvidenceId = '';
+    state.activeClaimId = '';
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }
@@ -584,24 +595,18 @@
         render();
         return;
       }
+      const evidenceAudit = event.target.closest('[data-gpi-evidence-audit]');
+      if (evidenceAudit) {
+        state.mode = 'structured';
+        render();
+        showClaimLineage(String(evidenceAudit.dataset.gpiEvidenceAudit || '').trim());
+        return;
+      }
       const evidenceButton = event.target.closest('[data-gpi-evidence-open]');
       if (evidenceButton) { openEvidence(evidenceButton); return; }
       const claimButton = event.target.closest('[data-gpi-claim]');
       if (claimButton) {
-        const claimId = String(claimButton.dataset.gpiClaim || '');
-        host.querySelectorAll('[data-gpi-claim]').forEach(button => {
-          button.setAttribute('aria-expanded', String(button === claimButton));
-        });
-        host.querySelectorAll('[data-gpi-claim-panel]').forEach(panel => {
-          panel.hidden = panel.dataset.gpiClaimPanel !== claimId;
-        });
-        const empty = host.querySelector('[data-gpi-claim-empty]');
-        if (empty) empty.hidden = true;
-        const drawer = host.querySelector('.gpi-claim-drawer');
-        if (drawer) drawer.classList.add('is-active');
-        const panel = Array.from(host.querySelectorAll('[data-gpi-claim-panel]'))
-          .find(item => item.dataset.gpiClaimPanel === claimId);
-        if (panel) panel.scrollIntoView({ block: 'nearest' });
+        showClaimLineage(String(claimButton.dataset.gpiClaim || '').trim());
         return;
       }
       if (event.target.closest('[data-gpi-claim-close]')) {
@@ -611,6 +616,8 @@
         if (empty) empty.hidden = false;
         const drawer = host.querySelector('.gpi-claim-drawer');
         if (drawer) drawer.classList.remove('is-active');
+        const layout = host.querySelector('[data-gpi-manuscript-layout]');
+        if (layout) layout.classList.remove('has-claim-drawer');
         return;
       }
       const tab = event.target.closest('[data-gpi-preview-mode]');
@@ -624,6 +631,26 @@
     });
     if (!state.resource) setAsideOpen(false);
     else render();
+  }
+
+  function showClaimLineage(claimId) {
+    if (!state.host || !claimId) return;
+    state.activeClaimId = claimId;
+    state.host.querySelectorAll('[data-gpi-claim]').forEach(button => {
+      button.setAttribute('aria-expanded', String(button.dataset.gpiClaim === claimId));
+    });
+    state.host.querySelectorAll('[data-gpi-claim-panel]').forEach(panel => {
+      panel.hidden = panel.dataset.gpiClaimPanel !== claimId;
+    });
+    const empty = state.host.querySelector('[data-gpi-claim-empty]');
+    if (empty) empty.hidden = true;
+    const drawer = state.host.querySelector('.gpi-claim-drawer');
+    if (drawer) drawer.classList.add('is-active');
+    const layout = state.host.querySelector('[data-gpi-manuscript-layout]');
+    if (layout) layout.classList.add('has-claim-drawer');
+    const panel = Array.from(state.host.querySelectorAll('[data-gpi-claim-panel]'))
+      .find(item => item.dataset.gpiClaimPanel === claimId);
+    if (panel) panel.scrollIntoView({ block: 'nearest' });
   }
 
   window.EU_GUIDED_PI_PREVIEW = { mount, open, close, clearProject, setWorkflowContext };
