@@ -48,6 +48,11 @@ FORBIDDEN_TRACKED_ROOTS = frozenset(
         "output",
         "research_output",
         "scratchpad",
+        # docs/repository_layout.md declares task_logs/ a local evidence
+        # workspace, and .gitignore excludes it. 416 files predating that rule
+        # stayed tracked because .gitignore never untracks; audit the root so a
+        # re-add is caught here instead of shipping development chronology.
+        "task_logs",
     }
 )
 
