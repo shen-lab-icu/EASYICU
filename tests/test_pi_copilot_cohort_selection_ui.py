@@ -35,6 +35,15 @@ def test_cohort_selection_renders_exact_server_contracts() -> None:
     assert "message.match" not in owner
 
 
+def test_cohort_selection_is_not_a_pre_plan_questionnaire() -> None:
+    shell = _read("js/screens-guided-pi.js")
+
+    # The Planner proposes inclusion/exclusion and the analysis unit in the
+    # candidate plan.  A preset selector must not appear alongside the
+    # pre-plan confirmation card and duplicate that scientific decision.
+    assert "COHORT_ELIGIBILITY.render()" not in shell
+
+
 def test_cohort_selection_css_and_event_marker_stay_route_owned() -> None:
     css_owner = STATIC / "css" / "guided-pi-cohort-eligibility.css"
     js_owner = STATIC / "js" / "screens-guided-pi-cohort-eligibility.js"
