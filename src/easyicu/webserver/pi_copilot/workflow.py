@@ -185,13 +185,10 @@ def registered_export_matches_study(
     )
 
 
-# Plan generation needs the question, an identified data source, and the one
-# population decision the Planner is forbidden to invent. Other design fields
-# remain Planner proposals reviewed later; eligibility is a researcher-owned
-# contract and therefore blocks even metadata-only candidate planning.
-_PLANNING_PREREQUISITE_FIELDS = frozenset(
-    {"question", "data_source", "cohort_eligibility"}
-)
+# Plan generation needs only the question and an identified data source.
+# Population eligibility is a Planner proposal: it must be reviewed before
+# execution, but it must not become a pre-plan conversational questionnaire.
+_PLANNING_PREREQUISITE_FIELDS = frozenset({"question", "data_source"})
 
 # These are Planner proposal fields, not pre-plan setup questions.  The
 # researcher reviews the complete candidate plan; they should not have to
@@ -534,10 +531,9 @@ def build_research_workflow_snapshot(
     prepared_export_receipted = bool(active_export_present or preflight_complete)
     # Planning starts from the user's question plus a data source EasyICU has
     # identified -- a prepared export or a bound, identified local database.
-    # The Planner proposes unresolved analysis choices in its reviewable plan;
-    # Copilot must not fabricate a shadow plan just to fill setup slots. The
-    # denominator-changing eligibility choice is the deliberate exception: it
-    # is researcher-owned and must be receipted before candidate planning.
+    # The Planner proposes unresolved analysis choices, including population
+    # eligibility, in its reviewable plan; Copilot must not create a shadow
+    # plan or turn those proposals into a pre-plan questionnaire.
     planning_data_ready = bool(
         prepared_export_receipted or _identified_data_source(study_row)
     )

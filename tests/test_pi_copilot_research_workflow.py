@@ -341,8 +341,8 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
         assert contract == ""
 
 
-def test_identified_local_database_still_requires_eligibility_confirmation() -> None:
-    """A source and a population mention do not authorize a denominator."""
+def test_identified_local_database_can_generate_a_candidate_plan() -> None:
+    """Eligibility is proposed in the candidate plan, not asked beforehand."""
 
     raw_bound = build_research_workflow_snapshot(
         study={
@@ -361,11 +361,11 @@ def test_identified_local_database_still_requires_eligibility_confirmation() -> 
         latest_run=None,
     )
 
-    assert raw_bound.planning_prerequisites_missing == ["cohort_eligibility"]
+    assert raw_bound.planning_prerequisites_missing == []
     plan_stage = next(row for row in raw_bound.stages if row.id == "plan")
-    assert plan_stage.status == "blocked"
-    assert plan_stage.reason_code == "cohort_eligibility_confirmation_required"
-    assert raw_bound.next_action_code == "cohort_eligibility_confirmation_required"
+    assert plan_stage.status == "ready"
+    assert plan_stage.reason_code == "provider_ready_to_generate_plan"
+    assert raw_bound.next_action_code == "provider_ready_to_generate_plan"
     assert "outcome" in raw_bound.missing_setup_fields
     assert "modules" in raw_bound.missing_setup_fields
 
@@ -384,10 +384,7 @@ def test_plan_still_blocked_without_a_data_source() -> None:
         latest_run=None,
     )
 
-    assert unbound.planning_prerequisites_missing == [
-        "data_source",
-        "cohort_eligibility",
-    ]
+    assert unbound.planning_prerequisites_missing == ["data_source"]
     plan_stage = next(row for row in unbound.stages if row.id == "plan")
     assert plan_stage.status == "blocked"
 
