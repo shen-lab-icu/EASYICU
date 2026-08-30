@@ -1266,9 +1266,22 @@ def _valid_writer_section_responses(
 
 ### Sensitivity and subgroup analyses
 {body}""".format(body=body)
+    # The reader-quality contract added on 2026-08-25 requires a populated
+    # Keywords line and a labelled structured abstract. A fixture that predates
+    # it makes every writer test die inside the repair retry instead of
+    # exercising what it names.
+    abstract = """## Abstract
+
+**Background:** {body}
+
+**Methods:** {body}
+
+**Results:** {body}
+
+**Conclusions:** Within these bounds the association is descriptive only; see {body}""".format(body=body)
     return [
-        title,
-        f"## Abstract\n\n{body}",
+        f"{title}\n\n**Keywords:** ICU, cohort, association",
+        abstract,
         f"## Introduction\n\n{body}",
         methods,
         results,
@@ -1284,7 +1297,10 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
     responses = _valid_writer_section_responses(
         body="Cohort: {evidence:table_one}.",
     )
-    responses[0] = "```markdown\n# Title\n\nCohort: {evidence:table_one}.\n```"
+    responses[0] = (
+        "```markdown\n# Title\n\n**Keywords:** ICU, cohort, association\n\n"
+        "Cohort: {evidence:table_one}.\n```"
+    )
 
     from easyicu.research_agent.agents.core import WriterAgent
 

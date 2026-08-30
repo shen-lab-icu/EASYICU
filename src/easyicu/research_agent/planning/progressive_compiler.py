@@ -420,22 +420,18 @@ def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
 
     When metadata-only planning has no closed grouping domain, the outline
     contract permits one auxiliary custom step to own baseline context until
-    post-extraction re-planning.  The model may describe that already-closed
-    shape with the historical ``artifact:baseline_context`` spelling; project
-    it onto the registered cohort-summary table instead of sending the same
-    non-scientific product-name repair back to the model forever.
+    post-extraction re-planning.  Product identity, role, and module shape are
+    the authority for that closed exception; ``custom_method`` is descriptive
+    model prose and must not become a hidden allowlist.  Project the historical
+    ``artifact:baseline_context`` spelling onto the registered cohort-summary
+    table instead of sending synonymous method labels back to the model.
     """
 
     return (
         step.module_id == "custom_analysis"
         and step.planned_analysis_role == "auxiliary"
         and step.scientific_action_id is None
-        and step.custom_method
-        in {
-            "continuous_baseline_summary",
-            "descriptive_cohort_summary",
-            "overall_baseline_context_summary",
-        }
+        and step.custom_method is not None
         and len(step.outputs) == 1
         and step.outputs[0].semantic_role == "custom"
         and step.outputs[0].product_id

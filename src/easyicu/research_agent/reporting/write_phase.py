@@ -34,6 +34,7 @@ from ..contracts.runtime import (
 from ..authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
+    evidence_artifact_basename_stem,
     sha256_of_file,
 )
 from ..authority.manuscript_claim_policy import (
@@ -119,6 +120,70 @@ from .pdf_render import render_pdf_for_run
 
 class RuntimeProvenanceMismatchError(RuntimeError):
     """Docker steps disagree about the immutable execution environment."""
+
+
+def _latex_figure_paths(
+    evidence_records: Sequence[Any],
+) -> Tuple[List[Tuple[str, str]], Tuple[str, ...]]:
+    """Choose one LaTeX-safe export for each registered logical figure.
+
+    Figure evidence intentionally registers several publication exports of the
+    same plot.  Embedding every export duplicated figures in the manuscript and
+    let TIFF files reach engines that cannot determine their bounding box.  The
+    PDF renderer owns a single review document, so it selects one compile-safe
+    representative per logical figure: PDF first, then PNG.
+
+    Grouping uses the evidence store's own ``<evidence_id>__<filename>`` reader.
+    Splitting on the first ``__`` here would corrupt the key whenever an
+    evidence id ends in ``_``, and because each export of one figure carries its
+    own id, a corrupted key silently reinstates the duplicate embedding this
+    selection exists to prevent.
+
+    Returns the selected ``(evidence_id, relative_path)`` pairs plus the ids of
+    registered figures that own no compile-safe export, so the caller can report
+    the omission instead of letting a figure disappear from the document.
+    """
+
+    priority = {".pdf": 0, ".png": 1}
+    selected: Dict[str, Tuple[int, int, str, str]] = {}
+    unrepresented: Dict[str, str] = {}
+    for index, record in enumerate(evidence_records):
+        if getattr(record, "kind", None) != "figure":
+            continue
+        relative_path = str(getattr(record, "relative_path", "") or "").replace(
+            "\\", "/"
+        )
+        if not relative_path:
+            continue
+        evidence_id = str(getattr(record, "evidence_id", "") or "")
+        logical_key = evidence_artifact_basename_stem(
+            Path(relative_path), evidence_id
+        )
+        suffix = Path(relative_path).suffix.lower()
+        if suffix not in priority:
+            unrepresented.setdefault(logical_key, evidence_id or logical_key)
+            continue
+        candidate = (
+            priority[suffix],
+            index,
+            evidence_id or logical_key,
+            relative_path,
+        )
+        current = selected.get(logical_key)
+        if current is None or candidate[:2] < current[:2]:
+            selected[logical_key] = candidate
+    chosen = [
+        (evidence_id, relative_path)
+        for _priority, _index, evidence_id, relative_path in sorted(
+            selected.values(), key=lambda row: row[1]
+        )
+    ]
+    omitted = tuple(
+        identifier
+        for logical_key, identifier in unrepresented.items()
+        if logical_key not in selected
+    )
+    return chosen, omitted
 
 
 def _deterministically_drop_rejected_writer_sentences(
@@ -2376,20 +2441,26 @@ def _publish_and_audit_manuscript(
                 run_id=run_id,
             )
             bib_basename = "manuscript_scaffold"
-            # Collect registered figure paths for auto-embedding.
-            fig_paths_for_latex: List[Tuple[str, str]] = []
-            for rec in current_verified_evidence_records:
-                if rec.kind != "figure":
-                    continue
-                # Prefer PNG for LaTeX compatibility; SVG needs
-                # inkscape or svg package.
-                if rec.relative_path.endswith((".png", ".pdf", ".tiff")):
-                    # EvidenceRecord paths are already run-root-relative
-                    # (normally ``evidence/<file>``).  Prefixing them again
-                    # produced ``evidence/evidence/...`` and made the safe PDF
-                    # renderer fail after LaTeX had emitted a partial PDF.
-                    figure_path = str(rec.relative_path).replace("\\", "/")
-                    fig_paths_for_latex.append((rec.evidence_id, figure_path))
+            # EvidenceRecord paths are already run-root-relative (normally
+            # ``evidence/<file>``).  Select exactly one compile-safe export per
+            # logical figure; publication TIFF remains registered for release
+            # but is not a LaTeX input.
+            fig_paths_for_latex, figures_without_latex_export = (
+                _latex_figure_paths(current_verified_evidence_records)
+            )
+            if figures_without_latex_export:
+                findings.append(
+                    ValidationFinding(
+                        validator="latex_figure_selection",
+                        severity="warning",
+                        message=(
+                            "Registered figures own no LaTeX-safe (PDF/PNG) "
+                            "export and were omitted from the review document: "
+                            + ", ".join(figures_without_latex_export)
+                        ),
+                        evidence_ids=list(figures_without_latex_export),
+                    )
+                )
             tex = scaffold_to_latex(
                 markdown=bound,
                 title=manuscript_title

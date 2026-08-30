@@ -1901,9 +1901,15 @@ class ProgressivePlannerAgent:
             ),
             (
                 "Closed-domain module rule:\nInclude a table_one outline step "
-                "only when at least one selected grouping variable's retrieved "
-                "data card has supports_closed_level_contrast=true. If no such "
-                "variable is available, use custom_analysis with "
+                "only when the grouping variable represents the study's primary "
+                "scientific comparison and its retrieved data card has "
+                "supports_closed_level_contrast=true. Prefer the primary exposure "
+                "when it has a closed domain; otherwise the target outcome may "
+                "define a prespecified outcome-stratified descriptive table. Never "
+                "select sex, age group, site, or another convenient demographic "
+                "merely because it has a closed domain unless that comparison is "
+                "explicit in the research question. If neither scientific anchor "
+                "has a closed domain, use custom_analysis with "
                 "scientific_action_id=null for an ungrouped prospective summary "
                 "and leave grouped Table 1 to the post-extraction "
                 "replan. Never invent category levels in a metadata-only run."
@@ -2822,7 +2828,11 @@ class ProgressivePlannerAgent:
         if outline_step.module_id == "table_one":
             blocks.append(
                 "Table 1 detail contract: set table_one_group_by to one selected "
-                "closed-domain variable; set table_one_mode to exactly "
+                "closed-domain variable that represents the study's primary "
+                "scientific comparison. Prefer the primary exposure; otherwise "
+                "the target outcome may define a prespecified outcome-stratified "
+                "description. Do not choose a demographic merely because it is "
+                "available and closed-domain. Set table_one_mode to exactly "
                 "independent_inference or descriptive_smd_only; provide at "
                 "least one table_one_variables item using the exact nested "
                 "shape above; include the group and summarized variables in "

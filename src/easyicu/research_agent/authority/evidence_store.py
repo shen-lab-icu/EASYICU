@@ -3382,6 +3382,18 @@ def _target_basename_stem(target: Path, evidence_id: str) -> str:
     return Path(name.split("__", 1)[-1]).stem
 
 
+def evidence_artifact_basename_stem(target: Path, evidence_id: str) -> str:
+    """Read the original artefact stem out of a registered evidence filename.
+
+    The ``<evidence_id>__<filename>`` layout is owned here, including the
+    doubled-underscore case an id ending in ``_`` produces.  Consumers that need
+    to group a logical artefact across its exports must use this reader instead
+    of splitting the filename themselves.
+    """
+
+    return _target_basename_stem(target, evidence_id)
+
+
 def _id_prefix(kind: str, stem: str) -> str:
     safe = "".join(c for c in stem if c.isalnum() or c in "_-").strip("_")[:32]
     return f"{kind}_{safe}" if safe else kind
@@ -3398,6 +3410,7 @@ def _binding_caveat(record: EvidenceRecord, *, verbose: bool = False) -> str:
 
 __all__ = [
     "EvidenceStore",
+    "evidence_artifact_basename_stem",
     "registered_source_fingerprints_match",
     "EvidenceAuthorityIntegrityError",
     "EvidenceEnforcementMode",
