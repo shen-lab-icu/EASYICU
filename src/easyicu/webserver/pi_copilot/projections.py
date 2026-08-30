@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from . import cohort_eligibility
 from .contracts import PiCopilotError
 from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
 
@@ -264,18 +263,6 @@ def project_study_context(
             "last_route": context.get("last_route"),
             "active_job_id": context.get("active_job_id"),
             "confirmations": dict(context.get("confirmations") or {}),
-            # THE MODEL CANNOT ASK A QUESTION IT CANNOT SEE.
-            #
-            # The Research Agent is forbidden from inventing eligibility, and
-            # only explicit structured filter fields authorize a filtered
-            # primary cohort -- so a study whose cohort slot was never written
-            # runs on every bound input row. Nothing was putting that choice to
-            # the researcher, and on one development host 771 of 799 study
-            # contexts carried no cohort preset at all. The proposal travels
-            # with the study so the conversation can ask, carrying each
-            # option's exact cohort patch so the answer is applied rather than
-            # paraphrased. Declining is one of the options.
-            "cohort_eligibility": cohort_eligibility.eligibility_proposal(context),
             "idea_handoff": {
                 key: idea_handoff.get(key)
                 for key in (

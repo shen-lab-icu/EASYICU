@@ -185,37 +185,19 @@ def test_an_adult_option_states_its_age_floor_instead_of_trusting_the_preset() -
     assert with_floor["age_min"] == 18
 
 
-def test_the_model_can_see_the_question_on_the_study_it_is_asked_about() -> None:
+def test_plan_first_projection_does_not_offer_cohort_presets() -> None:
     projected = project_study_context({"label": "study", "cohort": {}})
-    proposal = projected["cohort_eligibility"]
-
-    assert proposal["schema_version"] == cohort_eligibility.SCHEMA_VERSION
-    assert proposal["stated"] is False
-    assert {option["id"] for option in proposal["options"]} == set(
-        cohort_eligibility.option_ids()
-    )
-    settled = project_study_context(_confirmed_study("adults_first_admission"))
-    assert settled["cohort_eligibility"]["stated"] is True
+    assert "cohort_eligibility" not in projected
 
 
-def test_the_entrypoint_makes_the_model_ask_before_setup_ends() -> None:
+def test_the_entrypoint_leaves_eligibility_for_plan_review() -> None:
     entrypoint = Path(
         "src/easyicu/webserver/pi_copilot/node_app/src/main.mjs"
     ).read_text(encoding="utf-8")
 
-    assert "study_context.cohort_eligibility.stated is false" in entrypoint
-    assert "Final eligibility authority comes only from the host-rendered confirmation card" in entrypoint
-    # the agent still may not decide this on the researcher's behalf
-    assert "never claim that quoted, negated, explanatory, or undecided wording approved an option" in entrypoint
-    assert "Never apply one silently" in entrypoint
-    # and the old unconditional stop no longer precedes the question. Assert
-    # only the clause this module owns: the surrounding sentence names the
-    # confirmed source in wording owned by the plan-handoff work, and pinning
-    # that here would make this contract fail on an unrelated re-wording.
-    assert (
-        "and host-confirmed eligibility receipt are available, stop setup questioning"
-        in entrypoint
-    )
+    assert "Do not ask the user to choose a cohort eligibility preset" in entrypoint
+    assert "The candidate plan must explain its rationale and evidence" in entrypoint
+    assert "only that later review may authorize the exact cohort contract" in entrypoint
 
 
 def test_the_update_tool_accepts_every_field_an_option_applies() -> None:
@@ -548,7 +530,7 @@ def test_receipt_builder_rejects_unbound_or_invalid_provenance() -> None:
         )
 
 
-def test_unconfirmed_eligibility_blocks_candidate_planning() -> None:
+def test_unconfirmed_eligibility_remains_a_plan_review_requirement() -> None:
     from easyicu.webserver.pi_copilot import workflow
 
     legacy = {
@@ -558,7 +540,9 @@ def test_unconfirmed_eligibility_blocks_candidate_planning() -> None:
     }
     missing = workflow._setup_missing(legacy, active_export_present=False)
     assert "cohort_eligibility" in missing
-    assert "cohort_eligibility" in workflow._planning_prerequisites_missing(missing)
+    assert "cohort_eligibility" not in workflow._planning_prerequisites_missing(
+        missing
+    )
 
     confirmed = {**legacy, **_confirmed_study("no_eligibility_filter")}
     confirmed_missing = workflow._setup_missing(
