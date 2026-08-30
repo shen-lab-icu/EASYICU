@@ -22,6 +22,59 @@
     if (!source.pointer && source.value === '') return '';
     return `<div class="gpi-evidence-locator"><div><span>${esc(tr('JSON pointer', 'JSON 指针'))}</span><code>${esc(text(source.pointer, 500) || '—')}</code></div><div><span>${esc(tr('Bound source value', '绑定源数值'))}</span><code>${esc(text(source.value, 500) || '—')}</code></div></div>`;
   }
+  function relationLabel(relation) {
+    const labels = {
+      analysis_code: tr('Code that generated this record', '生成这条记录的代码'),
+      input_data: tr('Declared input evidence', '登记的输入证据'),
+      run_plan_authority: tr('Approved analysis plan', '运行所依据的分析计划'),
+      run_research_context: tr('Research context', '研究问题与配置'),
+      run_cohort_authority: tr('Cohort authority', '队列定义权威'),
+    };
+    return labels[String(relation || '')] || tr('Registered parent evidence', '已登记父证据');
+  }
+  function evidenceLink(row) {
+    const item = row && typeof row === 'object' ? row : {};
+    const evidenceId = text(item.evidence_id, 160);
+    const sha256 = text(item.sha256, 64).toLowerCase();
+    const status = String(item.status || 'unregistered');
+    const label = relationLabel(item.relation);
+    if (status !== 'registered' || !/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) {
+      return `<div class="gpi-evidence-lineage-gap"><span>${esc(label)}</span><strong>${esc(evidenceId || tr('Not recorded', '未记录'))}</strong><small>${esc(status)}</small></div>`;
+    }
+    const fileName = text(item.display_name || evidenceId, 180);
+    return `<button type="button" class="gpi-evidence-lineage-link" data-gpi-evidence-open data-evidence-id="${esc(evidenceId)}" data-evidence-sha256="${esc(sha256)}" data-evidence-kind="${esc(text(item.kind || 'artifact', 80))}" data-evidence-label="${esc(fileName)}"><span>${esc(label)}</span><strong>${esc(fileName)}</strong><code>${esc(text(item.relative_path, 300))}</code></button>`;
+  }
+  function recordView(payload) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const facts = [
+      [tr('Run-relative file', '运行内真实文件'), p.relative_path],
+      [tr('Analysis step', '生成步骤'), p.role],
+      [tr('Producer', '生成 owner'), p.producer],
+      [tr('Generation mode', '生成方式'), p.generation_mode],
+    ].filter(([, value]) => value !== '' && value != null);
+    return `<section class="gpi-evidence-record"><div class="gpi-evidence-record-head"><span>${esc(tr('Registered source record', '真实登记文件'))}</span><strong>${esc(text(p.display_name || p.evidence_id, 180))}</strong></div>${p.description ? `<p>${esc(text(p.description, 500))}</p>` : ''}<dl>${facts.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd><code>${esc(text(value, 500))}</code></dd></div>`).join('')}</dl><div class="gpi-evidence-record-identity"><span>${esc(text(p.kind || 'artifact', 80))}</span><code>${esc(text(p.evidence_id, 160))}</code><code>${esc(text(p.sha256, 64))}</code></div></section>`;
+  }
+  function declaredLineageView(payload) {
+    const rows = Array.isArray(payload && payload.declared_lineage) ? payload.declared_lineage : [];
+    const hasCode = rows.some(row => row && row.relation === 'analysis_code' && row.status === 'registered');
+    return `<section class="gpi-evidence-lineage"><div class="gpi-evidence-section-head"><span>${esc(tr('Direct declared lineage', '直接登记的生成链'))}</span><strong>${esc(String(rows.length))}</strong></div>${rows.length ? `<div class="gpi-evidence-lineage-list">${rows.map(evidenceLink).join('')}</div>` : `<p>${esc(tr('This record has no direct parent evidence registered.', '该文件没有登记直接父证据。'))}</p>`}${hasCode ? `<p class="gpi-evidence-line-note">${esc(tr('The run records the complete generating script, but not a field-to-line span. Open the script to inspect its numbered source.', '当前运行登记了完整生成脚本，但未登记字段到具体代码行的映射；点击后可查看带行号的只读源码。'))}</p>` : ''}</section>`;
+  }
+  function runAuthorityView(payload) {
+    const authority = payload && payload.run_authority && typeof payload.run_authority === 'object' ? payload.run_authority : {};
+    if (authority.status !== 'recorded') {
+      return `<section class="gpi-evidence-authority is-missing"><strong>${esc(tr('Upstream run provenance', '上层运行溯源'))}</strong><p>${esc(tr('No valid run manifest was recorded for this evidence.', '该证据没有可用的运行清单记录。'))}</p></section>`;
+    }
+    const facts = [
+      [tr('Run', '运行'), authority.run_id],
+      ['Git', authority.git_sha ? `${authority.git_sha}${authority.git_dirty === true ? ' · dirty' : ''}` : ''],
+      [tr('Runner image', '执行镜像'), authority.runner_image_digest],
+      [tr('Environment identity', '环境身份'), authority.environment_identity_sha256],
+      [tr('Prompt pack', '提示包'), authority.prompt_pack_sha256 || authority.prompt_pack_version],
+      [tr('Execution identity', '执行身份'), authority.execution_identity_sha256],
+    ].filter(([, value]) => value !== '' && value != null);
+    const links = Array.isArray(authority.links) ? authority.links : [];
+    return `<details class="gpi-evidence-authority"><summary>${esc(tr('Continue to upstream run provenance', '继续查看上层运行溯源'))}</summary><div class="gpi-evidence-authority-body"><p>${esc(tr('These are run-level authority anchors, not inferred direct parents of the current file.', '这些是同一运行的权威锚点，不会被冒充为当前文件的直接父证据。'))}</p><dl>${facts.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd><code>${esc(text(value, 500))}</code></dd></div>`).join('')}</dl>${links.length ? `<div class="gpi-evidence-lineage-list">${links.map(evidenceLink).join('')}</div>` : `<p>${esc(tr('No clickable run-authority evidence was registered.', '没有登记可点击的运行权威证据。'))}</p>`}</div></details>`;
+  }
   function codeView(payload) {
     const lines = text(payload.text, 600000).split('\n');
     return `<div class="gpi-evidence-code" role="region" aria-label="${esc(tr('Read-only evidence code', '只读证据代码'))}" tabindex="0"><ol>${lines.map(line => `<li><code>${esc(line || ' ')}</code></li>`).join('')}</ol></div>`;
@@ -103,7 +156,7 @@
     else if (p.previewable && p.renderer === 'json' && p.kind === 'statistic') body = statisticView(p);
     else if (p.previewable && p.renderer === 'json') body = jsonView(p);
     else if (p.previewable && p.renderer === 'table') body = tableView(p);
-    return `<div class="gpi-evidence-view">${locatorView(locator)}<div class="gpi-evidence-meta"><span>${esc(text(p.kind || 'artifact', 80))}</span><code>${esc(text(p.evidence_id, 160))}</code><code>${esc(text(p.sha256, 64))}</code></div>${body}<p class="gpi-evidence-readonly">${esc(tr('Read-only preview. Code is displayed, never executed; raw patient rows and host paths remain outside the browser boundary.', '只读预览。代码只展示、不执行；原始患者行和主机路径不会进入浏览器边界。'))}</p></div>`;
+    return `<div class="gpi-evidence-view">${locatorView(locator)}${recordView(p)}${declaredLineageView(p)}${body}${runAuthorityView(p)}<p class="gpi-evidence-readonly">${esc(tr('Read-only preview. Code is displayed, never executed; raw patient rows and absolute host paths remain outside the browser boundary.', '只读预览。代码只展示、不执行；原始患者行和主机绝对路径不会进入浏览器边界。'))}</p></div>`;
   }
 
   window.EU_GUIDED_PI_EVIDENCE_PREVIEW = { render, title, kindLabel };
