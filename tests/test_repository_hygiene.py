@@ -40,12 +40,20 @@ def test_hygiene_audit_rejects_competing_and_generated_tracked_roots(
     (tmp_path / "benchmark").mkdir()
     findings = audit_repository(
         tmp_path,
-        tracked_files=(Path("dist/easyicu.whl"), Path("src/pkg/__pycache__/x.pyc")),
+        tracked_files=(
+            Path("dist/easyicu.whl"),
+            Path("src/pkg/__pycache__/x.pyc"),
+            Path("task_logs/20260825_dev9_iteration.md"),
+        ),
     )
 
     assert "competing top-level benchmark/ owner exists; use benchmarks/" in findings
     assert "generated or retired root is tracked: dist/easyicu.whl" in findings
     assert "cache payload is tracked: src/pkg/__pycache__/x.pyc" in findings
+    assert (
+        "generated or retired root is tracked: "
+        "task_logs/20260825_dev9_iteration.md"
+    ) in findings
 
 
 def test_hygiene_audit_rejects_new_duplicate_helpers(tmp_path: Path) -> None:
