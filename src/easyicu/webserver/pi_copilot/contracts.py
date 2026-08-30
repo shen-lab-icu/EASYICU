@@ -5,7 +5,16 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Literal,
+    Mapping,
+    Optional,
+)
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -33,6 +42,50 @@ def utc_now() -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+#: Planner failures that preserve a validated progressive prefix on disk.  A
+#: *new* planning run may be seeded from that prefix instead of re-spending the
+#: provider budget re-deriving steps that already passed.  Seeding is a
+#: development-efficiency decision, not scientific authority: the resulting plan
+#: is still compiled, reviewed, and approved from scratch.
+PLANNER_CHECKPOINT_GATE_REASONS: frozenset[str] = frozenset(
+    {
+        "research_pipeline_planner_efficiency_budget_exhausted",
+        "research_pipeline_plan_contract_exhausted",
+        "research_pipeline_progressive_compile_failed",
+    }
+)
+
+#: The single failure where the *plan itself* survived, so the researcher may be
+#: offered "resume this plan" rather than "generate a fresh plan": the plan was
+#: sound and only the bounded development budget ran out.  Contract exhaustion
+#: and compile-gate failure mean the planning state was rejected, so the
+#: governed next action stays ``failed_pipeline_requires_fresh_plan`` -- even
+#: though that fresh plan may still be seeded from the set above.
+#:
+#: Keep these two sets distinct and distinctly named.  They differ by design,
+#: and a reader who assumes one set has been copied into two places will "fix"
+#: the difference and break either budget-resume or checkpoint seeding.
+PLAN_RESUME_OFFER_GATE_REASONS: frozenset[str] = frozenset(
+    {"research_pipeline_planner_efficiency_budget_exhausted"}
+)
+
+def plan_approval_allowed(source: Optional[Mapping[str, Any]]) -> bool:
+    """Return the single fail-closed reading of a plan review's approval flag.
+
+    ``plan_approval_allowed`` is compiled by the pipeline run owner. Consumers
+    used to disagree about a missing value: the model-facing projection and the
+    resumability check read it permissively while the submit route and the
+    workflow read it as blocking. A manifest that predates the field could then
+    advertise an approvable plan that the route rejected with 409, leaving the
+    researcher no route forward. Approval is execution authority, so only an
+    explicit ``True`` grants it.
+    """
+
+    if not isinstance(source, Mapping):
+        return False
+    return source.get("plan_approval_allowed") is True
 
 
 class PiCopilotError(RuntimeError):

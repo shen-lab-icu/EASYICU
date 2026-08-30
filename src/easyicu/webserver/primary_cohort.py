@@ -21,6 +21,11 @@ from easyicu.webserver.input_validation import parse_bool
 
 SCHEMA_VERSION = "easyicu.normalized-primary-cohort-scope/1"
 DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30
+#: Largest diagnosis roster Data Extraction will execute as one predicate.
+#: Exceeding it is refused, never trimmed: a silently shortened roster runs a
+#: different cohort than the researcher stated, and nothing downstream can
+#: tell that it happened.
+MAX_DIAGNOSIS_TOKENS = 64
 SUPPORTED_COHORT_PRESETS: Tuple[str, ...] = (
     "adult_all",
     "adult_first",
@@ -115,7 +120,21 @@ def normalize_diagnosis_tokens(raw: Any) -> Tuple[str, ...]:
                         )
                         continue
             tokens.append(token)
-    return tuple(dict.fromkeys(tokens))[:64]
+    unique = tuple(dict.fromkeys(tokens))
+    if len(unique) > MAX_DIAGNOSIS_TOKENS:
+        # A stated range expands here: "I20-I52, J09-J18, E10-E50" is three
+        # criteria and 84 codes. Trimming to the cap dropped E31-E50 from the
+        # executed queue with no error and no finding, so the cohort that ran
+        # was not the cohort that was stated.
+        raise PrimaryCohortContractError(
+            "diagnosis_filter_too_large",
+            {
+                "token_count": len(unique),
+                "max_tokens": MAX_DIAGNOSIS_TOKENS,
+                "dropped_tokens": list(unique[MAX_DIAGNOSIS_TOKENS:]),
+            },
+        )
+    return unique
 
 
 def normalize_execution_cohort(cohort: Any) -> Dict[str, Any]:
@@ -360,6 +379,7 @@ __all__ = [
     "CONCEPT_DERIVED_PRESETS",
     "DEFAULT_OBSERVATION_WINDOW_HOURS",
     "DIAGNOSIS_ELIGIBILITY_FIELDS",
+    "MAX_DIAGNOSIS_TOKENS",
     "NormalizedPrimaryCohortScope",
     "PrimaryCohortContractError",
     "SCHEMA_VERSION",

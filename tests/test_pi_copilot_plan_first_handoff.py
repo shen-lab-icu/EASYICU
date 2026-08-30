@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+
+STATIC = Path(__file__).parents[1] / "src" / "easyicu" / "webserver" / "static"
+
+
+def _read(relative: str) -> str:
+    return (STATIC / relative).read_text(encoding="utf-8")
+
+
+def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+
+    owner = _read("js/screens-guided-pi-confirmation.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const host = {{
+        tr: (en, zh) => zh || en,
+        esc: value => String(value),
+        iconHtml: () => '',
+        resourceButton: () => '',
+        sessionIsStale: () => false,
+        workflow: () => ({{ next_action_code: 'provider_ready_to_generate_plan' }}),
+        session: () => ({{ archived_child_jobs: [] }}),
+        busy: () => false,
+      }};
+      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const spec = confirmation.workflowConfirmation();
+      process.stdout.write(JSON.stringify({{
+        title: spec.title,
+        message: spec.message,
+        note: spec.note,
+        steps: spec.flowSteps,
+        flowTitle: spec.flowTitle,
+        flowHint: spec.flowHint,
+        flowCurrent: spec.flowCurrent,
+        html: confirmation.workflowConfirmationHtml(),
+      }}));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    rendered = json.loads(completed.stdout)
+
+    assert rendered["title"] == "现在生成候选研究计划吗？"
+    assert rendered["message"] == "开始生成候选研究计划。"
+    assert "计划会先决定需要哪些数据" in rendered["note"]
+    assert rendered["steps"] == [
+        "生成候选计划",
+        "按计划准备或复用数据",
+        "审阅数据准备情况",
+        "审核可执行计划并开始分析",
+    ]
+    assert rendered["flowTitle"] == "接下来会发生什么"
+    assert rendered["flowHint"] == "流程预览 · 现在无需操作"
+    assert rendered["flowCurrent"] == "当前：等待生成候选计划"
+    assert 'class="gpi-confirmation-flow-overview"' in rendered["html"]
+    assert 'class="gpi-confirmation-flow"' in rendered["html"]
+    assert 'class="is-current"' in rendered["html"]
+
+
+def test_plan_first_copy_stays_in_the_guided_copilot_owner() -> None:
+    confirmation = _read("js/screens-guided-pi-confirmation.js")
+    shell = _read("js/screens-guided-pi.js")
+    child_job = _read("js/screens-guided-pi-childjob.js")
+    css = _read("css/guided-pi.css")
+
+    assert "计划与分析前数据检查已准备好" in confirmation
+    assert "生成候选研究计划" in shell
+    assert "生成正式研究计划" in shell  # legacy persisted action remains replayable
+    assert "正在生成研究计划" in child_job
+    assert "正在生成正式研究计划" not in child_job
+    assert ".gpi-confirmation-flow" in css
+    assert ".gpi-confirmation-resources.is-expanded" in css
+    assert ".gpi-confirmation-more" in css
+    assert ".gpi-plan-conversation" in css
+    assert ".gpi-plan-conversation-more" in css
+    assert "正在复用已有计划并准备分析数据" in child_job
+    for non_owner in ("css/agent.css", "css/agent-plan.css", "css/guided.css"):
+        assert ".gpi-confirmation-flow" not in _read(non_owner)
+        assert ".gpi-confirmation-more" not in _read(non_owner)
+        assert ".gpi-plan-conversation" not in _read(non_owner)
+        assert ".gpi-plan-conversation-more" not in _read(non_owner)
+
+
+def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+
+    owner = _read("js/screens-guided-pi-confirmation.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const host = {{
+        tr: (en, zh) => zh || en,
+        esc: value => String(value),
+        iconHtml: () => '',
+        resourceButton: resource => `<button class="gpi-resource-link">${{resource.label}}</button>`,
+        sessionIsStale: () => false,
+        workflow: () => ({{ next_action_code: 'operator_plan_approval_required' }}),
+        session: () => ({{
+          archived_child_jobs: [],
+          binding: {{ run_id: 'run-test' }},
+          data_source_authorization: {{
+            extraction_scope: 'study_required',
+            source: {{ database: 'MIMIC-IV' }},
+          }},
+        }}),
+        busy: () => false,
+      }};
+      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      process.stdout.write(confirmation.workflowConfirmationHtml());
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    rendered = completed.stdout
+
+    assert "计划与分析前数据检查已准备好" in rendered
+    assert "快速审阅" in rendered
+    assert "研究计划" in rendered
+    assert "数据准备检查" in rendered
+    assert "文献依据" in rendered
+    assert "最终分析队列、数据预处理和模型仍待执行" in rendered
+    assert 'class="gpi-confirmation-resources is-expanded"' in rendered
+    assert '<details class="gpi-confirmation-resources">' not in rendered
+    assert "修改计划" in rendered
+    assert "批准并开始分析" in rendered
+    assert "其他操作" in rendered
+    assert rendered.count('class="btn ') == 2
+
+
+def test_executable_plan_review_answers_in_conversation_and_expands_the_plan() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+
+    owner = _read("js/screens-guided-pi-confirmation.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const workflow = {{
+        next_action_code: 'operator_plan_approval_required',
+        plan_conversation_preview: {{
+          step_count: 9,
+          table_count: 4,
+          figure_count: 3,
+          items: [
+            {{ key: 'population_and_unit', text: '纳入符合条件的 ICU 住院。' }},
+            {{ key: 'exposure_and_timing', text: '使用预设时间窗内的乳酸。' }},
+            {{ key: 'outcome_and_followup', text: '结局为院内死亡。' }},
+            {{ key: 'adjustment_and_model', text: '运行预设校正模型。' }},
+            {{ key: 'missing_data', text: '报告缺失并按计划处理。' }},
+            {{ key: 'sensitivity_and_feasibility', text: '分析前检查覆盖率并运行敏感性分析。' }},
+          ],
+        }},
+      }};
+      const host = {{
+        tr: (en, zh) => zh || en,
+        esc: value => String(value),
+        iconHtml: () => '',
+        resourceButton: resource => `<button>${{resource.label}}</button>`,
+        sessionIsStale: () => false,
+        workflow: () => workflow,
+        session: () => ({{
+          archived_child_jobs: [], binding: {{ run_id: 'run-test' }},
+          data_source_authorization: {{ extraction_scope: 'study_required', source: {{ database: 'MIMIC-IV' }} }},
+        }}),
+        busy: () => false,
+      }};
+      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      process.stdout.write(confirmation.workflowConfirmationHtml());
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    rendered = completed.stdout
+
+    assert "我已经根据你的研究问题生成了一份候选计划" in rendered
+    assert "目前还没有开始分析" in rendered
+    assert "研究人群与分析单位" in rendered
+    assert "暴露定义与时间窗" in rendered
+    assert "查看数据处理与完整设定" in rendered
+    assert '<details class="gpi-plan-conversation-more">' in rendered
+    assert "缺失数据处理" in rendered
+    assert "9 个步骤 · 4 张表 · 3 张图" in rendered
+    assert rendered.index('class="gpi-plan-conversation"') < rendered.index(
+        'class="gpi-confirmation'
+    )
+
+
+def test_scientific_plan_review_keeps_one_clear_plan_access_point() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+
+    owner = _read("js/screens-guided-pi-confirmation.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const workflow = {{
+        next_action_code: 'plan_scientific_changes_required',
+        plan_review_summary: {{ authorization_questions: [], remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }} }},
+        plan_conversation_preview: {{ items: [{{ key: 'population_and_unit', text: '纳入符合条件的 ICU 住院。' }}] }},
+      }};
+      const host = {{
+        tr: (en, zh) => zh || en,
+        esc: value => String(value),
+        iconHtml: () => '',
+        resourceButton: resource => `<button>${{resource.label}}</button>`,
+        sessionIsStale: () => false,
+        workflow: () => workflow,
+        session: () => ({{ archived_child_jobs: [], binding: {{ run_id: 'run-test' }} }}),
+        busy: () => false,
+      }};
+      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      process.stdout.write(confirmation.workflowConfirmationHtml());
+    """
+    rendered = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    ).stdout
+
+    assert "我已经根据你的研究问题生成了一份候选计划" not in rendered
+    assert '<details class="gpi-confirmation-resources">' in rendered
+    assert 'class="gpi-confirmation-resources is-expanded"' not in rendered
+    assert "打开完整计划" in rendered
+
+
+def test_repeated_stay_review_offers_two_plain_language_actions() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+
+    owner = _read("js/screens-guided-pi-confirmation.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const workflow = {{
+        next_action_code: 'plan_scientific_changes_required',
+        plan_review_summary: {{
+          authorization_questions: [{{ code: 'REPEATED_STAY_IDENTITY_UNAVAILABLE' }}],
+          remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }},
+        }},
+        plan_conversation_preview: {{ items: [{{ key: 'population_and_unit', text: '纳入 ICU 住院。' }}] }},
+      }};
+      const host = {{
+        tr: (en, zh) => zh || en,
+        esc: value => String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;'),
+        iconHtml: () => '',
+        resourceButton: resource => `<button>${{resource.label}}</button>`,
+        sessionIsStale: () => false,
+        workflow: () => workflow,
+        session: () => ({{ archived_child_jobs: [], binding: {{ run_id: 'run-test' }} }}),
+        busy: () => false,
+      }};
+      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      process.stdout.write(confirmation.workflowConfirmationHtml());
+    """
+    rendered = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    ).stdout
+
+    assert "计划已生成，但还需确认重复入院规则" in rendered
+    assert "推荐：每位患者只分析一次" in rendered
+    assert "采用推荐方案：仅保留首次入院" in rendered
+    assert "保留全部入院并处理重复记录" in rendered
+    assert rendered.count('data-gpi-next-choice=') == 2
+    assert "选择处理方式" not in rendered
+    assert 'class="gpi-plan-conversation"' not in rendered

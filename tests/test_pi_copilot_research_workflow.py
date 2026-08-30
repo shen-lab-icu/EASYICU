@@ -283,6 +283,19 @@ def _nonapprovable_review_payload(*, finding_code: str) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
+def _allow_current_scientific_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep non-review resume tests focused on their owner boundary."""
+
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_load_pending_scientific_review",
+        lambda *_args, **_kwargs: {
+            "schema_version": "easyicu.plan_scientific_review/2",
+            "approval_allowed": True,
+        },
+    )
+
+
 @pytest.mark.parametrize(
     ("finding_code", "expected_fragment"),
     [
@@ -919,69 +932,60 @@ def test_planner_proposal_prefers_owner_issued_event_status_coordinate() -> None
     ) == "death_max"
 
 
-def test_plan_first_package_proposes_closed_landmark_runtime_without_mutating_study(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    concepts = [
-        SimpleNamespace(concept_id="death", column_role="event_status"),
-        SimpleNamespace(concept_id="lact", column_role=""),
-        SimpleNamespace(concept_id="age", column_role=""),
-        SimpleNamespace(concept_id="sex", column_role=""),
-        SimpleNamespace(concept_id="los_icu", column_role=""),
-    ]
-    monkeypatch.setattr(
-        "easyicu.research_agent.acquisition.catalog.build_available_catalog",
-        lambda _path: SimpleNamespace(concepts=concepts),
+def test_materialized_target_outcome_uses_owner_issued_event_status_coordinate() -> None:
+    acquisition = SimpleNamespace(
+        analysis_columns={"death": "death_max"},
+        materialized_columns=("death_max", "death_first"),
     )
+
+    assert agent_pipeline_runs._resolve_materialized_target_outcome(
+        source_concept="death",
+        acquisition=acquisition,
+    ) == "death_max"
+
+
+def test_materialized_target_outcome_rejects_unmaterialized_projection() -> None:
+    acquisition = SimpleNamespace(
+        analysis_columns={"death": "death_max"},
+        materialized_columns=("lact_max",),
+    )
+
+    assert agent_pipeline_runs._resolve_materialized_target_outcome(
+        source_concept="death",
+        acquisition=acquisition,
+    ) is None
+
+
+def test_plan_first_web_preferences_do_not_promote_planner_choices_to_user_authority() -> None:
     study = {
         "question": "Does a continuous ICU measurement relate to death?",
         "covariate_selection": "planner_selectable",
     }
 
-    proposal = agent_pipeline_runs._planner_landmark_spline_proposal(
-        export_path="/typed/package",
-        study=study,
-        target="death",
-        primary_exposure="lact",
-    )
+    preferences = agent_pipeline_runs._research_user_preferences(study)
 
-    assert proposal is not None
-    assert study == {
-        "question": "Does a continuous ICU measurement relate to death?",
-        "covariate_selection": "planner_selectable",
-    }
-    assert proposal.covariates == ("age", "sex")
-    assert proposal.study["covariate_selection"] == "exact"
-    assert proposal.study["execution_concepts"] == {
-        "outcome": "death",
-        "primary_exposure": "lact",
-        "covariates": ["age", "sex"],
-    }
-    landmark, spline = proposal.sensitivity_specs
-    assert landmark.strategy == "landmark"
-    assert landmark.landmark_hours == 24
-    assert landmark.event_time_variable == "death_time"
-    assert landmark.observation_duration_variable == "los_icu"
-    assert spline.strategy == "restricted_cubic_spline"
-    assert spline.execution_variables == ("lact",)
+    assert preferences.get("covariate_selection", "planner_selectable") == (
+        "planner_selectable"
+    )
+    assert "covariates" not in preferences
+    assert "sensitivity_specs" not in preferences
 
 
 def test_plan_first_package_does_not_override_user_scientific_authority(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "easyicu.research_agent.acquisition.catalog.build_available_catalog",
-        lambda _path: pytest.fail("catalog must not be read for an exact study"),
+    preferences = agent_pipeline_runs._research_user_preferences(
+        {
+            "covariate_selection": "exact",
+            "covariates": ["age"],
+            "covariate_rationales": {
+                "age": "Baseline age is a prespecified confounding factor."
+            },
+            "covariate_temporal_roles": {"age": "baseline_static"},
+        }
     )
 
-    proposal = agent_pipeline_runs._planner_landmark_spline_proposal(
-        export_path="/typed/package",
-        study={"covariate_selection": "exact", "covariates": ["age"]},
-        target="death",
-        primary_exposure="lact",
-    )
-
-    assert proposal is None
+    assert preferences["covariate_selection"] == "exact"
+    assert preferences["covariates"] == ["age"]
 
 
 def test_metadata_only_planning_coordinates_do_not_invent_unnamed_slots() -> None:
@@ -1454,6 +1458,7 @@ def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
         plan_review_authority={
             "run_id": "run-plan-review",
             "resumable_here": True,
+            "plan_approval_allowed": True,
             "scientific_configuration_sha256": (
                 study_context_owner.scientific_configuration_sha256(study)
             ),
@@ -2078,7 +2083,7 @@ def test_validated_analysis_receipt_does_not_fall_back_to_legacy_blank_setup() -
     }
     snapshot = build_research_workflow_snapshot(
         study=study,
-        active_export_present=True,
+        active_export_present=False,
         active_job=None,
         latest_run={
             "run_id": "run-complete-analysis",
@@ -2104,6 +2109,8 @@ def test_validated_analysis_receipt_does_not_fall_back_to_legacy_blank_setup() -
     by_id = {row.id: row for row in snapshot.stages}
     assert by_id["setup"].status == "complete"
     assert by_id["setup"].reason_code == "approved_plan_setup_receipt"
+    assert by_id["extraction"].status == "complete"
+    assert by_id["extraction"].reason_code == "approved_analysis_input_receipt"
     assert snapshot.current_stage == "interpretation"
     assert snapshot.next_action_code == "evidence_bound_interpretation_ready"
 
@@ -4435,8 +4442,12 @@ def _acquisition_receipt() -> SimpleNamespace:
     return SimpleNamespace(
         selection=SimpleNamespace(selected_concepts=["heart_rate", "mortality"]),
         materialized_concepts=["heart_rate", "mortality"],
+        materialized_columns=("heart_rate", "mortality"),
         coverage=SimpleNamespace(sufficient=True),
-        analysis_columns={"heart_rate": "heart_rate"},
+        analysis_columns={
+            "heart_rate": "heart_rate",
+            "death": "mortality",
+        },
         endpoint=None,
     )
 
@@ -4638,7 +4649,7 @@ def test_pipeline_projection_does_not_build_engineering_report_for_manuscript_ru
     assert (wrapper / "manuscript_draft.json").is_file()
 
 
-def test_pending_plan_reason_survives_projection_and_run_history(
+def test_pending_plan_without_current_review_projects_stale_policy_reason(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "real-pending-run"
@@ -4671,15 +4682,16 @@ def test_pending_plan_reason_survives_projection_and_run_history(
         (wrapper / "source_run_manifest.json").read_text(encoding="utf-8")
     )
     assert manifest["pending_reviews"][0]["reason_code"] == (
-        "operator_plan_approval_required"
+        "scientific_plan_review_policy_stale"
     )
+    assert manifest["plan_approval_allowed"] is False
     history = agent_runs.list_run_history(
         study_id="study-workflow",
         project_root=str(project_root),
     )
     assert history["runs"][0]["run_status"] == "human_review_pending"
     assert history["runs"][0]["pending_review_reason_codes"] == [
-        "operator_plan_approval_required"
+        "scientific_plan_review_policy_stale"
     ]
     assert history["runs"][0]["scientific_configuration_sha256"] == (
         study_context_owner.scientific_configuration_sha256(_complete_study())
@@ -4858,12 +4870,17 @@ def test_pending_review_projects_from_the_typed_pause_run_directory(
     assert projected is not None
     assert projected["run_id"] == pending.run_id
     assert projected["scientific_plan_review"] == {}
+    assert projected["plan_approval_allowed"] is False
+    assert projected["requests"][0]["reason_code"] == (
+        "scientific_plan_review_policy_stale"
+    )
 
 
 def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _allow_current_scientific_review(monkeypatch)
     run_dir = tmp_path / "resumed-plan"
     run_dir.mkdir()
     request = HumanReviewRequest.create(
@@ -4960,6 +4977,7 @@ def test_recoverable_review_resume_failure_keeps_pending_run_and_pauses_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _allow_current_scientific_review(monkeypatch)
     run_dir = tmp_path / "recoverable-review"
     run_dir.mkdir()
     request = HumanReviewRequest.create(
@@ -5045,6 +5063,7 @@ def test_review_resume_claim_is_exclusive_before_touching_provider_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _allow_current_scientific_review(monkeypatch)
     run_dir = tmp_path / "already-claimed-review"
     run_dir.mkdir()
     request = HumanReviewRequest.create(
@@ -6933,6 +6952,46 @@ def test_planner_only_plan_requests_package_bound_regeneration() -> None:
     assert by_id["analysis"].reason_code == "plan_execution_upgrade_required"
 
 
+def test_legacy_scientific_review_requests_fresh_plan_without_reextracting() -> None:
+    study = _complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(study)
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_type": "full",
+            "run_id": "run-stale-science-policy",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "run_status": "human_review_pending",
+            "pending_review_reason_codes": [
+                "scientific_plan_review_policy_stale"
+            ],
+            "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+        },
+        plan_review_authority={
+            "run_id": "run-stale-science-policy",
+            "resumable_here": True,
+            "scientific_configuration_sha256": digest,
+            "budget_mode": "full_reviewed",
+            "plan_approval_allowed": False,
+            "requests": [
+                {
+                    "reason_code": "scientific_plan_review_policy_stale",
+                    "approval_allowed": False,
+                }
+            ],
+        },
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert snapshot.plan_execution_ready is False
+    assert snapshot.next_action_code == "scientific_plan_review_policy_stale"
+    assert by_id["plan"].reason_code == "scientific_plan_review_policy_stale"
+    assert by_id["analysis"].reason_code == "scientific_plan_review_policy_stale"
+
+
 def test_planner_canary_cannot_be_approved_into_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7202,6 +7261,7 @@ def test_plan_approval_revalidates_the_exact_prepared_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _allow_current_scientific_review(monkeypatch)
     study, package_binding = _study_with_package_binding(tmp_path / "package")
     request = HumanReviewRequest.create(
         kind="scientific_stop",
@@ -7519,6 +7579,51 @@ def test_web_data_foundation_materializes_sensitivity_support_without_adjustment
 
     assert profile["static_concepts"] == ("age", "icu_readmission")
     assert profile["required_feature_concepts"] == ()
+
+
+def test_web_data_foundation_keeps_available_readmission_safety_coordinate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+                CatalogConcept(
+                    concept_id="icu_readmission",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+            ],
+        ),
+    )
+
+    profile = agent_pipeline_runs._data_foundation_profile(
+        export_path="/typed/demo",
+        study={
+            "modules": ["demographics", "outcome"],
+            "covariate_selection": "planner_selectable",
+        },
+        target="death",
+    )
+
+    assert profile["static_concepts"] == ("age", "icu_readmission")
 
 
 def test_web_data_foundation_materializes_owner_readmission_indicator_for_first_stay(

@@ -19,6 +19,7 @@ from pathlib import Path
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.schema import AnalysisPlan
 from easyicu.webserver.pi_copilot.plan_projection import (
+    project_plan_conversation_preview,
     project_plan_reader_fields,
 )
 
@@ -60,6 +61,63 @@ def _plan() -> dict:
             },
         ],
     }
+
+
+def test_conversation_preview_uses_only_the_selected_reviewable_plan() -> None:
+    source = _plan()
+    selected = source["design_selection"]["candidates"][0]
+    selected["reviewable_plan"] = [
+        "Use the sealed ICU cohort.",
+        "Use the prespecified exposure window.",
+        "Follow the declared hospital outcome.",
+        "Fit the adjusted association model.",
+        "Report missingness and prespecify handling.",
+        "Check feasibility and sensitivity analyses before execution.",
+    ]
+    selected.update(
+        {
+            "estimand": "Adjusted association after the exposure landmark.",
+            "time_zero": "24 hours after ICU admission.",
+            "observation_window": "From 24 hours to hospital discharge.",
+            "primary_method": "Restricted cubic spline logistic model.",
+            "required_variables": ["stay_id", "lact_max", "death", "age"],
+        }
+    )
+
+    preview = project_plan_conversation_preview(source)
+
+    assert preview is not None
+    assert [item["key"] for item in preview["items"]] == [
+        "population_and_unit",
+        "exposure_and_timing",
+        "outcome_and_followup",
+        "adjustment_and_model",
+        "missing_data",
+        "sensitivity_and_feasibility",
+    ]
+    assert preview["items"][0]["text"] == "Use the sealed ICU cohort."
+    assert preview["step_count"] == 4
+    assert preview["analysis_step_count"] == 3
+    assert preview["output_step_count"] == 1
+    assert preview["table_count"] == 3
+    assert preview["figure_count"] == 1
+    assert preview["design"] == {
+        "estimand": "Adjusted association after the exposure landmark.",
+        "time_zero": "24 hours after ICU admission.",
+        "observation_window": "From 24 hours to hospital discharge.",
+        "primary_method": "Restricted cubic spline logistic model.",
+        "required_variables": ["stay_id", "lact_max", "death", "age"],
+    }
+
+
+def test_conversation_preview_refuses_incomplete_or_unselected_designs() -> None:
+    source = _plan()
+    assert project_plan_conversation_preview(source) is None
+    source["design_selection"]["candidates"][0]["reviewable_plan"] = ["short"]
+    assert project_plan_conversation_preview(source) is None
+    source["design_selection"]["candidates"][0]["disposition"] = "rejected"
+    assert project_plan_conversation_preview(source) is None
+
 
 def test_plan_preview_carries_the_owner_compiled_phase_and_family() -> None:
     projected = project_plan_reader_fields("agent_plan.json", _plan())
@@ -144,3 +202,16 @@ def test_the_artifact_service_stamps_the_plan_preview() -> None:
     head = source.index("    def get_research_artifact(")
     tail = source.index("    def get_research_evidence_preview(", head)
     assert "project_plan_reader_fields(clean_artifact, payload)" in source[head:tail]
+
+
+def test_project_workflow_projects_the_same_plan_into_the_conversation() -> None:
+    source = Path("src/easyicu/webserver/pi_copilot/service.py").read_text(
+        encoding="utf-8"
+    )
+    head = source.index("    def get_project_workflow(")
+    tail = source.index("    def get_workspace_preview(", head)
+    owner = source[head:tail]
+
+    assert "project_plan_conversation_preview" in owner
+    assert 'payloads.get("agent_plan.json")' in owner
+    assert 'update={"plan_conversation_preview": plan_preview}' in owner

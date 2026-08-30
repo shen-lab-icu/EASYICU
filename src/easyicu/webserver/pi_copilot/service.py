@@ -41,6 +41,7 @@ from easyicu.webserver.copilot_data_workbench import (
 )
 
 from .plan_projection import (
+    project_plan_conversation_preview,
     project_plan_reader_fields,
 )
 from . import cohort_eligibility
@@ -2366,6 +2367,15 @@ class PiCopilotService:
                 str(latest_run.get("project_dir") or "")
             )
             latest_run_outcome = project_run_outcome(review)
+            payloads = review.get("artifact_payloads")
+            payloads = payloads if isinstance(payloads, Mapping) else {}
+            plan_preview = project_plan_conversation_preview(
+                payloads.get("agent_plan.json")
+            )
+            if plan_preview:
+                snapshot = snapshot.model_copy(
+                    update={"plan_conversation_preview": plan_preview}
+                )
         return {
             "ok": True,
             "project_id": clean,
@@ -2628,6 +2638,7 @@ class PiCopilotService:
         from easyicu.webserver import cohort_review, dataio
 
         requested_variables: list[str] = []
+        materialized_analysis_path: Path | None = None
         run_id = self._latest_run_id(study_context_id, project_id=clean)
         if run_id:
             try:
@@ -2651,8 +2662,20 @@ class PiCopilotService:
                         for value in (selected.get("required_variables") or [])
                         if str(value or "").strip()
                     ][:12]
+                    run_cohort = (plan_path.parent / "cohort.parquet").resolve()
+                    immutable_input = (
+                        wrapper / "pipeline_input" / "web_research_universe.parquet"
+                    ).resolve()
+                    if run_cohort.parent == plan_path.parent and run_cohort.is_file():
+                        materialized_analysis_path = run_cohort
+                    elif (
+                        immutable_input.parent == (wrapper / "pipeline_input").resolve()
+                        and immutable_input.is_file()
+                    ):
+                        materialized_analysis_path = immutable_input
             except (OSError, ValueError, TypeError, json.JSONDecodeError, PiCopilotError):
                 requested_variables = []
+                materialized_analysis_path = None
 
         description = dataio.describe_export_source(source_path)
         files = [row for row in (description.get("files") or []) if isinstance(row, Mapping)]
@@ -2691,10 +2714,19 @@ class PiCopilotService:
                 break
 
         try:
-            body: Dict[str, Any] = {"source_path": source_path}
-            if feature_ids:
-                body["selected_features"] = feature_ids
-            owner_payload = cohort_review.cohort_review_summary(body)
+            if files:
+                body: Dict[str, Any] = {"source_path": source_path}
+                if feature_ids:
+                    body["selected_features"] = feature_ids
+                owner_payload = cohort_review.cohort_review_summary(body)
+            elif materialized_analysis_path is not None:
+                owner_payload = cohort_review.materialized_analysis_review(
+                    materialized_analysis_path,
+                    requested_variables,
+                )
+            else:
+                reason = str(description.get("error") or "source_not_available")
+                raise cohort_review.CohortReviewError({"error": reason})
             snapshot_payload = {
                 key: owner_payload.get(key)
                 for key in (
@@ -2713,8 +2745,16 @@ class PiCopilotService:
             }
             snapshot = build_data_workbench_snapshot(
                 project_id=clean,
-                view="feature_distribution" if feature_ids else "cohort_summary",
-                title="Analysis data and feature distributions" if feature_ids else "Cohort review",
+                view=(
+                    "feature_distribution"
+                    if feature_ids or requested_variables
+                    else "cohort_summary"
+                ),
+                title=(
+                    "Analysis data and feature distributions"
+                    if feature_ids or requested_variables
+                    else "Cohort review"
+                ),
                 payload=snapshot_payload,
                 privacy=(
                     owner_payload.get("privacy")
@@ -2919,8 +2959,22 @@ class PiCopilotService:
         clean_sha = str(expected_sha256 or "").strip().lower()
         row = self._research_run_row(project_id, clean_run)
         project_dir = str(row.get("project_dir") or "")
+        wrapper = Path(project_dir).expanduser().resolve()
+        pipeline_root = (wrapper / "pipeline").resolve()
+        declared_pipeline_run = pipeline_root / clean_run
+        evidence_run_dir = wrapper
+        if (
+            not declared_pipeline_run.is_symlink()
+            and declared_pipeline_run.is_dir()
+            and declared_pipeline_run.resolve().parent == pipeline_root
+        ):
+            # Wrapper-level artifacts are copied up for result browsing, while
+            # the immutable evidence registry remains owned by the concrete
+            # pipeline run. Keep governance at wrapper scope, but preview the
+            # digest-pinned record from its actual run directory.
+            evidence_run_dir = declared_pipeline_run.resolve()
         loaded = agent_runs.read_run_evidence_preview(
-            project_dir, clean_evidence, clean_sha
+            str(evidence_run_dir), clean_evidence, clean_sha
         )
         if not loaded.get("ok"):
             code = str(loaded.get("error") or "evidence_preview_unavailable")

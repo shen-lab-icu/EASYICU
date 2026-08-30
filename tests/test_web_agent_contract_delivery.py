@@ -21,6 +21,7 @@ from easyicu.research_agent.research_context.temporal_semantics import (
 )
 from easyicu.research_agent.schema import TimeWindow
 from easyicu.webserver import study_contexts
+from easyicu.webserver.primary_cohort import MAX_DIAGNOSIS_TOKENS
 from easyicu.webserver.agent_pipeline_runs import (
     _cohort_window,
     _declared_time_windows,
@@ -126,6 +127,47 @@ def test_the_icd_fields_reach_their_own_side() -> None:
     assert "exclude diagnoses: T20-T32" in _exclusion_criteria(study)
     # the researcher's stated range is kept rather than the expanded roster
     assert "T21" not in " | ".join(_exclusion_criteria(study))
+
+
+def test_every_stated_diagnosis_criterion_reaches_the_declaration() -> None:
+    """The write-up must not state a narrower cohort than the one that ran.
+
+    A private cap of 20 declared 20 of 35 stated criteria while 39 codes
+    actually executed. The cohort ledger and the manuscript's inclusion
+    criteria both read this declaration.
+    """
+
+    stated = "I21-I25, J44, J45, N17, A41, " + ", ".join(
+        f"E{value:02d}" for value in range(10, 40)
+    )
+    study = {"cohort": {"preset": "icd", "icd_include": stated}}
+
+    declared = _inclusion_criteria(study)[-1]
+    items = declared.split(": ", 1)[1].split(", ")
+
+    assert len(items) == 35
+    assert items[-1] == "E39"
+    assert "not declared" not in declared
+
+
+def test_a_trimmed_declaration_says_that_it_was_trimmed() -> None:
+    """Silence is the failure mode; an incomplete roster has to admit it.
+
+    A roster of more than ``MAX_DIAGNOSIS_TOKENS`` distinct codes is refused
+    upstream, so the only way to state more criteria than are declared is to
+    repeat one -- which still leaves the researcher reading a shorter list than
+    they wrote.
+    """
+
+    stated = [f"A{value:02d}" for value in range(10, 10 + MAX_DIAGNOSIS_TOKENS)]
+    stated += ["A10"] * 5
+    study = {
+        "cohort": {"preset": "icd", "icd_enabled": True, "include_diagnoses": stated}
+    }
+
+    declared = _inclusion_criteria(study)[-1]
+
+    assert "(+5 further stated criteria not declared)" in declared
 
 
 def test_a_stated_removal_has_a_slot_that_is_not_the_inclusion_channel() -> None:

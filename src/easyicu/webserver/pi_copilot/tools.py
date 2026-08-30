@@ -46,6 +46,7 @@ from .contracts import (
     PiToolResult,
     ToolExecutionContext,
     WorkspaceMutationLimitError,
+    plan_approval_allowed,
 )
 from . import cohort_eligibility
 from .extraction_handoff import (
@@ -67,6 +68,7 @@ from .projections import (
 from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
+    resumable_planner_checkpoint_job_id,
 )
 from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
 from .workflow import (
@@ -662,6 +664,24 @@ def _database_named_in_message(message: str) -> Optional[str]:
     return None
 
 
+def _registered_source_alternatives_requested(message: str) -> bool:
+    """Return whether the user explicitly asked to inspect non-default exports."""
+
+    normalized = " ".join(str(message or "").casefold().split())
+    return any(
+        marker in normalized
+        for marker in (
+            "其他已注册",
+            "其他本地数据",
+            "其他数据包",
+            "另一个已注册",
+            "other registered",
+            "other local export",
+            "another registered",
+        )
+    )
+
+
 def _list_data_sources(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -731,7 +751,18 @@ def _list_data_sources(
         selected_profile is not None
         and explicit_database == selected_profile.key
     )
-    auto_select_recommended = bool(recommended_source and exact_database_named)
+    alternatives_requested = _registered_source_alternatives_requested(user_message)
+    auto_select_recommended = bool(
+        recommended_source and exact_database_named and not alternatives_requested
+    )
+    visible_choices = choices
+    if auto_select_recommended:
+        recommended_source_id = str(recommended_source.get("source_id") or "")
+        visible_choices = [
+            row
+            for row in choices
+            if str(row.get("source_id") or "") == recommended_source_id
+        ]
     if recommended_source is not None:
         recommended_source = {
             key: recommended_source.get(key)
@@ -795,8 +826,8 @@ def _list_data_sources(
         ),
         owner="easyicu.webserver.sources",
         details={
-            "sources": choices,
-            "source_count": len(choices),
+            "sources": visible_choices,
+            "source_count": len(visible_choices),
             "selected_database": (
                 {
                     "database": selected_profile.key,
@@ -832,6 +863,7 @@ def _list_data_sources(
                 "demo_never_implies_full_database": True,
                 "official_demo_only_when_explicitly_requested_if_local_available": True,
                 "recommended_source_is_already_available_export": True,
+                "registered_alternatives_require_explicit_request": True,
                 "alternative_local_directory_requires_registration": True,
                 "show_returned_safe_aggregates_for_recommendation": True,
                 "user_facing_availability_term": "EasyICU can use",
@@ -5054,76 +5086,20 @@ def _development_resume_source_job_id(
     latest = _select_run(context)
     if not latest:
         return ""
-    resumable_reasons = {
-        "research_pipeline_planner_efficiency_budget_exhausted",
-        "research_pipeline_plan_contract_exhausted",
-        "research_pipeline_progressive_compile_failed",
+    transparent_attempt_reasons = {
+        "data_foundation_blocked",
+        "research_pipeline_cancelled",
     }
-    candidates = [latest]
-    if str(latest.get("gate_reason") or "") == "data_foundation_blocked":
-        # A metadata-only Planner continuation used to be routed through the
-        # generic full-run adapter when the terminal checkpoint had already
-        # compiled but failed the host article gate.  That adapter leaves an
-        # empty data-foundation projection newer than the still-valid Planner
-        # checkpoint.  It is evidence of the failed adapter call, not a plan
-        # authority, and must not hide the unchanged resumable checkpoint.
-        candidates.extend(
-            row
-            for row in _run_rows(context)
-            if str(row.get("run_id") or "")
-            != str(latest.get("run_id") or "")
-        )
-    latest = next(
-        (
-            row
-            for row in candidates
-            if str(row.get("gate_reason") or "") in resumable_reasons
-        ),
-        None,
+    rows = (
+        list(_run_rows(context))
+        if str(latest.get("gate_reason") or "") in transparent_attempt_reasons
+        else [latest]
     )
-    if not latest:
-        return ""
-    if str(latest.get("run_status") or "") != "failed":
-        return ""
-    if latest.get("development_planner_checkpoint_available") is not True:
-        # The workflow projection and the launch adapter must agree on resume
-        # eligibility.  A contract-exhausted run can fail before the first
-        # checkpoint exists; forwarding its job id would turn an explicit
-        # fresh-plan confirmation into a resume request that the lower owner
-        # must reject.
-        return ""
-    study_id = str(study.get("id") or "").strip()
-    if not study_id or str(latest.get("study_id") or "") != study_id:
-        return ""
-    planned_digest = str(
-        latest.get("scientific_configuration_sha256") or ""
-    ).strip()
-    if (
-        len(planned_digest) != 64
-        or planned_digest
-        != study_contexts.scientific_configuration_sha256(dict(study))
-    ):
-        return ""
-    match = re.fullmatch(
-        r"run_([A-Za-z0-9][A-Za-z0-9_-]{0,79})",
-        str(latest.get("run_id") or ""),
+    return resumable_planner_checkpoint_job_id(
+        study=study,
+        rows=rows,
+        project_root=research_pipeline_project_root(str(study.get("id") or "")),
     )
-    if match is None:
-        return ""
-    project_dir = Path(str(latest.get("project_dir") or "")).expanduser()
-    expected_root = research_pipeline_project_root(study_id).resolve()
-    try:
-        resolved_project = project_dir.resolve(strict=True)
-        resolved_project.relative_to(expected_root)
-    except (FileNotFoundError, OSError, ValueError):
-        return ""
-    # ProjectWorkspace owns ``<project-root>/<study-id>/run_<job>``.  The
-    # lower run owner revalidates the exact slug and checkpoint chain; this
-    # selector only proves that the candidate is one bounded child run inside
-    # the current Copilot project root.
-    if resolved_project.parent.parent != expected_root:
-        return ""
-    return match.group(1)
 
 
 def _run(
@@ -5632,7 +5608,7 @@ def _request_replan(
         and isinstance(live_review, Mapping)
         and planned_digest
         and planned_digest == current_digest
-        and live_review.get("plan_approval_allowed") is not False
+        and plan_approval_allowed(live_review)
         and (
             "operator_plan_approval_required" not in pending_codes
             or str(live_review.get("budget_mode") or "full_reviewed")

@@ -22,10 +22,110 @@ compiled reading aids, and they are marked as projections.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Optional
 
 
 PLAN_ARTIFACT_NAME = "agent_plan.json"
+
+
+def project_plan_conversation_preview(payload: Any) -> Optional[Dict[str, Any]]:
+    """Project the selected design's six review items into the conversation.
+
+    The research-agent design contract owns both the item order and wording.
+    Copilot only supplies bounded, path-free display coordinates; it never
+    invents a cohort, exposure, endpoint, method, or preprocessing step.
+    """
+
+    if not isinstance(payload, Mapping):
+        return None
+    selection = payload.get("design_selection")
+    if not isinstance(selection, Mapping):
+        return None
+    candidates = selection.get("candidates")
+    if not isinstance(candidates, list):
+        return None
+    selected = next(
+        (
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, Mapping)
+            and str(candidate.get("disposition") or "") == "selected"
+        ),
+        None,
+    )
+    if not isinstance(selected, Mapping):
+        return None
+    reviewable = selected.get("reviewable_plan")
+    if not isinstance(reviewable, list):
+        return None
+
+    from easyicu.research_agent.planning.design_selection import (
+        REVIEWABLE_PLAN_ITEM_ORDER,
+    )
+
+    if len(reviewable) != len(REVIEWABLE_PLAN_ITEM_ORDER):
+        return None
+    texts = [" ".join(str(value or "").split())[:800] for value in reviewable]
+    if any(not value for value in texts):
+        return None
+
+    steps = payload.get("steps")
+    steps = steps if isinstance(steps, list) else []
+    from easyicu.research_agent.planning.step_phase import compile_step_phase
+
+    phases = [compile_step_phase(step) for step in steps if isinstance(step, Mapping)]
+    analysis_step_count = sum(
+        phase in {"cohort", "analysis", "robustness"} for phase in phases
+    )
+    output_step_count = sum(phase == "reporting" for phase in phases)
+    outputs = {
+        str(output or "")
+        for step in steps
+        if isinstance(step, Mapping)
+        for output in (
+            step.get("expected_outputs")
+            if isinstance(step.get("expected_outputs"), list)
+            else []
+        )
+        if str(output or "").strip()
+    }
+    design = {
+        key: " ".join(str(selected.get(key) or "").split())[:1_200]
+        for key in (
+            "estimand",
+            "time_zero",
+            "observation_window",
+            "primary_method",
+        )
+        if str(selected.get(key) or "").strip()
+    }
+    required_variables = [
+        str(value or "").strip()[:120]
+        for value in (
+            selected.get("required_variables")
+            if isinstance(selected.get("required_variables"), list)
+            else []
+        )
+        if str(value or "").strip()
+    ][:24]
+    if required_variables:
+        design["required_variables"] = required_variables
+    return {
+        "research_question": " ".join(
+            str(payload.get("research_question") or "").split()
+        )[:500],
+        "analysis_type": str(payload.get("analysis_type") or "")[:120],
+        "items": [
+            {"key": key, "text": text}
+            for key, text in zip(REVIEWABLE_PLAN_ITEM_ORDER, texts, strict=True)
+        ],
+        "step_count": len(steps),
+        "analysis_step_count": analysis_step_count,
+        "output_step_count": output_step_count,
+        "table_count": sum(value.startswith("table:") for value in outputs),
+        "figure_count": sum(value.startswith("figure:") for value in outputs),
+        "design": design,
+    }
 
 
 def _projected_steps(steps: Any) -> List[Any] | None:
@@ -106,5 +206,6 @@ def project_plan_reader_fields(artifact_name: str, payload: Any) -> Any:
 
 __all__ = [
     "PLAN_ARTIFACT_NAME",
+    "project_plan_conversation_preview",
     "project_plan_reader_fields",
 ]

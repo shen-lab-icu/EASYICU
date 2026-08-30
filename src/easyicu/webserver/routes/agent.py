@@ -24,9 +24,16 @@ from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
-from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+from easyicu.webserver.pi_copilot.contracts import (
+    PiCopilotError,
+    plan_approval_allowed,
+)
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
-from easyicu.webserver.pi_copilot.run_authority import research_pipeline_workspace
+from easyicu.webserver.pi_copilot.run_authority import (
+    list_bound_run_history,
+    research_pipeline_workspace,
+    resumable_planner_checkpoint_job_id,
+)
 from easyicu.webserver.routes.jobs import submit_job
 from easyicu.webserver.routes.request_parsing import body_bool, body_int
 
@@ -329,6 +336,28 @@ def submit_agent_run(
             development_resume_source_job_id = str(
                 body.get("development_resume_source_job_id") or ""
             ).strip()
+            if (
+                not development_resume_source_job_id
+                and not plan_revision_source_run_id
+                and not execution_resume_source_run_id
+            ):
+                # Buttons, edited/resubmitted messages, and Pi tool calls all
+                # converge here.  Recover the newest unchanged Planner prefix
+                # at this owner boundary so one frontend path cannot silently
+                # restart a six-minute plan while another resumes it.
+                development_resume_source_job_id = (
+                    resumable_planner_checkpoint_job_id(
+                        study=study_context or {},
+                        rows=list_bound_run_history(
+                            study_context_id=str(
+                                (study_context or {}).get("id") or ""
+                            ),
+                            project_root=project_root,
+                            limit=50,
+                        ),
+                        project_root=project_root,
+                    )
+                )
             if development_resume_source_job_id:
                 runner_kwargs["development_resume_source_job_id"] = (
                     development_resume_source_job_id
@@ -464,6 +493,11 @@ def submit_agent_run(
                 "budget_mode": budget_mode,
                 "compute_target": compute.get("compute_target"),
                 "study_context_id": study_context_id or None,
+                "development_resume_source_job_id": (
+                    development_resume_source_job_id or None
+                    if engine == "research_agent_pipeline"
+                    else None
+                ),
             },
         )
     except Exception:
@@ -483,6 +517,11 @@ def submit_agent_run(
         "study_context_id": study_context_id or None,
         "study_context_revision": (
             int(synced_context.get("revision") or 0) if synced_context else None
+        ),
+        "development_resume_source_job_id": (
+            development_resume_source_job_id or None
+            if engine == "research_agent_pipeline"
+            else None
         ),
         "audit_warning": audit_warning,
     }
@@ -582,6 +621,25 @@ def submit_agent_run_review(
         raise HTTPException(
             status_code=409,
             detail={"error": "research_pipeline_planner_canary_execution_blocked"},
+        )
+    if decision == "approved" and not plan_approval_allowed(pending):
+        # Name the blockers the researcher has to clear. A bare 409 here is a
+        # dead end: the plan looks approvable in the conversation and the only
+        # signal is a refusal with no owner and no remediation coordinate.
+        review = pending.get("scientific_plan_review")
+        review = review if isinstance(review, Mapping) else {}
+        blocking_codes = [
+            str(finding.get("code") or "")
+            for finding in (review.get("findings") or [])
+            if isinstance(finding, Mapping) and finding.get("severity") == "blocker"
+        ]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "scientific_plan_review_changes_required",
+                "blocking_codes": [code for code in blocking_codes if code],
+                "scientific_plan_review_status": review.get("status"),
+            },
         )
     pending_provider = str(pending.get("provider") or "")
     if (

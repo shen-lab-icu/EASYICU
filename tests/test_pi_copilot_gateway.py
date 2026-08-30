@@ -1438,6 +1438,16 @@ def test_data_source_transition_appends_a_hidden_mechanically_read_only_host_tur
     assert "navigateTree" not in prompt_session
 
 
+def test_data_source_transition_cannot_move_a_failed_plan_back_to_data_preparation() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+
+    assert '"failed_pipeline_requires_fresh_plan"' in entrypoint.split(
+        "const PLAN_LIFECYCLE_WORKFLOW_CODES", 1
+    )[1].split("]);", 1)[0]
+    assert "sourcePreparationAlreadyPassed" in entrypoint
+    assert "Do not ask the user to choose, confirm, download, inspect, or prepare a data source again" in entrypoint
+
+
 def test_formal_plan_confirmation_is_a_hidden_typed_single_tool_transition() -> None:
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
 
@@ -1487,9 +1497,11 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "Do not write a Research Brief or shadow plan" in entrypoint
     assert "host-owned plan confirmation card already supplies the next actions" in entrypoint
     assert "do not write a Next step block, bullet choices, continue action" in entrypoint
-    assert "In a Chinese response, call the artifact 正式研究计划" in entrypoint
+    assert "In a Chinese response, call this first artifact 候选研究计划" in entrypoint
+    assert "Only after the exact prepared package is bound" in entrypoint
+    assert "可执行研究计划" in entrypoint
     assert "propose unresolved design choices in agent_plan.json" in entrypoint
-    assert "pause for user review before analysis" in entrypoint
+    assert "pause for candidate review and data preparation before any package-bound execution approval" in entrypoint
     assert "Permission to generate a formal plan does not authorize Copilot" in entrypoint
     assert "If neither path is executable, the plan must fail closed" in entrypoint
     assert "instead of inventing an executable cohort" in entrypoint

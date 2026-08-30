@@ -14,6 +14,8 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import pytest
+
 from easyicu.research_agent.research_context.outbound import (
     outbound_safe_context_payload,
 )
@@ -22,6 +24,7 @@ from easyicu.webserver.agent_pipeline_runs import (
     _inclusion_criteria,
 )
 from easyicu.webserver.pi_copilot import cohort_eligibility
+from easyicu.webserver import primary_cohort
 
 
 def _study(**cohort) -> dict:
@@ -202,7 +205,43 @@ def test_both_sides_stay_bounded() -> None:
     )
     assert len(_inclusion_criteria(study)) <= 32
     assert len(_exclusion_criteria(study)) <= 32
-    # the roster itself is capped before it is joined
+    # The roster is bounded by the roster that actually executes
+    # (``MAX_DIAGNOSIS_TOKENS``) rather than by a separate literal. A private
+    # cap of 20 declared less than the export ran, and the manuscript's
+    # inclusion criteria read this declaration.
     joined = _exclusion_criteria(study)[0]
     assert "condition-19" in joined
-    assert "condition-20" not in joined
+    assert "condition-39" in joined
+    assert len(joined.split(": ", 1)[1].split(", ")) == 40
+
+
+def test_an_oversized_diagnosis_roster_is_refused_not_trimmed() -> None:
+    """A trimmed roster runs a different cohort than the one that was stated.
+
+    ``I20-I52, J09-J18, E10-E50`` is three stated criteria and 84 codes. The
+    cap silently kept 64, so E31-E50 never entered the executed queue and
+    nothing downstream could tell that it had happened.
+    """
+
+    with pytest.raises(primary_cohort.PrimaryCohortContractError) as exc:
+        primary_cohort.normalize_execution_cohort(
+            {"preset": "icd", "icd_include": "I20-I52, J09-J18, E10-E50"}
+        )
+
+    assert exc.value.code == "diagnosis_filter_too_large"
+    assert exc.value.detail["token_count"] == 84
+    assert exc.value.detail["max_tokens"] == primary_cohort.MAX_DIAGNOSIS_TOKENS
+    assert exc.value.detail["dropped_tokens"][0] == "E31"
+
+
+def test_a_roster_at_the_limit_still_executes() -> None:
+    """The refusal is for exceeding the bound, not for approaching it."""
+
+    at_limit = ", ".join(
+        f"A{value:02d}" for value in range(10, 10 + primary_cohort.MAX_DIAGNOSIS_TOKENS)
+    )
+    executed = primary_cohort.normalize_execution_cohort(
+        {"preset": "icd", "icd_include": at_limit}
+    )
+
+    assert len(executed["icd_include"]) == primary_cohort.MAX_DIAGNOSIS_TOKENS
