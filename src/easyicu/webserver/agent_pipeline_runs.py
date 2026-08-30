@@ -71,6 +71,7 @@ from easyicu.webserver import (
     capabilities as capability_policy,
     dataio,
     literature_authority,
+    primary_cohort,
     provider_adapter,
     source_identity_authority,
 )
@@ -923,6 +924,50 @@ def _load_pending_scientific_review(
     except (FileNotFoundError, OSError, ValueError):
         return {}
     return review.model_dump(mode="json")
+
+
+def _pending_plan_approval_allowed(
+    *,
+    run_dir: Optional[Path],
+    pending: Optional[Any],
+    plan_recommendation_complete: bool,
+) -> bool:
+    """Fail closed unless the exact bound review satisfies current policy."""
+
+    # No pending entry is no approval authority. Owning the guard here keeps
+    # every call site from having to remember it before reading
+    # ``pending.requests``.
+    if pending is None or not plan_recommendation_complete:
+        return False
+    review = _load_pending_scientific_review(run_dir, pending)
+    if not review or review.get("approval_allowed") is not True:
+        return False
+    return all(
+        (
+            request.payload.get("approval_allowed", True)
+            if isinstance(request.payload, Mapping)
+            else True
+        )
+        for request in pending.requests
+    )
+
+
+def _pending_review_reason_code(
+    *,
+    request: Any,
+    plan_recommendation_complete: bool,
+    scientific_plan_review: Mapping[str, Any],
+) -> str:
+    """Project one precise current-policy reason for the paused plan."""
+
+    if not plan_recommendation_complete:
+        return "plan_scientific_changes_required"
+    if not scientific_plan_review:
+        return "scientific_plan_review_policy_stale"
+    if scientific_plan_review.get("approval_allowed") is not True:
+        return "plan_scientific_changes_required"
+    payload = request.payload if isinstance(request.payload, Mapping) else {}
+    return _clean_text(payload.get("reason"), 160)
 
 
 def _pipeline_failure_code(exc: BaseException) -> str:
@@ -2240,8 +2285,24 @@ def _data_foundation_profile(
     require_outcome = False
     raw_cohort = study.get("cohort")
     cohort = raw_cohort if isinstance(raw_cohort, Mapping) else {}
+    # Keep the owner-issued readmission indicator in a Planner-selectable
+    # universe when available. It is a dependence-safety coordinate, not an
+    # inferred exclusion: the plan may propose a first-stay analysis, while
+    # human review still owns whether that restriction is adopted.
+    readmission_meta = by_id.get("icu_readmission")
+    if (
+        _configured_covariate_selection(study) == "planner_selectable"
+        and readmission_meta is not None
+    ):
+        readmission_module = Path(readmission_meta.file_name).stem.lower()
+        if readmission_module in {"demographics", "outcome"} and (
+            not readmission_meta.typed_metadata
+            or readmission_meta.column_role == "value"
+        ):
+            static_concepts.append("icu_readmission")
+        else:
+            required_feature_concepts.append("icu_readmission")
     if cohort.get("exclude_readmissions") is True:
-        readmission_meta = by_id.get("icu_readmission")
         if readmission_meta is None:
             raise ResearchPipelineRunError(
                 "research_pipeline_readmission_indicator_unavailable",
@@ -2414,120 +2475,24 @@ def _resolve_planner_proposed_primary_exposure(
     return None
 
 
-@dataclass(frozen=True)
-class _PlannerScientificProposal:
-    """Ephemeral typed coordinates proposed for one reviewable candidate Plan.
+def _resolve_materialized_target_outcome(
+    *, source_concept: str, acquisition: Any
+) -> Optional[str]:
+    """Resolve a concept-level outcome to its owner-issued cohort column.
 
-    The persisted StudyContext remains untouched.  These coordinates only let
-    the deterministic runtime owner shape the candidate Plan that the user is
-    about to review; approving that digest-bound Plan is the authorization.
+    Event-status concepts such as ``death`` are normalized by the data
+    foundation to a stable stay-level coordinate such as ``death_max``.  The
+    Research Agent must receive that materialized coordinate rather than the
+    pre-materialization concept id; otherwise cohort validation incorrectly
+    reports that a present outcome is missing.
     """
 
-    study: Dict[str, Any]
-    covariates: tuple[str, ...]
-    sensitivity_specs: tuple[Any, ...]
-
-
-def _planner_landmark_spline_proposal(
-    *,
-    export_path: str,
-    study: Mapping[str, Any],
-    target: Optional[str],
-    primary_exposure: Optional[str],
-) -> Optional[_PlannerScientificProposal]:
-    """Propose a closed 24-hour ICU landmark design when the package supports it.
-
-    This is intentionally conservative and case-neutral: it applies only to a
-    binary event-status outcome with its standard event-time companion, a
-    continuous exposure concept, ICU length of stay, and the immutable age/sex
-    baseline demographics.  Any user-owned covariate or sensitivity decision
-    disables the proposal rather than being overwritten.
-    """
-
-    if (
-        not target
-        or not primary_exposure
-        or _configured_covariate_selection(study) == "exact"
-        or _configured_covariates(study)
-        or _configured_sensitivity_specs(study)
-    ):
-        return None
-
-    from easyicu.research_agent.acquisition.catalog import build_available_catalog
-    from easyicu.research_agent.planning.sensitivity_authority import (
-        normalize_prespecified_sensitivities,
-    )
-
-    catalog = build_available_catalog(Path(export_path).expanduser())
-    by_id = {concept.concept_id: concept for concept in catalog.concepts}
-    outcome = by_id.get(target)
-    exposure = by_id.get(primary_exposure)
-    if (
-        outcome is None
-        or outcome.column_role != "event_status"
-        or exposure is None
-        or any(value not in by_id for value in ("age", "sex", "los_icu"))
-    ):
-        return None
-
-    event_time = f"{target}_time"
-    specs = normalize_prespecified_sensitivities(
-        [
-            {
-                "spec_id": "planner_proposed_24h_landmark",
-                "axis": "timing",
-                "strategy": "landmark",
-                "landmark_hours": 24,
-                "require_alive_at_landmark": True,
-                "exclude_negative_event_times": True,
-                "event_time_variable": event_time,
-                "observation_duration_variable": "los_icu",
-                "observation_duration_unit": "days",
-            },
-            {
-                "spec_id": "planner_proposed_exposure_rcs",
-                "axis": "functional_form",
-                "strategy": "restricted_cubic_spline",
-                "execution_variables": [primary_exposure],
-            },
-        ]
-    )
-    covariates = ("age", "sex")
-    proposed = dict(study)
-    proposed.update(
-        {
-            "covariates": list(covariates),
-            "covariate_selection": "exact",
-            "covariate_rationales": {
-                "age": (
-                    "Planner proposal: baseline age adjustment available before "
-                    "the ICU landmark."
-                ),
-                "sex": (
-                    "Planner proposal: baseline sex adjustment available before "
-                    "the ICU landmark."
-                ),
-            },
-            "covariate_temporal_roles": {
-                "age": "baseline_static",
-                "sex": "baseline_static",
-            },
-            "covariate_operationalizations": {"age": "age", "sex": "sex"},
-            "sensitivity_specs": [
-                spec.model_dump(mode="json") for spec in specs
-            ],
-        }
-    )
-    execution = dict(proposed.get("execution_concepts") or {})
-    execution["outcome"] = target
-    execution["primary_exposure"] = primary_exposure
-    execution["covariates"] = list(covariates)
-    proposed["execution_concepts"] = execution
-    return _PlannerScientificProposal(
-        study=proposed,
-        covariates=covariates,
-        sensitivity_specs=specs,
-    )
+    analysis_columns = dict(getattr(acquisition, "analysis_columns", {}) or {})
+    materialized = set(getattr(acquisition, "materialized_columns", ()) or ())
+    resolved = str(analysis_columns.get(source_concept) or "").strip()
+    if resolved:
+        return resolved if resolved in materialized else None
+    return source_concept if source_concept in materialized else None
 
 
 def _elide_constraint_lists(
@@ -2787,6 +2752,14 @@ def _diagnosis_criteria(
     ``dataio`` reads ``icd_include or include_diagnoses`` (and the exclusion
     mirror); the researcher's own wording is kept rather than the expanded token
     roster, because a stated range is what they would recognise in the write-up.
+
+    The declaration is bounded by the same roster the export executes rather
+    than by a separate literal. A private cap of 20 declared 20 of 35 stated
+    criteria while 39 codes actually ran, and the cohort ledger and the
+    manuscript's inclusion criteria both read this declaration -- so the
+    write-up stated a narrower cohort than the one that was analysed. If a
+    roster is ever still trimmed here, the declaration says so instead of
+    ending silently.
     """
 
     if not _diagnosis_filter_applies(cohort):
@@ -2797,10 +2770,16 @@ def _diagnosis_criteria(
             values = [part for part in values.replace(";", ",").split(",")]
         if not isinstance(values, list):
             continue
-        clean = [_clean_text(item, 120) for item in values[:20]]
+        clean = [_clean_text(item, 120) for item in values]
         clean = [item for item in clean if item]
-        if clean:
-            return [f"{prefix}: {', '.join(clean)}"]
+        if not clean:
+            continue
+        shown = clean[:primary_cohort.MAX_DIAGNOSIS_TOKENS]
+        undeclared = len(clean) - len(shown)
+        stated = ", ".join(shown)
+        if undeclared:
+            stated += f" (+{undeclared} further stated criteria not declared)"
+        return [f"{prefix}: {stated}"]
     return []
 
 
@@ -3927,6 +3906,11 @@ def _write_projection(
         }
     )
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
+    current_review_approval_allowed = _pending_plan_approval_allowed(
+        run_dir=run_dir,
+        pending=pending,
+        plan_recommendation_complete=plan_recommendation_complete,
+    )
     scientific_readiness = build_scientific_readiness_projection(
         run_id=run_id,
         run_dir=run_dir,
@@ -3983,11 +3967,11 @@ def _write_projection(
                 "review_id": request.review_id,
                 "kind": request.kind,
                 "reason_code": _clean_text(
-                    "plan_scientific_changes_required"
-                    if not plan_recommendation_complete
-                    else request.payload.get("reason")
-                    if isinstance(request.payload, Mapping)
-                    else None,
+                    _pending_review_reason_code(
+                        request=request,
+                        plan_recommendation_complete=plan_recommendation_complete,
+                        scientific_plan_review=scientific_plan_review,
+                    ),
                     160,
                 ),
                 "summary": request.summary,
@@ -3995,8 +3979,10 @@ def _write_projection(
                 "approval_allowed": (
                     request.payload.get("approval_allowed", True)
                     and plan_recommendation_complete
+                    and current_review_approval_allowed
                     if isinstance(request.payload, Mapping)
                     else plan_recommendation_complete
+                    and current_review_approval_allowed
                 ),
                 "review_score": (
                     request.payload.get("review_score")
@@ -4039,6 +4025,7 @@ def _write_projection(
             pending_requests
             and all(item.get("approval_allowed", True) for item in pending_requests)
             and plan_recommendation_complete
+            and current_review_approval_allowed
         ),
         "scientific_plan_review_status": (
             scientific_plan_review.get("status")
@@ -4328,6 +4315,13 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(
         _pending_plan_authority(pending)
     )
+    run_dir = Path(pending.run_dir)
+    scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
+    current_review_approval_allowed = _pending_plan_approval_allowed(
+        run_dir=run_dir,
+        pending=pending,
+        plan_recommendation_complete=plan_recommendation_complete,
+    )
     return {
         "run_id": pending.run_id,
         "study_id": _clean_text(study.get("id"), 160),
@@ -4346,18 +4340,20 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
                 "summary": request.summary,
                 "authority_sha256": request.authority_sha256,
                 "reason_code": _clean_text(
-                    "plan_scientific_changes_required"
-                    if not plan_recommendation_complete
-                    else request.payload.get("reason")
-                    if isinstance(request.payload, Mapping)
-                    else None,
+                    _pending_review_reason_code(
+                        request=request,
+                        plan_recommendation_complete=plan_recommendation_complete,
+                        scientific_plan_review=scientific_plan_review,
+                    ),
                     160,
                 ),
                 "approval_allowed": (
                     request.payload.get("approval_allowed", True)
                     and plan_recommendation_complete
+                    and current_review_approval_allowed
                     if isinstance(request.payload, Mapping)
                     else plan_recommendation_complete
+                    and current_review_approval_allowed
                 ),
                 "review_score": (
                     request.payload.get("review_score")
@@ -4391,10 +4387,9 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             )
             for request in pending.requests
         )
-        and plan_recommendation_complete,
-        "scientific_plan_review": _load_pending_scientific_review(
-            Path(pending.run_dir), pending
-        ),
+        and plan_recommendation_complete
+        and current_review_approval_allowed,
+        "scientific_plan_review": scientific_plan_review,
     }
 
 
@@ -4818,20 +4813,12 @@ def make_research_pipeline_run_runner(
         selected_budget_mode == "planner_canary"
         and dataio.prepared_export_manifest_path(source_path) is None
     )
+    # Web may make candidate columns available to Planner, but it must not turn
+    # a host suggestion into user scientific authority. Availability of
+    # age/sex/LOS therefore never silently becomes an ``exact`` adjustment
+    # roster or a user-prespecified 24-hour landmark. Such choices remain
+    # proposals until Copilot records a reviewed StudyContext revision.
     candidate_planning_study = materialization_study
-    planner_scientific_proposal = None
-    if not metadata_only_planning:
-        planner_scientific_proposal = _planner_landmark_spline_proposal(
-            export_path=export_path,
-            study=materialization_study,
-            target=target,
-            primary_exposure=primary_exposure,
-        )
-        if planner_scientific_proposal is not None:
-            candidate_planning_study = planner_scientific_proposal.study
-            covariates = planner_scientific_proposal.covariates
-            covariate_selection = "exact"
-            sensitivity_specs = planner_scientific_proposal.sensitivity_specs
     metadata_planning_coordinates: Dict[str, Any] = dict(planning_coordinates)
     prepared_package_binding: Optional[Dict[str, Any]] = None
     if metadata_only_planning:
@@ -4844,23 +4831,8 @@ def make_research_pipeline_run_runner(
             "primary_exposure_source_concept": None,
         }
     else:
-        # A package-bound Planner proposal is already a typed, ephemeral
-        # candidate for the plan the operator is about to review.  Its exact
-        # outcome/exposure coordinates must therefore drive the bounded
-        # pre-plan materialization as well as the runtime projection.  Using
-        # only persisted StudyContext fields here drops those coordinates when
-        # the user correctly deferred them to Planner, producing an exposure-
-        # only universe and failing before the candidate Plan can be shown.
-        foundation_target = (
-            _target_outcome(candidate_planning_study)
-            if planner_scientific_proposal is not None
-            else configured_target
-        )
-        foundation_primary_exposure = (
-            _primary_exposure(candidate_planning_study)
-            if planner_scientific_proposal is not None
-            else configured_primary_exposure
-        )
+        foundation_target = configured_target
+        foundation_primary_exposure = configured_primary_exposure
         foundation_profile = _data_foundation_profile(
             export_path=export_path,
             study=candidate_planning_study,
@@ -5224,6 +5196,22 @@ def make_research_pipeline_run_runner(
                         "The Planner could not bind a reviewable materialized representation for the exposure named in the research question.",
                     )
             pipeline_target = target
+            if target and not metadata_only_planning:
+                pipeline_target = _resolve_materialized_target_outcome(
+                    source_concept=str(target),
+                    acquisition=acquisition,
+                )
+                if not pipeline_target:
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_target_outcome_materialization_unavailable",
+                        "The selected outcome is not available as a verified analysis column in the materialized cohort.",
+                        details={
+                            "source_concept": str(target),
+                            "available_analysis_columns": dict(
+                                getattr(acquisition, "analysis_columns", {}) or {}
+                            ),
+                        },
+                    )
             if metadata_only_planning:
                 execution_concepts = study.get("execution_concepts")
                 execution_concepts = (
@@ -5764,6 +5752,20 @@ def resume_research_pipeline(
             "This candidate predates the complete reviewable-plan contract and "
             "must be regenerated before it can be approved.",
         )
+    if resolved == "approved":
+        current_review = _load_pending_scientific_review(
+            Path(entry.pending.run_dir), entry.pending
+        )
+        if not current_review:
+            raise ResearchPipelineRunError(
+                "scientific_plan_review_policy_stale",
+                "This plan was reviewed under an older scientific policy and must be regenerated before approval.",
+            )
+        if current_review.get("approval_allowed") is not True:
+            raise ResearchPipelineRunError(
+                "scientific_plan_review_changes_required",
+                "The current scientific review requires plan changes before approval.",
+            )
     if resolved == "approved":
         source = entry.study.get("data_source")
         source = source if isinstance(source, Mapping) else {}

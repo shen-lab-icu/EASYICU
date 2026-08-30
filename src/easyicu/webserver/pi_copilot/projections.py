@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from .contracts import PiCopilotError
+from .contracts import PiCopilotError, plan_approval_allowed
 from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
 
 MAX_PROJECTION_BYTES = 32_768
@@ -780,7 +780,11 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
     waiting_for_plan_review = (
         str(row.get("run_status") or "") == "human_review_pending"
         and bool(
-            {"operator_plan_approval_required", "plan_scientific_changes_required"}
+            {
+                "operator_plan_approval_required",
+                "plan_scientific_changes_required",
+                "scientific_plan_review_policy_stale",
+            }
             & set(pending_review_reason_codes)
         )
     )
@@ -821,9 +825,7 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
             {
                 "execution_phase": "plan_review",
                 "human_plan_review_pending": True,
-                "plan_approval_allowed": bool(
-                    row.get("plan_approval_allowed") is not False
-                ),
+                "plan_approval_allowed": plan_approval_allowed(row),
                 "analysis_executed": False,
                 "scientific_results_available": False,
                 "artifact_semantics": "plan_stage_placeholders_not_analysis_results",

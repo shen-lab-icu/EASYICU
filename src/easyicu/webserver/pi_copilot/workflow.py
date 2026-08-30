@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from easyicu.webserver import study_contexts as study_context_owner
 
 from . import cohort_eligibility
+from .contracts import PLAN_RESUME_OFFER_GATE_REASONS, plan_approval_allowed
 
 WorkflowStatus = Literal[
     "blocked",
@@ -83,6 +84,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     )
     study_setup_receipt: StudySetupReceipt
     plan_review_summary: Optional[Mapping[str, Any]] = None
+    plan_conversation_preview: Optional[Mapping[str, Any]] = None
     plan_execution_ready: bool = False
 
 
@@ -570,6 +572,7 @@ def build_research_workflow_snapshot(
     plan_review_codes = {
         "operator_plan_approval_required",
         "plan_scientific_changes_required",
+        "scientific_plan_review_policy_stale",
     }
     active_plan_review_codes = sorted(
         pending_review_reason_codes & plan_review_codes
@@ -693,11 +696,14 @@ def build_research_workflow_snapshot(
     )
     plan_execution_ready = bool(
         plan_review_pending
+        and plan_approval_allowed(review_authority)
         and str(review_authority.get("budget_mode") or "full_reviewed")
         != "planner_canary"
     )
     live_plan_reason = (
-        "plan_scientific_changes_required"
+        "scientific_plan_review_policy_stale"
+        if "scientific_plan_review_policy_stale" in active_plan_review_codes
+        else "plan_scientific_changes_required"
         if "plan_scientific_changes_required" in active_plan_review_codes
         else "operator_plan_approval_required"
         if plan_execution_ready
@@ -735,6 +741,7 @@ def build_research_workflow_snapshot(
     # design used for execution, so an older StudyContext must not pull the
     # visible workflow backward from result interpretation to setup.
     setup_receipted = bool(setup_ready or analysis_complete)
+    extraction_receipted = bool(prepared_export_receipted or analysis_complete)
     pipeline_attempt_blocked = bool(
         full_run
         and pipeline_run
@@ -764,12 +771,13 @@ def build_research_workflow_snapshot(
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
     )
+    # Offering "resume this plan" is narrower than seeding a fresh planning run
+    # from a preserved prefix (PLANNER_CHECKPOINT_GATE_REASONS): only a
+    # budget-exhausted plan is itself still intact.
     planner_checkpoint_resume_available = bool(
         failed_pipeline_regeneration_required
         and str(run_row.get("gate_reason") or "")
-        in {
-            "research_pipeline_planner_efficiency_budget_exhausted",
-        }
+        in PLAN_RESUME_OFFER_GATE_REASONS
         and bool(run_row.get("development_planner_checkpoint_available"))
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
@@ -841,7 +849,7 @@ def build_research_workflow_snapshot(
             label="Feature extraction",
             status=(
                 "complete"
-                if prepared_export_receipted
+                if extraction_receipted
                 else "running"
                 if extraction_running
                 else "ready"
@@ -850,8 +858,10 @@ def build_research_workflow_snapshot(
             ),
             owner="easyicu.webserver.routes.jobs",
             reason_code=(
-                "active_export_ready"
-                if prepared_export_receipted
+                "approved_analysis_input_receipt"
+                if analysis_complete and not prepared_export_receipted
+                else "active_export_ready"
+                if extraction_receipted
                 else "extraction_running"
                 if extraction_running
                 else "extraction_ready"

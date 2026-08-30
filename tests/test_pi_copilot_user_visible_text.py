@@ -102,7 +102,7 @@ def test_exact_legacy_formal_plan_action_is_projected_concisely() -> None:
 
     projected = project_transcript(rows)
 
-    assert projected[0]["content"][0]["text"] == "开始生成正式研究计划。"
+    assert projected[0]["content"][0]["text"] == "开始生成候选研究计划。"
 
 
 def test_similar_researcher_wording_is_not_rewritten() -> None:

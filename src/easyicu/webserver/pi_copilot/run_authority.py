@@ -8,11 +8,13 @@ histories so a newer pipeline run cannot be hidden by an older native run.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
-from easyicu.webserver import agent_runs, state_paths
+from easyicu.webserver import agent_runs, state_paths, study_contexts
 
+from .contracts import PLANNER_CHECKPOINT_GATE_REASONS
 from .workspace import ProjectWorkspace
 
 
@@ -105,11 +107,10 @@ def _updated_epoch(row: Dict[str, Any]) -> float:
 def _development_planner_checkpoint_available(row: Dict[str, Any]) -> bool:
     """Project presence only; the run owner validates chain integrity later."""
 
-    if str(row.get("gate_reason") or "") not in {
-        "research_pipeline_planner_efficiency_budget_exhausted",
-        "research_pipeline_plan_contract_exhausted",
-        "research_pipeline_progressive_compile_failed",
-    }:
+    if (
+        str(row.get("gate_reason") or "")
+        not in PLANNER_CHECKPOINT_GATE_REASONS
+    ):
         return False
     project_dir = Path(str(row.get("project_dir") or "")).expanduser()
     pipeline_root = project_dir / "pipeline"
@@ -137,9 +138,74 @@ def _development_planner_checkpoint_available(row: Dict[str, Any]) -> bool:
         return False
 
 
+def resumable_planner_checkpoint_job_id(
+    *,
+    study: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    project_root: Path | str,
+) -> str:
+    """Select one unchanged, bounded Planner checkpoint from run history.
+
+    Preparation-only projections and user-cancelled retries do not own a new
+    plan, so they remain visible without masking the newest valid checkpoint.
+    Every other newer terminal result is an authority boundary and prevents a
+    silent jump back to older planning state.
+    """
+
+    resumable_reasons = PLANNER_CHECKPOINT_GATE_REASONS
+    transparent_attempt_reasons = {
+        "data_foundation_blocked",
+        "research_pipeline_cancelled",
+    }
+    candidate: Mapping[str, Any] | None = None
+    for row in rows:
+        reason = str(row.get("gate_reason") or "")
+        if reason in resumable_reasons:
+            candidate = row
+            break
+        if reason in transparent_attempt_reasons:
+            continue
+        return ""
+    if candidate is None:
+        return ""
+    if str(candidate.get("run_status") or "") != "failed":
+        return ""
+    if candidate.get("development_planner_checkpoint_available") is not True:
+        return ""
+    study_id = str(study.get("id") or "").strip()
+    if not study_id or str(candidate.get("study_id") or "") != study_id:
+        return ""
+    planned_digest = str(
+        candidate.get("scientific_configuration_sha256") or ""
+    ).strip()
+    if (
+        len(planned_digest) != 64
+        or planned_digest
+        != study_contexts.scientific_configuration_sha256(dict(study))
+    ):
+        return ""
+    match = re.fullmatch(
+        r"run_([A-Za-z0-9][A-Za-z0-9_-]{0,79})",
+        str(candidate.get("run_id") or ""),
+    )
+    if match is None:
+        return ""
+    candidate_dir = Path(str(candidate.get("project_dir") or "")).expanduser()
+    try:
+        expected_root = Path(project_root).expanduser().resolve(strict=True)
+        resolved_candidate = candidate_dir.resolve(strict=True)
+        resolved_candidate.relative_to(expected_root)
+    except (FileNotFoundError, OSError, ValueError):
+        return ""
+    if resolved_candidate.parent.parent != expected_root:
+        return ""
+    return match.group(1)
+
+
 __all__ = [
     "latest_bound_run_id",
     "list_bound_run_history",
+    "resumable_planner_checkpoint_job_id",
     "research_pipeline_project_root",
     "research_pipeline_workspace",
 ]

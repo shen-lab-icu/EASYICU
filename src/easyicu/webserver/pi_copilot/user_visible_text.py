@@ -56,7 +56,7 @@ _LEGACY_FORMAL_PLAN_TRIGGER_ZH: Final = (
     "检索相关文献并生成正式、证据绑定的研究计划。仅按元数据规划时不要读取患者行；"
     "在提取或分析前停下等待我审阅。"
 )
-_FORMAL_PLAN_ACTION_ZH: Final = "开始生成正式研究计划。"
+_FORMAL_PLAN_ACTION_ZH: Final = "开始生成候选研究计划。"
 
 # ``owner: easyicu.webserver.study_contexts`` and friends, including the form
 # the model invents where a Chinese gloss trails the dotted path.

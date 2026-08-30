@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 from easyicu.research_agent.acquisition.patient_grouping import (
     PatientGroupingBinding,
@@ -31,6 +32,7 @@ from easyicu.webserver.pi_copilot.contracts import (
     PiSessionRecord,
     ToolExecutionContext,
     WorkspaceMutationLimitError,
+    plan_approval_allowed,
 )
 from easyicu.webserver.pi_copilot.projections import (
     ensure_safe_projection,
@@ -2811,10 +2813,14 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
     monkeypatch.setattr(
         tool_module.agent_pipeline_runs,
         "pending_review",
+        # ``pending_review`` always compiles ``plan_approval_allowed``; a stub
+        # that omits it is looser than the producer and would hide the
+        # fail-closed reading every consumer now shares.
         lambda _run_id: {
             "run_id": "run-current-review",
             "scientific_configuration_sha256": digest,
             "resumable_here": True,
+            "plan_approval_allowed": True,
         },
     )
     submitted: list[dict[str, Any]] = []
@@ -3060,6 +3066,10 @@ def test_registered_data_source_choices_are_path_free(
     assert explicit["details"]["selected_database"]["database"] == "miiv"
     assert explicit["details"]["database_selection_deferred"] is False
     assert explicit["details"]["source_modes"] == ["easyicu_available_data"]
+    assert [
+        row["source_id"] for row in explicit["details"]["sources"]
+    ] == ["src_full"]
+    assert explicit["details"]["source_count"] == 1
     assert explicit["details"]["recommended_source"] == {
         "source_id": "src_full",
         "label": "MIMIC-IV v3.1",
@@ -3070,6 +3080,27 @@ def test_registered_data_source_choices_are_path_free(
         "selection_reason": "most_complete_local_dataset",
         "auto_select_for_exact_database_request": True,
     }
+
+    alternatives = tool_module.execute_tool(
+        "easyicu_list_data_sources",
+        {"database": "miiv"},
+        ToolExecutionContext(
+            session=PiSessionRecord(session_id="pi-sources-alternatives"),
+            user_message="选择其他已注册的 MIMIC-IV v3.1 导出",
+        ),
+    )
+    assert alternatives["details"]["source_count"] == 2
+    assert [
+        row["source_id"] for row in alternatives["details"]["sources"]
+    ] == ["src_demo", "src_full"]
+    assert alternatives["details"]["source_modes"] == [
+        "local_full_database",
+        "registered_export",
+        "official_demo",
+    ]
+    assert alternatives["details"]["recommended_source"][
+        "auto_select_for_exact_database_request"
+    ] is False
 
     corrected_model_argument = tool_module.execute_tool(
         "easyicu_list_data_sources",
@@ -5703,19 +5734,26 @@ def test_project_evidence_preview_is_project_scoped_digest_pinned_and_governed(
     )
     service.project_store.bind("project-a", "study-a")
     digest = "d" * 64
+    wrapper = tmp_path / "wrapper"
+    pipeline_run = wrapper / "pipeline" / "run_1"
+    pipeline_run.mkdir(parents=True)
     monkeypatch.setattr(
         service_module.agent_runs,
         "list_run_history",
         lambda **kwargs: {
-            "runs": [{"run_id": "run_1", "project_dir": "/private/run-a"}]
+            "runs": [{"run_id": "run_1", "project_dir": str(wrapper)}]
             if kwargs.get("study_id") == "study-a"
             else []
         },
     )
+    preview_paths: list[str] = []
     monkeypatch.setattr(
         service_module.agent_runs,
         "read_run_evidence_preview",
-        lambda project_dir, evidence_id, expected_sha256: {
+        lambda project_dir, evidence_id, expected_sha256: preview_paths.append(
+            project_dir
+        )
+        or {
             "ok": True,
             "payload": {
                 "schema_version": "easyicu.web-evidence-preview/1",
@@ -5729,10 +5767,12 @@ def test_project_evidence_preview_is_project_scoped_digest_pinned_and_governed(
             "privacy_scan": {"passed": True},
         },
     )
+    review_paths: list[str] = []
     monkeypatch.setattr(
         service_module.agent_runs,
         "read_run_review",
-        lambda project_dir: {
+        lambda project_dir: review_paths.append(project_dir)
+        or {
             "ok": True,
             "gate": {"status": "analysis_only"},
             "readiness": {
@@ -5754,6 +5794,8 @@ def test_project_evidence_preview_is_project_scoped_digest_pinned_and_governed(
     assert payload["payload"]["text"] == "estimate = 1.25\n"
     assert payload["payload"]["sha256"] == digest
     assert payload["governance"]["claim_ceiling"] == "analysis_only"
+    assert preview_paths == [str(pipeline_run.resolve())]
+    assert review_paths == [str(wrapper)]
     assert "project_dir" not in encoded and "/private/" not in encoded
 
     with pytest.raises(PiCopilotError) as wrong_project:
@@ -6011,3 +6053,79 @@ def test_unknown_tool_arguments_and_missing_plan_keep_owner_codes(
         context,
     )
     assert missing["code"] == "easyicu_plan_not_found"
+
+
+def test_plan_approval_authority_is_fail_closed_for_every_consumer() -> None:
+    """Only an explicit ``True`` is approval authority.
+
+    The model-facing projection once read a missing flag as permissive while
+    the submit route read it as blocking, so a manifest that predates the field
+    advertised an approvable plan that the route then rejected with 409.
+    """
+
+    assert plan_approval_allowed({"plan_approval_allowed": True}) is True
+    assert plan_approval_allowed({"plan_approval_allowed": False}) is False
+    assert plan_approval_allowed({"plan_approval_allowed": None}) is False
+    assert plan_approval_allowed({}) is False
+    assert plan_approval_allowed(None) is False
+    # A truthy non-boolean is not a compiled decision either.
+    assert plan_approval_allowed({"plan_approval_allowed": "true"}) is False
+
+
+def test_plan_approval_refusal_names_the_blockers_it_is_refusing_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bare 409 is a dead end for the researcher.
+
+    Approval is refused by the same fail-closed reading every consumer shares,
+    so the refusal has to carry the blocker codes that produced it.
+    """
+
+    from easyicu.webserver.routes import agent as agent_routes
+
+    monkeypatch.setattr(
+        agent_routes.settings_store,
+        "load_settings",
+        lambda: {"ai_enabled": True},
+    )
+    monkeypatch.setattr(
+        agent_routes.agent_pipeline_runs,
+        "pending_review",
+        lambda _run_id: {
+            "run_id": "run-blocked-plan",
+            "study_id": "study-blocked-plan",
+            "resumable_here": True,
+            "budget_mode": "full_reviewed",
+            "plan_approval_allowed": False,
+            "scientific_plan_review": {
+                "status": "changes_required",
+                "findings": [
+                    {
+                        "code": "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+                        "severity": "blocker",
+                    },
+                    {
+                        "code": "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE",
+                        "severity": "major",
+                    },
+                ],
+            },
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        agent_routes.submit_agent_run_review(
+            {
+                "run_id": "run-blocked-plan",
+                "study_context_id": "study-blocked-plan",
+                "decision": "approved",
+                "external_llm_opt_in": True,
+            }
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["error"] == "scientific_plan_review_changes_required"
+    assert exc.value.detail["blocking_codes"] == [
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE"
+    ]
+    assert exc.value.detail["scientific_plan_review_status"] == "changes_required"
