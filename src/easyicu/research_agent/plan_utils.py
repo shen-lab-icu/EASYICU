@@ -4572,13 +4572,10 @@ def _step_contract_findings(
         if _skipped:
             return findings
         figure_value = None
-        for key, value in _flatten_scalar_dict(step_summary).items():
-            lowered_key = key.lower()
+        for _key, value in _flatten_scalar_dict(step_summary).items():
             lowered_value = str(value).lower()
             if (
-                "figure" in lowered_key
-                or "plot" in lowered_key
-                or lowered_value.endswith((".png", ".svg", ".pdf", ".tiff", ".tif"))
+                lowered_value.endswith((".png", ".svg", ".pdf", ".tiff", ".tif"))
                 or ".png" in lowered_value
                 or ".svg" in lowered_value
                 or ".pdf" in lowered_value
