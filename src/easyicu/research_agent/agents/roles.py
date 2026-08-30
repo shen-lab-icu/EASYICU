@@ -352,50 +352,6 @@ class ManuscriptAgent:
             administrative_authority=administrative_authority,
         )
 
-    def repair_existing(
-        self,
-        manuscript: str,
-        *,
-        context: ResearchContext,
-        evidence_ids: Sequence[str],
-        evidence_digest: Optional[str] = None,
-        literature_digest: Optional[str] = None,
-    ) -> tuple[str, tuple[str, ...]]:
-        return WriterAgent(
-            self.llm,
-            language=self.language,
-            nature_writing_enabled=self.nature_writing_enabled,
-            user_writing_advisory=self.user_writing_advisory,
-        ).repair_existing(
-            manuscript,
-            context=context,
-            evidence_ids=evidence_ids,
-            evidence_digest=evidence_digest,
-            literature_digest=literature_digest,
-        )
-
-    def repair_existing(
-        self,
-        manuscript: str,
-        *,
-        context: ResearchContext,
-        evidence_ids: Sequence[str],
-        evidence_digest: Optional[str] = None,
-        literature_digest: Optional[str] = None,
-    ) -> tuple[str, tuple[str, ...]]:
-        return WriterAgent(
-            self.llm,
-            language=self.language,
-            nature_writing_enabled=self.nature_writing_enabled,
-            user_writing_advisory=self.user_writing_advisory,
-        ).repair_existing(
-            manuscript,
-            context=context,
-            evidence_ids=evidence_ids,
-            evidence_digest=evidence_digest,
-            literature_digest=literature_digest,
-        )
-
 
 class CriticAgent:
     """Structured evaluator for execute→critique→revise loops.

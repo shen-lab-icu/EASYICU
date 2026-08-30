@@ -75,8 +75,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/1"] = (
-        "easyicu.plan_scientific_review/1"
+    schema_version: Literal["easyicu.plan_scientific_review/2"] = (
+        "easyicu.plan_scientific_review/2"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -157,6 +157,25 @@ def repeat_units_possible(context: ResearchContext) -> bool:
     n_patients = context.cohort.n_patients
     n_stays = context.cohort.n_stays
     if n_patients is not None and n_stays is not None and n_stays > n_patients:
+        return True
+    # Both counts being known and equal is itself owner-issued proof that every
+    # stay belongs to a different person, so dependence is already ruled out.
+    counts_establish_one_stay_per_patient = (
+        n_patients is not None and n_stays is not None and n_stays <= n_patients
+    )
+    # Otherwise a stay-level cohort without patient identity cannot establish
+    # that every row belongs to a different person. Treat dependence as
+    # possible rather than silently upgrading "unknown" to "independent". The
+    # review below can then offer the governed remedies: materialize patient
+    # grouping or use an owner-issued one-stay/readmission restriction.
+    analysis_unit = str(provenance.get("analysis_unit") or "").strip().casefold()
+    if (
+        n_stays is not None
+        and n_stays > 1
+        and analysis_unit == "icu_stay"
+        and not counts_establish_one_stay_per_patient
+        and context_patient_group_authority(context) is None
+    ):
         return True
     text = " ".join(
         [
@@ -1499,7 +1518,7 @@ def build_plan_scientific_review(
                 code="REPEATED_STAY_IDENTITY_UNAVAILABLE",
                 severity="blocker",
                 dimension="icu_clinical_design",
-                message="The cohort retains ICU readmissions but exposes no patient identity, so within-patient dependence cannot be identified or handled.",
+                message="The stay-level cohort does not expose patient identity, so repeated ICU stays cannot be ruled out or handled.",
                 evidence_refs=["research_context.json.cohort.provenance"],
                 remediation="Materialize an authorized patient identifier for clustered/first-stay inference, or prespecify an executable non-readmission restriction using an owner-issued readmission indicator in a new study version.",
                 requires_user_authorization=True,
@@ -1585,7 +1604,7 @@ def build_plan_scientific_review(
         findings.append(
             PlanScientificFinding(
                 code="ADJUSTMENT_SET_NOT_USER_CONFIRMED",
-                severity="major",
+                severity="blocker",
                 dimension="statistical_design",
                 message="The Planner selected an exact covariate roster from candidates the user had not approved as a prespecified adjustment set.",
                 evidence_refs=["research_context.json.user_preferences", "analysis_plan.json.model_requirements"],

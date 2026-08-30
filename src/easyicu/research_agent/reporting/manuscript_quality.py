@@ -734,11 +734,18 @@ def _unnamed_metric_excerpts(section_text: str) -> tuple[str, ...]:
     return tuple(excerpts)
 
 
+#: Sentence-final marks that end a complete section. The full-width forms are
+#: not decoration: ``WriterAgent(language="zh")`` is a supported writer mode, and
+#: an ASCII-only set flagged every Chinese section as truncated -- which spent
+#: the one targeted repair retry and then failed the whole manuscript closed.
+_TERMINAL_PUNCTUATION = ".!?)]}" + "。！？）］｝】〕」』"
+
+
 def _section_has_truncated_ending(section_text: str) -> bool:
     prose = _strip_audit_markup(section_text).rstrip()
     if not prose:
         return False
-    return prose[-1] not in ".!?)]}"
+    return prose[-1] not in _TERMINAL_PUNCTUATION
 
 
 def expected_manuscript_display_labels(

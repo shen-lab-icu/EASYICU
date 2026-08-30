@@ -3633,6 +3633,14 @@ def test_outline_prompt_publishes_host_module_action_compatibility() -> None:
     assert "separate scientific action needs its own custom_analysis step" in prompt
 
 
+def test_outline_prompt_rejects_convenient_demographic_table_one_grouping() -> None:
+    prompt = ProgressivePlannerAgent.request_messages(_context())[-1].content
+
+    assert "represents the study's primary scientific comparison" in prompt
+    assert "Never select sex, age group, site" in prompt
+    assert "merely because it has a closed domain" in prompt
+
+
 def test_retrieved_data_cards_expose_module_compatibility_without_level_values() -> None:
     cards = ProgressivePlannerAgent._retrieved_data_cards(
         _context(),

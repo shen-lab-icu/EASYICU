@@ -460,9 +460,8 @@ def test_host_inserts_missing_grid_without_repurposing_existing_sensitivity() ->
     ]
 
 
-def test_runtime_grid_rebinds_after_generic_measurement_input_closure() -> None:
-    _, authority, bound, _ = _authority_and_plan()
-    context = ResearchContext(
+def _measurement_closure_context(bound) -> ResearchContext:
+    return ResearchContext(
         research_question=bound.research_question,
         cohort=CohortDescriptor(
             cohort_name="demo",
@@ -479,9 +478,55 @@ def test_runtime_grid_rebinds_after_generic_measurement_input_closure() -> None:
             )
         ],
     )
+
+
+def test_signed_runtime_step_is_not_widened_by_measurement_input_closure() -> None:
+    """A signed runtime contract already fixes the step's exact input roster.
+
+    Generic suffix closure would add measurement companions the executor never
+    selected and does not consume, only for the authority to strip them again on
+    the next bind. The step carries ``scientific_runtime_contract:<sha256>``, so
+    closure leaves it alone and the plan stays valid without a rebind.
+    """
+
+    _, authority, bound, _ = _authority_and_plan()
+    signed_step = bound.steps[1]
+    assert any(
+        str(ref).startswith("scientific_runtime_contract:")
+        for ref in (signed_step.icu_rule_refs or ())
+    )
+
     closed, findings = close_measurement_companion_inputs(
         plan=bound,
-        context=context,
+        context=_measurement_closure_context(bound),
+    )
+
+    assert findings == []
+    assert list(closed.steps[1].inputs) == list(signed_step.inputs)
+    authority.validate_plan(closed)
+
+
+def test_runtime_grid_rebinds_after_generic_measurement_input_closure() -> None:
+    """An unsigned step still gets closed, and closure still needs a rebind.
+
+    This is the half the runtime-contract bypass does not cover: without the
+    signed roster, suffix closure widens the step's inputs past what the
+    authority declared, so the plan must fail validation until it is rebound.
+    """
+
+    _, authority, bound, _ = _authority_and_plan()
+    unsigned = bound.model_copy(
+        update={
+            "steps": [
+                bound.steps[0],
+                bound.steps[1].model_copy(update={"icu_rule_refs": []}),
+            ]
+        }
+    )
+
+    closed, findings = close_measurement_companion_inputs(
+        plan=unsigned,
+        context=_measurement_closure_context(bound),
     )
     assert findings
     with pytest.raises(CurrentCaseScientificAuthorityError, match="inputs"):

@@ -548,6 +548,91 @@ def test_e1_like_plan_is_nonapprovable_for_clinical_timing_and_dependence() -> N
     )
 
 
+def test_stay_level_cohort_without_patient_identity_fails_closed_on_dependence() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "inclusion_criteria": ["adult ICU stays"],
+                    "exclusion_criteria": [],
+                    "n_patients": None,
+                    "n_stays": 94_458,
+                    "provenance": {"analysis_unit": "icu_stay"},
+                }
+            )
+        }
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=_plan(),
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "REPEATED_STAY_IDENTITY_UNAVAILABLE"
+    )
+    assert finding.severity == "blocker"
+    assert review.approval_allowed is False
+
+
+
+def test_equal_patient_and_stay_counts_do_not_raise_dependence_blocker() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={
+                    "inclusion_criteria": ["adult ICU stays"],
+                    "exclusion_criteria": [],
+                    "n_patients": 94_458,
+                    "n_stays": 94_458,
+                    "provenance": {"analysis_unit": "icu_stay"},
+                }
+            )
+        }
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=_plan(),
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    codes = {item.code for item in review.findings}
+    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" not in codes
+    assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
+
+
+def test_planner_selected_adjustment_roster_requires_new_user_revision() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": _context().cohort.model_copy(
+                update={"n_patients": 94_458, "n_stays": 94_458}
+            )
+        }
+    )
+
+    review = build_plan_scientific_review(
+        context=context,
+        plan=_plan(),
+        literature=_literature(),
+        figure_strategy=build_article_figure_strategy(context),
+    )
+
+    finding = next(
+        item
+        for item in review.findings
+        if item.code == "ADJUSTMENT_SET_NOT_USER_CONFIRMED"
+    )
+    assert finding.severity == "blocker"
+    assert finding.requires_user_authorization is True
+    assert review.approval_allowed is False
+
+
 def test_free_text_cannot_create_a_required_sensitivity_axis() -> None:
     context = _context().model_copy(
         update={

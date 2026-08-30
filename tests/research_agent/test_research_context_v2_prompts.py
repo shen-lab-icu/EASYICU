@@ -239,7 +239,12 @@ def test_writer_prompt_forbids_unregistered_numeric_derivation(
 
     prompt = _last_user_prompt(writer_llm)
     assert "Copy a current-study number only when that exact literal value" in prompt
-    assert "Do not calculate, infer, transform, round, or reconstruct" in prompt
+    assert "Do not calculate, infer, transform, or reconstruct" in prompt
+    # ``acb34b1`` deliberately dropped "round" from the prohibition: display
+    # rounding is allowed precisely because the Host verifies the displayed
+    # literal against the canonical claim. Lock the allowance so the word is not
+    # quietly restored, which would forbid the rounding the Host relies on.
+    assert "Standard display rounding is allowed" in prompt
     assert "RESEARCH CONTEXT supplies study semantics only" in prompt
     assert "host has registered it explicitly in the evidence digest" in prompt
 

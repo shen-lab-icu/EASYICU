@@ -4588,10 +4588,12 @@ def _step_contract_findings(
                 figure_value = value
                 break
         if figure_value is None:
-            # ``_flatten_scalar_dict`` drops lists, but the coder prompt itself
-            # recommends recording multiple figure paths in list-valued keys
-            # such as ``figure_files`` / ``figure_file`` / ``figure_paths``.
-            # Accept those when they contain at least one figure-shaped path.
+            # The flattened scan above reaches list elements, but only the
+            # ones that coerce to a scalar. The coder prompt recommends
+            # recording multiple figure paths in list-valued keys such as
+            # ``figure_files`` / ``figure_file`` / ``figure_paths``; read those
+            # by name so a nested or non-scalar shape still counts when it
+            # contains at least one figure-shaped path.
             for list_key in (
                 "figure_files",
                 "figure_file",

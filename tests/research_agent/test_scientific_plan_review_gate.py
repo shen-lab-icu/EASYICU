@@ -52,6 +52,16 @@ def _review(
     )
 
 
+def test_current_scientific_review_contract_rejects_legacy_policy_artifacts() -> None:
+    legacy_payload = _review(
+        status="analysis_only", approval_allowed=True
+    ).model_dump(mode="json")
+    legacy_payload["schema_version"] = "easyicu.plan_scientific_review/1"
+
+    with pytest.raises(ValueError):
+        PlanScientificReview.model_validate(legacy_payload)
+
+
 def test_review_artifact_is_registered_then_resume_revalidates_identity(
     tmp_path: Path,
 ) -> None:

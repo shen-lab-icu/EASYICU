@@ -200,6 +200,41 @@ def test_scalar_lookup_reads_metrics_inside_list_rows() -> None:
     assert _first_present_scalar(payload, ("auroc_ci_high",)) == 0.793
 
 
+def test_scalar_lookup_does_not_read_a_field_off_a_candidate_grid() -> None:
+    """A search grid enumerates alternatives; none of them is the declared value.
+
+    ``cluster_selection.candidates[0].n_clusters`` is the first cluster count
+    that was EVALUATED. Answering the ``n_clusters`` lookup with it made a
+    two-cluster solution report one cluster, contradict its own selection
+    manifest, and fail the clustering step contract closed.
+    """
+
+    from easyicu.research_agent.scalar_utils import _first_present_scalar
+
+    summary = {
+        "cluster_count": 2,
+        "cluster_selection": {
+            "selected_n_clusters": 2,
+            "candidates": [
+                {"n_clusters": 1, "criterion_value": 0.0},
+                {"n_clusters": 2, "criterion_value": 0.33},
+            ],
+        },
+    }
+
+    assert (
+        _first_present_scalar(summary, ("n_clusters", "cluster_count")) == 2
+    )
+    # With no declared count, disagreeing candidates answer nothing rather than
+    # letting the first evaluated alternative stand in for the selection.
+    assert (
+        _first_present_scalar(
+            {"cluster_selection": summary["cluster_selection"]}, ("n_clusters",)
+        )
+        is None
+    )
+
+
 def test_register_step_summary_numerics_no_cap_when_none(ra, tmp_path: Path):
     store = ra.EvidenceStore(tmp_path)
     summary = {f"x_{i}": float(i) for i in range(10)}
