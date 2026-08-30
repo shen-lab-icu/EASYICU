@@ -52,6 +52,7 @@ from easyicu.research_agent.planning.progressive_artifacts import (
     load_progressive_planner_checkpoint_chain,
 )
 from easyicu.research_agent.literature import LiteratureBundle
+from easyicu.research_agent.schema import TimeWindow
 from easyicu.research_agent.publication_skills import (
     publication_skill_flags_from_settings,
 )
@@ -2605,7 +2606,22 @@ def _research_user_preferences(
     if analysis_goal:
         preferences["must_have_outputs"] = analysis_goal
     if comparator:
-        preferences["subgroup_sensitivity"] = comparator
+        # A comparator is the estimand's contrast, not a request for subgroup
+        # analyses. Filed as `subgroup_sensitivity` it reached the Planner as
+        # "Include subgroup/sensitivity requests: <comparator>"
+        # (`skills.py::_preference_rationale_note`), turning a stated reference
+        # group into extra analyses nobody asked for. The inbound contract has
+        # no comparator field -- the contrast belongs to the Planner's own
+        # `PlannedModelRequirement.exposure_reference_level` -- so it travels as
+        # a declared statement the Planner may honour, not as an instruction.
+        preferences["extra_notes"] = "\n".join(
+            part
+            for part in (
+                preferences.get("extra_notes"),
+                f"Comparator stated by the researcher: {comparator}",
+            )
+            if part
+        )
     raw_analysis_design = study.get("analysis_design")
     analysis_design = (
         raw_analysis_design if isinstance(raw_analysis_design, Mapping) else {}
@@ -2701,13 +2717,91 @@ def _research_user_preferences(
     return preferences
 
 
-def _diagnosis_criteria(cohort: Mapping[str, Any], key: str, prefix: str) -> List[str]:
-    values = cohort.get(key)
-    if not isinstance(values, list):
+def _declared_time_windows(
+    window: tuple[float, float], study: Mapping[str, Any]
+) -> List[TimeWindow]:
+    """Declare the materialized window as the study's analysis window.
+
+    ``pipeline.run`` accepts ``time_windows`` and the outbound Planner contract
+    publishes it as a first-class list, but the Web caller never sent one. With
+    none supplied the context builder falls back to
+    ``inferred_windows or default_time_windows()`` -- a generic roster whose
+    third entry is ``full_stay`` 0-720h. So a study materialized to the opening
+    24 hours offered the Planner a whole-stay window the data cannot support,
+    while the researcher's own confirmed window was dropped.
+
+    The tuple passed here is the same one that bounded materialization, so the
+    plan cannot name a window the cohort does not carry. ``_cohort_window`` has
+    already fail-closed on a missing duration and on any anchor the materializer
+    cannot honour, which is what lets the anchor be stated as ICU admission.
+    """
+
+    start, end = float(window[0]), float(window[1])
+    raw = study.get("time_window")
+    stated = raw if isinstance(raw, Mapping) else {}
+    label = _clean_text(stated.get("label"), 120)
+    return [
+        TimeWindow(
+            name=label or f"icu_admission_0_{end:g}h",
+            anchor="icu_admission",
+            start_hours=start,
+            end_hours=end,
+            rationale=(
+                "Outer feature-materialization window bound by the host before "
+                "this run; the cohort carries no observation outside it."
+            ),
+        )
+    ]
+
+
+def _diagnosis_filter_applies(cohort: Mapping[str, Any]) -> bool:
+    """Will the export actually run a diagnosis filter for this cohort?
+
+    Ask the primary-cohort owner instead of restating what the conversation
+    happened to type. ``primary_cohort.normalize_execution_cohort`` decides what
+    counts as an executable diagnosis predicate -- it treats a structured
+    include/exclude list as one in its own right, and it refuses a cohort it
+    cannot execute at all (an ``icd`` preset carrying no tokens, an unsupported
+    preset). Reading the owner keeps this declaration true whichever way that
+    rule moves.
+
+    What it prevents: declaring a criterion no row was ever measured against.
+    The cohort ledger draws its exclusion stage from this declaration, so an
+    unexecutable filter would surface in the write-up as a stage that ran --
+    the same unearned claim the idea handoff used to make about an adult cohort
+    nobody had chosen.
+    """
+
+    try:
+        contract = dataio.normalize_export_cohort_contract(cohort)
+    except Exception:  # noqa: BLE001 - an unverifiable filter is declared as none
+        return False
+    return bool(contract.get("icd_enabled"))
+
+
+def _diagnosis_criteria(
+    cohort: Mapping[str, Any], keys: tuple[str, ...], prefix: str
+) -> List[str]:
+    """Declare one diagnosis criterion, in the same precedence the export uses.
+
+    ``dataio`` reads ``icd_include or include_diagnoses`` (and the exclusion
+    mirror); the researcher's own wording is kept rather than the expanded token
+    roster, because a stated range is what they would recognise in the write-up.
+    """
+
+    if not _diagnosis_filter_applies(cohort):
         return []
-    clean = [_clean_text(item, 120) for item in values[:20]]
-    clean = [item for item in clean if item]
-    return [f"{prefix}: {', '.join(clean)}"] if clean else []
+    for key in keys:
+        values = cohort.get(key)
+        if isinstance(values, str):
+            values = [part for part in values.replace(";", ",").split(",")]
+        if not isinstance(values, list):
+            continue
+        clean = [_clean_text(item, 120) for item in values[:20]]
+        clean = [item for item in clean if item]
+        if clean:
+            return [f"{prefix}: {', '.join(clean)}"]
+    return []
 
 
 def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
@@ -2739,21 +2833,41 @@ def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     minimum_los = cohort.get("min_icu_los_hours")
     if minimum_los is not None:
         rows.append(f"minimum ICU length of stay: {minimum_los} hours")
-    rows.extend(_diagnosis_criteria(cohort, "include_diagnoses", "include diagnoses"))
+    rows.extend(
+        _diagnosis_criteria(
+            cohort, ("icd_include", "include_diagnoses"), "include diagnoses"
+        )
+    )
     return rows[:32]
 
 
 def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
-    """Compile the criteria that say who is REMOVED from the cohort."""
+    """Compile the criteria that say who is REMOVED from the cohort.
+
+    ``exclusion_statement`` is the prose half. Splitting the structured filter
+    fields was not enough: in practice the conversation writes the cohort as one
+    free-text ``review`` blob, and a removal stated there ("excluding stays that
+    ended before the landmark") arrived as an inclusion criterion because
+    ``review`` is the inclusion channel. Parsing that prose back apart would
+    just be another renderer guessing at study semantics, so the removal half
+    gets its own slot and the Copilot entrypoint is told to use it.
+    """
 
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
     rows: List[str] = []
+    stated = _clean_text(cohort.get("exclusion_statement"), 500)
+    if stated:
+        rows.append(stated)
     if cohort.get("exclude_readmissions") is True:
         rows.append(
             "readmissions after the first eligible ICU stay per patient"
         )
-    rows.extend(_diagnosis_criteria(cohort, "exclude_diagnoses", "exclude diagnoses"))
+    rows.extend(
+        _diagnosis_criteria(
+            cohort, ("icd_exclude", "exclude_diagnoses"), "exclude diagnoses"
+        )
+    )
     return rows[:32]
 
 
@@ -5389,6 +5503,7 @@ def make_research_pipeline_run_runner(
                 primary_exposure=resolved_primary_exposure,
                 inclusion_criteria=_inclusion_criteria(study),
                 exclusion_criteria=_exclusion_criteria(study),
+                time_windows=_declared_time_windows(window, study),
                 id_columns=(
                     [patient_grouping.output_identity_column]
                     if patient_grouping is not None

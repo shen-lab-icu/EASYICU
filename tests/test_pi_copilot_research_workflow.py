@@ -7898,7 +7898,6 @@ def test_web_study_context_compiles_to_strict_user_preferences() -> None:
     assert set(compiled) == {
         "extra_notes",
         "must_have_outputs",
-        "subgroup_sensitivity",
         "data_constraints",
         "covariates",
         "covariate_selection",
@@ -7906,7 +7905,16 @@ def test_web_study_context_compiles_to_strict_user_preferences() -> None:
         "covariate_temporal_roles",
         "covariate_operationalizations",
     }
-    assert validated.extra_notes == "Demo-only product validation."
+    # A stated comparator is the estimand's reference group, so it travels as a
+    # declaration the Planner may honour. Filed as `subgroup_sensitivity` it
+    # reached the Planner as "Include subgroup/sensitivity requests: ...",
+    # turning a reference group into extra analyses nobody requested; the
+    # contrast itself belongs to PlannedModelRequirement.
+    assert validated.subgroup_sensitivity is None
+    assert validated.extra_notes == (
+        "Demo-only product validation.\n"
+        "Comparator stated by the researcher: Compare aggregate summaries by sex."
+    )
     assert "not_for_manuscript" in str(validated.data_constraints)
     assert validated.timing_and_design is None
     constraints = json.loads(str(validated.data_constraints))

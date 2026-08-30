@@ -34,6 +34,9 @@ def test_an_exclusion_is_compiled_as_an_exclusion() -> None:
         age_min=18,
         min_icu_los_hours=24,
         exclude_readmissions=True,
+        # the diagnosis lists are only a filter once the ICD gate is on; see
+        # test_a_diagnosis_list_is_declared_only_when_it_actually_filters
+        icd_enabled=True,
         include_diagnoses=["condition-a"],
         exclude_diagnoses=["condition-b", "condition-c"],
     )
@@ -134,8 +137,66 @@ def test_an_idea_handoff_claims_no_eligibility_it_was_not_given() -> None:
     assert "Adult ICU cohort from the active prepared" not in source
 
 
+def test_a_diagnosis_criterion_is_declared_only_when_the_owner_can_run_it() -> None:
+    """Declare what the export will execute, not what the conversation typed.
+
+    ``primary_cohort.normalize_execution_cohort`` owns what counts as an
+    executable diagnosis predicate; a structured include/exclude list is one in
+    its own right. The invariant here is the delegation, not any particular
+    answer: a cohort the owner refuses outright declares no criterion, so an
+    unexecutable filter never reaches the Planner as a real exclusion stage.
+    """
+
+    for cohort in (
+        {},
+        # the owner rejects these, so nothing may be declared from them
+        {"preset": "icd"},  # empty_icd_filter: an ICD cohort with no tokens
+        {"preset": "not-a-preset", "include_diagnoses": ["condition-a"]},
+    ):
+        assert _inclusion_criteria({"cohort": cohort}) == [], cohort
+        assert _exclusion_criteria({"cohort": cohort}) == [], cohort
+
+    for cohort in (
+        {"include_diagnoses": ["condition-a"], "exclude_diagnoses": ["condition-b"]},
+        {
+            "icd_enabled": True,
+            "include_diagnoses": ["condition-a"],
+            "exclude_diagnoses": ["condition-b"],
+        },
+    ):
+        assert _inclusion_criteria({"cohort": cohort}) == [
+            "include diagnoses: condition-a"
+        ], cohort
+        assert _exclusion_criteria({"cohort": cohort}) == [
+            "exclude diagnoses: condition-b"
+        ], cohort
+
+    # the dedicated ICD fields reach their own side too; before this repair the
+    # web caller read only the *_diagnoses aliases and dropped these entirely
+    icd = _study(preset="icd", icd_include="A41", icd_exclude="T20-T32")
+    assert _inclusion_criteria(icd) == ["include diagnoses: A41"]
+    assert _exclusion_criteria(icd) == ["exclude diagnoses: T20-T32"]
+
+
+def test_a_removal_stated_in_prose_does_not_arrive_as_an_inclusion() -> None:
+    """``review`` is the inclusion channel, so removals need their own slot.
+
+    Splitting the structured fields was not enough: real studies state the
+    cohort as one free-text ``review`` blob, and a removal written there was
+    delivered as an inclusion criterion.
+    """
+
+    study = _study(
+        review="adult ICU stays",
+        exclusion_statement="stays that ended before the landmark",
+    )
+    assert _inclusion_criteria(study) == ["adult ICU stays"]
+    assert _exclusion_criteria(study) == ["stays that ended before the landmark"]
+
+
 def test_both_sides_stay_bounded() -> None:
     study = _study(
+        icd_enabled=True,
         exclude_diagnoses=[f"condition-{index}" for index in range(40)],
         include_diagnoses=[f"other-{index}" for index in range(40)],
     )
