@@ -626,7 +626,6 @@
               : emptyResearchHtml)}
           ${workspace ? '' : RUN_OUTCOME.render(state.latestRun, state.workflow)}
           ${dataConsentHtml}
-          ${dataConsentRequired ? '' : COHORT_ELIGIBILITY.render()}
           ${dataConsentRequired ? '' : workflowConfirmationHtml()}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
