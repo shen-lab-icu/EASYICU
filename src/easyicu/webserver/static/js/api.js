@@ -151,6 +151,10 @@
     return cat;
   }
 
+  async function loadConceptLineage(conceptId) {
+    return getJSON('/api/catalog/lineage/' + encodeURIComponent(String(conceptId || '')));
+  }
+
   async function hydrateWorkspaceRegistry() {
     const reg = await getJSON('/api/workspaces/registry');
     window.EU_WORKSPACE_REGISTRY = reg;
@@ -646,6 +650,7 @@
   window.EU_API.postJSON = postJSON;
   window.EU_API.postBlob = postBlob;
   window.EU_API.hydrateCatalog = hydrateCatalog;
+  window.EU_API.loadConceptLineage = loadConceptLineage;
   window.EU_API.hydrateSettings = hydrateSettings;
   window.EU_API.hydrateCapabilities = hydrateCapabilities;
   window.EU_API.hydrateWorkspaceRegistry = hydrateWorkspaceRegistry;

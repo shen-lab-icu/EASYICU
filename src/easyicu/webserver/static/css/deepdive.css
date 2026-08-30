@@ -43,7 +43,7 @@
   max-width: 820px; margin: 0 0 14px; padding: 10px 12px;
   border: 1px solid var(--accent-border); border-radius: var(--r-2);
   background: var(--accent-soft); color: var(--accent-ink);
-  font-size: 11.5px; line-height: 1.45;
+  font-size: 13px; line-height: 1.5;
 }
 .dict-catalog-note svg { flex: none; margin-top: 1px; }
 
@@ -51,7 +51,7 @@
 .dict-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 11px; border: 1px solid var(--hair-2); border-radius: var(--r-pill);
-  background: var(--surface); font: inherit; font-size: 11.75px; color: var(--ink-2); cursor: pointer;
+  background: var(--surface); font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer;
   white-space: nowrap; transition: background .12s, border-color .12s, color .12s;
 }
 .dict-chip:hover { border-color: var(--hair-3); color: var(--ink); }
@@ -59,7 +59,7 @@
 .dict-chip .dch-n { font-family: var(--font-mono); font-size: 10px; opacity: .7; }
 .dict-chip.on .dch-n { opacity: .85; }
 
-.dict-resultline { font-size: 11.5px; color: var(--ink-4); margin-bottom: 10px; }
+.dict-resultline { font-size: 13px; color: var(--ink-4); margin-bottom: 10px; }
 
 .dict-table {
   border: 1px solid var(--hair); border-radius: var(--r-3); overflow: hidden; background: var(--surface);
@@ -67,21 +67,22 @@
 .dict-row {
   display: grid; grid-template-columns: 120px 1.7fr 90px 150px 1fr;
   gap: 14px; align-items: center; padding: 11px 16px;
-  border-bottom: 1px solid var(--hair); font-size: 12.5px;
+  border-bottom: 1px solid var(--hair); font-size: 13.5px;
 }
 .dict-row:last-child { border-bottom: 0; }
 .dict-head {
-  background: var(--surface-2); font-size: 10.5px; font-weight: 650;
+  background: var(--surface-2); font-size: 12px; font-weight: 650;
   text-transform: uppercase; letter-spacing: .04em; color: var(--ink-4); padding: 9px 16px;
   position: sticky; top: 0; z-index: 1;
 }
-.dict-row .dc-code { color: var(--accent-ink); font-size: 11.5px; }
+.dict-row .dc-code { color: var(--accent-ink); font-size: 13px; }
 .dict-head .dc-code { color: var(--ink-4); }
 .dict-row .dn-t { display: block; font-weight: 550; color: var(--ink); }
-.dict-row .dn-d { display: block; font-size: 11px; color: var(--ink-4); margin-top: 2px; line-height: 1.4; text-wrap: pretty; }
-.dict-row .dc-unit { color: var(--ink-3); font-size: 11px; }
-.dict-row .dc-cat { color: var(--ink-3); font-size: 11.5px; }
+.dict-row .dn-d { display: block; font-size: 12.5px; color: var(--ink-4); margin-top: 3px; line-height: 1.45; text-wrap: pretty; }
+.dict-row .dc-unit { color: var(--ink-3); font-size: 12.5px; }
+.dict-row .dc-cat { color: var(--ink-3); font-size: 12.5px; }
 .dict-row:not(.dict-head):hover { background: var(--surface-2); }
+.dict-concept-row{width:100%;border-left:0;border-right:0;border-top:0;background:var(--surface);font-family:inherit;text-align:left;cursor:pointer}.dict-concept-row.selected{background:color-mix(in srgb,var(--accent-soft) 52%,var(--surface));box-shadow:inset 4px 0 var(--accent)}
 
 .cov-badge { display: inline-flex; align-items: center; gap: 7px; }
 .cov-badge .cov-dots { display: inline-flex; gap: 2px; }
@@ -120,6 +121,12 @@
   padding: 48px 0; color: var(--ink-4); font-size: 13px;
   border: 1px dashed var(--hair-2); border-radius: var(--r-3);
 }
+
+.dict-lineage{margin-top:18px;border:1px solid var(--hair);border-radius:var(--r-3);background:var(--surface);padding:18px;box-shadow:var(--sh-1)}
+.dict-lineage-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.dict-lineage-head h2{margin:3px 0 6px;font-size:20px}.dict-lineage-head h2 .mono{margin-left:6px;color:var(--ink-4);font-size:13px}.dict-lineage-head p{margin:0;max-width:760px;color:var(--ink-4);font-size:13.5px;line-height:1.5}
+.dict-lineage-tabs{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px;padding-bottom:12px;border-bottom:1px solid var(--hair)}.dict-lineage-tabs button{min-height:36px;padding:7px 12px;border:1px solid var(--hair-2);border-radius:var(--r-pill);background:var(--surface);color:var(--ink-3);font:650 12.5px/1 var(--font);cursor:pointer}.dict-lineage-tabs button.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
+.dict-audit-track{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;margin-top:16px;overflow:auto}.dict-audit-step{position:relative;min-width:150px;padding:0 12px 12px 0}.dict-audit-step::after{content:"";position:absolute;left:28px;right:0;top:14px;height:2px;background:var(--hair-strong)}.dict-audit-step:last-child::after{display:none}.dict-audit-step>i{position:relative;z-index:1;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;font:700 12px var(--font-mono);font-style:normal}.dict-audit-step>div{margin-top:10px}.dict-audit-step b,.dict-audit-step span{display:block}.dict-audit-step b{font-size:13px}.dict-audit-step span{margin-top:5px;color:var(--ink-4);font:11.5px/1.5 var(--font-mono);overflow-wrap:anywhere}
+.dict-lineage-lanes{display:grid;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid var(--hair)}.dict-lineage-lanes article{display:grid;grid-template-columns:150px minmax(220px,1fr) minmax(220px,1.2fr) 150px;align-items:center;gap:12px;min-height:54px;padding:9px 12px;border:1px solid var(--hair);border-left:4px solid var(--dict-lane-color);border-radius:var(--r-1);background:var(--surface-2)}.dict-lineage-lanes article>div{display:grid;grid-template-columns:auto 1fr;gap:2px 7px;align-items:center}.dict-lineage-lanes article>div i{grid-row:1/3;width:10px;height:10px;border-radius:50%;background:var(--dict-lane-color)}.dict-lineage-lanes b{font-size:13px}.dict-lineage-lanes span{font:11px var(--font-mono);color:var(--ink-4)}.dict-lineage-lanes strong,.dict-lineage-lanes em,.dict-lineage-lanes small{font:11.5px/1.45 var(--font-mono);overflow-wrap:anywhere}.dict-lineage-lanes em{color:var(--ink-4);font-style:normal}.dict-lineage-lanes small{color:var(--accent-ink);font-weight:650}
 
 /* ============================================================
    COVERAGE AUDIT

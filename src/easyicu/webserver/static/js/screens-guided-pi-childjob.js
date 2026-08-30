@@ -32,7 +32,8 @@
       const value = String(code || '').toLowerCase();
       if (value.includes('extraction')) return tr('Extracting and validating study data', '正在提取并验证研究数据');
       if (value.includes('review')) return tr('Running the approved research plan', '正在执行已批准的研究计划');
-      if (value.includes('full_run')) return tr('Generating the formal research plan', '正在生成正式研究计划');
+      if (value.includes('full_run_resume')) return tr('Reusing the existing plan and preparing analysis data', '正在复用已有计划并准备分析数据');
+      if (value.includes('full_run')) return tr('Generating the research plan', '正在生成研究计划');
       return tr('EasyICU research task is running', 'EasyICU 科研任务正在运行');
     }
     function childActivity(jobId, code) {
@@ -45,8 +46,10 @@
       };
       const label = code === 'easyicu_extraction_submitted'
         ? tr('EasyICU data extraction submitted', 'EasyICU 数据提取任务已提交')
-        : code === 'easyicu_full_run_submitted'
-          ? tr('Research Agent planning submitted', 'Research Agent 规划任务已提交')
+        : String(code || '').includes('easyicu_full_run')
+          ? String(code || '').includes('resume')
+            ? tr('Existing plan reuse and local data preparation started', '已开始复用已有计划并进行本地数据准备')
+            : tr('Research Agent planning submitted', 'Research Agent 规划任务已提交')
           : code === 'easyicu_review_submitted'
             ? tr('Approved plan submitted for analysis', '已批准计划已提交分析')
           : tr('EasyICU preflight submitted', 'EasyICU 预检任务已提交');

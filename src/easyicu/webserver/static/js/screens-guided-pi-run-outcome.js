@@ -13,6 +13,7 @@
       'result_tables.json': ['View result tables', '查看结果表'],
       'figure_gallery.json': ['View analysis figures', '查看分析图表'],
       'manuscript_provenance.json': ['Preview evidence-bound article', '预览证据绑定文章'],
+      'manuscript_scaffold.pdf': ['View LaTeX manuscript PDF', '查看 LaTeX 论文'],
       'scientific_readiness.json': ['View scientific review', '查看科学审阅'],
     };
 

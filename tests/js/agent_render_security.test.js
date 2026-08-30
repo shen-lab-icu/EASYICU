@@ -102,6 +102,12 @@ const manuscriptReader = renderer.manuscriptProvenanceView({
   }],
 });
 assert.ok(manuscriptReader.includes('data-gpi-claim='), 'bound numbers must be interactive');
+assert.match(
+  manuscriptReader,
+  /class="gpi-bound-number"[^>]*data-gpi-evidence-open[^>]*data-evidence-id="summary"[^>]*data-evidence-sha256="a{64}"/,
+  'bound numbers with valid evidence must open the exact result preview directly',
+);
+assert.ok(manuscriptReader.includes('open its exact result evidence preview'), 'reader must explain the primary click action');
 assert.ok(manuscriptReader.includes('JSON field'), 'reader must expose the exact JSON field');
 assert.ok(manuscriptReader.includes('Open registered evidence'), 'reader must expose execution lineage');
 assert.ok(manuscriptReader.includes('data-gpi-evidence-open'), 'registered evidence must be actionable');

@@ -32,6 +32,24 @@ const table = renderer.render({
 assert.ok(table.includes('&lt;svg onload=bad()&gt;'));
 assert.ok(!table.includes('<svg onload=bad()>'));
 
+const statistic = renderer.render({
+  renderer: 'json', previewable: true, kind: 'statistic', evidence_id: 'statistic_1',
+  sha256: 'd'.repeat(64), value: {
+    analysis_family: 'absolute_risk_context', n_total: 50640, outcome: 'death',
+    method: '<img src=x onerror="bad()">',
+    reportable_descriptive_results: {
+      overall_outcome: { outcome: 'death', n: 50640, event_n: 7006, risk_pct: 13.8, risk_ci_low_pct: 13.5, risk_ci_high_pct: 14.1 },
+      exposures: [{ exposure: 'lact_max', groups: [{ label: 'above threshold', n: 100, outcome_n: 100, outcome_event_n: 20, outcome_risk_pct: 20, outcome_risk_ci_low_pct: 12, outcome_risk_ci_high_pct: 31 }] }],
+    },
+  },
+}, { pointer: '/n_total', value: 50640 });
+assert.ok(statistic.includes('Readable result'));
+assert.ok(statistic.includes('Overall risk'));
+assert.ok(statistic.includes('13.8%'));
+assert.ok(statistic.includes('&lt;img src=x'));
+assert.ok(statistic.includes('Open raw JSON for audit'));
+assert.ok(!statistic.includes('<img src=x'));
+
 const withheld = renderer.render({
   renderer: 'metadata', previewable: false, kind: 'table', evidence_id: 'cohort_1',
   sha256: 'c'.repeat(64), withheld_reason: 'patient_level_rows_withheld', bytes: 1024,
@@ -39,4 +57,4 @@ const withheld = renderer.render({
 assert.ok(withheld.includes('Patient-level cohort rows are withheld'));
 assert.ok(!withheld.includes('<table'));
 
-process.stdout.write(JSON.stringify({ ok: true, cases: 3 }));
+process.stdout.write(JSON.stringify({ ok: true, cases: 4 }));

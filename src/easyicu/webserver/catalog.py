@@ -451,14 +451,17 @@ def build_concept_lineage(concept_id: str) -> Dict[str, Any] | None:
             )
     units = raw.get("unit")
     if isinstance(units, list):
-        canonical_unit = " / ".join(str(value) for value in units)
+        canonical_unit = str(units[0]) if units else None
+        unit_aliases = [str(value) for value in units[1:]]
     else:
         canonical_unit = units
+        unit_aliases = []
     return {
         "concept": concept_id,
         "name": (cc.CONCEPT_DICTIONARY.get(concept_id) or [concept_id])[0],
         "canonical": {
             "unit": canonical_unit,
+            "unit_aliases": unit_aliases,
             "minimum": raw.get("min"),
             "maximum": raw.get("max"),
             "aggregate": raw.get("aggregate"),

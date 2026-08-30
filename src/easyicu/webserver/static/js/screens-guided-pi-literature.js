@@ -26,19 +26,36 @@
     if (/\bSOFA\b/i.test(title)) return 'SOFA 器官功能评分定义';
     return title;
   }
+  function semanticIntentKey(value) {
+    const intent = String(value || '');
+    const normalized = intent.toLowerCase();
+    if (/cohort|eligib|population|account|人群|队列|纳入|排除|分母/.test(normalized)) return 'population';
+    if (/nonlinear|spline|functional|dose|form|非线性|样条|函数形式|阈值/.test(normalized)) return 'functional_form';
+    if (/exposure|lactate|measurement|time|window|暴露|乳酸|测量|时间窗|时间对齐/.test(normalized)) return 'exposure_timing';
+    if (/outcome|mortality|death|结局|死亡/.test(normalized)) return 'outcome';
+    if (/missing|imput|缺失|插补/.test(normalized)) return 'missingness';
+    if (/confound|adjust|covariat|model|混杂|调整|协变量|模型/.test(normalized)) return 'adjustment_model';
+    if (/sensitivity|robust|敏感|稳健/.test(normalized)) return 'robustness';
+    if (/report|quality|summary|报告|质量|汇总/.test(normalized)) return 'reporting';
+    return normalized || 'plan_decision';
+  }
   function displayIntent(value) {
     const intent = String(value || '');
     if (window.EU_LANG !== 'zh') return intent || 'Plan decision';
-    const normalized = intent.toLowerCase();
-    if (/cohort|eligib|population|account/.test(normalized)) return '确定研究人群与纳排标准';
-    if (/nonlinear|spline|functional|dose|form/.test(normalized)) return '检验乳酸与死亡是否为非线性关系';
-    if (/exposure|lactate|measurement|time|window/.test(normalized)) return '确定乳酸的测量方式与时间窗';
-    if (/outcome|mortality|death/.test(normalized)) return '明确院内死亡结局';
-    if (/missing|imput/.test(normalized)) return '处理缺失数据';
-    if (/confound|adjust|covariat|model/.test(normalized)) return '确定混杂因素与统计模型';
-    if (/sensitivity|robust/.test(normalized)) return '安排敏感性分析';
-    if (/report|quality|summary/.test(normalized)) return '规范结果与研究流程的报告';
-    return '计划中的科学设计决定';
+    const functionalFormLabel = /lactate|乳酸/i.test(intent)
+      ? '检验乳酸与死亡是否为非线性关系'
+      : '检验连续研究因素与结局是否为非线性关系';
+    const labels = {
+      population: '确定研究人群与纳排标准',
+      functional_form: functionalFormLabel,
+      exposure_timing: '确定研究因素的测量方式与时间窗',
+      outcome: '明确研究结局',
+      missingness: '处理缺失数据',
+      adjustment_model: '确定混杂因素与统计模型',
+      robustness: '安排敏感性分析',
+      reporting: '规范结果与研究流程的报告',
+    };
+    return labels[semanticIntentKey(intent)] || '计划中的科学设计决定';
   }
   function displayApplication(source) {
     const application = String((source && source.application) || '');
@@ -52,6 +69,19 @@
     if (/direct|compar|lactate|mortality|death|icu/.test(haystack)) return '用于对照相近 ICU 人群中乳酸、院内死亡和调整策略的定义；本计划只借鉴设计，不复制文献中的效应值。';
     return application ? '这篇文献与该设计决定有关；下方保留原始绑定，仍需研究者核对其适用性。' : '';
   }
+  function sourceKey(source) {
+    const row = source && typeof source === 'object' ? source : {};
+    return String(row.key || row.pmid || row.doi || row.source_url || row.url || row.title || '').trim();
+  }
+  function uniqueSources(rows) {
+    const seen = new Set();
+    return (Array.isArray(rows) ? rows : []).filter(row => {
+      const key = sourceKey(row);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
   function boundUsage(payload) {
     const usage = new Map();
     (Array.isArray(payload.step_citation_map) ? payload.step_citation_map : []).forEach(step => {
@@ -59,10 +89,14 @@
         const key = String(binding.key || '');
         if (!key) return;
         if (!usage.has(key)) usage.set(key, []);
-        usage.get(key).push({
+        const next = {
+          key: semanticIntentKey(step.intent),
           intent: displayIntent(step.intent),
           application: displayApplication(binding),
-        });
+          designElements: Array.from(bindingElements(binding)),
+        };
+        const duplicate = usage.get(key).some(row => row.intent === next.intent && row.application === next.application);
+        if (!duplicate) usage.get(key).push(next);
       });
     });
     return usage;
@@ -75,22 +109,53 @@
     const elements = bindingElements(binding);
     return elements.size === 1 && elements.has('reporting');
   }
-  function evidenceCoverage(payload) {
-    let scientificBindings = 0;
-    let reportingBindings = 0;
+  function evidenceRole(binding, directKeys) {
+    const key = sourceKey(binding);
+    if (directKeys && directKeys.has(key)) return 'direct';
+    const haystack = `${key} ${binding && binding.title || ''}`.toLowerCase();
+    const elements = bindingElements(binding);
+    if (isReportingOnly(binding) || /\bstrobe\b|\brecord\b/.test(haystack)) return 'reporting';
+    if (/imput|missing|spline|landmark|survival|regression|model/.test(haystack)
+      || ['time_zero', 'missing_data', 'robustness'].some(value => elements.has(value))) return 'methods';
+    if (['population', 'exposure', 'outcome', 'adjustment', 'dependence', 'measurement'].some(value => elements.has(value))) return 'variables';
+    return 'methods';
+  }
+  function evidenceBuckets(payload) {
+    const directKeys = new Set(Array.isArray(payload.direct_comparator_keys)
+      ? payload.direct_comparator_keys.map(String) : []);
+    const citationByKey = new Map((Array.isArray(payload.citations) ? payload.citations : [])
+      .map(row => [sourceKey(row), row]).filter(row => row[0]));
+    const entries = new Map();
+    citationByKey.forEach((source, key) => {
+      if (directKeys.has(key)) entries.set(key, { source, role: 'direct' });
+    });
     (Array.isArray(payload.step_citation_map) ? payload.step_citation_map : []).forEach(step => {
       (Array.isArray(step.citation_bindings) ? step.citation_bindings : []).forEach(binding => {
-        if (isReportingOnly(binding)) reportingBindings += 1;
-        else scientificBindings += 1;
+        const key = sourceKey(binding);
+        if (!key) return;
+        const source = { ...(citationByKey.get(key) || {}), ...binding };
+        const role = evidenceRole(binding, directKeys);
+        const existing = entries.get(key);
+        if (!existing || existing.role !== 'direct') entries.set(key, { source, role });
       });
     });
+    const buckets = { direct: [], variables: [], methods: [], reporting: [] };
+    entries.forEach(entry => buckets[entry.role].push(entry.source));
+    Object.keys(buckets).forEach(key => { buckets[key] = uniqueSources(buckets[key]); });
+    return buckets;
+  }
+  function evidenceCoverage(payload) {
+    const buckets = evidenceBuckets(payload);
+    const scientificBindings = buckets.variables.length + buckets.methods.length;
+    const reportingBindings = buckets.reporting.length;
     const directCount = Number(payload.direct_comparator_count || 0);
     const incomplete = directCount === 0 || scientificBindings === 0;
     return `<section class="gpi-lit-coverage ${incomplete ? 'incomplete' : 'supported'}">
       <header><h3>${esc(tr('What the literature currently supports', '当前文献实际支撑了什么'))}</h3><span>${esc(incomplete ? tr('Incomplete', '依据不完整') : tr('Mapped', '已有科学依据'))}</span></header>
       <div class="gpi-lit-coverage-grid">
-        <div><span>${esc(tr('Direct question evidence', '同题直接证据'))}</span><strong>${directCount ? esc(tr(`${directCount} candidate(s)`, `${directCount} 篇候选`)) : esc(tr('Not established', '尚未建立'))}</strong></div>
-        <div><span>${esc(tr('Scientific design bindings', '科学设计依据'))}</span><strong>${scientificBindings ? esc(tr(`${scientificBindings} binding(s)`, `${scientificBindings} 项绑定`)) : esc(tr('Not shown', '尚未显示'))}</strong></div>
+        <div><span>${esc(tr('Direct question studies', '研究问题直接相关'))}</span><strong>${esc(tr(`${buckets.direct.length || directCount} source(s)`, `${buckets.direct.length || directCount} 篇`))}</strong></div>
+        <div><span>${esc(tr('Variables and covariates', '变量与协变量依据'))}</span><strong>${esc(tr(`${buckets.variables.length} source(s)`, `${buckets.variables.length} 篇`))}</strong></div>
+        <div><span>${esc(tr('Statistical methods', '统计方法依据'))}</span><strong>${esc(tr(`${buckets.methods.length} source(s)`, `${buckets.methods.length} 篇`))}</strong></div>
         <div><span>${esc(tr('Reporting guidance', '报告规范'))}</span><strong>${esc(tr(`${reportingBindings} source(s)`, `${reportingBindings} 篇`))}</strong></div>
       </div>
       ${incomplete ? `<p>${esc(tr(
@@ -157,19 +222,6 @@
   }
   function reasonFor(row, kind, usages) {
     const screening = row.screening && typeof row.screening === 'object' ? row.screening : null;
-    if (kind === 'direct') {
-      return tr(
-        'The retained title and abstract match the ICU population, the declared exposure, and the mortality outcome. It is still a candidate pending human review of time window and analysis design.',
-        '题名和摘要同时匹配 ICU 人群、乳酸这一研究因素和指定死亡结局。它仍只是候选，时间窗和分析方法还要人工核对。'
-      );
-    }
-    if (kind === 'plan') {
-      const applications = usages.map(row => row.application).filter(Boolean);
-      return applications[0] || tr(
-        'This source is attached to a concrete decision in the current plan.',
-        '这篇文献被用于当前计划中的一个具体决定。'
-      );
-    }
     if (kind === 'excluded' && screening) {
       const missing = missingAxes(screening);
       return missing.length
@@ -184,7 +236,9 @@
   function kindLabel(kind) {
     const labels = {
       direct: tr('Directly related candidate', '直接相关候选'),
-      plan: tr('Used in this plan', '用于当前计划'),
+      variables: tr('Variables / covariates', '变量与协变量'),
+      methods: tr('Statistical method', '统计方法'),
+      reporting: tr('Reporting guidance', '报告规范'),
       excluded: tr('Retrieved but not accepted', '检索到但未采用'),
       reference: tr('Other system reference', '其他系统参考'),
     };
@@ -198,12 +252,16 @@
     const key = row.key || '';
     const kind = config.kind || 'reference';
     const usages = Array.isArray(config.usages) ? config.usages : [];
+    const genericIntent = tr('Plan decision', '计划中的科学设计决定');
+    const useLabels = Array.from(new Set(usages.map(item => item.intent).filter(value => value && value !== genericIntent)));
+    const excludedReason = kind === 'excluded' ? reasonFor(row, kind, usages) : '';
     if (key && indexByKey) indexByKey.set(String(key), row);
     return `<article class="gpi-lit-card ${esc(kind)}">
       <div class="gpi-lit-card-head"><span class="gpi-lit-kind">${esc(kindLabel(kind))}</span></div>
       <h4>${esc(title)}</h4>
       ${sourceMeta(row) ? `<div class="gpi-lit-meta">${sourceMeta(row)}</div>` : ''}
-      <p class="gpi-lit-why"><strong>${esc(tr('Why it is shown: ', '为什么显示：'))}</strong>${esc(reasonFor(row, kind, usages))}</p>
+      ${useLabels.length ? `<div class="gpi-lit-use"><strong>${esc(tr('Used for: ', '用于计划：'))}</strong>${useLabels.map(label => `<span>${esc(label)}</span>`).join('')}</div>` : ''}
+      ${excludedReason ? `<p class="gpi-lit-why"><strong>${esc(tr('Why it was not accepted: ', '未采用原因：'))}</strong>${esc(excludedReason)}</p>` : ''}
       ${relevance ? `<details class="gpi-lit-source-detail"><summary>${esc(tr('View retained source excerpt', '查看系统保留的摘要片段'))}</summary><p>${esc(relevance)}</p></details>` : ''}
       ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(tr('Open source record', '打开来源页面'))}<span aria-hidden="true">↗</span></a>` : `<span class="gpi-lit-no-link">${esc(tr('No verified source link in this artifact', '该产物没有已核验的来源链接'))}</span>`}
     </article>`;
@@ -237,55 +295,34 @@
     </section>`;
   }
   function planMap(payload) {
-    const rows = (Array.isArray(payload.step_citation_map) ? payload.step_citation_map : [])
-      .map(row => ({
-        ...row,
-        citation_bindings: (Array.isArray(row.citation_bindings) ? row.citation_bindings : [])
-          .filter(binding => !isReportingOnly(binding)),
-      }))
-      .filter(row => row.citation_bindings.length);
-    const reporting = (Array.isArray(payload.step_citation_map) ? payload.step_citation_map : [])
-      .flatMap(row => (Array.isArray(row.citation_bindings) ? row.citation_bindings : [])
-        .filter(isReportingOnly));
-    const reportingHtml = reporting.length ? `<details class="gpi-lit-reporting"><summary>${esc(tr(`Reporting guidance (${reporting.length})`, `另有 ${reporting.length} 篇报告规范`))}</summary><p>${esc(tr('These sources guide transparent reporting, but do not determine the scientific design.', '这些文献只规范如何透明报告，不能替代科学设计依据。'))}</p><ul>${reporting.map(source => {
-      const url = safeUrl(source.source_url || source.url);
-      const label = esc(displayTitle(source));
-      return `<li>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${label}<span aria-hidden="true">↗</span></a>` : `<strong>${label}</strong>`}${source.year ? `<small>${esc(source.year)}</small>` : ''}</li>`;
-    }).join('')}</ul></details>` : '';
-    if (!rows.length) return `<section class="gpi-lit-map empty"><header><h3>${esc(tr('How literature shaped this plan', '文献具体影响了计划的哪里'))}</h3><span>${esc(tr('0 scientific decisions', '0 项科学设计决定'))}</span></header><p>${esc(tr('No article is attached to a scientific design decision yet.', '目前还没有文献绑定到科学设计决定。'))}</p>${reportingHtml}</section>`;
+    const buckets = evidenceBuckets(payload);
+    const usage = boundUsage(payload);
+    const indexByKey = new Map();
+    const searched = Boolean(payload.search && payload.search.search_conducted);
+    const total = buckets.direct.length + buckets.variables.length + buckets.methods.length + buckets.reporting.length;
+    if (!total) return `<section class="gpi-lit-map empty"><header><h3>${esc(tr('Literature grouped by purpose', '文献按用途分组'))}</h3><span>0</span></header><p>${esc(tr('No article is attached to this plan yet.', '目前还没有文献绑定到这份计划。'))}</p></section>`;
     return `<section class="gpi-lit-map">
-      <header><h3>${esc(tr('How literature shaped this plan', '文献具体影响了计划的哪里'))}</h3><span>${esc(tr(`${rows.length} decision(s)`, `${rows.length} 个决定`))}</span></header>
-      <div class="gpi-lit-map-list">${rows.map(row => {
-        const bindings = Array.isArray(row.citation_bindings) ? row.citation_bindings : [];
-        return `<article class="gpi-lit-step bound">
-          <h4>${esc(displayIntent(row.intent))}</h4>
-          <ul>${bindings.map(source => {
-            const url = safeUrl(source.source_url || source.url);
-            const label = esc(displayTitle(source));
-            const application = displayApplication(source);
-            return `<li><div>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${label}<span aria-hidden="true">↗</span></a>` : `<strong>${label}</strong>`}${source.year ? `<small>${esc(source.year)}</small>` : ''}</div>${application ? `<p><strong>${esc(tr('Why used: ', '为什么采用：'))}</strong>${esc(application)}</p>` : ''}</li>`;
-          }).join('')}</ul>
-        </article>`;
-      }).join('')}</div>
-      ${reportingHtml}
+      <header><h3>${esc(tr('Literature grouped by purpose', '文献按用途分组'))}</h3><span>${esc(tr(`${total} source(s)`, `${total} 篇`))}</span></header>
+      ${articleGroup(tr('Studies directly related to the research question', '研究问题直接相关'), buckets.direct, 'direct', usage, indexByKey, { note: tr('These candidates match the population, lactate exposure, and mortality outcome. Review the original article for its time window and analysis design.', '这些候选同时匹配研究人群、乳酸和死亡结局；时间窗与分析方法还需打开原文核对。'), emptyText: searched ? tr('No article passed direct-match screening.', '本次检索暂无文章通过筛选。') : tr('Question-specific search has not run yet.', '尚未执行针对这个问题的文献检索。') })}
+      ${articleGroup(tr('Evidence for variables and covariates', '变量、特征与协变量依据'), buckets.variables, 'variables', usage, indexByKey, { collapsed: true, note: tr('Used to define the population, lactate, outcome, and adjustment variables; not to copy effect estimates.', '用于定义研究人群、乳酸、结局和调整变量，不复制文献的效应值。'), hideWhenEmpty: true })}
+      ${articleGroup(tr('Evidence for statistical methods', '统计方法依据'), buckets.methods, 'methods', usage, indexByKey, { collapsed: true, note: tr('Used for time alignment, missing data, functional form, and sensitivity analyses.', '用于时间对齐、缺失数据、函数形式和敏感性分析。'), hideWhenEmpty: true })}
+      ${articleGroup(tr('Reporting guidelines', '报告规范'), buckets.reporting, 'reporting', usage, indexByKey, { collapsed: true, note: tr('These sources govern transparent reporting only; they do not prove the study association.', '这些文献只规范透明报告，不证明乳酸与死亡存在关联。'), hideWhenEmpty: true })}
     </section>`;
   }
   function articleGroup(title, rows, kind, usage, indexByKey, options) {
     if (!rows.length && options && options.hideWhenEmpty) return '';
-    const cards = rows.map(row => articleCard(row, indexByKey, { kind, usages: usage.get(String(row.key || '')) || [] })).join('');
+    const cards = rows.map(row => articleCard(row, indexByKey, { kind, usages: usage.get(sourceKey(row)) || [] })).join('');
     if (options && options.collapsed) {
       return `<details class="gpi-lit-group collapsed"><summary><strong>${esc(title)}</strong><span>${rows.length}</span></summary><p class="gpi-lit-group-note">${esc(options.note || '')}</p>${cards}</details>`;
     }
-    return `<section class="gpi-lit-group"><header><h3>${esc(title)}</h3><span>${rows.length}</span></header>${cards || `<div class="gpi-lit-empty">${esc(options && options.emptyText || tr('No articles in this group.', '这一组没有文献。'))}</div>`}</section>`;
+    return `<section class="gpi-lit-group"><header><h3>${esc(title)}</h3><span>${rows.length}</span></header>${options && options.note ? `<p class="gpi-lit-group-note">${esc(options.note)}</p>` : ''}${cards || `<div class="gpi-lit-empty">${esc(options && options.emptyText || tr('No articles in this group.', '这一组没有文献。'))}</div>`}</section>`;
   }
   function renderArtifact(payload, meta) {
     const p = payload && typeof payload === 'object' ? payload : {};
-    const searched = !!(p.search && p.search.search_conducted);
     const citations = Array.isArray(p.citations) ? p.citations : [];
     const indexByKey = new Map();
     const usage = boundUsage(p);
     const directKeys = new Set(Array.isArray(p.direct_comparator_keys) ? p.direct_comparator_keys.map(String) : []);
-    const direct = citations.filter(row => directKeys.has(String(row.key || '')));
     const excluded = citations.filter(row => row.screening && !directKeys.has(String(row.key || '')) && !usage.has(String(row.key || '')));
     const reference = citations.filter(row => !row.screening && !directKeys.has(String(row.key || '')) && !usage.has(String(row.key || '')));
     return `<div class="gpi-lit-view">
@@ -294,9 +331,6 @@
       <div class="gpi-lit-boundary" role="note"><strong>${esc(tr('How to read this page', '这一页怎么看'))}</strong><span>${esc(tr('Only the direct-match group addresses the user question. Reporting standards and variable definitions can shape a plan, but they cannot prove an association between the declared exposure and outcome.', '只有“直接相关候选”能回答用户的问题。报告规范和变量定义可以帮助制定计划，但不能证明用户指定的研究因素与结局有关。'))}</span></div>
       ${evidenceCoverage(p)}
       ${planMap(p)}
-      ${articleGroup(tr('Studies directly related to the research question', '与研究问题直接相关的文章'), direct, 'direct', usage, indexByKey, { emptyText: searched
-        ? tr('None passed screening. The plan needs a better search or must be labelled exploratory.', '本次检索暂无文章通过筛选。需要补充检索，否则计划只能标为探索性。')
-        : tr('Search has not run yet. Generate the plan again to retrieve and screen question-specific studies.', '尚未执行检索。请重新生成计划，系统将检索并筛选与当前问题直接相关的文章。') })}
       ${articleGroup(tr('Retrieved articles not accepted as direct evidence', '检索到但未作为直接依据的文章'), excluded, 'excluded', usage, indexByKey, { collapsed: true, note: tr('Open only when reviewing why candidates were rejected.', '需要核对筛选原因时再展开。') })}
       ${articleGroup(tr('Other system references not used as direct evidence', '系统参考库里的其他资料'), reference, 'reference', usage, indexByKey, { collapsed: true, note: tr('Older definition or method papers may appear here. They are not direct evidence for the current research question and are collapsed by default.', '这里可能包含较早的定义或方法文献；它们不是当前研究问题的直接证据，默认收起。') })}
     </div>`;

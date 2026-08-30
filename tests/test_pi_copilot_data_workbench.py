@@ -236,6 +236,90 @@ def test_completed_analysis_prepares_native_feature_workbench_from_plan(
     assert snapshot["payload"]["summary"]["cohort_size"] == 120
 
 
+def test_completed_analysis_review_uses_immutable_run_cohort_when_source_is_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pd = pytest.importorskip("pandas")
+    wrapper = tmp_path / "wrapper"
+    run_id = "run_completed"
+    run_dir = wrapper / "pipeline" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "analysis_plan.json").write_text(
+        json.dumps(
+            {
+                "design_selection": {
+                    "candidates": [
+                        {
+                            "disposition": "selected",
+                            "required_variables": [
+                                "stay_id",
+                                "lact_max",
+                                "death",
+                                "age",
+                                "sex",
+                            ],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "stay_id": [101, 102, 103],
+            "lact_max": [1.2, 2.8, None],
+            "death": [False, True, False],
+            "age": [51, 67, 73],
+            "sex": ["F", "M", "F"],
+        }
+    ).to_parquet(run_dir / "cohort.parquet", index=False)
+
+    store = CopilotDataWorkbenchSnapshotStore(tmp_path / "snapshots")
+    service = object.__new__(PiCopilotService)
+    service.project_store = type(
+        "ProjectStore", (), {"resolve": lambda _self, _project: "study-a"}
+    )()
+    service.data_workbench_snapshot_store = store
+    service._assert_project_initialized = lambda project_id: project_id
+    service._latest_run_id = lambda _study_id, project_id: run_id
+    service._research_run_row = lambda _project_id, _run_id: {
+        "project_dir": str(wrapper)
+    }
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.service.study_contexts.get_context",
+        lambda _study_id: {
+            "id": "study-a",
+            "data_source": {
+                "path": str(tmp_path / "disconnected-export"),
+                "database": "miiv",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "easyicu.webserver.dataio.describe_export_source",
+        lambda _path: {"error": "not_a_directory", "files": []},
+    )
+
+    prepared = service.prepare_data_workbench_snapshot(project_id="project-a")
+
+    resource = prepared["resource"]
+    assert resource["view"] == "feature_distribution"
+    snapshot = store.load(
+        project_id="project-a", digest=resource["snapshot_sha256"]
+    )
+    assert snapshot["payload"]["summary"]["cohort_size"] == 3
+    assert snapshot["payload"]["source"]["id"] == "run_scoped_analysis_input"
+    distributions = snapshot["payload"]["selected_feature_distributions"]
+    assert {row["column"] for row in distributions} == {
+        "lact_max",
+        "death",
+        "age",
+        "sex",
+    }
+    assert snapshot["privacy"]["raw_rows_returned"] is False
+
+
 def test_selected_feature_distributions_are_bounded_stay_level_aggregates() -> None:
     distributions = cohort_review._selected_feature_distributions(
         ["stay-a", "stay-b", "stay-c", "stay-d"],

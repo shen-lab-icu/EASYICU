@@ -308,6 +308,28 @@
       };
     }));
     const dense = bins.length > 12;
+    if (spec.pairedExact) {
+      const nonZero = values.filter(row => row.value[3] > 0);
+      const maxCount = Math.max(1, ...nonZero.map(row => row.value[3]));
+      return Object.assign(chartCore.baseOption(spec.description), {
+        grid: chartCore.grid({ left: 72, right: 28, top: 34, bottom: 62 }),
+        tooltip: chartCore.tooltip(params => {
+          const value = params && params.value || [];
+          return `SOFA-1 ${value[1]} → SOFA-2 ${value[0]}\nN ${value[3]} · ${chartCore.formatNumber(value[4], 1)}%`;
+        }, 'item'),
+        xAxis: chartCore.axis({ type: 'value', name: spec.xLabel, min: 0, max: 24, interval: 4, splitLine: true }),
+        yAxis: chartCore.axis({ type: 'value', name: spec.yLabel, min: 0, max: 24, interval: 4, splitLine: true }),
+        series: [{
+          name: spec.valueLabel,
+          type: 'scatter',
+          data: nonZero,
+          symbolSize: params => 9 + Math.sqrt(Number(params[3]) / maxCount) * 30,
+          itemStyle: { color: params => params.value[0] > params.value[1] ? '#be4c4c' : params.value[0] < params.value[1] ? '#2a6fb2' : '#22897a', opacity: .82, borderColor: '#fff', borderWidth: 2 },
+          markLine: { silent: true, symbol: ['none','none'], lineStyle: { color: '#73808c', type: 'dashed', width: 1.5 }, label: { show: false }, data: [[{ coord: [0,0] }, { coord: [24,24] }]] },
+          emphasis: { scale: 1.18 },
+        }],
+      });
+    }
     const option = Object.assign(chartCore.baseOption(spec.description), {
       grid: chartCore.grid({
         left: dense ? 78 : 72,
@@ -344,7 +366,7 @@
           show: !dense,
           color: '#17202a',
           fontFamily: 'IBM Plex Mono, ui-monospace, monospace',
-          fontSize: 10,
+          fontSize: 12,
           formatter: params => spec.mode === 'count'
             ? chartCore.formatNumber(params.value[3], 0)
             : `${chartCore.formatNumber(params.value[4], 1)}%`,
@@ -400,7 +422,7 @@
       heatmapOption(spec),
       heatmapFallback(spec),
       spec.label,
-      dense ? 560 : 410,
+      spec.pairedExact ? 520 : dense ? 560 : 410,
     )}
     <div class="cohort-heat-legend">
       <span><i class="same"></i>${esc(spec.sameLabel)}</span>

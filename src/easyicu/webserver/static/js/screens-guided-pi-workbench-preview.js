@@ -98,6 +98,32 @@
     if (!rows.length) return `<span class="gpi-wb-muted">${esc(tr('No configured modules', '尚未配置模块'))}</span>`;
     return `<div class="gpi-wb-modules">${rows.map(row => `<span class="${statusClass(row.availability_status)}"><strong>${esc(row.module || '')}</strong><small>${esc(statusLabel(row.availability_status))}</small></span>`).join('')}</div>`;
   }
+  function readinessChart(payload) {
+    const rows = (Array.isArray(payload && payload.concepts) ? payload.concepts : [])
+      .map(row => {
+        const denominator = number(row && row.denominator_count);
+        const evaluable = number(row && row.evaluable_count);
+        const coverage = denominator && evaluable != null
+          ? percent(evaluable / denominator * 100)
+          : percent(row && row.physical_coverage_pct);
+        return { row, coverage };
+      })
+      .filter(item => item.coverage != null)
+      .sort((left, right) => left.coverage - right.coverage)
+      .slice(0, 8);
+    if (!rows.length) return `<p class="gpi-wb-muted">${esc(tr('Coverage will appear after the source owner publishes aggregate receipts.', '数据源 owner 发布聚合回执后，这里会显示覆盖情况。'))}</p>`;
+    return `<div class="gpi-wb-coverage-chart" role="img" aria-label="${esc(tr('Lowest observed coverage among planned variables', '计划变量中覆盖率最低的字段'))}">
+      ${rows.map(item => `<div class="gpi-wb-coverage-row"><span title="${esc(item.row.concept_id || '')}">${esc(item.row.concept_id || tr('Unnamed concept', '未命名概念'))}</span><i><u style="width:${item.coverage.toFixed(2)}%"></u></i><strong>${item.coverage.toFixed(1)}%</strong></div>`).join('')}
+    </div>`;
+  }
+  function pendingAnalysisSteps() {
+    const rows = [
+      tr('Build the final analytic cohort and apply the Plan\'s time-zero and eligibility rules', '生成最终分析队列，并应用计划中的时间起点与纳排规则'),
+      tr('Apply missing-data handling, variable coding, and any prespecified transformations', '执行缺失数据处理、变量编码及预先设定的转换'),
+      tr('Fit the models and produce result tables and figures', '拟合模型，并生成结果表与图表'),
+    ];
+    return `<div class="gpi-wb-pending"><strong>${esc(tr('Runs only after approval', '批准后才会执行'))}</strong><ol>${rows.map(row => `<li>${esc(row)}</li>`).join('')}</ol></div>`;
+  }
   function render(payload) {
     const denominator = payload && payload.denominator && number(payload.denominator.count);
     const modules = Array.isArray(payload && payload.configured_modules) ? payload.configured_modules : [];
@@ -109,15 +135,16 @@
     const postPlan = payload && payload.review_stage === 'post_plan';
     const isReady = payload && ['ready_for_plan', 'ready_for_analysis'].includes(payload.status);
     return `<section class="gpi-wb" data-gpi-workbench>
-      <header class="gpi-wb-intro"><div><span class="gpi-wb-eyebrow">${esc(tr('Embedded data workbench', '嵌入式数据工作台'))}</span><h3>${esc(tr('Screen the analysis package without leaving the conversation', '无需离开对话即可审阅分析数据包'))}</h3><p>${esc(postPlan ? tr('This read-only view comes from the exact cohort bound to the candidate Plan. It shows only Parquet metadata and never reveals analysis results.', '这是候选计划精确绑定队列的只读视图，只展示 Parquet 元数据，不会提前泄露分析结果。') : tr('This is a read-only projection of the registered export. It cannot silently change the cohort or reveal analysis results.', '这是已登记数据源的只读投影，不能静默修改队列，也不会提前泄露分析结果。'))}</p></div><em class="${isReady ? 'ready' : 'blocked'}">${esc(isReady ? (postPlan ? tr('Analysis data ready', '分析数据已准备') : tr('Ready for plan', '可进入计划')) : tr('Review blocked', '审阅受阻'))}</em></header>
+      <header class="gpi-wb-intro"><div><span class="gpi-wb-eyebrow">${esc(tr('Embedded data workbench', '嵌入式数据工作台'))}</span><h3>${esc(postPlan ? tr('Pre-analysis data readiness check', '分析前数据准备检查') : tr('Registered source review', '已登记数据源检查'))}</h3><p>${esc(postPlan ? tr('This result-blind view confirms the reusable source and availability of Plan-named variables. It is not the final analytic cohort and no preprocessing or model has run.', '这个不看结果的视图用于确认可复用数据源及计划变量是否可用；它不是最终分析队列，尚未运行预处理或模型。') : tr('This is a read-only projection of the registered export. It cannot silently change the cohort or reveal analysis results.', '这是已登记数据源的只读投影，不能静默修改队列，也不会提前泄露分析结果。'))}</p></div><em class="${isReady ? 'ready' : 'blocked'}">${esc(isReady ? (postPlan ? tr('Source ready', '数据源已准备') : tr('Ready for plan', '可进入计划')) : tr('Review blocked', '审阅受阻'))}</em></header>
       <div class="gpi-wb-cards">
-        ${summaryCard(tr('Analysis denominator', '分析分母'), denominator == null ? '—' : denominator.toLocaleString(), payload && payload.denominator && payload.denominator.analysis_unit)}
-        ${summaryCard(postPlan ? tr('Analysis datasets', '分析数据集') : tr('Configured modules', '已配置模块'), modules.length, modules.filter(row => row && row.availability_status === 'ready').length + ' ' + tr('ready', '可用'))}
-        ${summaryCard(postPlan ? tr('Data columns', '数据字段') : tr('Execution concepts', '执行概念'), `${readyCount}/${concepts.length}`, tr('fully available', '完全可用'))}
+        ${summaryCard(postPlan ? tr('Source denominator', '来源分母') : tr('Registered denominator', '登记分母'), denominator == null ? '—' : denominator.toLocaleString(), payload && payload.denominator && payload.denominator.analysis_unit)}
+        ${summaryCard(postPlan ? tr('Bound source modules', '已绑定数据模块') : tr('Configured modules', '已配置模块'), modules.length, modules.filter(row => row && row.availability_status === 'ready').length + ' ' + tr('ready', '可用'))}
+        ${summaryCard(postPlan ? tr('Planned variables', '计划变量') : tr('Execution concepts', '执行概念'), `${readyCount}/${concepts.length}`, tr('fully available', '完全可用'))}
         ${summaryCard(tr('Quality watchlist', '质量关注项'), Number(quality.watchlist_count || 0), quality.median_coverage_pct == null ? '' : `${tr('median coverage', '中位覆盖')} ${quality.median_coverage_pct}%`)}
       </div>
-      <div class="gpi-wb-context"><div><span>${esc(tr('Registered source', '已登记数据源'))}</span><strong>${esc(source.label || source.database || 'EasyICU')}</strong></div><div><span>${esc(tr('Cohort', '队列'))}</span><strong>${esc(cohort.label || tr('Bound StudyContext cohort', 'StudyContext 已绑定队列'))}</strong></div></div>
-      <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(postPlan ? tr('Data completeness', '数据完整性') : tr('Module quality', '模块质量'))}</h4><p>${esc(tr('Aggregate availability only; no event rates or effect estimates.', '仅展示聚合可用性，不展示事件率或效应量。'))}</p></div></div>${qualityStrip(payload)}${moduleList(payload)}</section>
+      <div class="gpi-wb-context"><div><span>${esc(tr('Registered source', '已登记数据源'))}</span><strong>${esc(source.label || source.database || 'EasyICU')}</strong></div><div><span>${esc(postPlan ? tr('Source population', '来源人群') : tr('Cohort', '队列'))}</span><strong>${esc(cohort.label || tr('Bound StudyContext cohort', 'StudyContext 已绑定队列'))}</strong></div></div>
+      ${postPlan ? pendingAnalysisSteps() : ''}
+      <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(postPlan ? tr('Planned-variable coverage', '计划变量覆盖情况') : tr('Module quality', '模块质量'))}</h4><p>${esc(tr('Aggregate availability only; no event rates or effect estimates.', '仅展示聚合可用性，不展示事件率或效应量。'))}</p></div></div>${postPlan ? readinessChart(payload) : ''}${qualityStrip(payload)}${moduleList(payload)}</section>
       <section class="gpi-wb-section"><div class="gpi-wb-section-head"><div><h4>${esc(tr('Execution-concept screening', '执行概念筛选'))}</h4><p>${esc(tr('Filter this view locally. Scientific filter changes must be proposed and confirmed in chat.', '此处筛选只改变视图；科学筛选修改必须回到对话提出并确认。'))}</p></div></div>
         <div class="gpi-wb-controls"><label><span>${esc(tr('Find concept', '查找概念'))}</span><input type="search" data-gpi-wb-query value="${esc(view.query)}" placeholder="${esc(tr('Role, concept, module…', '角色、概念、模块…'))}" /></label><label><span>${esc(tr('Status', '状态'))}</span><select data-gpi-wb-status><option value="all">${esc(tr('All', '全部'))}</option>${['ready', 'partial', 'semantic_review_required', 'not_extracted'].map(value => `<option value="${value}" ${view.status === value ? 'selected' : ''}>${esc(statusLabel(value))}</option>`).join('')}</select></label></div>
         <div data-gpi-wb-results>${conceptTable(payload)}</div>

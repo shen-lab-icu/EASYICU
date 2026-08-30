@@ -123,7 +123,7 @@
   let cohortSurvivalOutcome = 'mort_28d';
   let cohortSurvivalGroup = 'sepsis';
   let cohortSofaMatrixMode = 'pct'; // pct | count
-  let cohortSofaMatrixGranularity = 'medium'; // coarse | medium | fine | exact
+  let cohortSofaMatrixGranularity = 'exact'; // approved default: exact 0-24 paired matrix
   let vizErr = null;
 
   function displayDataMode() {
@@ -3553,7 +3553,8 @@
       ${opts.demo ? cohortDemoPanelNote('coverage') : ''}
       ${metadataOnlyCount ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('Large export coverage optimized', '大导出覆盖率已优化')}</div><div class="d">${t('Some non-Parquet or very large modules are shown with manifest-confirmed row counts first to avoid a slow full stay-id scan. They are loaded modules, not missing modules.', '部分非 Parquet 或超大模块会先显示清单确认的行数，避免缓慢的全量 stay_id 扫描。它们是已加载模块，不是缺失模块。')}</div></div></div>` : ''}
       ${rateRows ? `<div class="note info mt-12"><div class="ico">${icon('activity', 14)}</div><div class="body"><div class="t">${cohortText('Presence-rate modules')}</div><div class="d">${cohortText('Event/exposure rows show cohort incidence or exposure prevalence, not missingness coverage; they are excluded from the coverage watchlist.')}</div></div></div>` : ''}
-      <div class="audit-cards">
+      ${cohortCoverageForest(review)}
+      <div class="audit-cards compact">
         ${[
           ['Modules OK', fmtInt(q.modules_ok)],
           ['Watchlist', fmtInt(q.watchlist_count)],
@@ -3562,7 +3563,7 @@
           ['Unknown coverage', fmtInt(q.modules_unknown)],
         ].map(([k, v]) => `<div class="audit-card"><div class="ac-k">${cohortText(k)}</div><div class="ac-v mono">${v}</div></div>`).join('')}
       </div>
-      <div class="table-wrap table-scroll mt-16">
+      <details class="cohort-coverage-details mt-16"><summary>${t('Open exact module table', '展开精确模块表')}</summary><div class="table-wrap table-scroll mt-10">
         <table class="eu-table">
           <thead><tr><th>${cohortText('Module')}</th><th class="num">${cohortText('Records')}</th><th class="num">${cohortText('Fields')}</th><th class="num">${cohortText('Entities')}</th><th class="num">${cohortText('Coverage / rate')}</th><th>${cohortText('Interpretation')}</th></tr></thead>
           <tbody>
@@ -3576,8 +3577,28 @@
             </tr>`).join('')}
           </tbody>
         </table>
-      </div>
+      </div></details>
       <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Fail-closed scope')}</div><div class="d">${t('Coverage is aggregate-only. Row-level filtering, subgroup missingness, and eligibility waterfalls remain blocked until a bounded cohort-builder backend exists.', '覆盖率是仅聚合结果。行级筛选、亚组缺失率和纳排瀑布图会在有界队列构建后端就绪前保持拦截。')}</div></div></div>`;
+  }
+
+  function cohortCoverageForest(review) {
+    const rows = (review.coverage || []).filter(row => row && row.covered_entities != null && row.coverage_pct != null);
+    const total = Number(review.summary && review.summary.cohort_size) || Math.max(0, ...rows.map(row => Number(row.covered_entities || 0)));
+    if (!rows.length || !total) return '';
+    const z = 1.96;
+    const interval = row => {
+      const n = total;
+      const p = Math.max(0, Math.min(1, Number(row.covered_entities || 0) / n));
+      const denominator = 1 + z * z / n;
+      const centre = (p + z * z / (2 * n)) / denominator;
+      const margin = z * Math.sqrt((p * (1 - p) + z * z / (4 * n)) / n) / denominator;
+      return [Math.max(0, (centre - margin) * 100), Math.min(100, (centre + margin) * 100)];
+    };
+    return `<section class="cohort-coverage-forest" data-cohort-coverage-forest>
+      <div class="cohort-forest-head"><div><b>${t('Module coverage with 95% Wilson intervals', '模块覆盖率与 95% Wilson 区间')}</b><span>${t('Presence-rate modules remain labelled as event or exposure rates, not missingness.', '事件或暴露模块仍按发生率标记，不解释为缺失率。')}</span></div><strong>N = ${fmtInt(total)}</strong></div>
+      <div class="cohort-forest-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+      <div class="cohort-forest-rows">${rows.map(row => { const value = Math.max(0, Math.min(100, Number(row.coverage_pct))); const [lo, hi] = interval(row); return `<div class="cohort-forest-row"><div><b>${esc(row.module)}</b><span>${esc(cohortText(row.metric_kind === 'event_rate' ? 'event rate' : row.metric_kind === 'exposure_rate' ? 'exposure rate' : 'coverage'))}</span></div><div class="cohort-forest-track"><i class="ci" style="left:${lo.toFixed(2)}%;width:${Math.max(.8, hi-lo).toFixed(2)}%"></i><i class="point" style="left:${value.toFixed(2)}%"></i></div><strong>${fmtPct(value)} <small>${fmtInt(row.covered_entities)}/${fmtInt(total)}</small></strong></div>`; }).join('')}</div>
+    </section>`;
   }
 
   const SOFA_MATRIX_GRANULARITIES = {
@@ -3698,6 +3719,7 @@
     }
     const mode = cohortSofaMatrixMode === 'count' ? 'count' : 'pct';
     const hasExactMatrix = !!binned.exact;
+    const pairedExact = hasExactMatrix && cohortSofaMatrixGranularity === 'exact';
     const maxValue = Math.max(
       1,
       ...matrix.flatMap(row => (row.cells || []).map(cell => (
@@ -3731,7 +3753,7 @@
       </div>
       ${cohortCharts && typeof cohortCharts.heatmapSlot === 'function'
         ? cohortCharts.heatmapSlot({
-          label: cohortText('Worst-ICU severity transition matrix'),
+          label: pairedExact ? cohortText('Exact SOFA-1 / SOFA-2 paired matrix') : cohortText('Worst-ICU severity transition matrix'),
           description: hasExactMatrix
             ? cohortText('Rows are SOFA-1 score bands; columns are SOFA-2 score bands. Use the granularity control to move from clinical bands to exact 0-24 scores.')
             : cohortText('Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.'),
@@ -3744,6 +3766,7 @@
           sameLabel: cohortText('Same severity band'),
           upLabel: cohortText('SOFA-2 higher band'),
           downLabel: cohortText('SOFA-2 lower band'),
+          pairedExact,
         })
         : ''}
       <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Cells on the diagonal are patients scored the same by SOFA-1 and SOFA-2; off-diagonal cells are patients the two definitions disagree on — large off-diagonal cells are where switching score versions would change your cohort.', '对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者；对角线以外是两套定义不一致的患者 —— 偏离对角线的大格子意味着换用评分版本会改变你的队列。')}</span></div>`;
@@ -4242,9 +4265,8 @@
         ${activeGroups.map((g, i) => `<div class="stat ${i === 0 ? 'accent' : ''}"><div class="label">${esc(cohortText(g.label))}</div><div class="val">${fmtInt(g.count)}</div><div style="font-size:11px;color:var(--ink-4);margin-top:4px;">${fmtPct(g.pct)}</div></div>`).join('')}
       </div>
 
-      <div class="sec-stack"><div class="lbl">${cohortText('Descriptive profile')}</div><h2>${cohortText('Aggregate-only group characteristics')}</h2></div>
-      ${cohortGroupComparisonChart(profileRows, profileColumns)}
-      <div class="table-wrap table-scroll">
+      <div class="sec-stack"><div class="lbl">Table One</div><h2>${cohortText('Aggregate-only group characteristics')}</h2></div>
+      <div class="table-wrap table-scroll cohort-table-one" data-cohort-table-one>
         <table class="eu-table">
           <thead><tr><th>${cohortText('Metric')}</th>${profileColumns.map(col => `<th class="num">${esc(cohortText(col))}</th>`).join('')}<th>${cohortText('Status')}</th></tr></thead>
           <tbody>

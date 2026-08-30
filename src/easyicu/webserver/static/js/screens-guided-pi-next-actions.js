@@ -171,7 +171,12 @@
     'plan_configuration_superseded',
     'plan_scientific_changes_required',
     'plan_review_not_resumable',
+    'scientific_plan_review_policy_stale',
     'failed_pipeline_requires_fresh_plan',
+    // The ordinary next action retries the approved execution, but an
+    // explicit request to regenerate the research plan must remain available.
+    // The host routes that request to a fresh Planner run, never to chat.
+    'failed_pipeline_execution_retry_available',
     'planner_checkpoint_resume_available',
     // A candidate plan waiting for data preparation may still be explicitly
     // replaced. This creates a fresh plan run; it never approves or executes
@@ -182,9 +187,16 @@
   function governedPlanGrants(value, workflowActionCode) {
     const code = String(workflowActionCode || '');
     if (!GOVERNED_PLAN_WORKFLOWS.has(code)) return [];
+    const isScientificRevision = code === 'plan_scientific_changes_required'
+      && isScientificPlanRevisionChoice(value);
     const isPlanAction = isFormalPlanChoice(value)
-      || (code === 'plan_scientific_changes_required' && isScientificPlanRevisionChoice(value));
+      || isScientificRevision;
     if (!isPlanAction) return [];
+    // A user answer to an open scientific-review question is both a study
+    // configuration mutation and a request for a fresh Planner turn.  The
+    // host must grant both actions in this one explicit click; otherwise the
+    // model can start replanning but cannot persist the reviewed choice.
+    if (isScientificRevision) return ['configure', 'provider_run'];
     return ['provider_run'];
   }
 

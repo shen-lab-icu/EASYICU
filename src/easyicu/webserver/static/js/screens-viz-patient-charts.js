@@ -188,12 +188,12 @@
       name: compact ? '' : axis.label,
       nameLocation: 'middle',
       nameGap: compact ? 0 : 30,
-      nameTextStyle: { color: colors.muted, fontSize: 10 },
+      nameTextStyle: { color: colors.muted, fontSize: 12 },
       axisLine: { lineStyle: { color: colors.hair } },
       axisTick: { show: false },
       axisLabel: {
         color: colors.muted,
-        fontSize: 9,
+        fontSize: 12,
         hideOverlap: true,
         formatter: axis.kind === 'value'
           ? value => formatNumber(value, 1)
@@ -271,7 +271,7 @@
           description: `${label}. ${values.length} bounded observations. The adjacent summary reports the latest value; pointer users can hover for exact plotted values.`,
         },
       },
-      grid: { left: 48, right: 14, top: 12, bottom: 28, containLabel: false },
+      grid: { left: 58, right: 18, top: 16, bottom: 34, containLabel: false },
       tooltip: {
         trigger: 'axis',
         renderMode: 'richText',
@@ -280,7 +280,7 @@
         formatter: tooltipFormatter(axis, unit),
         axisPointer: { type: 'line', snap: true },
       },
-      xAxis: xAxisOption(axis, colors, true),
+      xAxis: Object.assign(xAxisOption(axis, colors, true), axis.kind === 'value' && Array.isArray(spec.xDomain) ? { min: spec.xDomain[0], max: spec.xDomain[1] } : {}),
       yAxis: {
         type: 'value',
         scale: true,
@@ -288,10 +288,11 @@
         axisTick: { show: false },
         axisLabel: {
           color: colors.muted,
-          fontSize: 9,
+          fontSize: 12,
           formatter: value => formatNumber(value, 1),
         },
         splitLine: { lineStyle: { color: colors.hair, type: 'solid' } },
+        ...(Array.isArray(spec.yDomain) ? { min: spec.yDomain[0], max: spec.yDomain[1] } : {}),
       },
       series: [{
         name: label,
@@ -299,7 +300,7 @@
         data: axis.pairs,
         showSymbol: axis.pairs.length <= 24,
         symbol: 'circle',
-        symbolSize: 4,
+        symbolSize: 6,
         smooth: false,
         step: STEP_FEATURES.has(text(spec.feature, '').toLowerCase()) ? 'end' : false,
         connectNulls: false,
@@ -345,7 +346,7 @@
         right: 8,
         itemWidth: 16,
         itemHeight: 3,
-        textStyle: { color: colors.muted, fontSize: 10 },
+        textStyle: { color: colors.muted, fontSize: 12 },
       },
       grid: { left: 54, right: 18, top: 38, bottom: 58, containLabel: false },
       tooltip: {
@@ -383,7 +384,7 @@
         type: 'value',
         scale: true,
         name: unit,
-        nameTextStyle: { color: colors.muted, fontSize: 10 },
+        nameTextStyle: { color: colors.muted, fontSize: 12 },
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {

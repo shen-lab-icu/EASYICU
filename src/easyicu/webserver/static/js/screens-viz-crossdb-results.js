@@ -220,6 +220,25 @@
     </div>`;
   }
 
+  function threeScaleComparison(payload, config) {
+    const h = helpersOf(config);
+    const sources = (payload.sources || []).map((source, index) => {
+      const summary = source.summary || {};
+      const entities = Number(summary.stays != null ? summary.stays : summary.cohort_size != null ? summary.cohort_size : summary.entities || 0);
+      const records = Number(summary.total_records != null ? summary.total_records : summary.total_rows != null ? summary.total_rows : 0);
+      return { label: source.label || source.database || `${h.t('Source', '来源')} ${index + 1}`, entities, records, density: entities > 0 ? records / entities : 0, color: palette(index) };
+    });
+    const scales = [
+      ['entities', h.t('Entities / stays', '实体 / ICU 住院'), value => h.fmtInt(value)],
+      ['records', h.t('Total records', '总记录量'), value => h.fmtInt(value)],
+      ['density', h.t('Records per entity', '每实体记录密度'), value => formatDensity(value)],
+    ];
+    return `<section class="xdb-three-scale" data-crossdb-three-scale>
+      <div class="xdb-section-head"><div><h2>${h.t('Three-scale database comparison', '跨库三尺度比较')}</h2><p>${h.t('Entities, records, and density use independent scales so a large record count cannot flatten the other comparisons.', '实体量、记录量和记录密度分别使用独立尺度，避免记录量级过大压扁另外两个维度。')}</p></div></div>
+      <div class="xdb-scale-grid">${scales.map(([key,label,format]) => { const max = Math.max(1,...sources.map(row=>row[key])); return `<article><h3>${h.esc(label)}</h3>${sources.map(row=>`<div class="xdb-scale-row"><span><i style="background:${row.color}"></i>${h.esc(row.label)}</span><div><b style="width:${Math.max(1,row[key]/max*100).toFixed(1)}%;background:${row.color}"></b></div><strong>${format(row[key])}</strong></div>`).join('')}</article>`; }).join('')}</div>
+    </section>`;
+  }
+
   function overview(payload, config) {
     const h = helpersOf(config);
     const modules = cleanModules(payload);
@@ -236,7 +255,7 @@
           <article><span>${h.t('Comparison mode', '比较模式')}</span><strong class="textual">${h.esc(h.statusLabel(gate.comparison_mode || 'descriptive_only'))}</strong><small>${h.esc(h.statusLabel(gate.status || 'compatible'))}</small></article>
         </div>
         ${partialScopeNotice(payload, config)}
-        ${recordCards(payload, config)}
+        ${threeScaleComparison(payload, config)}
         <div class="viz-cap"><b>${h.t('What this shows', '这组数字是什么')}</b><span>${h.t('Per-source record volume in this bounded comparison. It is a size reference, not an outcome result.', '本次有界对比中各来源的记录规模；它只是样本量参照，不是结局结果。')}</span></div>
         <div class="note info mt-16">
           <div class="ico">${h.icon('benchmark', 16)}</div>
@@ -280,16 +299,17 @@
     return `
       <section class="xdb-result-section" id="crossdb-result-panel-coverage" role="tabpanel" aria-labelledby="crossdb-result-tab-coverage" tabindex="0" data-crossdb-result-panel="coverage">
         <div class="xdb-section-head">
-          <div><h2>${h.t('Module coverage matrix', '模块覆盖矩阵')}</h2><p>${h.t('Start here to see which clinical domains can be compared before inspecting individual feature distributions.', '先查看哪些临床模块能够跨库比较，再进入单个特征的分布检查。')}</p></div>
+          <div><h2>${h.t('Paired module coverage', '跨库模块覆盖配对点图')}</h2><p>${h.t('Every module uses the same 0–100% axis. A connecting line exposes the direction and size of the between-database coverage difference.', '所有模块共用 0–100% 轴；连接线直观呈现数据库间覆盖差异的方向和大小。')}</p></div>
           <span class="pill">${h.fmtInt(rows.length)}${scope.partial ? ` / ${h.fmtInt(scope.totalModules)}` : ''} ${h.t('modules audited', '个模块已审计')}</span>
         </div>
         ${partialScopeNotice(payload, config)}
-        <div class="table-wrap table-scroll">
+        ${labels.length === 2 ? `<div class="xdb-paired-coverage" data-crossdb-paired-coverage><div class="xdb-paired-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>${rows.map(row => { const values=(row.values||[]).map(value=>value&&value.present&&Number.isFinite(Number(value.coverage_pct))?Math.max(0,Math.min(100,Number(value.coverage_pct))):null); return `<div class="xdb-paired-row"><b>${h.esc(h.catalogModuleLabel(row.module))}</b><div class="xdb-paired-track">${values[0]!=null&&values[1]!=null?`<i class="xdb-paired-link" style="left:${Math.min(values[0],values[1])}%;width:${Math.abs(values[1]-values[0])}%"></i>`:''}${values.map((value,index)=>value==null?'':`<i class="xdb-paired-point" style="left:${value}%;background:${palette(index)}" title="${h.esc(labels[index])}: ${h.fmtPct(value)}"></i>`).join('')}</div><span>${values.map((value,index)=>value==null?'—':`${h.esc(labels[index])} ${h.fmtPct(value)}`).join(' · ')}</span></div>`;}).join('')}<div class="xdb-paired-legend">${labels.map((label,index)=>`<span><i style="background:${palette(index)}"></i>${h.esc(label)}</span>`).join('')}</div></div>` : ''}
+        <details class="xdb-exact-table"><summary>${h.t('Open exact coverage table', '展开精确覆盖表')}</summary><div class="table-wrap table-scroll mt-10">
           <table class="eu-table">
             <thead><tr><th>${h.t('Module', '模块')}</th>${labels.map(label => `<th class="num">${h.esc(label)}</th>`).join('')}<th class="num">${h.t('Shared', '共享')}</th></tr></thead>
             <tbody>${rows.map(row => `<tr><td class="key">${h.esc(h.catalogModuleLabel(row.module))}</td>${(row.values || []).map(value => availabilityCell(value, config)).join('')}<td class="num"><span class="pill ${row.shared ? 'ok' : 'warn'}">${row.shared ? h.t('Yes', '是') : h.t('No', '否')}</span></td></tr>`).join('')}</tbody>
           </table>
-        </div>
+        </div></details>
         <div class="xdb-shared-modules">
           <b>${h.t('Shared exported modules', '共享导出模块')}</b>
           <div>${(payload.shared_modules || []).length ? (payload.shared_modules || []).map(module => `<span class="chip solid">${h.esc(h.catalogModuleLabel(module))}</span>`).join('') : `<span class="pill warn">${h.t('No shared modules detected', '未检测到共享模块')}</span>`}</div>
@@ -310,7 +330,7 @@
     const values = item.row.values || [];
     return `<article class="xdb-feature-detail">
       <div class="xdb-section-head">
-        <div><h2>${h.esc(meta.name || item.row.feature)}</h2><p>${h.esc(h.catalogModuleLabel(item.module.module))} · <span class="mono">${h.esc(item.row.feature)}</span>${meta.unit ? ` · ${h.esc(meta.unit)}` : ''}</p></div>
+        <div><h2>${h.esc(meta.name || item.row.feature)}</h2><p>${h.esc(h.catalogModuleLabel(item.module.module))} · <span class="mono">${h.esc(item.row.feature)}</span>${meta.unit ? ` · ${h.esc(meta.unit)}` : ''} · ${h.fmtInt(values.reduce((sum,value)=>sum+Number(value && (value.non_null || value.n) || 0),0))} ${h.t('observed values', '个观测值')}</p></div>
         <span class="pill dashed">${h.fmtInt(values.filter(value => value && value.present).length)} / ${h.fmtInt(labels.length)} ${h.t('sources present', '个来源存在')}</span>
       </div>
       ${numericChart(item, labels, config)}
@@ -381,7 +401,7 @@
     return `
       <section class="xdb-result-section" id="crossdb-result-panel-quality" role="tabpanel" aria-labelledby="crossdb-result-tab-quality" tabindex="0" data-crossdb-result-panel="quality">
         <div class="xdb-section-head">
-          <div><h2>${h.t('Quality, scope, and provenance', '质量、范围与溯源')}</h2><p>${h.t('Review source identity, aggregate summaries, and fail-closed restrictions before exporting or planning downstream analysis.', '导出或规划下游分析前，核查来源身份、聚合摘要和默认拦截范围。')}</p></div>
+          <div><h2>${h.t('Cross-database Table One', '跨库 Table One')}</h2><p>${h.t('One descriptive table compares the same aggregate cohort metrics across databases. Differences are descriptive only.', '一张描述性表对照各数据库的同一组队列指标；差异仅用于描述。')}</p></div>
           <span class="pill ${gate.status === 'compatible' ? 'ok' : 'warn'}">${h.esc(h.statusLabel(gate.status || 'compatible'))}</span>
         </div>
         <div class="xdb-provenance-grid">
@@ -390,10 +410,10 @@
             <div><b>${h.esc(source.label || h.t('Local source', '本地来源'))}</b><small>${h.esc((source.database || 'local').toUpperCase())} · ${sourceMode} <span class="mono">${h.esc(source.path_hash || '—')}</span></small></div>
           </article>`).join('')}
         </div>
-        <div class="table-wrap table-scroll mt-16">
+        <div class="table-wrap table-scroll mt-16 xdb-table-one" data-crossdb-table-one>
           <table class="eu-table">
-            <thead><tr><th>${h.t('Aggregate metric', '聚合指标')}</th>${labels.map(label => `<th class="num">${h.esc(label)}</th>`).join('')}<th class="num">${h.t('Range', '范围')}</th></tr></thead>
-            <tbody>${(payload.rows || []).map(row => `<tr><td class="key">${h.esc(h.metricLabel(row.label || row.key))}</td>${(row.values || []).map(value => `<td class="num">${metricValue(row.key, value, h)}</td>`).join('')}<td class="num">${metricValue(row.key, row.delta, h)}</td></tr>`).join('')}</tbody>
+            <thead><tr><th>${h.t('Aggregate metric', '聚合指标')}</th>${labels.map(label => `<th class="num">${h.esc(label)}</th>`).join('')}<th class="num">${labels.length === 2 ? h.t(`${labels[1]} − ${labels[0]}`, `${labels[1]} − ${labels[0]}`) : h.t('Descriptive range', '描述范围')}</th></tr></thead>
+            <tbody>${(payload.rows || []).map(row => { const values=row.values||[]; const delta=values.length===2&&values.every(value=>Number.isFinite(Number(value)))?Number(values[1])-Number(values[0]):row.delta; const suffix=['female_pct','mortality','mortality_pct','sepsis_pct','coverage_median_pct'].includes(row.key)?' pp':''; return `<tr><td class="key">${h.esc(h.metricLabel(row.label || row.key))}</td>${values.map(value => `<td class="num">${metricValue(row.key, value, h)}</td>`).join('')}<td class="num">${delta==null?'—':`${delta>0?'+':''}${h.fmtNum(delta,1)}${suffix}`}</td></tr>`; }).join('')}</tbody>
           </table>
         </div>
         <div class="note warn mt-16">

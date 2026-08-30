@@ -24,7 +24,7 @@
   margin:0;
   max-width:720px;
   color:var(--ink-4);
-  font-size:12.5px;
+  font-size:14px;
   line-height:1.45;
 }
 .pt-series-modebar{
@@ -59,12 +59,12 @@
 }
 .pt-series-mode span{
   display:block;
-  font-size:11.5px;
+  font-size:13px;
   line-height:1.35;
 }
 .pt-series-mode-title{
   font-weight:700;
-  font-size:13px !important;
+  font-size:14px !important;
   margin-bottom:3px;
 }
 .pt-series-panel{
@@ -72,7 +72,7 @@
 }
 .pt-single-grid{
   display:grid;
-  grid-template-columns:repeat(2, minmax(0,1fr));
+  grid-template-columns:1fr;
   gap:12px;
   margin-top:12px;
 }
@@ -89,7 +89,7 @@
   justify-content:space-between;
   gap:10px;
   color:var(--ink-4);
-  font-size:11px;
+  font-size:13px;
   margin-bottom:8px;
 }
 .pt-single-meta span{
@@ -132,7 +132,7 @@
 .pt-echart{
   display:block;
   width:100%;
-  height:132px;
+  height:168px;
 }
 .pt-echart.comparison{
   height:286px;
@@ -147,9 +147,18 @@
   text-overflow:ellipsis;
   white-space:nowrap;
   color:var(--ink-4);
-  font-size:9.5px;
+  font-size:12px;
   pointer-events:none;
 }
+.pt-trajectory-summary{margin-top:12px;border:1px solid var(--hair);border-radius:var(--r-2);overflow:hidden;background:var(--surface)}
+.pt-trajectory-row{display:grid;grid-template-columns:minmax(145px,.38fr) minmax(420px,1.45fr) minmax(185px,.52fr);align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--hair)}
+.pt-trajectory-row:last-of-type{border-bottom:0}
+.pt-trajectory-entity b,.pt-trajectory-delta b{display:block;font-size:13px;color:var(--ink)}
+.pt-trajectory-entity span,.pt-trajectory-delta span,.pt-trajectory-delta em{display:block;margin-top:4px;color:var(--ink-4);font-size:12px;font-style:normal}
+.pt-trajectory-delta em{font-family:var(--mono);font-weight:700;color:var(--ink-3)}
+.pt-trajectory-chart .pt-echart{height:116px}
+.pt-trajectory-summary .pt-multi-note{padding:11px 14px;margin:0;border-top:1px solid var(--hair);font-size:13px}
+@media(max-width:1100px){.pt-trajectory-row{grid-template-columns:130px minmax(360px,1fr) 165px}}
 .pt-echart-current b{
   color:var(--ink-3);
   font-family:var(--mono);

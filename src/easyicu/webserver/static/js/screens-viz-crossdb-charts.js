@@ -50,7 +50,7 @@
     const colors = chartCore.palette();
     return Object.assign(chartCore.baseOption(description), {
       color: series.map((_, index) => colors.series[index % colors.series.length]),
-      grid: chartCore.grid({ left: 54, right: 24, top: 42, bottom: 46 }),
+      grid: chartCore.grid({ left: 70, right: 30, top: 54, bottom: 58 }),
       legend: chartCore.legend({ top: 4 }),
       tooltip: chartCore.tooltip(params => {
         const rows = Array.isArray(params) ? params : [params];
@@ -86,7 +86,7 @@
           .map(point => [Number(point.x), Number(point.density)]),
         showSymbol: row.value.points.length <= 18,
         symbol: index % 2 ? 'emptyCircle' : 'circle',
-        symbolSize: 4,
+        symbolSize: 6,
         smooth: false,
         connectNulls: false,
         sampling: 'lttb',

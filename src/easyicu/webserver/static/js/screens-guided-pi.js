@@ -1537,7 +1537,7 @@
     const id = String((row && row.id) || '');
     const original = String((row && row.text) || '').trim();
     const message = String(text || '').trim();
-    const planAction = /^(?:重新生成研究计划|生成正式研究计划|generate (?:a fresh|the formal) research plan)[。.!！]?$/i;
+    const planAction = /^(?:重新生成研究计划|生成候选研究计划|生成正式研究计划|generate (?:a fresh|the candidate|the formal) research plan)[。.!！]?$/i;
     // Host-generated messages are projected as plan-generation-* in memory,
     // but after reload the persisted transcript legitimately gives the same
     // message a history-* id and an entryId.  Its explicit plan-action text is
@@ -1554,7 +1554,13 @@
     if (!grants.includes('provider_run')) return false;
     const at = state.messages.findIndex(item => String((item && item.id) || '') === id);
     if (at >= 0) state.messages.splice(at);
-    void startCurrentFormalPlanGeneration(workflowCode);
+    // The workflow's default for an execution failure is to resume the exact
+    // approved plan. An edited/retried *plan generation* message is a different
+    // explicit user action: replace that failed branch with a fresh Planner run.
+    const generationReason = workflowCode === 'failed_pipeline_execution_retry_available'
+      ? 'failed_pipeline_requires_fresh_plan'
+      : workflowCode;
+    void startCurrentFormalPlanGeneration(generationReason);
     return true;
   }
   async function continueAfterDataSourceConfirmation() {
@@ -1616,6 +1622,7 @@
       'failed_pipeline_requires_fresh_plan',
       'plan_configuration_superseded',
       'plan_review_not_resumable',
+      'scientific_plan_review_policy_stale',
     ].includes(confirmation.code)) {
       await startCurrentFormalPlanGeneration(confirmation.code);
       return;
@@ -1646,7 +1653,7 @@
       const payload = await api().preparePiCopilotDataPackageReview(projectId());
       const resource = payload && payload.resource;
       if (!resource) throw new Error(tr('EasyICU did not return a data preview.', 'EasyICU 未返回可预览的数据包。'));
-      resource.label = tr('Analysis data preview', '分析数据预览');
+      resource.label = tr('Pre-analysis data readiness', '分析前数据准备检查');
       window.EU_GUIDED_PI_PREVIEW.open(resource, projectId(), previewWorkflowContext());
       state.error = '';
     } catch (error) {
@@ -1717,7 +1724,7 @@
         ? tr('Retry analysis from the failed step', '从失败步骤重试分析')
         : fresh
           ? tr('Generate a fresh research plan', '重新生成研究计划')
-          : tr('Generate the formal research plan', '生成正式研究计划'),
+          : tr('Generate the candidate research plan', '生成候选研究计划'),
     });
     state.busy = true;
     state.error = '';
@@ -1748,7 +1755,7 @@
           : {}),
       });
       state.busy = false;
-      watchChildJob(String(payload.job_id || ''), 'easyicu_full_run_submitted');
+      watchChildJob(String(payload.job_id || ''), payload.development_resume_source_job_id ? 'easyicu_full_run_resume_submitted' : 'easyicu_full_run_submitted');
     } catch (error) {
       state.busy = false;
       state.error = errorText(error);
@@ -1770,6 +1777,10 @@
   function editWorkflow() {
     const workflow = state.workflow || {};
     const code = String(workflow.next_action_code || '');
+    if (code === 'failed_pipeline_execution_retry_available') {
+      void startCurrentFormalPlanGeneration('failed_pipeline_requires_fresh_plan');
+      return;
+    }
     if (code === 'provider_ready_to_generate_plan') {
       state.draft = tr(
         'Before generating the plan, I want to add this research requirement: ',

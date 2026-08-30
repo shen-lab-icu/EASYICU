@@ -365,13 +365,13 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260825-remove-project1" in index_html
+        "js/screens-guided-projects.js?v=20260829-project-header1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260827-aside-owner1" in index_html
+    assert "js/screens-guided.js?v=20260829-bilateral-collapse1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -543,12 +543,12 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260827-type-scale1" in index_html
-    assert "css/guided-projects.css?v=20260827-type-scale1" in index_html
+    assert "css/guided.css?v=20260829-readability2" in index_html
+    assert "css/guided-projects.css?v=20260829-horizontal-arrows1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20260828-plan-review1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260825-remove-project1" in index_html
+        "js/screens-guided-projects.js?v=20260829-project-header1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -646,7 +646,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260827-aside-owner1" in index_html
+    assert "js/screens-guided.js?v=20260829-bilateral-collapse1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -2504,7 +2504,10 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "/api/guided/drafts" in api_js
     assert "/api/guided/drafts/list" in api_js
     assert "/api/guided/drafts/remove" in api_js
-    assert "loadGuidedDrafts({ limit: 20 })" in guided_js
+    assert "loadGuidedDrafts({ limit: 100 })" in guided_js
+    assert "rows.slice(0, 8)" not in projects_js
+    assert "overflow-y:auto" in projects_css
+    assert "scrollbar-width:thin" in projects_css
     assert "createGuidedDraft(payload)" in guided_js
     assert "function blankGuidedDraftPayload(label)" in guided_js
     assert "data_mode: 'unbound'" in guided_js
@@ -2583,7 +2586,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Seeded examples" not in guided_js
     assert "data-sess" not in guided_js
     assert "That is a seeded example" not in guided_js
-    assert "New / open research folder" in projects_js
+    assert "New / open research project" in projects_js
     assert "gdFolderControls" in projects_js
     assert "gdFolderControls" not in guided_js
     assert "gdFolderDialogHost" in guided_js
@@ -2674,6 +2677,12 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert 'class="gd-top"' not in guided_js
     assert 'class="gd-home-link"' not in guided_js
     assert '<button class="gd-rail-brand" type="button" data-open="entry"' in projects_js
+    assert 'data-project-rail-toggle' in projects_js
+    assert 'class="gd-rail-restore"' in projects_js
+    assert 'class="gd-rail-collapse"' in projects_js
+    assert "setProjectRailCollapsed" in projects_js
+    assert "isProjectRailCollapsed" in projects_js
+    assert "gd-project-rail-collapsed" in guided_js
     assert 'data-open="entry"' in projects_js
     assert "Back to EasyICU home" in projects_js
     assert "${t('Exit', '退出')}" not in guided_js
@@ -2689,6 +2698,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gd-home-link" not in guided_css
     assert ".gd-top" not in guided_css
     assert ".gd-rail-brand" in projects_css
+    assert ".gd-rail-restore" in projects_css
+    assert ".gd-rail-collapse" in projects_css
+    assert ".gd-main.threecol.gd-project-rail-collapsed" in projects_css
     assert ".gd-rail-utils" in projects_css
     assert ".gd-utilbtn.lang" in projects_css
     assert ".gd-data-workspace" in projects_css
@@ -2730,16 +2742,17 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20260828-plan-review1" in index_html
-    assert "screens-guided-projects.js?v=20260825-remove-project1" in index_html
+    assert "screens-guided-projects.js?v=20260829-project-header1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260827-aside-owner1" in index_html
-    assert "guided.css?v=20260827-type-scale1" in index_html
-    assert "guided-projects.css?v=20260827-type-scale1" in index_html
-    assert "gd-name\">${t('EasyICU Copilot', 'EasyICU 研究助手')}</span>" in projects_js
-    assert "${t('New / open research folder', '新建/打开研究目录')}" in projects_js
+    assert "screens-guided.js?v=20260829-bilateral-collapse1" in index_html
+    assert "guided.css?v=20260829-readability2" in index_html
+    assert "guided-projects.css?v=20260829-horizontal-arrows1" in index_html
+    assert "gd-rail-heading" in projects_js
+    assert "gd-name\">${t('EasyICU ICU Research Assistant', 'EasyICU 重症科研助手')}</span>" in projects_js
+    assert "${t('New / open research project', '新建 / 打开研究项目')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
 

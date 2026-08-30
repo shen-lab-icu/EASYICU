@@ -133,7 +133,7 @@
     return rows;
   }
 
-  function signalCell(sig, index, helpers, xLabels) {
+  function signalCell(sig, index, helpers, xLabels, domains = {}) {
     const samples = numericSamples(sig);
     const values = samples.values;
     if (values.length < 2 || !helpers || !helpers.axisSpark) return '';
@@ -158,6 +158,8 @@
         times: samples.times,
         unit,
         values,
+        xDomain: domains.xDomain,
+        yDomain: domains.yDomain,
       }, fallbackChart)
       : fallbackChart;
     return `
@@ -400,8 +402,10 @@
   }
 
   function renderSinglePatient(lanes, selected, helpers) {
-    const signals = flattenSignals(lanes).slice(0, 18);
+    const signals = flattenSignals(lanes).slice(0, 5);
     const xLabels = signalTimeLabels(signals.map(row => row.sig), helpers, helpers.demoHours ? helpers.demoHours() : null);
+    const observedTimes = signals.flatMap(row => numericSamples(row.sig).times.map(Number).filter(Number.isFinite));
+    const xDomain = observedTimes.length ? [Math.min(...observedTimes), Math.max(...observedTimes)] : null;
     if (!signals.length) return '';
     return `
       <div class="pt-series-panel" data-patient-series-panel="single">
@@ -409,7 +413,7 @@
           <div>
             <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Current-patient trajectory gallery', '当前患者轨迹画廊'))}</div>
             <h2>${hEsc(helpers, selected && (selected.label || selected.entity_ref) || hT(helpers, 'Selected entity', '已选实体'))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'Feature cards are intentionally separated, so SOFA scores, labs and interventions do not collapse into one unreadable multi-line chart.', '每个特征单独成卡，避免把 SOFA、实验室和治疗支持堆进一张难读的多折线图。'))}</p>
+            <p>${hEsc(helpers, hT(helpers, 'Five source-backed signals share one elapsed-time window. Each keeps its own clinical value scale and its original, unequal sampling intervals; no interpolation is added.', '5 个来源可追溯的信号共享同一时间窗；每行保留自己的临床数值尺度与真实不等间隔采样，不做插值。'))}</p>
           </div>
           <span class="pill">${hFmtInt(helpers, signals.length)} ${hEsc(helpers, hT(helpers, 'features shown', '个特征展示'))}</span>
         </div>
@@ -420,10 +424,49 @@
                 <span>${hEsc(helpers, moduleLabel(row.lane, helpers))}</span>
                 <span>${hEsc(helpers, signalKey(row.sig))}</span>
               </div>
-              ${signalCell(row.sig, i, helpers, xLabels)}
+              ${signalCell(row.sig, i, helpers, xLabels, { xDomain })}
             </article>`).join('')}
         </div>
       </div>`;
+  }
+
+  function renderTrajectorySummary(traces, comparison, helpers) {
+    const prepared = traces.map((trace, index) => {
+      const samples = numericSamples(trace);
+      return { trace, index, values: samples.values, times: samples.times.map(Number) };
+    }).filter(row => row.values.length >= 2);
+    const allTimes = prepared.flatMap(row => row.times.filter(Number.isFinite));
+    const allValues = prepared.flatMap(row => row.values);
+    const xDomain = allTimes.length ? [Math.min(...allTimes), Math.max(...allTimes)] : null;
+    const yDomain = allValues.length ? [Math.min(...allValues), Math.max(...allValues)] : null;
+    const unit = comparison && comparison.unit ? comparison.unit : '';
+    const owner = window.EU_PATIENT_CHARTS;
+    return `<div class="pt-trajectory-summary" data-patient-trajectory-summary>
+      ${prepared.map(row => {
+        const start = row.values[0];
+        const latest = row.values[row.values.length - 1];
+        const delta = latest - start;
+        const label = row.trace.label || row.trace.ref || `${hT(helpers, 'Entity', '实体')} ${row.index + 1}`;
+        const fallback = helpers.axisSpark ? helpers.axisSpark(row.values, 640, 116, colour(row.index), { unit, label, xLabels: null }) : '';
+        const chart = owner && owner.signalSlot ? owner.signalSlot({
+          color: colour(row.index),
+          feature: comparison && comparison.feature,
+          label,
+          times: row.times,
+          values: row.values,
+          unit,
+          xDomain,
+          yDomain,
+          thresholds: [],
+        }, fallback) : fallback;
+        return `<article class="pt-trajectory-row">
+          <div class="pt-trajectory-entity"><b>${hEsc(helpers, label)}</b><span>${hFmtInt(helpers, row.values.length)} ${hEsc(helpers, hT(helpers, 'observations', '个观测'))}</span></div>
+          <div class="pt-trajectory-chart">${chart}</div>
+          <div class="pt-trajectory-delta"><span>${hEsc(helpers, hT(helpers, 'start → last', '起点 → 末值'))}</span><b>${hFmtNum(helpers, start, 1)} → ${hFmtNum(helpers, latest, 1)}${unit ? ` ${hEsc(helpers, unit)}` : ''}</b><em class="${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}">Δ ${delta > 0 ? '+' : ''}${hFmtNum(helpers, delta, 1)}</em></div>
+        </article>`;
+      }).join('')}
+      <p class="pt-multi-note">${hEsc(helpers, hT(helpers, 'All rows use the same time and value domains for direct comparison. Points remain at their recorded ICU offsets; gaps are not synthesized.', '所有行使用相同的时间域与数值域，便于直接比较；点保留原始 ICU 时间偏移，不补造缺口。'))}</p>
+    </div>`;
   }
 
   function traceValues(trace) {
@@ -554,8 +597,8 @@
           <div class="pt-series-panel-head">
             <div>
               <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Cross-patient comparison', '跨患者对比'))}</div>
-              <h2>${hEsc(helpers, hT(helpers, 'Same feature across pseudonymous entities', '同一特征在多个伪匿名实体中的轨迹'))}</h2>
-              <p>${hEsc(helpers, hT(helpers, 'This restores the old Patient Review comparison mode: one selected feature, several bounded entities, no direct identifiers.', '这里恢复旧版患者审阅的对比模式：一个已选特征、多个有界实体、没有直接标识符。'))}</p>
+              <h2>${hEsc(helpers, hT(helpers, 'Trajectory summary across pseudonymous entities', '跨患者同特征轨迹摘要'))}</h2>
+              <p>${hEsc(helpers, hT(helpers, 'One row per entity shows the actual sampling pattern, start, last value and change. Shared axes make the rows comparable without stacking every line.', '每个实体一行，展示真实采样、起点、末值与变化；共享坐标便于比较，同时避免所有线堆在一张图里。'))}</p>
             </div>
             <span class="pill ok">${hFmtInt(helpers, traces.length)} ${hEsc(helpers, hT(helpers, 'entities', '个实体'))}</span>
           </div>
@@ -567,20 +610,7 @@
             </div>
             <span class="pill">${hEsc(helpers, hT(helpers, 'bounded trace payload', '有界轨迹载荷'))}</span>
           </div>
-          ${multiTraceChart(traces, comparison, helpers)}
-          <div class="pt-trace-legend">
-            ${traces.map((trace, index) => {
-              const values = traceValues(trace);
-              const last = values[values.length - 1];
-              const hidden = Math.max(0, Number(trace.point_count || values.length) - values.length);
-              return `<div class="pt-trace-key">
-                <i style="background:${colour(index)};"></i>
-                <span>${hEsc(helpers, trace.label || trace.ref || `${hT(helpers, 'Entity', '实体')} ${index + 1}`)}</span>
-                <b>${hEsc(helpers, helpers.fmtNum ? helpers.fmtNum(last, 2) : String(last))}</b>
-                ${hidden ? `<em>+${hFmtInt(helpers, hidden)}</em>` : ''}
-              </div>`;
-            }).join('')}
-          </div>
+          ${renderTrajectorySummary(traces, comparison, helpers)}
         </div>`;
     }
     return `

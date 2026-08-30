@@ -35,7 +35,7 @@
   align-items:center;
   color:var(--ink-3);
   display:inline-flex;
-  font-size:11px;
+  font-size:13px;
   gap:6px;
 }
 .cohort-heat-legend i{
@@ -74,7 +74,7 @@
 }
 .km-risk-table{
   border-collapse:collapse;
-  font-size:11px;
+  font-size:12.5px;
   line-height:1.5;
   min-width:100%;
   table-layout:fixed;
@@ -83,7 +83,7 @@
 .km-risk-table caption{
   caption-side:top;
   color:var(--ink-4);
-  font-size:10.5px;
+  font-size:12px;
   letter-spacing:.04em;
   padding-bottom:3px;
   text-align:left;

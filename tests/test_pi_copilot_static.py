@@ -36,24 +36,24 @@ _ESCAPE_OWNER = _read("js/html-escape.js")
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260829-post-plan-data1" in index
+    assert "css/guided-pi.css?v=20260829-readability2" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
-    assert "css/guided-pi-preview.css?v=20260827-type-scale1" in index
-    assert "css/guided-pi-workbench-preview.css?v=20260813-workbench1" in index
+    assert "css/guided-pi-preview.css?v=20260829-collapsible-rail1" in index
+    assert "css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" in index
     assert "css/guided-pi-literature.css?v=20260828-literature-reader2" in index
     assert "js/screens-guided-pi-literature.js?v=20260828-literature-search1" in index
     assert "js/screens-guided-pi-markdown.js?v=20260827-readable-reply1" in index
-    assert "js/screens-guided-pi-next-actions.js?v=20260829-compact-choices1" in index
-    assert "js/screens-guided-pi-message-actions.js?v=20260828-plan-resubmit1" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20260829-plan-retry2" in index
+    assert "js/screens-guided-pi-message-actions.js?v=20260829-plan-retry2" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260828-regeneration-branch2" in index
     assert "js/screens-guided-pi-starters.js?v=20260827-independent-starters1" in index
     assert "js/screens-guided-pi-header.js?v=20260827-type-scale1" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
-    assert "js/screens-guided-pi-workbench-preview.js?v=20260829-post-plan-data2" in index
+    assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
         "js/screens-guided-pi-evidence-preview.js?v=20260825-evidence-preview1" in index
     )
-    assert "js/screens-guided-pi-preview.js?v=20260829-data-scope1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260829-bilateral-collapse1" in index
     assert "js/screens-guided-pi-replay.js?v=20260828-edit-plan1" in index
     assert "js/screens-guided-pi-activity.js?v=20260828-failure-history2" in index
     assert (
@@ -63,9 +63,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260827-conversation-first1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20260829-post-plan-data1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20260829-plan-retry2" in index
     assert "js/screens-guided-pi-childjob.js?v=20260828-plan-review1" in index
-    assert "js/screens-guided-pi.js?v=20260829-analysis-previews1" in index
+    assert "js/screens-guided-pi.js?v=20260829-plan-first-cohort2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
@@ -667,8 +667,9 @@ def test_model_guidance_keeps_locked_clinical_implementation_off_the_user() -> N
     assert "do not generate a Research Brief, shadow plan" in prompt_owner
     assert "the host will show exactly two user actions" in prompt_owner
     assert "propose the unresolved scientific design" in prompt_owner
-    assert "Formal-plan display authority rule:" in prompt_owner
-    assert "Only the digest-bound agent_plan.json" in prompt_owner
+    assert "Plan-display authority rule:" in prompt_owner
+    assert "The digest-bound agent_plan.json" in prompt_owner
+    assert "is a candidate until exact prepared-package binding is present" in prompt_owner
     assert "Never claim literature support when no literature receipt exists" in prompt_owner
     assert "Save it only after the user directly confirms that outcome" in prompt_owner
     assert "Analysis-unit approval rule:" in prompt_owner
@@ -805,13 +806,13 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "本轮不新增可选的科学设定" in confirmation_owner
     assert "preserve every open scientific finding as a limitation" in confirmation_owner
     assert "reviewResources" in confirmation_owner
-    assert "计划审阅材料" in confirmation_owner
-    assert "预览正式研究计划" in confirmation_owner
-    assert "查看该计划的文献依据" in confirmation_owner
-    assert "已复用之前准备好的完整数据包" in confirmation_owner
-    assert "批准后不会重新提取数据" in confirmation_owner
+    assert "快速审阅" in confirmation_owner
+    assert "研究计划" in confirmation_owner
+    assert "文献依据" in confirmation_owner
+    assert "已复用现有数据源，计划变量可用" in confirmation_owner
+    assert "批准后才会生成最终分析队列、完成预处理并运行分析" in confirmation_owner
     assert "先预览分析数据" in confirmation_owner
-    assert "批准计划并开始分析" in confirmation_owner
+    assert "批准并开始分析" in confirmation_owner
     assert "失败关闭运行的只读产物" in confirmation_owner
     assert "预览上一版候选计划" in confirmation_owner
     assert "查看上一版文献快照" in confirmation_owner
@@ -819,9 +820,12 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "预览未验证图件" in confirmation_owner
     assert "预览证据绑定文章" in confirmation_owner
     assert "manuscript_provenance.json" in confirmation_owner
+    run_outcome_owner = _read("js/screens-guided-pi-run-outcome.js")
+    assert "manuscript_scaffold.pdf" in run_outcome_owner
+    assert "查看 LaTeX 论文" in run_outcome_owner
     assert "仍属未验证状态，不能签署或发表" in confirmation_owner
     assert "gpi-confirmation-resources" in confirmation_owner
-    assert "检索来源、筛选理由和每个计划步骤的精确引用绑定" in confirmation_owner
+    assert "数据准备检查" in confirmation_owner
     assert "重新生成新计划" in confirmation_owner
     assert "submitAgentRunReview" in pi_owner
     assert "easyicu_review_submitted" in pi_owner
@@ -973,8 +977,9 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "运行本地预检" in confirmation_owner
     assert "provider_ready_to_generate_plan" in pi_owner
     assert "开始生成研究计划" in confirmation_owner
-    assert "这一阶段不强制要求已准备的数据包" in confirmation_owner
-    assert "只依据数据库能力目录出计划且不读取患者行" in confirmation_owner
+    assert "计划会先决定需要哪些数据，不读取患者行" in confirmation_owner
+    assert "按计划准备或复用数据" in confirmation_owner
+    assert "审核可执行计划并开始分析" in confirmation_owner
     assert "我想先补充研究要求" in confirmation_owner
     assert "grants: ['provider_run', 'literature']" in confirmation_owner
     assert "plan_configuration_superseded" in aside_owner
@@ -1026,7 +1031,7 @@ def test_existing_project_study_setup_stays_in_bound_pi_conversation() -> None:
     assert ".finally(() =>" in owner
     assert "legacy 0/8 aside" in owner
     assert "data-gpi-project-workflow-loading" in aside_owner
-    assert "Loading authoritative configuration…" in aside_owner
+    assert "Loading project progress…" in aside_owner
     assert "if (!workflow)" in aside_owner
     session_panel = owner[
         owner.index("function sessionPanel()") : owner.index("function demoPanel()")
@@ -1040,14 +1045,18 @@ def test_scientific_review_continues_as_one_question_in_chat() -> None:
 
     # The question catalogue and the card that surfaces it belong to the
     # confirmation owner...
-    assert "Answer decision 1" in confirmation
+    assert "Answer this question" in confirmation
     assert "localizedAuthorizationQuestion" in confirmation
     assert "OUTCOME_DEFINITION_UNRESOLVED" in confirmation
     assert "这项研究应使用哪个当前数据可支持的临床结局及时间范围？" in confirmation
     assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in confirmation
     assert "ADJUSTMENT_SET_NOT_USER_CONFIRMED" in confirmation
     assert "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED" in confirmation
-    assert "回答第 1 项" in confirmation
+    assert "采用推荐方案：仅保留首次入院" in confirmation
+    assert "保留全部入院并处理重复记录" in confirmation
+    assert "选择处理方式" not in confirmation
+    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" in confirmation
+    assert "同一患者可能有多次 ICU 入院" in confirmation
     assert "review.authorization_questions" in confirmation
     # ...while composing and sending the one open question stays in the shell,
     # which is the only place a turn is actually sent.
@@ -1217,7 +1226,7 @@ process.stdout.write(activity.render({
     assert "任务完成或需要你确认后，才可继续发送消息" in shell
     assert "state.busy || state.childJobId || sessionIsStale()" in shell
     assert "runningTitle: runningJobTitle(code)" in childjob
-    assert "正在生成正式研究计划" in childjob
+    assert "正在生成研究计划" in childjob
     assert 'data-gpi-cancel-child-job="${esc(activeChild.childJobId)}"' in shell
     assert "停止生成" in shell
     assert "CHILDJOB.cancelChildJob(jobId)" in shell
@@ -1412,7 +1421,7 @@ process.stdout.write(JSON.stringify({
     assert json.loads(result.stdout) == {
         "code": "provider_ready_to_generate_plan",
         "grants": ["provider_run", "literature"],
-        "message": "开始生成正式研究计划。",
+        "message": "开始生成候选研究计划。",
         "rendersCard": True,
         "silentWhileBusy": True,
         "nullForUnknownState": True,
@@ -1918,11 +1927,19 @@ def test_type_scale_lifts_the_small_end_of_the_copilot_ui() -> None:
 
     pi_css = _read("css/guided-pi.css")
     study_css = _read("css/guided.css")
+    projects_css = _read("css/guided-projects.css")
 
     assert ".gpi-next-step>p{margin:3px 0 0;color:var(--ink-3);font-size:13px" in pi_css
     assert "font-size:11.5px" not in pi_css.split(".gpi-next-step")[1][:400]
-    # The panel that states the bound workflow.
-    assert ".gd-aside-head .at{ font-size: 16.5px" in study_css
+    # The progress panel and conversation remain readable without tiny
+    # governance copy leaking into ordinary product language.
+    assert ".gd-aside-head .at{ font-size: 18px" in study_css
+    aside_owner = _read("js/screens-guided-pi-aside.js")
+    assert "Project authority" not in aside_owner
+    assert "项目权威状态" not in aside_owner
+    assert ".gd-sess .ss-time" in projects_css and "font:500 12.5px" in projects_css
+    assert ".gpi-activity-kicker" in pi_css and "font:650 12.5px" in pi_css
+    assert ".gpi-activity-elapsed" in pi_css and "font:500 13px" in pi_css
     # The transcript itself.
     assert ".gpi-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:16.5px" in pi_css
 
@@ -1958,7 +1975,7 @@ def test_workflow_strip_leaves_the_stage_count_to_the_status_panel() -> None:
     strip = strip[: strip.index("</div>")]
     assert 'class="shell-sr-only"' in strip
     # The authoritative panel still states it in words.
-    assert "required stages complete" in aside_owner
+    assert "stages complete" in aside_owner
 
 
 def test_agent_handoff_receipt_is_forwarded_to_project_initialization() -> None:
@@ -1998,7 +2015,70 @@ def test_agent_handoff_project_remains_visible_without_a_guided_folder() -> None
         text=True,
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    assert result.stdout == '{"bound":true,"unbound":true,"empty":true}'
+    assert result.stdout == (
+        '{"bound":true,"unbound":true,"empty":true,"allProjects":true,"multiSelect":true,"collapsibleRail":true}'
+    )
+    guided = _read("js/screens-guided.js")
+    project_owner = _read("js/screens-guided-projects.js")
+    project_css = _read("css/guided-projects.css")
+    pi_css = _read("css/guided-pi.css")
+    preview_css = _read("css/guided-pi-preview.css")
+    assert "loadGuidedDrafts({ limit: 100 })" in guided
+    assert "rows.slice(0, 8)" not in project_owner
+    assert "overflow-y:auto" in project_css
+    assert "scrollbar-width:thin" in project_css
+    assert "data-project-manage" in project_owner
+    assert "data-select-all-projects" in project_owner
+    assert "data-remove-selected-projects" in project_owner
+    assert "selectedProjects(localDraftRows(), activeId)" in guided
+    assert "trash_confirmation: trashProjectFolder ? row.id : null" in guided
+    assert "data-project-rail-toggle" in project_owner
+    assert "setProjectRailCollapsed" in project_owner
+    assert "gd-project-rail-collapsed" in guided
+    assert ".gd-rail-restore" in project_css
+    assert ".gd-rail-collapse" in project_css
+    assert ".gpi-" not in project_css
+    assert ".gpi-setup-focus.gd-project-rail-collapsed" in pi_css
+    assert ".gpi-preview-open.gd-project-rail-collapsed" in preview_css
+
+
+def test_guided_shell_supports_independent_left_and_right_panel_collapse() -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is unavailable")
+    result = subprocess.run(
+        [
+            node,
+            str(Path(__file__).resolve().parent / "js" / "guided_side_panels.test.js"),
+            str(STATIC / "js" / "screens-guided-panels.js"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert result.stdout == '{"bilateralCollapse":true,"previewCanExpand":true}'
+    index = _read("index.html")
+    guided = _read("js/screens-guided.js")
+    preview = _read("js/screens-guided-pi-preview.js")
+    panel_css = _read("css/guided-panels.css")
+    assert "screens-guided-panels.js?v=20260829-bilateral-collapse1" in index
+    assert "guided-panels.css?v=20260829-horizontal-arrows1" in index
+    assert "data-context-aside-toggle" in guided
+    assert "guidedContextAsideClass()" in guided
+    assert "gd-context-aside-collapsed" in _read("js/screens-guided-panels.js")
+    assert "setContextAsideCollapsed(false, main)" in preview
+    assert ".gd-project-rail-collapsed.gd-context-aside-collapsed" in panel_css
+    assert ".gd-main.gd-context-aside-collapsed>.gd-aside{display:none}" in panel_css
+    assert ".gd-aside-restore" in panel_css
+    assert ".gd-aside-restore svg{transform:rotate(180deg)}" in panel_css
+    assert ".gd-aside-collapse svg{transform:none}" in panel_css
+    assert ".gpi-" not in panel_css
+    assert ".gd-aside.gpi-preview-open>.gd-aside-collapse{display:none}" in _read("css/guided-pi-preview.css")
+    assert ".gpi-" not in _read("css/guided-projects.css")
+    project_css = _read("css/guided-projects.css")
+    assert ".gd-rail-restore svg{transform:none}" in project_css
+    assert ".gd-rail-collapse svg{transform:rotate(180deg)}" in project_css
 
 
 def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
@@ -2082,8 +2162,8 @@ def test_guided_shell_readability_changes_stay_with_their_css_owners() -> None:
     assert ".gpi-panel.gpi-empty-session .gpi-log-start{flex:0" not in pi_css
     assert ".gd-sess .ss-t" in projects_css and "font-size:15.5px" in projects_css
     assert "grid-template-columns:292px minmax(0,1fr) 292px" in projects_css
-    assert ".gd-aside-head .at{ font-size: 16.5px" in study_css
-    assert ".study-item .si-t{ font-size: 14.75px" in study_css
+    assert ".gd-aside-head .at{ font-size: 18px" in study_css
+    assert ".study-item .si-t{ font-size: 15px" in study_css
     assert ".gd-pipeline-disclosure" in study_css
     for selector in (".gpi-research-start", ".gd-sess .ss-t", ".study-item .si-t"):
         assert selector not in catch_all
@@ -2698,9 +2778,50 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json
     # the whole plan is summarized before any prose
     assert '<div class="ag-plan-glance">' in html
     assert "个计划步骤" in html and "个阶段" in html
+    # the default reader shows the plan shape before optional long-form detail
+    assert html.index('分析流程') < html.index('候选计划涉及的变量')
     # the flow styles have one explicit owner
     for selector in (".ag-plan-flow", ".ag-plan-flow-stage", ".ag-plan-glance", ".ag-plan-step-detail"):
         assert selector in plan_css
+
+
+def test_candidate_agent_plan_folds_long_recommendations_after_the_core_flow() -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable renderer contract")
+    renderer = _read("js/screens-agent-render.js")
+    plan_css = _read("css/agent-plan.css")
+    payload = {
+        "analysis_type": "association_study",
+        "research_question": "Q",
+        "endpoint": {"name": "outcome"},
+        "robustness_specs": [{"id": "complete_case"}],
+        "design_selection": {
+            "candidates": [{
+                "disposition": "selected",
+                "reviewable_plan": [f"long recommendation {index}" for index in range(6)],
+            }]
+        },
+        "steps": [{"step_id": "primary", "method": "adjusted_association_model"}],
+    }
+    script = f"""
+global.window = {{
+  EU_LANG: 'zh',
+  EU_HTML: {{ esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'), escAttr: value => String(value ?? '') }},
+  t: (en, zh) => zh,
+  icon: () => '',
+}};
+eval({json.dumps(renderer)});
+process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
+"""
+    html = subprocess.run(
+        [node, "-e", script], check=True, capture_output=True, text=True
+    ).stdout
+
+    assert '<details class="ag-plan-recommendations">' in html
+    assert "Planner 推荐方案（待审阅）· 6 项具体设定" in html
+    assert html.index("分析流程") < html.index("Planner 推荐方案（待审阅）· 6 项具体设定")
+    assert ".ag-plan-recommendations" in plan_css
 
 
 def test_long_readable_artifacts_lead_with_a_section_index() -> None:
@@ -2894,6 +3015,7 @@ def test_pi_gui_adaptation_is_attributed_and_packaged() -> None:
 
 def test_pi_css_has_balanced_comments_and_braces() -> None:
     for relative in (
+        "css/guided-panels.css",
         "css/guided-pi.css",
         "css/guided-pi-preview.css",
         "css/guided-pi-workbench-preview.css",
@@ -2911,6 +3033,7 @@ def test_pi_frontend_javascript_parses() -> None:
     if node is None:
         pytest.skip("Node is not installed")
     for relative in (
+        "js/screens-guided-panels.js",
         "js/screens-guided-pi-activity.js",
         "js/screens-guided-pi-provider.js",
         "js/screens-guided-pi.js",
@@ -3225,12 +3348,16 @@ def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
     assert "data-gpi-wb-status" in workbench
     assert "typed proposal" in workbench
     assert "effect estimates" in workbench
-    assert "分析数据已准备" in workbench
-    assert "候选计划精确绑定队列" in workbench
-    assert "数据字段" in workbench
+    assert "数据源已准备" in workbench
+    assert "它不是最终分析队列" in workbench
+    assert "计划变量" in workbench
+    assert "批准后才会执行" in workbench
+    assert "计划变量覆盖情况" in workbench
     assert "全部分析记录均有值" in workbench
     assert "部分分析记录缺少数值" in workbench
     assert ".gpi-wb" in css
+    assert ".gpi-wb-pending" in css
+    assert ".gpi-wb-coverage-chart" in css
     assert ".patient-" not in css
     assert ".cohort-" not in css
     assert ".crossdb-" not in css
@@ -3563,16 +3690,21 @@ def test_evidence_bound_manuscript_reader_stays_in_its_preview_owner() -> None:
     assert "manuscriptProvenanceView" in renderer
     assert "manuscript_provenance.json" in renderer
     assert "data-gpi-claim" in renderer
+    assert "data-gpi-evidence-open" in renderer
+    assert "Open result evidence preview" in renderer
     assert "source_json_pointer" in renderer
     assert "related_artifacts" in renderer
     assert "data-gpi-claim-panel" in preview
     assert "data-gpi-claim-close" in preview
+    assert "data-gpi-evidence-audit" in preview
+    assert "showClaimLineage" in preview
     assert "loadPiCopilotResearchEvidence" in preview
     assert "data-gpi-evidence-tab" in preview
     assert "patient_level_rows_withheld" in evidence_preview
     assert "Code is displayed, never executed" in evidence_preview
     assert ".gpi-bound-number" in styles
     assert ".gpi-claim-drawer" in styles
+    assert ".gpi-manuscript-layout.has-claim-drawer" in styles
     assert ".gpi-evidence-code" in styles
     for unrelated in ("css/app.css", "css/tweaks.css"):
         assert ".gpi-bound-number" not in _read(unrelated)
@@ -3720,15 +3852,14 @@ def test_literature_reader_separates_direct_evidence_from_system_references() ->
     assert "没有找到能直接支持这个问题的研究" in html
     assert "共检索到 8 篇候选、完成 8 篇筛选" in html
     assert "本次检索暂无文章通过筛选" in html
-    assert "0 项科学设计决定" in html
-    assert "科学设计依据" in html
-    assert "尚未显示" in html
-    assert "另有 1 篇报告规范" in html
+    assert "变量与协变量依据" in html
+    assert "统计方法依据" in html
+    assert "报告规范" in html
     assert "仅有报告规范不能决定研究因素时间窗" in html
-    assert "这些文献只规范如何透明报告，不能替代科学设计依据" in html
+    assert "这些文献只规范透明报告，不证明乳酸与死亡存在关联" in html
     assert "1 个决定" not in html
     assert "系统参考库里的其他资料" in html
-    assert "没有被当作当前问题的直接依据" in html
+    assert "为什么显示" not in html
     assert "PRISMA" not in html
     assert "EvidenceStore" not in html
     assert "descriptive_quality_summary" not in html
@@ -3801,7 +3932,8 @@ def test_literature_reader_translates_plan_bindings_for_chinese_readers() -> Non
     )
     html = completed.stdout
     assert "检验乳酸与死亡是否为非线性关系" in html
-    assert "用于检验乳酸作为连续变量时是否存在弯曲或阈值关系" in html
+    assert "统计方法依据" in html
+    assert "用于计划：" in html
     assert "nonlinear lactate functional form" not in html
     assert "Use restricted cubic splines" not in html
 
@@ -4029,6 +4161,14 @@ def test_model_plan_choice_can_only_receive_provider_grant_from_plan_workflow() 
         'plan_scientific_changes_required'
       )));
       console.log(JSON.stringify(grants(
+        '每位患者仅保留第一次 ICU 入院，请按这一规则修订并重新提交候选研究计划；分析保持暂停。',
+        'plan_scientific_changes_required'
+      )));
+      console.log(JSON.stringify(grants(
+        '保留全部 ICU 入院，并在模型中处理同一患者的重复记录；请按这一规则修订并重新提交候选研究计划，分析保持暂停。',
+        'plan_scientific_changes_required'
+      )));
+      console.log(JSON.stringify(grants(
         '授权基于当前 E2 StudyContext 生成新的正式研究计划，并在分析前暂停审核',
         'study_setup_incomplete'
       )));
@@ -4044,8 +4184,10 @@ def test_model_plan_choice_can_only_receive_provider_grant_from_plan_workflow() 
     assert completed.stdout.splitlines() == [
         '["provider_run"]',
         '["provider_run"]',
-        '["provider_run"]',
+        '["configure","provider_run"]',
         "[]",
+        '["configure","provider_run"]',
+        '["configure","provider_run"]',
         "[]",
         "[]",
     ]
@@ -4334,6 +4476,58 @@ def test_editing_host_generated_plan_action_resubmits_without_appending() -> Non
     ]
 
 
+def test_retrying_candidate_plan_action_uses_governed_host_starter() -> None:
+    """Assistant retry must not replay a plan action as ordinary chat."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-message-actions.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'zh' }};
+      eval({_ESCAPE_OWNER!r});
+      eval({owner!r});
+      const calls = [];
+      const rows = [
+        {{
+          id: 'history-plan', entryId: 'entry-plan', role: 'user',
+          text: '生成候选研究计划', complete: true,
+        }},
+        {{id: 'history-answer', role: 'assistant', text: '旧回答', complete: true}},
+      ];
+      const actions = window.EU_GUIDED_PI_MESSAGE_ACTIONS.create({{
+        tr: (en, zh) => zh,
+        iconHtml: name => `<i>${{name}}</i>`,
+        rows: () => rows,
+        host: () => null,
+        canEdit: () => true,
+        setEditing: () => {{}},
+        renderHost: () => {{}},
+        regenerate: (...args) => calls.push(['regenerate', ...args]),
+        resubmitHostGenerated: (target, text) => {{
+          calls.push(['resubmitHostGenerated', target.id, text]);
+          return true;
+        }},
+      }});
+      const retry = {{
+        closest: selector => selector === '[data-gpi-message-retry]'
+          ? retry
+          : selector === '[data-gpi-message-id]'
+            ? {{dataset: {{gpiMessageId: 'history-answer'}}}}
+            : null,
+      }};
+      actions.handleClick({{target: retry}});
+      console.log(JSON.stringify(calls));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+
+    assert json.loads(completed.stdout) == [
+        ["resubmitHostGenerated", "history-plan", "生成候选研究计划"]
+    ]
+
+
 def test_copilot_message_actions_are_host_wired_without_history_rewrite() -> None:
     owner = _read("js/screens-guided-pi.js")
     css = _read("css/guided-pi.css")
@@ -4394,6 +4588,36 @@ def test_candidate_plan_can_be_explicitly_regenerated_before_data_preparation() 
     assert json.loads(completed.stdout) == ["provider_run"]
 
 
+def test_failed_analysis_still_allows_an_explicit_fresh_plan_request() -> None:
+    """Execution retry remains default while an explicit plan redo is governed."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    source = _read("js/screens-guided-pi-next-actions.js")
+    script = f"""
+      global.window = {{ EU_HTML: {{ esc: value => String(value || '') }} }};
+      eval({json.dumps(source)});
+      console.log(JSON.stringify(
+        window.EU_GUIDED_PI_NEXT_ACTIONS.governedPlanGrants(
+          '重新生成研究计划', 'failed_pipeline_execution_retry_available'
+        )
+      ));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(completed.stdout) == ["provider_run"]
+
+    guided = _read("js/screens-guided-pi.js")
+    assert "workflowCode === 'failed_pipeline_execution_retry_available'" in guided
+    assert "? 'failed_pipeline_requires_fresh_plan'" in guided
+    assert "code === 'failed_pipeline_execution_retry_available'" in guided
+    assert "startCurrentFormalPlanGeneration('failed_pipeline_requires_fresh_plan')" in guided
+    confirmation = _read("js/screens-guided-pi-confirmation.js")
+    assert "tr('Generate a fresh research plan', '重新生成研究计划')" in confirmation
+
+
 def test_copilot_regeneration_projects_activity_and_answer_in_place() -> None:
     node = shutil.which("node")
     if not node:
@@ -4442,10 +4666,12 @@ def test_copilot_regeneration_projects_activity_and_answer_in_place() -> None:
 def test_literature_preview_hides_execution_steps_and_explains_scientific_use() -> None:
     literature_owner = _read("js/screens-guided-pi-literature.js")
 
-    assert "文献具体影响了计划的哪里" in literature_owner
-    assert "为什么采用" in literature_owner
-    assert "与研究问题直接相关的文章" in literature_owner
-    assert "尚未执行检索。请重新生成计划" in literature_owner
+    assert "文献按用途分组" in literature_owner
+    assert "变量、特征与协变量依据" in literature_owner
+    assert "统计方法依据" in literature_owner
+    assert "研究问题直接相关" in literature_owner
+    assert "用于计划" in literature_owner
+    assert "为什么显示" not in literature_owner
     assert "目前 0 篇通过筛选" not in literature_owner
     assert "辅助执行或呈现步骤" not in literature_owner
     assert "planned_analysis_role" not in literature_owner.split(
@@ -4475,7 +4701,7 @@ def test_literature_preview_renders_unsearched_bundle_without_zero_result_claim(
     )
 
     assert "尚未执行针对这个问题的文献检索" in completed.stdout
-    assert "尚未执行检索。请重新生成计划" in completed.stdout
+    assert "目前还没有文献绑定到这份计划" in completed.stdout
     assert "本次检索暂无文章通过筛选" not in completed.stdout
 
 
