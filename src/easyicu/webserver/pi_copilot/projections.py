@@ -138,6 +138,10 @@ def project_study_context(
         "source_count",
         "module_count",
         "exclude_readmissions",
+        # The removal half of the cohort statement. Without it the model writes
+        # to a slot it can never read back, so it cannot tell an unstated
+        # exclusion from one it already recorded.
+        "exclusion_statement",
     )
     projected_cohort = {
         key: cohort[key]

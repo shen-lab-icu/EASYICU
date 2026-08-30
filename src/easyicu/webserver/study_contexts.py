@@ -96,6 +96,11 @@ _COHORT_TEXT_FIELDS = {
     "preset",
     "label",
     "review",
+    # The removal half of the cohort statement. `review` is the inclusion
+    # channel, so a removal written there reached the Planner as an inclusion
+    # criterion; this gives it somewhere to go that does not require parsing
+    # prose back apart.
+    "exclusion_statement",
     "review_scope",
     "comparison",
     "source_type",
