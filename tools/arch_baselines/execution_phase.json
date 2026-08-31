@@ -4,15 +4,15 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 5695,
-      "sha256": "46a906a18a47ebdb036de01469d9929f96979b4129d795fc9c9bb8f0a090baab",
+      "loc": 5679,
+      "sha256": "cc06d24d88f2d02b7ff8dae3b50113b3348345bfc9bda536c76aba93b9486e5b",
       "intra_package_import_edges": 101,
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 3748,
-      "sha256": "daf5b87ad69d34a76c130f0d6ca6c9396b0c844119277a2289ed48ed3cb9568c",
-      "intra_package_import_edges": 55,
+      "loc": 3745,
+      "sha256": "e380b0a0fa275d77fb30963bb4c7ded5290b18764c16e371a49be8a9237dbf3a",
+      "intra_package_import_edges": 58,
       "shim_bypass_violations": []
     },
     "execution/run_coordination.py": {
@@ -22,9 +22,9 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8483,
-      "sha256": "17ce7bf43cfc844e111bdcd25114e6b6e6449ea546ca1a0636c72286d7e67749",
-      "intra_package_import_edges": 124,
+      "loc": 8458,
+      "sha256": "9f315c23bc0e4396078b89765889a4cc86f098471878a5829fc87b9cc4f70314",
+      "intra_package_import_edges": 122,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
@@ -35,7 +35,7 @@
     },
     "reporting/readiness.py": {
       "loc": 3067,
-      "sha256": "2af66f7f382b2e4a75215061a906eae9e9b681eb34aed71e2e436a0934897be9",
+      "sha256": "bf874ae38a0cf0fc026464047711f14ebef530cc6c4c84dffd2c7169c072e686",
       "intra_package_import_edges": 35,
       "shim_bypass_violations": []
     },
@@ -52,9 +52,9 @@
       "shim_bypass_violations": []
     },
     "authority/plan_authority.py": {
-      "loc": 389,
-      "sha256": "2080f1456b00ff7dea2b2662c20d8ad28ce73034487fbc78e217fdb378bb933d",
-      "intra_package_import_edges": 11,
+      "loc": 386,
+      "sha256": "4af4ee3b1e04b1bfba46367b7974cbe17ad0f57af1aa1f3f52ad6321adac2317",
+      "intra_package_import_edges": 12,
       "shim_bypass_violations": []
     },
     "authority/typed_input_receipt.py": {
@@ -160,9 +160,9 @@
       "shim_bypass_violations": []
     },
     "plan_utils.py": {
-      "loc": 4987,
-      "sha256": "7709bd01cc8715b0bf3b63192959db5a1206abe40b303ddd66e5d96deb53d696",
-      "intra_package_import_edges": 17,
+      "loc": 81,
+      "sha256": "b73187f0a3ffbc6667a156d79478c07cd9e357607abfadff4117db5ac5f077b5",
+      "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
     "planning/final_article_design.py": {
@@ -226,9 +226,9 @@
       "shim_bypass_violations": []
     },
     "agents/coder.py": {
-      "loc": 1628,
-      "sha256": "c9abf916942f927b1d604eb65d39b42f05d830c40b457fa9dd04aae4e06387fc",
-      "intra_package_import_edges": 26,
+      "loc": 1627,
+      "sha256": "d8de85c73ee86eff7c56b1209b0f5aaf2111dd8fb1b4089d10cf88f168f54894",
+      "intra_package_import_edges": 27,
       "shim_bypass_violations": []
     },
     "agents/coder_output_contract.py": {
@@ -292,9 +292,9 @@
       "shim_bypass_violations": []
     },
     "orchestration/resume_plan_migration.py": {
-      "loc": 976,
-      "sha256": "fdb991ba9fa98438c2a839e5b9f8ae689ac8ef1f25ae3ec8ae77d8d53e81c2fd",
-      "intra_package_import_edges": 11,
+      "loc": 975,
+      "sha256": "3ed2c96dd6220584f781cbb259428e598f883d997ea433ac577cef094b9c5638",
+      "intra_package_import_edges": 12,
       "shim_bypass_violations": []
     },
     "discovery/idea_mining.py": {
@@ -316,16 +316,16 @@
       "shim_bypass_violations": []
     },
     "agents/progressive_planner.py": {
-      "loc": 4122,
-      "sha256": "219838897be8e0902bde147b972a45bc1831537ff1560fb175d0fc0626016f3f",
-      "intra_package_import_edges": 33,
+      "loc": 4160,
+      "sha256": "13ed85385a807b6bf648d1bbc6dad70a1d4551726e509bbc83ff8810a3e02464",
+      "intra_package_import_edges": 34,
       "shim_bypass_violations": []
     }
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 66,
-      "line_start": 1782,
+      "line_start": 1766,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 2,
@@ -337,7 +337,7 @@
     },
     "execution/phase.py::run_execute_phase": {
       "lines": 928,
-      "line_start": 1175,
+      "line_start": 1159,
       "direct_nested_funcs": 3,
       "total_nested_funcs": 5,
       "own_bound_names": 134,
@@ -347,7 +347,7 @@
     },
     "execution/phase.py::_execute_step": {
       "lines": 660,
-      "line_start": 3799,
+      "line_start": 3783,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 135,
@@ -357,7 +357,7 @@
     },
     "execution/phase.py::_prepare_execute_phase_authority": {
       "lines": 147,
-      "line_start": 1026,
+      "line_start": 1010,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 32,
@@ -377,7 +377,7 @@
     },
     "pipeline.py::run": {
       "lines": 790,
-      "line_start": 4109,
+      "line_start": 4084,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 107,
@@ -386,8 +386,8 @@
       "callable_closure_captured_names": 43
     },
     "pipeline.py::_generate_or_resume_plan": {
-      "lines": 438,
-      "line_start": 2025,
+      "lines": 440,
+      "line_start": 1998,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 55,
@@ -397,7 +397,7 @@
     },
     "pipeline.py::_run_plan_phase": {
       "lines": 618,
-      "line_start": 2914,
+      "line_start": 2889,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 83,
@@ -406,11 +406,11 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Ratchet the now-committed progressive Planner owner and accept the reviewed owner-scoped growth in this staged repair series. Every measured source is from the current branch state; this move records architecture debt and claims neither decomposition nor paper readiness.",
+  "baseline_reason": "Progressive Planner now returns one atomic output-and-provenance result; attempt state moved to a dedicated owner module.",
   "baseline_accepted_growth": {
-    "pipeline.py": {
-      "loc_was": 8440,
-      "loc_now": 8483
+    "agents/progressive_planner.py": {
+      "loc_was": 4122,
+      "loc_now": 4160
     }
   },
   "baseline_history": [
@@ -896,6 +896,15 @@
         "pipeline.py": {
           "loc_was": 8440,
           "loc_now": 8483
+        }
+      }
+    },
+    {
+      "reason": "Progressive Planner now returns one atomic output-and-provenance result; attempt state moved to a dedicated owner module.",
+      "accepted_growth": {
+        "agents/progressive_planner.py": {
+          "loc_was": 4122,
+          "loc_now": 4160
         }
       }
     }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import inspect
 from copy import deepcopy
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from easyicu.research_agent.agents.progressive_payload import (
 )
 from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
+    progressive_planner_failure_facts,
     _action_catalog,
     _bind_runtime_action_dependencies,
     _bind_direct_comparator_source,
@@ -92,7 +94,6 @@ from easyicu.research_agent.planning.progressive_resume import (
 from easyicu.research_agent.orchestration.progressive_planning import (
     ProgressiveDesignCanaryDraft,
     run_progressive_planner,
-    snapshot_progressive_planner_run,
 )
 from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
 from easyicu.research_agent.planning.preplan_know_how import (
@@ -126,6 +127,16 @@ from easyicu.research_agent.reporting.article_contract import (
     roles_covered_by_plan,
     validate_plan_against_article_contract,
 )
+
+
+def test_progressive_orchestration_consumes_one_atomic_attempt_result() -> None:
+    orchestration_source = inspect.getsource(run_progressive_planner)
+    agent_source = inspect.getsource(ProgressivePlannerAgent)
+
+    assert "planner.run_attempt(" in orchestration_source
+    assert "planner.last_" not in orchestration_source
+    assert "snapshot_progressive_planner_run" not in orchestration_source
+    assert "self.last_" not in agent_source
 
 
 def _context() -> ResearchContext:
@@ -1323,13 +1334,15 @@ def test_host_materialization_keeps_one_schema_ledger_entry_per_step(
     )
     agent = ProgressivePlannerAgent(llm)
 
-    plan = agent.run(_context())
+    attempt = agent.run_attempt(_context())
+    plan = attempt.output
+    facts = attempt.facts
 
     assert len(plan.steps) == 7
     assert len(llm.calls) == 5
-    assert agent.last_prompt_metrics["host_step_materialization_count"] == 4
-    assert agent.last_prompt_metrics["step_materialization_payload_bytes"].count(0) == 4
-    assert len(agent.last_prompt_metrics["step_materialization_schema_sha256"]) == 7
+    assert facts.prompt_metrics["host_step_materialization_count"] == 4
+    assert facts.prompt_metrics["step_materialization_payload_bytes"].count(0) == 4
+    assert len(facts.prompt_metrics["step_materialization_schema_sha256"]) == 7
 
 
 def test_checkpoint_resume_reuses_host_materialized_null_schema_authority(
@@ -5233,7 +5246,9 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     llm.supports_strict_json_schema = True
     agent = ProgressivePlannerAgent(llm)
 
-    plan = agent.run(_context())
+    attempt = agent.run_attempt(_context())
+    plan = attempt.output
+    facts = attempt.facts
 
     assert len(plan.steps) == 7
     assert plan.design_selection is not None
@@ -5265,14 +5280,15 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
     first_step_prompt = llm.calls[2][0][-1].content
     assert "Current outline step and host digest" in first_step_prompt
     assert "Do not return or rewrite any prefix or future step" in first_step_prompt
-    assert agent.last_prompt_metrics["compile_revision_count"] == 0
-    assert agent.last_prompt_metrics["step_materialization_count"] == 7
-    assert agent.last_prompt_metrics["full_revision_count"] == 0
-    assert agent.last_compile_receipt is not None
-    assert agent.last_outline is not None
-    assert agent.last_foundation is not None
-    assert len(agent.last_materializations) == 7
-    assert agent.last_skeleton is not None
+    assert facts.prompt_metrics["compile_revision_count"] == 0
+    assert facts.prompt_metrics["step_materialization_count"] == 7
+    assert facts.prompt_metrics["full_revision_count"] == 0
+    assert facts.compile_receipt is not None
+    assert facts.outline is not None
+    assert facts.foundation is not None
+    assert len(facts.materializations) == 7
+    assert facts.skeleton is not None
+    assert agent.last_result is attempt
 
 
 def test_outline_authority_failure_is_retried_before_foundation() -> None:
@@ -5461,7 +5477,7 @@ def test_agent_rejects_invalid_foundation_before_any_step_provider_call() -> Non
     assert getattr(caught.value.__cause__, "path", None) == "cohort"
     assert len(llm.calls) == 3
     assert [item.stage for item in checkpoints] == ["outline"]
-    assert agent.last_foundation is None
+    assert progressive_planner_failure_facts(caught.value).foundation is None
 
 
 def test_agent_repairs_missing_robustness_intent_before_step_materialization() -> None:
@@ -5545,7 +5561,7 @@ def test_agent_host_compiles_caller_bound_all_input_cohort() -> None:
     assert plan.cohort.selection_mode == "all_input_rows"
     assert plan.cohort.inclusion == ()
     assert plan.cohort.exclusion == ()
-    assert agent.last_prompt_metrics["foundation_cohort_owner"] == (
+    assert agent.last_result.facts.prompt_metrics["foundation_cohort_owner"] == (
         "host_required_primary_cohort"
     )
     foundation_request = llm.calls[1][1]["structured_output"]
@@ -5632,15 +5648,20 @@ def test_agent_resumes_only_the_unmaterialized_suffix() -> None:
 
     assert len(plan.steps) == 7
     assert len(resumed_llm.calls) == 4
-    assert resumed_agent.last_resume_validated is True
+    assert resumed_agent.last_result.facts.resume_validated is True
     assert [item.sequence for item in resumed_checkpoints] == [5, 6, 7, 8]
     assert (
         resumed_checkpoints[0].previous_checkpoint_sha256
         == resume_checkpoint.checkpoint_sha256
     )
-    assert resumed_agent.last_prompt_metrics["resume_reused_materialization_count"] == 3
+    assert resumed_agent.last_result.facts.prompt_metrics[
+        "resume_reused_materialization_count"
+    ] == 3
     assert (
-        resumed_agent.last_prompt_metrics["current_run_step_materialization_count"] == 4
+        resumed_agent.last_result.facts.prompt_metrics[
+            "current_run_step_materialization_count"
+        ]
+        == 4
     )
 
 
@@ -5740,7 +5761,7 @@ def test_agent_replays_a_complete_checkpoint_without_provider_calls() -> None:
 
     assert len(plan.steps) == 7
     assert replay_llm.calls == []
-    assert replay_agent.last_resume_validated is True
+    assert replay_agent.last_result.facts.resume_validated is True
 
 
 def test_agent_repairs_only_the_current_materialization() -> None:
@@ -5772,14 +5793,25 @@ def test_agent_repairs_only_the_current_materialization() -> None:
     assert llm.calls[6][1]["structured_output"].authority_sha256 == (
         llm.calls[7][1]["structured_output"].authority_sha256
     )
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
-    assert agent.last_prompt_metrics["step_materialization_count"] == 7
-    assert len(agent.last_prompt_metrics["step_materialization_schema_sha256"]) == 7
+    assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_result.facts.prompt_metrics["step_materialization_count"] == 7
     assert (
-        len(agent.last_prompt_metrics["step_materialization_attempt_schema_sha256"])
+        len(
+            agent.last_result.facts.prompt_metrics[
+                "step_materialization_schema_sha256"
+            ]
+        )
+        == 7
+    )
+    assert (
+        len(
+            agent.last_result.facts.prompt_metrics[
+                "step_materialization_attempt_schema_sha256"
+            ]
+        )
         == 8
     )
-    assert agent.last_prompt_metrics["full_revision_count"] == 0
+    assert agent.last_result.facts.prompt_metrics["full_revision_count"] == 0
 
 
 def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
@@ -5839,7 +5871,7 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
     assert '"required_covariates":["age_years","sex_code"]' in (
         llm.calls[7][0][-1].content
     )
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
 
 
 def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
@@ -5934,7 +5966,7 @@ def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:
     assert "progressive_final_method_layer_unbound" in repair_prompt
     assert '"missing_method_layers":["interpretation"]' in repair_prompt
     assert '"step_id":"07_figure"' in repair_prompt
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
     assert plan.steps[-1].literature_design_bindings[0].design_elements == [
         "reporting",
         "outcome",
@@ -5969,9 +6001,9 @@ def test_agent_repairs_identical_distribution_contrast_locally() -> None:
     assert llm.calls[4][1]["structured_output"].authority_sha256 == (
         llm.calls[5][1]["structured_output"].authority_sha256
     )
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
-    assert agent.last_prompt_metrics["step_materialization_count"] == 7
-    assert agent.last_prompt_metrics["full_revision_count"] == 0
+    assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_result.facts.prompt_metrics["step_materialization_count"] == 7
+    assert agent.last_result.facts.prompt_metrics["full_revision_count"] == 0
 
 
 def test_agent_repairs_outcome_covariate_at_the_current_model_step() -> None:
@@ -6006,7 +6038,7 @@ def test_agent_repairs_outcome_covariate_at_the_current_model_step() -> None:
     assert "never include the outcome as a model term or covariate" in (
         llm.calls[6][0][-1].content
     )
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
 
 
 def test_prefix_pydantic_failure_becomes_attributable_compiler_finding() -> None:
@@ -6074,16 +6106,16 @@ def test_agent_stops_after_one_host_compile_repair_and_keeps_attempts() -> None:
         "progressive_distribution_contrast_not_distinct"
     )
     assert len(llm.calls) == 6
-    assert [item.revision for item in agent.last_compile_failure_attempts] == [
+    failure_facts = progressive_planner_failure_facts(caught.value)
+    assert [item.revision for item in failure_facts.compile_failure_attempts] == [
         0,
         1,
     ]
     assert {
         item.compiler_finding.reason_code
-        for item in agent.last_compile_failure_attempts
+        for item in failure_facts.compile_failure_attempts
     } == {"progressive_distribution_contrast_not_distinct"}
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
-    failure_facts = snapshot_progressive_planner_run(agent)
+    assert failure_facts.prompt_metrics["compile_revision_count"] == 1
     assert len(failure_facts.compile_failure_attempts) == 2
     assert failure_facts.complete_for_persistence is False
 
@@ -6471,10 +6503,10 @@ def test_progressive_orchestrator_persists_validated_resume_on_interrupt(
     planner = ProgressivePlannerAgent(ScriptedMockLLMClient([]))
 
     def interrupted(*_args, **_kwargs):
-        planner.last_resume_validated = True
+        planner._attempt.resume_validated = True
         raise KeyboardInterrupt("operator stop")
 
-    monkeypatch.setattr(planner, "run", interrupted)
+    monkeypatch.setattr(planner, "_run_output", interrupted)
     with pytest.raises(KeyboardInterrupt, match="operator stop"):
         run_progressive_planner(
             planner=planner,
@@ -6539,21 +6571,21 @@ def test_progressive_artifacts_bind_each_schema_authority(
     llm.supports_strict_json_schema = True
     agent = ProgressivePlannerAgent(llm)
     plan = agent.run(_context())
-    assert agent.last_outline is not None
-    assert agent.last_foundation is not None
-    assert agent.last_skeleton is not None
-    assert agent.last_compile_receipt is not None
+    assert agent.last_result.facts.outline is not None
+    assert agent.last_result.facts.foundation is not None
+    assert agent.last_result.facts.skeleton is not None
+    assert agent.last_result.facts.compile_receipt is not None
     evidence = _RecordingEvidence()
 
     paths = persist_progressive_planning_artifacts(
         run_dir=tmp_path,
         evidence=evidence,
-        outline=agent.last_outline,
-        foundation=agent.last_foundation,
-        materializations=agent.last_materializations,
-        skeleton=agent.last_skeleton,
-        compile_receipt=agent.last_compile_receipt,
-        prompt_metrics=agent.last_prompt_metrics,
+        outline=agent.last_result.facts.outline,
+        foundation=agent.last_result.facts.foundation,
+        materializations=agent.last_result.facts.materializations,
+        skeleton=agent.last_result.facts.skeleton,
+        compile_receipt=agent.last_result.facts.compile_receipt,
+        prompt_metrics=agent.last_result.facts.prompt_metrics,
         prompt_pack_version="test",
     )
 
@@ -6570,7 +6602,7 @@ def test_progressive_artifacts_bind_each_schema_authority(
         for item in ledger["materializations"]
     ] == [request.authority_sha256 for request in requests[2:]]
     assert [item["step_id"] for item in ledger["materializations"]] == [
-        item.step.step_id for item in agent.last_materializations
+        item.step.step_id for item in agent.last_result.facts.materializations
     ]
     assert set(evidence.records) == {
         "progressive_plan_outline",
@@ -6591,7 +6623,7 @@ def test_progressive_artifacts_bind_each_schema_authority(
         json.dumps(
             {
                 "schema_version": "easyicu.planner_prompt_metrics/1",
-                **agent.last_prompt_metrics,
+                **agent.last_result.facts.prompt_metrics,
             },
             sort_keys=True,
         )
@@ -6638,7 +6670,7 @@ def test_progressive_artifacts_bind_each_schema_authority(
     assert authority.compiled_analysis_plan_sha256 == normalized.proposed.plan_sha256
     assert authority.normalized_plan_authority_sha256 == normalized.authority_sha256
     assert [item.step_id for item in authority.ordered_steps] == [
-        item.step_id for item in agent.last_outline.steps
+        item.step_id for item in agent.last_result.facts.outline.steps
     ]
     assert evidence.records["progressive_planning_authority"]["inputs"][-1] == (
         "plan_lifecycle_revision_0"
@@ -6658,22 +6690,22 @@ def test_progressive_artifacts_fail_closed_on_schema_authority_drift(
     llm.supports_strict_json_schema = True
     agent = ProgressivePlannerAgent(llm)
     agent.run(_context())
-    assert agent.last_outline is not None
-    assert agent.last_foundation is not None
-    assert agent.last_skeleton is not None
-    assert agent.last_compile_receipt is not None
-    drifted_metrics = dict(agent.last_prompt_metrics)
+    assert agent.last_result.facts.outline is not None
+    assert agent.last_result.facts.foundation is not None
+    assert agent.last_result.facts.skeleton is not None
+    assert agent.last_result.facts.compile_receipt is not None
+    drifted_metrics = dict(agent.last_result.facts.prompt_metrics)
     drifted_metrics["step_materialization_schema_sha256"] = ["0" * 64]
 
     with pytest.raises(ProgressivePlanningArtifactError) as caught:
         persist_progressive_planning_artifacts(
             run_dir=tmp_path,
             evidence=_RecordingEvidence(),
-            outline=agent.last_outline,
-            foundation=agent.last_foundation,
-            materializations=agent.last_materializations,
-            skeleton=agent.last_skeleton,
-            compile_receipt=agent.last_compile_receipt,
+            outline=agent.last_result.facts.outline,
+            foundation=agent.last_result.facts.foundation,
+            materializations=agent.last_result.facts.materializations,
+            skeleton=agent.last_result.facts.skeleton,
+            compile_receipt=agent.last_result.facts.compile_receipt,
             prompt_metrics=drifted_metrics,
             prompt_pack_version="test",
         )
@@ -6696,41 +6728,43 @@ def test_progressive_artifacts_do_not_overwrite_existing_evidence_identity(
     llm.supports_strict_json_schema = True
     agent = ProgressivePlannerAgent(llm)
     agent.run(_context())
-    assert agent.last_outline is not None
-    assert agent.last_foundation is not None
-    assert agent.last_skeleton is not None
-    assert agent.last_compile_receipt is not None
+    assert agent.last_result.facts.outline is not None
+    assert agent.last_result.facts.foundation is not None
+    assert agent.last_result.facts.skeleton is not None
+    assert agent.last_result.facts.compile_receipt is not None
     evidence = _RecordingEvidence()
     paths = persist_progressive_planning_artifacts(
         run_dir=tmp_path,
         evidence=evidence,
-        outline=agent.last_outline,
-        foundation=agent.last_foundation,
-        materializations=agent.last_materializations,
-        skeleton=agent.last_skeleton,
-        compile_receipt=agent.last_compile_receipt,
-        prompt_metrics=agent.last_prompt_metrics,
+        outline=agent.last_result.facts.outline,
+        foundation=agent.last_result.facts.foundation,
+        materializations=agent.last_result.facts.materializations,
+        skeleton=agent.last_result.facts.skeleton,
+        compile_receipt=agent.last_result.facts.compile_receipt,
+        prompt_metrics=agent.last_result.facts.prompt_metrics,
         prompt_pack_version="test",
     )
     original_ledger = paths.materializations.read_bytes()
-    changed_step = agent.last_materializations[0].step.model_copy(
+    changed_step = agent.last_result.facts.materializations[0].step.model_copy(
         update={"objective": "A different unreviewed objective."}
     )
     changed_materializations = [
-        agent.last_materializations[0].model_copy(update={"step": changed_step}),
-        *agent.last_materializations[1:],
+        agent.last_result.facts.materializations[0].model_copy(
+            update={"step": changed_step}
+        ),
+        *agent.last_result.facts.materializations[1:],
     ]
 
     with pytest.raises(ProgressivePlanningArtifactError) as caught:
         persist_progressive_planning_artifacts(
             run_dir=tmp_path,
             evidence=evidence,
-            outline=agent.last_outline,
-            foundation=agent.last_foundation,
+            outline=agent.last_result.facts.outline,
+            foundation=agent.last_result.facts.foundation,
             materializations=changed_materializations,
-            skeleton=agent.last_skeleton,
-            compile_receipt=agent.last_compile_receipt,
-            prompt_metrics=agent.last_prompt_metrics,
+            skeleton=agent.last_result.facts.skeleton,
+            compile_receipt=agent.last_result.facts.compile_receipt,
+            prompt_metrics=agent.last_result.facts.prompt_metrics,
             prompt_pack_version="test",
         )
 
@@ -6759,8 +6793,8 @@ def test_agent_repairs_current_step_coordinate_drift_without_full_rewrite() -> N
 
     assert len(plan.steps) == 7
     assert len(llm.calls) == 10
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
-    assert agent.last_prompt_metrics["full_revision_count"] == 0
+    assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_result.facts.prompt_metrics["full_revision_count"] == 0
     repair_prompt = llm.calls[6][0][-1].content
     assert "progressive_step_materialization_mismatch" in repair_prompt
     assert '"path":"scientific_action_id"' in repair_prompt
@@ -6877,7 +6911,7 @@ def test_agent_repairs_duplicate_outline_literature_key_without_diagnostic_crash
 
     assert len(plan.steps) == 7
     assert len(llm.calls) == 10
-    assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    assert agent.last_result.facts.prompt_metrics["compile_revision_count"] == 1
     repair_prompt = llm.calls[5][0][-1].content
     assert "progressive_step_literature_roster_mismatch" in repair_prompt
 
