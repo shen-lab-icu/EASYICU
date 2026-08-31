@@ -16,6 +16,9 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from easyicu.webserver import study_contexts as study_context_owner
+from easyicu.webserver.execution_retry import (
+    preserves_approved_execution_checkpoint,
+)
 
 from . import cohort_eligibility
 from .contracts import PLAN_RESUME_OFFER_GATE_REASONS, plan_approval_allowed
@@ -763,11 +766,7 @@ def build_research_workflow_snapshot(
         failed_pipeline_regeneration_required
         and has_plan
         and has_evidence
-        and str(run_row.get("gate_reason") or "")
-        in {
-            "research_agent_pipeline_failed_closed",
-            "research_pipeline_execution_failed",
-        }
+        and preserves_approved_execution_checkpoint(run_row.get("gate_reason"))
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
     )
