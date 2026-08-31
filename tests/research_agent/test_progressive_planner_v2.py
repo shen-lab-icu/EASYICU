@@ -6082,6 +6082,9 @@ def test_agent_stops_after_one_host_compile_repair_and_keeps_attempts() -> None:
         for item in agent.last_compile_failure_attempts
     } == {"progressive_distribution_contrast_not_distinct"}
     assert agent.last_prompt_metrics["compile_revision_count"] == 1
+    failure_facts = agent.snapshot_run_facts()
+    assert len(failure_facts.compile_failure_attempts) == 2
+    assert failure_facts.complete_for_persistence is False
 
 
 class _RecordingEvidence:
@@ -6409,6 +6412,9 @@ def test_progressive_orchestrator_resumes_and_imports_validated_chain(
 
     assert result.generation_mode == "llm_progressive_v2_dev_resume"
     assert len(result.plan.steps) == 7
+    assert result.facts.resume_validated is True
+    assert result.facts.complete_for_persistence is True
+    assert len(result.facts.materializations) == 7
     assert len(resumed_llm.calls) == 4
     assert findings[0].detail["reason_code"] == (
         "progressive_development_checkpoint_resumed"

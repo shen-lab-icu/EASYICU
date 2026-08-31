@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ..agents.progressive_planner import ProgressivePlannerAgent
+from ..agents.progressive_planner import (
+    ProgressivePlannerAgent,
+    ProgressivePlannerRunFacts,
+)
 from ..authority.evidence_store import sha256_of_file
 from ..planning.progressive_artifacts import (
     ProgressiveEvidenceRegistrar,
@@ -29,11 +32,12 @@ from .workflow import PlannerDesignCanaryComplete
 
 @dataclass(frozen=True)
 class ProgressivePlannerRunResult:
-    """Normalized plan plus the provenance-visible generation mode."""
+    """Plan and every provenance fact captured from the same attempt."""
 
     plan: AnalysisPlan
     generation_mode: str
     prompt_metrics: Mapping[str, Any]
+    facts: ProgressivePlannerRunFacts
 
 
 @dataclass(frozen=True)
@@ -234,7 +238,8 @@ def run_progressive_planner(
         )
     except BaseException:
         planner.capture_efficiency_metrics()
-        if source_chain and planner.last_resume_validated:
+        facts = planner.snapshot_run_facts()
+        if source_chain and facts.resume_validated:
             receipt = recorder.persist_validated_resume()
             finding_sink(
                 _resume_finding(
@@ -242,21 +247,19 @@ def run_progressive_planner(
                     terminal_artifact_sha256=str(resume_checkpoint_sha256),
                 )
             )
-        if (
-            planner.last_compile_failure_attempts
-            and recorder.latest_checkpoint is not None
-        ):
+        if facts.compile_failure_attempts and recorder.latest_checkpoint is not None:
             persist_progressive_compile_failure_replay(
                 run_dir=run_dir,
                 evidence=evidence,
-                attempts=planner.last_compile_failure_attempts,
+                attempts=facts.compile_failure_attempts,
                 prefix_checkpoint=recorder.latest_checkpoint,
                 prompt_pack_version=prompt_pack_version,
             )
         raise
 
+    facts = planner.snapshot_run_facts()
     if source_chain:
-        if not planner.last_resume_validated:
+        if not facts.resume_validated:
             raise RuntimeError(
                 "Progressive Planner returned without validating its development "
                 "resume checkpoint."
@@ -296,7 +299,7 @@ def run_progressive_planner(
     if not isinstance(generated, AnalysisPlan):
         raise RuntimeError("Progressive Planner returned no executable AnalysisPlan")
     persist_progressive_planner_output(
-        planner=planner,
+        facts=facts,
         run_dir=run_dir,
         evidence=evidence,
         prompt_metrics=prompt_metrics,
@@ -310,12 +313,13 @@ def run_progressive_planner(
             else "llm_progressive_v2"
         ),
         prompt_metrics=prompt_metrics,
+        facts=facts,
     )
 
 
 def persist_progressive_planner_output(
     *,
-    planner: ProgressivePlannerAgent,
+    facts: ProgressivePlannerRunFacts,
     run_dir: Path,
     evidence: ProgressiveEvidenceRegistrar,
     prompt_metrics: Mapping[str, Any],
@@ -323,13 +327,7 @@ def persist_progressive_planner_output(
 ) -> None:
     """Persist the complete outline-to-compiler chain from one Planner run."""
 
-    if (
-        planner.last_outline is None
-        or planner.last_foundation is None
-        or not planner.last_materializations
-        or planner.last_skeleton is None
-        or planner.last_compile_receipt is None
-    ):
+    if not facts.complete_for_persistence:
         raise RuntimeError(
             "Progressive Planner returned without its outline, foundation, step "
             "materializations, skeleton, or compile receipt"
@@ -337,11 +335,11 @@ def persist_progressive_planner_output(
     persist_progressive_planning_artifacts(
         run_dir=run_dir,
         evidence=evidence,
-        outline=planner.last_outline,
-        foundation=planner.last_foundation,
-        materializations=planner.last_materializations,
-        skeleton=planner.last_skeleton,
-        compile_receipt=planner.last_compile_receipt,
+        outline=facts.outline,
+        foundation=facts.foundation,
+        materializations=facts.materializations,
+        skeleton=facts.skeleton,
+        compile_receipt=facts.compile_receipt,
         prompt_metrics=prompt_metrics,
         prompt_pack_version=prompt_pack_version,
     )
