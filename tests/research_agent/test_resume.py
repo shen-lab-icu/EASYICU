@@ -29,6 +29,7 @@ from tools.run_research_agent_bench import (
     _run_ehrflowbench_jsonl,
 )
 from easyicu.research_agent.pipeline import (
+    _apply_resume_plan_migrations,
     _load_compatible_resume_plan,
     _load_resume_state,
 )
@@ -1844,6 +1845,162 @@ def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
 
     assert selected == plan
     assert selected_path == verified_run_evidence_path(run_dir, record)
+
+
+def test_resume_prefers_review_bound_plan_after_rejected_newer_migration(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.authority.plan_scope import (
+        _serializable_plan_scientific_scope_signature,
+    )
+    from easyicu.research_agent.canonical_json import canonical_sha256
+
+    run_dir = tmp_path / "run_review_bound_resume"
+    run_dir.mkdir()
+    reviewed = AnalysisPlan(
+        research_question="Resume the approved plan.",
+        steps=[
+            AnalysisStep(
+                step_id="01_complete",
+                intent="Completed scientific work.",
+                expected_outputs=["table:result"],
+            ),
+            AnalysisStep(
+                step_id="02_display",
+                planned_analysis_role="auxiliary",
+                intent="Render the approved result.",
+                method="visualization",
+                inputs=["table:result"],
+                expected_outputs=["figure:result"],
+            ),
+        ],
+    )
+    unreviewed = reviewed.model_copy(
+        update={
+            "revision": 3,
+            "steps": [
+                reviewed.steps[0],
+                reviewed.steps[1].model_copy(
+                    update={"inputs": ["table:result", "table:extra"]}
+                ),
+            ],
+        }
+    )
+    reviewed_path = run_dir / "analysis_plan.json"
+    unreviewed_path = run_dir / "analysis_plan_revision_3.json"
+    review_path = run_dir / "scientific_plan_review.json"
+    reviewed_path.write_text(reviewed.model_dump_json(indent=2), encoding="utf-8")
+    unreviewed_path.write_text(unreviewed.model_dump_json(indent=2), encoding="utf-8")
+    review_path.write_text(
+        json.dumps(
+            {"plan_sha256": canonical_sha256(reviewed.model_dump(mode="json"))}
+        ),
+        encoding="utf-8",
+    )
+    evidence = EvidenceStore(run_dir)
+    reviewed_record = evidence.register_file(
+        kind="log",
+        description="Reviewed plan.",
+        source_path=reviewed_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Rejected newer migration.",
+        source_path=unreviewed_path,
+        evidence_id="analysis_plan_revision_3",
+        producer="runtime_supervisor",
+        generation_mode="system",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Exact scientific review binding.",
+        source_path=review_path,
+        evidence_id="scientific_plan_review",
+        producer="plan_scientific_review",
+        generation_mode="deterministic_skill",
+    )
+    resume_state = {
+        "per_step_records": [
+            {
+                "step_id": "01_complete",
+                "status": "ok",
+                "planned_analysis_role": reviewed.steps[0].planned_analysis_role,
+                "analysis_request": {
+                    "step": reviewed.steps[0].model_dump(mode="json")
+                },
+                "plan_scientific_signature": (
+                    _serializable_plan_scientific_scope_signature(reviewed)
+                ),
+            }
+        ]
+    }
+
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=run_dir,
+        resume_state=resume_state,
+    )
+
+    assert selected == reviewed
+    assert selected_path == verified_run_evidence_path(run_dir, reviewed_record)
+
+
+def test_review_bound_crash_resume_does_not_mutate_the_plan(tmp_path: Path) -> None:
+    from easyicu.research_agent.canonical_json import canonical_sha256
+
+    plan = AnalysisPlan(
+        research_question="Resume exactly what the user approved.",
+        steps=[
+            AnalysisStep(
+                step_id="01_display",
+                planned_analysis_role="auxiliary",
+                intent="Render the reviewed table.",
+                method="visualization",
+                inputs=["table:result"],
+                expected_outputs=["figure:result"],
+            )
+        ],
+    )
+    review_path = tmp_path / "scientific_plan_review.json"
+    review_path.write_text(
+        json.dumps({"plan_sha256": canonical_sha256(plan.model_dump(mode="json"))}),
+        encoding="utf-8",
+    )
+    evidence = EvidenceStore(tmp_path)
+    evidence.register_file(
+        kind="log",
+        description="Exact scientific review binding.",
+        source_path=review_path,
+        evidence_id="scientific_plan_review",
+        producer="plan_scientific_review",
+        generation_mode="deterministic_skill",
+    )
+    findings = []
+
+    resumed, migrated_path, mode = _apply_resume_plan_migrations(
+        plan=plan,
+        agent_context=None,
+        run_dir=tmp_path,
+        resume_state={"per_step_records": []},
+        resume_from_step_id="01_display",
+        role_resolver=lambda _role: None,
+        evidence=evidence,
+        prompt_version="test",
+        llm_signature="mock",
+        max_prompt_tokens=None,
+        submission_profile_name=None,
+        plan_generation_mode="resumed",
+        migrated_plan_path=None,
+        findings=findings,
+        scientific_runtime_authorities=None,
+    )
+
+    assert resumed == plan
+    assert migrated_path is None
+    assert mode == "resumed"
+    assert findings[-1].detail["reason"] == "review_bound_resume_plan_preserved"
 
 
 def test_resume_plan_skips_newest_revision_without_locked_cohort(

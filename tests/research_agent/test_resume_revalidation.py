@@ -279,21 +279,32 @@ def _revalidate(
     )
 
 
-def test_current_fingerprint_is_a_true_zero_work_fast_path(monkeypatch, tmp_path):
-    from easyicu.research_agent.execution import phase as pipeline_execute
+def test_current_fingerprint_still_verifies_the_evidence_snapshot(
+    replay_environment,
+):
+    pipeline_execute, run_dir, evidence_store = replay_environment
 
-    class EvidenceMustNotBeRead:
+    class EvidenceReadProbe:
+        def __init__(self):
+            self.calls = 0
+
         def records(self):
-            pytest.fail("current fingerprints must not touch evidence")
+            self.calls += 1
+            return evidence_store.records()
 
     step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
-    record = {"step_id": step.step_id, "status": "ok"}
+    record, _, _ = _register_success(
+        run_dir=run_dir,
+        evidence=evidence_store,
+        step=step,
+    )
     record.update(pipeline_execute._deterministic_gate_stamp())
 
+    evidence = EvidenceReadProbe()
     result = _revalidate(
         pipeline_execute,
-        run_dir=tmp_path,
-        evidence=EvidenceMustNotBeRead(),
+        run_dir=run_dir,
+        evidence=evidence,
         records=[record],
         plan=AnalysisPlan(research_question="Question", steps=[step]),
     )
@@ -301,6 +312,7 @@ def test_current_fingerprint_is_a_true_zero_work_fast_path(monkeypatch, tmp_path
     assert result.resume_state["per_step_records"] == [record]
     assert result.revalidated_step_ids == ()
     assert result.invalidated_step_ids == ()
+    assert evidence.calls == 1
 
 
 def test_legacy_success_without_capsule_is_invalidated_not_revalidated(
