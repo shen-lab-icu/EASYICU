@@ -2064,3 +2064,87 @@ def test_docker_runner_rejects_step_id_path_escape(
 
     with pytest.raises(ValueError, match="single safe path component"):
         runner.run(step_id="../escape", code="print('no')\n")
+
+
+def test_a_stopped_daemon_raises_a_typed_availability_failure(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The host must learn which of two problems it has, and act on it.
+
+    ``docker image inspect`` fails identically for a stopped daemon and an
+    absent image; only its stderr separates them, and that stderr names the
+    host socket path. Raising a bare ``RuntimeError`` carrying that text made
+    the failure both unattributable at the Web boundary -- an untyped exception
+    is filtered out of the persisted diagnostic -- and unsafe to echo.
+    """
+
+    from types import SimpleNamespace
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    monkeypatch.setattr(
+        runner_mod,
+        "_run_with_bounded_output",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "Cannot connect to the Docker daemon at "
+                "unix:///Users/someone/.colima/default/docker.sock. "
+                "Is the docker daemon running?"
+            ),
+        ),
+    )
+
+    with pytest.raises(runner_mod.ExecutionRuntimeUnavailableError) as exc:
+        runner._inspect_image_identity()
+
+    assert exc.value.reason_code == "docker_daemon_unreachable"
+    assert exc.value.easyicu_safe_diagnostic == {
+        "owner": "easyicu.execution.runtime_v1",
+        "reason_code": "docker_daemon_unreachable",
+        "runner_kind": "docker",
+    }
+    # Still a RuntimeError, so every existing handler keeps working...
+    assert isinstance(exc.value, RuntimeError)
+    # ...and the daemon's own host path is not carried along. ('colima' does
+    # appear in the message -- as advice on how to start Docker, not as a path.)
+    assert "/Users/someone" not in str(exc.value)
+    assert ".sock" not in str(exc.value)
+    assert "Start Docker" in str(exc.value)
+
+
+def test_an_absent_image_is_not_reported_as_a_stopped_daemon(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Pulling an image and starting a daemon are different actions."""
+
+    from types import SimpleNamespace
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    monkeypatch.setattr(
+        runner_mod,
+        "_run_with_bounded_output",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="Error response from daemon: No such image: easyicu:test",
+        ),
+    )
+
+    with pytest.raises(runner_mod.ExecutionRuntimeUnavailableError) as exc:
+        runner._inspect_image_identity()
+
+    assert exc.value.reason_code == "docker_image_missing"
+    assert "Build or pull" in str(exc.value)
