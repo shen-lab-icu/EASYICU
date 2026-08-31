@@ -32,9 +32,11 @@ from easyicu.research_agent.planning.scientific_review import (
     _sensitivity_facts,
     build_plan_scientific_review,
     remediation_route_for_finding,
+    repeat_units_possible,
     repeated_unit_design_closed,
     render_agent_plan_revision_contract,
     render_plan_scientific_guardrails,
+    timing_design_closed,
 )
 from easyicu.research_agent.reporting.article_contract import (
     build_article_analysis_contract,
@@ -104,6 +106,86 @@ def test_guardrails_accept_a_context_without_optional_user_preferences() -> None
     rendered = render_plan_scientific_guardrails(context)
 
     assert "PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS" in rendered
+
+
+def test_metadata_only_zero_rows_do_not_rule_out_repeated_stays() -> None:
+    context = _context().model_copy(
+        update={
+            "cohort": CohortDescriptor(
+                cohort_name="metadata-only ICU catalog",
+                database="miiv",
+                n_patients=None,
+                n_stays=0,
+                id_columns=["stay_id"],
+                provenance={
+                    "analysis_unit": "icu_stay",
+                    "evidence_stage": "metadata_only_planning",
+                    "patient_identity_available": False,
+                    "patient_rows_read": False,
+                },
+            )
+        }
+    )
+
+    assert repeat_units_possible(context) is True
+
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" in {
+        item.code for item in review.findings
+    }
+
+
+def test_review_rejects_continuous_coding_for_declared_factor() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="admission_type",
+                    source_concept="adm",
+                    role=VariableRole.OTHER,
+                    dtype="float64",
+                ),
+            ]
+        }
+    )
+    plan = _plan()
+    primary = next(
+        step for step in plan.steps if step.planned_analysis_role == "primary"
+    )
+    requirement = primary.model_requirements[0]
+    requirement = requirement.model_copy(
+        update={
+            "covariates": ["age", "admission_type"],
+            "model_terms": [
+                *requirement.model_terms,
+                ModelTermSpec(
+                    name="admission_type",
+                    role="covariate",
+                    coding="continuous",
+                    transform="identity",
+                ),
+            ],
+        }
+    )
+    primary = primary.model_copy(update={"model_requirements": [requirement]})
+    plan = plan.model_copy(
+        update={
+            "steps": [
+                primary if step.step_id == primary.step_id else step
+                for step in plan.steps
+            ]
+        }
+    )
+
+    review = build_plan_scientific_review(context=context, plan=plan)
+    conflict = next(
+        item
+        for item in review.findings
+        if item.code == "MODEL_TERM_CODING_CONFLICTS_WITH_DECLARED_DOMAIN"
+    )
+    assert conflict.severity == "blocker"
+    assert "admission_type" in conflict.message
 
 
 def test_explicit_endpoint_description_is_not_vetoed_by_source_placeholder() -> None:
@@ -258,6 +340,46 @@ def test_signed_landmark_primary_credits_its_typed_runtime_coordinates() -> None
         "linear_per_unit_sensitivity",
         "peak_lactate_rcs_primary",
     ]
+
+
+def test_signed_landmark_result_projection_does_not_require_a_second_estimator() -> None:
+    primary = AnalysisStep(
+        step_id="signed_landmark_primary",
+        planned_analysis_role="primary",
+        intent="Run the signed landmark model.",
+        method="signed_landmark_restricted_cubic_spline",
+        inputs=["artifact:analysis_cohort", "exposure", "death"],
+        expected_outputs=[
+            "table:landmark_rcs_contrasts",
+            "table:landmark_linear_sensitivity",
+        ],
+        sensitivity_spec_ids=["landmark_24h", "repeated_stays_cluster_robust"],
+    )
+    projection = AnalysisStep(
+        step_id="cluster_projection",
+        planned_analysis_role="sensitivity",
+        intent="Project the signed clustered result.",
+        method="cluster_robust_association",
+        inputs=[
+            "table:landmark_rcs_contrasts",
+            "table:landmark_linear_sensitivity",
+        ],
+        expected_outputs=["table:sensitivity_repeated_stays_cluster_robust"],
+        sensitivity_spec_ids=["repeated_stays_cluster_robust"],
+    )
+    plan = AnalysisPlan(
+        research_question=_context().research_question,
+        analysis_type="association_study",
+        steps=[primary, projection],
+    )
+
+    assert timing_design_closed(plan) is True
+    refitting_child = projection.model_copy(
+        update={"inputs": [*projection.inputs, "artifact:analysis_cohort"]}
+    )
+    assert timing_design_closed(
+        plan.model_copy(update={"steps": [primary, refitting_child]})
+    ) is False
 
 
 def _binding(key: str, element: str, application: str) -> LiteratureDesignBinding:
@@ -1768,6 +1890,60 @@ def test_one_clustered_step_cannot_mask_an_unclosed_scientific_model() -> None:
     assert "REPEATED_STAY_METHOD_NOT_DECLARED" in {
         finding.code for finding in review.findings
     }
+
+
+def test_signed_landmark_runtime_group_input_closes_repeated_stay_design() -> None:
+    base = _context()
+    context = base.model_copy(
+        update={
+            "cohort": base.cohort.model_copy(
+                update={
+                    "id_columns": ["patient_stay_id"],
+                    "provenance": {
+                        "analysis_unit": "icu_stay",
+                        "replacement_row_identity": {
+                            "output_identity_column": "patient_stay_id",
+                            "mapping_file_sha256": "d" * 64,
+                            "patient_group_derivation": {
+                                "algorithm": "prefix_before_:s",
+                                "delimiter": ":s",
+                            },
+                        },
+                    },
+                }
+            ),
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "analysis_design": {
+                            "analysis_unit": "icu_stay",
+                            "cluster_unit": "patient",
+                            "variance_estimator": "cluster_robust",
+                        }
+                    }
+                ),
+            ),
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association_study",
+        steps=[
+            AnalysisStep(
+                step_id="signed_landmark_primary",
+                planned_analysis_role="primary",
+                intent="Run the signed landmark model.",
+                inputs=["dataset:analysis_cohort", "patient_stay_id"],
+                expected_outputs=["table:landmark_rcs_curve"],
+                method="signed_landmark_restricted_cubic_spline",
+                scientific_capability="association_landmark_spline_v1",
+                icu_rule_refs=["scientific_runtime_contract:" + "a" * 64],
+            )
+        ],
+    )
+
+    assert repeated_unit_design_closed(context, plan) is True
 
 
 def test_one_step_cannot_close_models_while_leaving_marginal_cis_unclosed() -> None:

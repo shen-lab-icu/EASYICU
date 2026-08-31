@@ -10,7 +10,14 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
+from easyicu.research_agent.intake.materialized_metadata import (
+    MaterializedMetadataError,
+)
+from easyicu.research_agent.planning.dependence_authority import (
+    context_patient_group_authority,
+)
 from easyicu.research_agent.research_context.outbound import (
     outbound_safe_context_payload,
 )
@@ -283,6 +290,103 @@ def test_build_context_basic(ra):
     assert sofa.role.value == "composite_score"
     assert sofa.is_ordinal is True
     assert sofa.pitfalls, "sofa2 must carry the missingness pitfall into context"
+
+
+def test_metadata_only_planning_authority_survives_context_projection(ra):
+    frame = pd.DataFrame(
+        {
+            "stay_id": pd.Series(dtype="int64"),
+            "patient_stay_id": pd.Series(dtype="string"),
+            "lact": pd.Series(dtype="float64"),
+            "lact_max": pd.Series(dtype="float64"),
+            "death": pd.Series(dtype="float64"),
+        }
+    )
+    frame.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog",
+        "patient_rows_read": False,
+        "replacement_row_identity": {
+            "output_identity_column": "patient_stay_id",
+            "mapping_file_sha256": "a" * 64,
+            "mapped_cohort_rows": 0,
+            "patient_group_derivation": {
+                "algorithm": "prefix_before_:s",
+                "delimiter": ":s",
+            },
+            "authority_coordinates": {
+                "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+                "authority_ref": "test/identity-bridge/v1",
+                "database": "miiv",
+                "mapping_sha256": "a" * 64,
+                "grouping_derivation": "prefix_before_:s",
+                "provider_visible_values": False,
+            },
+        },
+    }
+
+    context = ra.build_research_context(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=frame,
+        cohort_name="metadata-only",
+        database="miiv",
+        target_outcome="death",
+        primary_exposure="lact_max",
+        id_columns=["patient_stay_id"],
+    )
+
+    assert context.cohort.n_stays == 0
+    assert context.cohort.provenance["evidence_stage"] == (
+        "metadata_only_planning"
+    )
+    assert context.cohort.provenance["patient_rows_read"] is False
+    assert context.variable("lact_max") is not None
+    assert context.cohort.provenance["replacement_row_identity"] == (
+        frame.attrs["easyicu_planning_authority"]["replacement_row_identity"]
+    )
+    dependence = context_patient_group_authority(context)
+    assert dependence is not None
+    assert dependence.group_source == "patient_stay_id"
+    assert dependence.group_derivation == "prefix_before_delimiter"
+
+
+def test_metadata_only_planning_rejects_invalid_patient_grouping_authority(ra):
+    frame = pd.DataFrame(
+        {
+            "stay_id": pd.Series(dtype="int64"),
+            "patient_stay_id": pd.Series(dtype="string"),
+            "death": pd.Series(dtype="float64"),
+        }
+    )
+    frame.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog",
+        "patient_rows_read": False,
+        "replacement_row_identity": {
+            "output_identity_column": "patient_stay_id",
+            "mapping_file_sha256": "not-a-digest",
+            "mapped_cohort_rows": 0,
+            "patient_group_derivation": {
+                "algorithm": "prefix_before_:s",
+                "delimiter": ":s",
+            },
+            "authority_coordinates": {
+                "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+                "authority_ref": "test/identity-bridge/v1",
+                "mapping_sha256": "not-a-digest",
+                "grouping_derivation": "prefix_before_:s",
+                "provider_visible_values": False,
+            },
+        },
+    }
+
+    with pytest.raises(MaterializedMetadataError):
+        ra.build_research_context(
+            research_question="Is lactate associated with mortality?",
+            cohort=frame,
+            cohort_name="metadata-only",
+            database="miiv",
+            target_outcome="death",
+            id_columns=["patient_stay_id"],
+        )
 
 
 def test_id_time_outcome_overrides(ra):
