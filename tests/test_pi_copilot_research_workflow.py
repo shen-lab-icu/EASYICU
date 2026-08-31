@@ -32,6 +32,10 @@ from easyicu.webserver import (
     dataio,
     literature_authority,
     provider_adapter,
+    research_launch_resume,
+    research_launch_runtime,
+    research_launch_scientific,
+    research_pipeline_run_preparation,
     research_run_submission,
 )
 from easyicu.webserver import study_contexts as study_context_owner
@@ -796,7 +800,11 @@ def test_pipeline_factory_rejects_missing_typed_analysis_design_before_job(
         foundation_called = True
         return _foundation_profile()
 
-    monkeypatch.setattr(agent_pipeline_runs, "_data_foundation_profile", foundation)
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_data_foundation_profile",
+        foundation,
+    )
     study = {**_complete_study(), "analysis_design": {}}
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
@@ -835,7 +843,7 @@ def test_planner_only_run_supplies_neutral_materialization_scope(
     export = _write_pipeline_export(tmp_path / "export")
     study = _design_free_study(export)
 
-    scoped = agent_pipeline_runs._neutral_materialization_scope(
+    scoped = research_launch_scientific._neutral_materialization_scope(
         study, export_path=str(export)
     )
 
@@ -1006,7 +1014,7 @@ def test_metadata_only_planning_acquisition_projects_verified_patient_schema(
 
 
 def test_metadata_planning_schema_projects_exact_operational_covariates() -> None:
-    columns = agent_pipeline_runs._metadata_planning_operationalized_columns(
+    columns = research_launch_scientific._metadata_planning_operationalized_columns(
         primary_exposure_source="lact",
         primary_exposure_aggregation="max",
         covariates=("age", "sex", "charlson"),
@@ -1042,7 +1050,7 @@ def test_metadata_planning_schema_projects_derived_landmark_event_time() -> None
         PrespecifiedSensitivitySpec,
     )
 
-    columns = agent_pipeline_runs._metadata_planning_operationalized_columns(
+    columns = research_launch_scientific._metadata_planning_operationalized_columns(
         primary_exposure_source="lact",
         primary_exposure_aggregation="max",
         covariates=("age", "sex", "charlson"),
@@ -1074,7 +1082,7 @@ def test_metadata_planning_schema_projects_derived_landmark_event_time() -> None
 
 
 def test_metadata_only_planning_coordinates_keep_explicit_lactate_and_mortality() -> None:
-    coordinates = agent_pipeline_runs._metadata_only_planning_coordinates(
+    coordinates = research_launch_scientific._metadata_only_planning_coordinates(
         database="miiv",
         question="我想研究 ICU 患者的乳酸水平和院内死亡有没有关系。",
     )
@@ -1185,7 +1193,7 @@ def test_plan_first_package_does_not_override_user_scientific_authority(
 
 
 def test_metadata_only_planning_coordinates_do_not_invent_unnamed_slots() -> None:
-    coordinates = agent_pipeline_runs._metadata_only_planning_coordinates(
+    coordinates = research_launch_scientific._metadata_only_planning_coordinates(
         database="miiv",
         question="我想先看看这批 ICU 数据能做什么。",
     )
@@ -1292,10 +1300,8 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "from_config",
         lambda _config, *, services: FakePipeline(),
     )
-    monkeypatch.setattr(
-        agent_pipeline_runs,
-        "_patient_grouping_for_analysis_design",
-        lambda _study: PatientGroupingBinding(
+    def patient_grouping(_study: Any) -> PatientGroupingBinding:
+        return PatientGroupingBinding(
             mapping_path=tmp_path / "private-patient-map.parquet",
             mapping_sha256="a" * 64,
             mapping_stay_column="stay_id",
@@ -1308,7 +1314,17 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
                 "grouping_derivation": "prefix_before_:s",
                 "provider_visible_values": False,
             },
-        ),
+        )
+
+    monkeypatch.setattr(
+        research_launch_scientific,
+        "_patient_grouping_for_analysis_design",
+        patient_grouping,
+    )
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_patient_grouping_for_analysis_design",
+        patient_grouping,
     )
     prepared = _write_pipeline_export(tmp_path / "prepared-mimiciv")
     study = {
@@ -1466,7 +1482,7 @@ def test_neutral_scope_preserves_a_configured_scope(tmp_path: Path) -> None:
         "time_window": {"hours": 72, "anchor": "icu_admission"},
     }
 
-    scoped = agent_pipeline_runs._neutral_materialization_scope(
+    scoped = research_launch_scientific._neutral_materialization_scope(
         study, export_path=str(export)
     )
 
@@ -1485,7 +1501,11 @@ def test_pipeline_factory_rejects_non_executable_time_window_label_before_job(
         foundation_called = True
         return _foundation_profile()
 
-    monkeypatch.setattr(agent_pipeline_runs, "_data_foundation_profile", foundation)
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_data_foundation_profile",
+        foundation,
+    )
     study = {
         **_complete_study(),
         "time_window": {
@@ -1559,7 +1579,11 @@ def test_pipeline_factory_rejects_clinical_anchor_as_materialization_anchor(
         foundation_called = True
         return _foundation_profile()
 
-    monkeypatch.setattr(agent_pipeline_runs, "_data_foundation_profile", foundation)
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_data_foundation_profile",
+        foundation,
+    )
     study = {
         **_complete_study(),
         "time_window": {
@@ -1594,7 +1618,11 @@ def test_pipeline_factory_rejects_unaddressed_repeat_stay_dependence_before_job(
         foundation_called = True
         return _foundation_profile()
 
-    monkeypatch.setattr(agent_pipeline_runs, "_data_foundation_profile", foundation)
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_data_foundation_profile",
+        foundation,
+    )
     study = {
         **_complete_study(),
         "cohort": {
@@ -5780,7 +5808,7 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
         lambda **_kwargs: acquisition,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -6281,7 +6309,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
 
     monkeypatch.setattr(foundation, "acquire_universe_for_question", fake_acquire)
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -6316,7 +6344,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
             research_question=_complete_study()["question"],
         )
         monkeypatch.setattr(
-            agent_pipeline_runs,
+            research_launch_resume,
             "load_progressive_planner_checkpoint_chain",
             lambda **_kwargs: [object()],
         )
@@ -6461,7 +6489,7 @@ def test_web_runner_rejects_invalid_server_owned_image_environment(
 ) -> None:
     monkeypatch.setenv("EASYICU_RUNNER_IMAGE", " \n")
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -6486,7 +6514,7 @@ def test_web_runner_allows_server_owned_resume_for_full_reviewed_development(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -6511,7 +6539,7 @@ def test_web_runner_allows_server_owned_resume_for_full_reviewed_development(
         research_question=_complete_study()["question"],
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_launch_resume,
         "load_progressive_planner_checkpoint_chain",
         lambda **_kwargs: [object()],
     )
@@ -6549,12 +6577,12 @@ def test_development_resume_selects_one_server_owned_checkpoint_sequence(
             encoding="utf-8",
         )
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_launch_resume,
         "load_progressive_planner_checkpoint_chain",
         lambda **_kwargs: [object()],
     )
 
-    path, digest = agent_pipeline_runs._development_progressive_resume_binding(
+    path, digest = research_launch_resume._development_progressive_resume_binding(
         project_root=str(tmp_path / "projects"),
         study_id="study-workflow",
         source_job_id="prior-canary",
@@ -6584,7 +6612,7 @@ def test_development_resume_rejects_missing_server_checkpoint_sequence(
     )
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc_info:
-        agent_pipeline_runs._development_progressive_resume_binding(
+        research_launch_resume._development_progressive_resume_binding(
             project_root=str(tmp_path / "projects"),
             study_id="study-workflow",
             source_job_id="prior-canary",
@@ -6609,7 +6637,7 @@ def test_development_resume_restores_exact_typed_acquisition_roster(
         feature_concepts=("admission_type", "sepsis3"),
     )
 
-    profile = agent_pipeline_runs._development_resume_acquisition_profile(
+    profile = research_launch_resume._development_resume_acquisition_profile(
         checkpoint_path=checkpoint,
         database="miiv",
         cohort_window=(0.0, 24.0),
@@ -6637,7 +6665,7 @@ def test_development_resume_restores_exact_literature_authority(
         research_question=question,
     )
 
-    bundle = agent_pipeline_runs._development_resume_literature_bundle(
+    bundle = research_launch_resume._development_resume_literature_bundle(
         checkpoint_path=checkpoint
     )
 
@@ -6671,12 +6699,12 @@ def test_development_resume_restores_metadata_only_planner_catalog_without_rows(
             "provider_visible_values": False,
         },
     )
-    coordinates = agent_pipeline_runs._metadata_only_planning_coordinates(
+    coordinates = research_launch_scientific._metadata_only_planning_coordinates(
         database="miiv",
         question="我想研究 ICU 患者的乳酸水平和院内死亡有没有关系。",
     )
 
-    profile = agent_pipeline_runs._development_resume_acquisition_profile(
+    profile = research_launch_resume._development_resume_acquisition_profile(
         checkpoint_path=checkpoint,
         database="miiv",
         cohort_window=(0.0, 24.0),
@@ -6728,7 +6756,7 @@ def test_development_resume_restores_metadata_only_planner_catalog_without_rows(
         chained_run_dir / "progressive_planner_checkpoint_005.json"
     )
     chained_checkpoint.write_text("{}", encoding="utf-8")
-    chained_profile = agent_pipeline_runs._development_resume_acquisition_profile(
+    chained_profile = research_launch_resume._development_resume_acquisition_profile(
         checkpoint_path=chained_checkpoint,
         database="miiv",
         cohort_window=(0.0, 24.0),
@@ -6755,13 +6783,13 @@ def test_development_resume_rejects_metadata_catalog_with_patient_rows(
         universe,
         index=False,
     )
-    coordinates = agent_pipeline_runs._metadata_only_planning_coordinates(
+    coordinates = research_launch_scientific._metadata_only_planning_coordinates(
         database="miiv",
         question="我想研究 ICU 患者的乳酸水平和院内死亡有没有关系。",
     )
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc_info:
-        agent_pipeline_runs._development_resume_acquisition_profile(
+        research_launch_resume._development_resume_acquisition_profile(
             checkpoint_path=checkpoint,
             database="miiv",
             cohort_window=(0.0, 24.0),
@@ -6791,12 +6819,12 @@ def test_development_resume_recovers_legacy_chained_metadata_catalog(
     legacy_run.mkdir(parents=True)
     legacy_checkpoint = legacy_run / "progressive_planner_checkpoint_004.json"
     legacy_checkpoint.write_bytes(source_checkpoint.read_bytes())
-    coordinates = agent_pipeline_runs._metadata_only_planning_coordinates(
+    coordinates = research_launch_scientific._metadata_only_planning_coordinates(
         database="miiv",
         question="我想研究 ICU 患者的乳酸水平和院内死亡有没有关系。",
     )
 
-    profile = agent_pipeline_runs._development_resume_acquisition_profile(
+    profile = research_launch_resume._development_resume_acquisition_profile(
         checkpoint_path=legacy_checkpoint,
         database="miiv",
         cohort_window=(0.0, 24.0),
@@ -6828,7 +6856,7 @@ def test_development_resume_rejects_changed_acquisition_bytes(tmp_path: Path) ->
     universe.write_bytes(b"changed-after-receipt")
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc_info:
-        agent_pipeline_runs._development_resume_acquisition_profile(
+        research_launch_resume._development_resume_acquisition_profile(
             checkpoint_path=checkpoint,
             database="miiv",
             cohort_window=(0.0, 24.0),
@@ -6876,7 +6904,7 @@ def test_web_runner_enables_live_pubmed_only_with_host_authorization(
         lambda **_kwargs: acquisition,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -6976,7 +7004,7 @@ def test_web_runner_reuses_digest_bound_web_literature_without_second_search(
         lambda **_kwargs: acquisition,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -7632,7 +7660,7 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
         lambda **_kwargs: acquisition,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -7680,7 +7708,7 @@ def test_pipeline_bridge_rejects_direct_scientific_provider_fallback(
 ) -> None:
     export = _write_pipeline_export(tmp_path / "export")
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -7708,7 +7736,7 @@ def test_pipeline_revalidates_package_before_provider_or_acquisition(
         "data_source": {"path": str(export), "database": "miiv"},
     }
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         lambda **_kwargs: _foundation_profile(),
     )
@@ -7857,7 +7885,7 @@ def test_web_data_foundation_profile_keeps_continuous_outcome_static(
         ),
     )
 
-    profile = agent_pipeline_runs._data_foundation_profile(
+    profile = research_launch_scientific._data_foundation_profile(
         export_path="/typed/demo",
         study={"modules": ["demographics", "outcome"]},
         target="los_icu",
@@ -7900,7 +7928,7 @@ def test_web_data_foundation_profile_keeps_event_outcome_typed(
         ),
     )
 
-    profile = agent_pipeline_runs._data_foundation_profile(
+    profile = research_launch_scientific._data_foundation_profile(
         export_path="/typed/demo",
         study={"modules": ["demographics", "outcome"]},
         target="death",
@@ -7937,7 +7965,7 @@ def test_web_data_foundation_profile_keeps_legacy_owner_declared_event_outcome(
         ),
     )
 
-    profile = agent_pipeline_runs._data_foundation_profile(
+    profile = research_launch_scientific._data_foundation_profile(
         export_path="/legacy/demo",
         study={"modules": ["demographics", "outcome"]},
         target="death",
@@ -7987,7 +8015,7 @@ def test_web_data_foundation_materializes_typed_exposure_and_covariates(
         ),
     )
 
-    profile = agent_pipeline_runs._data_foundation_profile(
+    profile = research_launch_scientific._data_foundation_profile(
         export_path="/typed/demo",
         study={
             "modules": ["demographics", "outcome", "sepsis3_sofa2"],
@@ -8053,7 +8081,7 @@ def test_web_data_foundation_materializes_sensitivity_support_without_adjustment
         ]
     )
 
-    profile = agent_pipeline_runs._data_foundation_profile(
+    profile = research_launch_scientific._data_foundation_profile(
         export_path="/typed/demo",
         study={"modules": ["demographics", "outcome"]},
         target="death",
@@ -8098,7 +8126,7 @@ def test_web_data_foundation_keeps_available_readmission_safety_coordinate(
         ),
     )
 
-    profile = agent_pipeline_runs._data_foundation_profile(
+    profile = research_launch_scientific._data_foundation_profile(
         export_path="/typed/demo",
         study={
             "modules": ["demographics", "outcome"],
@@ -8143,7 +8171,7 @@ def test_web_data_foundation_materializes_owner_readmission_indicator_for_first_
         ),
     )
 
-    profile = agent_pipeline_runs._data_foundation_profile(
+    profile = research_launch_scientific._data_foundation_profile(
         export_path="/typed/demo",
         study={
             "modules": ["demographics", "outcome"],
@@ -8184,7 +8212,7 @@ def test_web_data_foundation_rejects_first_stay_without_owner_indicator(
     )
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
-        agent_pipeline_runs._data_foundation_profile(
+        research_launch_scientific._data_foundation_profile(
             export_path="/typed/demo",
             study={
                 "modules": ["demographics", "outcome"],
@@ -8303,7 +8331,7 @@ def test_web_data_foundation_rejects_unmaterialized_primary_exposure(
     )
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
-        agent_pipeline_runs._data_foundation_profile(
+        research_launch_scientific._data_foundation_profile(
             export_path="/typed/demo",
             study={"modules": ["demographics"]},
             target=None,
@@ -8331,7 +8359,11 @@ def test_pipeline_factory_validates_execution_concepts_before_job_creation(
             },
         )
 
-    monkeypatch.setattr(agent_pipeline_runs, "_data_foundation_profile", reject)
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_data_foundation_profile",
+        reject,
+    )
     study = {
         **_complete_study(),
         "outcome": "In-hospital mortality from the outcome module",
@@ -8372,7 +8404,7 @@ def test_pipeline_factory_rejects_generic_sepsis_sofa2_before_job_creation(
         return _foundation_profile()
 
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_data_foundation_profile",
         unexpected_foundation,
     )
@@ -8419,12 +8451,12 @@ def test_pipeline_factory_accepts_owner_confirmed_explicit_sepsis_concept(
         },
     }
     monkeypatch.setattr(
-        agent_pipeline_runs,
+        research_pipeline_run_preparation,
         "_validate_analysis_design",
         lambda _study: {},
     )
 
-    agent_pipeline_runs._validate_primary_concept_selection(
+    research_launch_scientific._validate_primary_concept_selection(
         study,
         "sep3_sofa2",
     )
@@ -8440,7 +8472,11 @@ def test_pipeline_factory_rejects_unimplemented_cluster_variance_before_job(
         foundation_called = True
         return _foundation_profile()
 
-    monkeypatch.setattr(agent_pipeline_runs, "_data_foundation_profile", foundation)
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_data_foundation_profile",
+        foundation,
+    )
     study = {
         **_complete_study(),
         "analysis_design": {

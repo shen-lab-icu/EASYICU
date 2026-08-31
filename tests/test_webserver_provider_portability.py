@@ -341,19 +341,21 @@ def test_pipeline_credential_source_is_bound_to_provider_family(
     provider: str,
     expected: str,
 ) -> None:
-    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver import research_launch_runtime
 
-    assert agent_pipeline_runs._validated_pipeline_credential_source(
+    assert research_launch_runtime._validated_pipeline_credential_source(
         source,
         provider={"provider": provider},
     ) == expected
 
 
 def test_pipeline_credential_source_rejects_cross_family_reuse() -> None:
-    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver import research_launch_runtime
 
-    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as api_as_account:
-        agent_pipeline_runs._validated_pipeline_credential_source(
+    with pytest.raises(
+        research_launch_runtime.ResearchPipelineRunError
+    ) as api_as_account:
+        research_launch_runtime._validated_pipeline_credential_source(
             "codex_user_auth",
             provider={"provider": "deepseek"},
         )
@@ -361,8 +363,10 @@ def test_pipeline_credential_source_rejects_cross_family_reuse() -> None:
         "research_pipeline_codex_user_auth_provider_required"
     )
 
-    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as account_as_api:
-        agent_pipeline_runs._validated_pipeline_credential_source(
+    with pytest.raises(
+        research_launch_runtime.ResearchPipelineRunError
+    ) as account_as_api:
+        research_launch_runtime._validated_pipeline_credential_source(
             "pi_verified",
             provider={"provider": "codex"},
         )

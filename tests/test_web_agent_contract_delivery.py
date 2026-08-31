@@ -31,6 +31,7 @@ from easyicu.webserver.agent_pipeline_runs import (
 )
 
 _RUNS = Path("src/easyicu/webserver/agent_pipeline_runs.py")
+_PREPARATION = Path("src/easyicu/webserver/research_pipeline_run_preparation.py")
 
 
 # --------------------------------------------------------------------------
@@ -62,10 +63,11 @@ def test_the_declared_window_is_the_one_materialization_used() -> None:
     """Recomputing it from the study would let the two drift apart."""
 
     source = _RUNS.read_text(encoding="utf-8")
+    preparation = _PREPARATION.read_text(encoding="utf-8")
     assert "time_windows=_declared_time_windows(window, study)," in source
     # `window` is the tuple already passed as `cohort_window=` for materialization
     assert "cohort_window=window," in source
-    assert "window = _cohort_window(materialization_study)" in source
+    assert "window = _cohort_window(materialization_study)" in preparation
 
 
 def test_a_study_without_a_label_still_names_its_window() -> None:

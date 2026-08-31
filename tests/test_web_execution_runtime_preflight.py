@@ -23,7 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.execution import runner as runner_module
-from easyicu.webserver import agent_pipeline_runs
+from easyicu.webserver import agent_pipeline_runs, research_launch_runtime
 
 
 # One realistic daemon-down stderr, host socket path and all. Nothing derived
@@ -66,7 +66,7 @@ def test_a_stopped_daemon_is_refused_before_the_run_spends_anything(
     asked = _stub_probe(monkeypatch, _unavailable("docker_daemon_unreachable"))
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
-        agent_pipeline_runs._require_execution_runtime(
+        research_launch_runtime._require_execution_runtime(
             budget_mode="full_reviewed",
             runner_image="easyicu-research-agent:1.0.0",
         )
@@ -88,7 +88,7 @@ def test_a_ready_runtime_is_not_an_obstacle(monkeypatch: pytest.MonkeyPatch) -> 
         ),
     )
 
-    agent_pipeline_runs._require_execution_runtime(
+    research_launch_runtime._require_execution_runtime(
         budget_mode="full_reviewed",
         runner_image="easyicu-research-agent:1.0.0",
     )
@@ -106,7 +106,7 @@ def test_a_planner_only_launch_never_asks_for_a_container_runtime(
     asked = _stub_probe(monkeypatch, _unavailable("docker_daemon_unreachable"))
 
     for budget_mode in ("planner_canary", "", "unknown_mode"):
-        agent_pipeline_runs._require_execution_runtime(
+        research_launch_runtime._require_execution_runtime(
             budget_mode=budget_mode,
             runner_image="easyicu-research-agent:1.0.0",
         )
