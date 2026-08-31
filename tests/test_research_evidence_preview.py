@@ -21,6 +21,9 @@ def _register(
     content: bytes,
     produced_by_step: str = "analysis_step",
     script_evidence_id: str | None = None,
+    inputs: list[str] | None = None,
+    producer: str = "runner",
+    generation_mode: str = "system",
 ) -> tuple[Path, str]:
     evidence = run_dir / "evidence"
     evidence.mkdir(parents=True, exist_ok=True)
@@ -38,13 +41,19 @@ def _register(
             "sha256": digest,
             "produced_by_step": produced_by_step,
             "script_evidence_id": script_evidence_id,
+            "inputs": list(inputs or []),
+            "producer": producer,
+            "generation_mode": generation_mode,
+            "prompt_pack_version": "test-prompts/v1",
         }
     )
     index_path.write_text(json.dumps(records), encoding="utf-8")
     return path, digest
 
 
-def test_registered_code_preview_is_digest_pinned_and_path_free(tmp_path: Path) -> None:
+def test_registered_code_preview_is_digest_pinned_and_host_path_free(
+    tmp_path: Path,
+) -> None:
     _path, digest = _register(
         tmp_path,
         evidence_id="code_analysis_1",
@@ -59,23 +68,109 @@ def test_registered_code_preview_is_digest_pinned_and_path_free(tmp_path: Path) 
     assert preview["language"] == "python"
     assert preview["line_count"] == 2
     assert preview["text"] == "value = 42\nprint(value)\n"
-    assert "relative_path" not in preview
+    assert preview["display_name"] == "analysis.py"
+    assert preview["relative_path"] == "evidence/code_analysis_1__analysis.py"
     assert str(tmp_path) not in json.dumps(preview)
 
 
 def test_statistic_json_preview_is_structured(tmp_path: Path) -> None:
+    _path, code_digest = _register(
+        tmp_path,
+        evidence_id="code_analysis_1",
+        kind="code",
+        name="code_analysis_1__analysis.py",
+        content=b"estimate = 1.25\n",
+        producer="coder",
+        generation_mode="llm",
+    )
+    _path, input_digest = _register(
+        tmp_path,
+        evidence_id="analysis_cohort_1",
+        kind="table",
+        name="analysis_cohort_1__cohort.parquet",
+        content=b"PAR1 cohort placeholder",
+        produced_by_step="cohort_definition",
+        producer="cohort",
+    )
+    _path, plan_digest = _register(
+        tmp_path,
+        evidence_id="analysis_plan",
+        kind="log",
+        name="analysis_plan__analysis_plan.json",
+        content=b'{"steps": ["analysis_step"]}',
+        produced_by_step="",
+        producer="planner",
+        generation_mode="llm",
+    )
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_test",
+                "code_version": {"git_sha": "abc123", "git_dirty": False},
+                "execution_identity": {
+                    "runner": "docker",
+                    "runner_image_digest": "sha256:image",
+                    "environment_identity_sha256": "e" * 64,
+                    "prompt_pack_sha256": "p" * 64,
+                    "identity_sha256": "i" * 64,
+                    "paper_eligible": False,
+                },
+                "prompt_pack_version": "test-prompts/v1",
+                "current_plan_authority": {
+                    "evidence_id": "analysis_plan",
+                    "sha256": plan_digest,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     _path, digest = _register(
         tmp_path,
         evidence_id="statistic_summary_1",
         kind="statistic",
         name="statistic_summary_1__summary.json",
         content=b'{"estimate": 1.25, "ci": [1.1, 1.4]}',
+        script_evidence_id="code_analysis_1",
+        inputs=["analysis_cohort_1"],
     )
 
     preview = build_evidence_preview(tmp_path, "statistic_summary_1", digest)
 
     assert preview["renderer"] == "json"
     assert preview["value"]["estimate"] == 1.25
+    assert preview["relative_path"] == "evidence/statistic_summary_1__summary.json"
+    assert [row["relation"] for row in preview["declared_lineage"]] == [
+        "analysis_code",
+        "input_data",
+    ]
+    assert preview["declared_lineage"][0]["sha256"] == code_digest
+    assert preview["declared_lineage"][1]["sha256"] == input_digest
+    assert preview["run_authority"]["run_id"] == "run_test"
+    assert preview["run_authority"]["git_sha"] == "abc123"
+    assert preview["run_authority"]["links"][0]["relation"] == ("run_plan_authority")
+    assert preview["run_authority"]["links"][0]["sha256"] == plan_digest
+
+
+def test_missing_declared_parent_is_shown_as_unregistered(tmp_path: Path) -> None:
+    _path, digest = _register(
+        tmp_path,
+        evidence_id="statistic_summary_1",
+        kind="statistic",
+        name="statistic_summary_1__summary.json",
+        content=b'{"estimate": 1.25}',
+        script_evidence_id="missing_code",
+    )
+
+    preview = build_evidence_preview(tmp_path, "statistic_summary_1", digest)
+
+    assert preview["declared_lineage"] == [
+        {
+            "relation": "analysis_code",
+            "evidence_id": "missing_code",
+            "status": "unregistered",
+        }
+    ]
+    assert preview["run_authority"] == {"status": "not_recorded", "links": []}
 
 
 def test_result_csv_is_bounded_and_identifier_csv_is_withheld(tmp_path: Path) -> None:

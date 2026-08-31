@@ -167,11 +167,7 @@ def _load_record(
     run_dir: Path, evidence_id: str
 ) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
     records = _load_records(run_dir)
-    matches = [
-        row
-        for row in records
-        if row.get("evidence_id") == evidence_id
-    ]
+    matches = [row for row in records if row.get("evidence_id") == evidence_id]
     if len(matches) != 1:
         code = (
             "evidence_preview_not_found"
@@ -292,9 +288,7 @@ def _declared_lineage(
     return links
 
 
-def _run_authority(
-    run_dir: Path, records: list[Mapping[str, Any]]
-) -> Dict[str, Any]:
+def _run_authority(run_dir: Path, records: list[Mapping[str, Any]]) -> Dict[str, Any]:
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.is_file():
         return {"status": "not_recorded", "links": []}
@@ -334,9 +328,7 @@ def _run_authority(
         ("cohort_locked", "run_cohort_authority"),
     ):
         if any(str(row.get("evidence_id") or "") == evidence_id for row in records):
-            links.append(
-                _record_link(run_dir, records, evidence_id, relation=relation)
-            )
+            links.append(_record_link(run_dir, records, evidence_id, relation=relation))
     return {
         "status": "recorded",
         "run_id": str(manifest.get("run_id") or run_dir.name),
