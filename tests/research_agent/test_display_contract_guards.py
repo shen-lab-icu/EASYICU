@@ -29,7 +29,11 @@ from easyicu.research_agent.planning.figure_plan_shaping import (
     select_deterministic_result_renderers,
     step_declares_audit_panel,
 )
-from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ArtifactConsumptionContract,
+)
 
 
 def _table_only_plan() -> AnalysisPlan:
@@ -136,6 +140,61 @@ def test_data_quality_figure_guard_never_invents_an_unbound_renderer():
         "data_quality_figure_source_not_closed"
     )
     assert not any(step_declares_audit_panel(step) for step in shaped.steps)
+
+
+def test_data_quality_figure_guard_completes_one_typed_audit_pair() -> None:
+    audit = AnalysisStep(
+        step_id="measurement_audit",
+        planned_analysis_role="auxiliary",
+        intent="Audit measurement opportunity and missingness.",
+        method="missing_data",
+        inputs=["lact_max", "death"],
+        expected_outputs=["table:measurement_process_audit"],
+        measurement_audit_spec={
+            "products": [
+                {
+                    "product_id": "measurement_process_audit",
+                    "audit": "measurement_process",
+                }
+            ]
+        },
+    )
+    plan = AnalysisPlan(
+        research_question="Is lactate associated with mortality?",
+        steps=[audit],
+    )
+
+    shaped, findings = ensure_data_quality_figure_step(
+        plan=plan,
+        context=_Ctx(plan.research_question),
+    )
+
+    completed = shaped.steps[0]
+    assert completed.expected_outputs == [
+        "table:measurement_process_audit",
+        "table:missingness_measurement_audit",
+    ]
+    assert completed.measurement_audit_spec is not None
+    assert [
+        (product.product_id, product.audit)
+        for product in completed.measurement_audit_spec.products
+    ] == [
+        ("measurement_process_audit", "measurement_process"),
+        ("missingness_measurement_audit", "measurement_missingness"),
+    ]
+    figure = shaped.steps[-1]
+    assert figure.inputs == [
+        "table:missingness_measurement_audit",
+        "table:measurement_process_audit",
+    ]
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "data_quality",
+        "data_quality",
+    ]
+    assert {finding.detail.get("reason_code") for finding in findings} == {
+        "data_quality_audit_pair_completed",
+        "data_quality_figure_bound_to_typed_sources",
+    }
 
 
 def test_deterministic_cohort_renderer_gets_digest_bound_panel_contract() -> None:
@@ -433,6 +492,98 @@ def test_signed_landmark_association_gets_source_bound_composite_renderer() -> N
     assert len({panel.chart_type for panel in figure.figure_panels}) == 4
     assert findings[0].detail["reason_code"] == (
         "landmark_association_composite_figure_bound"
+    )
+
+    again, repeated = ensure_landmark_association_composite_figure_step(plan=shaped)
+    assert again == shaped
+    assert repeated == []
+
+
+def test_signed_landmark_renderer_reuses_article_step_and_measurement_alias() -> None:
+    """A Planner-authored article placeholder must not fall back to Coder.
+
+    The signed runtime currently emits ``table:measurement_process`` while
+    older plans use the canonical ``*_audit`` spelling.  Both names describe
+    the same typed display role and are accepted by the sealed renderer.
+    """
+
+    plan = AnalysisPlan(
+        research_question="Estimate a landmark association.",
+        steps=[
+            AnalysisStep(
+                step_id="measurement_audit",
+                planned_analysis_role="auxiliary",
+                intent="Audit the landmark measurement process.",
+                method="missing_data",
+                expected_outputs=["table:measurement_process"],
+            ),
+            AnalysisStep(
+                step_id="adjusted_primary",
+                planned_analysis_role="primary",
+                intent="Estimate the signed landmark spline association.",
+                method="signed_landmark_restricted_cubic_spline",
+                expected_outputs=["table:landmark_rcs_curve"],
+            ),
+            AnalysisStep(
+                step_id="absolute_risk_context",
+                planned_analysis_role="secondary",
+                intent="Report adjusted absolute-risk context.",
+                method="absolute_risk_context",
+                expected_outputs=["table:absolute_risk_context"],
+            ),
+            AnalysisStep(
+                step_id="robustness_replay",
+                planned_analysis_role="sensitivity",
+                intent="Replay the prespecified robustness authority.",
+                method="robustness_sensitivity",
+                expected_outputs=[
+                    "table:robustness_summary",
+                    "table:robustness_matrix",
+                ],
+            ),
+            AnalysisStep(
+                step_id="assemble_article_displays",
+                planned_analysis_role="auxiliary",
+                intent="Assemble article displays.",
+                method="visualization",
+                inputs=[
+                    "table:absolute_risk_context",
+                    "table:robustness_matrix",
+                    "table:robustness_summary",
+                ],
+                expected_outputs=["figure:assemble_article_displays"],
+                input_consumption_contracts=[
+                    ArtifactConsumptionContract(input_key=value, mode="all_rows")
+                    for value in (
+                        "table:absolute_risk_context",
+                        "table:robustness_matrix",
+                        "table:robustness_summary",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    shaped, findings = ensure_landmark_association_composite_figure_step(plan=plan)
+
+    assert len(shaped.steps) == len(plan.steps)
+    figure = shaped.steps[-1]
+    assert figure.step_id == "assemble_article_displays"
+    assert figure.expected_outputs == ["figure:assemble_article_displays"]
+    assert figure.inputs == [
+        "table:landmark_rcs_curve",
+        "table:absolute_risk_context",
+        "table:robustness_summary",
+        "table:measurement_process",
+    ]
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "data_quality",
+    ]
+    assert findings[0].detail["reason_code"] == (
+        "landmark_association_composite_figure_rebound"
     )
 
     again, repeated = ensure_landmark_association_composite_figure_step(plan=shaped)

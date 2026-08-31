@@ -17,6 +17,11 @@ from pydantic import ValidationError
 
 from ..canonical_json import canonical_sha256
 from ..schema import AnalysisPlan, ResearchContext
+from .adjustment_authority import (
+    AdjustmentAuthorityError,
+    AdjustmentSetAuthority,
+    validate_plan_against_adjustment_authority,
+)
 from .progressive_compiler import compile_progressive_plan
 from .progressive_contract import (
     ProgressiveFoundationMaterialization,
@@ -416,6 +421,24 @@ def compile_progressive_prefix(
         allowed_know_how_decisions=allowed_know_how_decisions,
         host_reporting_method_source_keys=reporting_method_source_keys,
     )
+    try:
+        validate_plan_against_adjustment_authority(plan=plan, context=context)
+    except AdjustmentAuthorityError as exc:
+        authority = AdjustmentSetAuthority.from_context(context)
+        raise ProgressivePlanCompileError(
+            "progressive_adjustment_authority_mismatch",
+            str(exc),
+            step_id=materialization.step.step_id,
+            step_index=len(state.steps),
+            path="model_terms",
+            findings=[
+                {
+                    "selection": authority.selection,
+                    "required_covariates": list(authority.operational_covariates),
+                    "repair_scope": "current_model_step_only",
+                }
+            ],
+        ) from exc
     product_refs = tuple(
         (step.step_id, product_id)
         for step in plan.steps

@@ -46,6 +46,7 @@ from ..schema import (
     AnalysisPlan,
     AnalysisStep,
     ArtifactConsumptionContract,
+    MeasurementAuditProduct,
     ResearchContext,
     ValidationFinding,
 )
@@ -314,11 +315,30 @@ def ensure_landmark_association_composite_figure_step(
     a new scientific decision.
     """
 
+    produced = {
+        str(output)
+        for step in plan.steps
+        for output in step.expected_outputs or []
+    }
+    curve_candidates = sorted(
+        output
+        for output in produced
+        if output.startswith("table:")
+        and output.partition(":")[2].endswith("landmark_rcs_curve")
+    )
+    measurement_candidates = sorted(
+        output
+        for output in produced
+        if output.partition(":")[2]
+        in {"measurement_process", "measurement_process_audit"}
+    )
+    if len(curve_candidates) != 1 or len(measurement_candidates) != 1:
+        return plan, []
     sources = (
-        "table:landmark_rcs_curve",
+        curve_candidates[0],
         "table:absolute_risk_context",
         "table:robustness_summary",
-        "table:measurement_process_audit",
+        measurement_candidates[0],
     )
     owners = {
         source: [
@@ -344,9 +364,37 @@ def ensure_landmark_association_composite_figure_step(
         return plan, []
 
     steps = list(plan.steps)
-    figure_output = _next_figure_output(steps, "figure:landmark_association")
+    reusable_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if step.planned_analysis_role == "auxiliary"
+            and _method_head(str(step.method or "")) == "visualization"
+            and not step.figure_panels
+            and len(step.expected_outputs) == 1
+            and str(step.expected_outputs[0]).startswith("figure:")
+            and "article" in (
+                f"{step.step_id} {step.expected_outputs[0]}".lower()
+            )
+            and {
+                "table:absolute_risk_context",
+                "table:robustness_summary",
+            }
+            <= {str(value) for value in step.inputs}
+        ),
+        None,
+    )
+    figure_output = (
+        str(steps[reusable_index].expected_outputs[0])
+        if reusable_index is not None
+        else _next_figure_output(steps, "figure:landmark_association")
+    )
     figure_step = AnalysisStep(
-        step_id=_next_step_id(steps, "landmark_association_figure"),
+        step_id=(
+            str(steps[reusable_index].step_id)
+            if reusable_index is not None
+            else _next_step_id(steps, "landmark_association_figure")
+        ),
         planned_analysis_role="auxiliary",
         intent=(
             "Render the exact signed landmark association curve, absolute-risk "
@@ -367,7 +415,13 @@ def ensure_landmark_association_composite_figure_step(
             for panel in landmark_association_composite_panels(sources)
         ],
     )
-    return plan.model_copy(update={"steps": [*steps, figure_step]}), [
+    if reusable_index is None:
+        steps.append(figure_step)
+        reason_code = "landmark_association_composite_figure_bound"
+    else:
+        steps[reusable_index] = figure_step
+        reason_code = "landmark_association_composite_figure_rebound"
+    return plan.model_copy(update={"steps": steps}), [
         ValidationFinding(
             validator="landmark_association_figure_contract",
             severity="warning",
@@ -376,7 +430,7 @@ def ensure_landmark_association_composite_figure_step(
                 "four-panel article figure."
             ),
             detail={
-                "reason_code": "landmark_association_composite_figure_bound",
+                "reason_code": reason_code,
                 "appended_step_id": figure_step.step_id,
                 "inputs": list(sources),
                 "producer_step_ids": owners,
@@ -541,12 +595,14 @@ def ensure_data_quality_figure_step(
     """
 
     del context
+    plan, audit_pair_findings = _complete_typed_data_quality_audit_pair(plan)
     steps = list(plan.steps or [])
     required_inputs, candidates, missing, ambiguous = _closed_data_quality_sources(
         steps
     )
     if missing or ambiguous:
         return plan, [
+            *audit_pair_findings,
             ValidationFinding(
                 validator="data_quality_figure_contract",
                 severity="warning",
@@ -590,6 +646,7 @@ def ensure_data_quality_figure_step(
         ],
     )
     return plan.model_copy(update={"steps": [*steps, audit_step]}), [
+        *audit_pair_findings,
         ValidationFinding(
             validator="data_quality_figure_contract",
             severity="warning",
@@ -605,6 +662,88 @@ def ensure_data_quality_figure_step(
                     role: [step_id for _source, step_id in values]
                     for role, values in candidates.items()
                 },
+            },
+        )
+    ]
+
+
+def _complete_typed_data_quality_audit_pair(
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, list[ValidationFinding]]:
+    """Complete the mechanical missingness/process pair on one typed audit.
+
+    The two tables are complementary views over the same already-authorized
+    inputs: whether each value is present, and how measurement opportunity is
+    distributed.  Adding the missing count table to a uniquely owned typed
+    audit does not choose a population, estimand, variable, or missing-data
+    strategy.  It only closes the deterministic source contract needed by the
+    data-quality renderer.  Ambiguous or untyped plans remain untouched.
+    """
+
+    candidates = data_quality_audit_source_candidates(plan.steps)
+    missing_roles = [role for role, values in candidates.items() if not values]
+    present_roles = [role for role, values in candidates.items() if len(values) == 1]
+    if len(missing_roles) != 1 or len(present_roles) != 1:
+        return plan, []
+    if any(len(values) > 1 for values in candidates.values()):
+        return plan, []
+
+    missing_role = missing_roles[0]
+    present_role = present_roles[0]
+    owner_step_id = candidates[present_role][0][1]
+    owner_indexes = [
+        index
+        for index, step in enumerate(plan.steps)
+        if str(step.step_id) == owner_step_id and step.measurement_audit_spec is not None
+    ]
+    if len(owner_indexes) != 1:
+        return plan, []
+
+    output_by_role = {
+        "measurement_missingness": MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
+        "measurement_process": MEASUREMENT_PROCESS_AUDIT_INPUT,
+    }
+    output = output_by_role[missing_role]
+    if any(
+        output in {str(value) for value in step.expected_outputs}
+        for step in plan.steps
+    ):
+        return plan, []
+
+    index = owner_indexes[0]
+    owner = plan.steps[index]
+    assert owner.measurement_audit_spec is not None
+    product_id = output.split(":", 1)[1]
+    completed_spec = owner.measurement_audit_spec.model_copy(
+        update={
+            "products": [
+                *owner.measurement_audit_spec.products,
+                MeasurementAuditProduct(product_id=product_id, audit=missing_role),
+            ]
+        }
+    )
+    completed_owner = owner.model_copy(
+        update={
+            "expected_outputs": [*owner.expected_outputs, output],
+            "measurement_audit_spec": completed_spec,
+        }
+    )
+    steps = list(plan.steps)
+    steps[index] = completed_owner
+    return plan.model_copy(update={"steps": steps}), [
+        ValidationFinding(
+            validator="data_quality_figure_contract",
+            severity="warning",
+            message=(
+                "Completed the uniquely owned typed measurement audit with "
+                f"its complementary {missing_role!r} count table."
+            ),
+            detail={
+                "reason_code": "data_quality_audit_pair_completed",
+                "step_id": owner_step_id,
+                "preserved_audit_role": present_role,
+                "appended_audit_role": missing_role,
+                "appended_output": output,
             },
         )
     ]

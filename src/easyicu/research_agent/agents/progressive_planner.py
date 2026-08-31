@@ -14,7 +14,10 @@ from ..cohort.schema import (
     validate_plan_typed_bindings_against_context,
 )
 from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
-from ..planning.adjustment_authority import validate_plan_against_adjustment_authority
+from ..planning.adjustment_authority import (
+    AdjustmentSetAuthority,
+    validate_plan_against_adjustment_authority,
+)
 from ..planning.analysis_types import (
     infer_analysis_type,
     list_analysis_types,
@@ -36,6 +39,7 @@ from ..planning.literature_design_authority import (
     validate_selected_design_against_literature,
 )
 from ..planning.method_literature import (
+    method_cards_for_layers,
     method_binding_support,
     reporting_method_source_keys_for_guidelines,
 )
@@ -1700,6 +1704,7 @@ class ProgressivePlannerAgent:
         planning_contract_context: str = "",
     ) -> str:
         contract_context = article_context or context
+        adjustment_authority = AdjustmentSetAuthority.from_context(context)
         module_ids_by_analysis_type = {
             analysis_type: list(
                 progressive_module_ids_for_analysis_types((analysis_type,))
@@ -1892,6 +1897,32 @@ class ProgressivePlannerAgent:
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
+            ),
+            "User-owned adjustment-set authority (host compiled; do not revise):\n"
+            + json.dumps(
+                {
+                    "selection": adjustment_authority.selection,
+                    "scientific_covariates": list(adjustment_authority.covariates),
+                    "operational_covariates": list(
+                        adjustment_authority.operational_covariates
+                    ),
+                    "operationalizations": dict(
+                        adjustment_authority.operationalizations
+                    ),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + (
+                "\nBecause selection='exact', every outline step that owns a "
+                "fitted adjusted model must include every operational_covariate "
+                "in variable_names, and the selected design's required_variables "
+                "must include them too. These are physical analysis-column "
+                "identities, not modeling roles. Do not add, remove, infer, "
+                "rename, or reorder the fitted covariate roster."
+                if adjustment_authority.selection == "exact"
+                else "\nThe adjustment roster remains Planner-selectable; do not "
+                "describe available variables as user-approved covariates."
             ),
             "Retrieved data cards (high-level fields only):\n"
             + json.dumps(
@@ -2096,6 +2127,7 @@ class ProgressivePlannerAgent:
         continuous_domain_variables: Sequence[str] | None = None,
         primary_exposure: str | None = None,
         target_outcome: str | None = None,
+        required_exact_covariates: Sequence[str] = (),
         context_required_method_layers: Sequence[str] | None = None,
         require_design_selection: bool = False,
         literature_design_evidence_cards: Sequence[
@@ -2251,6 +2283,47 @@ class ProgressivePlannerAgent:
             for step in outline.steps
             if step.planned_analysis_role == "primary"
         }
+        exact_covariates = tuple(
+            dict.fromkeys(
+                str(value or "").strip()
+                for value in required_exact_covariates
+                if str(value or "").strip()
+            )
+        )
+        adjusted_model_steps = [
+            step for step in outline.steps if step.module_id == "adjusted_association"
+        ]
+        if exact_covariates and adjusted_model_steps:
+            missing_by_step = {
+                step.step_id: sorted(
+                    set(exact_covariates) - set(step.variable_names)
+                )
+                for step in adjusted_model_steps
+                if set(exact_covariates) - set(step.variable_names)
+            }
+            selected_designs = [
+                candidate
+                for candidate in (outline.design_selection.candidates or ())
+                if candidate.disposition == "selected"
+            ]
+            missing_from_design = sorted(
+                set(exact_covariates)
+                - set(selected_designs[0].required_variables or ())
+            ) if len(selected_designs) == 1 else []
+            if missing_by_step or missing_from_design:
+                raise ProgressivePlanCompileError(
+                    "progressive_outline_exact_adjustment_covariate_missing",
+                    "the outline omitted host-bound operational covariates from "
+                    "an adjusted model owner or its selected design",
+                    path="steps.variable_names",
+                    findings=(
+                        {
+                            "required_exact_covariates": list(exact_covariates),
+                            "missing_by_step": missing_by_step,
+                            "missing_from_selected_design": missing_from_design,
+                        },
+                    ),
+                )
         direct_comparator_keys = set(direct_comparator_literature_keys)
         if direct_comparator_keys and not any(
             step.planned_analysis_role == "primary"
@@ -2607,6 +2680,30 @@ class ProgressivePlannerAgent:
         available_product_refs: Sequence[tuple[str, str]],
         compiler_observation: Mapping[str, Any] | None = None,
     ) -> str:
+        sealed_citation_keys = set(allowed_literature_citation_keys)
+        method_source_scope = []
+        for citation_key in allowed_literature_citation_keys:
+            cards = tuple(
+                card
+                for card in method_cards_for_layers()
+                if card.source_key == citation_key
+                and card.source_key in sealed_citation_keys
+            )
+            if not cards:
+                continue
+            method_source_scope.append(
+                {
+                    "citation_key": citation_key,
+                    "allowed_design_elements": sorted(
+                        {
+                            element
+                            for card in cards
+                            for element in card.design_elements
+                        }
+                    ),
+                    "method_card_ids": sorted(card.id for card in cards),
+                }
+            )
         blocks = [
             "PROGRESSIVE CURRENT-STEP MATERIALIZATION AUTHORITY",
             "Selected analysis family:\n" + outline.analysis_type,
@@ -2647,6 +2744,17 @@ class ProgressivePlannerAgent:
             + json.dumps(
                 list(allowed_literature_citation_keys),
                 ensure_ascii=False,
+            ),
+            "Curated method-source binding scope (binding): for every citation "
+            "listed below, each design_elements value must be a non-empty "
+            "subset of allowed_design_elements. Never add a plausible-sounding "
+            "element outside this exact source authority. Sealed citations not "
+            "listed here are topic or direct-comparator sources and remain "
+            "subject to the normal evidence review.\n"
+            + json.dumps(
+                method_source_scope,
+                ensure_ascii=False,
+                separators=(",", ":"),
             ),
             "Outbound-safe data authority for this current step:\n"
             + format_outbound_safe_context(context, variable_names=variables),
@@ -3400,6 +3508,12 @@ class ProgressivePlannerAgent:
         analysis_types, variables, action_ids, action_rows = self._request_authorities(
             context
         )
+        adjustment_authority = AdjustmentSetAuthority.from_context(context)
+        required_exact_covariates = (
+            adjustment_authority.operational_covariates
+            if adjustment_authority.selection == "exact"
+            else ()
+        )
         context_variable_map = {
             variable.name: variable for variable in context.variables
         }
@@ -3608,6 +3722,7 @@ class ProgressivePlannerAgent:
                     continuous_domain_variables=continuous_domain_variables,
                     primary_exposure=context.primary_exposure,
                     target_outcome=context.target_outcome,
+                    required_exact_covariates=required_exact_covariates,
                     context_required_method_layers=(
                         required_method_layers_for_context(context)
                     ),
@@ -3656,6 +3771,7 @@ class ProgressivePlannerAgent:
             continuous_domain_variables=continuous_domain_variables,
             primary_exposure=context.primary_exposure,
             target_outcome=context.target_outcome,
+            required_exact_covariates=required_exact_covariates,
             context_required_method_layers=required_method_layers_for_context(context),
             require_design_selection=resume_checkpoint is None,
             literature_design_evidence_cards=design_cards,
@@ -3789,6 +3905,13 @@ class ProgressivePlannerAgent:
                     host_cohort=host_cohort,
                     allowed_know_how_decisions=allowed_know_how_decisions,
                 )
+                if parsed.outline_sha256 != outline_sha256:
+                    raise ProgressivePlanCompileError(
+                        "progressive_foundation_outline_digest_mismatch",
+                        "plan foundation did not bind the host-validated "
+                        "outline digest",
+                        path="outline_sha256",
+                    )
                 validate_progressive_foundation(
                     parsed.foundation,
                     context=context,
