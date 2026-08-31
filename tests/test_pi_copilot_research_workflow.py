@@ -13,6 +13,7 @@ import pandas as pd
 from starlette.requests import Request
 
 from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
+from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
 from easyicu.research_agent.reporting.result_card import (
     build_result_interpretation_card,
 )
@@ -896,6 +897,147 @@ def test_metadata_only_planning_acquisition_writes_zero_patient_rows(
     assert receipt["execution_authorized"] is False
 
 
+def test_metadata_only_planning_acquisition_projects_verified_patient_schema(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(
+                {
+                    "selected_concepts": ["lact", "death"],
+                    "inclusion_exclusion": ["Adult ICU stays"],
+                    "rationale": "Exposure and mortality outcome.",
+                }
+            )
+        ]
+    )
+
+    patient_grouping = PatientGroupingBinding(
+        mapping_path=tmp_path / "private-patient-map.parquet",
+        mapping_sha256="a" * 64,
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+        authority_coordinates={
+            "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+            "authority_ref": "test/identity-bridge/v1",
+            "database": "miiv",
+            "mapping_sha256": "a" * 64,
+            "grouping_derivation": "prefix_before_:s",
+            "provider_visible_values": False,
+        },
+    )
+    acquisition = agent_pipeline_runs._metadata_only_planning_acquisition(
+        database="miiv",
+        question="Is lactate associated with mortality?",
+        llm=llm,
+        output_dir=tmp_path / "planning",
+        patient_grouping=patient_grouping,
+        operationalized_columns=("lact_max",),
+    )
+
+    cohort = pd.read_parquet(acquisition.universe_path)
+    assert cohort.empty
+    assert list(cohort.columns) == [
+        "stay_id",
+        "patient_stay_id",
+        "lact_max",
+        "lact",
+        "death",
+    ]
+    receipt = json.loads(acquisition.provenance_path.read_text(encoding="utf-8"))
+    assert receipt["patient_identity_column"] == "patient_stay_id"
+    assert receipt["operationalized_columns"] == ["lact_max"]
+    assert receipt["replacement_row_identity"] == {
+        "output_identity_column": "patient_stay_id",
+        "mapping_file_sha256": "a" * 64,
+        "mapped_cohort_rows": 0,
+        "patient_group_derivation": {
+            "algorithm": "prefix_before_:s",
+            "delimiter": ":s",
+        },
+        "authority_coordinates": {
+            "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+            "authority_ref": "test/identity-bridge/v1",
+            "database": "miiv",
+            "mapping_sha256": "a" * 64,
+            "grouping_derivation": "prefix_before_:s",
+            "provider_visible_values": False,
+        },
+    }
+    assert receipt["patient_rows_read"] is False
+    assert receipt["patient_rows_written"] is False
+
+
+def test_metadata_planning_schema_projects_exact_operational_covariates() -> None:
+    columns = agent_pipeline_runs._metadata_planning_operationalized_columns(
+        primary_exposure_source="lact",
+        primary_exposure_aggregation="max",
+        covariates=("age", "sex", "charlson"),
+        covariate_selection="exact",
+        covariate_operationalizations={
+            "age": "age",
+            "sex": "sex",
+            "charlson": "charlson_first",
+        },
+        sensitivity_specs=(
+            SimpleNamespace(
+                source_materialization_variables=(
+                    "death_time",
+                    "los_icu",
+                    "charlson_first",
+                )
+            ),
+        ),
+    )
+
+    assert columns == (
+        "lact_max",
+        "age",
+        "sex",
+        "charlson_first",
+        "death_time",
+        "los_icu",
+    )
+
+
+def test_metadata_planning_schema_projects_derived_landmark_event_time() -> None:
+    from easyicu.research_agent.planning.sensitivity_authority import (
+        PrespecifiedSensitivitySpec,
+    )
+
+    columns = agent_pipeline_runs._metadata_planning_operationalized_columns(
+        primary_exposure_source="lact",
+        primary_exposure_aggregation="max",
+        covariates=("age", "sex", "charlson"),
+        covariate_selection="exact",
+        covariate_operationalizations={"charlson": "charlson_first"},
+        sensitivity_specs=(
+            PrespecifiedSensitivitySpec(
+                spec_id="landmark_24h_primary",
+                axis="timing",
+                strategy="landmark",
+                landmark_hours=24,
+                require_alive_at_landmark=True,
+                exclude_negative_event_times=True,
+                event_time_variable="death_time",
+                observation_duration_variable="los_icu",
+                observation_duration_unit="days",
+            ),
+        ),
+    )
+
+    assert columns == (
+        "lact_max",
+        "age",
+        "sex",
+        "charlson_first",
+        "los_icu",
+        "death_time",
+    )
+
+
 def test_metadata_only_planning_coordinates_keep_explicit_lactate_and_mortality() -> None:
     coordinates = agent_pipeline_runs._metadata_only_planning_coordinates(
         database="miiv",
@@ -1096,7 +1238,11 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             cohort = pd.read_parquet(kwargs["cohort"])
             captured["cohort_rows"] = len(cohort)
             captured["cohort_columns"] = list(cohort.columns)
+            captured["planning_authority"] = cohort.attrs.get(
+                "easyicu_planning_authority"
+            )
             captured["cohort_authority_path"] = kwargs["cohort_authority_path"]
+            captured["id_columns"] = kwargs["id_columns"]
             captured["target_outcome"] = kwargs["target_outcome"]
             captured["primary_exposure"] = kwargs["primary_exposure"]
             captured["endpoint"] = (
@@ -1111,20 +1257,38 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "from_config",
         lambda _config, *, services: FakePipeline(),
     )
-    raw = tmp_path / "raw-mimiciv"
-    raw.mkdir()
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_patient_grouping_for_analysis_design",
+        lambda _study: PatientGroupingBinding(
+            mapping_path=tmp_path / "private-patient-map.parquet",
+            mapping_sha256="a" * 64,
+            mapping_stay_column="stay_id",
+            mapping_patient_column="patient_key",
+            authority_coordinates={
+                "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+                "authority_ref": "test/identity-bridge/v1",
+                "database": "miiv",
+                "mapping_sha256": "a" * 64,
+                "grouping_derivation": "prefix_before_:s",
+                "provider_visible_values": False,
+            },
+        ),
+    )
+    prepared = _write_pipeline_export(tmp_path / "prepared-mimiciv")
     study = {
-        **_design_free_study(raw),
+        **_design_free_study(prepared),
         "outcome": "ICU 住院期间死亡（death during the same ICU stay）",
         "primary_exposure": "入 ICU 后 24 小时内乳酸水平",
         "analysis_design": {
-            "analysis_family": "descriptive_epidemiology",
+            "analysis_family": "association_study",
             "analysis_unit": "icu_stay",
-            "variance_estimator": "none_counts_only",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
         },
     }
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-        export_path=str(raw),
+        export_path=str(prepared),
         study_context=study,
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
@@ -1145,8 +1309,38 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
 
     assert captured == {
         "cohort_rows": 0,
-        "cohort_columns": ["stay_id", "lact", "sep3", "death"],
+        "cohort_columns": [
+            "stay_id",
+            "patient_stay_id",
+            "lact",
+            "sep3",
+            "death",
+        ],
+        "planning_authority": {
+            "kind": "metadata_only_planning_catalog",
+            "patient_rows_read": False,
+            "replacement_row_identity": {
+                "output_identity_column": "patient_stay_id",
+                "mapping_file_sha256": "a" * 64,
+                "mapped_cohort_rows": 0,
+                "patient_group_derivation": {
+                    "algorithm": "prefix_before_:s",
+                    "delimiter": ":s",
+                },
+                "authority_coordinates": {
+                    "schema_version": (
+                        "easyicu.patient_grouping_runtime_authority/1"
+                    ),
+                    "authority_ref": "test/identity-bridge/v1",
+                    "database": "miiv",
+                    "mapping_sha256": "a" * 64,
+                    "grouping_derivation": "prefix_before_:s",
+                    "provider_visible_values": False,
+                },
+            },
+        },
         "cohort_authority_path": None,
+        "id_columns": ["patient_stay_id"],
         "target_outcome": "death",
         "primary_exposure": "sep3",
         "endpoint": {
@@ -1572,6 +1766,15 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
                     {
                         "code": "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
                         "requires_user_authorization": True,
+                        "message": "Exposure timing is not closed by an executable design.",
+                        "evidence_refs": [
+                            "research_context.json",
+                            "analysis_plan.json",
+                        ],
+                        "remediation": (
+                            "Create a new landmark version or keep the current "
+                            "study descriptive."
+                        ),
                         "authorization_question": (
                             "Use a new landmark version or keep this study descriptive?"
                         ),
@@ -1602,20 +1805,36 @@ def test_nonapprovable_plan_projects_bounded_score_and_authorization_questions()
         "rendered_outputs_assessed": False,
         "dimension_scores": {"icu_clinical_design": 0, "figures": 70},
         "finding_codes": ["POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"],
-        "authorization_questions": [],
+        "authorization_questions": [
+            {
+                "code": "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+                "question": (
+                    "Use a new landmark version or keep this study descriptive?"
+                ),
+                "evidence": "Exposure timing is not closed by an executable design.",
+                "evidence_refs": [
+                    "research_context.json",
+                    "analysis_plan.json",
+                ],
+                "remediation": (
+                    "Create a new landmark version or keep the current study descriptive."
+                ),
+            }
+        ],
         "remediation_buckets": {
             "agent_plan_revision": [
                 "CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
-                "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
             ],
-            "study_authority_change": [],
+            "study_authority_change": [
+                "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
+            ],
             "external_evidence": ["DIRECT_COMPARATOR_NOT_ESTABLISHED"],
             "independent_review": [],
         },
     }
 
 
-def test_plan_review_keeps_design_choices_as_system_proposals_before_review() -> None:
+def test_plan_review_separates_system_proposals_from_user_authorization() -> None:
     study = _complete_study()
     review = {
         "status": "changes_required",
@@ -1675,14 +1894,18 @@ def test_plan_review_keeps_design_choices_as_system_proposals_before_review() ->
 
     assert snapshot.next_action_code == "plan_scientific_changes_required"
     assert snapshot.plan_review_summary is not None
-    assert snapshot.plan_review_summary["authorization_questions"] == []
+    assert snapshot.plan_review_summary["authorization_questions"] == [
+        {
+            "code": "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
+            "question": "Which adjustment variables?",
+        }
+    ]
     assert snapshot.plan_review_summary["remediation_buckets"] == {
         "agent_plan_revision": [
             "OUTCOME_DEFINITION_UNRESOLVED",
             "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
-            "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
         ],
-        "study_authority_change": [],
+        "study_authority_change": ["ADJUSTMENT_SET_NOT_USER_CONFIRMED"],
         "external_evidence": [],
         "independent_review": [],
     }
@@ -1838,6 +2061,34 @@ def test_durable_web_execution_failure_also_retries_exact_approved_plan() -> Non
             "engine": "easyicu.research_agent.pipeline",
             "gate_status": "blocked",
             "gate_reason": "research_pipeline_execution_failed",
+            "run_status": "failed",
+            "scientific_configuration_sha256": digest,
+            "artifact_names": [
+                "agent_plan.json",
+                "evidence_ledger.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+
+    assert snapshot.next_action_code == "failed_pipeline_execution_retry_available"
+
+
+def test_retry_bridge_failure_preserves_exact_approved_plan_retry() -> None:
+    study = _complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(study)
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_id": "run-web-wrapper",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "gate_reason": (
+                "research_pipeline_execution_retry_unexpected_plan_review"
+            ),
             "run_status": "failed",
             "scientific_configuration_sha256": digest,
             "artifact_names": [
@@ -2086,6 +2337,48 @@ def test_validated_analysis_advances_even_when_publication_gate_stays_closed() -
     assert by_id["analysis"].reason_code == "validated_analysis_ready"
     assert by_id["interpretation"].status == "review_required"
     assert by_id["manuscript"].status == "review_required"
+
+
+def test_completed_numeric_outputs_do_not_force_a_fresh_plan_during_validation_repair() -> None:
+    study = _complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(study)
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=True,
+        active_job=None,
+        latest_run={
+            "run_id": "run-analysis-validation-open",
+            "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked",
+            "gate_reason": "research_agent_pipeline_failed_closed",
+            "gate_checks": {
+                "execution_complete": True,
+                "analysis_validated": False,
+                "evidence_complete": True,
+                "numeric_verified": True,
+            },
+            "run_status": "analysis_only",
+            "scientific_configuration_sha256": digest,
+            "artifact_names": [
+                "agent_plan.json",
+                "evidence_ledger.json",
+                "result_tables.json",
+                "figure_gallery.json",
+                "source_run_manifest.json",
+            ],
+        },
+    )
+
+    by_id = {row.id: row for row in snapshot.stages}
+    assert by_id["setup"].status == "complete"
+    assert by_id["extraction"].status == "complete"
+    assert by_id["plan"].status == "complete"
+    assert by_id["analysis"].status == "review_required"
+    assert by_id["analysis"].reason_code == "analysis_outputs_require_validation"
+    assert by_id["interpretation"].status == "review_required"
+    assert snapshot.next_action_code == "analysis_outputs_require_validation"
+    assert snapshot.analysis_validation_retry_available is True
 
 
 def test_validated_analysis_receipt_does_not_fall_back_to_legacy_blank_setup() -> None:
@@ -4111,7 +4404,7 @@ def test_planner_owned_design_choices_do_not_block_plan_generation(
     assert result["code"] != "study_setup_incomplete"
 
 
-def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
+def test_full_run_uses_verified_pi_provider_and_prepared_source_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     submitted: list[dict[str, Any]] = []
@@ -4132,7 +4425,7 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
         metadata_only_planning_authorized: bool = False,
     ) -> dict[str, Any]:
         assert account_environment is None
-        assert metadata_only_planning_authorized is True
+        assert metadata_only_planning_authorized is False
         submitted.append(dict(body))
         return {
             "job_id": "agent-job-full",
@@ -4170,9 +4463,120 @@ def test_full_run_uses_verified_pi_provider_not_model_selected_alias(
             "llm_provider": "openai",
             "external_llm_opt_in": True,
             "engine": "research_agent_pipeline",
+            "planner_start_mode": "auto",
             "credential_source": "pi_verified",
         }
     ]
+
+
+def test_candidate_plan_approval_starts_package_bound_run_instead_of_resuming_canary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = _complete_study()
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: study)
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, *, study_override=None: {
+            "next_action_code": "plan_execution_upgrade_required",
+            "planning_prerequisites_missing": [],
+        },
+    )
+
+    def replacement_run(context, params, *, planner_start_mode="auto"):
+        captured.update(
+            context=context,
+            params=dict(params),
+            planner_start_mode=planner_start_mode,
+        )
+        return {"status": "ok", "code": "package_bound_run_submitted"}
+
+    monkeypatch.setattr(tool_module, "_run", replacement_run)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-upgrade-canary",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id=study["id"],
+                study_revision=study["revision"],
+                run_id="run-preview-only",
+            ),
+        ),
+        allowed_actions={"provider_run", "configure", "extract"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_resume",
+        {"run_id": "run-preview-only", "decision": "approved"},
+        context,
+    )
+
+    assert result["code"] == "package_bound_run_submitted"
+    assert captured["params"] == {"run_type": "full"}
+    assert captured["planner_start_mode"] == "fresh"
+
+
+@pytest.mark.parametrize(
+    "workflow_action_code",
+    [
+        "failed_pipeline_execution_retry_available",
+        "failed_pipeline_requires_fresh_plan",
+    ],
+)
+def test_failed_package_bound_run_retry_does_not_return_to_preview_canary(
+    monkeypatch: pytest.MonkeyPatch,
+    workflow_action_code: str,
+) -> None:
+    study = _complete_study()
+    submitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: study)
+    monkeypatch.setattr(
+        tool_module,
+        "_workflow_snapshot",
+        lambda _context, *, study_override=None: {
+            "next_action_code": workflow_action_code,
+            "planning_prerequisites_missing": [],
+        },
+    )
+    from easyicu.webserver.routes import agent as agent_route
+
+    def submit(
+        body: dict[str, Any],
+        *,
+        account_environment: dict[str, str] | None = None,
+        metadata_only_planning_authorized: bool = False,
+    ) -> dict[str, Any]:
+        assert account_environment is None
+        assert metadata_only_planning_authorized is False
+        submitted.append(dict(body))
+        return {
+            "job_id": "agent-job-package-retry",
+            "kind": "agent-run",
+            "status": "running",
+            "study_context_id": study["id"],
+            "study_context_revision": study["revision"],
+        }
+
+    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="pi-package-retry",
+            external_llm_opt_in=True,
+            binding=AuthorityBinding(
+                study_context_id=study["id"],
+                study_revision=study["revision"],
+            ),
+        ),
+        allowed_actions={"provider_run"},
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_run", {"run_type": "full"}, context
+    )
+
+    assert result["code"] == "easyicu_full_run_submitted"
+    assert submitted[0]["planner_start_mode"] == "auto"
 
 
 def _run_submission_rejection(
@@ -4199,7 +4603,7 @@ def _run_submission_rejection(
         account_environment: dict[str, str] | None = None,
         metadata_only_planning_authorized: bool = False,
     ) -> dict[str, Any]:
-        assert metadata_only_planning_authorized is True
+        assert metadata_only_planning_authorized is False
         raise HTTPException(status_code=400, detail=detail)
 
     monkeypatch.setattr(agent_route, "submit_agent_run", submit)
@@ -4310,7 +4714,7 @@ def test_full_run_uses_the_codex_account_frozen_into_the_session(
         account_environment: dict[str, str] | None = None,
         metadata_only_planning_authorized: bool = False,
     ) -> dict[str, Any]:
-        assert metadata_only_planning_authorized is True
+        assert metadata_only_planning_authorized is False
         captured["body"] = dict(body)
         captured["environment"] = dict(account_environment or {})
         return {
@@ -4533,19 +4937,59 @@ def _write_development_resume_planner_catalog(
     run_dir: Path,
     *,
     selected_concepts: tuple[str, ...] = ("lact", "death"),
+    patient_identity_column: str | None = None,
+    operationalized_columns: tuple[str, ...] = (),
 ) -> None:
     pipeline_input = run_dir.parent.parent / "pipeline_input"
     pipeline_input.mkdir(parents=True, exist_ok=True)
     universe = pipeline_input / "planner_catalog.parquet"
-    pd.DataFrame(
+    columns: dict[str, pd.Series] = {"stay_id": pd.Series(dtype="int64")}
+    if patient_identity_column:
+        columns[patient_identity_column] = pd.Series(dtype="string")
+    columns.update(
         {
-            "stay_id": pd.Series(dtype="int64"),
-            **{
-                concept: pd.Series(dtype="float64")
-                for concept in selected_concepts
+            column: pd.Series(dtype="float64")
+            for column in operationalized_columns
+        }
+    )
+    columns.update(
+        {
+            concept: pd.Series(dtype="float64")
+            for concept in selected_concepts
+        }
+    )
+    frame = pd.DataFrame(columns)
+    replacement_row_identity = (
+        {
+            "output_identity_column": patient_identity_column,
+            "mapping_file_sha256": "a" * 64,
+            "mapped_cohort_rows": 0,
+            "patient_group_derivation": {
+                "algorithm": "prefix_before_:s",
+                "delimiter": ":s",
+            },
+            "authority_coordinates": {
+                "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+                "authority_ref": "test/identity-bridge/v1",
+                "database": "miiv",
+                "mapping_sha256": "a" * 64,
+                "grouping_derivation": "prefix_before_:s",
+                "provider_visible_values": False,
             },
         }
-    ).to_parquet(universe, index=False)
+        if patient_identity_column
+        else None
+    )
+    frame.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog",
+        "patient_rows_read": False,
+        **(
+            {"replacement_row_identity": replacement_row_identity}
+            if replacement_row_identity is not None
+            else {}
+        ),
+    }
+    frame.to_parquet(universe, index=False)
     selected_sha256 = hashlib.sha256(
         json.dumps(
             list(selected_concepts),
@@ -4560,6 +5004,9 @@ def _write_development_resume_planner_catalog(
                 "database": "miiv",
                 "catalog_source": "easyicu-database-capability:miiv",
                 "row_identity_column": "stay_id",
+                "patient_identity_column": patient_identity_column,
+                "operationalized_columns": list(operationalized_columns),
+                "replacement_row_identity": replacement_row_identity,
                 "selected_concepts": list(selected_concepts),
                 "selected_concepts_sha256": selected_sha256,
                 "patient_rows_read": False,
@@ -5413,6 +5860,7 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
         project_root=str(project_root),
         provider={"provider": "openai", "external": True},
         provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        budget_mode="full_reviewed",
     )
 
     class Job:
@@ -5786,19 +6234,19 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     ),
     [
         (
-            None,
+            "full_reviewed",
             None,
             None,
             "easyicu-research-agent:1.0.0",
-            "npj_dm_e1_canary_dev",
+            "npj_dm_e1_demo_dev",
             "20260819",
         ),
         (
-            None,
+            "full_reviewed",
             None,
             "easyicu-research-agent:isolated-exact-head",
             "easyicu-research-agent:isolated-exact-head",
-            "npj_dm_e1_canary_dev",
+            "npj_dm_e1_demo_dev",
             "20260819",
         ),
         (
@@ -6252,7 +6700,25 @@ def test_development_resume_restores_metadata_only_planner_catalog_without_rows(
     run_dir.mkdir(parents=True)
     checkpoint = run_dir / "progressive_planner_checkpoint_004.json"
     checkpoint.write_text("{}", encoding="utf-8")
-    _write_development_resume_planner_catalog(run_dir)
+    _write_development_resume_planner_catalog(
+        run_dir,
+        patient_identity_column="patient_stay_id",
+        operationalized_columns=("lact_max",),
+    )
+    patient_grouping = PatientGroupingBinding(
+        mapping_path=tmp_path / "private-patient-map.parquet",
+        mapping_sha256="a" * 64,
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+        authority_coordinates={
+            "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+            "authority_ref": "test/identity-bridge/v1",
+            "database": "miiv",
+            "mapping_sha256": "a" * 64,
+            "grouping_derivation": "prefix_before_:s",
+            "provider_visible_values": False,
+        },
+    )
     coordinates = agent_pipeline_runs._metadata_only_planning_coordinates(
         database="miiv",
         question="我想研究 ICU 患者的乳酸水平和院内死亡有没有关系。",
@@ -6267,19 +6733,30 @@ def test_development_resume_restores_metadata_only_planner_catalog_without_rows(
         required_feature_concepts=(),
         planning_target_outcome=coordinates["target_outcome"],
         planning_endpoint=coordinates["endpoint"],
+        planning_operationalized_columns=("lact_max",),
     )
     acquisition = agent_pipeline_runs._restore_metadata_only_planning_acquisition(
         database="miiv",
         profile=profile,
         output_dir=tmp_path / "run_current" / "pipeline_input",
         endpoint=coordinates["endpoint"],
+        patient_grouping=patient_grouping,
+        operationalized_columns=("lact_max",),
     )
 
     assert profile.kind == "metadata_only_planning_catalog"
     assert profile.selected_concepts == ("lact", "death")
     assert acquisition.selection.selection_authority == "host_exact"
     assert acquisition.selection.selected_concepts == ["lact", "death"]
-    assert pd.read_parquet(acquisition.universe_path).empty
+    restored = pd.read_parquet(acquisition.universe_path)
+    assert restored.empty
+    assert list(restored.columns) == [
+        "stay_id",
+        "patient_stay_id",
+        "lact_max",
+        "lact",
+        "death",
+    ]
     assert acquisition.universe_path == (
         tmp_path / "run_current" / "pipeline_input" / "planner_catalog.parquet"
     )
@@ -6308,6 +6785,7 @@ def test_development_resume_restores_metadata_only_planner_catalog_without_rows(
         required_feature_concepts=(),
         planning_target_outcome=coordinates["target_outcome"],
         planning_endpoint=coordinates["endpoint"],
+        planning_operationalized_columns=("lact_max",),
     )
     assert chained_profile.selected_concepts == ("lact", "death")
 
@@ -6475,6 +6953,7 @@ def test_web_runner_enables_live_pubmed_only_with_host_authorization(
         provider={"provider": "openai", "external": True},
         provider_environment=_PI_PROVIDER_ENVIRONMENT,
         literature_search_authorized=True,
+        budget_mode="full_reviewed",
     )
 
     class Job:
@@ -6579,6 +7058,7 @@ def test_web_runner_reuses_digest_bound_web_literature_without_second_search(
         provider={"provider": "openai", "external": True},
         provider_environment=_PI_PROVIDER_ENVIRONMENT,
         literature_search_authorized=True,
+        budget_mode="full_reviewed",
     )
 
     class Job:
@@ -7217,6 +7697,7 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
         provider_environment=expected_environment,
+        budget_mode="full_reviewed",
     )
 
     class Job:
@@ -7230,8 +7711,8 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
     result = runner(Job())
 
     assert captured["environment"] == expected_environment
-    assert captured["request_timeout"] == 120.0
-    assert captured["request_hard_timeout"] == 120.0
+    assert captured["request_timeout"] is None
+    assert captured["request_hard_timeout"] is None
     assert result["provider"]["model"] == "test-local-model"
     assert "test-private-provider-key" not in json.dumps(result)
 
@@ -7292,6 +7773,7 @@ def test_pipeline_revalidates_package_before_provider_or_acquisition(
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
         provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        budget_mode="full_reviewed",
     )
     (export / "demographics.parquet").write_bytes(b"changed-after-submit")
 

@@ -37,6 +37,7 @@ EXPECTED_SYSTEM_ROUTES = [
     ("GET", "/api/health"),
     ("GET", "/favicon.ico"),
     ("GET", "/api/catalog"),
+    ("GET", "/api/catalog/lineage/{concept_id}"),
     ("GET", "/api/settings"),
     ("POST", "/api/settings"),
     ("POST", "/api/settings/reset"),
@@ -53,6 +54,7 @@ EXPECTED_SYSTEM_OPERATION_NAMES = [
     "health",
     "favicon",
     "catalog",
+    "catalog_lineage",
     "get_settings",
     "post_settings",
     "post_settings_reset",
@@ -179,6 +181,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "POST",
         "/api/copilot/pi/sessions/{session_id}/message",
         "post_pi_copilot_message",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/cohort-eligibility-selection",
+        "post_pi_copilot_cohort_eligibility_selection",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/plan-decision-selection",
+        "post_pi_copilot_plan_decision_selection",
     ),
     (
         "POST",

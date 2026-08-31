@@ -19,7 +19,7 @@ def test_pi_security_proofs_are_not_skipped_after_scoped_pytest_failure() -> Non
 
     for step_name in (
         "Parse-check Pi sidecar owners",
-        "Run research artifact renderer security vectors",
+        "Run JavaScript owner and security contracts",
         "Prove hostile preview origin isolation in Chromium",
     ):
         step = workflow.split(f"- name: {step_name}", maxsplit=1)[1]

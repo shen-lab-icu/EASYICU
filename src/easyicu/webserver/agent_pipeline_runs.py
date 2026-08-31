@@ -86,8 +86,8 @@ from easyicu.webserver.scientific_readiness_projection import (
 )
 from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver.research_evidence_preview import is_identifier_column
-from easyicu.webserver.execution_retry import (
-    preserves_approved_execution_checkpoint,
+from easyicu.webserver.pi_copilot.contracts import (
+    EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
 )
 from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
@@ -580,6 +580,7 @@ def _development_resume_acquisition_profile(
     required_feature_concepts: Sequence[str],
     planning_target_outcome: Optional[str] = None,
     planning_endpoint: Any = None,
+    planning_operationalized_columns: Sequence[str] = (),
 ) -> _DevelopmentResumeAcquisition:
     """Restore the exact server-owned concept roster behind a Dev checkpoint.
 
@@ -677,6 +678,11 @@ def _development_resume_acquisition_profile(
         normalized_selected = tuple(
             dict.fromkeys(value.strip() for value in selected)
         )
+        normalized_operationalized = (
+            _normalized_metadata_planning_operationalized_columns(
+                planning_operationalized_columns
+            )
+        )
         selected_sha256 = hashlib.sha256(
             json.dumps(
                 list(normalized_selected),
@@ -701,6 +707,8 @@ def _development_resume_acquisition_profile(
             or (provenance.get("planning_target_outcome") or None)
             != planning_target_outcome
             or (provenance.get("planning_endpoint") or None) != expected_endpoint
+            or tuple(provenance.get("operationalized_columns") or ())
+            != normalized_operationalized
         ):
             raise ResearchPipelineRunError(
                 "research_pipeline_development_resume_acquisition_authority_mismatch",
@@ -711,9 +719,30 @@ def _development_resume_acquisition_profile(
 
             parquet = pq.ParquetFile(selected_universe_path)
             row_identity = str(provenance.get("row_identity_column") or "").strip()
-            expected_columns = [row_identity, *normalized_selected]
+            raw_patient_identity = provenance.get("patient_identity_column")
+            patient_identity = (
+                str(raw_patient_identity).strip()
+                if raw_patient_identity is not None
+                else ""
+            )
+            patient_identity_valid = bool(
+                not patient_identity
+                or (
+                    re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", patient_identity)
+                    and patient_identity != row_identity
+                    and patient_identity not in normalized_selected
+                )
+            )
+            expected_columns = [
+                row_identity,
+                *([patient_identity] if patient_identity else []),
+                *normalized_operationalized,
+                *normalized_selected,
+            ]
+            expected_columns = list(dict.fromkeys(expected_columns))
             if (
                 not row_identity
+                or not patient_identity_valid
                 or parquet.metadata.num_rows != 0
                 or parquet.schema_arrow.names != expected_columns
             ):
@@ -1585,6 +1614,39 @@ def _configured_sensitivity_specs(study: Mapping[str, Any]) -> tuple[Any, ...]:
         ) from exc
 
 
+def _runtime_projection_sensitivity_specs(
+    sensitivity_specs: tuple[Any, ...],
+    *,
+    primary_exposure_source: str,
+) -> tuple[Any, ...]:
+    """Add only the deterministic runtime's automatic nonlinear safeguard.
+
+    A user-selected landmark must close exposure opportunity in the primary
+    estimator.  When the researcher has not requested a competing functional-
+    form sensitivity, the signed landmark runtime supplies its standard RCS
+    primary plus linear sensitivity as a plan-owned automatic remediation.  It
+    is not written back to StudyContext or projected as a user request.
+    """
+
+    if not primary_exposure_source:
+        return sensitivity_specs
+    strategies = {str(getattr(item, "strategy", "") or "") for item in sensitivity_specs}
+    axes = {str(getattr(item, "axis", "") or "") for item in sensitivity_specs}
+    if "landmark" not in strategies or "functional_form" in axes:
+        return sensitivity_specs
+    from easyicu.research_agent.planning.sensitivity_authority import (
+        PrespecifiedSensitivitySpec,
+    )
+
+    automatic = PrespecifiedSensitivitySpec(
+        spec_id="easyicu_auto_primary_exposure_rcs",
+        axis="functional_form",
+        strategy="restricted_cubic_spline",
+        execution_variables=(primary_exposure_source,),
+    )
+    return (*sensitivity_specs, automatic)
+
+
 def _patient_grouping_for_analysis_design(
     study: Mapping[str, Any],
 ) -> Optional[PatientGroupingBinding]:
@@ -1982,6 +2044,111 @@ def _neutral_materialization_scope(
     return patched
 
 
+def _normalized_metadata_planning_operationalized_columns(
+    values: Sequence[str],
+) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for raw in values:
+        value = str(raw or "").strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is None:
+            raise ResearchPipelineRunError(
+                "research_pipeline_planning_operationalization_invalid",
+                "The metadata-only planning schema contains an invalid "
+                "operationalized column.",
+            )
+        if value not in normalized:
+            normalized.append(value)
+    return tuple(normalized)
+
+
+def _metadata_planning_operationalized_columns(
+    *,
+    primary_exposure_source: Optional[str],
+    primary_exposure_aggregation: Optional[str],
+    covariates: Sequence[str],
+    covariate_selection: str,
+    covariate_operationalizations: Mapping[str, Any],
+    sensitivity_specs: Sequence[Any],
+) -> tuple[str, ...]:
+    """Project host-owned analysis columns into the zero-row plan schema.
+
+    Planner canary runs deliberately read no patient rows, but their schema
+    still has to expose every operational column that the host has already
+    bound. Otherwise an exact adjustment set becomes impossible to satisfy:
+    using its materialized column is rejected as unavailable, while omitting
+    it is rejected as changing the user's adjustment decision.
+    """
+
+    values: list[str] = []
+    if primary_exposure_source and primary_exposure_aggregation:
+        values.append(
+            f"{primary_exposure_source}_{primary_exposure_aggregation}"
+        )
+    if covariate_selection == "exact":
+        mapping = {
+            str(key or "").strip(): str(value or "").strip()
+            for key, value in covariate_operationalizations.items()
+        }
+        values.extend(mapping.get(name, name) for name in covariates)
+    for spec in sensitivity_specs:
+        values.extend(getattr(spec, "source_materialization_variables", ()) or ())
+        # The outcome owner derives event time during real materialization, so
+        # it is intentionally absent from ``source_materialization_variables``.
+        # A zero-row planning catalog still needs that derived column in its
+        # schema so the host can compile the already user-reviewed landmark
+        # runtime without reading patient rows.
+        event_time_variable = getattr(spec, "event_time_variable", None)
+        if event_time_variable:
+            values.append(event_time_variable)
+    return _normalized_metadata_planning_operationalized_columns(values)
+
+
+def _metadata_only_patient_grouping_authority(
+    patient_grouping: Optional[PatientGroupingBinding],
+) -> Optional[Dict[str, Any]]:
+    if patient_grouping is None:
+        return None
+    coordinates = dict(patient_grouping.authority_coordinates)
+    if (
+        coordinates.get("schema_version")
+        != "easyicu.patient_grouping_runtime_authority/1"
+        or not isinstance(coordinates.get("authority_ref"), str)
+        or not coordinates.get("authority_ref")
+        or coordinates.get("mapping_sha256") != patient_grouping.mapping_sha256
+        or coordinates.get("grouping_derivation") != "prefix_before_:s"
+        or coordinates.get("provider_visible_values") is not False
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_planning_patient_grouping_authority_invalid",
+            "The verified patient-grouping authority cannot be projected into "
+            "the metadata-only planning schema.",
+        )
+    safe_coordinates = {
+        key: coordinates[key]
+        for key in (
+            "schema_version",
+            "authority_ref",
+            "database",
+            "export_manifest_file",
+            "export_manifest_sha256",
+            "mapping_sha256",
+            "grouping_derivation",
+            "provider_visible_values",
+        )
+        if key in coordinates
+    }
+    return {
+        "output_identity_column": patient_grouping.output_identity_column,
+        "mapping_file_sha256": patient_grouping.mapping_sha256,
+        "mapped_cohort_rows": 0,
+        "patient_group_derivation": {
+            "algorithm": "prefix_before_:s",
+            "delimiter": ":s",
+        },
+        "authority_coordinates": safe_coordinates,
+    }
+
+
 def _metadata_only_planning_acquisition(
     *,
     database: str,
@@ -1991,6 +2158,8 @@ def _metadata_only_planning_acquisition(
     target_outcome: Optional[str] = None,
     endpoint: Any = None,
     required_concepts: Sequence[str] = (),
+    patient_grouping: Optional[PatientGroupingBinding] = None,
+    operationalized_columns: Sequence[str] = (),
 ) -> Any:
     """Select a planning catalog without reading patient data.
 
@@ -2079,12 +2248,53 @@ def _metadata_only_planning_acquisition(
             details={"database": normalized_database},
         )
     row_identity_column = database_id_columns[0]
-    pd.DataFrame(
+    normalized_operationalized = (
+        _normalized_metadata_planning_operationalized_columns(
+            operationalized_columns
+        )
+    )
+    replacement_row_identity = _metadata_only_patient_grouping_authority(
+        patient_grouping
+    )
+    projected_patient_identity = (
+        patient_grouping.output_identity_column
+        if patient_grouping is not None
+        and patient_grouping.output_identity_column != row_identity_column
+        else None
+    )
+    planning_columns: Dict[str, Any] = {
+        row_identity_column: pd.Series(dtype="int64")
+    }
+    if projected_patient_identity:
+        # This is schema authority only. The private stay-to-patient mapping is
+        # applied later by the governed materializer and no identifier values
+        # cross the Planner boundary.
+        planning_columns[projected_patient_identity] = pd.Series(dtype="string")
+    planning_columns.update(
         {
-            row_identity_column: pd.Series(dtype="int64"),
-            **{concept: pd.Series(dtype="float64") for concept in selected},
+            column: pd.Series(dtype="float64")
+            for column in normalized_operationalized
+            if column not in planning_columns
         }
-    ).to_parquet(universe_path, index=False)
+    )
+    planning_columns.update(
+        {
+            concept: pd.Series(dtype="float64")
+            for concept in selected
+            if concept not in planning_columns
+        }
+    )
+    planning_catalog = pd.DataFrame(planning_columns)
+    planning_catalog.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog",
+        "patient_rows_read": False,
+        **(
+            {"replacement_row_identity": replacement_row_identity}
+            if replacement_row_identity is not None
+            else {}
+        ),
+    }
+    planning_catalog.to_parquet(universe_path, index=False)
     provenance_path = output_dir / "planner_catalog_receipt.json"
     _write_json(
         provenance_path,
@@ -2093,6 +2303,9 @@ def _metadata_only_planning_acquisition(
             "database": database,
             "catalog_source": catalog.source,
             "row_identity_column": row_identity_column,
+            "patient_identity_column": projected_patient_identity,
+            "operationalized_columns": list(normalized_operationalized),
+            "replacement_row_identity": replacement_row_identity,
             "selected_concepts": selected,
             "selected_concepts_sha256": hashlib.sha256(
                 json.dumps(
@@ -2134,6 +2347,8 @@ def _restore_metadata_only_planning_acquisition(
     profile: _DevelopmentResumeAcquisition,
     output_dir: Path,
     endpoint: Any = None,
+    patient_grouping: Optional[PatientGroupingBinding] = None,
+    operationalized_columns: Sequence[str] = (),
 ) -> Any:
     """Replay and restage one verified zero-row catalog without an LLM call.
 
@@ -2188,6 +2403,39 @@ def _restore_metadata_only_planning_acquisition(
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_acquisition_digest_mismatch",
             "The verified Planner catalog changed before it could be restaged.",
+        )
+    import pyarrow.parquet as pq
+
+    receipt = _read_json(profile.provenance_path, {})
+    schema_columns = set(pq.read_schema(profile.universe_path).names)
+    expected_patient_identity = (
+        patient_grouping.output_identity_column
+        if patient_grouping is not None
+        else None
+    )
+    expected_replacement = _metadata_only_patient_grouping_authority(
+        patient_grouping
+    )
+    expected_operationalized = (
+        _normalized_metadata_planning_operationalized_columns(
+            operationalized_columns
+        )
+    )
+    if (
+        receipt.get("patient_identity_column") != expected_patient_identity
+        or receipt.get("replacement_row_identity") != expected_replacement
+        or tuple(receipt.get("operationalized_columns") or ())
+        != expected_operationalized
+        or (
+            expected_patient_identity is not None
+            and expected_patient_identity not in schema_columns
+        )
+        or any(column not in schema_columns for column in expected_operationalized)
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_identity_authority_mismatch",
+            "The prior Planner catalog does not match the current patient "
+            "grouping and operationalized planning schema.",
         )
     output_dir.mkdir(parents=True, exist_ok=True)
     universe_path = output_dir / "planner_catalog.parquet"
@@ -4703,7 +4951,8 @@ def _resolve_execution_resume_wrapper(
             "The study configuration changed after approval; generate a new plan.",
         )
     if (
-        not preserves_approved_execution_checkpoint(source_row.get("gate_reason"))
+        _clean_text(source_row.get("gate_reason"), 160)
+        not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
         or _clean_text(source_row.get("run_status"), 80) not in {"blocked", "failed"}
     ):
         raise ResearchPipelineRunError(
@@ -4945,11 +5194,12 @@ def make_research_pipeline_run_runner(
     # Compile and validate the display-to-execution boundary before JobManager
     # creates a background job. A prose label or stale concept therefore fails
     # at its owner instead of appearing later as an opaque pipeline crash.
-    source_path = Path(export_path).expanduser()
-    metadata_only_planning = bool(
-        selected_budget_mode == "planner_canary"
-        and dataio.prepared_export_manifest_path(source_path) is None
-    )
+    # ``planner_canary`` is the authority boundary, independent of whether the
+    # selected source happens to be a raw registered database or an already
+    # prepared export.  Looking at package presence here previously upgraded a
+    # candidate plan into cohort/trajectory materialization behind the user's
+    # planning-only click.
+    metadata_only_planning = selected_budget_mode == "planner_canary"
     # Web may make candidate columns available to Planner, but it must not turn
     # a host suggestion into user scientific authority. Availability of
     # age/sex/LOS therefore never silently becomes an ``exact`` adjustment
@@ -4957,6 +5207,30 @@ def make_research_pipeline_run_runner(
     # proposals until Copilot records a reviewed StudyContext revision.
     candidate_planning_study = materialization_study
     metadata_planning_coordinates: Dict[str, Any] = dict(planning_coordinates)
+    execution_concepts = study.get("execution_concepts")
+    execution_concepts = (
+        execution_concepts if isinstance(execution_concepts, Mapping) else {}
+    )
+    planning_exposure_source = (
+        _clean_text(execution_concepts.get("primary_exposure"), 160)
+        or metadata_planning_coordinates.get("primary_exposure")
+        or None
+    )
+    planning_exposure_aggregation = _primary_exposure_aggregation(study)
+    metadata_operationalized_columns = (
+        _metadata_planning_operationalized_columns(
+            primary_exposure_source=planning_exposure_source,
+            primary_exposure_aggregation=planning_exposure_aggregation,
+            covariates=covariates,
+            covariate_selection=covariate_selection,
+            covariate_operationalizations=(
+                study.get("covariate_operationalizations") or {}
+            ),
+            sensitivity_specs=sensitivity_specs,
+        )
+        if metadata_only_planning
+        else ()
+    )
     prepared_package_binding: Optional[Dict[str, Any]] = None
     if metadata_only_planning:
         foundation_profile = {
@@ -5044,6 +5318,7 @@ def make_research_pipeline_run_runner(
                 "target_outcome"
             ),
             planning_endpoint=metadata_planning_coordinates.get("endpoint"),
+            planning_operationalized_columns=metadata_operationalized_columns,
         )
         if development_resume_binding is not None
         else None
@@ -5209,6 +5484,8 @@ def make_research_pipeline_run_runner(
                     profile=development_resume_acquisition,
                     output_dir=wrapper_dir / "pipeline_input",
                     endpoint=metadata_planning_coordinates.get("endpoint"),
+                    patient_grouping=patient_grouping,
+                    operationalized_columns=metadata_operationalized_columns,
                 )
             elif metadata_only_planning:
                 acquisition = _metadata_only_planning_acquisition(
@@ -5232,6 +5509,8 @@ def make_research_pipeline_run_runner(
                             for variable in spec.source_materialization_variables
                         ),
                     ),
+                    patient_grouping=patient_grouping,
+                    operationalized_columns=metadata_operationalized_columns,
                 )
             else:
                 acquisition = acquire_universe_for_question(
@@ -5421,51 +5700,77 @@ def make_research_pipeline_run_runner(
                     "enable_replanning": False,
                 }
             )
-            if not metadata_only_planning:
-                from easyicu.webserver.scientific_runtime_projection import (
-                    WebScientificRuntimeProjectionError,
-                    compile_landmark_spline_runtime_projection,
-                )
+            from easyicu.webserver.scientific_runtime_projection import (
+                WebScientificRuntimeProjectionError,
+                compile_landmark_spline_runtime_projection,
+            )
+            from easyicu.research_agent.contracts.dependence import (
+                PlannedDependenceRequirement,
+            )
 
-                try:
-                    runtime_projection = compile_landmark_spline_runtime_projection(
-                        study=candidate_planning_study,
-                        sensitivity_specs=sensitivity_specs,
-                        primary_exposure=resolved_primary_exposure,
-                        primary_exposure_source=(
-                            foundation_profile.get("primary_exposure_source_concept")
-                            or primary_exposure
+            planning_endpoint = metadata_planning_coordinates.get("endpoint")
+            runtime_primary_exposure_source = str(
+                foundation_profile.get("primary_exposure_source_concept")
+                or planning_exposure_source
+                or primary_exposure
+                or ""
+            ).strip()
+            runtime_projection_specs = _runtime_projection_sensitivity_specs(
+                sensitivity_specs,
+                primary_exposure_source=runtime_primary_exposure_source,
+            )
+            try:
+                runtime_projection = compile_landmark_spline_runtime_projection(
+                    study=candidate_planning_study,
+                    sensitivity_specs=runtime_projection_specs,
+                    primary_exposure=resolved_primary_exposure,
+                    primary_exposure_source=runtime_primary_exposure_source,
+                    target_outcome=pipeline_target,
+                    declared_covariates=covariates,
+                    covariate_operationalizations=dict(
+                        study.get("covariate_operationalizations") or {}
+                    ),
+                    target_is_event_status=(
+                        bool(foundation_profile.get("require_outcome"))
+                        or (
+                            metadata_only_planning
+                            and str(getattr(planning_endpoint, "kind", ""))
+                            .strip()
+                            .casefold()
+                            == "binary"
+                        )
+                    ),
+                    dependence=(
+                        PlannedDependenceRequirement(
+                            group_source=patient_grouping.output_identity_column,
+                            group_derivation="prefix_before_delimiter",
+                            delimiter=":s",
+                        )
+                        if patient_grouping is not None
+                        else None
+                    ),
+                    universe_path=Path(acquisition.universe_path),
+                    scientific_configuration_sha256=(
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                )
+            except WebScientificRuntimeProjectionError as exc:
+                raise ResearchPipelineRunError(
+                    exc.code,
+                    str(exc),
+                    details=exc.details,
+                ) from exc
+            if runtime_projection is not None:
+                profile_options.update(
+                    {
+                        "current_case_scientific_runtime_authority": (
+                            runtime_projection.authority
                         ),
-                        target_outcome=pipeline_target,
-                        declared_covariates=covariates,
-                        covariate_operationalizations=dict(
-                            study.get("covariate_operationalizations") or {}
+                        "scientific_runtime_projection_sha256": (
+                            runtime_projection.projection_sha256
                         ),
-                        target_is_event_status=bool(
-                            foundation_profile.get("require_outcome")
-                        ),
-                        universe_path=Path(acquisition.universe_path),
-                        scientific_configuration_sha256=(
-                            study_context_owner.scientific_configuration_sha256(study)
-                        ),
-                    )
-                except WebScientificRuntimeProjectionError as exc:
-                    raise ResearchPipelineRunError(
-                        exc.code,
-                        str(exc),
-                        details=exc.details,
-                    ) from exc
-                if runtime_projection is not None:
-                    profile_options.update(
-                        {
-                            "current_case_scientific_runtime_authority": (
-                                runtime_projection.authority
-                            ),
-                            "scientific_runtime_projection_sha256": (
-                                runtime_projection.projection_sha256
-                            ),
-                        }
-                    )
+                    }
+                )
             if development_resume_binding is not None:
                 profile_options.update(
                     {
@@ -5649,34 +5954,10 @@ def make_research_pipeline_run_runner(
             if execution_resume_target is not None and isinstance(
                 outcome, HumanReviewPending
             ):
-                _progress(
-                    job,
-                    step="human_review",
-                    label=(
-                        "Exact approved plan restored; retrying from the failed "
-                        "execution step without another Planner run"
-                    ),
-                )
-                decisions = [
-                    {
-                        "review_id": request.review_id,
-                        "authority_sha256": request.authority_sha256,
-                        "decision": "approved",
-                        "reviewer": server_reviewer_identity(),
-                        "decided_at": time.strftime(
-                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                        ),
-                        "note": (
-                            "Exact-plan execution retry after an attributable "
-                            "software failure; study configuration unchanged."
-                        ),
-                    }
-                    for request in outcome.requests
-                ]
-                outcome = pipeline.resume_human_review(
-                    decisions,
-                    run_id=outcome.run_id,
-                    progress_callback=lambda event: _pipeline_progress(job, event),
+                raise ResearchPipelineRunError(
+                    "research_pipeline_execution_retry_unexpected_plan_review",
+                    "The exact-plan execution retry unexpectedly requested a new "
+                    "plan review; no approval was created or overwritten.",
                 )
             if isinstance(outcome, HumanReviewPending):
                 run_dir = Path(outcome.run_dir)
