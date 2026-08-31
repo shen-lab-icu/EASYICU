@@ -92,6 +92,7 @@ from easyicu.research_agent.planning.progressive_resume import (
 from easyicu.research_agent.orchestration.progressive_planning import (
     ProgressiveDesignCanaryDraft,
     run_progressive_planner,
+    snapshot_progressive_planner_run,
 )
 from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
 from easyicu.research_agent.planning.preplan_know_how import (
@@ -6082,7 +6083,7 @@ def test_agent_stops_after_one_host_compile_repair_and_keeps_attempts() -> None:
         for item in agent.last_compile_failure_attempts
     } == {"progressive_distribution_contrast_not_distinct"}
     assert agent.last_prompt_metrics["compile_revision_count"] == 1
-    failure_facts = agent.snapshot_run_facts()
+    failure_facts = snapshot_progressive_planner_run(agent)
     assert len(failure_facts.compile_failure_attempts) == 2
     assert failure_facts.complete_for_persistence is False
 
