@@ -1,0 +1,4 @@
+/* Guided Copilot article-with-figures view owner. */
+.gpi-article-figure-insert{margin:34px 0;padding:22px 0;border-top:2px solid #1d557d;border-bottom:1px solid #d9e1e9;font-family:var(--font)}
+.gpi-article-figure-head{margin-bottom:16px}.gpi-article-figure-head span{color:#397089;font-size:10.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.gpi-article-figure-head h2{margin:4px 0 6px!important;color:#18334c!important;font-size:20px!important}.gpi-article-figure-head p{margin:0!important;color:#718090!important;font:400 11.5px/1.5 var(--font)!important}
+.gpi-article-figure-insert .ag-figure-gallery{grid-template-columns:1fr;gap:22px}.gpi-article-figure-insert .ag-figure-gallery figure{border-color:#dce4eb;background:#fbfcfd}.gpi-article-figure-insert .ag-figure-gallery img{max-height:none;object-fit:contain}.gpi-article-figure-insert .ag-figure-gallery figcaption{font-family:var(--font)}

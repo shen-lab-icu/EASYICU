@@ -18,7 +18,7 @@
       if (resource.kind === 'data_package_review') return `data-package:${resource.study_context_id || ''}:${resource.study_revision || 0}:${resource.review_sha256 || ''}`;
       if (resource.kind === 'data_workbench_snapshot') return `data-workbench:${resource.view || ''}:${resource.snapshot_sha256 || ''}`;
       if (resource.kind === 'native_workspace') return `native-workspace:${resource.route || ''}:${resource.study_context_id || ''}:${resource.job_id || resource.source_id || resource.state || ''}:${resource.entry_mode || ''}`;
-      return resource.kind === 'research_artifact' || resource.kind === 'research_document' || resource.kind === 'system_validation_document'
+      return resource.kind === 'research_artifact' || resource.kind === 'research_report' || resource.kind === 'research_document' || resource.kind === 'system_validation_document'
         ? `research:${resource.run_id || ''}:${resource.artifact || ''}`
         : `${resource.kind || 'file'}:${resource.file || ''}`;
     }
@@ -37,6 +37,8 @@
        the same ``key`` that de-duplicates them -- so it belongs here rather
        than inline in the screen shell. */
     const PREFERRED_ARTIFACTS = [
+      'full_analysis_report.json', 'article_report.json',
+      'technical_report.json',
       'system_validation_report.html', 'system_validation_report.pdf',
       'system_validation_report.json', 'result_tables.json', 'figure_gallery.json',
       'manuscript_scaffold.pdf', 'manuscript_draft.json', 'agent_plan.json',
@@ -59,7 +61,7 @@
       const supported = new Set([
         'demo_document', 'demo_artifact', 'data_package_review',
         'data_workbench_snapshot', 'native_workspace', 'system_validation_document',
-        'research_document', 'research_artifact', 'literature_source', 'webpage',
+        'research_document', 'research_report', 'research_artifact', 'literature_source', 'webpage',
       ]);
       return supported.has(resource && resource.kind) ? resource.kind : 'file';
     }

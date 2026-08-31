@@ -72,6 +72,26 @@
         media_type: 'text/html', authority_class: authorityClass,
       };
     }
+    if (value.kind === 'research_report') {
+      const runId = String(value.run_id || '').trim();
+      const requestedArtifact = String(value.artifact || 'technical_report.json').trim();
+      const supportedReports = new Set([
+        'technical_report.json',
+        'full_analysis_report.json',
+        'article_report.json',
+      ]);
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(runId)) return null;
+      if (!supportedReports.has(requestedArtifact)) return null;
+      return {
+        kind: 'research_report', run_id: runId, artifact: requestedArtifact,
+        label: String(value.label || (requestedArtifact === 'full_analysis_report.json'
+          ? tr('Complete analysis report', '完整分析报告')
+          : requestedArtifact === 'article_report.json'
+            ? tr('Article report with figures', '含图文章报告')
+            : tr('Technical analysis report', '技术分析报告'))).slice(0, 160),
+        media_type: 'application/json',
+      };
+    }
     if (value.kind === 'research_artifact') {
       const runId = String(value.run_id || '').trim();
       const artifact = String(value.artifact || '').trim();
@@ -217,6 +237,14 @@
       .slice(0, 6);
   }
   function isResearchArtifact() { return !!state.resource && state.resource.kind === 'research_artifact'; }
+  function isResearchReport() { return !!state.resource && state.resource.kind === 'research_report'; }
+  function researchReportOwner() {
+    if (!isResearchReport()) return null;
+    if (state.resource.artifact === 'full_analysis_report.json') return window.EU_GUIDED_PI_ANALYSIS_REPORT;
+    if (state.resource.artifact === 'article_report.json') return window.EU_GUIDED_PI_ARTICLE_REPORT;
+    return window.EU_GUIDED_PI_TECHNICAL_REPORT;
+  }
+  function isEvidenceBoundResource() { return isResearchArtifact() || isResearchReport(); }
   function isResearchDocument() { return !!state.resource && (state.resource.kind === 'research_document' || state.resource.kind === 'system_validation_document'); }
   function isDemoDocument() { return !!state.resource && state.resource.kind === 'demo_document'; }
   function isDocument() { return isResearchDocument() || isDemoDocument(); }
@@ -225,7 +253,7 @@
   function isDataPackageReview() { return !!state.resource && state.resource.kind === 'data_package_review'; }
   function isDataWorkbenchSnapshot() { return !!state.resource && state.resource.kind === 'data_workbench_snapshot'; }
   function isNativeWorkspace() { return !!state.resource && state.resource.kind === 'native_workspace'; }
-  function isStructuredArtifact() { return isResearchArtifact() || isDemoArtifact() || isDataPackageReview() || isDataWorkbenchSnapshot(); }
+  function isStructuredArtifact() { return isResearchArtifact() || isResearchReport() || isDemoArtifact() || isDataPackageReview() || isDataWorkbenchSnapshot(); }
   function isLiteratureSource() { return !!state.resource && state.resource.kind === 'literature_source'; }
   function isHtml() {
     return !!state.resource && (
@@ -304,7 +332,7 @@
     return state.evidenceTabs.find(item => item.evidenceId === state.activeEvidenceId) || null;
   }
   function evidenceTabsView() {
-    if (!isResearchArtifact() || !state.evidenceTabs.length) return '';
+    if (!isEvidenceBoundResource() || !state.evidenceTabs.length) return '';
     return state.evidenceTabs.map(item => `<span class="gpi-evidence-tab-wrap"><button type="button" role="tab" data-gpi-evidence-tab="${esc(item.evidenceId)}" aria-selected="${state.mode === 'evidence' && state.activeEvidenceId === item.evidenceId}">${esc(item.kindLabel)} · ${esc(item.label)}</button><button type="button" class="gpi-evidence-tab-close" data-gpi-evidence-tab-close="${esc(item.evidenceId)}" aria-label="${esc(tr('Close evidence tab', '关闭证据标签页'))}">×</button></span>`).join('');
   }
   function render() {
@@ -346,7 +374,10 @@
     } else if (state.mode === 'structured' && isStructuredArtifact()) {
       const renderer = window.AGENT_RENDER;
       const literature = window.EU_GUIDED_PI_LITERATURE;
-      body = state.resource.artifact === 'literature_evidence.json'
+      const report = researchReportOwner();
+      body = isResearchReport() && report && typeof report.render === 'function'
+        ? report.render(state.payload || {})
+        : state.resource.artifact === 'literature_evidence.json'
         && literature && typeof literature.renderArtifact === 'function'
         ? literature.renderArtifact(state.payload || {}, {
           ...state.workflowContext,
@@ -384,7 +415,7 @@
       ? `${state.resource.run_id} · ${state.resource.artifact}`
       : isLiteratureSource() ? state.resource.url : state.resource.file;
     const provenance = isDemoArtifact() ? demoProvenance() : isDemoDocument() ? demoDocumentProvenance() : isNativeWorkspace() ? `
-      <div class="gpi-preview-provenance is-research" role="note"><strong>${tr('Native EasyICU owner · Local execution', 'EasyICU 原生 owner · 本地执行')}</strong><span>${tr('Folder paths and patient rows stay in the host UI; the model receives only governed receipts.', '目录路径和患者行只保留在本机界面；模型仅接收受治理回执。')}</span></div>` : isDataWorkbenchSnapshot() ? dataWorkbenchProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
+      <div class="gpi-preview-provenance is-research" role="note"><strong>${tr('Native EasyICU owner · Local execution', 'EasyICU 原生 owner · 本地执行')}</strong><span>${tr('Folder paths and patient rows stay in the host UI; the model receives only governed receipts.', '目录路径和患者行只保留在本机界面；模型仅接收受治理回执。')}</span></div>` : isDataWorkbenchSnapshot() ? dataWorkbenchProvenance() : isDataPackageReview() ? dataPackageProvenance() : (isResearchArtifact() || isResearchReport() || isResearchDocument()) ? researchProvenance() : isLiteratureSource() ? `
       <div class="gpi-preview-provenance is-research" role="note">
         <strong>${tr('Literature metadata · Search receipt', '文献元数据 · 检索回执')}</strong>
         <span>${tr('Design evidence, separate from patient/result evidence.', '设计依据；与患者/结果证据分开治理。')}</span>
@@ -429,7 +460,7 @@
     }
   }
   async function openEvidence(button) {
-    if (!isResearchArtifact() || !button) return;
+    if (!isEvidenceBoundResource() || !button) return;
     const evidenceId = String(button.dataset.evidenceId || '').trim();
     const sha256 = String(button.dataset.evidenceSha256 || '').trim().toLowerCase();
     if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return;
@@ -495,6 +526,10 @@
           payload: item,
           governance: { claim_ceiling: 'analysis_only', reportable: false, human_signoff: 'required' },
         };
+      } else if (isResearchReport()) {
+        const owner = researchReportOwner();
+        if (!owner || typeof owner.load !== 'function') throw new Error(tr('The report renderer is unavailable.', '报告渲染器不可用。'));
+        payload = await owner.load(api, state.projectId, state.resource.run_id);
       } else if (isResearchArtifact()) {
         if (!api.loadPiCopilotResearchArtifact) throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
         payload = await api.loadPiCopilotResearchArtifact(
@@ -552,7 +587,7 @@
     state.evidenceTabs = [];
     state.activeEvidenceId = '';
     state.error = '';
-    state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
+    state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'research_report' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
     state.activeClaimId = '';
     render();
     if (state.mode !== 'web' && state.mode !== 'source' && state.mode !== 'document') loadResource();
@@ -604,6 +639,15 @@
       }
       const evidenceButton = event.target.closest('[data-gpi-evidence-open]');
       if (evidenceButton) { openEvidence(evidenceButton); return; }
+      const reportArtifact = event.target.closest('[data-gpi-report-artifact]');
+      if (reportArtifact && state.resource && state.resource.run_id) {
+        const artifact = String(reportArtifact.dataset.gpiReportArtifact || '');
+        open({
+          kind: 'research_artifact', run_id: state.resource.run_id, artifact,
+          label: String(reportArtifact.dataset.gpiReportLabel || artifact), media_type: 'application/json',
+        }, state.projectId, state.workflowContext);
+        return;
+      }
       const claimButton = event.target.closest('[data-gpi-claim]');
       if (claimButton) {
         showClaimLineage(String(claimButton.dataset.gpiClaim || '').trim());

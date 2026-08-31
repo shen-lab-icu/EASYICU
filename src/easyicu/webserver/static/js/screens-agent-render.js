@@ -460,13 +460,20 @@
       const evidenceAttrs = claimEvidenceAttrs(claim);
       return `<button type="button" class="gpi-bound-number" id="claim-${escAttr(claimId)}" data-gpi-claim="${escAttr(claimId)}"${evidenceAttrs} aria-controls="gpi-claim-detail-${escAttr(claimId)}" aria-expanded="false" title="${escAttr(evidenceAttrs ? t('Open result evidence preview', '打开结果证据预览') : t('Open evidence lineage', '查看证据链路'))}">${text}</button>`;
     }).join('');
+    const reportFigures = figureGallery(p.figure_gallery || {});
     const article = blocks.map(block => {
       const content = renderSegments(block && block.segments);
+      const headingText = (Array.isArray(block && block.segments) ? block.segments : [])
+        .map(segment => String(segment && segment.text || '')).join('').trim();
+      const figureInsert = reportFigures && block && block.kind === 'heading'
+        && Number(block.level || 2) === 2 && /^Discussion$/i.test(headingText)
+        ? `<section class="gpi-article-figure-insert"><div class="gpi-article-figure-head"><span>${esc(t('Registered result figures', '已登记结果图'))}</span><h2>${esc(t('Main visual results', '主要可视化结果'))}</h2><p>${esc(p.figure_gallery && p.figure_gallery.presentation_variant ? t('Re-rendered from digest-verified source tables. Original run figures remain unchanged.', '根据摘要核验后的源数据表重新排版；原始运行图件保持不变。') : t('Figures registered by this run.', '本次运行登记的图件。'))}</p></div>${reportFigures}</section>`
+        : '';
       if (block && block.kind === 'heading') {
         const level = Math.max(2, Math.min(4, Number(block.level || 2)));
-        return `<h${level}>${content}</h${level}>`;
+        return `${figureInsert}<h${level}>${content}</h${level}>`;
       }
-      return `<p>${content}</p>`;
+      return `${figureInsert}<p>${content}</p>`;
     }).join('');
     const evidenceButton = (row, label, pointer, sourceValue) => {
       const evidenceId = String(row && row.evidence_id || '').trim();
