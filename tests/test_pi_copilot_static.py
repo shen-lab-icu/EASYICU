@@ -77,6 +77,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-data-consent.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260831-simple-decision4" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20260831-governed-actions1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260830-researcher-stages1" in index
     assert "js/screens-guided-pi.js?v=20260831-simple-flow3" in index
     assert (
@@ -245,16 +246,78 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
 
 
 def test_formal_plan_buttons_append_one_concise_governed_action() -> None:
-    owner = _read("js/screens-guided-pi.js")
+    owner = _read("js/screens-guided-pi-plan-actions.js")
+    shell = _read("js/screens-guided-pi.js")
 
-    assert "async function startCurrentFormalPlanGeneration(reasonCode)" in owner
-    assert "await sendText(text, ['provider_run'], turnIntent)" in owner
-    assert "api().startAgentRun" not in owner
-    approval = owner.split("async function submitCurrentPlanReview", 1)[1].split(
-        "async function startCurrentFormalPlanGeneration", 1
+    assert "async function startFormalPlanGeneration(reasonCode)" in owner
+    assert "await host.sendText(request.text, request.grants, request.intent)" in owner
+    assert "api.startAgentRun" not in owner
+    approval = owner.split("async function submitReview", 1)[1].split(
+        "async function retryFailedExecution", 1
     )[0]
-    assert "api().submitAgentRunReview" in approval
-    assert "sendText(" not in approval
+    assert "api.submitAgentRunReview" in approval
+    assert "host.sendText(" not in approval
+    assert "window.EU_GUIDED_PI_PLAN_ACTIONS.create({" in shell
+    assert "async function submitCurrentPlanReview" not in shell
+
+
+def test_governed_plan_action_owner_executes_generation_review_and_retry() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-plan-actions.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const calls = [];
+      let busy = false;
+      let workflow = {{next_action_code: 'plan_configuration_superseded'}};
+      const host = {{
+        tr: (en, zh) => zh,
+        errorText: error => String(error && error.message || error),
+        regeneration: {{isPlanActionText: value => /研究计划/.test(String(value || ''))}},
+        nextActions: {{governedPlanGrants: () => ['provider_run']}},
+        replay: {{retryFailedExecution: async () => ({{job_id: 'retry-job'}})}},
+        session: () => ({{session_id: 's1', binding: {{run_id: 'r1', study_context_id: 'study1'}}}}),
+        workflow: () => workflow,
+        busy: () => busy,
+        sessionIsStale: () => false,
+        api: () => ({{submitAgentRunReview: async body => {{calls.push(['review', body]); return {{job_id: 'review-job'}};}}}}),
+        projectId: () => 'p1',
+        turnGrants: () => ['configure'],
+        sendText: async (...args) => calls.push(['send', ...args]),
+        render: () => {{}},
+        watchChildJob: (...args) => calls.push(['child', ...args]),
+        refreshSession: async () => {{}}, loadWorkflow: async () => {{}},
+        setBusy: value => {{busy = value;}}, setError: () => {{}},
+        appendMessage: value => calls.push(['message', value.text]),
+        truncateMessagesAt: id => calls.push(['truncate', id]),
+      }};
+      const actions = window.EU_GUIDED_PI_PLAN_ACTIONS.create(host);
+      (async () => {{
+        await actions.startFormalPlanGeneration('provider_ready_to_generate_plan');
+        await actions.submitReview('approved');
+        await actions.retryFailedExecution();
+        const authority = actions.regenerationAuthority('重新生成研究计划', 'user_edited_message');
+        process.stdout.write(JSON.stringify({{calls, authority}}));
+      }})().catch(error => {{console.error(error); process.exit(1);}});
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["authority"] == {
+        "grants": ["configure", "provider_run"],
+        "intent": "confirm_fresh_plan_generation",
+    }
+    assert payload["calls"][0] == [
+        "send",
+        "生成候选研究计划",
+        ["provider_run"],
+        "confirm_formal_plan_generation",
+    ]
+    assert ["child", "review-job", "easyicu_review_submitted"] in payload["calls"]
+    assert ["child", "retry-job", "easyicu_full_run_submitted"] in payload["calls"]
 
 
 def test_new_research_session_starters_minimize_interaction_cost() -> None:
@@ -846,8 +909,9 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "gpi-confirmation-resources" in confirmation_owner
     assert "数据准备检查" in confirmation_owner
     assert "重新生成新计划" in confirmation_owner
-    assert "submitAgentRunReview" in pi_owner
-    assert "easyicu_review_submitted" in pi_owner
+    plan_actions_owner = _read("js/screens-guided-pi-plan-actions.js")
+    assert "submitAgentRunReview" in plan_actions_owner
+    assert "easyicu_review_submitted" in plan_actions_owner
     assert "submitAgentRunReview" in api
     assert "'/api/jobs/agent-run-review'" in api
     assert "stage.status === 'review_required'" in aside_owner
@@ -857,7 +921,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "Research Agent 规划任务已提交" in childjob_owner
     assert "EasyICU 完整科研分析已提交" not in pi_owner
     assert "同一研究项目中新建后续对话" in pi_owner
-    assert "external_llm_opt_in: true" in pi_owner
+    assert "external_llm_opt_in: true" in plan_actions_owner
     assert pi_owner.count("project_id: projectId()") >= 4
     assert "loadPiCopilotSessions(100, expectedProjectId)" in pi_owner
     assert "easyicu_pi_copilot_session:' + encodeURIComponent(projectId())" in pi_owner
@@ -1550,7 +1614,8 @@ process.stdout.write(JSON.stringify({
     assert "function workflowConfirmation()" not in shell
     assert "function workflowConfirmation()" in owner
     assert "请基于已确认的研究问题和 EasyICU 数据库能力目录" not in owner
-    assert "confirm_formal_plan_generation" in shell
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
+    assert "confirm_formal_plan_generation" in plan_actions
     # Read-only by contract: no host mutation, no transport, no grant spend.
     for forbidden in ("state.", "sendText", "api()", "render()"):
         assert forbidden not in owner, f"{forbidden} does not belong in this owner"
@@ -4469,12 +4534,13 @@ def test_model_plan_choice_can_only_receive_provider_grant_from_plan_workflow() 
 
 def test_scientific_plan_revision_requests_a_fresh_governed_plan() -> None:
     guided = _read("js/screens-guided-pi.js")
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
     tool_owner = (STATIC.parent / "pi_copilot" / "tools.py").read_text(
         encoding="utf-8"
     )
 
-    assert "'plan_scientific_changes_required'," in guided
-    assert "confirm_fresh_plan_generation" in guided
+    assert "'plan_scientific_changes_required'," in plan_actions
+    assert "confirm_fresh_plan_generation" in plan_actions
     assert "plan_revision_source_run_id" not in guided
     assert 'planner_start_mode=strategy' in tool_owner
     assert 'fresh_run_required = bool(same_study_plan and not current_review_is_resumable)' in tool_owner
@@ -4533,15 +4599,16 @@ def test_recommended_prepared_export_choice_receives_configuration_grant() -> No
 
 def test_preview_plan_confirmation_routes_to_data_preparation_not_same_plan_runner() -> None:
     shell = _read("js/screens-guided-pi.js")
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
     confirmation = _read("js/screens-guided-pi-confirmation.js")
 
-    branch = shell.split(
+    branch = plan_actions.split(
         "if (confirmation.code === 'plan_execution_upgrade_required')", 1
-    )[1].split("if ([", 1)[0]
-    assert "sendText(confirmation.message, confirmation.grants)" in branch
-    assert "startCurrentFormalPlanGeneration" not in branch
+    )[1].split("if (confirmation.code === 'failed_pipeline_execution_retry_available'", 1)[0]
+    assert "host.sendText(confirmation.message, confirmation.grants)" in branch
+    assert "startFormalPlanGeneration" not in branch
     assert "candidate_plan_only: true" not in shell
-    assert "const projectedAllowlist = new Set(['extract', 'configure']);" in shell
+    assert "const projectedAllowlist = new Set(['extract', 'configure']);" in plan_actions
     assert "['configure', 'extract', 'provider_run', 'literature']" in confirmation
     assert "候选研究计划已生成，请确认数据准备" in confirmation
     assert "并不代表数据包已经准备好" in confirmation
@@ -4564,6 +4631,7 @@ def test_copilot_public_projection_hides_internal_pi_codes_and_owner_paths() -> 
 
 def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() -> None:
     owner = _read("js/screens-guided-pi.js")
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
     events = _read("js/screens-guided-pi-events.js")
     data_binding_owner = _read("js/screens-guided-pi-data-binding.js")
     css = _read("css/guided-pi.css")
@@ -4572,8 +4640,8 @@ def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() ->
     assert "row.complete !== false" in owner
     assert "row === latestAssistant && !interactionLocked && !stale" in owner
     assert "sendText(message, governedNextChoiceGrants(nextChoice, message))" in events
-    assert "function governedNextChoiceGrants(element, message)" in owner
-    assert "nextOwner.governedPlanGrants(message, code)" in owner
+    assert "function governedNextChoiceGrants(element, message)" in plan_actions
+    assert "nextActions.governedPlanGrants(message, workflowCode())" in plan_actions
     assert "event.target.closest('[data-gpi-next-focus]')" in events
     assert "event.target.closest('[data-gpi-next-custom-form]')" in events
     # The free-text box goes through the same governed grant decision as a
@@ -4812,6 +4880,7 @@ def test_retrying_candidate_plan_action_uses_governed_host_starter() -> None:
 
 def test_copilot_message_actions_are_host_wired_without_history_rewrite() -> None:
     owner = _read("js/screens-guided-pi.js")
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
     events = _read("js/screens-guided-pi-events.js")
     css = _read("css/guided-pi.css")
 
@@ -4833,18 +4902,18 @@ def test_copilot_message_actions_are_host_wired_without_history_rewrite() -> Non
     # resolvable turn identifier must still not vanish.
     assert "context.resubmitHostGenerated(row, text)" in message_owner
     assert "context.sendText(text);" in message_owner
-    assert "resubmitHostGenerated: resubmitHostGeneratedMessage" in owner
+    assert "resubmitHostGenerated: PLAN_ACTIONS.resubmitHostGenerated" in owner
     assert "regeneratePiCopilotMessage" in owner
     assert "user_entry_id: entryId" in owner
     assert "advance_after_data_source_confirmation" in owner
     assert "dataSourceContinuationTarget" not in owner
-    assert "turnGrants().filter(action => action === 'configure')" in owner
-    assert "nextOwner.governedPlanGrants(text, workflowCode)" in owner
-    assert "'replace_plan_response_preserve_study'" in owner
-    assert "hostConfirmedPlanReplay" in owner
-    assert "replayPlanGrants.includes('provider_run')" in owner
-    assert "message: text, allowed_actions: replayGrants" in owner
-    assert "turn_intent: replayIntent" in owner
+    assert "host.turnGrants().filter(action => action === 'configure')" in plan_actions
+    assert "nextActions.governedPlanGrants(text, code)" in plan_actions
+    assert "'replace_plan_response_preserve_study'" in plan_actions
+    assert "REPLAY_GRANT_INTENTS" in plan_actions
+    assert "planGrants.includes('provider_run')" in plan_actions
+    assert "message: text, allowed_actions: authority.grants" in owner
+    assert "turn_intent: authority.intent" in owner
     assert "regeneration_intent: regenerationIntent" in owner
     assert "interactive: row === latestAssistant && !interactionLocked && !stale" in owner
     assert ".gpi-message.user .gpi-message-actions{right:0;opacity:0}" in css
@@ -4893,11 +4962,10 @@ def test_failed_analysis_still_allows_an_explicit_fresh_plan_request() -> None:
     )
     assert json.loads(completed.stdout) == ["provider_run"]
 
-    guided = _read("js/screens-guided-pi.js")
-    assert "workflowCode === 'failed_pipeline_execution_retry_available'" in guided
-    assert "? 'failed_pipeline_requires_fresh_plan'" in guided
-    assert "code === 'failed_pipeline_execution_retry_available'" in guided
-    assert "startCurrentFormalPlanGeneration('failed_pipeline_requires_fresh_plan')" in guided
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
+    assert "code === 'failed_pipeline_execution_retry_available'" in plan_actions
+    assert "? 'failed_pipeline_requires_fresh_plan'" in plan_actions
+    assert "startFormalPlanGeneration(" in plan_actions
     confirmation = _read("js/screens-guided-pi-confirmation.js")
     assert "tr('Generate a fresh research plan', '重新生成研究计划')" in confirmation
 
@@ -4945,11 +5013,11 @@ def test_failed_analysis_retry_submits_exact_resume_without_chat_roundtrip() -> 
         "execution_resume_source_run_id": "run-e2",
     }
 
-    guided = _read("js/screens-guided-pi.js")
-    assert "await retryFailedExecution();" in guided
-    assert "sendText(confirmation.message" not in guided.split(
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
+    assert "await retryFailedExecution();" in plan_actions
+    assert "host.sendText(confirmation.message" not in plan_actions.split(
         "confirmation.code === 'failed_pipeline_execution_retry_available'", 1
-    )[1].split("if ([", 1)[0]
+    )[1].split("if (FRESH_PLAN_CODES", 1)[0]
 
 
 def test_copilot_regeneration_projects_activity_and_answer_in_place() -> None:
@@ -5001,7 +5069,8 @@ def test_plan_retry_appends_a_short_governed_action() -> None:
     """Plan buttons must not replay an old verbose prompt or bypass Pi."""
 
     shell = _read("js/screens-guided-pi.js")
-    starter = shell.split("async function startCurrentFormalPlanGeneration", 1)[1].split(
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
+    starter = plan_actions.split("async function startFormalPlanGeneration", 1)[1].split(
         "function governedNextChoiceGrants", 1
     )[0]
     assert "confirm_fresh_plan_generation" in starter
@@ -5014,13 +5083,13 @@ def test_plan_retry_appends_a_short_governed_action() -> None:
 
     # Explicit message editing still owns its separate branch-replacement
     # contract; removing replay from workflow buttons must not weaken it.
-    replay = shell.split("async function regenerateMessage", 1)[1].split(
-        "function resubmitHostGeneratedMessage", 1
+    replay = plan_actions.split("function regenerationAuthority", 1)[1].split(
+        "function resubmitHostGenerated", 1
     )[0]
-    assert "'replace_plan_response_preserve_study'" in replay
-    assert "nextOwner.governedPlanGrants(text, workflowCode)" in replay
-    assert "...replayPlanGrants" in replay
-    assert "replayPlanGrants.includes('provider_run')" in replay
+    assert "'replace_plan_response_preserve_study'" in plan_actions
+    assert "nextActions.governedPlanGrants(text, code)" in replay
+    assert "...planGrants" in replay
+    assert "planGrants.includes('provider_run')" in replay
 
     node = shutil.which("node")
     if not node:

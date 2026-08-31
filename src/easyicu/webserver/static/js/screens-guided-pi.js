@@ -245,17 +245,6 @@
     busy: () => state.busy || Boolean(state.childJobId),
     sessionIsStale,
   });
-  const MESSAGE_ACTIONS = window.EU_GUIDED_PI_MESSAGE_ACTIONS.create({
-    tr, iconHtml,
-    rows: () => state.messages.concat(state.workflowReceipts),
-    canEdit: () => !state.busy && !state.childJobId && !sessionIsStale(),
-    setEditing: id => { state.editingMessageId = id; },
-    renderHost: render,
-    sendText,
-    regenerate: regenerateMessage,
-    resubmitHostGenerated: resubmitHostGeneratedMessage,
-    host: () => state.host,
-  });
   const { timeMs } = ACTIVITY;
   const TRANSCRIPT = window.EU_GUIDED_PI_TRANSCRIPT.create({
     activity: ACTIVITY, upsertActivityStep, timeMs, resourceKey, modelErrorText,
@@ -312,6 +301,42 @@
   const handleChildJobEvent = CHILDJOB.handleChildJobEvent;
   const watchChildJob = CHILDJOB.watchChildJob;
   const hydrateProjectedJob = CHILDJOB.hydrateProjectedJob;
+  const PLAN_ACTIONS = window.EU_GUIDED_PI_PLAN_ACTIONS.create({
+    tr, errorText, regeneration: REGENERATION,
+    nextActions: window.EU_GUIDED_PI_NEXT_ACTIONS,
+    replay: window.EU_GUIDED_PI_REPLAY,
+    session: () => state.session,
+    workflow: () => state.workflow,
+    busy: () => state.busy || Boolean(state.childJobId),
+    sessionIsStale,
+    api, projectId, turnGrants, sendText, render, watchChildJob,
+    refreshSession: (...args) => refreshSession(...args),
+    loadWorkflow: (...args) => loadWorkflow(...args),
+    setBusy: value => { state.busy = Boolean(value); },
+    setError: value => { state.error = String(value || ''); },
+    appendMessage: value => { state.messages.push(value); },
+    truncateMessagesAt: id => {
+      const at = state.messages.findIndex(item => String((item && item.id) || '') === id);
+      if (at >= 0) state.messages.splice(at);
+    },
+  });
+  const confirmWorkflowAction = () => PLAN_ACTIONS.confirmWorkflow(workflowConfirmation());
+  const rejectWorkflowAction = () => PLAN_ACTIONS.rejectWorkflow(workflowConfirmation());
+  const confirmPlanDecision = PLAN_ACTIONS.confirmDecision;
+  const retryFailedExecution = PLAN_ACTIONS.retryFailedExecution;
+  const startCurrentFormalPlanGeneration = PLAN_ACTIONS.startFormalPlanGeneration;
+  const governedNextChoiceGrants = PLAN_ACTIONS.governedNextChoiceGrants;
+  const MESSAGE_ACTIONS = window.EU_GUIDED_PI_MESSAGE_ACTIONS.create({
+    tr, iconHtml,
+    rows: () => state.messages.concat(state.workflowReceipts),
+    canEdit: () => !state.busy && !state.childJobId && !sessionIsStale(),
+    setEditing: id => { state.editingMessageId = id; },
+    renderHost: render,
+    sendText,
+    regenerate: regenerateMessage,
+    resubmitHostGenerated: PLAN_ACTIONS.resubmitHostGenerated,
+    host: () => state.host,
+  });
   const EVENTS = window.EU_GUIDED_PI_EVENTS.create({
     state, RESOURCE_OWNER, MESSAGE_ACTIONS, STARTERS, COHORT_ELIGIBILITY,
     DATA_CONSENT, RUN_OUTCOME, render, projectId, previewWorkflowContext,
@@ -1375,45 +1400,11 @@
     state.regenerating = true;
     state.busy = true; state.error = ''; render();
     try {
-      // Assistant retry stays side-effect free. An explicit user edit is
-      // different: the edited text replaces that branch, so an exact formal-
-      // plan request may receive one fresh provider grant when the current
-      // host workflow independently says plan generation/replanning is legal.
-      // Never copy an old turn's provider grant from transcript history.
-      const workflowCode = String((state.workflow && state.workflow.next_action_code) || '');
-      const nextOwner = window.EU_GUIDED_PI_NEXT_ACTIONS;
-      const hostConfirmedPlanReplay = [
-        'user_edited_message',
-        'replace_plan_response_preserve_study',
-      ].includes(regenerationIntent);
-      const replayPlanGrants = hostConfirmedPlanReplay
-        && nextOwner && typeof nextOwner.governedPlanGrants === 'function'
-        ? nextOwner.governedPlanGrants(text, workflowCode)
-        : [];
-      const replayGrants = Array.from(new Set([
-        ...turnGrants().filter(action => action === 'configure'),
-        ...replayPlanGrants,
-      ]));
-      const replayIntent = replayPlanGrants.includes('provider_run')
-        && workflowCode === 'provider_ready_to_generate_plan'
-        ? 'confirm_formal_plan_generation'
-        : replayPlanGrants.includes('provider_run')
-          && workflowCode === 'planner_checkpoint_resume_available'
-          ? 'confirm_planner_checkpoint_resume'
-          : replayPlanGrants.includes('provider_run')
-            && [
-              'failed_pipeline_requires_fresh_plan',
-              'plan_configuration_superseded',
-              'plan_review_not_resumable',
-              'scientific_plan_review_policy_stale',
-              'plan_scientific_changes_required',
-            ].includes(workflowCode)
-            ? 'confirm_fresh_plan_generation'
-          : '';
+      const authority = PLAN_ACTIONS.regenerationAuthority(text, regenerationIntent);
       const payload = await api().regeneratePiCopilotMessage(state.session.session_id, {
         project_id: projectId(), user_entry_id: entryId,
-        message: text, allowed_actions: replayGrants,
-        ...(replayIntent ? { turn_intent: replayIntent } : {}),
+        message: text, allowed_actions: authority.grants,
+        ...(authority.intent ? { turn_intent: authority.intent } : {}),
         ...(regenerationIntent ? { regeneration_intent: regenerationIntent } : {}),
       });
       state.jobId = payload.job_id;
@@ -1425,38 +1416,6 @@
       state.error = errorText(error);
       render();
     }
-  }
-  function resubmitHostGeneratedMessage(row, text) {
-    const id = String((row && row.id) || '');
-    const original = String((row && row.text) || '').trim();
-    const message = String(text || '').trim();
-    const planAction = value => REGENERATION
-      && typeof REGENERATION.isPlanActionText === 'function'
-      && REGENERATION.isPlanActionText(value);
-    // Host-generated messages are projected as plan-generation-* in memory,
-    // but after reload the persisted transcript legitimately gives the same
-    // message a history-* id and an entryId.  Its explicit plan-action text is
-    // therefore part of the stable identity used for routing.
-    if (!id.startsWith('plan-generation-') && !planAction(original)) return false;
-    if (!planAction(message)) {
-      return false;
-    }
-    const workflowCode = String((state.workflow && state.workflow.next_action_code) || '');
-    const nextOwner = window.EU_GUIDED_PI_NEXT_ACTIONS;
-    const grants = nextOwner && typeof nextOwner.governedPlanGrants === 'function'
-      ? nextOwner.governedPlanGrants(message, workflowCode)
-      : [];
-    if (!grants.includes('provider_run')) return false;
-    const at = state.messages.findIndex(item => String((item && item.id) || '') === id);
-    if (at >= 0) state.messages.splice(at);
-    // The workflow's default for an execution failure is to resume the exact
-    // approved plan. An edited/retried *plan generation* message is a different
-    // explicit user action: replace that failed branch with a fresh Planner run.
-    const generationReason = workflowCode === 'failed_pipeline_execution_retry_available'
-      ? 'failed_pipeline_requires_fresh_plan'
-      : workflowCode;
-    void startCurrentFormalPlanGeneration(generationReason);
-    return true;
   }
   async function continueAfterDataSourceConfirmation() {
     if (!state.session || state.busy || state.childJobId || sessionIsStale()) return false;
@@ -1499,78 +1458,6 @@
       render();
     }
   }
-  async function confirmPlanDecision(selection) {
-    if (!selection || !state.session || state.busy || state.childJobId || sessionIsStale()) return;
-    const binding = state.session.binding || {};
-    const expectedRevision = Number(binding.study_revision || 0);
-    const runId = String(binding.run_id || '').trim();
-    if (!expectedRevision || !runId || !api().confirmPiCopilotPlanDecision) return;
-    state.busy = true;
-    state.error = '';
-    render();
-    try {
-      const payload = await api().confirmPiCopilotPlanDecision(state.session.session_id, {
-        project_id: projectId(),
-        decision_code: selection.decision_code,
-        option_id: selection.option_id,
-        expected_revision: expectedRevision,
-        run_id: runId,
-      });
-      await refreshSession(true);
-      await loadWorkflow();
-      state.busy = false;
-      render();
-      if (payload && payload.next_action === 'replan') {
-        await startCurrentFormalPlanGeneration('plan_configuration_superseded');
-      } else if (payload && payload.next_action === 'reextract') {
-        state.error = tr(
-          'This option needs a new timestamped extraction. EasyICU has saved the choice and kept analysis paused.',
-          '该方案需要重新提取带时间戳的数据；EasyICU 已保存选择并保持分析暂停。',
-        );
-        render();
-      }
-    } catch (error) {
-      state.busy = false;
-      state.error = errorText(error);
-      render();
-    }
-  }
-  async function confirmWorkflowAction() {
-    const confirmation = workflowConfirmation();
-    if (!confirmation) return;
-    if (confirmation.code === 'operator_plan_approval_required') {
-      await submitCurrentPlanReview('approved');
-      return;
-    }
-    if (confirmation.code === 'plan_execution_upgrade_required') {
-      await sendText(confirmation.message, confirmation.grants);
-      return;
-    }
-    if (confirmation.code === 'failed_pipeline_execution_retry_available') {
-      await retryFailedExecution();
-      return;
-    }
-    if ([
-      'provider_ready_to_generate_plan',
-      'plan_scientific_changes_required',
-      'failed_pipeline_requires_fresh_plan',
-      'plan_configuration_superseded',
-      'plan_review_not_resumable',
-      'scientific_plan_review_policy_stale',
-    ].includes(confirmation.code)) {
-      await startCurrentFormalPlanGeneration(confirmation.code);
-      return;
-    }
-    await sendText(
-      confirmation.message,
-      confirmation.grants,
-      confirmation.code === 'provider_ready_to_generate_plan'
-        ? 'confirm_formal_plan_generation'
-        : confirmation.code === 'planner_checkpoint_resume_available'
-          ? 'confirm_planner_checkpoint_resume'
-          : '',
-    );
-  }
   async function previewApprovedPlanDataPackage(button) {
     if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
     if (!api().preparePiCopilotDataPackageReview || !window.EU_GUIDED_PI_PREVIEW || !window.EU_GUIDED_PI_PREVIEW.open) {
@@ -1599,110 +1486,6 @@
         button.textContent = original;
       }
     }
-  }
-  async function rejectWorkflowAction() {
-    const confirmation = workflowConfirmation();
-    if (!confirmation || !confirmation.rejectMessage) return;
-    if (confirmation.code === 'operator_plan_approval_required') {
-      await submitCurrentPlanReview('rejected');
-      return;
-    }
-    await sendText(confirmation.rejectMessage, confirmation.grants);
-  }
-  async function submitCurrentPlanReview(decision) {
-    if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
-    const runId = String((state.session.binding && state.session.binding.run_id) || '').trim();
-    const studyContextId = String((state.session.binding && state.session.binding.study_context_id) || '').trim();
-    if (!runId || !studyContextId || !api().submitAgentRunReview) {
-      state.error = tr('The current plan review coordinates are unavailable. Refresh this project and try again.', '当前计划的审核坐标不可用，请刷新该项目后重试。');
-      render();
-      return;
-    }
-    const approved = decision === 'approved';
-    state.messages.push({
-      id: 'plan-review-' + Date.now(), role: 'user', complete: true,
-      text: approved ? tr('Approve plan and start analysis', '批准计划并开始分析') : tr('Reject this plan', '拒绝当前计划'),
-    });
-    state.busy = true;
-    state.error = '';
-    render();
-    try {
-      const payload = await api().submitAgentRunReview({
-        run_id: runId,
-        study_context_id: studyContextId,
-        decision,
-        external_llm_opt_in: true,
-      });
-      state.busy = false;
-      watchChildJob(String(payload.job_id || ''), 'easyicu_review_submitted');
-    } catch (error) {
-      state.busy = false;
-      state.error = errorText(error);
-      render();
-    }
-  }
-  async function retryFailedExecution(reason) {
-    if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
-    const replayOwner = window.EU_GUIDED_PI_REPLAY;
-    if (!replayOwner || typeof replayOwner.retryFailedExecution !== 'function') {
-      state.error = tr('The failed run coordinates are unavailable. Refresh this project and try again.', '失败运行的恢复坐标不可用，请刷新当前项目后重试。');
-      render();
-      return;
-    }
-    const validationRepair = reason === 'validation_repair';
-    state.messages.push({
-      id: 'execution-retry-' + Date.now(), role: 'user', complete: true,
-      text: validationRepair
-        ? tr('Repair the remaining validation item', '修复剩余校验项')
-        : tr('Retry analysis from the failed step', '从失败步骤重试分析'),
-    });
-    state.busy = true;
-    state.error = '';
-    render();
-    try {
-      const payload = await replayOwner.retryFailedExecution({
-        api: api(), session: state.session,
-      });
-      state.busy = false;
-      watchChildJob(String(payload.job_id || ''), 'easyicu_full_run_submitted');
-    } catch (error) {
-      state.busy = false;
-      state.error = errorText(error);
-      render();
-    }
-  }
-  async function startCurrentFormalPlanGeneration(reasonCode) {
-    if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
-    const retryExecution = reasonCode === 'failed_pipeline_execution_retry_available';
-    const fresh = reasonCode !== 'provider_ready_to_generate_plan' && !retryExecution;
-    const text = retryExecution
-      ? tr('Retry analysis from the failed step', '从失败步骤重试分析')
-      : fresh
-        ? tr('Generate a fresh research plan', '重新生成研究计划')
-        : tr('Generate the candidate research plan', '生成候选研究计划');
-    const turnIntent = fresh
-      ? 'confirm_fresh_plan_generation'
-      : reasonCode === 'provider_ready_to_generate_plan'
-        ? 'confirm_formal_plan_generation'
-        : '';
-    // A workflow button is a new, concise user action. Replaying an earlier
-    // verbose plan-request branch made the transcript look as if the user had
-    // typed a long technical prompt and also hid which button was actually
-    // pressed. Preserve the old run as history, but append only this short
-    // current action with its fresh one-use provider grant.
-    await sendText(text, ['provider_run'], turnIntent);
-  }
-  function governedNextChoiceGrants(element, message) {
-    const projected = String((element && element.dataset && element.dataset.gpiNextGrants) || '')
-      .split(',').map(value => value.trim()).filter(Boolean);
-    const projectedAllowlist = new Set(['extract', 'configure']);
-    if (projected.length && projected.every(value => projectedAllowlist.has(value))) return projected;
-    const code = String((state.workflow && state.workflow.next_action_code) || '');
-    const nextOwner = window.EU_GUIDED_PI_NEXT_ACTIONS;
-    const planGrants = nextOwner && typeof nextOwner.governedPlanGrants === 'function'
-      ? nextOwner.governedPlanGrants(message, code)
-      : [];
-    return planGrants.length ? planGrants : null;
   }
   function editWorkflow() {
     const workflow = state.workflow || {};
