@@ -57,6 +57,56 @@ def test_typed_bounds_default_still_rejects():
         )
 
 
+def test_legacy_concept_bounds_exclude_before_stay_aggregation(
+    monkeypatch, tmp_path
+):
+    source = {
+        "age": pd.DataFrame({"stay_id": [1, 2], "age": [60.0, 70.0]}),
+        "lact": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2],
+                "charttime": [1.0, 2.0, 1.0],
+                "lact": [2.0, 1_276_103.0, 3.0],
+            }
+        ),
+        "death": pd.DataFrame({"stay_id": [1, 2], "death": [1, 0]}),
+    }
+
+    def fake_load(
+        _source_mode,
+        _source_handle,
+        concept,
+        _database,
+        _patient_ids,
+        _unavailable,
+    ):
+        return source[concept].copy()
+
+    monkeypatch.setattr(M, "_load_concept", fake_load)
+    cohort, provenance, _collector = M._materialize_cohort_from_resolved_source(
+        feature_concepts=("lact",),
+        database="miiv",
+        cohort_definition=None,
+        cohort_window=(0.0, 24.0),
+        outcome_concepts=("death",),
+        static_concepts=("age",),
+        patient_ids=None,
+        source_mode="converted",
+        root=tmp_path,
+        export_package=None,
+        t0=0.0,
+        bounds_violation_policy="exclude_with_receipt",
+        positive_only_event_concepts=(),
+        verify_source_package=False,
+    )
+
+    first_stay = cohort.loc[cohort["stay_id"].eq(1)].iloc[0]
+    assert first_stay["lact_max"] == 2.0
+    assert first_stay["lact_n"] == 1
+    assert provenance["source_bounds_violation_policy"] == "exclude_with_receipt"
+    assert provenance["source_bounds_exclusions"] == {"lact": 1}
+
+
 def test_replacement_patient_identity_preserves_rows_and_patient_groups(tmp_path):
     cohort = pd.DataFrame(
         {

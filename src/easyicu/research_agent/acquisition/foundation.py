@@ -554,6 +554,11 @@ def acquire_universe_for_question(
         emit_trajectory=emit_trajectory,
         trajectory_concepts=[*feature_concepts, *outcome_concepts],
         trajectory_window=trajectory_window,
+        # Fresh concept extraction applies dictionary bounds before
+        # aggregation. Legacy export packages predate typed sidecars, so the
+        # formal pipeline applies the same canonical bounds here and records
+        # every excluded source value in materialization provenance.
+        bounds_violation_policy="exclude_with_receipt",
         **identity_kwargs,
     )
     try:
