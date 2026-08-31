@@ -53,9 +53,6 @@ OVER_BUDGET_JS = {
     # 6000 before the Idea Mining sub-flow moved to screens-guided-idea.js,
     # 4961 before its session-slot serialisation followed it.
     "screens-guided.js": 4906,
-    # 4947 before Patient Review state, effects, render, and route dispatch
-    # moved to screens-viz-patient.js.
-    "screens-viz.js": 3624,
     # Project setup/run initiation moved to Guided Copilot; this route is now
     # a project monitor only.
     "screens-agent.js": 1974,
@@ -610,6 +607,50 @@ def test_patient_review_owner_contains_state_effects_render_and_route() -> None:
         "let patientSeriesMode =",
     ):
         assert state_declaration not in shell
+
+
+def test_cohort_statistics_owner_contains_state_effects_render_and_route() -> None:
+    shell = (STATIC / "js" / "screens-viz.js").read_text(encoding="utf-8")
+    owner = (STATIC / "js" / "screens-viz-cohort.js").read_text(encoding="utf-8")
+    view = (STATIC / "js" / "screens-viz-cohort-view.js").read_text(
+        encoding="utf-8"
+    )
+    survival = (STATIC / "js" / "screens-viz-cohort-survival.js").read_text(
+        encoding="utf-8"
+    )
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    assert "const cohortOwner = window.EU_VIZ_COHORT;" in shell
+    assert "const state = {" in owner
+    assert "view: 'idle'," in owner
+    assert "S.cohort = {" in owner
+    assert "function loadRealCohort(" in owner
+    assert "window.EU_API.loadCohortReviewSummary(body)" in owner
+    assert "data-cohort-run" in owner
+    assert "function cohortPanelBody(" in view
+    assert "function cohortGroupsBody(" in view
+    assert "function cohortSurvivalBody(" in survival
+    assert "cohortOwner.init({" in shell
+
+    for marker in (
+        "function loadRealCohort(",
+        "S.cohort = {",
+        "data-cohort-run",
+        "function cohortPanelBody(",
+        "function cohortSurvivalBody(",
+    ):
+        assert marker not in shell, marker
+
+    script_order = [
+        "js/screens-viz-cohort-survival.js?",
+        "js/screens-viz-cohort-demo.js?",
+        "js/screens-viz-cohort-view.js?",
+        "js/screens-viz-cohort.js?",
+        "js/screens-viz.js?",
+    ]
+    assert [index.index(script) for script in script_order] == sorted(
+        index.index(script) for script in script_order
+    )
 
 
 def test_owner_js_files_do_not_grow_past_their_ratchet() -> None:

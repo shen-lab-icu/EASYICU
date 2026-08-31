@@ -2247,32 +2247,31 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     Age/SOFA/LOS distributions remain available, but the old age x LOS proxy
     heatmap is not allowed to stand in for a cohort phenotype.
     """
-    viz_js = _static_js("screens-viz.js")
+    cohort_view_js = _static_js("screens-viz-cohort-view.js")
     cohort_css = _static_css("cohort.css")
     index_html = _static_html("index.html")
 
-    # Owner-file: distribution renderers live in screens-viz.js (viz route owner).
-    assert "function cohortDistBars(" in viz_js
-    assert "function cohortCompositionBars(" in viz_js
+    assert "function cohortDistBars(" in cohort_view_js
+    assert "function cohortCompositionBars(" in cohort_view_js
     # Real-data snapshot now binds backend bins for every population distribution.
-    assert "cohortDistBars(s.age && s.age.bins)" in viz_js
-    assert "cohortDistBars(s.sofa2 && s.sofa2.bins)" in viz_js
-    assert "cohortDistBars(s.los_icu_days && s.los_icu_days.bins)" in viz_js
-    assert "ICU LOS distribution" in viz_js
-    assert "ICU 住院时长分布" in viz_js
-    assert "Cohort composition" in viz_js
-    assert "队列构成" in viz_js
+    assert "cohortDistBars(s.age && s.age.bins)" in cohort_view_js
+    assert "cohortDistBars(s.sofa2 && s.sofa2.bins)" in cohort_view_js
+    assert "cohortDistBars(s.los_icu_days && s.los_icu_days.bins)" in cohort_view_js
+    assert "ICU LOS distribution" in cohort_view_js
+    assert "ICU 住院时长分布" in cohort_view_js
+    assert "Cohort composition" in cohort_view_js
+    assert "队列构成" in cohort_view_js
     # Admission-type categorical distribution borrowed from the legacy dashboard.
-    assert "cohortDistBars(s.admission.bins)" in viz_js
-    assert "Admission type" in viz_js
-    assert "入院类型" in viz_js
+    assert "cohortDistBars(s.admission.bins)" in cohort_view_js
+    assert "Admission type" in cohort_view_js
+    assert "入院类型" in cohort_view_js
     # Clinical phenotype replaces the old age x LOS proxy heatmap.
-    assert "function cohortClinicalProfile(" in viz_js
-    assert "cohortClinicalProfile(s.clinical_profile)" in viz_js
-    assert "Clinical phenotype" in viz_js
-    assert "临床画像" in viz_js
-    assert "function cohortComplexityHeatmap(" not in viz_js
-    assert "Age × ICU LOS complexity" not in viz_js
+    assert "function cohortClinicalProfile(" in cohort_view_js
+    assert "cohortClinicalProfile(s.clinical_profile)" in cohort_view_js
+    assert "Clinical phenotype" in cohort_view_js
+    assert "临床画像" in cohort_view_js
+    assert "function cohortComplexityHeatmap(" not in cohort_view_js
+    assert "Age × ICU LOS complexity" not in cohort_view_js
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
@@ -2281,15 +2280,15 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
     """The selected C01 view is the exact aggregate Table One, not legacy bars."""
-    viz_js = _static_js("screens-viz.js")
+    cohort_view_js = _static_js("screens-viz-cohort-view.js")
     cohort_css = _static_css("cohort.css")
 
-    assert "data-cohort-table-one" in viz_js
-    assert "cohortProfileValue(row, value)" in viz_js
-    assert "function cohortGroupComparisonChart(" not in viz_js
+    assert "data-cohort-table-one" in cohort_view_js
+    assert "cohortProfileValue(row, value)" in cohort_view_js
+    assert "function cohortGroupComparisonChart(" not in cohort_view_js
     assert ".cgc-bar" not in cohort_css
     assert ".cgc-fill" not in cohort_css
-    assert "Aggregate-only group characteristics" in viz_js
+    assert "Aggregate-only group characteristics" in cohort_view_js
 
 
 def test_native_patient_time_series_uses_module_grouped_single_feature_charts() -> None:
@@ -2339,6 +2338,7 @@ def test_native_patient_feature_catalog_has_a_dedicated_owner() -> None:
     """Catalog-to-trajectory merging belongs to one Patient Review owner."""
     owner_js = _static_js("screens-viz-patient-features.js")
     viz_js = _static_js("screens-viz.js")
+    patient_domain_js = _static_js("screens-viz-patient.js")
     series_js = _static_js("screens-viz-patient-series.js")
     index_html = _static_html("index.html")
 
@@ -2355,8 +2355,8 @@ def test_native_patient_feature_catalog_has_a_dedicated_owner() -> None:
     assert "const uncatalogued = []" in owner_js
     assert "catalogLanes.concat(uncatalogued)" in owner_js
 
-    assert "signalKey: ptSignalKey" in viz_js
-    assert "catalogLanes: patientCatalogLanes" in viz_js
+    assert "signalKey: ptSignalKey" in patient_domain_js
+    assert "catalogLanes: patientCatalogLanes" in patient_domain_js
     assert "function ptSignalKey(" not in viz_js
     assert "function patientCatalogLanes(" not in viz_js
     assert "window.EU_PATIENT_FEATURES" not in series_js
@@ -2366,7 +2366,7 @@ def test_native_patient_feature_catalog_has_a_dedicated_owner() -> None:
     )
     assert index_html.index("js/screens-viz-demo.js?") < feature_owner
     assert feature_owner < index_html.index("js/screens-viz-patient-series.js?")
-    assert feature_owner < index_html.index("js/screens-viz.js?")
+    assert feature_owner < index_html.index("js/screens-viz-patient.js?")
 
 
 def test_native_crossdb_availability_matrix_is_a_heatmap() -> None:
@@ -2473,6 +2473,9 @@ def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations(
             "screens-settings.js",
             "screens-states.js",
             "screens-viz.js",
+            "screens-viz-cohort.js",
+            "screens-viz-cohort-view.js",
+            "screens-viz-cohort-survival.js",
         ]
     )
 
@@ -2810,6 +2813,7 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
 
 def test_native_patient_source_radios_are_real_controls() -> None:
     viz_js = _static_js("screens-viz.js")
+    cohort_domain_js = _static_js("screens-viz-cohort.js")
     patient_domain_js = _static_js("screens-viz-patient.js")
     patient_navigation_js = _static_js("screens-viz-patient-navigation.js")
     patient_tables_js = _static_js("screens-viz-patient-tables.js")
@@ -2846,7 +2850,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "const wsMatchesActive = ws" in viz_js
     assert "const patientSource = active === 'patient' ? patientReview.activeSourceMeta() : null" in viz_js
     assert "route: 'patient'" in patient_domain_js
-    assert "route: 'cohort'" in viz_js
+    assert "route: 'cohort'" in cohort_domain_js
     assert "route: 'crossdb'" in viz_js
     assert "skeletonWorkspace(window.EU_DATA)" in patient_domain_js
     assert "full cohort', '完整队列'" in patient_domain_js
@@ -3045,8 +3049,8 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "official-demo-progress" in demo_sources_js
     assert ".official-demo-progress{" in official_demo_sources_css
     assert ".official-demo-progress" not in patient_series_css
-    assert "source.status.active" in viz_js
-    assert "demoSourceOwner.rememberOpened(sourceId)" in viz_js
+    assert "source.status.active" in patient_domain_js
+    assert "demoSourceOwner.rememberOpened(sourceId)" in patient_domain_js
     assert "function activeMetadata(registrySources, activePath)" in demo_sources_js
     assert "data-patient-official-demo" in patient_domain_js
     assert "data-gen" in demo_sources_js
@@ -3133,64 +3137,71 @@ def test_native_source_registry_add_gives_feedback_instead_of_silent_noop() -> N
 
 
 def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
-    viz_js = _static_js("screens-viz.js")
+    cohort_js = _static_js("screens-viz-cohort.js")
+    cohort_view_js = _static_js("screens-viz-cohort-view.js")
+    cohort_survival_js = _static_js("screens-viz-cohort-survival.js")
+    cohort_demo_js = _static_js("screens-viz-cohort-demo.js")
     api_js = _static_js("api.js")
 
     assert "loadCohortReviewSummary" in api_js
-    assert "window.EU_API.loadCohortReviewSummary(body)" in viz_js
-    assert "window.EU_COHORT_REVIEW = payload;" in viz_js
-    assert "cohortWorkspaceFromReview(payload)" in viz_js
-    assert "function cohortLoaded()" in viz_js
-    assert "window.EU_DATA !== 'real' || !!(review && review.summary)" in viz_js
-    assert "function reloadStaleRealCohortIfNeeded" in viz_js
-    assert "function cohortText" in viz_js
-    assert "function cohortReason" in viz_js
-    assert "'Backend evidence checks': '后端证据检查'" in viz_js
-    assert "'Draft review': '草稿核验'" in viz_js
-    assert "'Local export cohort review ready': '本地导出队列审阅已就绪'" in viz_js
-    assert "'Fail-closed': '保守拦截'" in viz_js
-    assert "'Blocked cohort functions': '已拦截的队列功能'" in viz_js
-    assert "function cohortSurvivalSourceHint" in viz_js
-    assert "data-survival-source-hint" in viz_js
-    assert "Current export is already loaded" in viz_js
-    assert "当前导出已加载" in viz_js
-    assert "data-survival-current-export" in viz_js
-    assert "data-survival-source-picker" not in viz_js
-    assert "No re-import is required" in viz_js
-    assert "不需要重新导入" in viz_js
-    assert "'Hospital mortality': '院内死亡'" in viz_js
-    assert "Object.prototype.hasOwnProperty.call(map, raw)" in viz_js
-    assert "'Not manuscript-ready by itself': '不能单独用于稿件结论'" in viz_js
-    assert "choosing a source immediately recomputes the backend summary" not in viz_js
-    assert "function cohortRealModuleSummary" in viz_js
-    assert "data-cohort-real-modules" in viz_js
-    assert "Open coverage audit" in viz_js
-    assert "function cohortRealFeaturePicker" in viz_js
-    assert "data-cohort-feature-picker" in viz_js
-    assert "data-cohort-feature-toggle" in viz_js
-    assert "data-cohort-feature-module" in viz_js
-    assert "selected_features" in viz_js
-    assert "Full export feature catalog" in viz_js
-    assert "全量导出特征目录" in viz_js
-    assert "Restore default features" in viz_js
-    assert "恢复默认特征" in viz_js
-    assert "cohortSelectedFeatures" in viz_js
+    assert "window.EU_API.loadCohortReviewSummary(body)" in cohort_js
+    assert "window.EU_COHORT_REVIEW = payload;" in cohort_js
+    assert "cohortWorkspaceFromReview(payload)" in cohort_js
+    assert "function cohortLoaded()" in cohort_js
+    assert "window.EU_DATA !== 'real' || !!(review && review.summary)" in cohort_js
+    assert "function reloadStaleRealCohortIfNeeded" in cohort_js
+    assert "function cohortText" in cohort_view_js
+    assert "function cohortReason" in cohort_view_js
+    assert "'Backend evidence checks': '后端证据检查'" in cohort_view_js
+    assert "'Draft review': '草稿核验'" in cohort_view_js
+    assert "'Local export cohort review ready': '本地导出队列审阅已就绪'" in cohort_view_js
+    assert "'Fail-closed': '保守拦截'" in cohort_view_js
+    assert "'Blocked cohort functions': '已拦截的队列功能'" in cohort_view_js
+    assert "function cohortSurvivalSourceHint" in cohort_survival_js
+    assert "data-survival-source-hint" in cohort_survival_js
+    assert "Current export is already loaded" in cohort_survival_js
+    assert "当前导出已加载" in cohort_survival_js
+    assert "data-survival-current-export" in cohort_survival_js
+    assert "data-survival-source-picker" not in cohort_survival_js
+    assert "No re-import is required" in cohort_survival_js
+    assert "不需要重新导入" in cohort_survival_js
+    assert "'Hospital mortality': '院内死亡'" in cohort_view_js
+    assert "Object.prototype.hasOwnProperty.call(map, raw)" in cohort_view_js
+    assert "'Not manuscript-ready by itself': '不能单独用于稿件结论'" in cohort_view_js
+    assert "choosing a source immediately recomputes the backend summary" not in cohort_js
+    assert "function cohortRealModuleSummary" in cohort_view_js
+    assert "data-cohort-real-modules" in cohort_view_js
+    assert "Open coverage audit" in cohort_view_js
+    assert "function cohortRealFeaturePicker" in cohort_view_js
+    assert "data-cohort-feature-picker" in cohort_view_js
+    assert "data-cohort-feature-toggle" in cohort_view_js
+    assert "data-cohort-feature-module" in cohort_view_js
+    assert "selected_features" in cohort_js
+    assert "Full export feature catalog" in cohort_view_js
+    assert "全量导出特征目录" in cohort_view_js
+    assert "Restore default features" in cohort_view_js
+    assert "恢复默认特征" in cohort_view_js
+    assert "state.selectedFeatures" in cohort_js
     assert (
-        "loadRealCohort(ok => { cohortView = ok ? 'loaded' : 'idle'; repaintScreen('cohort'); });"
-        in viz_js
+        "loadRealCohort(ok => { state.view = ok ? 'loaded' : 'idle'; repaintScreen('cohort'); });"
+        in cohort_js
     )
     assert (
         "manifest parsed · denominators previewed · aggregate payload returned"
-        in viz_js
+        in cohort_js
     )
-    assert "聚合载荷已就绪；打开项目监控做证据绑定草稿核验。" in viz_js
-    assert "Draft gate" not in viz_js
-    assert "Evidence checks" not in viz_js
-    assert "locked · needs reviewer sign-off" not in viz_js
+    assert "聚合载荷已就绪；打开项目监控做证据绑定草稿核验。" in cohort_js
+    assert "Draft gate" not in cohort_js
+    assert "Evidence checks" not in cohort_js
+    assert "locked · needs reviewer sign-off" not in cohort_js
 
 
 def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     viz_js = _static_js("screens-viz.js")
+    cohort_js = _static_js("screens-viz-cohort.js")
+    cohort_view_js = _static_js("screens-viz-cohort-view.js")
+    cohort_survival_js = _static_js("screens-viz-cohort-survival.js")
+    cohort_demo_js = _static_js("screens-viz-cohort-demo.js")
     cohort_charts_js = _static_js("screens-viz-cohort-charts.js")
     cohort_css = _static_css("cohort.css")
     cohort_charts_css = _static_css("cohort-charts.css")
@@ -3199,136 +3210,136 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
 
     assert "css/cohort.css?v=20260830-viz-final1" in index_html
     assert "js/screens-viz.js?v=20260830-viz-final1" in index_html
-    assert "let cohortView = 'idle';" in viz_js
-    assert "let cohortFeatureScope = 'recommended';" in viz_js
-    assert 'data-cohort-config-required="true"' in viz_js
-    assert "Choose one cohort data source" in viz_js
-    assert "data-cohort-demo-fallback" in viz_js
-    assert "{ scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' }" in viz_js
-    assert "demoSourceOwner.rememberOpened(sourceId)" in viz_js
-    assert "cohortView = ok ? 'loaded' : 'idle';" in viz_js
-    assert "function cohortMissingExportMessage" in viz_js
+    assert "view: 'idle'," in cohort_js
+    assert "featureScope: 'recommended'," in cohort_js
+    assert 'data-cohort-config-required="true"' in cohort_js
+    assert "Choose one cohort data source" in cohort_js
+    assert "data-cohort-demo-fallback" in cohort_js
+    assert "{ scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' }" in cohort_js
+    assert "demoSourceOwner.rememberOpened(sourceId)" in cohort_js
+    assert "state.view = ok ? 'loaded' : 'idle';" in cohort_js
+    assert "function cohortMissingExportMessage" in cohort_js
     assert (
         "Choose or add a local EasyICU export before loading Cohort Statistics."
-        in viz_js
+        in cohort_js
     )
-    assert "请先选择或添加本地 EasyICU 导出，再加载队列统计。" in viz_js
-    assert "const body = { source_path: active };" in viz_js
-    assert "if (!registryActivePath()) {" in viz_js
-    assert "No active export selected" in viz_js
-    assert "cohortView = 'idle';" in viz_js
-    assert "window.EU_COHORT_REVIEW = null;" in viz_js
-    assert "data-viz-reset" in viz_js
-    assert "let cohortCompare = 'outcome';" in viz_js
-    assert "let cohortSurvivalOutcome = 'mort_28d';" in viz_js
-    assert "let cohortSurvivalGroup = 'sepsis';" in viz_js
-    assert 'data-cohort-comp="${key}"' in viz_js
-    assert "cohortCompare = b.dataset.cohortComp || 'outcome';" in viz_js
-    assert "data-cohort-surv-outcome" not in viz_js
-    assert "function cohortSurvivalOutcomeCards" in viz_js
-    assert "event_summary" in viz_js
-    assert "Outcome overview" in viz_js
-    assert "data-cohort-surv-group" in viz_js
-    assert "Kaplan-Meier curves and log-rank" in viz_js
-    assert "Number at risk" in viz_js
+    assert "请先选择或添加本地 EasyICU 导出，再加载队列统计。" in cohort_js
+    assert "const body = { source_path: active };" in cohort_js
+    assert "if (!registryActivePath()) {" in cohort_js
+    assert "No active export selected" in cohort_js
+    assert "state.view = 'idle';" in cohort_js
+    assert "window.EU_COHORT_REVIEW = null;" in cohort_js
+    assert "data-viz-reset" in cohort_js
+    assert "compare: 'outcome'," in cohort_js
+    assert "survivalOutcome: 'mort_28d'," in cohort_js
+    assert "survivalGroup: 'sepsis'," in cohort_js
+    assert 'data-cohort-comp="${key}"' in cohort_view_js
+    assert "state.compare = b.dataset.cohortComp || 'outcome';" in cohort_js
+    assert "data-cohort-surv-outcome" not in cohort_survival_js
+    assert "function cohortSurvivalOutcomeCards" in cohort_survival_js
+    assert "event_summary" in cohort_survival_js
+    assert "Outcome overview" in cohort_survival_js
+    assert "data-cohort-surv-group" in cohort_survival_js
+    assert "Kaplan-Meier curves and log-rank" in cohort_survival_js
+    assert "Number at risk" in cohort_survival_js
     assert "Math.log10(n)" in viz_js
-    assert "p = ${esc(pValueLabel)}" in viz_js
-    assert "cohortSurvivalWindowNote" in viz_js
-    assert "dedicated flag + follow-up" in viz_js
-    assert "derived from hospital death + LOS" not in viz_js
-    assert "hospital_mortality_time_window" not in viz_js
+    assert "p = ${esc(pValueLabel)}" in cohort_survival_js
+    assert "cohortSurvivalWindowNote" in cohort_survival_js
+    assert "dedicated flag + follow-up" in cohort_survival_js
+    assert "derived from hospital death + LOS" not in cohort_survival_js
+    assert "hospital_mortality_time_window" not in cohort_survival_js
     assert ".surv-outcome-card" in cohort_css
     assert (
         "ICU mortality is unavailable because this export does not include ICU-specific event and time columns."
-        in viz_js
+        in cohort_view_js
     )
-    assert "p <0.001" not in viz_js
-    assert "cohortSurvivalDemoBody" in viz_js
-    assert "data-demo-survival-simulated" in viz_js
-    assert "Demo simulated KM preview" in viz_js
+    assert "p <0.001" not in cohort_survival_js
+    assert "cohortSurvivalDemoBody" in cohort_survival_js
+    assert "data-demo-survival-simulated" in cohort_survival_js
+    assert "Demo simulated KM preview" in cohort_survival_js
     assert (
         "This Kaplan-Meier curve is a fixed simulated preview for the demo workspace"
-        in viz_js
+        in cohort_survival_js
     )
-    assert "Demo mode does not fabricate survival curves" not in viz_js
-    assert "function cohortDemoCatalogScope" in viz_js
-    assert "function cohortDemoFeaturePicker" in viz_js
-    assert "data-cohort-catalog-scope" in viz_js
-    assert "data-cohort-feature-scope" in viz_js
-    assert "Load all modules" in viz_js
-    assert "加载全部模块" in viz_js
-    assert "Use recommended modules" in viz_js
-    assert "恢复推荐模块" in viz_js
-    assert "The simulated preview can take a little longer" in viz_js
-    assert "演示预览可能稍慢一点" in viz_js
+    assert "Demo mode does not fabricate survival curves" not in cohort_survival_js
+    assert "function cohortDemoCatalogScope" in cohort_view_js
+    assert "function cohortDemoFeaturePicker" in cohort_view_js
+    assert "data-cohort-catalog-scope" in cohort_view_js
+    assert "data-cohort-feature-scope" in cohort_view_js
+    assert "Load all modules" in cohort_view_js
+    assert "加载全部模块" in cohort_view_js
+    assert "Use recommended modules" in cohort_view_js
+    assert "恢复推荐模块" in cohort_view_js
+    assert "The simulated preview can take a little longer" in cohort_view_js
+    assert "演示预览可能稍慢一点" in cohort_view_js
     assert (
         "Features to load')}: ${fmtInt(scope.selectedFeatureCount)} / ${fmtInt(scope.totalFeatureCount)}"
-        in viz_js
+        in cohort_view_js
     )
-    assert "Features to load')}: 9" not in viz_js
-    assert "window.EU_STALE = true;" in viz_js
-    assert "function cohortProfileValue" in viz_js
-    assert "function cohortSurvivalBody" in viz_js
-    assert "function cohortSurvivalChart" in viz_js
-    assert "function cohortUnavailablePanel" in viz_js
-    assert "metadata_row_count_only" in viz_js
-    assert "Large export coverage optimized" in viz_js
-    assert "大导出覆盖率已优化" in viz_js
-    assert "They are loaded modules, not missing modules." in viz_js
-    assert "它们是已加载模块，不是缺失模块。" in viz_js
+    assert "Features to load')}: 9" not in cohort_view_js
+    assert "window.EU_STALE = true;" in cohort_js
+    assert "function cohortProfileValue" in cohort_view_js
+    assert "function cohortSurvivalBody" in cohort_survival_js
+    assert "function cohortSurvivalChart" in cohort_survival_js
+    assert "function cohortUnavailablePanel" in cohort_view_js
+    assert "metadata_row_count_only" in cohort_view_js
+    assert "Large export coverage optimized" in cohort_view_js
+    assert "大导出覆盖率已优化" in cohort_view_js
+    assert "They are loaded modules, not missing modules." in cohort_view_js
+    assert "它们是已加载模块，不是缺失模块。" in cohort_view_js
     assert (
         "Current export is loaded, but the cohort is above the interactive KM preview limit"
-        in viz_js
+        in cohort_view_js
     )
-    assert "同一个导出上继续运行本地审计分析任务" in viz_js
-    assert "function cohortDemoCoverageReview" in viz_js
-    assert "function cohortDemoSofaReview" in viz_js
-    assert "function cohortDemoPanelNote" in viz_js
-    assert "data-demo-cohort-panel" in viz_js
-    assert "Demo module coverage and quality" in viz_js
-    assert "演示模块覆盖率与质量" in viz_js
-    assert "function cohortCoverageMetricLabel" in viz_js
-    assert "function cohortQualityStatusLabel" in viz_js
-    assert "Event/exposure rows show cohort incidence or exposure prevalence" in viz_js
-    assert "事件/暴露行显示队列发生率或暴露率" in viz_js
-    assert "cohortCoverageMetricValue(row)" in viz_js
-    assert "esc(row.quality_status || 'unknown')" not in viz_js
-    assert "Demo SOFA-2 aggregate preview" in viz_js
-    assert "演示 SOFA-2 聚合预览" in viz_js
+    assert "同一个导出上继续运行本地审计分析任务" in cohort_view_js
+    assert "function cohortDemoCoverageReview" in cohort_demo_js
+    assert "function cohortDemoSofaReview" in cohort_demo_js
+    assert "function cohortDemoPanelNote" in cohort_demo_js
+    assert "data-demo-cohort-panel" in cohort_demo_js
+    assert "Demo module coverage and quality" in cohort_view_js
+    assert "演示模块覆盖率与质量" in cohort_view_js
+    assert "function cohortCoverageMetricLabel" in cohort_view_js
+    assert "function cohortQualityStatusLabel" in cohort_view_js
+    assert "Event/exposure rows show cohort incidence or exposure prevalence" in cohort_view_js
+    assert "事件/暴露行显示队列发生率或暴露率" in cohort_view_js
+    assert "cohortCoverageMetricValue(row)" in cohort_view_js
+    assert "esc(row.quality_status || 'unknown')" not in cohort_view_js
+    assert "Demo SOFA-2 aggregate preview" in cohort_view_js
+    assert "演示 SOFA-2 聚合预览" in cohort_view_js
     assert (
-        "review ? cohortCoverageBody(review) : (demoLoaded ? cohortCoverageBody(cohortDemoCoverageReview(), { demo: true })"
-        in viz_js
+        "review ? cohortCoverageBody(review) : (demoLoaded ? cohortCoverageBody(demo.coverageReview(), { demo: true })"
+        in cohort_view_js
     )
     assert (
-        "review ? cohortSofaBody(review) : (demoLoaded ? cohortSofaBody(cohortDemoSofaReview(), { demo: true })"
-        in viz_js
+        "review ? cohortSofaBody(review) : (demoLoaded ? cohortSofaBody(demo.sofaReview(), { demo: true })"
+        in cohort_view_js
     )
-    assert "The old seeded audit panel has been removed." in viz_js
-    assert "window.EUAudit" not in viz_js
-    assert "window.EUSofa" not in viz_js
+    assert "The old seeded audit panel has been removed." in cohort_view_js
+    assert "window.EUAudit" not in cohort_view_js
+    assert "window.EUSofa" not in cohort_view_js
     assert "screens-audit.js" not in index_html
     assert not (STATIC_DIR / "js" / "screens-audit.js").exists()
-    assert "Aggregate-only group characteristics" in viz_js
-    assert "profileRows.map" in viz_js
-    assert "active.profile" in viz_js
-    assert "SOFA-1 to SOFA-2 movement" in viz_js
-    assert "Worst-ICU severity transition matrix" in viz_js
-    assert "function cohortSofaHeatmap" in viz_js
+    assert "Aggregate-only group characteristics" in cohort_view_js
+    assert "profileRows.map" in cohort_view_js
+    assert "active.profile" in cohort_view_js
+    assert "SOFA-1 to SOFA-2 movement" in cohort_view_js
+    assert "Worst-ICU severity transition matrix" in cohort_view_js
+    assert "function cohortSofaHeatmap" in cohort_view_js
     assert "window.EU_COHORT_CHARTS = {" in cohort_charts_js
     assert "type: 'heatmap'" in cohort_charts_js
     assert "step: 'end'" in cohort_charts_js
-    assert "cohortSofaMatrixMode" in viz_js
-    assert "data-cohort-sofa-matrix-mode" in viz_js
-    assert "SOFA_MATRIX_GRANULARITIES" in viz_js
-    assert "cohortSofaMatrixGranularity = 'exact'" in viz_js
-    assert "data-cohort-sofa-granularity" in viz_js
-    assert "exact_score_matrix" in viz_js
-    assert "cohortCharts.heatmapSlot" in viz_js
-    assert "Rows are SOFA-1 score bands; columns are SOFA-2 score bands." in viz_js
-    assert "Rows are SOFA-1 severity bands; columns are SOFA-2 bands." in viz_js
-    assert "reclass.status === 'ready'" in viz_js
-    assert "Demo threshold uses SOFA ≥ 6" in viz_js
-    assert "Age Groups' overview" not in viz_js
+    assert "sofaMatrixMode" in cohort_js
+    assert "data-cohort-sofa-matrix-mode" in cohort_view_js
+    assert "SOFA_MATRIX_GRANULARITIES" in cohort_view_js
+    assert "sofaMatrixGranularity: 'exact'" in cohort_js
+    assert "data-cohort-sofa-granularity" in cohort_view_js
+    assert "exact_score_matrix" in cohort_view_js
+    assert "cohortCharts.heatmapSlot" in cohort_view_js
+    assert "Rows are SOFA-1 score bands; columns are SOFA-2 score bands." in cohort_view_js
+    assert "Rows are SOFA-1 severity bands; columns are SOFA-2 bands." in cohort_view_js
+    assert "reclass.status === 'ready'" in cohort_view_js
+    assert "Demo threshold uses SOFA ≥ 6" in cohort_view_js
+    assert "Age Groups' overview" not in cohort_view_js
     assert ".surv-toolbar" in cohort_css
     assert ".cohort-echart" in cohort_charts_css
     assert ".risk-table" in cohort_css
@@ -3340,12 +3351,13 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert ".cohort-echart" not in cohort_css
     assert ".sofa-matrix-controls" not in redesign_css
     for key in ["outcome", "age", "sex", "los", "sepsis", "custom"]:
-        assert f"{key}:" in viz_js
+        assert f"{key}:" in cohort_view_js
 
 
 def test_visual_routes_share_source_choice_with_single_and_multi_source_contracts() -> None:
     """Patient/Cohort select one source; Cross-DB selects an official pair."""
     viz_js = _static_js("screens-viz.js")
+    cohort_js = _static_js("screens-viz-cohort.js")
     demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
     crossdb_setup_js = _static_js("screens-viz-crossdb-setup.js")
     crossdb_source_js = _static_js("screens-viz-crossdb-source.js")
@@ -3356,7 +3368,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert "function sourceModeSelector(realMode)" in viz_js
     assert "Previously exported data" in viz_js
     assert "Demo data" in viz_js
-    assert "{ scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' }" in viz_js
+    assert "{ scope: 'cohort', fallbackAttribute: 'data-cohort-demo-fallback' }" in cohort_js
     assert "window.EU_OFFICIAL_DEMO_SOURCES = owner" in demo_sources_js
     assert "function registeredSources(registryRows)" in demo_sources_js
     assert "function rememberPair(registryRows)" in demo_sources_js
@@ -3424,6 +3436,7 @@ def test_native_home_landing_styles_are_owned_by_home_css() -> None:
 def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
     """Demo data generation and Patient drilldown assembly have separate owners."""
     viz_js = _static_js("screens-viz.js")
+    patient_domain_js = _static_js("screens-viz-patient.js")
     demo_js = _static_js("screens-viz-demo.js")
     demo_drilldown_js = _static_js("screens-viz-demo-drilldown.js")
     index_html = _static_html("index.html")
@@ -3452,13 +3465,13 @@ def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
     assert "function buildDemoPatientDrilldown(" not in viz_js
     assert "function demoTablePreviewRowContext(" not in viz_js
 
-    # main file rebinds the two owner contracts so existing call sites stay unchanged
-    assert "} = window.VIZ_DEMO;" in viz_js
+    # The Patient domain owner consumes the drilldown contract directly; the
+    # shared shell no longer imports Patient-only demo helpers.
     assert (
         "const { buildPatientDrilldown: buildDemoPatientDrilldown } = "
         "window.VIZ_DEMO_DRILLDOWN;"
-    ) in viz_js
-    assert "demoCatalogModules" in viz_js  # still called
+    ) in patient_domain_js
+    assert "demoCatalogModules" not in viz_js
 
     # Generator -> drilldown owner -> main shell load order is explicit.
     demo_pos = index_html.find("screens-viz-demo.js")
@@ -3518,6 +3531,7 @@ def test_analysis_handoffs_route_to_copilot_and_monitor_links_use_one_name() -> 
     """Starting/configuring analysis belongs to Guided Copilot; #agent is only
     the consistently named Project Monitor destination for existing runs."""
     viz_js = _static_js("screens-viz.js")
+    cohort_js = _static_js("screens-viz-cohort.js")
     crossdb_js = _static_js("screens-viz-crossdb-results.js")
     ideas_js = _static_js("screens-ideas.js")
     help_js = _static_js("screens-help.js")
@@ -3526,13 +3540,13 @@ def test_analysis_handoffs_route_to_copilot_and_monitor_links_use_one_name() -> 
     app_js = _static_js("app.js")
     guided_js = _static_js("screens-guided.js")
 
-    for owner in (viz_js, crossdb_js, ext_js):
+    for owner in (viz_js, cohort_js, crossdb_js, ext_js):
         assert 'data-study-target="agent"' not in owner
-    for owner in (viz_js, crossdb_js):
+    for owner in (cohort_js, crossdb_js):
         assert 'data-study-target="guided"' in owner
     assert "data-ex-sync-guided" in ext_js
     assert "syncExtractionToCopilot" in ext_js
-    assert "Continue in Guided Copilot" in viz_js
+    assert "Continue in Guided Copilot" in cohort_js
     assert "Continue in Guided Copilot" in ext_js
     assert "Plan in Guided Copilot" in crossdb_js
 
@@ -3647,10 +3661,10 @@ def test_review_routes_share_echarts_theme_without_cross_route_owner_leaks() -> 
 def test_km_panel_surfaces_effect_size() -> None:
     """[6] The KM panel must surface an effect contrast (end-of-follow-up survival +
     absolute risk difference), not just a lone log-rank p-value."""
-    viz_js = _static_js("screens-viz.js")
+    cohort_survival_js = _static_js("screens-viz-cohort-survival.js")
     cohort_css = _static_css("cohort.css")
-    assert "function cohortSurvivalEffect(curve)" in viz_js
-    assert "absolute risk difference" in viz_js
+    assert "function cohortSurvivalEffect(curve)" in cohort_survival_js
+    assert "absolute risk difference" in cohort_survival_js
     assert ".surv-effect" in cohort_css
 
 
@@ -3781,6 +3795,7 @@ def test_destination_names_consistent_across_sidebar_crumb_and_page() -> None:
     made the same screen read as three different places)."""
     app_js = _static_js("app.js")
     viz_js = _static_js("screens-viz.js")
+    cohort_js = _static_js("screens-viz-cohort.js")
     patient_domain_js = _static_js("screens-viz-patient.js")
     help_js = _static_js("screens-help.js")
     dock_js = _static_js("copilot-dock.js")
@@ -3793,7 +3808,7 @@ def test_destination_names_consistent_across_sidebar_crumb_and_page() -> None:
         in app_js
     )
     # the retired aliases must not resurface anywhere user-facing
-    for src in (viz_js, patient_domain_js, help_js, dock_js, series_js):
+    for src in (viz_js, cohort_js, patient_domain_js, help_js, dock_js, series_js):
         assert "患者明细" not in src
         assert "跨库基准" not in src
     # the patient idle page head identifies itself as the destination, not as a
@@ -3803,17 +3818,17 @@ def test_destination_names_consistent_across_sidebar_crumb_and_page() -> None:
     # cohort keeps one constant page title; the load-state moves to the lead
     assert (
         "<h1 style=\"margin-top:0;\">${t('Cohort Statistics', '队列统计')}</h1>"
-        in viz_js
+        in cohort_js
     )
 
 
 def test_cohort_and_crossdb_consume_guided_handoff() -> None:
     """A study configured in Guided Copilot must not silently vanish when the
     conversation lands the user on Cohort Statistics or Cross-database comparison."""
-    viz_js = _static_js("screens-viz.js")
+    cohort_js = _static_js("screens-viz-cohort.js")
     setup_js = _static_js("screens-viz-crossdb-setup.js")
-    assert "window.EU_GUIDED_HANDOFF.take('cohort')" in viz_js
-    assert "window.EU_GUIDED_HANDOFF.noteHtml('cohort')" in viz_js
+    assert "window.EU_GUIDED_HANDOFF.take('cohort')" in cohort_js
+    assert "window.EU_GUIDED_HANDOFF.noteHtml('cohort')" in cohort_js
     assert "window.EU_GUIDED_HANDOFF.take('crossdb')" in setup_js
     assert "window.EU_GUIDED_HANDOFF.noteHtml('crossdb')" in setup_js
 
@@ -3822,12 +3837,13 @@ def test_topbar_actions_only_appear_once_workspace_is_loaded() -> None:
     """Before any data is loaded the page body owns the single primary action;
     a context-free topbar "Render"/"Run" button is noise that confused users."""
     viz_js = _static_js("screens-viz.js")
+    cohort_js = _static_js("screens-viz-cohort.js")
     patient_domain_js = _static_js("screens-viz-patient.js")
     setup_js = _static_js("screens-viz-crossdb-setup.js")
     # the pre-load Render button is gone from the patient screen
     assert "${t('Render', '渲染')}" not in patient_domain_js
     # each viz actionHtml falls through to an empty string when not loaded
-    assert viz_js.count("Topbar actions only exist once") == 1
+    assert cohort_js.count("Topbar actions only exist once") == 1
     assert patient_domain_js.count("Topbar actions only exist once") == 1
     assert "function actionHtml(config)" in setup_js
     assert "if (!loaded) return '';" in setup_js
@@ -3838,13 +3854,17 @@ def test_result_charts_carry_reading_captions() -> None:
     """Every result-bearing chart explains what it means and what to do next:
     KM curve, SOFA transition matrix, group comparison tables, Cross-DB density
     view, and the per-database record cards."""
-    viz_js = _static_js("screens-viz.js")
+    cohort_view_js = _static_js("screens-viz-cohort-view.js")
+    cohort_survival_js = _static_js("screens-viz-cohort-survival.js")
     crossdb_results_js = _static_js("screens-viz-crossdb-results.js")
-    assert viz_js.count('class="viz-cap"') >= 4
+    assert (
+        cohort_view_js.count('class="viz-cap"')
+        + cohort_survival_js.count('class="viz-cap"')
+    ) >= 4
     assert crossdb_results_js.count('class="viz-cap"') >= 2
-    assert "曲线每下降一格代表一次事件" in viz_js  # KM
-    assert "对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者" in viz_js  # SOFA matrix
-    assert "每行是一个基线特征" in viz_js  # group comparison tables
+    assert "曲线每下降一格代表一次事件" in cohort_survival_js  # KM
+    assert "对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者" in cohort_view_js  # SOFA matrix
+    assert "每行是一个基线特征" in cohort_view_js  # group comparison tables
     assert "曲线重叠表示聚合测量分布较一致" in crossdb_results_js
     assert "不是结局结果" in crossdb_results_js
     app_css = _static_css("app.css")
