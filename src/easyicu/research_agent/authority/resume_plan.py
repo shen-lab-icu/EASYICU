@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
+from ..canonical_json import canonical_sha256
 from ..cohort.schema import (
     COHORT_LOCK_FILENAME,
     _load_locked_cohort_definition,
@@ -32,7 +34,11 @@ from .runtime_artifacts import (
     verified_run_evidence_path,
 )
 
-__all__ = ["load_compatible_resume_plan", "resume_plan_candidate_paths"]
+__all__ = [
+    "load_compatible_resume_plan",
+    "resume_plan_candidate_paths",
+    "review_bound_plan_sha256",
+]
 
 
 def resume_plan_candidate_paths(
@@ -107,6 +113,34 @@ def _read_candidate(path: Path) -> Optional[AnalysisPlan]:
         return None
 
 
+def review_bound_plan_sha256(run_dir: Path) -> Optional[str]:
+    """Return the exact plan digest already reviewed for this run.
+
+    A failed resume attempt can leave a newer immutable migration artifact
+    behind before the scientific review gate rejects it.  Ranking that file by
+    revision alone would make every later retry select the same unreviewed
+    plan.  The registered review is the authority: once present, crash recovery
+    may only select a candidate bound by that review.
+    """
+
+    records = list(load_current_evidence_snapshot(run_dir).records)
+    for record in reversed(records):
+        if not isinstance(record, dict) or str(record.get("evidence_id") or "") != (
+            "scientific_plan_review"
+        ):
+            continue
+        path = verified_run_evidence_path(run_dir, record)
+        if path is None:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return None
+        digest = str(payload.get("plan_sha256") or "").strip().lower()
+        return digest if re.fullmatch(r"[0-9a-f]{64}", digest) else None
+    return None
+
+
 def load_compatible_resume_plan(
     *,
     run_dir: Path,
@@ -145,6 +179,13 @@ def load_compatible_resume_plan(
         for candidate in candidates
         if (plan := _read_candidate(candidate)) is not None
     ]
+    reviewed_plan_sha256 = review_bound_plan_sha256(run_dir)
+    if reviewed_plan_sha256 is not None:
+        parsed_candidates = [
+            (plan, candidate)
+            for plan, candidate in parsed_candidates
+            if canonical_sha256(plan.model_dump(mode="json")) == reviewed_plan_sha256
+        ]
     for plan, candidate in parsed_candidates:
         if _plan_matches_completed_steps(
             plan=plan,

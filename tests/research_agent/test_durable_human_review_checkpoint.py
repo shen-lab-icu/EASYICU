@@ -138,6 +138,47 @@ def test_new_pipeline_instance_resumes_without_running_planner_again(
     assert approved["decision_set_sha256"] == checkpoint.consumed_decision_sha256
 
 
+def test_completed_review_is_reused_for_exact_execution_retry(
+    monkeypatch, tmp_path
+) -> None:
+    _force_approvable_plan_review(monkeypatch)
+    workdir = tmp_path / "runs"
+    question = "Does age describe hospital mortality?"
+    pending = _pipeline(workdir).run(
+        question=question,
+        cohort=_cohort(),
+        target_outcome="death",
+    )
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision="approved",
+            reviewer="test reviewer",
+            decided_at="2026-08-14T03:12:00Z",
+        )
+        for request in pending.requests
+    ]
+    _pipeline(workdir).resume_human_review(decisions, run_id=pending.run_id)
+    decision_path = Path(pending.run_dir) / "human_review_decisions.json"
+    original_decisions = decision_path.read_bytes()
+
+    retried = _pipeline(workdir).run(
+        question=question,
+        cohort=_cohort(),
+        target_outcome="death",
+        resume_run_id=pending.run_id,
+    )
+
+    assert retried.run_id == pending.run_id
+    assert decision_path.read_bytes() == original_decisions
+    checkpoint = load_checkpoint(
+        Path(pending.run_dir) / "human_review_checkpoint.json",
+        require_pending=False,
+    )
+    assert checkpoint.state == "completed"
+
+
 def test_same_pipeline_resumes_its_paused_provider_clock(monkeypatch, tmp_path) -> None:
     _force_approvable_plan_review(monkeypatch)
     workdir = tmp_path / "runs"

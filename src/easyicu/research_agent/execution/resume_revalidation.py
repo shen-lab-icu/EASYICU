@@ -233,6 +233,21 @@ def _trusted_resume_success_records(
         if str(record.get("status") or "").lower() != "ok":
             continue
         step_id = str(record.get("step_id") or "").strip()
+        listed_evidence_error = next(
+            (
+                f"listed evidence {evidence_id} is missing or failed path/digest verification"
+                for raw_id in (record.get("evidence_ids") or [])
+                if (evidence_id := str(raw_id).strip())
+                and (
+                    (authority := evidence_by_id.get(evidence_id)) is None
+                    or verified_run_evidence_path(run_dir, authority) is None
+                )
+            ),
+            None,
+        )
+        if listed_evidence_error is not None:
+            errors[step_id] = listed_evidence_error
+            continue
         if (
             str(record.get("generation_mode") or "").strip().lower()
             == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
@@ -573,15 +588,6 @@ def _prepare_revalidation_ledger(
     )
 
     stamp = request.services.deterministic_gate_stamp()
-    stale_successes = [
-        record
-        for record in current_successes
-        if record.get("deterministic_gate_fingerprint")
-        != stamp["deterministic_gate_fingerprint"]
-    ]
-    if not stale_successes and not seeded_invalidated:
-        return None
-
     evidence_records = list(request.evidence.records())
     evidence_by_id = {
         str(_evidence_record_field(record, "evidence_id") or ""): record
@@ -592,6 +598,21 @@ def _prepare_revalidation_ledger(
         evidence_by_id=evidence_by_id,
         run_dir=request.run_dir,
     )
+    # A matching validator fingerprint does not authorize changed bytes.  The
+    # evidence snapshot is immutable authority on every resume, so any missing
+    # or digest-mismatched artifact must enter the same fail-closed replay path
+    # as validator drift before a completed step can be skipped.
+    stale_successes = [
+        record
+        for record in current_successes
+        if (
+            record.get("deterministic_gate_fingerprint")
+            != stamp["deterministic_gate_fingerprint"]
+            or str(record.get("step_id") or "") in trusted_summary_errors
+        )
+    ]
+    if not stale_successes and not seeded_invalidated:
+        return None
     dependencies = _resume_success_dependencies(
         plan=request.plan,
         current_records=current_records,

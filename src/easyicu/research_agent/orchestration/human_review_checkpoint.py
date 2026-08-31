@@ -511,6 +511,80 @@ def load_checkpoint(
     return checkpoint
 
 
+def completed_review_authorizes_exact_retry(
+    path: Path,
+    *,
+    pipeline_config_sha256: str,
+    run_input_capsule_sha256: str,
+    plan_payload: Mapping[str, Any],
+) -> bool:
+    """Verify that a completed approval covers one exact execution retry.
+
+    A failed execution resumes through :meth:`ResearchAgentPipeline.run` so it
+    can reuse the normal checkpoint and per-step ledger.  Re-entering the Plan
+    phase must not manufacture a second approval for the same plan: doing so
+    both misrepresents the operator's action and collides with the immutable
+    decision evidence.  This verifier is the fail-closed bridge between the
+    completed review checkpoint and that execution-only retry.
+
+    ``False`` means the checkpoint is not a completed execution approval and
+    the normal review workflow still applies.  A completed checkpoint whose
+    authority no longer matches raises instead of silently falling back to a
+    new, visually indistinguishable approval.
+    """
+
+    checkpoint = load_checkpoint(path, require_pending=False)
+    if checkpoint.state != "completed":
+        return False
+    if checkpoint.pipeline_config_sha256 != str(pipeline_config_sha256):
+        raise HumanReviewCheckpointError(
+            "completed review pipeline configuration changed before retry"
+        )
+    if checkpoint.run_input_capsule_sha256 != str(run_input_capsule_sha256):
+        raise HumanReviewCheckpointError(
+            "completed review run-input capsule changed before retry"
+        )
+    reviewed_plan = checkpoint.plan_handoff.get("plan")
+    if not isinstance(reviewed_plan, Mapping) or canonical_sha256(
+        reviewed_plan
+    ) != canonical_sha256(plan_payload):
+        raise HumanReviewCheckpointError(
+            "completed review analysis plan changed before retry"
+        )
+    if checkpoint.execution_start_receipt is None:
+        raise HumanReviewCheckpointError(
+            "completed review has no execution-start receipt"
+        )
+    receipt = checkpoint.execution_start_receipt
+    if (
+        str(receipt.get("run_id") or "") != checkpoint.run_id
+        or str(receipt.get("approved_plan_handoff_sha256") or "")
+        != checkpoint.plan_handoff_sha256
+        or str(receipt.get("decision_set_sha256") or "")
+        != str(checkpoint.consumed_decision_sha256 or "")
+    ):
+        raise HumanReviewCheckpointError(
+            "completed review execution-start receipt is not bound to the checkpoint"
+        )
+    requests = {item.review_id: item for item in checkpoint.requests}
+    decisions = {str(item.get("review_id") or ""): item for item in checkpoint.approved_decisions}
+    if not requests or set(decisions) != set(requests):
+        raise HumanReviewCheckpointError(
+            "completed review decision set does not cover every request"
+        )
+    for review_id, request in requests.items():
+        decision = decisions[review_id]
+        if (
+            str(decision.get("decision") or "") != "approved"
+            or str(decision.get("authority_sha256") or "")
+            != request.authority_sha256
+        ):
+            raise HumanReviewCheckpointError(
+                "completed review decision does not approve its exact request"
+            )
+    return True
+
+
 __all__ = [
     "CHECKPOINT_FILENAME",
     "DEFAULT_CHECKPOINT_TTL",
@@ -520,6 +594,7 @@ __all__ = [
     "HumanReviewCheckpointExpired",
     "HumanReviewCheckpointPhaseUncertain",
     "checkpoint_path",
+    "completed_review_authorizes_exact_retry",
     "load_checkpoint",
     "write_checkpoint",
 ]

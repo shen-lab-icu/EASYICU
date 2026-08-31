@@ -160,6 +160,7 @@ from .authority.table_one_binding import (
 )
 from .authority.resume_plan import (
     load_compatible_resume_plan as _load_compatible_resume_plan,
+    review_bound_plan_sha256 as _review_bound_plan_sha256,
 )
 from .authority import (
     pipeline_cache as _pipeline_cache,
@@ -206,6 +207,7 @@ from .orchestration.human_review_checkpoint import (
     HumanReviewCheckpoint,
     HumanReviewCheckpointError,
     checkpoint_path as human_review_checkpoint_path,
+    completed_review_authorizes_exact_retry,
     load_checkpoint as load_human_review_checkpoint,
     write_checkpoint as write_human_review_checkpoint,
 )
@@ -782,6 +784,26 @@ def _apply_resume_plan_migrations(
         plan,
         resume_from_step_id,
     )
+
+    reviewed_plan_sha256 = _review_bound_plan_sha256(run_dir)
+    if reviewed_plan_sha256 is not None and canonical_sha256(
+        plan.model_dump(mode="json")
+    ) == reviewed_plan_sha256:
+        findings.append(
+            ValidationFinding(
+                validator="resume_review_authority",
+                severity="warning",
+                message=(
+                    "Crash recovery preserved the exact human-reviewed plan; "
+                    "no resume-time plan migration was applied."
+                ),
+                detail={
+                    "reason": "review_bound_resume_plan_preserved",
+                    "plan_sha256": reviewed_plan_sha256,
+                },
+            )
+        )
+        return plan, migrated_plan_path, plan_generation_mode
 
     plan, migrated_plan_path, migrated_step_ids = (
         _migrate_legacy_resume_model_requirements(
@@ -8329,6 +8351,27 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
         if plan_evidence is not None
         else None
     )
+    if (
+        getattr(plan_result, "resume_state", None) is not None
+        and capsule_record is not None
+    ):
+        evidence_root = getattr(plan_evidence, "root", None)
+        checkpoint_file = human_review_checkpoint_path(
+            Path(evidence_root)
+            if evidence_root is not None
+            else plan_result.plan_path.parent
+        )
+        if checkpoint_file.is_file() and completed_review_authorizes_exact_retry(
+            checkpoint_file,
+            pipeline_config_sha256=self._config.canonical_digest(),
+            run_input_capsule_sha256=str(capsule_record.sha256),
+            plan_payload=plan_result.plan.model_dump(mode="json"),
+        ):
+            # The exact plan, input capsule, runtime configuration and every
+            # approved request are already bound by the completed checkpoint.
+            # Continue through the normal Execute state instead of creating a
+            # second approval and overwriting immutable review evidence.
+            return ()
     if capsule_record is None:
         requests_without_execution = human_review_requests_for_plan(
             findings=plan_result.findings,
