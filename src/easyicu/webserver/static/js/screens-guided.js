@@ -15,6 +15,7 @@
   const S = (window.SCREENS = window.SCREENS || {});
   const IDEA = window.EU_GUIDED_IDEA;
   const EXTRACT = window.EU_GUIDED_EXTRACT;
+  const REVIEW = window.EU_GUIDED_REVIEW;
   const STARTUP = window.EU_GUIDED_STARTUP;
   const projectTitle = (value, fallback) => window.EU_PRODUCT_LABELS.projectTitle(value, fallback);
   const {
@@ -50,7 +51,7 @@
 
   /* ============== runtime state ============== */
   let branch, depth, dataMode, mods, cohortPhase, extractPhase, runPhase, draftPhase;
-  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedReview, guidedAgent;
+  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedAgent;
   let guidedRunStream = null;
   const guidedRunChannel = window.EU_AGENT_STUDY_CONTEXT.createRunChannel();
 
@@ -164,11 +165,35 @@
     scheduleGuidedSlotSave,
     guidedJobEndError,
   });
+  REVIEW.init({
+    t,
+    icon,
+    esc,
+    attr,
+    fmtInt,
+    fmtNum,
+    fmtPct,
+    fmtFixed,
+    fmtP,
+    bi,
+    activeExportSource,
+    activeExportLabel,
+    thread: () => thread,
+    clearChips: () => { chips = []; },
+    pushUser,
+    setDataMode: value => { dataMode = value; },
+    setVal,
+    markThrough,
+    renderThread,
+    renderChips,
+    renderAside,
+    scheduleGuidedSlotSave,
+  });
   function reset() {
     disconnectGuidedRunUi();
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
-    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedReview = null; guidedAgent = null; IDEA.clearIdeaState(); EXTRACT.clearState();
+    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedAgent = null; IDEA.clearIdeaState(); EXTRACT.clearState(); REVIEW.clearState();
     pendingGuidedGoal = null;
     guidedFrontdoorSeedText = null;
     guidedFolderMenuOpen = false;
@@ -1303,211 +1328,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     return EXTRACT.windowHours(EXTRACT.design()) || GUIDED_EXTRACT_WINDOW_HOURS;
   }
   /* ============== inline native review: patient + cohort + KM ============== */
-  function resetGuidedReviewState() {
-    guidedReview = {
-      loading: false,
-      error: null,
-      patient: null,
-      cohort: null,
-      selectedRef: null,
-    };
-  }
-  function guidedSourceLabel(payload) {
-    const source = payload && payload.source ? payload.source : activeExportSource();
-    if (!source) return t('No active export', '没有 active export');
-    const label = source.label || source.database || 'active export';
-    const summary = (payload && payload.summary) || source.summary || {};
-    const parts = [];
-    if (summary.entities != null || summary.stays != null) parts.push(`${fmtInt(summary.entities != null ? summary.entities : summary.stays)} entities`);
-    if (summary.modules != null) parts.push(`${fmtInt(summary.modules)} modules`);
-    return `${label}${parts.length ? ' · ' + parts.join(' · ') : ''}`;
-  }
-  function startGuidedReviewFlow(label) {
-    if (label) pushUser(label);
-    dataMode = 'real';
-    resetGuidedReviewState();
-    setVal({ data: activeExportLabel(), review: 'inline Copilot' });
-    markThrough('review', 'active');
-    thread.push({ bot: true, html: bi(
-      `I’ll review the active local export here: patient drilldown, cohort summary, feature coverage, and KM/log-rank when the export has time-to-event fields.`,
-      `我会直接在这里审阅 active 本地导出：患者概览、队列汇总、特征覆盖，以及在导出具备 time-to-event 字段时显示 KM/log-rank。`,
-    ) });
-    thread.push({ guidedReview: true });
-    chips = [];
-    renderThread();
-    renderChips();
-    scheduleGuidedSlotSave('start_review');
-    loadGuidedReviewData();
-  }
-  function loadGuidedReviewData(entityRef) {
-    if (!guidedReview) resetGuidedReviewState();
-    if (!window.EU_API || !window.EU_API.loadPatientReviewDrilldown || !window.EU_API.loadCohortReviewSummary) {
-      guidedReview.loading = false;
-      guidedReview.error = 'Review APIs are unavailable.';
-      renderThread();
-      return;
-    }
-    guidedReview.loading = true;
-    guidedReview.error = null;
-    if (entityRef) guidedReview.selectedRef = entityRef;
-    renderThread();
-    const body = guidedReview.selectedRef ? { entity_ref: guidedReview.selectedRef } : {};
-    Promise.allSettled([
-      window.EU_API.loadPatientReviewDrilldown(body),
-      window.EU_API.loadCohortReviewSummary({}),
-    ]).then(([patientResult, cohortResult]) => {
-      guidedReview.loading = false;
-      const patientOk = patientResult.status === 'fulfilled' && patientResult.value && patientResult.value.ok;
-      const cohortOk = cohortResult.status === 'fulfilled' && cohortResult.value && cohortResult.value.ok;
-      guidedReview.patient = patientOk ? patientResult.value : null;
-      guidedReview.cohort = cohortOk ? cohortResult.value : null;
-      if (guidedReview.patient && guidedReview.patient.selected) guidedReview.selectedRef = guidedReview.patient.selected.ref;
-      if (!patientOk && !cohortOk) {
-        const pErr = patientResult.status === 'rejected' ? patientResult.reason : (patientResult.value && (patientResult.value.error || patientResult.value.reason));
-        const cErr = cohortResult.status === 'rejected' ? cohortResult.reason : (cohortResult.value && (cohortResult.value.error || cohortResult.value.reason));
-        guidedReview.error = (pErr && (pErr.message || String(pErr))) || (cErr && (cErr.message || String(cErr))) || 'No active registered export is available.';
-      }
-      if (guidedReview.cohort && guidedReview.cohort.summary) {
-        setVal({
-          cohort: `${fmtInt(guidedReview.cohort.summary.cohort_size || guidedReview.cohort.summary.entities)} entities`,
-          review: 'cohort + KM audit',
-        });
-      }
-      renderThread();
-      renderAside();
-      scheduleGuidedSlotSave('load_review_data');
-    }).catch(err => {
-      guidedReview.loading = false;
-      guidedReview.error = err.message || String(err);
-      renderThread();
-      scheduleGuidedSlotSave('load_review_data_error');
-    });
-  }
+  /* Review state, effects, presentation, and DOM transitions live in
+     screens-guided-review.js. Agent keeps a tiny local metric primitive
+     because its evidence card is not part of the active-export review. */
   function guidedMetricCard(label, value, sub) {
     return `<div class="gdr-metric"><span>${esc(label)}</span><strong>${esc(value == null ? 'n/a' : value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
   }
-  function renderGuidedPatientPanel(patient) {
-    if (!patient) {
-      return `<div class="gdr-panel blocked"><strong>${t('Patient drilldown unavailable', '患者 drilldown 不可用')}</strong><span>${t('Select or register an active EasyICU export first.', '请先选择或注册一个 active EasyICU 导出。')}</span></div>`;
-    }
-    const summary = patient.summary || {};
-    const selected = patient.selected || {};
-    const demo = selected.demographics || {};
-    const scores = selected.scores || {};
-    const outcomes = selected.outcomes || {};
-    const entities = (patient.entities || []).slice(0, 5);
-    const lanes = (patient.time_lanes || []).filter(row => row.status !== 'unavailable');
-    return `
-      <div class="gdr-panel">
-        <div class="gdr-panel-head">
-          <div><span class="gdx-label">${t('Patient drilldown', '患者 drilldown')}</span><strong>${esc(selected.label || 'Entity')}</strong></div>
-          <div class="gdr-entity-pick">
-            ${entities.map(row => `<button type="button" class="${row.ref === selected.ref ? 'on' : ''}" data-gr-entity="${attr(row.ref)}">${esc(row.label || row.ref)}</button>`).join('')}
-          </div>
-        </div>
-        <div class="gdr-metrics">
-          ${guidedMetricCard(t('Entities', '实体数'), fmtInt(summary.entities))}
-          ${guidedMetricCard(t('Age', '年龄'), fmtNum(demo.age, 'n/a'), demo.sex || '')}
-          ${guidedMetricCard(t('Outcome', '结局'), outcomes.status || 'Unknown', outcomes.icu_los_days != null ? `${fmtNum(outcomes.icu_los_days)} ICU days` : '')}
-          ${guidedMetricCard('SOFA-2', fmtNum(scores.sofa2_max, 'n/a'), scores.sepsis3_sofa2 == null ? '' : `sepsis ${scores.sepsis3_sofa2 ? 'yes' : 'no'}`)}
-        </div>
-        <div class="gdr-mini-table">
-          ${(patient.module_profiles || []).slice(0, 5).map(row => `
-            <div><strong>${esc(row.label || row.module)}</strong><span>${fmtInt(row.rows)} rows · ${fmtPct(row.coverage_pct)} coverage · ${fmtInt(row.feature_count)} features</span></div>
-          `).join('') || `<div><strong>${t('No modules found', '未找到模块')}</strong><span>${t('The export does not expose reviewable modules.', '该导出没有可审阅模块。')}</span></div>`}
-        </div>
-        ${lanes.length ? `<div class="gdr-note">${lanes.map(row => `${row.label}: ${fmtInt(row.signal_count)} signals`).join(' · ')}</div>` : `<div class="gdr-note">${t('No time-series lanes are available in this export. Add vitals/labs/scores modules to review trajectories.', '该导出暂无时间序列通道。请补充 vitals/labs/scores 模块后查看轨迹。')}</div>`}
-      </div>`;
-  }
-  function guidedSurvivalCurve(cohort) {
-    const survival = cohort && cohort.survival_analysis ? cohort.survival_analysis : {};
-    const outcomeId = survival.default_outcome || ((survival.outcomes || []).find(row => row.status === 'ready') || {}).id;
-    const groupId = survival.default_group || ((survival.group_options || []).find(row => row.status === 'ready') || {}).id;
-    return (survival.curves || []).find(row => row.outcome_id === outcomeId && row.group_id === groupId) || null;
-  }
-  function renderGuidedKmPanel(cohort) {
-    const survival = cohort && cohort.survival_analysis ? cohort.survival_analysis : {};
-    const curve = guidedSurvivalCurve(cohort);
-    const blocked = (survival.outcomes || []).filter(row => row.status !== 'ready').slice(0, 3);
-    if (!curve) {
-      return `
-        <div class="gdr-panel blocked">
-          <div class="gdr-panel-head"><div><span class="gdx-label">KM / log-rank</span><strong>${t('Blocked by export schema', '被导出结构阻断')}</strong></div></div>
-          <p>${esc(survival.reason || t('This export does not expose event and time-to-event columns for KM/log-rank.', '该导出没有 KM/log-rank 所需的事件列和 time-to-event 列。'))}</p>
-          ${blocked.length ? `<div class="gdr-mini-table">${blocked.map(row => `<div><strong>${esc(row.label || row.id)}</strong><span>${esc(row.reason || 'unavailable')}</span></div>`).join('')}</div>` : ''}
-        </div>`;
-    }
-    const logrank = curve.logrank || {};
-    const groups = curve.groups || [];
-    const risk = curve.number_at_risk || {};
-    const times = risk.times || [];
-    const rows = risk.rows || [];
-    return `
-      <div class="gdr-panel">
-        <div class="gdr-panel-head">
-          <div><span class="gdx-label">KM / log-rank</span><strong>${esc(curve.label || 'Kaplan-Meier curve')}</strong></div>
-          <div class="gdr-logrank"><span>log-rank</span><strong>${logrank.status === 'ready' ? `χ² ${fmtFixed(logrank.chi_square, 2)} · p ${fmtP(logrank.p_value)}` : 'blocked'}</strong></div>
-        </div>
-        <div class="gdr-km">
-          ${groups.map((g, i) => `<div class="gdr-km-row"><span class="line c${i % 4}"></span><strong>${esc(g.label || `Group ${i + 1}`)}</strong><em>n ${fmtInt(g.n)} · events ${fmtInt(g.events)}</em></div>`).join('')}
-        </div>
-        ${times.length && rows.length ? `<div class="gdr-risk"><strong>${t('Number at risk', '风险人数表')}</strong><table><thead><tr><th>Group</th>${times.map(x => `<th>${fmtNum(x)}d</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.label)}</td>${(row.values || []).map(v => `<td>${fmtInt(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}
-        <div class="gdr-note">${t('Exploratory aggregate only. Manuscript claims still need Agent evidence checks and human review.', '仅为探索性聚合结果。论文结论仍需 Agent 证据核验和人工审阅。')}</div>
-      </div>`;
-  }
-  function renderGuidedCohortPanel(cohort) {
-    if (!cohort) {
-      return `<div class="gdr-panel blocked"><strong>${t('Cohort summary unavailable', '队列汇总不可用')}</strong><span>${t('Register an active export, then refresh this card.', '请先注册 active export，然后刷新这张卡。')}</span></div>`;
-    }
-    const summary = cohort.summary || {};
-    const mortality = summary.mortality || {};
-    const coverage = (cohort.coverage || []).slice(0, 6);
-    return `
-      <div class="gdr-panel">
-        <div class="gdr-panel-head"><div><span class="gdx-label">${t('Cohort summary', '队列汇总')}</span><strong>${esc(guidedSourceLabel(cohort))}</strong></div></div>
-        <div class="gdr-metrics">
-          ${guidedMetricCard(t('Cohort', '队列'), fmtInt(summary.cohort_size || summary.entities), 'entities')}
-          ${guidedMetricCard(t('Mortality', '死亡率'), fmtPct(summary.mortality_pct), `${fmtInt(mortality.deceased_count, 'n/a')} events`)}
-          ${guidedMetricCard(t('Median age', '年龄中位数'), fmtNum(summary.age && summary.age.median, 'n/a'), 'years')}
-          ${guidedMetricCard(t('Modules', '模块'), fmtInt(summary.modules), `${fmtInt(summary.total_records)} records`)}
-        </div>
-        <div class="gdr-mini-table">
-          ${coverage.map(row => `<div><strong>${esc(row.label || row.module)}</strong><span>${fmtPct(row.coverage_pct)} · ${fmtInt(row.rows)} rows · ${esc(row.quality_status || 'ok')}</span></div>`).join('') || `<div><strong>${t('No coverage rows', '暂无覆盖率')}</strong><span>${t('This export has no auditable feature modules yet.', '该导出还没有可审计特征模块。')}</span></div>`}
-        </div>
-      </div>`;
-  }
-  function renderGuidedReviewCard() {
-    if (!guidedReview) resetGuidedReviewState();
-    const loading = guidedReview.loading;
-    const hasPayload = guidedReview.patient || guidedReview.cohort;
-    return `
-      <div class="gd-review-card">
-        <div class="gdx-head">
-          <span class="gdx-ico">${icon('eye', 15)}</span>
-          <div>
-            <strong>${t('Review active export inside Copilot', '在 Copilot 内审阅 active export')}</strong>
-            <span>${t('Uses Patient Review and Cohort Statistics APIs; no seeded demo panels are substituted.', '复用 Patient Review 和 Cohort Statistics API；不会用 seeded demo 面板替代。')}</span>
-          </div>
-        </div>
-        <div class="gdx-status ${guidedReview.error ? 'bad' : hasPayload ? 'ok' : ''}">
-          <span>${icon(guidedReview.error ? 'x' : hasPayload ? 'check' : 'shield', 12)}</span>
-          <div><strong>${loading ? t('Loading active export review...', '正在加载 active export 审阅...') : guidedReview.error ? esc(guidedReview.error) : hasPayload ? t('Loaded from active registered export.', '已从 active registered export 加载。') : t('No review loaded yet.', '尚未加载审阅。')}</strong><small>${esc(guidedSourceLabel(guidedReview.cohort || guidedReview.patient))}</small></div>
-        </div>
-        ${hasPayload ? `
-          <div class="gdr-grid">
-            ${renderGuidedPatientPanel(guidedReview.patient)}
-            ${renderGuidedCohortPanel(guidedReview.cohort)}
-            ${renderGuidedKmPanel(guidedReview.cohort)}
-          </div>
-        ` : ''}
-        <div class="gdx-actions">
-          <button type="button" class="btn primary" data-gr-refresh ${loading ? 'disabled' : ''}>${icon('refresh', 13)} ${t('Refresh review', '刷新审阅')}</button>
-          <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare more modules here', '在这里补抽取模块')}</button>
-          <button type="button" class="btn" data-guided-goal="run_agent" ${hasPayload ? '' : 'disabled'}>${t('Continue to Agent preflight', '继续 Agent 预检')}</button>
-        </div>
-      </div>`;
-  }
-
   /* ============== inline Agent preflight ============== */
   function resetGuidedAgentState() {
     const guidedDesign = EXTRACT.design();
@@ -1916,7 +1742,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     host.innerHTML = thread.map(t => {
       if (t.typing) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble"><div class="typing"><span></span><span></span><span></span></div></div></div></div>`;
       if (t.guidedExtraction) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${EXTRACT.renderCard()}</div></div>`;
-      if (t.guidedReview) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedReviewCard()}</div></div>`;
+      if (t.guidedReview) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${REVIEW.renderCard()}</div></div>`;
       if (t.guidedAgent) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedAgentCard()}</div></div>`;
       if (t.guidedIdeaApiSetup) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${IDEA.renderGuidedIdeaApiSetupCard()}</div></div>`;
       if (t.guidedIdea) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${IDEA.renderGuidedIdeaCard()}</div></div>`;
@@ -2232,7 +2058,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function guidedActiveFlow() {
     if (IDEA.state()) return 'idea_mining';
     if (EXTRACT.state()) return 'data_extraction';
-    if (guidedReview) return 'review_data';
+    if (REVIEW.state()) return 'review_data';
     if (guidedAgent) return 'run_agent';
     return null;
   }
@@ -2301,12 +2127,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           files_written: guidedExtract.result.files_written == null ? guidedExtract.result.files : guidedExtract.result.files_written,
         } : null,
       } : null,
-      review: guidedReview ? {
-        selected_ref: guidedReview.selectedRef || null,
-        loaded: !!(guidedReview.patient || guidedReview.cohort),
-        source_label: guidedSourceLabel(guidedReview.cohort || guidedReview.patient),
-        cohort_size: guidedReview.cohort && guidedReview.cohort.summary && (guidedReview.cohort.summary.cohort_size || guidedReview.cohort.summary.entities),
-      } : null,
+      review: REVIEW.slotSnapshot(),
       agent: guidedAgent ? {
         question: guidedAgent.question || '',
         job_id: guidedAgent.jobId || null,
@@ -2397,10 +2218,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedAgent.jobId = slots.agent.job_id || null;
       guidedAgent.result = slots.agent.result || null;
     }
-    if (slots.review && typeof slots.review === 'object') {
-      resetGuidedReviewState();
-      guidedReview.selectedRef = slots.review.selected_ref || null;
-    }
+    REVIEW.restoreSlot(slots.review);
     return active || null;
   }
   function hasGuidedProjectMemory() {
@@ -2569,14 +2387,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       restored.forEach(item => thread.push(item));
       if (session && session.handoff) thread.push({ bot: true, html: renderGuidedHandoffCard(session.handoff) });
     }
-    if (restoredFlow && (EXTRACT.state() || IDEA.state() || guidedReview || guidedAgent)) {
+    if (restoredFlow && (EXTRACT.state() || IDEA.state() || REVIEW.state() || guidedAgent)) {
       thread.push({ bot: true, html: bi(
         `Restored the saved setup for this folder. Continue editing here; required configuration stays inside Guided Copilot.`,
         `已恢复这个文件夹里保存的配置。你可以继续在这里编辑；必需配置仍留在研究引导内完成。`,
       ) });
       if (restoredFlow === 'data_extraction' && EXTRACT.state()) thread.push({ guidedExtraction: true });
       else if (restoredFlow === 'idea_mining' && IDEA.state()) thread.push({ guidedIdea: true });
-      else if (restoredFlow === 'review_data' && guidedReview) thread.push({ guidedReview: true });
+      else if (restoredFlow === 'review_data' && REVIEW.state()) thread.push({ guidedReview: true });
       else if (restoredFlow === 'run_agent' && guidedAgent) thread.push({ guidedAgent: true });
     } else if (!restored.length && kind === 'run') {
       thread.push({ bot: true, html: bi(
@@ -2604,7 +2422,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     workspaceSnapshot = null;
     workspaceSnapshotPath = null;
     EXTRACT.clearState();
-    guidedReview = null;
+    REVIEW.clearState();
     guidedAgent = null;
     IDEA.clearIdeaState();
     thread = [];
@@ -2754,7 +2572,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     if (goal === 'review_data') {
-      startGuidedReviewFlow(label || guidedGoalMeta(goal).label_en);
+      REVIEW.start(label || guidedGoalMeta(goal).label_en);
       return;
     }
     if (goal === 'run_agent') {
@@ -3097,7 +2915,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `已将 <span class="mono">${esc(compactPath(raw))}</span> 注册为 active EasyICU export。接下来会在这里审阅已提取数据；不会创建项目记忆或 Agent run。`,
       );
       setVal({ data: (source && (source.label || source.database)) || 'active export' });
-      startGuidedReviewFlow(null);
+          REVIEW.start(null);
       return true;
     }).catch(err => {
       thread = thread.filter(item => !item.typing);
@@ -3801,15 +3619,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           return;
         }
         if (EXTRACT.handleClick(e.target)) return;
-        if (e.target.closest('[data-gr-refresh]')) {
-          loadGuidedReviewData();
-          return;
-        }
-        const grEntity = e.target.closest('[data-gr-entity]');
-        if (grEntity) {
-          loadGuidedReviewData(grEntity.dataset.grEntity);
-          return;
-        }
+        if (REVIEW.handleClick(e.target)) return;
         if (e.target.closest('[data-ga-run]')) {
           runGuidedAgentPreflight();
           return;
@@ -4378,7 +4188,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }
     if (currentId === 'frontdoor' && isGuidedReviewIntent(v)) {
       if (requireGuidedProjectMemory('review_data', v)) return;
-      startGuidedReviewFlow(v);
+      REVIEW.start(v);
       return;
     }
     if (currentId === 'frontdoor' && isGuidedAgentIntent(v)) {

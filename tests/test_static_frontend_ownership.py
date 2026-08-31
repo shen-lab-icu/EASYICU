@@ -557,6 +557,30 @@ def test_guided_extraction_owner_contains_effects_and_dom_transitions() -> None:
     assert "data-gx-" not in shell
 
 
+def test_guided_review_owner_contains_state_effects_and_dom_transitions() -> None:
+    shell = (STATIC / "js" / "screens-guided.js").read_text(encoding="utf-8")
+    owner = (STATIC / "js" / "screens-guided-review.js").read_text(encoding="utf-8")
+
+    assert "const REVIEW = window.EU_GUIDED_REVIEW;" in shell
+    assert "let reviewState = null;" in owner
+    assert not re.search(r"^  let .*\bguidedReview\b", shell, re.M)
+    for marker in (
+        "function load(entityRef)",
+        "function renderCard()",
+        "function handleClick(target)",
+        "window.EU_API.loadPatientReviewDrilldown",
+        "window.EU_API.loadCohortReviewSummary",
+        "data-gr-refresh",
+        "data-gr-entity",
+    ):
+        assert marker in owner, marker
+        assert marker not in shell, marker
+
+    assert "REVIEW.handleClick(e.target)" in shell
+    assert "REVIEW.renderCard()" in shell
+    assert "REVIEW.slotSnapshot()" in shell
+
+
 def test_owner_js_files_do_not_grow_past_their_ratchet() -> None:
     too_big: list[str] = []
     for path in sorted((STATIC / "js").glob("*.js")):
