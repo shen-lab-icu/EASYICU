@@ -1,22 +1,9 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/analysis_blueprint.py",
-      "src/easyicu/research_agent/planning/figure_strategy.py",
-      "src/easyicu/research_agent/planning/study_design.py",
-      "src/easyicu/research_agent/planning/study_design_playbook.py",
       "src/easyicu/research_agent/reporting/article_contract.py"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 61241,
-        "was": 60812
-      },
-      "max_planner_without_resources_bytes": {
-        "now": 56601,
-        "was": 56172
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -358,9 +345,48 @@
           "was": 56172
         }
       }
+    },
+    {
+      "reason": "Re-adjudicate the provider-free and patient-data-free offline Canonical9 resource envelope after the reviewed Planner, capability, typed-context, and prompt-scope owner changes in the current integration checkpoint. The measured maximum Planner prompt decreases from 61,241 to 60,841 bytes and the without-resources maximum decreases from 56,601 to 56,201 bytes; selected resources, nine-task scope, zero Provider calls, zero patient-data reads, and existing hard limits remain unchanged.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/figure_strategy.py",
+        "src/easyicu/research_agent/reporting/article_contract.py",
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 60841,
+          "was": 61241
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 56201,
+          "was": 56601
+        }
+      }
+    },
+    {
+      "reason": "Correct the immediately preceding baseline entry, which was generated without PYTHONPATH=src and therefore measured the ambient editable primary checkout instead of this unified checkout. This entry binds the exact local source tree: the actual maximum Planner prompt is 61,262 bytes and the without-resources maximum is 56,622 bytes, each 21 bytes above the prior valid 61,241/56,601 checkpoint; all nine tasks remain below existing limits with seven selected resources, zero Provider calls, and zero patient-data reads.",
+      "source_digest_changes": [],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 61262,
+          "was": 60841
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 56622,
+          "was": 56201
+        }
+      }
+    },
+    {
+      "reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 context envelope after the committed planning, execution, figure, and prompt-contract repairs. All nine fixtures remain within existing limits; this baseline is architecture evidence only and grants no scientific or publication authority.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/reporting/article_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 resource envelope against this exact checkout after typed design planning, figure strategy, reviewed method-resource, and orchestration updates. The current package source is explicitly bound through PYTHONPATH=src; all nine prompts remain below 80,000 bytes, coder prompts remain below 8,000 bytes, and Provider calls and patient-data reads remain zero.",
+  "baseline_reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 context envelope after the committed planning, execution, figure, and prompt-contract repairs. All nine fixtures remain within existing limits; this baseline is architecture evidence only and grants no scientific or publication authority.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -381,11 +407,11 @@
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "79c013db5b2b6f14bf0d1463dbcc614ab2e1943a3e670f0f25454bacfd55c3eb",
     "src/easyicu/research_agent/planning/cohort_contract.py": "1ab0475e41e56685dd0cc4fac96f5a02fb04db84c29791800585a78f9da5f4db",
-    "src/easyicu/research_agent/planning/figure_strategy.py": "1b166ecf4b9afe3f400d31856d3af8c16aa930bfb5c4a03359a104ab4372ccfd",
+    "src/easyicu/research_agent/planning/figure_strategy.py": "fb38bee2e099043411707383c6144793d898a123323a2be7989cc832978f2923",
     "src/easyicu/research_agent/planning/study_design.py": "8c26e3d42c1397839e3347317b90ceadab56beee58a500170cb182535aca7a3c",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "c8312eb455d0a65d8c3936bbf8f770cb15a64925923e679cc2509bcf5036d649",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "d2653946432be60d2c3b41d91182a5abdf1fe1e2628e5aa892e63c372696ef36",
+    "src/easyicu/research_agent/reporting/article_contract.py": "f4d94f95b595926cf22c68612f64bc1e56c024f793234c5857e1abb2933dbb73",
     "src/easyicu/research_agent/research_context/outbound.py": "0a33010d53ddbb34c954162e15a68e4f4bb2893780451ad8b1a8d216c16b66b9",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
@@ -394,14 +420,14 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "cad3205e4a1f8a7f54c8a700c44aac671f0de599cc108acd0668f45224d48cd0",
+    "src/easyicu/research_agent/schema.py": "19504cd710883a9d81f00fed772cba4b7c1e75d4f0ef88f22b70c6016d019e4b",
     "tools/research_agent_resource_baseline.py": "4f3fe0d9c859ff713fe1cbdaa9dc47ebe5041b60b2be08fd8b8087d115bd3712"
   },
   "summary": {
     "coder_resource_provider_calls": 0,
     "max_coder_resource_prompt_bytes": 2255,
-    "max_planner_with_resources_bytes": 61241,
-    "max_planner_without_resources_bytes": 56601,
+    "max_planner_with_resources_bytes": 61262,
+    "max_planner_without_resources_bytes": 56622,
     "max_resource_added_bytes": 4657,
     "selected_resource_count": 7,
     "task_count": 9
@@ -865,15 +891,15 @@
       "know_how_prompt_bytes": 4012,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15311,
+        "approx_input_tokens": 15316,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48985,
+            "bytes": 49006,
             "included": true,
             "required": true,
-            "sha256": "df54b31ebf0f11a33acd69165b958fe1f9de9c811435e71ff2057a1fd67c8776"
+            "sha256": "f359e1c35370632c7fc865c2fb2100666abc91a9317b624fae9a5fd5d21b2f63"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -884,30 +910,30 @@
           }
         },
         "system_bytes": 7616,
-        "total_bytes": 61241,
+        "total_bytes": 61262,
         "truncated_strings": false,
-        "user_bytes": 53625
+        "user_bytes": 53646
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14151,
+        "approx_input_tokens": 14156,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48985,
+            "bytes": 49006,
             "included": true,
             "required": true,
-            "sha256": "df54b31ebf0f11a33acd69165b958fe1f9de9c811435e71ff2057a1fd67c8776"
+            "sha256": "f359e1c35370632c7fc865c2fb2100666abc91a9317b624fae9a5fd5d21b2f63"
           }
         },
         "system_bytes": 7616,
-        "total_bytes": 56601,
+        "total_bytes": 56622,
         "truncated_strings": false,
-        "user_bytes": 48985
+        "user_bytes": 49006
       },
-      "planning_contract_bytes": 7248,
-      "planning_contract_sha256": "95cdfe4fa7cc6cf9a26037f3de1dc921e579d1dd124c87b99d698225fcd8b563",
+      "planning_contract_bytes": 7269,
+      "planning_contract_sha256": "760d4789da8e5161e82c92ddd5841de1a4558f0c7eb03be121334ef4a0c14513",
       "question": "Build a first-24-hour mortality risk prediction model.",
       "resource_added_bytes": 4640,
       "resource_allowlist_sha256": "72a976b73568ab1ed5129766b0366ce68463e47e09ab4b2c1dcddbdf62bc4aad",

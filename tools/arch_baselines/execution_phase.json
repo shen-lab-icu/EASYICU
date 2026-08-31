@@ -1,6 +1,6 @@
 {
   "tool_version": "1.8.0",
-  "tool_sha256": "23b9e5ce82474e845442bbefbfc58ed88f80adeabc52086193cb031069585bb0",
+  "tool_sha256": "94d98442cfe121f2c2ec264b66ca9f56e4096e6a481a33ebeff4554e085df00e",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
@@ -10,8 +10,8 @@
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 3758,
-      "sha256": "56aff0c0530c600022a0a5f0934f6d81b270cdde9fa5b860bca588ff8448587d",
+      "loc": 3748,
+      "sha256": "daf5b87ad69d34a76c130f0d6ca6c9396b0c844119277a2289ed48ed3cb9568c",
       "intra_package_import_edges": 55,
       "shim_bypass_violations": []
     },
@@ -22,21 +22,21 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 8419,
-      "sha256": "f5f7a79f8234fdfb4d51fd45d6c9b69a2f781b5a78887b5638f7fa87d2d539c0",
-      "intra_package_import_edges": 125,
+      "loc": 8483,
+      "sha256": "17ce7bf43cfc844e111bdcd25114e6b6e6449ea546ca1a0636c72286d7e67749",
+      "intra_package_import_edges": 124,
       "shim_bypass_violations": []
     },
     "reporting/publication_bundles.py": {
-      "loc": 2734,
-      "sha256": "f256dbb899126e0562955d46636e1f94a963f6a40555fc29ddce91b44fe9cea1",
+      "loc": 2794,
+      "sha256": "4ddf80ed830157b2b93275cd4b2a1c5cd82f3196a6cc0aeb43ca306110d2b5a8",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 3034,
-      "sha256": "cb1d09f7d7797b136a4f8e2bff909d78aa4995951a8770c66c0c7cf84df3d362",
-      "intra_package_import_edges": 34,
+      "loc": 3067,
+      "sha256": "2af66f7f382b2e4a75215061a906eae9e9b681eb34aed71e2e436a0934897be9",
+      "intra_package_import_edges": 35,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
@@ -53,7 +53,7 @@
     },
     "authority/plan_authority.py": {
       "loc": 389,
-      "sha256": "625691b4089ad30689898fd9e5f44dbc525c988ecb7b7e1c305e6480eb988af4",
+      "sha256": "2080f1456b00ff7dea2b2662c20d8ad28ce73034487fbc78e217fdb378bb933d",
       "intra_package_import_edges": 11,
       "shim_bypass_violations": []
     },
@@ -124,8 +124,8 @@
       "shim_bypass_violations": []
     },
     "audits/cross_step.py": {
-      "loc": 4316,
-      "sha256": "16896f0f85ff68749b41cd5af7f332abf2bb840e1441395bcd43ffb021e45965",
+      "loc": 4317,
+      "sha256": "3013a5322a4c867bae597dd6cdbadaabe51d7b6543674c1d342f8246593f0f84",
       "intra_package_import_edges": 5,
       "shim_bypass_violations": []
     },
@@ -160,8 +160,8 @@
       "shim_bypass_violations": []
     },
     "plan_utils.py": {
-      "loc": 4958,
-      "sha256": "2c28ac3b8e919c2d57251de6cbb4c206f2d54635c167c7eee5f2712ee3ff33d2",
+      "loc": 4987,
+      "sha256": "7709bd01cc8715b0bf3b63192959db5a1206abe40b303ddd66e5d96deb53d696",
       "intra_package_import_edges": 17,
       "shim_bypass_violations": []
     },
@@ -220,9 +220,9 @@
       "shim_bypass_violations": []
     },
     "agents/roles.py": {
-      "loc": 562,
-      "sha256": "c295328ab9d72eae9ebdf040e3d36966feb5d93149866d429a3612120ea1f526",
-      "intra_package_import_edges": 7,
+      "loc": 595,
+      "sha256": "716de1e85951aa3cbe67fc8b9eca4e44447b3bd45a1d1bc02caeccb0303e3a29",
+      "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "agents/coder.py": {
@@ -238,14 +238,14 @@
       "shim_bypass_violations": []
     },
     "agents/reporting.py": {
-      "loc": 348,
-      "sha256": "c7cf0aa2328f5e16e70e84c4178e76164b47131f75e20ea03be8ff5aca6ec692",
-      "intra_package_import_edges": 9,
+      "loc": 454,
+      "sha256": "db38b4076d8be54ce75ab6b130151546f859fc812d15d756daa609efe8ef82e3",
+      "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
     "schema.py": {
-      "loc": 3263,
-      "sha256": "cad3205e4a1f8a7f54c8a700c44aac671f0de599cc108acd0668f45224d48cd0",
+      "loc": 3277,
+      "sha256": "19504cd710883a9d81f00fed772cba4b7c1e75d4f0ef88f22b70c6016d019e4b",
       "intra_package_import_edges": 19,
       "shim_bypass_violations": []
     },
@@ -286,8 +286,8 @@
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 3325,
-      "sha256": "f4bb49d8f4e073f14984f0c9d7b6ee122df08e46346fd41141f2cef95b14c382",
+      "loc": 3423,
+      "sha256": "b6f4e338b7a1dd8184f6db93537cff17525fcf0d7686e482809df14c060e01d4",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
@@ -304,8 +304,8 @@
       "shim_bypass_violations": []
     },
     "execution/runner.py": {
-      "loc": 3329,
-      "sha256": "619f7fbdea766468ed94039f016c3cde7919a7a31cbbb104901c0a4d3807d75d",
+      "loc": 3498,
+      "sha256": "da12b351e7b692e31fb76671e43c3ecf21568fce3df3a2adb4d354a269033f39",
       "intra_package_import_edges": 9,
       "shim_bypass_violations": []
     },
@@ -313,6 +313,12 @@
       "loc": 3341,
       "sha256": "560187cffec031394d8f46099b560ff40b114775f1819ede6d7cc99f5506c212",
       "intra_package_import_edges": 17,
+      "shim_bypass_violations": []
+    },
+    "agents/progressive_planner.py": {
+      "loc": 4122,
+      "sha256": "219838897be8e0902bde147b972a45bc1831537ff1560fb175d0fc0626016f3f",
+      "intra_package_import_edges": 33,
       "shim_bypass_violations": []
     }
   },
@@ -370,8 +376,8 @@
       "callable_closure_captured_names": 15
     },
     "pipeline.py::run": {
-      "lines": 782,
-      "line_start": 4074,
+      "lines": 790,
+      "line_start": 4109,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 107,
@@ -380,8 +386,8 @@
       "callable_closure_captured_names": 43
     },
     "pipeline.py::_generate_or_resume_plan": {
-      "lines": 449,
-      "line_start": 1994,
+      "lines": 438,
+      "line_start": 2025,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 55,
@@ -391,7 +397,7 @@
     },
     "pipeline.py::_run_plan_phase": {
       "lines": 618,
-      "line_start": 2879,
+      "line_start": 2914,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 83,
@@ -400,63 +406,11 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Dev9 quality-remediation freeze: ratchet the reviewed case-neutral owner contracts and deterministic adapters after all nine exact execution packages completed 76/76. Twelve new responsibility-scoped modules own spline validation/execution, prediction execution, source feasibility, scientific reporting, progressive materialization, supplement assembly, and trajectory validation. Existing large-file growth remains visible in this accepted-growth ledger and is architecture debt for a separate characterized refactor; this baseline move does not claim decomposition or paper readiness.",
+  "baseline_reason": "Ratchet the now-committed progressive Planner owner and accept the reviewed owner-scoped growth in this staged repair series. Every measured source is from the current branch state; this move records architecture debt and claims neither decomposition nor paper readiness.",
   "baseline_accepted_growth": {
-    "execution/phase.py": {
-      "loc_was": 5679,
-      "loc_now": 5695
-    },
-    "execution/phase_support.py": {
-      "loc_was": 3708,
-      "loc_now": 3758
-    },
     "pipeline.py": {
-      "loc_was": 8256,
-      "loc_now": 8419
-    },
-    "reporting/readiness.py": {
-      "loc_was": 2789,
-      "loc_now": 3034
-    },
-    "authority/typed_binding.py": {
-      "loc_was": 2285,
-      "loc_now": 2301
-    },
-    "agents/_support.py": {
-      "loc_was": 590,
-      "loc_now": 643
-    },
-    "agents/roles.py": {
-      "loc_was": 559,
-      "loc_now": 562
-    },
-    "agents/reporting.py": {
-      "loc_was": 315,
-      "loc_now": 348
-    },
-    "contracts/declared_product.py": {
-      "loc_was": 2220,
-      "loc_now": 2245
-    },
-    "figures/skill.py": {
-      "loc_was": 3370,
-      "loc_now": 3772
-    },
-    "figures/promotion_contract.py": {
-      "loc_was": 115,
-      "loc_now": 116
-    },
-    "authority/evidence_store.py": {
-      "loc_was": 3221,
-      "loc_now": 3325
-    },
-    "orchestration/resume_plan_migration.py": {
-      "loc_was": 882,
-      "loc_now": 976
-    },
-    "execution/runners/deterministic_robustness.py": {
-      "loc_was": 3323,
-      "loc_now": 3341
+      "loc_was": 8440,
+      "loc_now": 8483
     }
   },
   "baseline_history": [
@@ -885,6 +839,63 @@
         "execution/runners/deterministic_robustness.py": {
           "loc_was": 3323,
           "loc_now": 3341
+        }
+      }
+    },
+    {
+      "reason": "Accept reviewed owner-scoped functionality added since the stale snapshot: fail-closed planning and runtime gates plus publication display governance; 404 focused contracts pass, and the new responsibilities remain split into acyclic owner modules.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 8419,
+          "loc_now": 8440
+        },
+        "reporting/publication_bundles.py": {
+          "loc_was": 2734,
+          "loc_now": 2794
+        },
+        "reporting/readiness.py": {
+          "loc_was": 3034,
+          "loc_now": 3067
+        },
+        "audits/cross_step.py": {
+          "loc_was": 4316,
+          "loc_now": 4317
+        },
+        "plan_utils.py": {
+          "loc_was": 4958,
+          "loc_now": 4987
+        },
+        "agents/roles.py": {
+          "loc_was": 562,
+          "loc_now": 595
+        },
+        "agents/reporting.py": {
+          "loc_was": 348,
+          "loc_now": 454
+        },
+        "schema.py": {
+          "loc_was": 3263,
+          "loc_now": 3277
+        },
+        "authority/evidence_store.py": {
+          "loc_was": 3325,
+          "loc_now": 3423
+        },
+        "execution/runner.py": {
+          "loc_was": 3329,
+          "loc_now": 3498
+        }
+      }
+    },
+    {
+      "reason": "Refresh the accepted-growth ledger for the in-flight owner work on this branch. agents/progressive_planner.py is deliberately NOT in this baseline: it was added to the ratchet on 2026-08-30 while still uncommitted, so the entry recorded transient working-tree bytes (loc 4115, matching neither HEAD's 3999 nor the file's next state); the file reached 4122 minutes later and the gate failed on its own new entry. arch_measure.py's TARGET_FILES rule already required waiting for the owning workstream to commit. Re-add it there, with a baseline captured from committed bytes, once that workstream lands. This refresh claims no decomposition and no paper readiness."
+    },
+    {
+      "reason": "Ratchet the now-committed progressive Planner owner and accept the reviewed owner-scoped growth in this staged repair series. Every measured source is from the current branch state; this move records architecture debt and claims neither decomposition nor paper readiness.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 8440,
+          "loc_now": 8483
         }
       }
     }
