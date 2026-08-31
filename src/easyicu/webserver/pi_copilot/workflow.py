@@ -89,6 +89,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     plan_review_summary: Optional[Mapping[str, Any]] = None
     plan_conversation_preview: Optional[Mapping[str, Any]] = None
     plan_execution_ready: bool = False
+    analysis_validation_retry_available: bool = False
 
 
 def _has_mapping(value: Any) -> bool:
@@ -522,6 +523,17 @@ def build_research_workflow_snapshot(
         and gate_checks.get("analysis_validated") is True
         and gate_checks.get("numeric_verified") is True
     )
+    analysis_outputs_available = bool(
+        full_run
+        and pipeline_run
+        and pipeline_receipt
+        and has_plan
+        and has_evidence
+        and has_outputs
+        and gate_checks.get("execution_complete") is True
+        and gate_checks.get("evidence_complete") is True
+        and gate_checks.get("numeric_verified") is True
+    )
     preflight_complete = bool(
         run_type == "preflight"
         and has_evidence
@@ -743,14 +755,19 @@ def build_research_workflow_snapshot(
     # legacy blank setup slots. The approved Agent plan owns the exact study
     # design used for execution, so an older StudyContext must not pull the
     # visible workflow backward from result interpretation to setup.
-    setup_receipted = bool(setup_ready or analysis_complete)
-    extraction_receipted = bool(prepared_export_receipted or analysis_complete)
+    setup_receipted = bool(
+        setup_ready or analysis_complete or analysis_outputs_available
+    )
+    extraction_receipted = bool(
+        prepared_export_receipted or analysis_complete or analysis_outputs_available
+    )
     pipeline_attempt_blocked = bool(
         full_run
         and pipeline_run
         and pipeline_receipt
         and run_blocked
         and not analysis_complete
+        and not analysis_outputs_available
     )
     # A terminal fail-closed run is historical evidence, not a completed
     # analysis stage.  The ordinary Copilot journey must return to a fresh Plan
@@ -766,6 +783,13 @@ def build_research_workflow_snapshot(
         failed_pipeline_regeneration_required
         and has_plan
         and has_evidence
+        and preserves_approved_execution_checkpoint(run_row.get("gate_reason"))
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest == current_scientific_digest
+    )
+    analysis_validation_retry_available = bool(
+        analysis_outputs_available
+        and run_blocked
         and preserves_approved_execution_checkpoint(run_row.get("gate_reason"))
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
@@ -835,7 +859,7 @@ def build_research_workflow_snapshot(
             owner="easyicu.webserver.study_contexts",
             reason_code=(
                 "approved_plan_setup_receipt"
-                if analysis_complete and not setup_ready
+                if (analysis_complete or analysis_outputs_available) and not setup_ready
                 else "study_setup_complete"
                 if setup_ready
                 else "cohort_eligibility_confirmation_required"
@@ -858,7 +882,8 @@ def build_research_workflow_snapshot(
             owner="easyicu.webserver.routes.jobs",
             reason_code=(
                 "approved_analysis_input_receipt"
-                if analysis_complete and not prepared_export_receipted
+                if (analysis_complete or analysis_outputs_available)
+                and not prepared_export_receipted
                 else "active_export_ready"
                 if extraction_receipted
                 else "extraction_running"
@@ -918,6 +943,8 @@ def build_research_workflow_snapshot(
                 else "complete"
                 if analysis_complete
                 else "review_required"
+                if analysis_outputs_available
+                else "review_required"
                 if pipeline_attempt_blocked
                 else "ready"
                 if prepared_export_receipted and setup_ready
@@ -937,6 +964,8 @@ def build_research_workflow_snapshot(
                 if analysis_running
                 else "validated_analysis_ready"
                 if analysis_complete
+                else "analysis_outputs_require_validation"
+                if analysis_outputs_available
                 else "analysis_gate_blocked"
                 if pipeline_attempt_blocked
                 else "research_pipeline_required"
@@ -949,11 +978,15 @@ def build_research_workflow_snapshot(
         ResearchWorkflowStage(
             id="interpretation",
             label="Result interpretation",
-            status=("review_required" if analysis_complete else "blocked"),
+            status=(
+                "review_required"
+                if analysis_complete or analysis_outputs_available
+                else "blocked"
+            ),
             owner="easyicu.research_agent.reporting",
             reason_code=(
                 "evidence_bound_interpretation_ready"
-                if analysis_complete
+                if analysis_complete or analysis_outputs_available
                 else "validated_analysis_required"
             ),
         ),
@@ -1005,6 +1038,9 @@ def build_research_workflow_snapshot(
         study_setup_receipt=_safe_study_setup_receipt(study_row),
         plan_review_summary=plan_review_summary,
         plan_execution_ready=plan_execution_ready,
+        analysis_validation_retry_available=(
+            analysis_validation_retry_available
+        ),
     )
 
 
