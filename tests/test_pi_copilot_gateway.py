@@ -82,6 +82,9 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert 'turnIntent,' in entrypoint
     assert "record.session.navigateTree(target.entryId" in entrypoint
     assert "replaced_turn_index: target.turnIndex" in entrypoint
+    assert "userPromptStudySnapshot(raw)" in entrypoint
+    assert "study_context_snapshot: target.studyContextSnapshot" in entrypoint
+    assert "easyicu.pi-turn-study-snapshot/1" in entrypoint
     assert 'turnIntent === "advance_after_data_source_confirmation"' in entrypoint
     assert 'customType: "easyicu_host_transition"' in entrypoint
     assert "do not ask the next setup question" in entrypoint
@@ -1460,6 +1463,27 @@ def test_formal_plan_confirmation_is_a_hidden_typed_single_tool_transition() -> 
     assert "The run owner decides from the bound source" in entrypoint
 
 
+def test_fresh_plan_regeneration_is_a_hidden_typed_single_tool_transition() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+
+    prompt_session = entrypoint.split("async function promptSession", 1)[1].split(
+        "function regenerateTarget", 1
+    )[0]
+    regenerate_session = entrypoint.split("async function regenerateSession", 1)[1].split(
+        "async function handleRequest", 1
+    )[0]
+    assert 'intent === "confirm_fresh_plan_generation"' in prompt_session
+    assert 'turnIntent === "confirm_fresh_plan_generation"' in regenerate_session
+    assert 'intent === "replace_plan_response_preserve_study"' in regenerate_session
+    assert 'record.session.setActiveToolsByName(["easyicu_request_replan"])' in regenerate_session
+    assert "currently bound prepared data" in entrypoint
+    assert "Do not mutate or reuse the failed plan" in entrypoint
+    assert "strategy='fresh'" in entrypoint
+    assert "strategy='resume_checkpoint'" in entrypoint
+    assert 'Type.Literal("fresh")' in entrypoint
+    assert 'Type.Literal("resume_checkpoint")' in entrypoint
+
+
 def test_system_prompt_keeps_declined_optional_sensitivity_out_of_study_context() -> None:
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
     assert "the user declines, that is not a sensitivity spec or a StudyContext change" in entrypoint
@@ -1500,8 +1524,9 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "In a Chinese response, call this first artifact 候选研究计划" in entrypoint
     assert "Only after the exact prepared package is bound" in entrypoint
     assert "可执行研究计划" in entrypoint
-    assert "propose unresolved design choices in agent_plan.json" in entrypoint
-    assert "pause for candidate review and data preparation before any package-bound execution approval" in entrypoint
+    assert "propose the unresolved scientific design" in entrypoint
+    assert "all other unresolved design choices in agent_plan.json" in entrypoint
+    assert "pause so the user can review the candidate and choose data preparation" in entrypoint
     assert "Permission to generate a formal plan does not authorize Copilot" in entrypoint
     assert "If neither path is executable, the plan must fail closed" in entrypoint
     assert "instead of inventing an executable cohort" in entrypoint
@@ -1512,6 +1537,14 @@ def test_system_prompt_keeps_copilot_replies_concise_while_preserving_blockers()
     assert "never save suspected-infection onset as its physical anchor" in entrypoint
     assert "not as a mandatory conversational questionnaire" in entrypoint
     assert "Never hide a blocker or weaken its exact stable code" in entrypoint
+
+
+def test_study_context_tool_distinguishes_covariate_ids_from_modeling_prose() -> None:
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+
+    assert "Covariate identity rule" in entrypoint
+    assert "never store categorical, ordinal, or nonlinear" in entrypoint
+    assert "exact materialized analysis column identifier" in entrypoint
 
 
 def test_study_update_guidance_continues_with_model_chosen_scientific_step() -> None:

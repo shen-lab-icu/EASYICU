@@ -97,6 +97,8 @@ const sessions = new Map();
 const activeRequestBySession = new Map();
 const pendingToolResponses = new Map();
 const HOST_LANGUAGE_MARKER = "\n\n[EASYICU_INTERNAL_RESPONSE_LANGUAGE_V1]\n";
+const OWNER_CONTEXT_MARKER = "\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n";
+const HOST_TRANSITION_MARKER = "\n\n[EASYICU_HOST_TRANSITION_V1]\n";
 let modelRuntimePromise;
 let temporaryModelDir;
 
@@ -514,8 +516,10 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "") {
   );
   const transition = turnIntent === "confirm_formal_plan_generation"
     ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user activated the host-owned provider_ready_to_generate_plan control. Call easyicu_run exactly once with run_type='full', then stop after the submission receipt. The run owner decides from the bound source whether this is metadata-only planning or a prepared-package run. Do not inspect an older run, ask setup questions, request extraction, repeat the confirmation, or explain internal authorization and budget mechanics."
+    : turnIntent === "confirm_fresh_plan_generation"
+    ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user activated the host-owned fresh-plan control after a prior plan attempt became unusable. Call easyicu_request_replan exactly once with strategy='fresh' and a concise reason that the unchanged study must receive a fresh candidate plan from its currently bound prepared data, then stop after the submission receipt. Do not mutate or reuse the failed plan, start analysis, ask setup or configuration questions, request data preparation, inspect the old run, or explain internal authorization and budget mechanics. The host owns failed-run selection, replay binding, and fresh-plan validation."
     : turnIntent === "confirm_planner_checkpoint_resume"
-    ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user confirmed the host-owned planner_checkpoint_resume_available control. Call easyicu_request_replan exactly once with a concise reason that the unchanged study must continue from its validated development Planner checkpoint, then stop after the submission receipt. Do not inspect the old run, explain its blocker, start a fresh plan, ask for a path or job id, or claim that analysis ran. The host owns checkpoint selection and validation."
+    ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe user confirmed the host-owned planner_checkpoint_resume_available control. Call easyicu_request_replan exactly once with strategy='resume_checkpoint' and a concise reason that the unchanged study must continue from its validated development Planner checkpoint, then stop after the submission receipt. Do not inspect the old run, explain its blocker, start a fresh plan, ask for a path or job id, or claim that analysis ran. The host owns checkpoint selection and validation."
     : turnIntent === "advance_after_data_source_confirmation"
     ? (sourcePreparationAlreadyPassed
       ? `\n\n[EASYICU_HOST_TRANSITION_V1]\nThe host has confirmed the study's data source outside the model transcript, and the authoritative workflow has already advanced to ${transitionWorkflowCode}. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. Acknowledge the current plan-stage readiness in at most two short sentences and stop so the host can show the workflow-owned action. Do not ask a setup question, do not start a sequential questionnaire, and do not propose cohort, exposure, outcome, window, module or export values yourself. Do not call a tool during this transition.`
@@ -528,6 +532,51 @@ function userVisiblePromptText(value) {
   const text = String(value ?? "");
   const markerAt = text.lastIndexOf(HOST_LANGUAGE_MARKER);
   return markerAt < 0 ? text : text.slice(0, markerAt);
+}
+
+function userPromptStudySnapshot(value) {
+  const text = String(value ?? "");
+  const markerAt = text.lastIndexOf(OWNER_CONTEXT_MARKER);
+  if (markerAt < 0) return undefined;
+  const payloadStart = markerAt + OWNER_CONTEXT_MARKER.length;
+  const transitionAt = text.indexOf(HOST_TRANSITION_MARKER, payloadStart);
+  const payload = text.slice(
+    payloadStart,
+    transitionAt < 0 ? text.length : transitionAt,
+  ).trim();
+  if (!payload || payload.length > 24000) return undefined;
+  let receipts;
+  try {
+    receipts = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+  const workflowReceipt = Array.isArray(receipts)
+    ? receipts.find((receipt) => receipt?.code === "easyicu_research_workflow_projected")
+    : undefined;
+  const setup = workflowReceipt?.details?.workflow?.study_setup_receipt;
+  const authority = workflowReceipt?.authority;
+  const studyContextId = boundedText(setup?.study_context_id, 160).trim();
+  const revision = Number(setup?.revision);
+  if (
+    setup?.schema_version !== "easyicu.pi-study-setup-receipt/1"
+    || !studyContextId
+    || !Number.isInteger(revision)
+    || revision < 0
+    || authority?.study_context_id !== studyContextId
+    || Number(authority?.study_revision) !== revision
+    || !setup.configuration
+    || typeof setup.configuration !== "object"
+    || Array.isArray(setup.configuration)
+  ) {
+    return undefined;
+  }
+  return {
+    schema_version: "easyicu.pi-turn-study-snapshot/1",
+    study_context_id: studyContextId,
+    source_revision: revision,
+    configuration: setup.configuration,
+  };
 }
 
 function resourceLoader(agentMode, extensionSnapshot, language) {
@@ -564,6 +613,7 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "Simple-decision fast path: when the user's message explicitly adds or edits one scientific requirement before plan generation, inspect the workflow and context only as needed and save that one human decision with one minimal easyicu_update_study_context call. Then return to the same formal-plan generation confirmation rather than opening a questionnaire. A repeated selection of the already-bound source is not a new setup decision. Do not re-list data sources, query source concepts, add modules, or resolve execution_concepts unless the user's choice itself selected a new source or exact catalog-backed concept. A semantic choice must not be expanded into an execution-readiness search. Target no more than one workflow read, one context read when necessary, and one update before the public reply.",
       "Keep shared guidance case-neutral. Ask for unresolved user-owned scientific choices; use only owner-issued locked implementation defaults for EasyICU-owned technical slots.",
       "A first-stay restriction is a scientific analysis-unit decision, never an implied persisted default. Copilot must not save adult_first, exclude readmissions, or all-stay semantics: adult ICU population alone authorizes neither first-stay nor all-stay. If the user did not decide this before planning, the Research Agent Planner must propose it with its dependence strategy and rationale in the formal plan for review.",
+      "Cohort criteria channel rule: a stated removal belongs in cohort.exclusion_statement, never cohort.review or another inclusion channel. Preserve inclusion and exclusion wording separately and do not invert either criterion.",
       "Start each research request by inspecting the project workflow. Before asking a new setup question, persist every explicit, unambiguous user-authored slot that is already owner-ready in one easyicu_update_study_context call when the Configure grant is available; do not make the user repeat facts from the same message, and do not invent or prematurely bind a concept that still requires source-catalog authority. Keep that update minimal: if an executable concept still needs catalog authority, omit only that unresolved field instead of bundling it into the same atomic update and causing the whole update to fail. A user's phenotype wording is not permission to choose among multiple unlocked or clinically non-equivalent variants. Canonical phenotype wording may use a unique owner-locked recommended profile without a mandatory user micro-confirmation. Idea Mining is an optional EasyICU stage; when the user selects a mined idea, accept its digest-bound handoff before continuing setup. Study setup, extraction, plan, execution, validation, interpretation, and manuscript review remain receipt-driven stages.",
       "Current-turn owner-context rule: when EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1 supplies a fresh workflow receipt or data-source catalog receipt, treat it exactly as the corresponding EasyICU tool result for this user message and do not call easyicu_inspect_workflow or easyicu_list_data_sources again. This hidden context is host-owned, path-free, and removed from the visible user transcript.",
       "Treat every scientific question as one ordinary research project and one ordinary conversation. Never propose or create evaluation dashboards, question-batch controls, or user-facing internal evaluation labels. Evaluation orchestration and scoring stay outside the Copilot product surface; inside Copilot, use only the user's scientific wording and the normal governed workflow.",
@@ -589,6 +639,7 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "Question phrasing rule: never open with a list of internal missing fields, schema paths, module names, or implementation jargon. Start with the user's research intent or the choice just saved, then ask one short user-level question. For a time-window decision, explain the scientific tradeoff in ordinary language and recommend a default; do not expose canonical coordinate strings as code unless the user asks for technical details.",
       "Next-step choice quality rule: offer two to four mutually exclusive, semantically distinct choices. If one choice is recommended, mark that same choice as recommended instead of adding a duplicate recommendation option. Choice labels must be concise plain text without Markdown markers, surrounding quotation marks, bullets, schema paths, or internal identifiers.",
       "Covariate availability is not adjustment authority. Keep covariate_selection='planner_selectable' when the user has not explicitly approved an adjustment roster. Set covariate_selection='exact' only after the user explicitly chooses the complete roster and confirms one clinical confounding rationale and one baseline temporal role for every non-empty covariate. Save those decisions in covariate_rationales and covariate_temporal_roles; exact plus an empty roster is an explicit unadjusted analysis. Do not silently promote age, sex, severity, or any available concept into an adjustment set.",
+      "Covariate identity rule: save covariates as exact canonical ASCII identifiers and never store categorical, ordinal, or nonlinear modeling roles or natural-language prose in covariate_operationalizations. That field maps a canonical covariate identity only to an exact materialized analysis column identifier returned by EasyICU; omit it when no exact binding exists. Put an explicitly approved nonlinear check in typed sensitivity_specs; leave primary model coding to the typed candidate plan and human review.",
       "When the user chooses a scientific analysis family (for example descriptive epidemiology, adjusted association, survival, prediction, clustering, or causal inference), save its exact canonical key in typed analysis_design.analysis_family. When the user chooses an analysis unit or an independence/robust/clustered variance assumption, save that commitment in typed analysis_design too. Confirmations, cohort prose, and analysis_goal are not execution authority for these choices. Never upgrade a descriptive unadjusted noncausal contrast to association or causal inference merely because it reports a risk difference. For cluster-robust inference, save the semantic cluster_unit but never guess a private physical grouping column; the host must fail closed when the source and executor cannot prove support.",
       "Repeated-unit dependence rule: if the formal Planner proposal retains repeated ICU stays, it must pair them with owner-supported patient-clustered inference, or propose an owner-supported first-stay restriction and explain the tradeoff. Do not recommend model-based or heteroskedasticity-robust variance as a closure for within-patient dependence. A first-stay restriction is executable only when the host verifies the coordinate. If neither path is executable, the plan must fail closed with the owner's safe alternatives instead of inventing an executable cohort.",
       "Analysis-unit approval rule: analysis unit and dependence strategy belong together in the formal plan review. Persist a user-authored choice before planning only when the user explicitly supplies it; otherwise leave both for the Planner proposal and later approval.",
@@ -605,9 +656,9 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "A persisted run_id is historical evidence, not proof of an active job. An easyicu_run submission receipt with run_id_status=pending_pipeline_start has no new scientific run id yet: report its job_id only and never copy the historical binding as the new run. Never call easyicu_resume without an approved/rejected decision merely because a run_id exists. Reattach only when the workflow reports a live queued/running job; after a terminal failed, cancelled, blocked, or missing JobManager entry, an explicit user rerun request must call easyicu_run under the current one-turn run grant and preserve the older run as history.",
       "When the workflow reports plan_ready, the formal Research Agent plan does not exist. If the user confirms the local-preflight prompt, call easyicu_run exactly once with run_type='preflight' under the local-run grant, report the submission receipt, and stop. Never consume a provider-run grant or present a Copilot-authored plan at this stage.",
       "When the workflow reports provider_ready_to_generate_plan, no inspectable provider plan exists yet. If the user confirms the Generate Agent plan prompt, call easyicu_run exactly once with run_type='full' under the current provider-run grant, report the new submission job_id, and stop. Do not inspect, approve, resume, or reinterpret the completed preflight run; it is readiness evidence only.",
-      "When the workflow reports plan_configuration_superseded or plan_review_not_resumable and the user asks for a new plan, call easyicu_request_replan. It may start a fresh full ResearchAgentPipeline run under a new run id and the current StudyContext digest; it never edits or reuses the old plan. Stop after the submission receipt so the new run can pause at its own human plan-review gate.",
-      "When the workflow reports failed_pipeline_requires_fresh_plan, treat the terminal failed run as immutable history rather than the current answer. If the user confirms the fresh-plan prompt, call easyicu_request_replan and stop after its submission receipt. If they have not confirmed, ask one direct question; do not keep interpreting the failed run or expose unvalidated numbers.",
-      "When the workflow reports planner_checkpoint_resume_available, the development Planner stopped at a bounded planning failure after preserving a validated checkpoint for the unchanged study. If the user confirms the continue-plan prompt, call easyicu_request_replan exactly once and stop after its submission receipt. The host will bind the owned checkpoint; do not describe this as a fresh plan, do not ask the user for a path or job id, and do not claim that analysis ran.",
+      "When the workflow reports plan_configuration_superseded or plan_review_not_resumable and the user asks for a new plan, call easyicu_request_replan with strategy='fresh'. It starts a fresh full ResearchAgentPipeline planning run under a new run id and the current StudyContext digest; it never edits or reuses the old plan or its development checkpoint. Stop after the submission receipt so the new run can pause at its own human plan-review gate.",
+      "When the workflow reports failed_pipeline_requires_fresh_plan, treat the terminal failed run as immutable history rather than the current answer. If the user confirms the fresh-plan prompt, call easyicu_request_replan with strategy='fresh' and stop after its submission receipt. If they have not confirmed, ask one direct question; do not keep interpreting the failed run or expose unvalidated numbers.",
+      "When the workflow reports planner_checkpoint_resume_available, the development Planner stopped at a bounded planning failure after preserving a validated checkpoint for the unchanged study. If the user confirms the continue-plan prompt, call easyicu_request_replan exactly once with strategy='resume_checkpoint' and stop after its submission receipt. The host will bind the owned checkpoint; do not describe this as a fresh plan, do not ask the user for a path or job id, and do not claim that analysis ran.",
       workspaceMode
         ? "For a webpage, calculator, dashboard, or interactive artifact: load the web-prototype skill, list files, write or edit the artifact, read it back, run the static check, and prepare its web preview. Label simulated formulas and values as unvalidated demo content."
         : "Treat a scientific question as the start of a governed research workflow. Inspect the typed StudyContext first and map only facts the user actually supplied. Once the question and an owner-confirmed data source or package are available, stop setup questioning and let the host ask whether to generate the candidate research plan. Do not ask the user to choose a cohort eligibility preset, first-stay rule, or repeated-admission handling before that plan. The Research Agent Planner must search the authorized literature and propose population inclusion and exclusion criteria, the analysis unit, repeated-admission handling, and all other unresolved design choices in agent_plan.json without reading patient rows. The candidate plan must explain its rationale and evidence, then pause for human review; only that later review may authorize the exact cohort contract and data preparation. Do not write a Research Brief or shadow plan, never silently apply a cohort rule, and never invent a criterion outside the Planner proposal.",
@@ -678,6 +729,12 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
   const optionalRunId = Type.Optional(Type.String({ maxLength: 160 }));
   const empty = Type.Object({}, { additionalProperties: false });
   const optionalText = (maxLength) => Type.Optional(Type.String({ maxLength }));
+  const covariateId = Type.String({
+    minLength: 1,
+    maxLength: 80,
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$",
+    description: "Exact canonical ASCII covariate identity, not a display label or modeling instruction.",
+  });
   const studyCohort = Type.Object({
     preset: Type.Optional(Type.Union([
       Type.Literal("all_icu"), Type.Literal("adult_first"),
@@ -711,7 +768,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       Type.Literal("mean"), Type.Literal("first"),
     ])),
     covariates: Type.Optional(
-      Type.Array(Type.String({ minLength: 1, maxLength: 80 }), { maxItems: 64 }),
+      Type.Array(covariateId, { maxItems: 64 }),
     ),
   }, { additionalProperties: false });
   const analysisDesign = Type.Object({
@@ -801,7 +858,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       title: optionalText(160), question: optionalText(1200), purpose: optionalText(800),
       cohort: Type.Optional(studyCohort), modules: Type.Optional(Type.Array(Type.String({ maxLength: 80 }), { maxItems: 64 })),
       outcome: optionalText(500), primary_exposure: optionalText(160),
-      covariates: Type.Optional(Type.Array(Type.String({ maxLength: 160 }), { maxItems: 64 })),
+      covariates: Type.Optional(Type.Array(covariateId, { maxItems: 64 })),
       covariate_selection: Type.Optional(Type.Union([
         Type.Literal("planner_selectable"), Type.Literal("exact"),
       ])),
@@ -817,8 +874,13 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
         ]),
       )),
       covariate_operationalizations: Type.Optional(Type.Record(
-        Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" }),
-        Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" }),
+        covariateId,
+        Type.String({
+          minLength: 1,
+          maxLength: 80,
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$",
+          description: "Exact materialized analysis column identifier; never a categorical, ordinal, nonlinear, or other modeling role.",
+        }),
       )),
       execution_concepts: Type.Optional(executionConcepts),
       analysis_design: Type.Optional(analysisDesign),
@@ -838,7 +900,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
     hostTool(sessionId, { name: "easyicu_run", executionMode: "sequential", label: "Start EasyICU run", description: "Submit an EasyICU preflight or the real ResearchAgentPipeline Plan -> Execute -> Validate -> Write workflow. Preflight requires the local-run grant. Full analysis requires the separate provider-run grant and the existing scientific provider gates. The host, not the model, selects the already verified provider configuration. Submission invalidates this turn's authority: report the receipt and stop until host rebind.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_resume", executionMode: "sequential", label: "Resume EasyICU work", description: "Reattach to a live job or submit an explicit approved/rejected decision for a durable digest-bound Research Agent plan review. A terminal run_id is not resumable. A review decision needs a fresh provider-run grant.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })), run_id: optionalRunId, decision: Type.Optional(Type.Union([Type.Literal("approved"), Type.Literal("rejected")])), reviewer: Type.Optional(Type.String({ maxLength: 200 })), note: Type.Optional(Type.String({ maxLength: 1000 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_cancel", executionMode: "sequential", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request fresh plan", description: "For a superseded or non-resumable plan, start a new ResearchAgentPipeline planning run bound to the current StudyContext and a new run id. It never mutates or reuses the old plan and requires a fresh provider-run grant. Other in-place replan requests fail closed.", parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request research plan", description: "Start either a fresh ResearchAgentPipeline planning run from the current prepared data or explicitly continue one validated Planner checkpoint. Fresh mode never mutates or reuses the old plan or checkpoint. Both modes require a fresh provider-run grant and fail closed when their typed authority is unavailable.", parameters: Type.Object({ strategy: Type.Union([Type.Literal("fresh"), Type.Literal("resume_checkpoint")]), reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_list_extensions", label: "List frozen user extensions", description: "List the path-free Skill and MCP descriptors frozen into this Copilot session, including content digests and explicit tool allowlists.", parameters: empty }),
     hostTool(sessionId, { name: "easyicu_load_skill", executionMode: "sequential", label: "Load frozen Skill", description: "Load the exact reviewed instructions for one conversation Skill frozen into this session. In workspace mode, the built-in web-prototype Skill is also available.", parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_call_mcp_tool", executionMode: "sequential", label: "Call allowlisted MCP tool", description: "Call one read-only external metadata tool from a server frozen into this session. The host enforces the MCP master switch, exact server/tool allowlist, bounded JSON, privacy projection, and one-turn authorization. MCP output never becomes current-study evidence automatically.", parameters: Type.Object({ server: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }), tool: Type.String({ minLength: 1, maxLength: 128 }), arguments: Type.Optional(Type.Record(Type.String({ maxLength: 160 }), Type.Unknown())) }, { additionalProperties: false }) }),
@@ -1111,7 +1173,7 @@ async function promptSession(requestId, params) {
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
-  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation") {
+  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation") {
     throw Object.assign(new Error("unsupported message intent"), { code: "pi_message_intent_invalid" });
   }
   const record = sessions.get(sessionId);
@@ -1126,6 +1188,8 @@ async function promptSession(requestId, params) {
   try {
     if (intent === "confirm_formal_plan_generation") {
       record.session.setActiveToolsByName(["easyicu_run"]);
+    } else if (intent === "confirm_fresh_plan_generation") {
+      record.session.setActiveToolsByName(["easyicu_request_replan"]);
     } else if (intent === "confirm_planner_checkpoint_resume") {
       record.session.setActiveToolsByName(["easyicu_request_replan"]);
     } else if (intent === "advance_after_data_source_confirmation") {
@@ -1171,7 +1235,12 @@ function regenerateTarget(record, userEntryId) {
   const raw = Array.isArray(target.message.content)
     ? target.message.content.filter((part) => part?.type === "text").map((part) => part.text || "").join("")
     : String(target.message.content || "");
-  return { entryId, message: userVisiblePromptText(raw).trim(), turnIndex };
+  return {
+    entryId,
+    message: userVisiblePromptText(raw).trim(),
+    turnIndex,
+    studyContextSnapshot: userPromptStudySnapshot(raw),
+  };
 }
 
 async function regenerateSession(requestId, params) {
@@ -1186,20 +1255,29 @@ async function regenerateSession(requestId, params) {
   const supplied = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
   const turnIntent = boundedText(params.turn_intent, 80).trim();
-  if (intent && intent !== "user_edited_message") {
+  if (
+    intent
+    && intent !== "user_edited_message"
+    && intent !== "replace_plan_response_preserve_study"
+  ) {
     throw Object.assign(new Error("unsupported regenerate intent"), { code: "pi_regenerate_intent_invalid" });
   }
-  if (turnIntent && turnIntent !== "confirm_formal_plan_generation" && turnIntent !== "confirm_planner_checkpoint_resume") {
+  if (turnIntent && turnIntent !== "confirm_formal_plan_generation" && turnIntent !== "confirm_fresh_plan_generation" && turnIntent !== "confirm_planner_checkpoint_resume") {
     throw Object.assign(new Error("unsupported regenerate turn intent"), { code: "pi_message_intent_invalid" });
   }
-  if (turnIntent && intent !== "user_edited_message") {
+  if (
+    turnIntent
+    && intent !== "user_edited_message"
+    && intent !== "replace_plan_response_preserve_study"
+  ) {
     throw Object.assign(new Error("regenerate turn intent requires an explicit user edit"), { code: "pi_regenerate_intent_invalid" });
   }
   // Regenerating re-runs exactly what the user said, so a drifted transcript is
   // a conflict.  An explicit user edit is the opposite: the text is meant to
   // differ, and navigateTree below rewinds to this turn so everything after it
   // is replaced instead of appended to the bottom of the conversation.
-  const editedTurn = intent === "user_edited_message";
+  const editedTurn = intent === "user_edited_message"
+    || intent === "replace_plan_response_preserve_study";
   if (!supplied || (!editedTurn && supplied !== target.message)) {
     throw Object.assign(new Error("regenerate message does not match the active transcript"), { code: "pi_regenerate_message_mismatch" });
   }
@@ -1207,6 +1285,11 @@ async function regenerateSession(requestId, params) {
   activeRequestBySession.set(sessionId, requestId);
   const activeTools = record.session.getActiveToolNames();
   try {
+    if (turnIntent === "confirm_formal_plan_generation") {
+      record.session.setActiveToolsByName(["easyicu_run"]);
+    } else if (turnIntent === "confirm_fresh_plan_generation" || turnIntent === "confirm_planner_checkpoint_resume") {
+      record.session.setActiveToolsByName(["easyicu_request_replan"]);
+    }
     const navigation = await record.session.navigateTree(target.entryId, { summarize: false });
     if (navigation.cancelled) {
       throw Object.assign(new Error("regenerate branch navigation was cancelled"), { code: "pi_regenerate_cancelled" });
@@ -1263,7 +1346,11 @@ async function handleRequest(request) {
       const record = sessions.get(boundedText(params.session_id, 160).trim());
       if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
       const target = regenerateTarget(record, params.user_entry_id);
-      return { message: target.message, turn_index: target.turnIndex };
+      return {
+        message: target.message,
+        turn_index: target.turnIndex,
+        study_context_snapshot: target.studyContextSnapshot,
+      };
     }
     case "session.regenerate":
       return await regenerateSession(requestId, params);

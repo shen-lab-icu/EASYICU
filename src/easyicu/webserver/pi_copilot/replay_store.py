@@ -331,6 +331,18 @@ class PiConversationReplayStore:
             for row in payload["turns"]
             if isinstance(row, dict) and not row.get("superseded")
         ]
+        active_child_job_ids = {
+            str(event.get("job_id") or "").strip()
+            for turn in active_turns
+            for event in (turn.get("events") or [])
+            if isinstance(event, Mapping) and str(event.get("job_id") or "").strip()
+        }
+        active_child_jobs = [
+            row
+            for row in payload["child_jobs"]
+            if isinstance(row, dict)
+            and str(row.get("job_id") or "").strip() in active_child_job_ids
+        ]
         turn_page = self._turn_page(
             active_turns,
             cursor=cursor,
@@ -340,7 +352,10 @@ class PiConversationReplayStore:
             "schema_version": payload["schema_version"],
             "updated_at": payload.get("updated_at"),
             "turns": active_turns,
-            "child_jobs": list(payload["child_jobs"]),
+            # Child jobs are a projection of the active conversation branch,
+            # not a second independent history. Superseded branches remain in
+            # the private audit file but must not reappear in the Web dialogue.
+            "child_jobs": active_child_jobs,
         }
         public = {
             **digest_payload,
