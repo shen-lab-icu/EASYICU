@@ -207,42 +207,83 @@
       const file = resourceName(resource);
       return file ? `${label} · ${file}` : label;
     }
-    /* Pipeline progress arrives with an English prose label written by the
-       runner plus the structured fields it was built from. Passing the prose
-       through put lines like "Step 10/13 started: assemble_visual_displays."
-       into a Chinese UI -- 20 live rows, all English, most carrying an
-       internal step id. Compose the line from the structured fields instead,
-       and humanize the step id rather than printing the identifier. */
-    function humanizeStepId(value) {
-      return String(value || '')
-        .replace(/^[0-9]+[_-]/, '')
-        .replace(/[_-]+/g, ' ')
-        .trim()
-        .slice(0, 80);
+    /* Research Agent emits diagnostic owner steps such as provider, runtime,
+       context, and audit. They remain available in the persisted job receipt,
+       but the conversation projects them into researcher-facing stages. */
+    function pipelineStage(value) {
+      const step = String(value || '').toLowerCase();
+      if (step === 'submitted') return 'submitted';
+      if (['provider', 'research_pipeline', 'run', 'runtime'].includes(step)) return 'setup';
+      if (['data_foundation', 'cohort', 'context', 'audit'].includes(step)) return 'inputs';
+      if (['hypothesis', 'literature', 'evidence'].includes(step)) return 'evidence';
+      if (['planning', 'plan', 'scientific_review'].includes(step)) return 'plan';
+      if (step === 'terminal') return 'terminal';
+      if (['event_stream', 'cancel_requested'].includes(step)) return 'attention';
+      return 'progress';
+    }
+
+    function pipelineStageLabel(stage, status, fallback) {
+      const done = status === 'complete';
+      if (stage === 'setup') return done
+        ? tr('Research-task setup is ready', '研究计划生成环境已准备')
+        : tr('Preparing the research-task setup', '正在准备研究计划生成环境');
+      if (stage === 'inputs') return done
+        ? tr('Research question, data scope, and study context checked', '已核对研究问题、数据范围与研究上下文')
+        : tr('Checking the research question, data scope, and study context', '正在核对研究问题、数据范围与研究上下文');
+      if (stage === 'evidence') return done
+        ? tr('Planning evidence and hypotheses organized', '已整理计划所需的研究依据与假设')
+        : tr('Organizing planning evidence and hypotheses', '正在整理计划所需的研究依据与假设');
+      if (stage === 'plan') return done
+        ? tr('Candidate research plan generated and contract-checked', '候选研究计划已生成并完成结构校验')
+        : tr('Generating and checking the candidate research plan', '正在生成并校验候选研究计划');
+      if (stage === 'progress') return done
+        ? tr('Research-task progress updated', '研究任务进度已更新')
+        : tr('Research task is progressing', '研究任务正在推进');
+      return String(fallback || tr('Research-task status updated', '研究任务状态已更新'));
     }
 
     function pipelineEventLabel(event) {
       const type = String((event && event.type) || '');
       if (type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
       if (type === 'cancel_requested') return tr('Cancellation requested', '已请求取消任务');
-      const current = Number(event && event.current);
-      const total = Number(event && event.total);
-      const counted = Number.isFinite(current) && Number.isFinite(total) && total > 0;
-      const name = humanizeStepId(event && event.step);
-      // `planning` is emitted by several independent structured-generation
-      // calls. Their 1/3, 2/3 counters are retry attempts for one component,
-      // not monotonic progress for the whole plan. Showing them as a shared
-      // step counter made the UI appear to move backwards (2/3 -> 1/3).
-      if (name === 'planning') {
-        if (String(event && event.status) === 'complete') {
-          return tr('A research-plan component passed validation', '一项研究计划组成部分已通过校验');
+      const stage = pipelineStage(event && event.step);
+      return pipelineStageLabel(stage, String(event && event.status || 'running'));
+    }
+
+    function projectPipelineSteps(steps) {
+      const source = Array.isArray(steps) ? steps : [];
+      const hasPlanStage = source.some(step => step.kind === 'pipeline'
+        && ['planning', 'plan', 'scientific_review'].includes(String(step.step || '').toLowerCase()));
+      const projected = [];
+      const stageIndexes = new Map();
+      source.forEach(step => {
+        if (step.kind !== 'pipeline') { projected.push(step); return; }
+        const sourceStage = pipelineStage(step.step);
+        let stage = sourceStage;
+        if (stage === 'terminal' && hasPlanStage) stage = 'plan';
+        const fallbackAllowed = ['submitted', 'terminal', 'attention'].includes(sourceStage);
+        const next = {
+          ...step,
+          id: `pipeline-stage-${stage}`,
+          step: stage,
+          label: pipelineStageLabel(
+            fallbackAllowed ? sourceStage : stage,
+            String(step.status || ''),
+            fallbackAllowed ? step.label : '',
+          ),
+          // Artifact navigation belongs to the result/confirmation card. The
+          // activity list is lifecycle progress, not a second artifact menu.
+          resource: null,
+          resources: [],
+        };
+        if (stageIndexes.has(stage)) {
+          projected[stageIndexes.get(stage)] = next;
+        } else {
+          stageIndexes.set(stage, projected.length);
+          projected.push(next);
         }
-        return tr('Generating research-plan components', '正在生成研究计划的组成部分');
-      }
-      if (counted && name) return tr(`Step ${current}/${total} · ${name}`, `第 ${current}/${total} 步 · ${name}`);
-      if (counted) return tr(`Step ${current}/${total}`, `第 ${current}/${total} 步`);
-      if (name) return name;
-      return tr('EasyICU research pipeline updated', 'EasyICU 科研流程已更新');
+      });
+      return projected;
     }
 
     function stepLabel(step) {
@@ -315,7 +356,7 @@
     }
     function render(row) {
       const allSteps = Array.isArray(row && row.steps) ? row.steps : [];
-      const visibleSteps = allSteps.filter(step => VISIBLE_KINDS.has(step.kind));
+      const visibleSteps = projectPipelineSteps(allSteps.filter(step => VISIBLE_KINDS.has(step.kind)));
       const latest = visibleSteps[visibleSteps.length - 1] || allSteps[allSteps.length - 1];
       const running = row && row.status === 'running';
       const failed = row && (row.status === 'error' || row.status === 'cancelled');

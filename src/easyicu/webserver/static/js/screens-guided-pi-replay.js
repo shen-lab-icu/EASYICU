@@ -108,13 +108,19 @@
     const gateBlocked = !reviewPending && String(job && job.gate_status || '') === 'blocked';
     const gateReason = String(job && job.gate_reason_code || '');
     const errorCode = String(job && job.error_code || '');
-    const analysisComplete = Boolean(job && job.analysis_results_available);
+    const analysisResultsAvailable = Boolean(job && job.analysis_results_available);
+    const analysisValidated = Boolean(job && job.analysis_validated);
     // Only a genuine historical Planner efficiency-budget stop is presented
     // as resumable. Contract/compiler failures are failures, not a normal
     // pause, and must never produce a misleading "continue" affordance.
     const plannerCheckpointSaved = errorCode
       === 'research_pipeline_planner_efficiency_budget_exhausted';
     const planFoundationBlocked = gateBlocked && gateReason === 'data_foundation_blocked';
+    // A host-environment failure, not a scientific one. Without its own label
+    // this arrives as the bare "task failed" banner, which sends the
+    // researcher looking for a problem in their study design.
+    const executionRuntimeDown = errorCode
+      === 'research_pipeline_execution_runtime_unavailable';
     const created = Number(job && job.created_at_epoch);
     const finished = Number(job && job.finished_at_epoch);
     return {
@@ -130,28 +136,68 @@
       endedAt: Number.isFinite(finished) ? finished * 1000 : null,
       title: reviewPending
         ? translate('Analysis plan ready for review', '分析计划已就绪，等待审阅')
-        : analysisComplete
-          ? translate('Analysis complete; publication review remains', '分析已完成；仍需完成投稿审阅')
+        : analysisResultsAvailable
+          ? analysisValidated
+            ? translate('Analysis complete; publication review remains', '分析已完成；仍需完成投稿审阅')
+            : translate('Results generated; one validation item remains', '结果已生成；仍有一项校验待处理')
         : plannerCheckpointSaved
           ? translate('Planner saved a validated checkpoint', '规划器已保存验证检查点')
         : planFoundationBlocked
           ? translate('Research plan was not generated', '研究计划未生成')
+        : executionRuntimeDown
+          ? translate('Analysis runtime was not available', '分析运行环境不可用')
           : gateBlocked
             ? translate('EasyICU task did not pass its scientific gate', 'EasyICU 科研任务未通过')
             : '',
       terminalLabel: reviewPending
         ? translate('Plan contract passed; analysis is paused for human review', '计划合同已通过；分析已暂停，等待人工审阅')
-        : analysisComplete
-          ? translate('Validated results, figures, and draft are ready to review', '已生成并验证结果、图表和文章草稿，可继续查看')
+        : analysisResultsAvailable
+          ? analysisValidated
+            ? translate('Validated results, figures, and draft are ready to review', '已生成并验证结果、图表和文章草稿，可继续查看')
+            : translate('Results and figures are ready to review while validation is repaired', '结果和图表已经可以查看，剩余校验正在修复')
         : plannerCheckpointSaved
           ? translate('A validated checkpoint was saved; continue to finish the plan', '已保存验证检查点；可继续完成研究计划')
         : planFoundationBlocked
           ? translate('Research plan was not generated because data preparation did not pass', '研究计划未生成：数据准备未通过')
+        : executionRuntimeDown
+          ? translate('The container runtime that executes analysis code was not running; start it and run again', '执行分析代码的容器运行环境未启动；启动后可重新运行')
           : gateBlocked
             ? translate('The scientific gate blocked this task', '科学闸门已阻止本次任务')
             : '',
-      blocked: (gateBlocked && !analysisComplete) || plannerCheckpointSaved,
+      blocked: (gateBlocked && !analysisResultsAvailable) || plannerCheckpointSaved,
     };
+  }
+
+  async function retryFailedExecution(options) {
+    const host = options && typeof options === 'object' ? options : {};
+    const session = host.session && typeof host.session === 'object' ? host.session : {};
+    const binding = session.binding && typeof session.binding === 'object' ? session.binding : {};
+    const provider = session.research_provider && typeof session.research_provider === 'object'
+      ? session.research_provider : {};
+    const api = host.api && typeof host.api === 'object' ? host.api : {};
+    const runId = String(binding.run_id || '').trim();
+    const studyContextId = String(binding.study_context_id || '').trim();
+    if (!runId || !studyContextId || typeof api.loadStudyContext !== 'function' || typeof api.startAgentRun !== 'function') {
+      throw new Error('failed_execution_retry_coordinates_unavailable');
+    }
+    const response = await api.loadStudyContext(studyContextId);
+    const study = response && (response.context || response.study || response);
+    const source = study && study.data_source;
+    const sourcePath = String((source && source.path) || '').trim();
+    if (!study || !sourcePath) throw new Error('prepared_data_source_unavailable');
+    return api.startAgentRun({
+      path: sourcePath,
+      study_id: studyContextId,
+      study_context_id: studyContextId,
+      question: study.question,
+      run_type: 'full',
+      llm_provider: String(provider.provider || ''),
+      credential_source: String(provider.credential_source || ''),
+      external_llm_opt_in: true,
+      engine: 'research_agent_pipeline',
+      planner_start_mode: 'auto',
+      execution_resume_source_run_id: runId,
+    });
   }
 
   window.EU_GUIDED_PI_REPLAY = {
@@ -159,5 +205,6 @@
     lifecycleTurns,
     childJobPresentation,
     preferredSessionId,
+    retryFailedExecution,
   };
 })();

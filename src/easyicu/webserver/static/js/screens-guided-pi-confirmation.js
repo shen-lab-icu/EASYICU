@@ -17,6 +17,8 @@
     const iconHtml = host.iconHtml;
     const resourceButton = host.resourceButton;
     const sessionIsStale = host.sessionIsStale;
+    const cohortEligibilityDecisionHtml = typeof host.cohortEligibilityDecisionHtml === 'function'
+      ? host.cohortEligibilityDecisionHtml : () => '';
 
     function preparedDataStatus() {
       const authorization = (host.session() && host.session().data_source_authorization) || {};
@@ -146,6 +148,9 @@
         approve: tr('Generate a fresh plan', '重新生成新计划'),
         reviewMaterialsTitle: tr('Read-only outputs from the failed-closed run', '失败关闭运行的只读产物'),
         reviewResources: historicalRunId ? [
+          { kind: 'research_report', run_id: historicalRunId, artifact: 'full_analysis_report.json', label: tr('Preview complete analysis report', '预览完整分析报告'), media_type: 'application/json' },
+          { kind: 'research_report', run_id: historicalRunId, artifact: 'article_report.json', label: tr('Preview article report with figures', '预览含图文章报告'), media_type: 'application/json' },
+          { kind: 'research_report', run_id: historicalRunId, artifact: 'technical_report.json', label: tr('Preview technical analysis report', '预览技术分析报告'), media_type: 'application/json' },
           { kind: 'research_artifact', run_id: historicalRunId, artifact: 'agent_plan.json', label: tr('Preview the previous candidate plan', '预览上一版候选计划'), media_type: 'application/json' },
           { kind: 'research_artifact', run_id: historicalRunId, artifact: 'literature_evidence.json', label: tr('View the previous literature snapshot', '查看上一版文献快照'), media_type: 'application/json' },
           { kind: 'research_artifact', run_id: historicalRunId, artifact: 'result_tables.json', label: tr('Preview unvalidated result tables', '预览未验证结果表'), media_type: 'application/json' },
@@ -187,7 +192,12 @@
         ],
       };
       if (code === 'plan_execution_upgrade_required') return {
-        code, grants: ['configure', 'extract'],
+        // One visible confirmation owns the whole bounded upgrade: persist the
+        // accepted candidate, prepare its exact data package, and let the
+        // Research Agent generate the package-bound plan. Splitting the
+        // provider grant into a hidden second interaction made a valid click
+        // fail with an authorization error.
+        code, grants: ['configure', 'extract', 'provider_run', 'literature'],
         message: tr(
           'I confirm this candidate plan as the basis for data preparation. Keep the plan, prepare only the cohort, variables, and time windows it requires, then generate a package-bound execution plan and pause again for my review before analysis.',
           '我确认以这份候选计划作为数据准备依据。请保留计划，只准备计划所需的队列、变量和时间窗；数据包就绪后再生成与数据包绑定的可执行计划，并在分析前再次停下让我审核。',
@@ -261,14 +271,12 @@
         ? localizedAuthorizationDecisionCopy(firstDecisionItem)
         : null;
       const reviewStatus = confirmation.code === 'plan_scientific_changes_required'
-        ? `<div class="gpi-confirmation-review-status"><strong>${esc(decisionCount
-          ? firstDecisionCopy.recommendation
-          : tr('EasyICU will revise the candidate plan before analysis', 'EasyICU 将在分析前修订候选计划'))}</strong><span>${esc(decisionCount
-            ? firstDecisionCopy.reason
-            : tr(
-              `${remediationCounts.automatic + remediationCounts.evidence} plan and evidence items are system-owned; no scientific setup answer is required here.`,
-              `${remediationCounts.automatic + remediationCounts.evidence} 项计划修订与补证由系统负责；这里不需要回答科学设定问题。`,
-            ))}</span></div>`
+        ? firstDecisionCopy
+          ? `<div class="gpi-decision-evidence"><span>${esc(firstDecisionCopy.evidenceLabel)}</span><strong>${esc(firstDecisionCopy.evidenceStatus)}</strong><small>${esc(firstDecisionCopy.evidenceDetail)}</small></div><p class="gpi-decision-guidance">${esc(firstDecisionCopy.guidance)}</p>`
+          : `<div class="gpi-confirmation-review-status"><strong>${esc(tr('EasyICU will revise the candidate plan before analysis', 'EasyICU 将在分析前修订候选计划'))}</strong><span>${esc(tr(
+            `${remediationCounts.automatic + remediationCounts.evidence} plan and evidence items are system-owned; no scientific setup answer is required here.`,
+            `${remediationCounts.automatic + remediationCounts.evidence} 项计划修订与补证由系统负责；这里不需要回答科学设定问题。`,
+          ))}</span></div>`
         : '';
       const dataStatus = confirmation.dataStatus
         ? confirmation.compactApproval
@@ -281,28 +289,37 @@
             <ol class="gpi-confirmation-flow">${confirmation.flowSteps.map((step, index) => `<li${index === 0 ? ' class="is-current"' : ''}><span>${index + 1}</span><div><b>${esc(step)}</b>${index === 0 && confirmation.flowCurrent ? `<em>${esc(confirmation.flowCurrent)}</em>` : ''}</div></li>`).join('')}</ol>
           </div>`
         : '';
+      const decisionRationale = firstDecisionCopy
+        ? `<p class="gpi-decision-rationale"><strong>${esc(tr('Why this decision is required', '为什么现在需要选择'))}</strong><span>${esc(firstDecisionCopy.technicalEvidence || (firstDecisionItem && firstDecisionItem.evidence) || '')}</span><span>${esc(firstDecisionCopy.technicalRemediation || (firstDecisionItem && firstDecisionItem.remediation) || '')}</span></p>`
+        : '';
       const reviewMaterials = reviewResources
         ? confirmation.code === 'plan_scientific_changes_required'
-          ? `<details class="gpi-confirmation-resources"><summary>${esc(confirmation.reviewMaterialsTitle || tr('View the plan and review evidence', '查看计划与审阅依据'))}</summary><div>${reviewResources}</div></details>`
+          ? `<details class="gpi-confirmation-resources"><summary>${esc(tr('View rationale and complete evidence', '查看理由与完整证据'))}</summary>${decisionRationale}<div>${reviewResources}</div></details>`
           : `<div class="gpi-confirmation-resources is-expanded"><strong>${esc(confirmation.reviewMaterialsTitle || (confirmation.compactApproval ? tr('Quick review', '快速审阅') : tr('View the plan and references', '查看计划与依据')))}</strong><div>${reviewResourceButtons[0] || ''}${confirmation.compactApproval ? `<button class="gpi-resource-link" type="button" data-gpi-confirm-preview-data>${esc(tr('Data readiness check', '数据准备检查'))}</button>` : ''}${reviewResourceButtons.slice(1).join('')}</div></div>`
         : '';
       const compactOtherAction = confirmation.compactApproval && confirmation.rejectMessage
         ? `<details class="gpi-confirmation-more"><summary>${esc(tr('Other actions', '其他操作'))}</summary><button type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button></details>`
         : '';
-      const planConversation = planPreview && confirmation.compactApproval
+      const planConversation = planPreview && (
+        confirmation.compactApproval
+        || confirmation.code === 'plan_scientific_changes_required'
+      )
         ? planConversationHtml(planPreview)
         : '';
       const displayedTitle = firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
       const displayedNote = firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
-        ? firstDecisionCopy.options.map((option, index) => `<button class="btn ${index === 0 ? 'primary ' : ''}sm" type="button" data-gpi-next-choice="${esc(option.message)}">${esc(option.label)}</button>`).join('')
+        ? String(firstDecisionItem && firstDecisionItem.code || '') === 'REPEATED_STAY_METHOD_NOT_DECLARED'
+            ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-confirm-action><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span><small>${esc(option.requirement)}</small></button>`).join('')
+          : firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span><small>${esc(option.requirement)}</small></button>`).join('')
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
         <div><strong>${esc(displayedTitle)}</strong><small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${reviewMaterials}${compactOtherAction}</div>
-        <div class="gpi-confirmation-actions">
+        <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
+          ${decisionActions && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Choose different variables', '选择其他调整变量') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
           ${confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.approve)}</button>`}
         </div>
@@ -338,14 +355,13 @@
       const designHtml = designRows.length
         ? `<section class="gpi-plan-exact-settings"><strong>${esc(tr('Exact settings proposed by the plan', '计划建议的具体设定'))}</strong>${designRows.map(row => `<div><b>${esc(row[0])}</b><span>${esc(row[1])}</span></div>`).join('')}${Array.isArray(design.required_variables) && design.required_variables.length ? `<small>${esc(tr('Required variables: ', '需要的变量：'))}${esc(design.required_variables.join('、'))}</small>` : ''}</section>`
         : '';
+      const designDisclosure = designHtml
+        ? `<details class="gpi-plan-design-disclosure"><summary>${esc(tr('View exact model and variable settings', '查看精确模型与变量设置'))}</summary>${designHtml}</details>`
+        : '';
       const rowHtml = row => `<li><span>${rows.indexOf(row) + 1}</span><div><b>${esc(labels[String(row && row.key || '')] || tr('Plan item', '计划内容'))}</b><em>${esc(row && row.text || '')}</em></div></li>`;
-      const primaryRows = rows.slice(0, 4);
-      const supportingRows = rows.slice(4);
       return `<article class="gpi-plan-conversation" aria-label="${esc(tr('Candidate research plan summary', '候选研究计划摘要'))}">
         <p><strong>${esc(tr('I have generated a candidate plan from your research question.', '我已经根据你的研究问题生成了一份候选计划。'))}</strong><span>${esc(tr('Here is the core plan for your review. No analysis has started yet.', '核心方案直接列在下面，方便你先审阅；目前还没有开始分析。'))}</span></p>
-        <ol>${primaryRows.map(rowHtml).join('')}</ol>
-        ${supportingRows.length || designHtml ? `<details class="gpi-plan-conversation-more"><summary>${esc(tr('View data handling and full settings', '查看数据处理与完整设定'))}</summary>${supportingRows.length ? `<ol>${supportingRows.map(rowHtml).join('')}</ol>` : ''}${designHtml}</details>` : ''}
-        ${counts ? `<footer>${esc(counts)} · ${esc(tr('Open the full plan below for details and evidence bindings.', '完整步骤与文献绑定可在下方继续查看。'))}</footer>` : ''}
+        <details class="gpi-plan-conversation-summary"><summary>${esc(tr(`View ${rows.length} candidate plan items`, `查看 ${rows.length} 项候选计划摘要`))}</summary><ol>${rows.map(rowHtml).join('')}</ol>${designDisclosure}${counts ? `<footer>${esc(tr('Planned scope: ', '计划规模：'))}${esc(counts)} · ${esc(tr('Complete steps and evidence bindings remain available below.', '完整步骤与证据绑定可在下方继续查看。'))}</footer>` : ''}</details>
       </article>`;
     }
 
@@ -365,8 +381,8 @@
           '你是否批准建议的基线调整变量及其时间零点前的选择依据？',
         ),
         REPEATED_STAY_IDENTITY_UNAVAILABLE: tr(
-          'The same patient may have more than one ICU stay. Choose either: A. keep only the first ICU stay per patient (recommended), or B. keep all stays and account for repeated records in the model.',
-          '同一患者可能有多次 ICU 入院。请选择：A. 每位患者只保留第一次 ICU 入院（推荐）；B. 保留全部入院，并在模型中处理同一患者的重复记录。',
+          'The same patient may have more than one ICU stay. Choose by study target: A. study each patient\'s first ICU stay, or B. study every ICU stay and account for repeated records in the model.',
+          '同一患者可能有多次 ICU 入院。请按研究目标选择：A. 研究每位患者首次 ICU 入住；B. 研究每次 ICU 入住，并在模型中处理同一患者的重复记录。',
         ),
         ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED: tr(
           'Which executable sensitivity analyses should be prespecified for this study?',
@@ -378,36 +394,209 @@
 
     function localizedAuthorizationDecisionCopy(item) {
       const code = String((item && item.code) || '');
-      if (code === 'REPEATED_STAY_IDENTITY_UNAVAILABLE') return {
+      if (code === 'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED') return {
         cardTitle: tr(
-          'The plan is ready, but repeated ICU stays need one rule',
-          '计划已生成，但还需确认重复入院规则',
+          'Choose how the first-24-hour lactate window should align with mortality follow-up',
+          '请选择首 24 小时乳酸窗如何与死亡随访对齐',
         ),
         context: tr(
-          'The same patient may appear more than once in the ICU data. Choose one option below and EasyICU will revise the plan automatically; analysis has not started.',
-          '同一患者可能在 ICU 数据中出现多次。请选择下方一种方案，EasyICU 会自动修订计划；目前尚未开始分析。',
+          'The exposure is the maximum lactate measured during ICU hours 0–24, so mortality follow-up cannot fairly begin at ICU admission without an explicit time design.',
+          '当前暴露是入 ICU 后 0–24 小时内的乳酸最大值；若死亡随访从入 ICU 当刻开始，就必须明确处理这段暴露测量机会。',
         ),
-        recommendation: tr(
-          'Recommended: analyse each patient once',
-          '推荐：每位患者只分析一次',
+        evidenceLabel: tr('Current plan evidence', '当前计划证据'),
+        evidenceStatus: tr(
+          'Exposure window: ICU admission to 24 hours',
+          '暴露窗：入 ICU 后 0–24 小时',
         ),
-        reason: tr(
-          'Keep only the first ICU stay for each patient to avoid counting the same patient repeatedly.',
-          '每位患者仅保留第一次 ICU 入院，避免同一患者被重复计入。',
+        evidenceDetail: tr(
+          'Patients who die early cannot contribute a complete 24-hour maximum, while survivors have more opportunity to be classified as highly exposed.',
+          '早期死亡患者无法贡献完整的 24 小时最大值，而存活更久的患者有更多机会被归为高乳酸。',
+        ),
+        guidance: tr(
+          'Recommended for the current prepared data: use a 24-hour landmark. It is executable and aligns exposure opportunity, but the result applies only to patients alive at 24 hours. A time-varying model retains early events but needs newly extracted timestamped lactate measurements.',
+          '当前已准备数据推荐采用 24 小时 landmark：可直接执行并对齐暴露机会，但结论仅适用于 24 小时仍存活者。时变模型可保留早期事件，但需重新提取带时间戳的乳酸测量。',
+        ),
+        technicalEvidence: tr(
+          'The scientific review found a post-baseline exposure timing blocker: lact_max summarizes ICU hours 0–24, but the current plan does not bind the outcome clock to that completed window.',
+          '科学审阅识别到基线后暴露时间阻断：lact_max 汇总入 ICU 后 0–24 小时，但当前计划尚未把结局时钟绑定到完成后的暴露窗。',
+        ),
+        technicalRemediation: tr(
+          'Authorize one new study version: a 24-hour landmark, a timestamped time-varying exposure, or descriptive-only reporting without a time-aligned association claim.',
+          '需授权一个新研究版本：24 小时 landmark、带时间戳的时变暴露，或仅作描述且不提出时间对齐后的关联结论。',
         ),
         options: [
           {
-            label: tr('Use first ICU stay only (recommended)', '采用推荐方案：仅保留首次入院'),
-            message: tr(
-              'Use only each patient\'s first ICU stay, then revise and resubmit the candidate research plan with this rule. Keep analysis paused.',
-              '每位患者仅保留第一次 ICU 入院，请按这一规则修订并重新提交候选研究计划；分析保持暂停。',
-            ),
+            optionId: 'landmark_24h',
+            label: tr('Use a 24-hour landmark (recommended)', '采用 24 小时 landmark（推荐）'),
+            effect: tr('Estimate mortality association from hour 24 among patients alive then.', '仅在 24 小时仍存活者中，从第 24 小时开始估计院内死亡关联。'),
+            requirement: tr('Uses the current 0–24-hour lactate maximum; excludes deaths before the landmark.', '可使用当前 0–24 小时乳酸最大值；会排除 landmark 前死亡。'),
           },
           {
-            label: tr('Keep all stays and account for repeats', '保留全部入院并处理重复记录'),
+            optionId: 'descriptive_only',
+            label: tr('Keep this version descriptive', '当前版本仅保留描述性分析'),
+            effect: tr('Show lactate and mortality distributions without a time-aligned association claim.', '展示乳酸与死亡的分布和分层，不提出时间对齐后的关联结论。'),
+            requirement: tr('Keeps early deaths, but does not answer an adjusted association question.', '保留早期死亡，但不能回答调整后的关联问题。'),
+          },
+          {
+            optionId: 'time_varying_reextract',
+            label: tr('Re-extract for a time-varying model', '重新提取并采用时变乳酸模型'),
+            effect: tr('Retain early events and update exposure with each timestamped lactate result.', '保留早期事件，并随每次带时间戳的乳酸结果更新暴露。'),
+            requirement: tr('Requires a new extraction with timestamped lactate measurements; lact_max alone is insufficient.', '需重新提取带时间戳的乳酸测量；仅有 lact_max 摘要不足。'),
+          },
+        ],
+      };
+      if (code === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED') {
+        const rawCovariates = Array.isArray(item && item.proposed_covariates)
+          ? item.proposed_covariates.map(value => String(value || '').trim()).filter(Boolean)
+          : [];
+        const labels = { age: tr('age', '年龄'), sex: tr('sex', '性别') };
+        const roster = rawCovariates.map(value => labels[value] || value).join(' + ');
+        return {
+          cardTitle: tr('Confirm the proposed adjustment variables', '确认计划建议的调整变量'),
+          context: tr(
+            'Choose the proposed baseline set or select different variables. Analysis remains paused.',
+            '可采用建议的基线调整项，或自行修改；当前尚未开始分析。',
+          ),
+          evidenceLabel: tr('Current plan proposal', '当前计划建议'),
+          evidenceStatus: roster || tr('No executable roster was found', '未找到可执行的调整变量清单'),
+          evidenceDetail: tr(
+            'These variables are available at ICU admission and were proposed to reduce baseline confounding; they do not remove unmeasured confounding.',
+            '这些变量在入 ICU 时已可获得，用于减少基线混杂；仍不能消除未测量混杂。',
+          ),
+          guidance: tr(
+            'For this prepared dataset, use the compact baseline set unless the research question requires another prespecified confounder.',
+            '对当前已准备数据，建议采用这组精简基线变量；若研究问题需要其他预设混杂因素，可另行调整。',
+          ),
+          technicalEvidence: String((item && item.evidence) || ''),
+          technicalRemediation: String((item && item.remediation) || ''),
+          allowEdit: true,
+          options: rawCovariates.length ? [{
+            optionId: 'accept_proposed_adjustment',
+            label: tr('Use the proposed variables (recommended)', '采用建议变量（推荐）'),
+            effect: roster,
+            requirement: tr(
+              'Saved as the exact adjustment set for the revised plan.',
+              '将作为修订计划的确定调整变量保存。',
+            ),
+          }] : [],
+        };
+      }
+      if (code === 'REPEATED_STAY_IDENTITY_UNAVAILABLE') return {
+        cardTitle: tr(
+          'Choose the study target for repeated ICU stays',
+          '请选择重复 ICU 入住的研究目标',
+        ),
+        context: tr(
+          'This choice changes the study population and statistical model. Analysis remains paused.',
+          '这个选择会改变研究人群与统计模型；目前尚未开始分析。',
+        ),
+        evidenceLabel: tr('Current data evidence', '当前数据证据'),
+        evidenceStatus: tr(
+          'Repeated-patient frequency is unknown',
+          '重复患者比例未知',
+        ),
+        evidenceDetail: tr(
+          'The candidate plan has an ICU-stay identifier but no authorized patient identifier, so it cannot count repeated patients yet.',
+          '候选计划只有 ICU stay 标识，尚无获授权的患者标识，因此现在不能计算重复患者数量。',
+        ),
+        guidance: tr(
+          'There is no unconditional default. To study each patient\'s first ICU stay, change the cohort rules. To study every ICU stay, keep the saved cohort and use patient-clustered uncertainty.',
+          '这里没有无条件默认答案。若研究首次 ICU 入住，请修改队列规则；若研究每次 ICU 入住，则保留当前队列并按患者聚类。',
+        ),
+        technicalEvidence: tr(
+          'Research Agent blocked the plan because repeated ICU stays cannot be ruled out or handled from the current stay-only identity.',
+          'Research Agent 已阻断计划：当前只有 stay 级身份，无法排除或处理同一患者的多次 ICU 入住。',
+        ),
+        technicalRemediation: tr(
+          'Execution must first obtain an authorized patient mapping or a trusted first-stay/readmission indicator.',
+          '执行前必须先取得获授权的患者映射，或可信的首次入住／再入院标记。',
+        ),
+        allowEdit: true,
+        options: [
+          {
+            optionId: 'all_icu_stays_clustered',
+            label: tr('Keep every ICU stay (recommended for the saved cohort)', '保留每次 ICU 入住（与已保存队列一致）'),
+            effect: tr('Retains later stays; the model must address within-patient dependence.', '保留后续入住；模型必须处理患者内相关性。'),
+            requirement: tr('EasyICU will materialize verified patient grouping and use patient-clustered uncertainty.', 'EasyICU 将核验患者分组，并采用按患者聚类的稳健方差。'),
+          },
+        ],
+      };
+      if (code === 'REPEATED_STAY_METHOD_NOT_DECLARED') return {
+        cardTitle: tr(
+          'Use the repeated-stay setting already saved for this study?',
+          '沿用已保存的重复入住设置？',
+        ),
+        context: tr(
+          'EasyICU already has the researcher’s choice. No technical explanation needs to be entered again.',
+          'EasyICU 已保存研究者的选择，无需重新输入技术说明。',
+        ),
+        evidenceLabel: tr('Saved study setting', '已保存的研究设置'),
+        evidenceStatus: tr(
+          'Every ICU stay · patient-clustered uncertainty',
+          '每次 ICU 入住 · 按患者聚类稳健',
+        ),
+        evidenceDetail: tr(
+          'The verified patient grouping is available to the analysis runner.',
+          '分析执行器可使用已核验的患者分组。',
+        ),
+        guidance: tr(
+          'Regenerate the candidate plan from this saved setting. Analysis will remain paused for review.',
+          '直接按该设置重新生成候选计划；分析仍会在审阅前暂停。',
+        ),
+        technicalEvidence: String((item && item.evidence) || ''),
+        technicalRemediation: String((item && item.remediation) || ''),
+        allowEdit: true,
+        options: [
+          {
+            label: tr('Regenerate using saved setting', '按已保存设置重新生成'),
+            effect: tr(
+              'Keeps every ICU stay and uses the verified patient grouping.',
+              '保留每次 ICU 入住，并使用已核验的患者分组。',
+            ),
+            requirement: tr(
+              'EasyICU will replace only the candidate plan.',
+              'EasyICU 只替换候选计划。',
+            ),
             message: tr(
-              'Keep all ICU stays and account for repeated records from the same patient in the model, then revise and resubmit the candidate research plan. Keep analysis paused.',
-              '保留全部 ICU 入院，并在模型中处理同一患者的重复记录；请按这一规则修订并重新提交候选研究计划，分析保持暂停。',
+              'Use the saved repeated-stay setting and regenerate the research plan.',
+              '使用已保存的重复入住设置，重新生成研究计划。',
+            ),
+          },
+        ],
+      };
+      if (code === 'REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY') return {
+        cardTitle: tr(
+          'Choose whether to keep the confirmed robustness analyses',
+          '是否保留已确认的稳健性分析？',
+        ),
+        context: tr(
+          'The current study configuration already requests these analyses. Analysis remains paused until the revised plan can execute them.',
+          '当前研究配置已经要求这些分析；修订后的计划能执行它们之前，分析保持暂停。',
+        ),
+        evidenceLabel: tr('Current study evidence', '当前研究依据'),
+        evidenceStatus: tr(
+          'Confirmed analyses are not all executable in this candidate plan',
+          '候选计划尚未完整执行已确认分析',
+        ),
+        evidenceDetail: String((item && item.evidence) || localizedAuthorizationQuestion(item)),
+        guidance: tr(
+          'Keeping them is recommended because it preserves the question and the outputs already confirmed by the researcher.',
+          '建议保留：这样不会改变研究问题，也不会删减研究者已经确认的输出。',
+        ),
+        technicalEvidence: String((item && item.evidence) || ''),
+        technicalRemediation: String((item && item.remediation) || ''),
+        allowEdit: true,
+        options: [
+          {
+            optionId: 'keep_executable_sensitivities',
+            label: tr('Keep and execute them (recommended)', '保留并执行（推荐）'),
+            effect: tr(
+              'EasyICU revises the plan to execute every confirmed analysis.',
+              'EasyICU 修订计划并执行全部已确认分析。',
+            ),
+            requirement: tr(
+              'The revised plan will pause again for review before analysis.',
+              '修订完成后会再次停下审核，不会直接开始分析。',
             ),
           },
         ],
@@ -415,8 +604,11 @@
       return {
         cardTitle: tr('The plan needs one answer before it can be revised', '计划还需回答 1 个问题才能修订'),
         context: localizedAuthorizationQuestion(item),
-        recommendation: tr('Your answer will be saved in the revised plan', '你的回答会写入修订后的计划'),
-        reason: tr('Answer this question in the conversation; analysis will remain paused.', '请在对话中回答这个问题；分析仍会保持暂停。'),
+        evidenceLabel: tr('Current review evidence', '当前审阅证据'),
+        evidenceStatus: tr('One user decision remains', '还需 1 项用户决定'),
+        evidenceDetail: String((item && item.evidence) || localizedAuthorizationQuestion(item)),
+        guidance: tr('Your answer will be saved in a revised plan; analysis remains paused.', '你的回答会写入修订后的计划；分析仍保持暂停。'),
+        technicalRemediation: String((item && item.remediation) || ''),
       };
     }
 

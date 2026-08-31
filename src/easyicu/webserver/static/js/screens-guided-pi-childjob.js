@@ -223,7 +223,9 @@
         upsertActivityStep(activity, {
           id: 'pipeline-' + step,
           kind: 'pipeline', step,
-          label: String(event.label || step.replace(/[_-]+/g, ' ')),
+          // Replays must use the same safe public projection as live SSE.
+          // Persisted runner prose is an audit receipt, not conversation copy.
+          label: childEventLabel(event),
           status: ['failed', 'cancelled', 'error'].includes(String(event.status || '')) ? 'error' : 'complete',
           at: Date.now(), code: [count, reason].filter(Boolean).join(' · '), owner: String(job.kind || 'EasyICU'),
         });

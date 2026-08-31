@@ -4,6 +4,43 @@
 (function () {
   'use strict';
 
+  const PLAN_ACTION = /^(?:重新生成研究计划|生成候选研究计划|生成正式研究计划|generate (?:a fresh|the candidate|the formal) research plan)[。.!！]?$/i;
+
+  function isPlanActionText(value) {
+    return PLAN_ACTION.test(String(value || '').trim());
+  }
+
+  function latestPlanRequest(rows) {
+    const source = Array.isArray(rows) ? rows : [];
+    for (let index = source.length - 1; index >= 0; index -= 1) {
+      const row = source[index];
+      if (
+        !row || row.role !== 'user'
+        || !String(row.entryId || '').trim()
+        || !isPlanActionText(row.text)
+      ) continue;
+      let assistant = null;
+      for (let cursor = index + 1; cursor < source.length; cursor += 1) {
+        const item = source[cursor];
+        if (item && item.role === 'user') break;
+        if (item && item.role === 'assistant' && String(item.id || '').trim()) {
+          assistant = item;
+          break;
+        }
+      }
+      return {
+        userEntryId: String(row.entryId),
+        // A terminal planning failure can project only a workflow card after
+        // the user request while keeping the assistant receipt out of the
+        // visible message list.  The persisted user entry is still the exact
+        // branch coordinate; regenerate from it instead of appending a second
+        // plan request below the failed conversation.
+        targetMessageId: assistant ? String(assistant.id) : '',
+      };
+    }
+    return null;
+  }
+
   function create(rows, options) {
     const source = Array.isArray(rows) ? rows : [];
     const userEntryId = String(options && options.userEntryId || '');
@@ -70,5 +107,7 @@
     return targetIndex < 0 ? source : source.slice(0, targetIndex + 1);
   }
 
-  window.EU_GUIDED_PI_REGENERATION = Object.freeze({ create, project, visibleRows });
+  window.EU_GUIDED_PI_REGENERATION = Object.freeze({
+    create, project, visibleRows, isPlanActionText, latestPlanRequest,
+  });
 })();

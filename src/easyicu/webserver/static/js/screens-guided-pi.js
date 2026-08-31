@@ -172,6 +172,9 @@
     if (error.code === 'codex_auth_model_unavailable') {
       return tr('That model is no longer available for this Codex account. Refresh the account model list.', '该 Codex 账户已无法使用这个模型，请刷新账户模型列表。');
     }
+    if (error.code === 'research_pipeline_execution_runtime_unavailable') {
+      return tr('The container runtime that executes analysis code is not running. Start it (Docker Desktop, or "colima start") and run again.', '执行分析代码的容器运行环境未启动。请先启动它（Docker Desktop，或 "colima start"），然后重新运行。');
+    }
     if (isStaticPreview() && String(error.message || '').includes('Failed to fetch')) {
       return tr('This is a static preview without the EasyICU backend. Start EasyICU and open http://127.0.0.1:8765/#guided.', '这是不带 EasyICU 后端的静态预览。请启动 EasyICU，再打开 http://127.0.0.1:8765/#guided。');
     }
@@ -205,6 +208,15 @@
   const resourceKey = RESOURCE_OWNER.key;
   const resourceLabel = RESOURCE_OWNER.label;
   const resourceButton = RESOURCE_OWNER.button;
+  const PROVIDER_CONTROL = window.EU_GUIDED_PI_PROVIDER_CONTROL.create({
+    state, api, tr, render, runtimeReady, shellReady,
+    connectionConfigured, connectionReady, errorText,
+  });
+  const {
+    stopCodexPoll, loadCodexModels, loadCodexResearchStatus,
+    startCodexLogin, openAuthorizationPopup, cancelCodexLogin, logoutCodex,
+    configureProvider, finishProviderSetup,
+  } = PROVIDER_CONTROL;
   const RUN_OUTCOME = window.EU_GUIDED_PI_RUN_OUTCOME.create({
     tr, esc, iconHtml, resourceButton, api, projectId,
     canPreview: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
@@ -221,6 +233,7 @@
     workflow: () => state.workflow,
     session: () => state.session,
     busy: () => state.busy || Boolean(state.childJobId),
+    cohortEligibilityDecisionHtml: copies => COHORT_ELIGIBILITY.repeatedStayDecisionHtml(copies),
   });
   const workflowConfirmation = CONFIRMATION.workflowConfirmation;
   const workflowConfirmationHtml = CONFIRMATION.workflowConfirmationHtml;
@@ -228,6 +241,7 @@
   const COHORT_ELIGIBILITY = window.EU_GUIDED_PI_COHORT_ELIGIBILITY.create({
     tr, esc,
     session: () => state.session,
+    workflow: () => state.workflow,
     busy: () => state.busy || Boolean(state.childJobId),
     sessionIsStale,
   });
@@ -298,6 +312,23 @@
   const handleChildJobEvent = CHILDJOB.handleChildJobEvent;
   const watchChildJob = CHILDJOB.watchChildJob;
   const hydrateProjectedJob = CHILDJOB.hydrateProjectedJob;
+  const EVENTS = window.EU_GUIDED_PI_EVENTS.create({
+    state, RESOURCE_OWNER, MESSAGE_ACTIONS, STARTERS, COHORT_ELIGIBILITY,
+    DATA_CONSENT, RUN_OUTCOME, render, projectId, previewWorkflowContext,
+    openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
+    openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
+    loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
+    setShell, openStudySetupInConversation, createSession,
+    previewApprovedPlanDataPackage, confirmWorkflowAction,
+    retryFailedExecution,
+    rejectWorkflowAction, editWorkflow, confirmCohortEligibility,
+    confirmPlanDecision,
+    authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
+    governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
+    togglePresentationPin, configureProvider,
+  });
+  const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
+  const wire = EVENTS.wire;
 
   function activeActivity() {
     if (state.regenerating && state.regeneration && state.regeneration.activity.status === 'running') {
@@ -626,7 +657,7 @@
               : emptyResearchHtml)}
           ${workspace ? '' : RUN_OUTCOME.render(state.latestRun, state.workflow)}
           ${dataConsentHtml}
-          ${dataConsentRequired ? '' : workflowConfirmationHtml()}
+          ${dataConsentRequired ? '' : (COHORT_ELIGIBILITY.render() || workflowConfirmationHtml())}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
         <div class="gpi-compose">
@@ -748,163 +779,6 @@
       state.loading = false;
       state.projectLoading = false;
       render();
-    }
-  }
-
-  function stopCodexPoll() {
-    if (state.codexPoll) window.clearTimeout(state.codexPoll);
-    state.codexPoll = null;
-  }
-
-  async function loadCodexModels(renderAfter) {
-    if (!api().loadPiCopilotCodexModels) return;
-    try {
-      const payload = await api().loadPiCopilotCodexModels();
-      state.codexModels = Array.isArray(payload && payload.models) ? payload.models : [];
-      if (!state.researchModel || !state.codexModels.some(row => row.id === state.researchModel)) {
-        const preferred = state.codexModels.find(row => row.is_default) || state.codexModels[0];
-        state.researchModel = preferred ? String(preferred.id || '') : '';
-      }
-    } catch (error) {
-      // Keep the last catalog that was successfully verified for this
-      // browser-owned runtime. A transient account/catalog probe must not
-      // erase the user's model choice; logout clears it explicitly.
-      if (renderAfter) state.error = errorText(error);
-    }
-    if (renderAfter) render();
-  }
-
-  async function loadCodexResearchStatus(renderAfter) {
-    if (!api().loadPiCopilotCodexStatus) return;
-    try {
-      const payload = await api().loadPiCopilotCodexStatus();
-      state.codexAuth = payload && payload.auth ? payload.auth : null;
-      if (state.codexAuth && state.codexAuth.authentication_verified) {
-        stopCodexPoll();
-        state.codexLogin = null;
-        await loadCodexModels(false);
-      } else if (state.codexAuth && state.codexAuth.account_session_status === 'codex_auth_login_pending') {
-        stopCodexPoll();
-        state.codexPoll = window.setTimeout(() => loadCodexResearchStatus(true), 1500);
-      }
-    } catch (error) {
-      state.codexAuth = null;
-      if (renderAfter) state.error = errorText(error);
-    }
-    if (renderAfter) render();
-  }
-
-  async function startCodexLogin(flow, popup) {
-    if (state.codexBusy || !api().startPiCopilotCodexLogin) return;
-    state.codexBusy = true; state.error = ''; render();
-    try {
-      if (api().saveSetting) await api().saveSetting('ai_enabled', true);
-      const runtimePayload = await api().loadPiCopilotStatus();
-      state.runtime = runtimePayload && runtimePayload.runtime;
-      const payload = await api().startPiCopilotCodexLogin(flow || 'browser');
-      state.codexAuth = payload && payload.auth ? payload.auth : state.codexAuth;
-      state.codexLogin = payload && payload.login_started ? {
-        auth_url: payload.auth_url || payload.verification_url || '',
-        user_code: payload.user_code || '',
-      } : null;
-      const authUrl = String((payload && (payload.auth_url || payload.verification_url)) || '');
-      if (authUrl) {
-        if (popup && !popup.closed) popup.location.href = authUrl;
-        else window.open(authUrl, '_blank', 'noopener,noreferrer');
-      } else if (popup && !popup.closed) {
-        popup.close();
-      }
-      await loadCodexResearchStatus(false);
-    } catch (error) {
-      if (popup && !popup.closed) popup.close();
-      state.error = errorText(error);
-    } finally {
-      state.codexBusy = false; render();
-    }
-  }
-
-  function openAuthorizationPopup() {
-    const popup = window.open('about:blank', '_blank');
-    if (popup) {
-      try { popup.opener = null; } catch (error) {}
-    }
-    return popup;
-  }
-
-  async function cancelCodexLogin() {
-    if (state.codexBusy || !api().cancelPiCopilotCodexLogin) return;
-    state.codexBusy = true; state.error = ''; render();
-    try {
-      const payload = await api().cancelPiCopilotCodexLogin();
-      stopCodexPoll();
-      state.codexAuth = payload && payload.auth ? payload.auth : null;
-      state.codexLogin = null;
-    } catch (error) { state.error = errorText(error); }
-    finally { state.codexBusy = false; render(); }
-  }
-
-  async function logoutCodex() {
-    if (state.codexBusy || !api().logoutPiCopilotCodex) return;
-    state.codexBusy = true; state.error = ''; render();
-    try {
-      const payload = await api().logoutPiCopilotCodex();
-      stopCodexPoll();
-      state.codexAuth = payload && payload.auth ? payload.auth : null;
-      state.codexLogin = null; state.codexModels = []; state.researchModel = '';
-    } catch (error) { state.error = errorText(error); }
-    finally { state.codexBusy = false; render(); }
-  }
-
-  async function configureProvider(form) {
-    if (state.setupSaving || !form) return;
-    const data = new FormData(form);
-    const apiKey = String(data.get('api_key') || '').trim();
-    const keyInput = form.querySelector('[name="api_key"]');
-    if (keyInput) keyInput.value = '';
-    state.setupSaving = true; state.error = '';
-    const submit = form.querySelector('[type="submit"]');
-    if (submit) { submit.disabled = true; submit.textContent = tr('Verifying…', '正在验证…'); }
-    try {
-      const payload = await api().savePiCopilotProviderConfig({
-        provider: String(data.get('provider') || '').trim(),
-        api_key: apiKey,
-        base_url: String(data.get('base_url') || '').trim(),
-        model: String(data.get('model') || '').trim(),
-        api_transport: String(data.get('api_transport') || 'openai-completions'),
-        enable_ai: true,
-      });
-      state.runtime = payload && payload.runtime;
-      if (!runtimeReady()) {
-        state.error = tr('The model connection was saved, but the Copilot runtime is not ready yet.', '模型连接已保存，但研究助手运行环境尚未就绪。');
-        return;
-      }
-      state.error = '';
-    } catch (error) {
-      state.availableModels = Array.isArray(error && error.details && error.details.available_models)
-        ? error.details.available_models.map(String) : [];
-      state.error = errorText(error);
-    } finally {
-      state.setupSaving = false; render();
-    }
-  }
-
-  async function finishProviderSetup() {
-    if (!connectionConfigured()) return;
-    state.setupSaving = true; state.error = ''; render();
-    try {
-      if (!shellReady() && api().saveSetting) {
-        await api().saveSetting('ai_enabled', true);
-        const payload = await api().loadPiCopilotStatus();
-        state.runtime = payload && payload.runtime;
-      }
-      if (!connectionReady()) {
-        throw new Error(tr('The selected model connection is not ready yet.', '所选模型连接尚未就绪。'));
-      }
-      state.showSetup = false;
-    } catch (error) {
-      state.error = errorText(error);
-    } finally {
-      state.setupSaving = false; render();
     }
   }
 
@@ -1492,6 +1366,12 @@
         targetMessageId: String(targetMessageId || ''),
         startedAt: Date.now(),
       }) : null;
+    if (regenerationIntent === 'user_edited_message') {
+      const edited = state.messages.find(row => (
+        row && row.role === 'user' && String(row.entryId || '') === entryId
+      ));
+      if (edited) edited.text = text;
+    }
     state.regenerating = true;
     state.busy = true; state.error = ''; render();
     try {
@@ -1502,20 +1382,33 @@
       // Never copy an old turn's provider grant from transcript history.
       const workflowCode = String((state.workflow && state.workflow.next_action_code) || '');
       const nextOwner = window.EU_GUIDED_PI_NEXT_ACTIONS;
-      const editedPlanGrants = regenerationIntent === 'user_edited_message'
+      const hostConfirmedPlanReplay = [
+        'user_edited_message',
+        'replace_plan_response_preserve_study',
+      ].includes(regenerationIntent);
+      const replayPlanGrants = hostConfirmedPlanReplay
         && nextOwner && typeof nextOwner.governedPlanGrants === 'function'
         ? nextOwner.governedPlanGrants(text, workflowCode)
         : [];
       const replayGrants = Array.from(new Set([
         ...turnGrants().filter(action => action === 'configure'),
-        ...editedPlanGrants,
+        ...replayPlanGrants,
       ]));
-      const replayIntent = editedPlanGrants.includes('provider_run')
+      const replayIntent = replayPlanGrants.includes('provider_run')
         && workflowCode === 'provider_ready_to_generate_plan'
         ? 'confirm_formal_plan_generation'
-        : editedPlanGrants.includes('provider_run')
+        : replayPlanGrants.includes('provider_run')
           && workflowCode === 'planner_checkpoint_resume_available'
           ? 'confirm_planner_checkpoint_resume'
+          : replayPlanGrants.includes('provider_run')
+            && [
+              'failed_pipeline_requires_fresh_plan',
+              'plan_configuration_superseded',
+              'plan_review_not_resumable',
+              'scientific_plan_review_policy_stale',
+              'plan_scientific_changes_required',
+            ].includes(workflowCode)
+            ? 'confirm_fresh_plan_generation'
           : '';
       const payload = await api().regeneratePiCopilotMessage(state.session.session_id, {
         project_id: projectId(), user_entry_id: entryId,
@@ -1537,13 +1430,15 @@
     const id = String((row && row.id) || '');
     const original = String((row && row.text) || '').trim();
     const message = String(text || '').trim();
-    const planAction = /^(?:重新生成研究计划|生成候选研究计划|生成正式研究计划|generate (?:a fresh|the candidate|the formal) research plan)[。.!！]?$/i;
+    const planAction = value => REGENERATION
+      && typeof REGENERATION.isPlanActionText === 'function'
+      && REGENERATION.isPlanActionText(value);
     // Host-generated messages are projected as plan-generation-* in memory,
     // but after reload the persisted transcript legitimately gives the same
     // message a history-* id and an entryId.  Its explicit plan-action text is
     // therefore part of the stable identity used for routing.
-    if (!id.startsWith('plan-generation-') && !planAction.test(original)) return false;
-    if (!planAction.test(message)) {
+    if (!id.startsWith('plan-generation-') && !planAction(original)) return false;
+    if (!planAction(message)) {
       return false;
     }
     const workflowCode = String((state.workflow && state.workflow.next_action_code) || '');
@@ -1604,6 +1499,42 @@
       render();
     }
   }
+  async function confirmPlanDecision(selection) {
+    if (!selection || !state.session || state.busy || state.childJobId || sessionIsStale()) return;
+    const binding = state.session.binding || {};
+    const expectedRevision = Number(binding.study_revision || 0);
+    const runId = String(binding.run_id || '').trim();
+    if (!expectedRevision || !runId || !api().confirmPiCopilotPlanDecision) return;
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      const payload = await api().confirmPiCopilotPlanDecision(state.session.session_id, {
+        project_id: projectId(),
+        decision_code: selection.decision_code,
+        option_id: selection.option_id,
+        expected_revision: expectedRevision,
+        run_id: runId,
+      });
+      await refreshSession(true);
+      await loadWorkflow();
+      state.busy = false;
+      render();
+      if (payload && payload.next_action === 'replan') {
+        await startCurrentFormalPlanGeneration('plan_configuration_superseded');
+      } else if (payload && payload.next_action === 'reextract') {
+        state.error = tr(
+          'This option needs a new timestamped extraction. EasyICU has saved the choice and kept analysis paused.',
+          '该方案需要重新提取带时间戳的数据；EasyICU 已保存选择并保持分析暂停。',
+        );
+        render();
+      }
+    } catch (error) {
+      state.busy = false;
+      state.error = errorText(error);
+      render();
+    }
+  }
   async function confirmWorkflowAction() {
     const confirmation = workflowConfirmation();
     if (!confirmation) return;
@@ -1615,10 +1546,13 @@
       await sendText(confirmation.message, confirmation.grants);
       return;
     }
+    if (confirmation.code === 'failed_pipeline_execution_retry_available') {
+      await retryFailedExecution();
+      return;
+    }
     if ([
       'provider_ready_to_generate_plan',
       'plan_scientific_changes_required',
-      'failed_pipeline_execution_retry_available',
       'failed_pipeline_requires_fresh_plan',
       'plan_configuration_superseded',
       'plan_review_not_resumable',
@@ -1707,60 +1641,56 @@
       render();
     }
   }
-  async function startCurrentFormalPlanGeneration(reasonCode) {
+  async function retryFailedExecution(reason) {
     if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
-    const studyContextId = String((state.session.binding && state.session.binding.study_context_id) || '').trim();
-    const research = state.session.research_provider || {};
-    if (!studyContextId || !api().loadStudyContext || !api().startAgentRun) {
-      state.error = tr('The current research bindings are unavailable. Refresh this project and try again.', '当前研究绑定不可用，请刷新项目后重试。');
+    const replayOwner = window.EU_GUIDED_PI_REPLAY;
+    if (!replayOwner || typeof replayOwner.retryFailedExecution !== 'function') {
+      state.error = tr('The failed run coordinates are unavailable. Refresh this project and try again.', '失败运行的恢复坐标不可用，请刷新当前项目后重试。');
       render();
       return;
     }
-    const retryExecution = reasonCode === 'failed_pipeline_execution_retry_available';
-    const fresh = reasonCode !== 'provider_ready_to_generate_plan' && !retryExecution;
+    const validationRepair = reason === 'validation_repair';
     state.messages.push({
-      id: 'plan-generation-' + Date.now(), role: 'user', complete: true,
-      text: retryExecution
-        ? tr('Retry analysis from the failed step', '从失败步骤重试分析')
-        : fresh
-          ? tr('Generate a fresh research plan', '重新生成研究计划')
-          : tr('Generate the candidate research plan', '生成候选研究计划'),
+      id: 'execution-retry-' + Date.now(), role: 'user', complete: true,
+      text: validationRepair
+        ? tr('Repair the remaining validation item', '修复剩余校验项')
+        : tr('Retry analysis from the failed step', '从失败步骤重试分析'),
     });
     state.busy = true;
     state.error = '';
     render();
     try {
-      const contextPayload = await api().loadStudyContext(studyContextId);
-      const study = contextPayload && contextPayload.context ? contextPayload.context : null;
-      const source = study && study.data_source ? study.data_source : {};
-      const reviewedRunId = String((state.session.binding && state.session.binding.run_id) || '').trim();
-      if (!study || !String(source.path || '').trim()) {
-        throw new Error(tr('The prepared study data source is no longer bound.', '当前研究已不再绑定准备好的数据源。'));
-      }
-      const payload = await api().startAgentRun({
-        path: String(source.path || '').trim(),
-        study_context_id: studyContextId,
-        question: String(study.question || '').trim(),
-        run_type: 'full',
-        engine: 'research_agent_pipeline',
-        llm_provider: String(research.provider || '').trim(),
-        credential_source: String(research.credential_source || '').trim(),
-        external_llm_opt_in: true,
-        literature_search_authorized: true,
-        ...(retryExecution && reviewedRunId
-          ? { execution_resume_source_run_id: reviewedRunId }
-          : {}),
-        ...(reasonCode === 'plan_scientific_changes_required' && reviewedRunId
-          ? { plan_revision_source_run_id: reviewedRunId }
-          : {}),
+      const payload = await replayOwner.retryFailedExecution({
+        api: api(), session: state.session,
       });
       state.busy = false;
-      watchChildJob(String(payload.job_id || ''), payload.development_resume_source_job_id ? 'easyicu_full_run_resume_submitted' : 'easyicu_full_run_submitted');
+      watchChildJob(String(payload.job_id || ''), 'easyicu_full_run_submitted');
     } catch (error) {
       state.busy = false;
       state.error = errorText(error);
       render();
     }
+  }
+  async function startCurrentFormalPlanGeneration(reasonCode) {
+    if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
+    const retryExecution = reasonCode === 'failed_pipeline_execution_retry_available';
+    const fresh = reasonCode !== 'provider_ready_to_generate_plan' && !retryExecution;
+    const text = retryExecution
+      ? tr('Retry analysis from the failed step', '从失败步骤重试分析')
+      : fresh
+        ? tr('Generate a fresh research plan', '重新生成研究计划')
+        : tr('Generate the candidate research plan', '生成候选研究计划');
+    const turnIntent = fresh
+      ? 'confirm_fresh_plan_generation'
+      : reasonCode === 'provider_ready_to_generate_plan'
+        ? 'confirm_formal_plan_generation'
+        : '';
+    // A workflow button is a new, concise user action. Replaying an earlier
+    // verbose plan-request branch made the transcript look as if the user had
+    // typed a long technical prompt and also hid which button was actually
+    // pressed. Preserve the old run as history, but append only this short
+    // current action with its fresh one-use provider grant.
+    await sendText(text, ['provider_run'], turnIntent);
   }
   function governedNextChoiceGrants(element, message) {
     const projected = String((element && element.dataset && element.dataset.gpiNextGrants) || '')
@@ -1893,195 +1823,6 @@
     render();
   }
 
-  function dismissHeaderOverflow(event) {
-    const menu = state.host && state.host.querySelector('.gpi-head-overflow[open]');
-    if (!menu) return;
-    const action = event.target && event.target.closest
-      ? event.target.closest('.gpi-head-overflow-menu button') : null;
-    if (!menu.contains(event.target) || action) menu.removeAttribute('open');
-  }
-
-  function wire() {
-    if (!state.host) return;
-    state.host.addEventListener('click', event => {
-      const session = event.target.closest('[data-gpi-session]');
-      if (session) { openSession(session.dataset.gpiSession); return; }
-      if (event.target.closest('[data-gpi-demo-exit]')) { closeDemo(); return; }
-      if (event.target.closest('[data-gpi-demo]')) { openDemo(); return; }
-      const resource = event.target.closest('[data-gpi-resource-kind]');
-      if (resource) {
-        if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
-          window.EU_GUIDED_PI_PREVIEW.open(
-            RESOURCE_OWNER.fromButton(resource), projectId(), previewWorkflowContext(),
-          );
-        }
-        return;
-      }
-      const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
-      if (modeSwitch) { switchMode(modeSwitch.dataset.gpiModeSwitch); return; }
-      const accessMode = event.target.closest('[data-gpi-access-mode]');
-      if (accessMode) { state.accessMode = accessMode.dataset.gpiAccessMode || 'assist'; render(); return; }
-      const researchProvider = event.target.closest('[data-gpi-research-provider]');
-      if (researchProvider) {
-        state.researchProvider = researchProvider.dataset.gpiResearchProvider === 'codex' ? 'codex' : 'api';
-        state.error = '';
-        if (state.researchProvider === 'codex') loadCodexResearchStatus(true);
-        else render();
-        return;
-      }
-      if (event.target.closest('[data-gpi-codex-login]')) {
-        const popup = openAuthorizationPopup();
-        startCodexLogin('browser', popup); return;
-      }
-      if (event.target.closest('[data-gpi-codex-device]')) {
-        const popup = openAuthorizationPopup();
-        startCodexLogin('device_code', popup); return;
-      }
-      if (event.target.closest('[data-gpi-codex-cancel]')) { cancelCodexLogin(); return; }
-      if (event.target.closest('[data-gpi-codex-logout]')) { logoutCodex(); return; }
-      if (event.target.closest('[data-gpi-codex-models]')) { loadCodexModels(true); return; }
-      if (event.target.closest('[data-gpi-provider-done]')) {
-        if (state.researchProvider === 'codex' && (!state.codexAuth || !state.codexAuth.authentication_verified || !state.researchModel)) {
-          state.error = tr('Connect your ChatGPT account and select an account model first.', '请先连接 ChatGPT 账户并选择账户模型。');
-          render(); return;
-        }
-        if (state.researchProvider === 'api' && !apiResearchReady()) {
-          state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
-          render(); return;
-        }
-        finishProviderSetup(); return;
-      }
-      if (event.target.closest('[data-gpi-retry]')) { loadStatus(); return; }
-      if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
-      if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
-      if (event.target.closest('[data-gpi-study-setup]')) { openStudySetupInConversation(); return; }
-      if (event.target.closest('[data-gpi-legacy]')) { setShell('legacy'); return; }
-      if (event.target.closest('[data-gpi-create]')) { createSession(); return; }
-      const previewPlanData = event.target.closest('[data-gpi-confirm-preview-data]');
-      if (previewPlanData) { previewApprovedPlanDataPackage(previewPlanData); return; }
-      const previewAnalysisData = event.target.closest('[data-gpi-run-outcome-data]');
-      if (previewAnalysisData) { RUN_OUTCOME.openData(previewAnalysisData); return; }
-      if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
-      if (event.target.closest('[data-gpi-confirm-reject]')) { rejectWorkflowAction(); return; }
-      if (event.target.closest('[data-gpi-confirm-edit]')) { editWorkflow(); return; }
-      const cohortSelection = COHORT_ELIGIBILITY.actionFromEvent(event);
-      if (cohortSelection) { confirmCohortEligibility(cohortSelection); return; }
-      const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);
-      if (dataSourceAction) { authorizeDataSource(dataSourceAction); return; }
-      if (event.target.closest('[data-gpi-data-demo]')) {
-        sendText(tr(
-          'I do not have local data yet. Show only the official EasyICU demo datasets and explain their limits. Do not download or use one until I choose it. Offer only each exact demo or continuing study planning without data; do not offer a local full-database workflow.',
-          '我还没有本地数据。请只列出 EasyICU 官方 Demo 数据并说明局限；在我选择前不要下载或使用。下一步只提供每个准确 Demo 或继续无数据规划，不要提供本地完整数据库工作流。',
-        ));
-        return;
-      }
-      if (MESSAGE_ACTIONS.handleClick(event)) return;
-      const starterAction = STARTERS && STARTERS.actionFromEvent(event);
-      if (starterAction && starterAction.kind === 'send') {
-        sendText(starterAction.text, []);
-        return;
-      }
-      if (starterAction && starterAction.kind === 'compose') {
-        state.draft = starterAction.text;
-        render();
-        window.requestAnimationFrame(() => {
-          const input = state.host && state.host.querySelector('[data-gpi-input]');
-          if (!input) return;
-          input.focus();
-          input.setSelectionRange(input.value.length, input.value.length);
-          input.scrollIntoView({ block: 'nearest' });
-        });
-        return;
-      }
-      if (event.target.closest('[data-gpi-data-source-continue]')) {
-        continueAfterDataSourceConfirmation();
-        return;
-      }
-      const nextChoice = event.target.closest('[data-gpi-next-choice]');
-      if (nextChoice) {
-        const localDatabase = String(nextChoice.dataset.gpiNextLocalDatabase || '').trim();
-        if (localDatabase) {
-          authorizeDataSource('begin_local_selection', { database: localDatabase });
-          return;
-        }
-        const message = nextChoice.dataset.gpiNextChoice;
-        sendText(message, governedNextChoiceGrants(nextChoice, message));
-        return;
-      }
-      if (event.target.closest('[data-gpi-next-focus]')) {
-        const input = state.host.querySelector('[data-gpi-input]');
-        if (input) { input.focus(); input.scrollIntoView({ block: 'nearest' }); }
-        return;
-      }
-      if (event.target.closest('[data-gpi-send]')) { sendMessage(); return; }
-      if (event.target.closest('[data-gpi-stop]')) { stopMessage(); return; }
-      const childStop = event.target.closest('[data-gpi-cancel-child-job]');
-      if (childStop) { stopChildJob(childStop.dataset.gpiCancelChildJob); return; }
-      if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }
-      if (event.target.closest('[data-gpi-presentation-pin]')) { togglePresentationPin(); return; }
-      if (event.target.closest('[data-gpi-config]')) { state.showSetup = true; state.error = ''; render(); return; }
-      if (event.target.closest('[data-gpi-cancel-setup]')) { state.showSetup = false; state.error = ''; render(); return; }
-      if (event.target.closest('[data-gpi-new]')) { state.sessionSelectionRevision += 1; state.session = null; state.messages = []; state.editingMessageId = ''; rememberSession(''); render(); }
-    });
-    state.host.addEventListener('input', event => {
-      if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
-    });
-    state.host.addEventListener('change', event => {
-      if (event.target.matches('[data-gpi-codex-model]')) {
-        state.researchModel = String(event.target.value || '');
-        state.error = ''; render(); return;
-      }
-      if (!event.target.matches('[data-gpi-provider-preset]')) return;
-      const form = event.target.closest('[data-gpi-provider-form]');
-      if (!form) return;
-      const presets = {
-        cliproxyapi: { provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions', model: 'gpt-5.6-luna' },
-        'custom-openai': { provider: 'custom-openai', base_url: 'https://example.com/v1', api_transport: 'openai-completions', model: '' },
-        openai: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses', model: 'gpt-5.6-luna' },
-        openrouter: { provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions', model: '' },
-        deepseek: { provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions', model: 'deepseek-chat' },
-        anthropic: { provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages', model: 'claude-sonnet-4-6' },
-        google: { provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai', model: 'gemini-3.5-flash' },
-      };
-      const selected = presets[event.target.value];
-      if (!selected) return;
-      Object.keys(selected).forEach(name => {
-        const field = form.elements.namedItem(name);
-        if (field) field.value = selected[name];
-      });
-      state.availableModels = [];
-      const modelList = form.querySelector('#gpi-model-options');
-      if (modelList) modelList.replaceChildren();
-    });
-    state.host.addEventListener('keydown', event => {
-      if (event.key === 'Escape') {
-        const menu = state.host.querySelector('.gpi-head-overflow[open]');
-        if (menu) {
-          menu.removeAttribute('open');
-          const summary = menu.querySelector('summary');
-          if (summary) summary.focus();
-          return;
-        }
-      }
-      if (event.target.matches('[data-gpi-input]') && window.EU_COMPOSER_KEYBOARD.enterShouldSend(event)) {
-        event.preventDefault(); sendMessage();
-      }
-    });
-    state.host.addEventListener('submit', event => {
-      if (MESSAGE_ACTIONS.handleSubmit(event)) return;
-      const nextCustomForm = event.target.closest('[data-gpi-next-custom-form]');
-      if (nextCustomForm) {
-        event.preventDefault();
-        const input = nextCustomForm.querySelector('[data-gpi-next-custom-input]');
-        const message = String((input && input.value) || '').trim();
-        if (message) sendText(message, governedNextChoiceGrants(null, message));
-        return;
-      }
-      const form = event.target.closest('[data-gpi-provider-form]');
-      if (!form) return;
-      event.preventDefault(); configureProvider(form);
-    });
-  }
   function mount(host) {
     if (!host) return Promise.resolve();
     if (state.host === host) return state.startupPromise || Promise.resolve();

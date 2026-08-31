@@ -78,6 +78,16 @@ global.EU_GUIDED_PROJECTS.renderProjectRail(context(null, allRows));
 assert.equal((host.innerHTML.match(/class="gd-sessline\b/g) || []).length, 12);
 assert.match(host.innerHTML, /Project 11/);
 
+global.EU_GUIDED_PROJECTS.renderProjectRail(context(null, [{
+  id: 'source-bound-project',
+  title: 'Source-bound project',
+  status: 'metadata_only',
+  data_mode: 'real',
+  workflow_status: 'configured',
+}]));
+assert.match(host.innerHTML, /Data selected/);
+assert.doesNotMatch(host.innerHTML, /Study configured/);
+
 global.EU_GUIDED_PROJECTS.setProjectManagement(true);
 global.EU_GUIDED_PROJECTS.renderProjectRail(context(allRows[0], allRows));
 assert.match(host.innerHTML, /data-project-manage/);
