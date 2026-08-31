@@ -103,7 +103,6 @@ from .schema import (
     ClusterSelectionManifest,
     ResearchContext,
     ValidationFinding,
-    VariableRole,
 )
 from .trajectory.contract import (
     TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS,
@@ -1332,73 +1331,6 @@ def _enforce_advanced_plan_contract(
         },
     )
     return revised, [finding]
-
-
-def _infer_primary_predictor_from_context(
-    context: ResearchContext,
-) -> Optional[str]:
-    """Infer the named exposure/predictor from the question and variables.
-
-    This intentionally stays task-family generic. It scores variable-name
-    tokens that appear before adjustment language higher than tokens that
-    appear only in an "adjusted for ..." covariate clause.
-    """
-
-    question = (context.research_question or "").lower()
-    if not question:
-        return None
-    primary_span = re.split(
-        r"\b(?:after adjustment for|adjusted for|controlling for|with adjustment for|including covariates|covariates?)\b",
-        question,
-        maxsplit=1,
-    )[0]
-    best_name: Optional[str] = None
-    best_score = 0
-    for variable in context.variables:
-        if variable.role in {VariableRole.ID, VariableRole.TIME, VariableRole.OUTCOME}:
-            continue
-        tokens = _predictor_tokens(variable.name)
-        if not tokens:
-            continue
-        score = 0
-        for token in tokens:
-            if token in primary_span:
-                score += 20
-            elif token in question:
-                score += 5
-        if score > best_score:
-            best_score = score
-            best_name = variable.name
-    return best_name if best_score > 0 else None
-
-
-def _predictor_tokens(name: Optional[str]) -> set[str]:
-    if not name:
-        return set()
-    raw_tokens = re.split(r"[^a-zA-Z0-9]+", str(name).lower())
-    stop = {
-        "",
-        "24h",
-        "48h",
-        "72h",
-        "max",
-        "min",
-        "mean",
-        "median",
-        "first",
-        "last",
-        "any",
-        "flag",
-        "binary",
-        "value",
-        "score",
-    }
-    tokens = {token for token in raw_tokens if token not in stop}
-    if "vaso" in tokens:
-        tokens.add("vasopressor")
-    if "norepi" in tokens:
-        tokens.add("norepinephrine")
-    return tokens
 
 
 def _output_declares_auxiliary_log(output: str) -> bool:
