@@ -93,6 +93,7 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
         "measurement_missingness",
         "measurement_audit",
         "measurement_process",
+        "measurement_process_audit",
         "measurement_source",
         "measurement_quality",
         "measurement_quality_audit",

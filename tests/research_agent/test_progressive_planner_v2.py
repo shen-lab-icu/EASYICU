@@ -973,6 +973,31 @@ def test_article_contract_credits_host_compiled_data_quality_audit_product() -> 
     assert "data_quality" in covered
 
 
+def test_article_contract_credits_canonical_measurement_process_audit_product() -> None:
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(_payload()),
+        context=_context(),
+    )
+    measurement = next(
+        step for step in plan.steps if step.measurement_audit_spec is not None
+    )
+    measurement.expected_outputs = ["table:measurement_process_audit"]
+
+    contract = build_article_analysis_contract(
+        _context(), analysis_type=plan.analysis_type
+    )
+    covered = roles_covered_by_plan(plan, contract)
+    findings = validate_plan_against_article_contract(plan=plan, contract=contract)
+
+    assert "data_quality" in covered
+    missing_roles = {
+        role
+        for finding in findings
+        for role in (finding.detail or {}).get("missing_roles", [])
+    }
+    assert "data_quality" not in missing_roles
+
+
 def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases() -> None:
     payload = _payload()
     baseline = payload["steps"][1]
@@ -1559,6 +1584,47 @@ def test_progressive_step_rejects_method_source_scope_overclaim_locally() -> Non
             "repair_scope": "current_step_only",
         }
     ]
+
+
+def test_materialization_prompt_projects_exact_method_source_scope() -> None:
+    outline_step = ProgressiveOutlineStep(
+        step_id="robustness_summary",
+        planned_analysis_role="sensitivity",
+        module_id="robustness_replay",
+        objective="Summarize the prespecified robustness replays.",
+        variable_names=["exposure_flag", "outcome_flag"],
+        literature_citation_keys=["strobe_2007", "record_2015"],
+    )
+    outline = ProgressivePlanOutline(
+        analysis_type="association_study",
+        cohort_objective="Estimate the adjusted observational association.",
+        steps=[outline_step],
+        rationale="Keep method-source claims inside the curated card scope.",
+    )
+
+    prompt = ProgressivePlannerAgent._materialization_prompt(
+        context=_context(),
+        outline=outline,
+        outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variables=["exposure_flag", "outcome_flag"],
+        action_rows=[],
+        allowed_literature_citation_keys=["strobe_2007", "record_2015"],
+        know_how_context="",
+        planning_contract_context="",
+        prefix_summary=[],
+        available_product_refs=[],
+    )
+
+    assert (
+        '"citation_key":"strobe_2007","allowed_design_elements":'
+        '["dependence","estimand","outcome","reporting"]' in prompt
+    )
+    assert (
+        '"citation_key":"record_2015","allowed_design_elements":["reporting"]'
+        in prompt
+    )
+    assert "Never add a plausible-sounding element outside this exact source" in prompt
 
 
 def test_association_custom_sensitivity_must_follow_primary_adjusted_model() -> None:
@@ -3546,6 +3612,72 @@ def test_outline_rejects_secondary_custom_result_off_primary_lineage() -> None:
     assert caught.value.details["findings"][0]["step_ids"] == [custom["step_id"]]
 
 
+def test_outline_rejects_an_adjusted_model_that_omits_a_host_bound_covariate() -> None:
+    payload = _outline_payload()
+    selected = next(
+        candidate
+        for candidate in payload["design_selection"]["candidates"]
+        if candidate["disposition"] == "selected"
+    )
+    selected["required_variables"].extend(["age_years", "sex_code"])
+    primary = next(
+        step for step in payload["steps"] if step["module_id"] == "adjusted_association"
+    )
+    primary["variable_names"].remove("sex_code")
+    outline = ProgressivePlanOutline.model_validate(payload)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            outline,
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            required_exact_covariates=("age_years", "sex_code"),
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_outline_exact_adjustment_covariate_missing"
+    )
+    finding = caught.value.details["findings"][0]
+    assert finding["missing_by_step"] == {primary["step_id"]: ["sex_code"]}
+    assert finding["missing_from_selected_design"] == []
+
+
+def test_outline_prompt_projects_scientific_to_physical_adjustment_authority() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                covariates=["AGE", "SEX"],
+                covariate_selection="exact",
+                covariate_rationales={
+                    "AGE": "Prespecified baseline demographic confounder.",
+                    "SEX": "Prespecified baseline demographic confounder.",
+                },
+                covariate_temporal_roles={
+                    "AGE": "baseline_static",
+                    "SEX": "baseline_static",
+                },
+                covariate_operationalizations={
+                    "AGE": "age_years",
+                    "SEX": "sex_code",
+                },
+            )
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[-1].content
+
+    assert "User-owned adjustment-set authority" in prompt
+    assert '"scientific_covariates":["AGE","SEX"]' in prompt
+    assert '"operational_covariates":["age_years","sex_code"]' in prompt
+    assert "not modeling roles" in prompt
+
+
 def test_outline_rejects_missing_method_layer_before_checkpoint() -> None:
     payload = _outline_payload()
     for step in payload["steps"]:
@@ -4646,6 +4778,45 @@ def test_compiler_uses_concept_declared_levels_for_metadata_only_model_term() ->
     assert term.transform == "treatment_contrast"
 
 
+def test_compiler_rejects_continuous_coding_for_declared_factor() -> None:
+    context = _context().model_copy(
+        update={
+            "variables": [
+                *_context().variables,
+                ConceptDescriptor(
+                    name="admission_type_declared",
+                    source_concept="adm",
+                    dtype="float64",
+                    observed_domain=None,
+                ),
+            ]
+        }
+    )
+    payload = _payload()
+    primary = payload["steps"][4]
+    primary["raw_inputs"].append("admission_type_declared")
+    primary["model_terms"].append(
+        {
+            "name": "admission_type_declared",
+            "role": "covariate",
+            "coding": "continuous",
+            "reference_level_index": None,
+        }
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(
+            skeleton=ProgressivePlanSkeleton.model_validate(payload),
+            context=context,
+        )
+
+    assert caught.value.reason_code == (
+        "progressive_model_continuous_coding_declared_domain"
+    )
+    assert caught.value.step_id == "05_primary"
+    assert caught.value.path == "model_terms[3]"
+
+
 def test_compiler_reports_outcome_covariate_at_the_model_owner() -> None:
     payload = _payload()
     payload["steps"][4]["model_terms"].append(
@@ -5128,6 +5299,33 @@ def test_outline_authority_failure_is_retried_before_foundation() -> None:
     assert "progressive_outline_variable_unavailable" in (llm.calls[1][0][-1].content)
 
 
+def test_foundation_outline_digest_mismatch_is_retried() -> None:
+    invalid_foundation = _foundation_payload()
+    invalid_foundation["outline_sha256"] = "0" * 64
+    responses = [
+        _outline_payload(),
+        invalid_foundation,
+        _foundation_payload(),
+        *_materialization_payloads(),
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+
+    plan = ProgressivePlannerAgent(llm).run(_context())
+
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    assert llm.calls[1][1]["structured_output"].name == (
+        "easyicu_progressive_plan_foundation_v1"
+    )
+    assert llm.calls[2][1]["structured_output"].name == (
+        "easyicu_progressive_plan_foundation_v1"
+    )
+    assert "progressive_foundation_outline_digest_mismatch" in (
+        llm.calls[2][0][-1].content
+    )
+
+
 def test_repeated_singleton_outline_is_retried_before_foundation() -> None:
     responses = [
         _outline_with_repeated_robustness(),
@@ -5581,6 +5779,66 @@ def test_agent_repairs_only_the_current_materialization() -> None:
         == 8
     )
     assert agent.last_prompt_metrics["full_revision_count"] == 0
+
+
+def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
+    context = _context().model_copy(
+        update={
+            "user_preferences": UserPreferences(
+                covariates=["age_years", "sex_code"],
+                covariate_selection="exact",
+                covariate_rationales={
+                    "age_years": "Prespecified baseline demographic confounder.",
+                    "sex_code": "Prespecified baseline demographic confounder.",
+                },
+                covariate_temporal_roles={
+                    "age_years": "baseline_static",
+                    "sex_code": "baseline_static",
+                },
+            )
+        }
+    )
+    outline = _outline_payload()
+    selected = next(
+        candidate
+        for candidate in outline["design_selection"]["candidates"]
+        if candidate["disposition"] == "selected"
+    )
+    selected["required_variables"].extend(["age_years", "sex_code"])
+    foundation = _foundation_payload()
+    foundation["outline_sha256"] = canonical_sha256(
+        ProgressivePlanOutline.model_validate(outline).model_dump(mode="json")
+    )
+    materializations = _materialization_payloads()
+    invalid_primary = deepcopy(materializations[4])
+    invalid_primary["step"]["model_terms"] = [
+        term
+        for term in invalid_primary["step"]["model_terms"]
+        if term["name"] != "sex_code"
+    ]
+    responses = [
+        outline,
+        foundation,
+        *materializations[:4],
+        invalid_primary,
+        materializations[4],
+        *materializations[5:],
+    ]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    agent = ProgressivePlannerAgent(llm)
+
+    plan = agent.run(context)
+
+    primary = next(step for step in plan.steps if step.step_id == "05_primary")
+    assert primary.model_requirements[0].covariates == ["age_years", "sex_code"]
+    assert "progressive_adjustment_authority_mismatch" in (
+        llm.calls[7][0][-1].content
+    )
+    assert '"required_covariates":["age_years","sex_code"]' in (
+        llm.calls[7][0][-1].content
+    )
+    assert agent.last_prompt_metrics["compile_revision_count"] == 1
 
 
 def test_agent_repairs_final_plan_dependent_method_layer_locally() -> None:

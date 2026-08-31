@@ -1096,6 +1096,15 @@ def _compile_model_terms(
         )
         closed_domain = observed or list(declared or ())
         if item.coding == "continuous":
+            if declared:
+                raise _fail(
+                    "progressive_model_continuous_coding_declared_domain",
+                    f"continuous term {item.name!r} conflicts with its "
+                    f"{_declared_basis or 'declared'} closed domain",
+                    step=step,
+                    step_index=step_index,
+                    path=f"model_terms[{index}]",
+                )
             levels = None
             reference = None
             transform = "identity"
