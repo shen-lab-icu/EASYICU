@@ -85,6 +85,9 @@ from easyicu.webserver.scientific_readiness_projection import (
     build_scientific_readiness_projection,
 )
 from easyicu.webserver.research_evidence_preview import is_identifier_column
+from easyicu.webserver.execution_retry import (
+    preserves_approved_execution_checkpoint,
+)
 from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     WebReviewRecoveryRecord,
@@ -4686,10 +4689,10 @@ def _resolve_execution_resume_wrapper(
             "research_pipeline_execution_retry_configuration_superseded",
             "The study configuration changed after approval; generate a new plan.",
         )
-    if _clean_text(source_row.get("gate_reason"), 160) not in {
-        "research_agent_pipeline_failed_closed",
-        "research_pipeline_execution_failed",
-    } or _clean_text(source_row.get("run_status"), 80) not in {"blocked", "failed"}:
+    if (
+        not preserves_approved_execution_checkpoint(source_row.get("gate_reason"))
+        or _clean_text(source_row.get("run_status"), 80) not in {"blocked", "failed"}
+    ):
         raise ResearchPipelineRunError(
             "research_pipeline_execution_retry_source_not_failed_execution",
             "Only a failed-closed approved execution can resume without replanning.",

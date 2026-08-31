@@ -9,9 +9,17 @@ import pytest
 from easyicu.webserver import agent_pipeline_runs
 
 
+@pytest.mark.parametrize(
+    "gate_reason",
+    [
+        "research_agent_pipeline_failed_closed",
+        "research_pipeline_execution_failed",
+    ],
+)
 def test_completed_approved_run_can_retry_post_execution_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    gate_reason: str,
 ) -> None:
     root = tmp_path / "projects"
     wrapper = root / "study" / "run-wrapper"
@@ -40,7 +48,7 @@ def test_completed_approved_run_can_retry_post_execution_validation(
                 {
                     "run_id": "run-analysis",
                     "scientific_configuration_sha256": "a" * 64,
-                    "gate_reason": "research_agent_pipeline_failed_closed",
+                    "gate_reason": gate_reason,
                     "run_status": "blocked",
                     "project_dir": str(wrapper),
                 }
