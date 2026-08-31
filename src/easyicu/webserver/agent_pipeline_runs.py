@@ -4729,14 +4729,23 @@ def _resolve_execution_resume_wrapper(
         approved = list(checkpoint.approved_decisions or ())
         status = _read_json(status_path, {}) or {}
         gates = status.get("gates") if isinstance(status, Mapping) else {}
+        execution_failed = bool(
+            isinstance(gates, Mapping) and list(gates.get("failed_steps") or ())
+        )
+        validation_repair = bool(
+            isinstance(gates, Mapping)
+            and gates.get("execution_complete") is True
+            and gates.get("evidence_complete") is True
+            and gates.get("numeric_verified") is True
+            and gates.get("analysis_validated") is False
+        )
         if (
             checkpoint.state == "completed"
             and approved
             and all(
                 str(item.get("decision") or "") == "approved" for item in approved
             )
-            and isinstance(gates, Mapping)
-            and list(gates.get("failed_steps") or ())
+            and (execution_failed or validation_repair)
         ):
             resumable.append((run_dir, checkpoint, status))
     if not resumable:
