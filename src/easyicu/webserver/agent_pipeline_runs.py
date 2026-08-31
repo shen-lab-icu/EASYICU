@@ -84,6 +84,7 @@ from easyicu.webserver.literature_projection import (
 from easyicu.webserver.scientific_readiness_projection import (
     build_scientific_readiness_projection,
 )
+from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.execution_retry import (
     preserves_approved_execution_checkpoint,
@@ -3011,7 +3012,12 @@ def _manuscript_provenance_projection(run_dir: Path) -> Dict[str, Any]:
 
 
 def _figure_projection(run_dir: Path) -> Dict[str, Any]:
-    source = _read_json(run_dir / "figure_gallery.json", {})
+    canonical_source = _read_json(run_dir / "figure_gallery.json", {})
+    source = (
+        verified_presentation_gallery(run_dir, canonical_source)
+        if isinstance(canonical_source, Mapping)
+        else None
+    ) or canonical_source
     figures = source.get("figures") if isinstance(source, Mapping) else []
     public: List[Dict[str, Any]] = []
     embedded_total = 0
@@ -3051,6 +3057,10 @@ def _figure_projection(run_dir: Path) -> Dict[str, Any]:
             except OSError:
                 pass
         public.append(item)
+    presentation_variant = (
+        isinstance(source, Mapping)
+        and source.get("schema_version") == "easyicu.presentation-figure-gallery/1"
+    )
     return {
         "kind": "figure_gallery",
         "schema_version": "easyicu.web-pipeline-figure-gallery/1",
@@ -3066,6 +3076,9 @@ def _figure_projection(run_dir: Path) -> Dict[str, Any]:
         if isinstance(source, Mapping)
         else len(public),
         "embedded_count": sum(1 for row in public if row.get("data_url")),
+        "presentation_variant": presentation_variant,
+        "authority_ceiling": "analysis_only" if presentation_variant else "",
+        "original_run_figures_preserved": presentation_variant,
     }
 
 

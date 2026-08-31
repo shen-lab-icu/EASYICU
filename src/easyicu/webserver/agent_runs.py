@@ -33,6 +33,7 @@ from easyicu.webserver.research_evidence_preview import (
     EvidencePreviewError,
     build_evidence_preview,
 )
+from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver import study_contexts as context_store
 
 
@@ -825,7 +826,20 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     if not decoded.get("ok"):
         return decoded
     payload = decoded["payload"]
-    privacy_scan = decoded["privacy_scan"]
+    if artifact_name == "figure_gallery.json":
+        payload = verified_presentation_gallery(
+            run_dir,
+            payload,
+            embed_pngs=True,
+        ) or payload
+    privacy_scan = _scan_artifact_payloads({artifact_path.name: payload})
+    if not privacy_scan.get("passed"):
+        return {
+            "ok": False,
+            "error": "artifact_privacy_scan_failed",
+            "artifact": artifact_path.name,
+            "privacy_scan": privacy_scan,
+        }
     return {
         "ok": True,
         "project_dir": str(run_dir),
