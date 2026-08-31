@@ -29,11 +29,10 @@ from ..authority.runtime_artifacts import current_step_records
 from ..plan_utils import (
     _effect_figure_semantics_supported_by_inputs,
     _effect_figure_semantics_supported_by_model_roster,
-    _migrate_render_step_contract,
     _render_only_figure_step_intent,
     effect_output_authorized,
 )
-from ..planning.figure_plan_shaping import close_empty_deterministic_figure_contracts
+from ..planning import figure_plan_shaping as _figure_plan
 from ..providers.prompt_budget import budgeted_role_client
 from ..providers.protocol import LLMMessage
 from ..robustness.panel import load_locked_robustness_specs, robustness_specs_sha
@@ -442,7 +441,7 @@ def _migrate_legacy_resume_figure_render_edges(
         if str(step.step_id) not in completed_step_ids
         and (cut_index is None or index >= cut_index)
     ]
-    closed_plan, _closure_findings = close_empty_deterministic_figure_contracts(
+    closed_plan, _closure_findings = _figure_plan.close_empty_deterministic_figure_contracts(
         plan=plan,
         eligible_step_ids=eligible_figure_ids,
     )
@@ -616,7 +615,7 @@ def _migrate_legacy_resume_figure_render_edges(
         ):
             continue
 
-        revised_steps[index] = _migrate_render_step_contract(
+        revised_steps[index] = _figure_plan.migrate_render_step_contract(
             child, source_tokens, method="visualization"
         )
         migrated_step_ids.append(child_id)
@@ -681,7 +680,7 @@ def _migrate_legacy_resume_figure_render_edges(
             source_step_id=source_step_id,
             figure_outputs=figure_outputs,
         )
-        migrated_child = _migrate_render_step_contract(
+        migrated_child = _figure_plan.migrate_render_step_contract(
             child, source_tokens, intent=intended
         )
         if child == migrated_child:

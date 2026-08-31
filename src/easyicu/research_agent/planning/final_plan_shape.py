@@ -13,7 +13,6 @@ from typing import Sequence
 
 from ..contracts.declared_product import typed_product
 from ..plan_utils import (
-    _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
@@ -26,6 +25,9 @@ from ..plan_utils import (
     _typed_plan_dag_findings,
 )
 from .endpoint_contract import endpoint_contract_findings
+from .figure_plan_shaping import (
+    augment_report_typed_product_inputs as _augment_report_typed_product_inputs,
+)
 from ..schema import AnalysisPlan
 
 
