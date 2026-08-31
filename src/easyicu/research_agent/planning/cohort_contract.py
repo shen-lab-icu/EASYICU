@@ -11,12 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import threading
 from contextlib import contextmanager
 from functools import lru_cache
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Iterator, Literal, Optional
+from typing import Any, Dict, Iterator, Literal, Optional, Sequence
 
 # Framework-owned anchors stay deliberately small and generic. Disease- or
 # intervention-specific anchors such as "sepsis_onset" or "vent_start" are
@@ -365,6 +366,113 @@ def cohort_definition_has_explicit_selection(
     )
 
 
+_PRIMARY_COHORT_OWNER_METHODS = frozenset(
+    {
+        "cohort_construction",
+        "cohort_definition",
+        "cohort_definition_and_attrition",
+        "eligibility_definition",
+        "primary_cohort_definition",
+    }
+)
+_PRIMARY_COHORT_OWNER_PRODUCTS = frozenset(
+    {
+        "analysis_cohort",
+        "attrition",
+        "attrition_by_rule",
+        "cohort_attrition",
+        "cohort_denominator",
+        "cohort_denominators",
+        "cohort_flow",
+        "eligibility_flow",
+        "locked_cohort",
+    }
+)
+_STRUCTURED_COHORT_OUTPUT_KINDS = frozenset(
+    {"", "statistic", "table", "model", "manifest", "dataset", "artifact"}
+)
+
+
+def _cohort_method_head(method: str) -> str:
+    normalized = re.sub(
+        r"[^a-z0-9]+", "_", str(method or "").strip().lower()
+    ).strip("_")
+    return normalized.split("_with_", 1)[0]
+
+
+def _cohort_output_names(expected_outputs: Sequence[str] | str) -> set[str]:
+    values = (
+        re.split(r"[\s,]+", expected_outputs)
+        if isinstance(expected_outputs, str)
+        else [str(value or "") for value in (expected_outputs or [])]
+    )
+    names: set[str] = set()
+    for raw in values:
+        value = str(raw or "").strip().lower()
+        if not value:
+            continue
+        kind, separator, product = value.partition(":")
+        if separator and kind not in _STRUCTURED_COHORT_OUTPUT_KINDS:
+            continue
+        name = (product if separator else kind).rsplit("/", 1)[-1]
+        names.add(re.sub(r"\.(?:csv|json|parquet)$", "", name))
+    return names
+
+
+def _step_owns_primary_cohort_contract(step: Any) -> bool:
+    """Require an exact cohort-owner method and a closed population product."""
+
+    return _cohort_method_head(str(step.method or "")) in (
+        _PRIMARY_COHORT_OWNER_METHODS
+    ) and bool(
+        _cohort_output_names(step.expected_outputs or [])
+        & _PRIMARY_COHORT_OWNER_PRODUCTS
+    )
+
+
+def plan_expects_analysis_cohort(plan: Any) -> bool:
+    """Return whether the structured plan owns an analysis population."""
+
+    return any(
+        _step_owns_primary_cohort_contract(step) for step in plan.steps or []
+    )
+
+
+def cohort_definition_prose(plan: Any) -> str:
+    """Return only prose from structured cohort-owner steps."""
+
+    return "\n".join(
+        str(step.intent)
+        for step in plan.steps or []
+        if _step_owns_primary_cohort_contract(step) and step.intent
+    )
+
+
+def cohort_definition_is_empty(plan: Any) -> bool:
+    return not cohort_definition_has_explicit_selection(getattr(plan, "cohort", None))
+
+
+def cohort_definition_contract_issue(plan: Any) -> dict[str, Any] | None:
+    """Describe a cohort definition that exists only as free text."""
+
+    if not cohort_definition_is_empty(plan) or not plan_expects_analysis_cohort(plan):
+        return None
+    return {
+        "validator": "cohort_contract",
+        "severity": "error",
+        "message": (
+            "The plan defines an analysis cohort in prose (a cohort / "
+            "eligibility / attrition step) but plan.cohort carries no "
+            "structured inclusion/exclusion predicates and did not set "
+            "cohort.selection_mode='all_input_rows'. The population cannot "
+            "be materialised or audited. Express typed predicates "
+            "(concept_id, time_window, aggregation, op, value), or explicitly "
+            "select every sealed input row."
+        ),
+        "detail": {"cohort": "empty", "expects_cohort": True},
+    }
+
+
 def expand_named_cohort(
     name: str, registry: Optional[PatternRegistry] = None
 ) -> CohortDefinition:
@@ -506,11 +614,15 @@ __all__ = [
     "clear_cohort_concept_ids",
     "coerce_cohort_definition",
     "cohort_definition_sha",
+    "cohort_definition_contract_issue",
+    "cohort_definition_is_empty",
+    "cohort_definition_prose",
     "concept_id_exists",
     "default_pattern_registry",
     "ensure_cohort_definition",
     "expand_named_cohort",
     "known_concept_ids",
+    "plan_expects_analysis_cohort",
     "register_cohort_concept_ids",
     "register_pattern",
     "register_patterns_from_file",

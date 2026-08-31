@@ -383,7 +383,6 @@ from ..repairs.reasons import (
     repair_reason_for_finding,
     typed_repair_ticket,
 )
-from ..planning.endpoint_contract import endpoint_contract_findings
 from ..planning import final_plan_shape as _final_plan
 from ..orchestration.resume import (
     QuarantinedConceptDraft,
@@ -1604,7 +1603,7 @@ def run_execute_phase(
     )
     owner_declaration_preflight = owner_declaration_plan_findings(plan=plan)
     product_promise_preflight = product_promise_plan_findings(plan=plan)
-    endpoint_preflight = endpoint_contract_findings(
+    endpoint_preflight = _final_plan.endpoint_contract_findings(
         plan, context=context, severity="error"
     )
     replan_directives = _step_build_replan_directives(
@@ -1671,7 +1670,7 @@ def run_execute_phase(
                 }
             }
         )
-        for finding in endpoint_contract_findings(
+        for finding in _final_plan.endpoint_contract_findings(
             plan, context=context, severity="error"
         )
     ]

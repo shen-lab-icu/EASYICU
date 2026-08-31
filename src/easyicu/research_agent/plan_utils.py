@@ -64,7 +64,12 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
-from .planning.cohort_contract import cohort_definition_has_explicit_selection
+from .planning.cohort_contract import (
+    cohort_definition_contract_issue,
+    cohort_definition_is_empty as _cohort_definition_is_empty,  # noqa: F401 - compatibility export
+    cohort_definition_prose as _cohort_definition_prose,  # noqa: F401 - compatibility export
+    plan_expects_analysis_cohort as _plan_expects_analysis_cohort,  # noqa: F401 - compatibility export
+)
 from .planning.endpoint_contract import endpoint_contract_findings as endpoint_contract_findings
 from .planning.figure_plan_shaping import (
     dedicated_renderer_consumes_typed_source as _dedicated_renderer_consumes_typed_source,
@@ -250,15 +255,26 @@ def _problematic_metric_keys(
     return problems
 
 
+_FIGURE_METHODS = frozenset(
+    {
+        "figure",
+        "visualization",
+        "visualisation",
+        "plotting",
+        "publication_figure",
+        "publication_figure_generation",
+        "render_figure",
+        "figure_generation",
+        "chart_generation",
+    }
+)
+
+
 def _step_expects_figure(step: AnalysisStep) -> bool:
-    method = re.sub(r"[^a-z0-9]+", "_", str(step.method or "").strip().lower()).strip(
-        "_"
-    )
-    if method in _FIGURE_METHODS:
-        return True
-    return any(
-        _output_declares_figure(output) for output in step.expected_outputs or []
-    )
+    method = re.sub(
+        r"[^a-z0-9]+", "_", str(step.method or "").strip().lower()
+    ).strip("_")
+    return method in _FIGURE_METHODS or _step_produces_figure(step)
 
 
 def _step_is_figure_only(step: AnalysisStep) -> bool:
@@ -281,103 +297,13 @@ def _step_is_figure_only(step: AnalysisStep) -> bool:
     )
 
 
-_PRIMARY_COHORT_OWNER_METHODS = frozenset(
-    {
-        "cohort_construction",
-        "cohort_definition",
-        "cohort_definition_and_attrition",
-        "eligibility_definition",
-        "primary_cohort_definition",
-    }
-)
-_PRIMARY_COHORT_OWNER_PRODUCTS = frozenset(
-    {
-        "analysis_cohort",
-        "attrition",
-        "attrition_by_rule",
-        "cohort_attrition",
-        "cohort_denominator",
-        "cohort_denominators",
-        "cohort_flow",
-        "eligibility_flow",
-        "locked_cohort",
-    }
-)
-
-
-def _step_owns_primary_cohort_contract(step: AnalysisStep) -> bool:
-    """Require an exact cohort-owner method and a closed population product."""
-
-    head = _normalised_method_head(str(step.method or ""))
-    products = _normalised_structured_output_names(step.expected_outputs or [])
-    return head in _PRIMARY_COHORT_OWNER_METHODS and bool(
-        products & _PRIMARY_COHORT_OWNER_PRODUCTS
-    )
-
-
-def _plan_expects_analysis_cohort(plan: AnalysisPlan) -> bool:
-    """True when the plan clearly intends to *define* an analysis population.
-
-    Scientific ownership comes from the structured method/output contract.  A
-    prose mention such as "treatment eligibility bias" is not a cohort owner and
-    must never send an effect step through automatic cohort materialisation.
-    """
-    return any(_step_owns_primary_cohort_contract(step) for step in plan.steps or [])
-
-
-def _cohort_definition_prose(plan: AnalysisPlan) -> str:
-    """Concatenated ``intent`` prose of the plan's cohort-defining step(s).
-
-    This is the free-text 纳排 the agent wrote in lieu of a structured
-    ``plan.cohort``; ``cohort_repair`` translates it into typed predicates.
-    Uses the same structured owner predicate as
-    :func:`_plan_expects_analysis_cohort` so unrelated scientific prose is never
-    translated into inclusion/exclusion predicates.
-    """
-    prose: List[str] = []
-    for step in plan.steps or []:
-        if _step_owns_primary_cohort_contract(step) and step.intent:
-            prose.append(step.intent)
-    return "\n".join(prose)
-
-
-def _cohort_definition_is_empty(plan: AnalysisPlan) -> bool:
-    cohort = getattr(plan, "cohort", None)
-    return not cohort_definition_has_explicit_selection(cohort)
-
-
 def _cohort_definition_contract_findings(
     plan: AnalysisPlan,
 ) -> List[ValidationFinding]:
-    """Reject a 纳排 that lives only in free-text step intents.
+    """Adapt the dependency-neutral cohort owner issue to runtime findings."""
 
-    The planner must either express structured inclusion/exclusion predicates
-    or explicitly select every sealed input row. A default empty cohort is
-    ambiguous: it may be omitted 纳排 rather than an intentional full-input
-    population, so it remains an error.
-    """
-    if not _cohort_definition_is_empty(plan):
-        return []
-    if not _plan_expects_analysis_cohort(plan):
-        return []
-    return [
-        ValidationFinding(
-            validator="cohort_contract",
-            severity="error",
-            message=(
-                "The plan defines an analysis cohort in prose (a cohort / "
-                "eligibility / attrition step) but plan.cohort carries no "
-                "structured inclusion/exclusion predicates and did not set "
-                "cohort.selection_mode='all_input_rows'. The population cannot "
-                "be materialised or audited. Express typed predicates "
-                "(concept_id, time_window, aggregation, op, value), or explicitly "
-                "select every sealed input row."
-            ),
-            detail={"cohort": "empty", "expects_cohort": True},
-        )
-    ]
-
-
+    issue = cohort_definition_contract_issue(plan)
+    return [ValidationFinding(**issue)] if issue is not None else []
 
 
 # Contract "family" buckets this enforcer knows how to normalise. These are the
@@ -1527,19 +1453,6 @@ def _predictor_tokens(name: Optional[str]) -> set[str]:
     return tokens
 
 
-_FIGURE_METHODS = frozenset(
-    {
-        "figure",
-        "visualization",
-        "visualisation",
-        "plotting",
-        "publication_figure",
-        "publication_figure_generation",
-        "render_figure",
-        "figure_generation",
-        "chart_generation",
-    }
-)
 def _output_declares_auxiliary_log(output: str) -> bool:
     """Return whether an output is an explicitly typed, non-scientific log."""
 
