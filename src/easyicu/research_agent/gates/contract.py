@@ -67,15 +67,7 @@ from ..contracts.declared_product import (
 from ..contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ..robustness.membership import replay_locked_memberships
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
-from ..plan_utils import (
-    _normalised_expected_output_names,
-    _primary_exposure_contract_findings,
-    _primary_exposure_measurement_filter_findings,
-    _primary_exposure_overadjustment_findings,
-    _primary_model_leakage_findings,
-    _step_contract_findings,
-    _step_expects_figure,
-)
+from .. import plan_utils as _plan_contracts
 from ..contracts.robustness_execution import (
     ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
     _executed_robustness_result_issues,
@@ -147,7 +139,7 @@ def _is_cohort_definition_sensitivity_result_step(step: AnalysisStep) -> bool:
     stray robustness keyword cannot opt an unrelated analysis into the gate.
     """
 
-    if _step_expects_figure(step):
+    if _plan_contracts._step_expects_figure(step):
         return False
     if _method_head(str(step.method or "")) not in (
         _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS
@@ -660,7 +652,7 @@ def _closed_auxiliary_output_products(
         kind, separator, _product = value.partition(":")
         if separator and kind not in _AUXILIARY_OUTPUT_KINDS:
             return None
-        normalized = _normalised_expected_output_names([value])
+        normalized = _plan_contracts._normalised_expected_output_names([value])
         if len(normalized) != 1:
             return None
         products.update(normalized)
@@ -730,7 +722,7 @@ def _step_deterministic_contract_findings(
     predicate).
     """
 
-    findings: List[ValidationFinding] = _step_contract_findings(
+    findings: List[ValidationFinding] = _plan_contracts._step_contract_findings(
         step=step,
         step_summary=step_summary,
         context=context,
@@ -843,22 +835,22 @@ def _step_deterministic_contract_findings(
         step_summary=step_summary,
         out_dir=out_dir,
     )
-    findings += _primary_exposure_contract_findings(
+    findings += _plan_contracts._primary_exposure_contract_findings(
         step=step,
         step_summary=step_summary,
         context=context,
     )
-    findings += _primary_exposure_measurement_filter_findings(
+    findings += _plan_contracts._primary_exposure_measurement_filter_findings(
         step=step,
         step_summary=step_summary,
         context=context,
     )
-    findings += _primary_exposure_overadjustment_findings(
+    findings += _plan_contracts._primary_exposure_overadjustment_findings(
         step=step,
         context=context,
         out_dir=out_dir,
     )
-    findings += _primary_model_leakage_findings(
+    findings += _plan_contracts._primary_model_leakage_findings(
         step=step,
         context=context,
         out_dir=out_dir,

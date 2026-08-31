@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from easyicu.research_agent.plan_utils import (
     _clustering_contract_applies,
     _effect_contract_applies,
@@ -11,6 +13,26 @@ from easyicu.research_agent.planning.figure_plan_shaping import (
     step_declares_audit_panel,
 )
 from easyicu.research_agent.schema import AnalysisStep
+
+
+def test_plan_contract_catch_all_is_not_an_adapter_import_surface() -> None:
+    root = Path(__file__).resolve().parents[2] / "src/easyicu/research_agent"
+    pipeline = (root / "pipeline.py").read_text(encoding="utf-8")
+    execution = (root / "execution/phase.py").read_text(encoding="utf-8")
+    gate = (root / "gates/contract.py").read_text(encoding="utf-8")
+    final_owner = (root / "planning/final_plan_shape.py").read_text(encoding="utf-8")
+    execution_owner = (root / "execution/phase_support.py").read_text(
+        encoding="utf-8"
+    )
+
+    for adapter in (pipeline, execution, gate):
+        assert "from .plan_utils import (" not in adapter
+        assert "from ..plan_utils import (" not in adapter
+    assert "from .planning import final_plan_shape as _final_plan" in pipeline
+    assert "from .phase_support import (" in execution
+    assert "from .. import plan_utils as _plan_contracts" in gate
+    assert "from ..plan_utils import (" in final_owner
+    assert "from ..plan_utils import (" in execution_owner
 
 
 def _step(

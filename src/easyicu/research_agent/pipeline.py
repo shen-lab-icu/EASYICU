@@ -379,35 +379,8 @@ from .reporting.writer_evidence import (
     _summarise_primary_association_table,
     _summarise_table_one_rows,
 )
-from .plan_utils import (
-    _augment_report_typed_product_inputs,
-    _cap_plan_preserving_figure_steps,
-    _clustering_contract_applies,
-    _cohort_definition_contract_findings,
-    endpoint_contract_findings,
-    _cohort_definition_is_empty,
-    _ensure_publication_figure_step_in_plan,
-    _effect_figure_semantics_supported_by_inputs,
-    _effect_figure_semantics_supported_by_model_roster,
-    _enforce_advanced_plan_contract,
-    _plan_expects_analysis_cohort,
-    _infer_primary_predictor_from_context,
-    _migrate_render_step_contract,
-    _parent_step_id_for_figure_step,
-    _prediction_contract_applies,
-    _predictor_tokens,
-    _preserve_figure_steps_after_replan,
-    _research_question_implies_figure,
-    _render_only_figure_step_intent,
-    _split_table_and_figure_outputs_in_plan,
-    _step_contract_findings,
-    _step_contract_repair_guidance,
-    _step_expects_figure,
-    _step_produces_figure,
-    effect_output_authorized,
-)
 from .planning import figure_plan_shaping as _figure_plan
-from .planning.final_plan_shape import validate_final_plan_shape
+from .planning import final_plan_shape as _final_plan
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
 from .orchestration import scientific_plan_review_gate as _scientific_plan_gate
 from .figures.skill import PublicationFigureSkill
@@ -2412,8 +2385,8 @@ class ResearchAgentPipeline:
             # cohort, so a good plan is never discarded when the retry doesn't.
             if (
                 not used_mock_llm
-                and _plan_expects_analysis_cohort(plan)
-                and _cohort_definition_is_empty(plan)
+                and _final_plan._plan_expects_analysis_cohort(plan)
+                and _final_plan._cohort_definition_is_empty(plan)
             ):
                 cohort_retry = None
                 try:
@@ -2433,7 +2406,7 @@ class ResearchAgentPipeline:
                 if (
                     cohort_retry is not None
                     and cohort_retry.steps
-                    and not _cohort_definition_is_empty(cohort_retry)
+                    and not _final_plan._cohort_definition_is_empty(cohort_retry)
                 ):
                     plan = cohort_retry
                     findings.append(
@@ -2511,16 +2484,16 @@ class ResearchAgentPipeline:
         # ensure_* could rename or reorder step_ids and break the resume skip
         # set. A freshly generated plan still gets the full treatment.
         if not reused_prior_plan:
-            plan, plan_contract_findings = _enforce_advanced_plan_contract(
+            plan, plan_contract_findings = _final_plan._enforce_advanced_plan_contract(
                 plan=plan,
                 context=context,
                 long_trajectory_bound=long_trajectory_bound,
             )
             findings.extend(plan_contract_findings)
-            plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+            plan, split_findings = _final_plan._split_table_and_figure_outputs_in_plan(plan=plan)
             findings.extend(split_findings)
             plan = _figure_plan.apply_required_plan_obligations(plan, context, findings)
-            plan, report_input_findings = _augment_report_typed_product_inputs(
+            plan, report_input_findings = _final_plan._augment_report_typed_product_inputs(
                 plan=plan
             )
             findings.extend(report_input_findings)
@@ -2537,7 +2510,7 @@ class ResearchAgentPipeline:
                 _figure_plan.select_deterministic_result_renderers(plan=plan)
             )
             findings.extend(result_renderer_findings)
-            plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
+            plan, figure_guard_findings = _final_plan._ensure_publication_figure_step_in_plan(
                 plan=plan,
                 context=context,
                 force=self._enable_publication_figure_skill,
@@ -2568,7 +2541,7 @@ class ResearchAgentPipeline:
             )
             findings.extend(companion_input_findings)
             cap = self._max_total_steps
-            plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
+            plan, cap_findings = _final_plan._cap_plan_preserving_figure_steps(plan=plan, cap=cap)
             findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
             plan, trajectory_product_findings = augment_trajectory_plan_products(
                 plan=plan,
@@ -2607,7 +2580,7 @@ class ResearchAgentPipeline:
             # structured inclusion/exclusion (the retry above didn't recover
             # it), record a loud, auditable contract error instead of silently
             # running the analysis on the full universe.
-            findings.extend(_cohort_definition_contract_findings(plan))
+            findings.extend(_final_plan._cohort_definition_contract_findings(plan))
         # One boundary for every plan source: LLM, deterministic skill and
         # digest-verified resume. Planner parsing also binds early for prompt
         # diagnostics, but execution authority cannot depend on which producer
@@ -2634,13 +2607,13 @@ class ResearchAgentPipeline:
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.
-        findings.extend(endpoint_contract_findings(plan, context=context))
+        findings.extend(_final_plan.endpoint_contract_findings(plan, context=context))
         # Planner output was validated before shaping, but the host has since
         # split mixed outputs, closed typed dependencies, and applied the step
         # cap. Never offer a human an approval request for a transform-corrupted
         # plan (for example a visualization step whose sole figure declaration
         # was moved away during de-duplication).
-        validate_final_plan_shape(plan)
+        _final_plan.validate_final_plan_shape(plan)
         if study_design_brief is not None:
             if (
                 plan.analysis_type
@@ -7934,7 +7907,7 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
                 out.append(stripped)
         expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
         intent = (step.intent or "").lower()
-        if _prediction_contract_applies(step):
+        if _final_plan._prediction_contract_applies(step):
             out.extend(
                 [
                     "model_performance",
@@ -7942,7 +7915,7 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
                     "baseline_prevalence",
                 ]
             )
-        if _clustering_contract_applies(
+        if _final_plan._clustering_contract_applies(
             method=str(step.method or ""),
             step_id=step_id,
             intent=intent,
