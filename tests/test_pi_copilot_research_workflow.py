@@ -598,7 +598,7 @@ def test_workflow_projects_exact_path_free_study_setup_receipt() -> None:
     assert receipt.configuration["confirmations"] == study["confirmations"]
     assert receipt.configuration["data_source"] == {
         "database": "mimiciv",
-        "path_hash": "58809605ee2154d6",
+        "path_digest": "58809605ee2154d663851cf4776d7954",
     }
     serialized = snapshot.model_dump_json()
     assert "/private/prepared/source" not in serialized

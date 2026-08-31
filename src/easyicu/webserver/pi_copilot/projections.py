@@ -6,14 +6,31 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
+from pydantic import BaseModel, ConfigDict, Field
+
+from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
 from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
 
 MAX_PROJECTION_BYTES = 32_768
 MAX_TEXT_CHARS = 2_000
 MAX_LIST_ITEMS = 80
+
+
+class StudySetupReceipt(BaseModel):
+    """Path-free StudyContext configuration projected for Copilot review."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.pi-study-setup-receipt/1"] = (
+        "easyicu.pi-study-setup-receipt/1"
+    )
+    study_context_id: str
+    revision: int = Field(ge=0)
+    configured_fields: List[str] = Field(default_factory=list, max_length=24)
+    configuration: Mapping[str, Any]
 
 _SENSITIVE_TEXT_PATTERNS = (
     re.compile(r"\b(?:subject|stay|hadm|patient|entity)[ _-]?ids?\b", re.I),
@@ -159,6 +176,7 @@ def project_study_context(
             "question": question,
             "purpose": _bounded_text(context.get("purpose"), 800),
             "data_source": {
+                "label": _bounded_text(source.get("label"), 160),
                 "source_type": source.get("source_type") or source.get("type"),
                 "database": source.get("database") or source.get("source_id"),
                 "path_digest": path_digest(source.get("path")),
@@ -291,6 +309,66 @@ def project_study_context(
                 if literature_authority.get(key) is not None
             },
         }
+    )
+
+
+def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
+    """Project the exact bounded StudyContext fields used by workflow review."""
+
+    projected = project_study_context(study)
+    if not projected.get("present"):
+        return StudySetupReceipt(
+            study_context_id="",
+            revision=0,
+            configured_fields=[],
+            configuration={},
+        )
+    source = projected.get("data_source")
+    source = dict(source) if isinstance(source, Mapping) else {}
+    configuration: Dict[str, Any] = {
+        key: projected.get(key)
+        for key in (
+            "question",
+            "purpose",
+            "cohort",
+            "modules",
+            "outcome",
+            "primary_exposure",
+            "covariates",
+            "covariate_selection",
+            "covariate_operationalizations",
+            "execution_concepts",
+            "analysis_design",
+            "sensitivity_specs",
+            "time_window",
+            "comparator",
+            "export_format",
+            "analysis_goal",
+            "confirmations",
+        )
+    }
+    for field in (
+        "crossdb_selection",
+        "covariate_rationales",
+        "covariate_temporal_roles",
+    ):
+        raw = study.get(field)
+        configuration[field] = dict(raw) if isinstance(raw, Mapping) else {}
+    configuration["data_source"] = {
+        key: value
+        for key, value in source.items()
+        if key in {"label", "source_type", "database", "path_digest", "status"}
+        and value not in (None, "")
+    }
+    configuration["cohort_eligibility_authority"] = (
+        cohort_eligibility.validated_authority(study) or {}
+    )
+    configuration = ensure_safe_projection(configuration)
+    return StudySetupReceipt(
+        study_context_id=str(projected.get("id") or ""),
+        revision=int(projected.get("revision") or 0),
+        configured_fields=[key for key, value in configuration.items() if bool(value)],
+        configuration=configuration,
     )
 
 
@@ -947,6 +1025,7 @@ def stable_code(value: Any) -> Optional[str]:
 
 
 __all__ = [
+    "StudySetupReceipt",
     "project_transcript",
     "bounded_json_projection",
     "ensure_safe_projection",
@@ -956,6 +1035,7 @@ __all__ = [
     "project_job",
     "project_run_row",
     "project_study_context",
+    "project_study_setup_receipt",
     "reject_sensitive_message",
     "stable_code",
 ]

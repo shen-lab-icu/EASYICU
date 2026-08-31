@@ -8,8 +8,6 @@ owners' receipts.
 
 from __future__ import annotations
 
-import hashlib
-
 from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,7 +26,12 @@ from .contracts import (
     plan_approval_allowed,
 )
 from .plan_projection import project_plan_conversation_preview
-from .projections import project_job, project_run_outcome
+from .projections import (
+    StudySetupReceipt,
+    project_job,
+    project_run_outcome,
+    project_study_setup_receipt,
+)
 from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
@@ -61,20 +64,6 @@ class ResearchWorkflowStage(BaseModel):
     status: WorkflowStatus
     owner: str
     reason_code: str
-
-
-class StudySetupReceipt(BaseModel):
-    """Path-free identity and configuration receipt for Copilot review."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal["easyicu.pi-study-setup-receipt/1"] = (
-        "easyicu.pi-study-setup-receipt/1"
-    )
-    study_context_id: str
-    revision: int = Field(ge=0)
-    configured_fields: List[str] = Field(default_factory=list, max_length=24)
-    configuration: Mapping[str, Any]
 
 
 class ResearchWorkflowSnapshot(BaseModel):
@@ -170,100 +159,6 @@ def _identified_data_source(study: Mapping[str, Any]) -> bool:
     if not isinstance(source, Mapping):
         return False
     return bool(str(source.get("database") or "").strip())
-
-
-def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
-    """Project only bounded setup fields; never return a local filesystem path."""
-
-    raw_source = study.get("data_source")
-    source = raw_source if isinstance(raw_source, Mapping) else {}
-    source_path = str(source.get("path") or "").strip()
-    safe_source: Dict[str, Any] = {
-        key: str(source.get(key) or "").strip()
-        for key in ("label", "database")
-        if str(source.get(key) or "").strip()
-    }
-    if source_path:
-        safe_source["path_hash"] = hashlib.sha256(
-            source_path.encode("utf-8")
-        ).hexdigest()[:16]
-
-    raw_crossdb = study.get("crossdb_selection")
-    crossdb = dict(raw_crossdb) if isinstance(raw_crossdb, Mapping) else {}
-    raw_cohort = study.get("cohort")
-    cohort = dict(raw_cohort) if isinstance(raw_cohort, Mapping) else {}
-    raw_window = study.get("time_window")
-    time_window = dict(raw_window) if isinstance(raw_window, Mapping) else {}
-    raw_execution = study.get("execution_concepts")
-    execution_concepts = (
-        dict(raw_execution) if isinstance(raw_execution, Mapping) else {}
-    )
-    raw_analysis_design = study.get("analysis_design")
-    analysis_design = (
-        dict(raw_analysis_design) if isinstance(raw_analysis_design, Mapping) else {}
-    )
-    raw_rationales = study.get("covariate_rationales")
-    covariate_rationales = (
-        dict(raw_rationales) if isinstance(raw_rationales, Mapping) else {}
-    )
-    raw_temporal_roles = study.get("covariate_temporal_roles")
-    covariate_temporal_roles = (
-        dict(raw_temporal_roles) if isinstance(raw_temporal_roles, Mapping) else {}
-    )
-    raw_operationalizations = study.get("covariate_operationalizations")
-    covariate_operationalizations = (
-        dict(raw_operationalizations)
-        if isinstance(raw_operationalizations, Mapping)
-        else {}
-    )
-    raw_confirmations = study.get("confirmations")
-    confirmations = (
-        dict(raw_confirmations) if isinstance(raw_confirmations, Mapping) else {}
-    )
-    eligibility_authority = cohort_eligibility.validated_authority(study) or {}
-    configuration: Dict[str, Any] = {
-        "question": str(study.get("question") or "").strip(),
-        "purpose": str(study.get("purpose") or "").strip(),
-        "data_source": safe_source,
-        "crossdb_selection": crossdb,
-        "cohort": cohort,
-        "modules": [
-            str(value) for value in (study.get("modules") or []) if str(value).strip()
-        ],
-        "outcome": str(study.get("outcome") or "").strip(),
-        "primary_exposure": str(study.get("primary_exposure") or "").strip(),
-        "covariates": [
-            str(value)
-            for value in (study.get("covariates") or [])
-            if str(value).strip()
-        ],
-        "covariate_selection": str(
-            study.get("covariate_selection") or "planner_selectable"
-        ).strip(),
-        "covariate_rationales": covariate_rationales,
-        "covariate_temporal_roles": covariate_temporal_roles,
-        "covariate_operationalizations": covariate_operationalizations,
-        "execution_concepts": execution_concepts,
-        "analysis_design": analysis_design,
-        "sensitivity_specs": [
-            dict(value)
-            for value in (study.get("sensitivity_specs") or [])
-            if isinstance(value, Mapping)
-        ],
-        "time_window": time_window,
-        "comparator": str(study.get("comparator") or "").strip(),
-        "export_format": str(study.get("export_format") or "").strip(),
-        "analysis_goal": str(study.get("analysis_goal") or "").strip(),
-        "confirmations": confirmations,
-        "cohort_eligibility_authority": eligibility_authority,
-    }
-    configured_fields = [key for key, value in configuration.items() if bool(value)]
-    return StudySetupReceipt(
-        study_context_id=str(study.get("id") or ""),
-        revision=int(study.get("revision") or 0),
-        configured_fields=configured_fields,
-        configuration=configuration,
-    )
 
 
 def build_research_workflow_snapshot(
@@ -850,7 +745,7 @@ def build_research_workflow_snapshot(
         missing_setup_fields=missing,
         stages=stages,
         completed_required_stages=completed,
-        study_setup_receipt=_safe_study_setup_receipt(study_row),
+        study_setup_receipt=project_study_setup_receipt(study_row),
         plan_review_summary=plan_review_summary,
         plan_execution_ready=plan_execution_ready,
         analysis_validation_retry_available=(analysis_validation_retry_available),
