@@ -40,6 +40,7 @@ from easyicu.webserver.copilot_data_workbench import (
     project_patient_snapshot_payload,
 )
 from easyicu.webserver.ideas import mining as idea_mining
+from easyicu.webserver.ideas import handoff as idea_handoff
 
 from .contracts import (
     AuthorityBinding,
@@ -3187,20 +3188,6 @@ def _accept_idea_handoff(
             summary=str(detail.get("reason") or "Idea handoff acceptance failed."),
             owner="easyicu.webserver.ideas.handoff",
         )
-    digest = str(handoff.get("canonical_handoff_sha256") or "").strip().lower()
-    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-        return _result(
-            context,
-            status="blocked",
-            code="canonical_idea_handoff_digest_required",
-            summary="The selected Idea Mining handoff has no valid canonical digest.",
-            owner="easyicu.webserver.ideas.handoff",
-        )
-    canonical = (
-        handoff.get("canonical_handoff")
-        if isinstance(handoff.get("canonical_handoff"), Mapping)
-        else {}
-    )
     try:
         prior_art_binding = idea_mining.prior_art_receipt_binding(body["run_id"])
     except idea_mining.IdeaMiningWebError as exc:
@@ -3215,177 +3202,26 @@ def _accept_idea_handoff(
             ),
             owner="easyicu.webserver.ideas.mining",
         )
-    selected_row = (
-        canonical.get("selected_ledger_row")
-        if isinstance(canonical.get("selected_ledger_row"), Mapping)
-        else {}
-    )
-    mapped_concepts = [
-        row
-        for row in selected_row.get("mapped_concepts") or []
-        if isinstance(row, Mapping)
-    ]
-    module_by_concept = {
-        str(row.get("concept_id") or "").strip(): str(row.get("module") or "").strip()
-        for row in mapped_concepts
-        if str(row.get("concept_id") or "").strip()
-        and str(row.get("module") or "").strip()
-    }
-    predictor_concept = str(canonical.get("resolved_predictor_concept") or "").strip()
-    outcome_concept = str(
-        canonical.get("resolved_outcome_concept")
-        or canonical.get("target_outcome")
-        or ""
-    ).strip()
-    analysis_concepts = list(
-        dict.fromkeys(
-            str(value).strip()
-            for value in canonical.get("resolved_analysis_concepts") or []
-            if str(value).strip()
-        )
-    )
-    execution_concepts = list(
-        dict.fromkeys(
-            value
-            for value in (predictor_concept, outcome_concept, *analysis_concepts)
-            if value
-        )
-    )
-    missing_modules = [
-        concept_id
-        for concept_id in execution_concepts
-        if concept_id not in module_by_concept
-    ]
-    if not canonical or not execution_concepts or missing_modules:
-        return _result(
-            context,
-            status="blocked",
-            code="canonical_idea_execution_contract_required",
-            summary=(
-                "The canonical Idea Mining handoff does not contain a complete "
-                "digest-bound concept-to-module execution contract."
-            ),
-            owner="easyicu.webserver.ideas.handoff",
-            details={"missing_concept_modules": missing_modules},
-        )
-    plan_body = plan.get("plan") if isinstance(plan.get("plan"), Mapping) else {}
-    agent_seed = (
-        handoff.get("agent_seed")
-        if isinstance(handoff.get("agent_seed"), Mapping)
-        else {}
-    )
-    patch: Dict[str, Any] = {
-        "id": current["id"],
-        "idea_handoff": {
-            "schema_version": "easyicu.pi-idea-selection/1",
-            "run_id": body["run_id"],
-            "idea_id": str(handoff.get("idea_id") or body["idea_id"]),
-            "canonical_handoff_sha256": digest,
-            "status": "accepted",
-            "accepted_at": str(handoff.get("created_at") or ""),
-            "go_no_go": str(handoff.get("go_no_go") or ""),
-            "go_no_go_reason": str(handoff.get("go_no_go_reason") or "")[:500],
-            **dict(prior_art_binding or {}),
-        },
-        "current_stage": "study_setup",
-        "last_route": "guided",
-    }
-    derived_fields = {
-        "title": handoff.get("candidate_topic"),
-        "question": plan_body.get("research_question") or agent_seed.get("question"),
-        "outcome": outcome_concept or plan_body.get("outcome"),
-        "primary_exposure": predictor_concept or plan_body.get("exposure"),
-        "comparator": plan_body.get("comparator"),
-        "analysis_goal": canonical.get("analysis_family")
-        or plan_body.get("analysis_family"),
-    }
-    limits = {
-        "title": 160,
-        "question": 1200,
-        "outcome": 500,
-        "primary_exposure": 160,
-        "comparator": 500,
-        "analysis_goal": 1200,
-    }
-    patch.update(
-        {
-            key: str(value).strip()[: limits[key]]
-            for key, value in derived_fields.items()
-            if str(value or "").strip()
-        }
-    )
-    # A comparator belongs to its exposure.  Re-selecting an idea can change
-    # the digest-bound predictor while the new handoff intentionally leaves
-    # comparator selection to the remaining conversational setup.  Retaining
-    # the previous idea's comparator in that case silently creates an invalid
-    # study contract (for example, a per-unit lab contrast on a binary
-    # phenotype).  Clear only this dependent slot; the user can then confirm
-    # the new comparator in the same Copilot conversation.
-    previous_exposure = str(current.get("primary_exposure") or "").strip()
-    if (
-        predictor_concept != previous_exposure
-        and not str(plan_body.get("comparator") or "").strip()
-    ):
-        patch["comparator"] = ""
-    patch["modules"] = list(
-        dict.fromkeys(
-            module_by_concept[concept_id] for concept_id in execution_concepts
-        )
-    )
-    requested_adjustment_concepts = list(
-        dict.fromkeys(
-            str(value).strip()
-            for value in selected_row.get("requested_adjustment_concepts") or []
-            if str(value).strip()
-        )
-    )
-    invalid_adjustment_concepts = [
-        concept_id
-        for concept_id in requested_adjustment_concepts
-        if concept_id not in analysis_concepts
-        or concept_id in {predictor_concept, outcome_concept}
-    ]
-    if invalid_adjustment_concepts:
-        return _result(
-            context,
-            status="blocked",
-            code="canonical_idea_adjustment_contract_invalid",
-            summary=(
-                "The canonical Idea Mining handoff contains adjustment variables "
-                "outside its digest-bound analysis concept set."
-            ),
-            owner="easyicu.webserver.ideas.handoff",
-            details={"invalid_adjustment_concepts": invalid_adjustment_concepts},
-        )
-    # Only an explicit adjustment clause may populate this slot. Mentioning a
-    # marker for feasibility or descriptive review is not authority to adjust
-    # for it; an absent clause intentionally leaves the list empty for the
-    # conversational setup/human Plan gate.
-    patch["covariates"] = requested_adjustment_concepts
-    patch["execution_concepts"] = {
-        **({"outcome": outcome_concept} if outcome_concept else {}),
-        **(
-            {"primary_exposure": predictor_concept}
-            if predictor_concept
-            else {}
-        ),
-        "covariates": requested_adjustment_concepts,
-    }
     try:
-        updated = study_contexts.upsert_context(
-            patch,
-            active=True,
-            expected_revision=int(current.get("revision") or 0),
-            require_revision=True,
-            lifecycle_write=False,
+        updated = idea_handoff.accept_canonical_handoff(
+            current=current,
+            body=body,
+            plan=plan,
+            handoff=handoff,
+            prior_art_binding=(
+                prior_art_binding
+                if isinstance(prior_art_binding, Mapping)
+                else None
+            ),
         )
-    except study_contexts.StudyContextError as exc:
+    except idea_handoff.CanonicalHandoffAcceptanceError as exc:
         return _result(
             context,
             status="blocked",
-            code=str(exc.detail.get("error") or "idea_handoff_binding_blocked"),
-            summary="The StudyContext owner rejected the selected Idea Mining handoff.",
-            owner="easyicu.webserver.study_contexts",
+            code=exc.code,
+            summary=exc.message,
+            owner=exc.owner,
+            details=exc.details,
         )
     result = _result(
         context,
