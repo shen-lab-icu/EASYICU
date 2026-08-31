@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from easyicu.research_agent.plan_utils import (
+from easyicu.research_agent.contracts.step_families import (
     _clustering_contract_applies,
     _effect_contract_applies,
     _prediction_contract_applies,
+)
+from easyicu.research_agent.gates.step_contract import (
     _step_contract_findings,
+)
+from easyicu.research_agent.gates.step_repair import (
     _step_contract_repair_guidance,
 )
 from easyicu.research_agent.planning.figure_plan_shaping import (
@@ -15,38 +19,32 @@ from easyicu.research_agent.planning.figure_plan_shaping import (
 from easyicu.research_agent.schema import AnalysisStep
 
 
-def test_plan_contract_catch_all_is_not_an_adapter_import_surface() -> None:
+def test_plan_contract_owners_do_not_depend_on_compatibility_catch_all() -> None:
     root = Path(__file__).resolve().parents[2] / "src/easyicu/research_agent"
-    pipeline = (root / "pipeline.py").read_text(encoding="utf-8")
-    execution = (root / "execution/phase.py").read_text(encoding="utf-8")
     gate = (root / "gates/contract.py").read_text(encoding="utf-8")
     final_owner = (root / "planning/final_plan_shape.py").read_text(encoding="utf-8")
-    cohort_owner = (root / "planning/cohort_contract.py").read_text(encoding="utf-8")
-    product_owner = (root / "contracts/product_identity.py").read_text(
-        encoding="utf-8"
-    )
-    figure_owner = (root / "planning/figure_plan_shaping.py").read_text(
-        encoding="utf-8"
-    )
     compatibility = (root / "plan_utils.py").read_text(encoding="utf-8")
     execution_owner = (root / "execution/phase_support.py").read_text(
         encoding="utf-8"
     )
+    production_consumers = [
+        path
+        for path in root.rglob("*.py")
+        if path.name != "plan_utils.py"
+    ]
 
-    for adapter in (pipeline, execution, gate):
-        assert "from .plan_utils import (" not in adapter
-        assert "from ..plan_utils import (" not in adapter
-    assert "from .planning import final_plan_shape as _final_plan" in pipeline
-    assert "from .phase_support import (" in execution
-    assert "from .. import plan_utils as _plan_contracts" in gate
-    assert "from ..plan_utils import (" in final_owner
-    assert "from ..plan_utils import (" in execution_owner
-    assert "def cohort_definition_contract_issue(" in cohort_owner
-    assert "issue = cohort_definition_contract_issue(plan)" in compatibility
-    assert "def normalised_structured_output_names(" in product_owner
-    assert "def _normalised_structured_output_names(" not in compatibility
-    assert "def augment_report_typed_product_inputs(" in figure_owner
-    assert "def _augment_report_typed_product_inputs(" not in compatibility
+    assert all(
+        "plan_utils import" not in path.read_text(encoding="utf-8")
+        and "import plan_utils" not in path.read_text(encoding="utf-8")
+        for path in production_consumers
+    )
+    assert "_plan_contracts" not in gate
+    assert "plan_utils" not in final_owner
+    assert "plan_utils" not in execution_owner
+    assert len(compatibility.splitlines()) < 100
+    assert "from .contracts.step_families import (" in compatibility
+    assert "from .gates.step_contract import _step_contract_findings" in compatibility
+    assert "from .planning.plan_graph import (" in compatibility
 
 
 def _step(

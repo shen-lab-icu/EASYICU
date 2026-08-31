@@ -15,7 +15,7 @@ from typing import Iterable, Optional
 
 from ..planning.analysis_types import canonical_analysis_family
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
-from ..plan_utils import (
+from ..contracts.step_families import (
     clustering_contract_applies,
     cohort_change_contract_applies,
     effect_output_authorized,

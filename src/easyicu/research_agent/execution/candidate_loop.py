@@ -67,7 +67,8 @@ from ..repairs.reasons import (
     repair_reason_for_finding,
     typed_repair_ticket,
 )
-from ..plan_utils import _step_contract_repair_guidance, effect_output_authorized
+from ..contracts.step_families import effect_output_authorized
+from ..gates.step_repair import _step_contract_repair_guidance
 from ..orchestration.resume import store_quarantined_concept_draft
 from ..repair_registry import is_sealed_renderer_repair
 from ..authority.provider_budget import ProviderCallBudgetReceiptError

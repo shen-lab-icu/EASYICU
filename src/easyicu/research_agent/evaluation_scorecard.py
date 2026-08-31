@@ -58,7 +58,7 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
-from .plan_utils import read_adjustment_covariates
+from .contracts.model_covariates import read_adjustment_covariates
 from .authority.runtime_artifacts import (
     current_run_evidence_paths,
     current_step_records,

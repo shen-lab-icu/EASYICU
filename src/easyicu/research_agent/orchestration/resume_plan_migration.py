@@ -26,11 +26,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..authority.evidence_store import EvidenceStore
 from ..authority.runtime_artifacts import current_step_records
-from ..plan_utils import (
+from ..contracts.step_families import effect_output_authorized
+from ..planning.figure_plan_mutation import (
     _effect_figure_semantics_supported_by_inputs,
     _effect_figure_semantics_supported_by_model_roster,
     _render_only_figure_step_intent,
-    effect_output_authorized,
 )
 from ..planning import figure_plan_shaping as _figure_plan
 from ..providers.prompt_budget import budgeted_role_client
