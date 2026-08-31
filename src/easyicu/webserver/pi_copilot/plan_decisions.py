@@ -11,11 +11,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Sequence
 
+from easyicu.webserver.study_scientific_configuration import ScientificConfiguration
+
 
 class PlanDecisionError(ValueError):
     """A rendered plan choice cannot be compiled for the bound plan."""
 
-    def __init__(self, code: str, message: str, *, details: Mapping[str, Any] | None = None):
+    def __init__(
+        self, code: str, message: str, *, details: Mapping[str, Any] | None = None
+    ):
         super().__init__(message)
         self.code = code
         self.details = dict(details or {})
@@ -80,8 +84,12 @@ def _primary_requirement(plan: Mapping[str, Any]) -> Mapping[str, Any]:
     steps = plan.get("steps")
     if isinstance(steps, Sequence) and not isinstance(steps, (str, bytes)):
         for step in steps:
-            requirements = step.get("model_requirements") if isinstance(step, Mapping) else None
-            if not isinstance(requirements, Sequence) or isinstance(requirements, (str, bytes)):
+            requirements = (
+                step.get("model_requirements") if isinstance(step, Mapping) else None
+            )
+            if not isinstance(requirements, Sequence) or isinstance(
+                requirements, (str, bytes)
+            ):
                 continue
             matches.extend(
                 item
@@ -114,31 +122,7 @@ def proposed_adjustment_set(plan: Mapping[str, Any]) -> list[str]:
 def decision_is_resolved(study: Mapping[str, Any], decision_code: str) -> bool:
     """Return whether the StudyContext already carries a typed human choice."""
 
-    confirmations = study.get("confirmations")
-    confirmations = confirmations if isinstance(confirmations, Mapping) else {}
-    code = str(decision_code or "").strip()
-    if code == "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED":
-        return any(
-            confirmations.get(key) is True
-            for key in (
-                "plan_timing_landmark_24h",
-                "plan_timing_descriptive_only",
-                "plan_timing_time_varying",
-            )
-        )
-    if code == "REPEATED_STAY_IDENTITY_UNAVAILABLE":
-        return any(
-            confirmations.get(key) is True
-            for key in (
-                "plan_repeated_stays_clustered",
-                "plan_repeated_stays_first",
-            )
-        )
-    if code == "ADJUSTMENT_SET_NOT_USER_CONFIRMED":
-        return confirmations.get("plan_adjustment_set_confirmed") is True
-    if code == "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY":
-        return confirmations.get("plan_required_sensitivities_executable") is True
-    return False
+    return ScientificConfiguration.inspect(study).decision_is_resolved(decision_code)
 
 
 def pending_authorization_questions(
@@ -157,33 +141,6 @@ def pending_authorization_questions(
             continue
         result.append(dict(raw))
     return result
-
-
-def _merge_confirmations(study: Mapping[str, Any], **values: bool) -> Dict[str, bool]:
-    current = study.get("confirmations")
-    merged = dict(current) if isinstance(current, Mapping) else {}
-    merged.update(values)
-    return merged
-
-
-def _replace_sensitivity(
-    study: Mapping[str, Any],
-    *,
-    axis: str,
-    replacement: Mapping[str, Any] | None,
-) -> list[Dict[str, Any]]:
-    current = study.get("sensitivity_specs")
-    rows = [
-        dict(item)
-        for item in current
-        if isinstance(current, Sequence)
-        and not isinstance(current, (str, bytes))
-        and isinstance(item, Mapping)
-        and str(item.get("axis") or "") != axis
-    ] if isinstance(current, Sequence) and not isinstance(current, (str, bytes)) else []
-    if replacement is not None:
-        rows.append(dict(replacement))
-    return rows
 
 
 def _timing_coordinates(plan: Mapping[str, Any]) -> Dict[str, str]:
@@ -216,6 +173,7 @@ def compile_plan_decision(
 
     code = str(decision_code or "").strip()
     option = str(option_id or "").strip()
+    configuration = ScientificConfiguration.inspect(study)
     if code == "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY":
         if option != "keep_executable_sensitivities":
             raise PlanDecisionError(
@@ -241,11 +199,10 @@ def compile_plan_decision(
         }
         return CompiledPlanDecision(
             patch={
-                "sensitivity_specs": _replace_sensitivity(
-                    study, axis="timing", replacement=landmark
+                "sensitivity_specs": configuration.replace_sensitivity(
+                    axis="timing", replacement=landmark
                 ),
-                "confirmations": _merge_confirmations(
-                    study,
+                "confirmations": configuration.merge_confirmations(
                     plan_required_sensitivities_executable=True,
                 ),
             },
@@ -274,11 +231,10 @@ def compile_plan_decision(
                     "variance_estimator": "cluster_robust",
                     "cluster_unit": "patient",
                 },
-                "sensitivity_specs": _replace_sensitivity(
-                    study, axis="repeated_stays", replacement=sensitivity
+                "sensitivity_specs": configuration.replace_sensitivity(
+                    axis="repeated_stays", replacement=sensitivity
                 ),
-                "confirmations": _merge_confirmations(
-                    study,
+                "confirmations": configuration.merge_confirmations(
                     plan_repeated_stays_clustered=True,
                 ),
             },
@@ -322,8 +278,7 @@ def compile_plan_decision(
                     covariate: covariate for covariate in covariates
                 },
                 "execution_concepts": execution,
-                "confirmations": _merge_confirmations(
-                    study,
+                "confirmations": configuration.merge_confirmations(
                     plan_adjustment_set_confirmed=True,
                 ),
             },
@@ -393,11 +348,10 @@ def compile_plan_decision(
                 "execution_concepts": execution,
                 "analysis_goal": "24 小时 landmark 后的调整关联分析",
                 "export_format": "parquet",
-                "sensitivity_specs": _replace_sensitivity(
-                    study, axis="timing", replacement=sensitivity
+                "sensitivity_specs": configuration.replace_sensitivity(
+                    axis="timing", replacement=sensitivity
                 ),
-                "confirmations": _merge_confirmations(
-                    study,
+                "confirmations": configuration.merge_confirmations(
                     feature_time_window=True,
                     extraction_completed=True,
                     export_format=True,
@@ -417,11 +371,10 @@ def compile_plan_decision(
                 "execution_concepts": execution,
                 "analysis_goal": "描述暴露与结局分布，不估计时间对齐后的关联",
                 "export_format": "parquet",
-                "sensitivity_specs": _replace_sensitivity(
-                    study, axis="timing", replacement=None
+                "sensitivity_specs": configuration.replace_sensitivity(
+                    axis="timing", replacement=None
                 ),
-                "confirmations": _merge_confirmations(
-                    study,
+                "confirmations": configuration.merge_confirmations(
                     feature_time_window=True,
                     extraction_completed=True,
                     export_format=True,
@@ -449,11 +402,10 @@ def compile_plan_decision(
                     "primary_exposure": exposure,
                 },
                 "analysis_goal": f"{exposure_zh}的时变暴露关联分析",
-                "sensitivity_specs": _replace_sensitivity(
-                    study, axis="timing", replacement=sensitivity
+                "sensitivity_specs": configuration.replace_sensitivity(
+                    axis="timing", replacement=sensitivity
                 ),
-                "confirmations": _merge_confirmations(
-                    study,
+                "confirmations": configuration.merge_confirmations(
                     plan_timing_time_varying=True,
                     extraction_completed=False,
                 ),

@@ -76,6 +76,10 @@ from easyicu.webserver import (
     source_identity_authority,
 )
 from easyicu.webserver import study_contexts as study_context_owner
+from easyicu.webserver.study_scientific_configuration import (
+    ScientificConfiguration,
+    ScientificConfigurationError,
+)
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.literature_projection import (
     load_current_plan_authority,
@@ -433,9 +437,7 @@ def _development_progressive_resume_binding(
     return terminal, artifact_sha256
 
 
-def _development_resume_literature_bundle(
-    *, checkpoint_path: Path
-) -> Dict[str, Any]:
+def _development_resume_literature_bundle(*, checkpoint_path: Path) -> Dict[str, Any]:
     """Load the exact literature authority hashed into a Dev checkpoint."""
 
     path = checkpoint_path.parent / "preplan_literature_bundle.json"
@@ -641,9 +643,7 @@ def _development_resume_acquisition_profile(
             "The prior canary has no typed acquisition receipt.",
         )
     try:
-        provenance = json.loads(
-            selected_provenance_path.read_text(encoding="utf-8")
-        )
+        provenance = json.loads(selected_provenance_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_acquisition_unreadable",
@@ -658,9 +658,11 @@ def _development_resume_acquisition_profile(
                 "research_pipeline_development_resume_acquisition_unreadable",
                 "The prior metadata-only planning catalog cannot be verified.",
             ) from exc
-        if not isinstance(provenance, Mapping) or provenance.get(
-            "schema_version"
-        ) != "easyicu.metadata-only-planning-catalog/1":
+        if (
+            not isinstance(provenance, Mapping)
+            or provenance.get("schema_version")
+            != "easyicu.metadata-only-planning-catalog/1"
+        ):
             raise ResearchPipelineRunError(
                 "research_pipeline_development_resume_acquisition_invalid",
                 "The prior metadata-only planning receipt has an unsupported schema.",
@@ -675,9 +677,7 @@ def _development_resume_acquisition_profile(
                 "research_pipeline_development_resume_acquisition_invalid",
                 "The prior metadata-only planning receipt has an invalid concept roster.",
             )
-        normalized_selected = tuple(
-            dict.fromkeys(value.strip() for value in selected)
-        )
+        normalized_selected = tuple(dict.fromkeys(value.strip() for value in selected))
         normalized_operationalized = (
             _normalized_metadata_planning_operationalized_columns(
                 planning_operationalized_columns
@@ -698,8 +698,7 @@ def _development_resume_acquisition_profile(
         )
         if (
             str(provenance.get("database") or "").strip().lower() != database
-            or str(provenance.get("selected_concepts_sha256") or "")
-            != selected_sha256
+            or str(provenance.get("selected_concepts_sha256") or "") != selected_sha256
             or provenance.get("patient_rows_read") is not False
             or provenance.get("patient_rows_written") is not False
             or provenance.get("observed_feasibility_claims") is not False
@@ -767,7 +766,9 @@ def _development_resume_acquisition_profile(
         )
 
     try:
-        universe_sha256 = hashlib.sha256(selected_universe_path.read_bytes()).hexdigest()
+        universe_sha256 = hashlib.sha256(
+            selected_universe_path.read_bytes()
+        ).hexdigest()
     except OSError as exc:
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_acquisition_unreadable",
@@ -816,9 +817,7 @@ def _development_resume_acquisition_profile(
         != tuple(dict.fromkeys(str(value) for value in outcome_concepts))
         or restored["static_concepts"]
         != tuple(dict.fromkeys(str(value) for value in static_concepts))
-        or not set(required_feature_concepts).issubset(
-            restored["feature_concepts"]
-        )
+        or not set(required_feature_concepts).issubset(restored["feature_concepts"])
     ):
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_acquisition_authority_mismatch",
@@ -1507,111 +1506,42 @@ def _safe_relative(root: Path, raw: Any) -> Optional[Path]:
 
 
 def _target_outcome(study: Mapping[str, Any]) -> Optional[str]:
-    execution = study.get("execution_concepts")
-    execution = execution if isinstance(execution, Mapping) else {}
-    value = _clean_text(execution.get("outcome") or study.get("outcome"), 160)
-    if value.lower() in {
-        "none",
-        "n/a",
-        "na",
-        "not applicable",
-        "descriptive only",
-        "无",
-        "不适用",
-        "仅描述",
-    }:
-        return None
-    return value or None
+    return ScientificConfiguration.inspect(study).target_outcome()
 
 
 def _primary_exposure(study: Mapping[str, Any]) -> Optional[str]:
-    execution = study.get("execution_concepts")
-    execution = execution if isinstance(execution, Mapping) else {}
-    return (
-        _clean_text(
-            execution.get("primary_exposure") or study.get("primary_exposure"),
-            160,
-        )
-        or None
-    )
+    return ScientificConfiguration.inspect(study).primary_exposure()
 
 
 def _primary_exposure_aggregation(study: Mapping[str, Any]) -> Optional[str]:
     """Return the StudyContext-owned repeated-measure aggregation coordinate."""
 
-    execution = study.get("execution_concepts")
-    execution = execution if isinstance(execution, Mapping) else {}
-    value = _clean_text(execution.get("primary_exposure_aggregation"), 16).lower()
-    return value or None
+    return ScientificConfiguration.inspect(study).primary_exposure_aggregation()
 
 
 def _configured_covariates(study: Mapping[str, Any]) -> tuple[str, ...]:
-    execution = study.get("execution_concepts")
-    execution = execution if isinstance(execution, Mapping) else {}
-    declared_raw = study.get("covariates")
-    raw = (
-        execution.get("covariates")
-        if "covariates" in execution
-        else declared_raw
-    )
-    if not isinstance(raw, (list, tuple)):
-        return ()
-    resolved = tuple(
-        dict.fromkeys(
-            _clean_text(value, 160)
-            for value in raw
-            if isinstance(value, str) and _clean_text(value, 160)
-        )
-    )
-    if (
-        str(study.get("covariate_selection") or "planner_selectable").strip()
-        == "exact"
-        and isinstance(declared_raw, (list, tuple))
-        and "covariates" in execution
-    ):
-        declared = tuple(
-            dict.fromkeys(
-                _clean_text(value, 160)
-                for value in declared_raw
-                if isinstance(value, str) and _clean_text(value, 160)
-            )
-        )
-        if set(resolved) != set(declared):
-            raise ResearchPipelineRunError(
-                "research_pipeline_covariate_execution_binding_mismatch",
-                "The exact adjustment roster does not match its executable concept binding.",
-                details={"field": "execution_concepts.covariates"},
-            )
-    return resolved
+    try:
+        return ScientificConfiguration.inspect(study).covariates()
+    except ScientificConfigurationError as exc:
+        raise ResearchPipelineRunError(exc.code, str(exc), details=exc.details) from exc
 
 
 def _configured_covariate_selection(study: Mapping[str, Any]) -> str:
     """Return the one validated owner coordinate for adjustment authority."""
 
-    selection = str(study.get("covariate_selection") or "planner_selectable").strip()
-    if selection not in {"planner_selectable", "exact"}:
-        raise ResearchPipelineRunError(
-            "research_pipeline_covariate_selection_invalid",
-            "StudyContext covariate_selection must be planner_selectable or exact.",
-        )
-    return selection
+    try:
+        return ScientificConfiguration.inspect(study).covariate_selection()
+    except ScientificConfigurationError as exc:
+        raise ResearchPipelineRunError(exc.code, str(exc), details=exc.details) from exc
 
 
 def _configured_sensitivity_specs(study: Mapping[str, Any]) -> tuple[Any, ...]:
     """Load only the typed sensitivity authority owned by StudyContext."""
 
-    from easyicu.research_agent.planning.sensitivity_authority import (
-        normalize_prespecified_sensitivities,
-    )
-
     try:
-        return normalize_prespecified_sensitivities(study.get("sensitivity_specs"))
-    except (TypeError, ValueError) as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_sensitivity_specs_invalid",
-            "The configured prespecified sensitivity contract is invalid.",
-            details={"field": "sensitivity_specs", "reason": str(exc)[:500]},
-        ) from exc
+        return ScientificConfiguration.inspect(study).sensitivity_specs()
+    except ScientificConfigurationError as exc:
+        raise ResearchPipelineRunError(exc.code, str(exc), details=exc.details) from exc
 
 
 def _runtime_projection_sensitivity_specs(
@@ -1630,7 +1560,9 @@ def _runtime_projection_sensitivity_specs(
 
     if not primary_exposure_source:
         return sensitivity_specs
-    strategies = {str(getattr(item, "strategy", "") or "") for item in sensitivity_specs}
+    strategies = {
+        str(getattr(item, "strategy", "") or "") for item in sensitivity_specs
+    }
     axes = {str(getattr(item, "axis", "") or "") for item in sensitivity_specs}
     if "landmark" not in strategies or "functional_form" in axes:
         return sensitivity_specs
@@ -1906,75 +1838,17 @@ def _source_concept_for_operational_column(
 
 
 def _cohort_window(study: Mapping[str, Any]) -> tuple[float, float]:
-    raw = study.get("time_window")
-    window = raw if isinstance(raw, Mapping) else {}
-    if not window:
-        raise ResearchPipelineRunError(
-            "research_pipeline_time_window_required",
-            "A typed study time window is required before pipeline launch.",
-            details={"field": "time_window"},
-        )
-    value = window.get("hours")
-    if value is None:
-        value = window.get("observation_hours")
-    if value is None:
-        raise ResearchPipelineRunError(
-            "research_pipeline_time_window_hours_required",
-            (
-                "The time-window label or preset has no executable duration; "
-                "hours or observation_hours must be explicitly bound."
-            ),
-            details={"field": "time_window.hours"},
-        )
-    if not _clean_text(window.get("anchor"), 160):
-        raise ResearchPipelineRunError(
-            "research_pipeline_time_window_anchor_required",
-            "The typed study time window requires an explicit scientific anchor.",
-            details={"field": "time_window.anchor"},
-        )
     window_finding = study_context_owner.materialization_window_finding(dict(study))
-    if window_finding is not None:
-        raise ResearchPipelineRunError(
-            "research_pipeline_materialization_window_anchor_unsupported",
-            (
-                "The configured time-window anchor is not an executable "
-                "outer materialization coordinate for this pipeline."
-            ),
-            details={
-                key: value for key, value in window_finding.items() if key != "error"
-            },
-        )
-    if isinstance(value, bool):
-        raise ResearchPipelineRunError(
-            "research_pipeline_time_window_invalid",
-            "The configured study time window must be a finite number of hours.",
-        )
     try:
-        hours = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_time_window_invalid",
-            "The configured study time window must be a finite number of hours.",
-        ) from exc
-    if not math.isfinite(hours) or not 0 < hours <= 24 * 365:
-        raise ResearchPipelineRunError(
-            "research_pipeline_time_window_invalid",
-            "The configured study time window is outside the supported range.",
+        return ScientificConfiguration.inspect(study).materialization_window(
+            window_finding=window_finding
         )
-    return (0.0, hours)
+    except ScientificConfigurationError as exc:
+        raise ResearchPipelineRunError(exc.code, str(exc), details=exc.details) from exc
 
 
 def _configured_modules(study: Mapping[str, Any]) -> tuple[str, ...]:
-    raw = study.get("modules")
-    if not isinstance(raw, (list, tuple)):
-        return ()
-    return tuple(
-        dict.fromkeys(
-            str(module).strip().lower()
-            for module in raw
-            if isinstance(module, str) and str(module).strip()
-        )
-    )
+    return ScientificConfiguration.inspect(study).modules()
 
 
 # The cohort materializer interprets every outer-window offset from ICU
@@ -2081,9 +1955,7 @@ def _metadata_planning_operationalized_columns(
 
     values: list[str] = []
     if primary_exposure_source and primary_exposure_aggregation:
-        values.append(
-            f"{primary_exposure_source}_{primary_exposure_aggregation}"
-        )
+        values.append(f"{primary_exposure_source}_{primary_exposure_aggregation}")
     if covariate_selection == "exact":
         mapping = {
             str(key or "").strip(): str(value or "").strip()
@@ -2218,9 +2090,7 @@ def _metadata_only_planning_acquisition(
     )
     selected = list(dict.fromkeys(coverage.available))
     blocked = bool(
-        not selection.selection_succeeded
-        or not selected
-        or not coverage.sufficient
+        not selection.selection_succeeded or not selected or not coverage.sufficient
     )
     if blocked:
         return AcquisitionResult(
@@ -2248,10 +2118,8 @@ def _metadata_only_planning_acquisition(
             details={"database": normalized_database},
         )
     row_identity_column = database_id_columns[0]
-    normalized_operationalized = (
-        _normalized_metadata_planning_operationalized_columns(
-            operationalized_columns
-        )
+    normalized_operationalized = _normalized_metadata_planning_operationalized_columns(
+        operationalized_columns
     )
     replacement_row_identity = _metadata_only_patient_grouping_authority(
         patient_grouping
@@ -2262,9 +2130,7 @@ def _metadata_only_planning_acquisition(
         and patient_grouping.output_identity_column != row_identity_column
         else None
     )
-    planning_columns: Dict[str, Any] = {
-        row_identity_column: pd.Series(dtype="int64")
-    }
+    planning_columns: Dict[str, Any] = {row_identity_column: pd.Series(dtype="int64")}
     if projected_patient_identity:
         # This is schema authority only. The private stay-to-patient mapping is
         # applied later by the governed materializer and no identifier values
@@ -2397,8 +2263,7 @@ def _restore_metadata_only_planning_acquisition(
         ) from exc
     if (
         hashlib.sha256(universe_raw).hexdigest() != profile.universe_sha256
-        or hashlib.sha256(provenance_raw).hexdigest()
-        != profile.provenance_sha256
+        or hashlib.sha256(provenance_raw).hexdigest() != profile.provenance_sha256
     ):
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_acquisition_digest_mismatch",
@@ -2413,13 +2278,9 @@ def _restore_metadata_only_planning_acquisition(
         if patient_grouping is not None
         else None
     )
-    expected_replacement = _metadata_only_patient_grouping_authority(
-        patient_grouping
-    )
-    expected_operationalized = (
-        _normalized_metadata_planning_operationalized_columns(
-            operationalized_columns
-        )
+    expected_replacement = _metadata_only_patient_grouping_authority(patient_grouping)
+    expected_operationalized = _normalized_metadata_planning_operationalized_columns(
+        operationalized_columns
     )
     if (
         receipt.get("patient_identity_column") != expected_patient_identity
@@ -3062,7 +2923,7 @@ def _diagnosis_criteria(
         clean = [item for item in clean if item]
         if not clean:
             continue
-        shown = clean[:primary_cohort.MAX_DIAGNOSIS_TOKENS]
+        shown = clean[: primary_cohort.MAX_DIAGNOSIS_TOKENS]
         undeclared = len(clean) - len(shown)
         stated = ", ".join(shown)
         if undeclared:
@@ -3127,9 +2988,7 @@ def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     if stated:
         rows.append(stated)
     if cohort.get("exclude_readmissions") is True:
-        rows.append(
-            "readmissions after the first eligible ICU stay per patient"
-        )
+        rows.append("readmissions after the first eligible ICU stay per patient")
     rows.extend(
         _diagnosis_criteria(
             cohort, ("icd_exclude", "exclude_diagnoses"), "exclude diagnoses"
@@ -4343,9 +4202,7 @@ def _write_projection(
             row.get("name") == "manuscript_scaffold.pdf" for row in manuscript_documents
         ),
         "system_validation_report_available": system_validation_applicable,
-        "system_validation_document_count": (
-            1 if system_validation_applicable else 0
-        ),
+        "system_validation_document_count": (1 if system_validation_applicable else 0),
         "provider": {
             key: provider.get(key)
             for key in (
@@ -4780,9 +4637,7 @@ def _recover_pending_run(
     ledger = ProviderHardStopLedger(
         path=Path(record.hard_stop_ledger_path).resolve(),
         task_ids=(task_id,),
-        limits=provider_adapter.web_research_agent_hard_stop_limits(
-            record.budget_mode
-        ),
+        limits=provider_adapter.web_research_agent_hard_stop_limits(record.budget_mode),
         batch_id=task_id,
         declaration_sha256=record.hard_stop_declaration_sha256,
         resume_existing=True,
@@ -4950,11 +4805,11 @@ def _resolve_execution_resume_wrapper(
             "research_pipeline_execution_retry_configuration_superseded",
             "The study configuration changed after approval; generate a new plan.",
         )
-    if (
-        _clean_text(source_row.get("gate_reason"), 160)
-        not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
-        or _clean_text(source_row.get("run_status"), 80) not in {"blocked", "failed"}
-    ):
+    if _clean_text(
+        source_row.get("gate_reason"), 160
+    ) not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS or _clean_text(
+        source_row.get("run_status"), 80
+    ) not in {"blocked", "failed"}:
         raise ResearchPipelineRunError(
             "research_pipeline_execution_retry_source_not_failed_execution",
             "Only a failed-closed approved execution can resume without replanning.",
@@ -5007,9 +4862,7 @@ def _resolve_execution_resume_wrapper(
         if (
             checkpoint.state == "completed"
             and approved
-            and all(
-                str(item.get("decision") or "") == "approved" for item in approved
-            )
+            and all(str(item.get("decision") or "") == "approved" for item in approved)
             and (execution_failed or validation_repair)
         ):
             resumable.append((run_dir, checkpoint, status))
@@ -5172,9 +5025,8 @@ def make_research_pipeline_run_runner(
     # These coordinates stay local to this run; approving the digest-bound Plan
     # is what authorizes them, not this proposal projection.
     target = configured_target or planning_coordinates.get("target_outcome")
-    primary_exposure = (
-        configured_primary_exposure
-        or planning_coordinates.get("primary_exposure")
+    primary_exposure = configured_primary_exposure or planning_coordinates.get(
+        "primary_exposure"
     )
     # Reject an unconfirmed explicit-only phenotype before validating the
     # remaining model-produced execution bindings. Otherwise an unrelated
@@ -5311,12 +5163,8 @@ def make_research_pipeline_run_runner(
             cohort_window=window,
             outcome_concepts=foundation_profile["outcome_concepts"],
             static_concepts=foundation_profile["static_concepts"],
-            required_feature_concepts=foundation_profile[
-                "required_feature_concepts"
-            ],
-            planning_target_outcome=metadata_planning_coordinates.get(
-                "target_outcome"
-            ),
+            required_feature_concepts=foundation_profile["required_feature_concepts"],
+            planning_target_outcome=metadata_planning_coordinates.get("target_outcome"),
             planning_endpoint=metadata_planning_coordinates.get("endpoint"),
             planning_operationalized_columns=metadata_operationalized_columns,
         )
@@ -5493,9 +5341,7 @@ def make_research_pipeline_run_runner(
                     question=question,
                     llm=acquisition_client,
                     output_dir=wrapper_dir / "pipeline_input",
-                    target_outcome=metadata_planning_coordinates.get(
-                        "target_outcome"
-                    ),
+                    target_outcome=metadata_planning_coordinates.get("target_outcome"),
                     endpoint=metadata_planning_coordinates.get("endpoint"),
                     required_concepts=(
                         target,
@@ -5525,17 +5371,17 @@ def make_research_pipeline_run_runner(
                         or primary_exposure
                     ),
                     outcome_concepts=(
-                            development_resume_acquisition.outcome_concepts
+                        development_resume_acquisition.outcome_concepts
                         if development_resume_acquisition is not None
                         else foundation_profile["outcome_concepts"]
                     ),
                     required_feature_concepts=(
-                            development_resume_acquisition.feature_concepts
+                        development_resume_acquisition.feature_concepts
                         if development_resume_acquisition is not None
                         else foundation_profile["required_feature_concepts"]
                     ),
                     static_concepts=(
-                            development_resume_acquisition.static_concepts
+                        development_resume_acquisition.static_concepts
                         if development_resume_acquisition is not None
                         else foundation_profile["static_concepts"]
                     ),
@@ -5595,16 +5441,12 @@ def make_research_pipeline_run_runner(
                         "analysis aggregation before planning can start.",
                     )
             elif primary_exposure and not metadata_only_planning:
-                resolved_primary_exposure = (
-                    _resolve_planner_proposed_primary_exposure(
-                        source_concept=str(
-                            foundation_profile.get(
-                                "primary_exposure_source_concept"
-                            )
-                            or primary_exposure
-                        ),
-                        acquisition=acquisition,
-                    )
+                resolved_primary_exposure = _resolve_planner_proposed_primary_exposure(
+                    source_concept=str(
+                        foundation_profile.get("primary_exposure_source_concept")
+                        or primary_exposure
+                    ),
+                    acquisition=acquisition,
                 )
                 if not resolved_primary_exposure:
                     raise ResearchPipelineRunError(

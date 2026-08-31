@@ -9,14 +9,17 @@ owners' receipts.
 from __future__ import annotations
 
 import hashlib
-import re
 
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
 from easyicu.webserver import study_contexts as study_context_owner
+from easyicu.webserver.study_scientific_configuration import (
+    ScientificConfiguration,
+    SetupFacts,
+)
 
 from . import cohort_eligibility, plan_decisions
 from .contracts import (
@@ -110,68 +113,6 @@ class ProjectWorkflowProjection(BaseModel):
     latest_run: Mapping[str, Any]
 
 
-def _has_mapping(value: Any) -> bool:
-    return isinstance(value, Mapping) and bool(value)
-
-
-def _owner_locked_clinical_definition(contract: Mapping[str, Any]) -> bool:
-    """Return whether EasyICU already owns one executable standard profile."""
-
-    return bool(
-        contract.get("definition_locked") is True
-        and str(contract.get("runtime_profile") or "").strip()
-        and str(contract.get("implementation_profile") or "").strip()
-        and _has_mapping(contract.get("locked_core"))
-    )
-
-
-def _missing_clinical_definition_confirmation(study: Mapping[str, Any]) -> str:
-    """Return one unresolved phenotype choice that needs human scientific input."""
-
-    cohort = study.get("cohort")
-    cohort = cohort if isinstance(cohort, Mapping) else {}
-    confirmations = study.get("confirmations")
-    confirmations = confirmations if isinstance(confirmations, Mapping) else {}
-    user_text = " ".join(
-        str(study.get(field) or "")
-        for field in ("question", "purpose", "primary_exposure")
-    ).lower()
-    normalized_text = re.sub(r"[^a-z0-9]+", " ", user_text)
-    for field, contract in cohort.items():
-        clean_field = str(field or "").strip().lower()
-        if not clean_field.endswith("_definition") or not _has_mapping(contract):
-            continue
-        if _owner_locked_clinical_definition(contract):
-            continue
-        phenotype = clean_field.removesuffix("_definition").strip("_")
-        normalized_phenotype = phenotype.replace("_", " ")
-        confirmation_key = f"clinical_definition_{phenotype}"
-        if (
-            normalized_phenotype
-            and normalized_phenotype in normalized_text
-            and confirmations.get(confirmation_key) is not True
-        ):
-            return f"confirmations.{confirmation_key}"
-    return ""
-
-
-def _requires_primary_exposure(study: Mapping[str, Any]) -> bool:
-    """Return whether the stated research intent includes an exposure relation."""
-
-    if str(study.get("primary_exposure") or "").strip():
-        return True
-    intent = " ".join(
-        str(study.get(field) or "") for field in ("question", "purpose")
-    ).casefold()
-    return bool(
-        re.search(
-            r"(?:关系|关联|相关|效应|影响|预测|危险因素|"
-            r"association|associated|relationship|effect|predict|risk factor)",
-            intent,
-        )
-    )
-
-
 def active_export_matches_study(
     study: Optional[Mapping[str, Any]], active_export_path: Any
 ) -> bool:
@@ -209,11 +150,6 @@ def registered_export_matches_study(
     )
 
 
-# Plan generation needs only the question and an identified data source.
-# Population eligibility is a Planner proposal: it must be reviewed before
-# execution, but it must not become a pre-plan conversational questionnaire.
-_PLANNING_PREREQUISITE_FIELDS = frozenset({"question", "data_source"})
-
 # These are Planner proposal fields, not pre-plan setup questions.  The
 # researcher reviews the complete candidate plan; they should not have to
 # invent an endpoint contract or a sensitivity implementation before seeing
@@ -234,137 +170,6 @@ def _identified_data_source(study: Mapping[str, Any]) -> bool:
     if not isinstance(source, Mapping):
         return False
     return bool(str(source.get("database") or "").strip())
-
-
-def _planning_prerequisites_missing(
-    missing_setup_fields: Sequence[str],
-) -> List[str]:
-    """The subset of missing setup fields that genuinely blocks planning."""
-
-    return [
-        field
-        for field in missing_setup_fields
-        if str(field).split(".", 1)[0] in _PLANNING_PREREQUISITE_FIELDS
-    ]
-
-
-def _setup_missing(
-    study: Mapping[str, Any], *, active_export_present: bool
-) -> List[str]:
-    raw_execution = study.get("execution_concepts")
-    execution = raw_execution if isinstance(raw_execution, Mapping) else {}
-    raw_window = study.get("time_window")
-    time_window = raw_window if isinstance(raw_window, Mapping) else {}
-    raw_confirmations = study.get("confirmations")
-    confirmations = (
-        raw_confirmations if isinstance(raw_confirmations, Mapping) else {}
-    )
-    human_outcome = bool(str(study.get("outcome") or "").strip())
-    human_exposure = bool(str(study.get("primary_exposure") or "").strip())
-    exposure_required = _requires_primary_exposure(study)
-    executable_exposure = bool(
-        str(execution.get("primary_exposure") or "").strip()
-    )
-    executable_outcome = bool(str(execution.get("outcome") or "").strip())
-    analysis_design_present = _has_mapping(study.get("analysis_design"))
-    dependence_finding = study_context_owner.analysis_dependence_finding(dict(study))
-    window_finding = study_context_owner.materialization_window_finding(dict(study))
-    clinical_definition_confirmation = _missing_clinical_definition_confirmation(
-        study
-    )
-    feature_window_confirmed = confirmations.get("feature_time_window") is True
-    window_hours = time_window.get("hours")
-    if window_hours is None:
-        window_hours = time_window.get("observation_hours")
-    missing: List[str] = []
-    checks = (
-        ("question", bool(str(study.get("question") or "").strip())),
-        (
-            "data_source",
-            active_export_present or _has_mapping(study.get("data_source")),
-        ),
-        ("cohort", _has_mapping(study.get("cohort"))),
-        ("cohort_eligibility", cohort_eligibility.eligibility_stated(study)),
-        ("outcome", human_outcome),
-        *(((("primary_exposure", human_exposure),)) if exposure_required else ()),
-        (
-            "analysis_goal",
-            bool(str(study.get("analysis_goal") or "").strip()),
-        ),
-        *(
-            (("time_window", False),)
-            if not time_window
-            else (
-                ("time_window.hours", window_hours is not None),
-                (
-                    "time_window.anchor",
-                    bool(str(time_window.get("anchor") or "").strip()),
-                ),
-                *(
-                    (("time_window.anchor_supported", False),)
-                    if window_finding is not None
-                    else ()
-                ),
-                *(
-                    (("confirmations.feature_time_window", False),)
-                    if (
-                        window_hours is not None
-                        and bool(str(time_window.get("anchor") or "").strip())
-                        and window_finding is None
-                        and not feature_window_confirmed
-                    )
-                    else ()
-                ),
-            )
-        ),
-        *(
-            (
-                (
-                    "covariates",
-                    str(study.get("covariate_selection") or "").strip()
-                    in {"exact", "planner_selectable"},
-                ),
-            )
-            if exposure_required
-            else ()
-        ),
-        (
-            "export_format",
-            bool(str(study.get("export_format") or "").strip())
-            and confirmations.get("export_format") is True,
-        ),
-        # Finish user-owned scientific choices before EasyICU-owned
-        # implementation readiness. Missing catalog ids must not create a
-        # generic "continue" gate between two key user decisions.
-        ("modules", bool(study.get("modules"))),
-        *(
-            (("execution_concepts.outcome", executable_outcome),)
-            if human_outcome
-            else ()
-        ),
-        *(
-            (
-                ("execution_concepts.primary_exposure", executable_exposure),
-                ("analysis_design", analysis_design_present),
-                *(
-                    (("analysis_design.dependence", False),)
-                    if analysis_design_present and dependence_finding is not None
-                    else ()
-                ),
-            )
-            if human_exposure or executable_exposure
-            else ()
-        ),
-        *(
-            ((clinical_definition_confirmation, False),)
-            if clinical_definition_confirmation
-            else ()
-        ),
-    )
-    for name, present in checks:
-        if not present:
-            missing.append(name)
-    return missing
 
 
 def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
@@ -395,9 +200,7 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
     )
     raw_analysis_design = study.get("analysis_design")
     analysis_design = (
-        dict(raw_analysis_design)
-        if isinstance(raw_analysis_design, Mapping)
-        else {}
+        dict(raw_analysis_design) if isinstance(raw_analysis_design, Mapping) else {}
     )
     raw_rationales = study.get("covariate_rationales")
     covariate_rationales = (
@@ -405,9 +208,7 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
     )
     raw_temporal_roles = study.get("covariate_temporal_roles")
     covariate_temporal_roles = (
-        dict(raw_temporal_roles)
-        if isinstance(raw_temporal_roles, Mapping)
-        else {}
+        dict(raw_temporal_roles) if isinstance(raw_temporal_roles, Mapping) else {}
     )
     raw_operationalizations = study.get("covariate_operationalizations")
     covariate_operationalizations = (
@@ -417,9 +218,7 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
     )
     raw_confirmations = study.get("confirmations")
     confirmations = (
-        dict(raw_confirmations)
-        if isinstance(raw_confirmations, Mapping)
-        else {}
+        dict(raw_confirmations) if isinstance(raw_confirmations, Mapping) else {}
     )
     eligibility_authority = cohort_eligibility.validated_authority(study) or {}
     configuration: Dict[str, Any] = {
@@ -429,9 +228,7 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
         "crossdb_selection": crossdb,
         "cohort": cohort,
         "modules": [
-            str(value)
-            for value in (study.get("modules") or [])
-            if str(value).strip()
+            str(value) for value in (study.get("modules") or []) if str(value).strip()
         ],
         "outcome": str(study.get("outcome") or "").strip(),
         "primary_exposure": str(study.get("primary_exposure") or "").strip(),
@@ -460,9 +257,7 @@ def _safe_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
         "confirmations": confirmations,
         "cohort_eligibility_authority": eligibility_authority,
     }
-    configured_fields = [
-        key for key, value in configuration.items() if bool(value)
-    ]
+    configured_fields = [key for key, value in configuration.items() if bool(value)]
     return StudySetupReceipt(
         study_context_id=str(study.get("id") or ""),
         revision=int(study.get("revision") or 0),
@@ -494,13 +289,21 @@ def build_research_workflow_snapshot(
         and len(str(idea_handoff.get("canonical_handoff_sha256") or "")) == 64
     )
     idea_recommendation = str(idea_handoff.get("go_no_go") or "").strip()
-    idea_blocks_execution = bool(
-        idea_accepted and idea_recommendation != "recommend"
+    idea_blocks_execution = bool(idea_accepted and idea_recommendation != "recommend")
+    assessment = ScientificConfiguration.inspect(study_row).assess_setup(
+        SetupFacts(
+            active_export_present=bool(active_export_present),
+            eligibility_stated=cohort_eligibility.eligibility_stated(study_row),
+            dependence_finding=study_context_owner.analysis_dependence_finding(
+                dict(study_row)
+            ),
+            window_finding=study_context_owner.materialization_window_finding(
+                dict(study_row)
+            ),
+        )
     )
-    missing = _setup_missing(
-        study_row,
-        active_export_present=bool(active_export_present),
-    )
+    missing = list(assessment.missing_fields)
+    planning_prerequisites_missing = list(assessment.planning_prerequisites_missing)
     setup_ready = not missing
     job_kind = str(job_row.get("kind") or "")
     job_status = str(job_row.get("status") or "")
@@ -531,9 +334,7 @@ def build_research_workflow_snapshot(
     gate_status = str(run_row.get("gate_status") or "")
     run_blocked = gate_status == "blocked"
     raw_gate_checks = run_row.get("gate_checks")
-    gate_checks = (
-        dict(raw_gate_checks) if isinstance(raw_gate_checks, Mapping) else {}
-    )
+    gate_checks = dict(raw_gate_checks) if isinstance(raw_gate_checks, Mapping) else {}
     executed_analysis_validated = bool(
         gate_checks.get("execution_complete") is True
         and gate_checks.get("analysis_validated") is True
@@ -554,8 +355,7 @@ def build_research_workflow_snapshot(
         run_type == "preflight"
         and has_evidence
         and gate_status == "analysis_only"
-        and str(run_row.get("readiness_status") or "")
-        == "awaiting_human_signoff"
+        and str(run_row.get("readiness_status") or "") == "awaiting_human_signoff"
     )
     # A completed local preflight is an owner-issued receipt that the exact
     # bound registered export was resolved and reviewed.  Treat it as stronger
@@ -570,7 +370,6 @@ def build_research_workflow_snapshot(
     planning_data_ready = bool(
         prepared_export_receipted or _identified_data_source(study_row)
     )
-    planning_prerequisites_missing = _planning_prerequisites_missing(missing)
     eligibility_confirmation_required = bool(
         "cohort_eligibility" in planning_prerequisites_missing
         and question_ready
@@ -583,16 +382,12 @@ def build_research_workflow_snapshot(
         and not has_plan
     )
     review_authority = (
-        plan_review_authority
-        if isinstance(plan_review_authority, Mapping)
-        else {}
+        plan_review_authority if isinstance(plan_review_authority, Mapping) else {}
     )
     authority_requests = review_authority.get("requests")
     authority_reason_codes = {
         str(item.get("reason_code") or "").strip()
-        for item in (
-            authority_requests if isinstance(authority_requests, list) else []
-        )
+        for item in (authority_requests if isinstance(authority_requests, list) else [])
         if isinstance(item, Mapping) and str(item.get("reason_code") or "").strip()
     }
     pending_review_reason_codes = authority_reason_codes or {
@@ -605,9 +400,7 @@ def build_research_workflow_snapshot(
         "plan_scientific_changes_required",
         "scientific_plan_review_policy_stale",
     }
-    active_plan_review_codes = sorted(
-        pending_review_reason_codes & plan_review_codes
-    )
+    active_plan_review_codes = sorted(pending_review_reason_codes & plan_review_codes)
     plan_review_declared = bool(
         has_plan
         and str(run_row.get("run_status") or "") == "human_review_pending"
@@ -615,24 +408,19 @@ def build_research_workflow_snapshot(
     )
     raw_scientific_review = review_authority.get("scientific_plan_review")
     raw_scientific_review = (
-        raw_scientific_review
-        if isinstance(raw_scientific_review, Mapping)
-        else {}
+        raw_scientific_review if isinstance(raw_scientific_review, Mapping) else {}
     )
     dimension_scores = raw_scientific_review.get("dimension_scores")
-    dimension_scores = (
-        dimension_scores if isinstance(dimension_scores, Mapping) else {}
-    )
+    dimension_scores = dimension_scores if isinstance(dimension_scores, Mapping) else {}
     review_findings = raw_scientific_review.get("findings")
     review_findings = review_findings if isinstance(review_findings, list) else []
     raw_facts = raw_scientific_review.get("facts")
     raw_facts = raw_facts if isinstance(raw_facts, Mapping) else {}
     raw_remediation_buckets = raw_facts.get("remediation_buckets")
     raw_remediation_buckets = (
-        raw_remediation_buckets
-        if isinstance(raw_remediation_buckets, Mapping)
-        else {}
+        raw_remediation_buckets if isinstance(raw_remediation_buckets, Mapping) else {}
     )
+
     def projected_remediation_codes(route: str) -> List[str]:
         values = raw_remediation_buckets.get(route)
         rows = [
@@ -665,9 +453,7 @@ def build_research_workflow_snapshot(
         evidence_refs = item.get("evidence_refs")
         if isinstance(evidence_refs, list):
             refs = [
-                str(value)[:240]
-                for value in evidence_refs[:12]
-                if str(value).strip()
+                str(value)[:240] for value in evidence_refs[:12] if str(value).strip()
             ]
             if refs:
                 row["evidence_refs"] = refs
@@ -704,8 +490,7 @@ def build_research_workflow_snapshot(
                 for item in review_findings[:40]
                 if isinstance(item, Mapping)
                 and bool(item.get("requires_user_authorization"))
-                and str(item.get("code") or "")
-                not in _PLANNER_PROPOSAL_FINDING_CODES
+                and str(item.get("code") or "") not in _PLANNER_PROPOSAL_FINDING_CODES
                 and str(item.get("authorization_question") or "").strip()
             ],
             "remediation_buckets": {
@@ -721,8 +506,8 @@ def build_research_workflow_snapshot(
         if raw_scientific_review
         else None
     )
-    current_scientific_digest = (
-        study_context_owner.scientific_configuration_sha256(study_row)
+    current_scientific_digest = study_context_owner.scientific_configuration_sha256(
+        study_row
     )
     planned_scientific_digest = str(
         review_authority.get("scientific_configuration_sha256")
@@ -810,9 +595,7 @@ def build_research_workflow_snapshot(
     # only be told that the old run failed).  The failed run stays immutable;
     # a newly authorized provider turn receives a new run id and Plan review.
     failed_pipeline_regeneration_required = bool(
-        pipeline_attempt_blocked
-        and not analysis_running
-        and not plan_review_declared
+        pipeline_attempt_blocked and not analysis_running and not plan_review_declared
     )
     failed_execution_retry_available = bool(
         failed_pipeline_regeneration_required
@@ -836,8 +619,7 @@ def build_research_workflow_snapshot(
     # budget-exhausted plan is itself still intact.
     planner_checkpoint_resume_available = bool(
         failed_pipeline_regeneration_required
-        and str(run_row.get("gate_reason") or "")
-        in PLAN_RESUME_OFFER_GATE_REASONS
+        and str(run_row.get("gate_reason") or "") in PLAN_RESUME_OFFER_GATE_REASONS
         and bool(run_row.get("development_planner_checkpoint_available"))
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
@@ -1055,11 +837,7 @@ def build_research_workflow_snapshot(
         next_stage = next(row for row in required if row.id == "plan")
     else:
         next_stage = next(
-            (
-                row
-                for row in required
-                if row.status != "complete"
-            ),
+            (row for row in required if row.status != "complete"),
             stages[-1],
         )
     next_action = next_stage.reason_code
@@ -1075,9 +853,7 @@ def build_research_workflow_snapshot(
         study_setup_receipt=_safe_study_setup_receipt(study_row),
         plan_review_summary=plan_review_summary,
         plan_execution_ready=plan_execution_ready,
-        analysis_validation_retry_available=(
-            analysis_validation_retry_available
-        ),
+        analysis_validation_retry_available=(analysis_validation_retry_available),
     )
 
 
@@ -1102,8 +878,8 @@ def _enrich_plan_review(
         for question in questions:
             item = dict(question) if isinstance(question, Mapping) else {}
             if item.get("code") == "ADJUSTMENT_SET_NOT_USER_CONFIRMED":
-                item["proposed_covariates"] = (
-                    plan_decisions.proposed_adjustment_set(agent_plan)
+                item["proposed_covariates"] = plan_decisions.proposed_adjustment_set(
+                    agent_plan
                 )
             enriched_questions.append(item)
         snapshot = snapshot.model_copy(
@@ -1171,9 +947,7 @@ def build_project_workflow_projection(
     )
     latest_run_outcome: Mapping[str, Any] = {"present": False}
     if latest_run:
-        review = agent_runs.read_run_review(
-            str(latest_run.get("project_dir") or "")
-        )
+        review = agent_runs.read_run_review(str(latest_run.get("project_dir") or ""))
         latest_run_outcome = project_run_outcome(review)
         snapshot = _enrich_plan_review(snapshot, study=study, review=review)
 
