@@ -7,6 +7,7 @@ from pathlib import Path
 
 from easyicu.webserver.pi_copilot.extraction_handoff import (
     compile_registered_export_handoff,
+    submit_study_extraction,
 )
 from easyicu.webserver.routes.jobs import _study_source_matches
 
@@ -134,6 +135,73 @@ def test_handoff_reuses_only_contract_matching_registered_export(
     assert handoff.reusable is True
     assert handoff.mismatch_codes == ()
     assert handoff.public_receipt()["reusable"] is True
+
+    def unexpected_submit(_body: dict) -> dict:
+        raise AssertionError("matching exports must not start a duplicate job")
+
+    transaction = submit_study_extraction(
+        study=_study(export_path),
+        registered_source={
+            "id": "src-demo",
+            "path": str(export_path),
+            "database": "miiv",
+            "ok": True,
+        },
+        submit=unexpected_submit,
+    )
+    assert transaction.reused is True
+    assert transaction.source_id == "src-demo"
+    assert transaction.submitted is None
+
+
+def test_submission_transaction_owns_the_bound_job_contract() -> None:
+    study = {
+        "id": "study-local",
+        "revision": 7,
+        "title": "Local extraction",
+        "data_source": {"path": "/private/raw", "database": "miiv"},
+        "modules": ["demographics", "vitals"],
+        "cohort": {"preset": "adult_first"},
+        "time_window": {"observation_hours": 24},
+        "export_format": "parquet",
+    }
+    submitted_bodies: list[dict] = []
+
+    def submit(body: dict) -> dict:
+        submitted_bodies.append(dict(body))
+        return {"job_id": "extract-7", "kind": "extract", "status": "running"}
+
+    transaction = submit_study_extraction(
+        study=study,
+        registered_source=None,
+        submit=submit,
+    )
+
+    assert transaction.reused is False
+    assert transaction.submitted == {
+        "job_id": "extract-7",
+        "kind": "extract",
+        "status": "running",
+    }
+    assert submitted_bodies == [
+        {
+            "path": "/private/raw",
+            "registered_export_path": None,
+            "database": "miiv",
+            "modules": ["demographics", "vitals"],
+            "format": "parquet",
+            "merge": True,
+            "cohort": {
+                "preset": "adult_first",
+                "observation_window_hours": 24,
+            },
+            "max_patients": None,
+            "include_feature_definitions": True,
+            "label": "Local extraction",
+            "study_context_id": "study-local",
+            "study_context_revision": 7,
+        }
+    ]
 
 
 def test_job_source_gate_accepts_only_manifest_bound_raw_source(
