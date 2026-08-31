@@ -132,6 +132,15 @@ def test_public_preparation_interface_does_not_expose_primitive_operations() -> 
     assert len(inspect.signature(PreparedLaunchExecution).parameters) == 9
 
 
+def test_preparation_has_no_reverse_private_seam_into_pipeline_caller() -> None:
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    source = inspect.getsource(preparation)
+    assert "_pipeline_policy" not in source
+    assert "policy._" not in source
+    assert "agent_pipeline_runs" not in source
+
+
 def test_pipeline_factory_delegates_launch_policy_to_preparation_owner() -> None:
     source = inspect.getsource(agent_pipeline_runs.make_research_pipeline_run_runner)
     preparation, separator, _runner = source.partition("    def runner(")

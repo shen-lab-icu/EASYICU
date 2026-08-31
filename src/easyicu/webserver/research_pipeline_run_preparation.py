@@ -10,6 +10,7 @@ states; primitive policy lookups stay private to this module.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -29,6 +30,31 @@ from easyicu.webserver import (
     provider_adapter,
 )
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.research_launch_resume import (
+    _development_progressive_resume_binding,
+    _development_resume_acquisition_profile,
+    _development_resume_literature_bundle,
+)
+from easyicu.webserver.research_launch_runtime import (
+    _require_execution_runtime,
+    _validated_pipeline_credential_source,
+)
+from easyicu.webserver.research_launch_scientific import (
+    _cohort_window,
+    _configured_covariate_selection,
+    _configured_covariates,
+    _configured_sensitivity_specs,
+    _data_foundation_profile,
+    _metadata_only_planning_coordinates,
+    _metadata_planning_operationalized_columns,
+    _neutral_materialization_scope,
+    _patient_grouping_for_analysis_design,
+    _primary_exposure,
+    _primary_exposure_aggregation,
+    _target_outcome,
+    _validate_analysis_design,
+    _validate_primary_concept_selection,
+)
 
 _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
 _DEVELOPMENT_RESUME_JOB_ENV = "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
@@ -126,25 +152,13 @@ class _ProviderAuthorization:
     literature_search_authorized: bool
 
 
-def _pipeline_policy() -> Any:
-    """Resolve current primitive owners lazily to preserve patchable test seams."""
-
-    # agent_pipeline_runs imports this module. Resolving it only while a launch
-    # is prepared avoids an import cycle and keeps primitive helpers out of the
-    # public launch interface.
-    from easyicu.webserver import agent_pipeline_runs
-
-    return agent_pipeline_runs
-
-
 def _clean_text(value: Any, limit: int) -> str:
-    return _pipeline_policy()._clean_text(value, limit)
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
 def _prepare_scientific_launch(
     request: ResearchPipelineLaunchRequest,
 ) -> PreparedScientificLaunch:
-    policy = _pipeline_policy()
     study = dict(request.study_context)
     question = _clean_text(study.get("question"), 1_200)
     if not question:
@@ -174,13 +188,13 @@ def _prepare_scientific_launch(
         ) from exc
 
     budget_mode = str(request.budget_mode or "").strip().lower()
-    materialization_study = policy._neutral_materialization_scope(
+    materialization_study = _neutral_materialization_scope(
         study,
         export_path=request.export_path,
     )
-    configured_target = policy._target_outcome(study)
-    configured_primary_exposure = policy._primary_exposure(study)
-    planning_coordinates = policy._metadata_only_planning_coordinates(
+    configured_target = _target_outcome(study)
+    configured_primary_exposure = _primary_exposure(study)
+    planning_coordinates = _metadata_only_planning_coordinates(
         question=question,
         database=database,
     )
@@ -188,17 +202,17 @@ def _prepare_scientific_launch(
     primary_exposure = configured_primary_exposure or planning_coordinates.get(
         "primary_exposure"
     )
-    policy._validate_primary_concept_selection(
+    _validate_primary_concept_selection(
         study,
         configured_primary_exposure,
     )
-    covariates = policy._configured_covariates(study)
-    covariate_selection = policy._configured_covariate_selection(study)
-    sensitivity_specs = policy._configured_sensitivity_specs(study)
-    window = policy._cohort_window(materialization_study)
-    validated_analysis_design = policy._validate_analysis_design(study)
+    covariates = _configured_covariates(study)
+    covariate_selection = _configured_covariate_selection(study)
+    sensitivity_specs = _configured_sensitivity_specs(study)
+    window = _cohort_window(materialization_study)
+    validated_analysis_design = _validate_analysis_design(study)
     patient_grouping = (
-        policy._patient_grouping_for_analysis_design(study)
+        _patient_grouping_for_analysis_design(study)
         if validated_analysis_design.get("variance_estimator") == "cluster_robust"
         else None
     )
@@ -216,9 +230,9 @@ def _prepare_scientific_launch(
         or metadata_planning_coordinates.get("primary_exposure")
         or None
     )
-    planning_exposure_aggregation = policy._primary_exposure_aggregation(study)
+    planning_exposure_aggregation = _primary_exposure_aggregation(study)
     metadata_operationalized_columns = (
-        policy._metadata_planning_operationalized_columns(
+        _metadata_planning_operationalized_columns(
             primary_exposure_source=planning_exposure_source,
             primary_exposure_aggregation=planning_exposure_aggregation,
             covariates=covariates,
@@ -243,7 +257,7 @@ def _prepare_scientific_launch(
             "primary_exposure_source_concept": None,
         }
     else:
-        foundation_profile = policy._data_foundation_profile(
+        foundation_profile = _data_foundation_profile(
             export_path=request.export_path,
             study=materialization_study,
             target=configured_target,
@@ -303,7 +317,7 @@ def _authorize_launch_provider(
             "Choose an explicit reviewed Research Agent budget mode.",
         ) from exc
 
-    credential_source = _pipeline_policy()._validated_pipeline_credential_source(
+    credential_source = _validated_pipeline_credential_source(
         request.credential_source,
         provider=request.provider,
     )
@@ -330,7 +344,6 @@ def _prepare_launch_execution(
     scientific: PreparedScientificLaunch,
     provider_authorization: _ProviderAuthorization,
 ) -> tuple[PreparedLaunchAuthority, PreparedLaunchExecution]:
-    policy = _pipeline_policy()
     if not request.project_root:
         raise ResearchPipelineRunError(
             "research_pipeline_project_workspace_required",
@@ -346,7 +359,7 @@ def _prepare_launch_execution(
         80,
     )
     if selected_resume_source:
-        development_resume_binding = policy._development_progressive_resume_binding(
+        development_resume_binding = _development_progressive_resume_binding(
             project_root=project_root,
             study_id=str(scientific.study.get("id") or ""),
             source_job_id=selected_resume_source,
@@ -354,7 +367,7 @@ def _prepare_launch_execution(
             checkpoint_sequence=os.environ.get(_DEVELOPMENT_RESUME_SEQUENCE_ENV),
         )
     development_resume_acquisition = (
-        policy._development_resume_acquisition_profile(
+        _development_resume_acquisition_profile(
             checkpoint_path=development_resume_binding[0],
             database=scientific.database,
             cohort_window=scientific.cohort_window,
@@ -375,7 +388,7 @@ def _prepare_launch_execution(
         else None
     )
     development_resume_literature = (
-        policy._development_resume_literature_bundle(
+        _development_resume_literature_bundle(
             checkpoint_path=development_resume_binding[0]
         )
         if development_resume_binding is not None
@@ -419,7 +432,7 @@ def _prepare_launch_execution(
             "research_pipeline_runner_image_invalid",
             "The server-owned runner image must be one non-empty reference.",
         )
-    policy._require_execution_runtime(
+    _require_execution_runtime(
         budget_mode=budget_mode,
         runner_image=selected_runner_image,
     )
