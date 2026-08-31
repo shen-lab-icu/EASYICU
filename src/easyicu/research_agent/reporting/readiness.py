@@ -1851,7 +1851,12 @@ def _compute_readiness_gates(
         "manuscript_literature_complete": False,
         "robustness_panel_complete": False,
     }
-    if manuscript_text and not writer_probe_mode and not stop_after_analysis:
+    if (
+        manuscript_text
+        and "Manuscript scaffold not generated" not in manuscript_text[:300]
+        and not writer_probe_mode
+        and not stop_after_analysis
+    ):
         from ..audits.manuscript_claims import audit_manuscript_numeric_claims
 
         current_numeric_findings = audit_manuscript_numeric_claims(

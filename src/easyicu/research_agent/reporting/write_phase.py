@@ -70,6 +70,7 @@ from .manuscript_provenance import (
 from .manuscript_projection import project_owner_issued_manuscript_claims
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_keys
+from ..orchestration.profiles import is_paper_facing_profile
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
 from ..providers.structured_retry import StructuredResponseFailure
@@ -2923,6 +2924,20 @@ def _register_reproducibility_envelope_for_review(
     )
 
 
+def _development_runtime_lineage_allowed(pipeline: Any) -> bool:
+    """Allow mixed-image lineage only for explicitly non-paper coordinates."""
+
+    if bool(getattr(pipeline, "_development_diagnostic", False)):
+        return True
+    submission_profile_name = str(
+        getattr(pipeline, "_submission_profile_name", "") or ""
+    ).strip()
+    return bool(
+        submission_profile_name
+        and not is_paper_facing_profile(submission_profile_name)
+    )
+
+
 def _write_reproducibility_artifacts(
     pipeline: Any,
     *,
@@ -2939,13 +2954,13 @@ def _write_reproducibility_artifacts(
     # packages in ``requirements.lock.txt``. Runs regardless of
     # reviewer / checklist flags so the reproducibility artefacts
     # are always present.
-    development_diagnostic = bool(getattr(pipeline, "_development_diagnostic", False))
+    development_lineage_allowed = _development_runtime_lineage_allowed(pipeline)
     captured_runtime_lock = _validated_runtime_lock(
         run_dir,
-        allow_development_lineage=development_diagnostic,
+        allow_development_lineage=development_lineage_allowed,
     )
     try:
-        if development_diagnostic and captured_runtime_lock is not None:
+        if development_lineage_allowed and captured_runtime_lock is not None:
             lineage_path = _write_development_runtime_lineage(run_dir)
             lineage_record = evidence.register_file(
                 kind="log",
@@ -3037,10 +3052,10 @@ def _write_reproducibility_artifacts(
         lockfile_path.write_text(
             build_requirements_lockfile(captured_runtime_lock), encoding="utf-8"
         )
-        if not development_diagnostic:
+        if not development_lineage_allowed:
             _assert_registered_runtime_lock_matches(evidence, lockfile_path)
         existing_lock_record = evidence.get("requirements_lockfile")
-        if existing_lock_record is None or development_diagnostic:
+        if existing_lock_record is None or development_lineage_allowed:
             evidence.register_file(
                 kind="log",
                 description=(
@@ -3057,10 +3072,12 @@ def _write_reproducibility_artifacts(
                         if captured_runtime_lock is not None
                         else "host_interpreter"
                     ),
-                    "paper_authority": not development_diagnostic,
-                    "diagnostic_only": development_diagnostic,
+                    "paper_authority": not development_lineage_allowed,
+                    "diagnostic_only": development_lineage_allowed,
                 },
-                on_sha_change=("new_id" if development_diagnostic else "raise"),
+                on_sha_change=(
+                    "new_id" if development_lineage_allowed else "raise"
+                ),
             )
     except RuntimeProvenanceMismatchError:
         raise

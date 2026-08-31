@@ -278,6 +278,23 @@ def test_pipeline_write_rejects_inconsistent_step_runtime_snapshots(tmp_path):
         _validated_runtime_lock(run_dir)
 
 
+def test_development_profile_allows_audited_multi_image_lineage() -> None:
+    from easyicu.research_agent.reporting.write_phase import (
+        _development_runtime_lineage_allowed,
+    )
+
+    class Pipeline:
+        _development_diagnostic = False
+        _submission_profile_name = "npj_dm_e1_demo_dev"
+
+    class PaperPipeline:
+        _development_diagnostic = False
+        _submission_profile_name = "npj_dm"
+
+    assert _development_runtime_lineage_allowed(Pipeline()) is True
+    assert _development_runtime_lineage_allowed(PaperPipeline()) is False
+
+
 def test_development_write_accepts_audited_multi_image_lineage(tmp_path):
     from easyicu.research_agent.reporting.write_phase import (
         _validated_runtime_lock,
