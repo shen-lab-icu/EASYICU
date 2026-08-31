@@ -27,6 +27,7 @@ from ..contracts.association_execution import (
 from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.figure_plan import landmark_association_composite_panels
+from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.model_terms import ModelTermSpec
 from ..schema import (
     AnalysisPlan,
@@ -94,6 +95,17 @@ class _AuthorityBase(BaseModel):
             legacy.pop("adjusted_absolute_risk_product", None)
             legacy.pop("population_flow_product", None)
             legacy.pop("variable_opportunity_sensitivity_product", None)
+            legacy.pop("dependence", None)
+            observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
+        if (
+            observed != self.execution_contract_sha256
+            and body.get("authority_kind") == "landmark_spline_association"
+            and body.get("schema_version")
+            == "easyicu.landmark_spline_runtime_authority/2"
+            and body.get("dependence") is None
+        ):
+            legacy = dict(body)
+            legacy.pop("dependence", None)
             observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
         if (
             observed != self.execution_contract_sha256
@@ -578,6 +590,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     schema_version: Literal[
         "easyicu.landmark_spline_runtime_authority/1",
         "easyicu.landmark_spline_runtime_authority/2",
+        "easyicu.landmark_spline_runtime_authority/3",
     ]
     authority_kind: Literal["landmark_spline_association"]
     plan_method: Literal["signed_landmark_restricted_cubic_spline"]
@@ -592,6 +605,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     required_adjustment_columns: tuple[str, ...]
     categorical_adjustment_columns: tuple[str, ...]
     alternative_exposure_columns: tuple[str, ...] = ()
+    dependence: PlannedDependenceRequirement | None = None
     adjusted_absolute_risk_product: str | None = None
     population_flow_product: str | None = None
     variable_opportunity_sensitivity_product: str | None = None
@@ -693,6 +707,15 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
             values = [value for value in reporting_products if value is not None]
             if len(values) != len(set(values)):
                 raise ValueError("landmark spline reporting products must be unique")
+        if self.schema_version.endswith(("/1", "/2")):
+            if self.dependence is not None:
+                raise ValueError(
+                    "landmark spline v1/v2 authority cannot declare repeated-unit dependence"
+                )
+        elif self.dependence is None:
+            raise ValueError(
+                "landmark spline v3 authority requires a cluster-robust dependence contract"
+            )
         self._verify_digest()
         return self
 
@@ -715,6 +738,11 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     self.observation_duration_column,
                     *self.required_adjustment_columns,
                     *self.alternative_exposure_columns,
+                    *(
+                        (self.dependence.group_source,)
+                        if self.dependence is not None
+                        else ()
+                    ),
                 )
             )
         )
@@ -729,6 +757,11 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     self.exposure_column,
                     self.outcome_column,
                     *self.required_adjustment_columns,
+                    *(
+                        (self.dependence.group_source,)
+                        if self.dependence is not None
+                        else ()
+                    ),
                 )
             )
         )

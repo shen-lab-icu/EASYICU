@@ -208,3 +208,75 @@ def test_missing_linear_per_unit_becomes_explicit_analysis_only_step() -> None:
     assert step.method == "linear_per_unit_sensitivity"
     assert step.expected_outputs == ["table:sensitivity_exposure_linear_per_unit"]
     assert findings[0].detail["strategy"] == "linear_per_unit"
+
+
+def test_landmark_and_cluster_choices_become_separate_executable_steps() -> None:
+    context = _context()
+    preferences = UserPreferences.model_validate(
+        {
+            **context.user_preferences.model_dump(mode="json"),
+            "sensitivity_specs": [
+                {
+                    "spec_id": "landmark_24h",
+                    "axis": "timing",
+                    "strategy": "landmark",
+                    "execution_variables": ["event_time", "observation_hours"],
+                    "landmark_hours": 24,
+                    "require_alive_at_landmark": True,
+                    "exclude_negative_event_times": True,
+                    "event_time_variable": "event_time",
+                    "observation_duration_variable": "observation_hours",
+                    "observation_duration_unit": "hours",
+                },
+                {
+                    "spec_id": "repeated_stays_cluster_robust",
+                    "axis": "repeated_stays",
+                    "strategy": "cluster_robust",
+                },
+            ],
+        }
+    )
+    context = context.model_copy(update={"user_preferences": preferences})
+    plan = _plan()
+    primary = plan.steps[0]
+    requirement = primary.model_requirements[0].model_copy(
+        update={
+            "dependence": {
+                "schema_version": "easyicu.planned_dependence/1",
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+                "group_source": "patient_stay_id",
+                "group_derivation": "prefix_before_delimiter",
+                "delimiter": ":s",
+            }
+        }
+    )
+    primary = primary.model_copy(
+        update={
+            "inputs": [*primary.inputs, "patient_stay_id"],
+            "model_requirements": [requirement],
+        }
+    )
+    plan = plan.model_copy(update={"steps": [primary, *plan.steps[1:]]})
+
+    shaped, findings = ensure_prespecified_sensitivity_steps(
+        plan=plan,
+        context=context,
+    )
+
+    landmark = next(
+        step for step in shaped.steps if step.step_id == "sensitivity_landmark_24h"
+    )
+    clustered = next(
+        step
+        for step in shaped.steps
+        if step.step_id == "sensitivity_repeated_stays_cluster_robust"
+    )
+    assert landmark.method == "landmark_analysis"
+    assert {"event_time", "observation_hours"} <= set(landmark.inputs)
+    assert clustered.method == "cluster_robust_association"
+    assert "patient_stay_id" in clustered.inputs
+    assert {item.detail["spec_id"] for item in findings} == {
+        "landmark_24h",
+        "repeated_stays_cluster_robust",
+    }

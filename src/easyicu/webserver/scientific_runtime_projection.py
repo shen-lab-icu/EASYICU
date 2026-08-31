@@ -26,6 +26,7 @@ from typing import Any, Mapping, Sequence
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
@@ -171,6 +172,7 @@ def compile_landmark_spline_runtime_projection(
     target_is_event_status: bool,
     universe_path: Path,
     scientific_configuration_sha256: str,
+    dependence: PlannedDependenceRequirement | None = None,
 ) -> WebScientificRuntimeProjection | None:
     """Return a signed runtime projection only for one fully closed design.
 
@@ -253,6 +255,7 @@ def compile_landmark_spline_runtime_projection(
         str(landmark.event_time_variable),
         str(landmark.observation_duration_variable),
         *map(str, covariates),
+        *((dependence.group_source,) if dependence is not None else ()),
     }
     try:
         import pyarrow.parquet as pq
@@ -274,7 +277,11 @@ def compile_landmark_spline_runtime_projection(
 
     authority = build_current_case_scientific_runtime_authority(
         {
-            "schema_version": "easyicu.landmark_spline_runtime_authority/2",
+            "schema_version": (
+                "easyicu.landmark_spline_runtime_authority/3"
+                if dependence is not None
+                else "easyicu.landmark_spline_runtime_authority/2"
+            ),
             "authority_kind": "landmark_spline_association",
             "protocol_content_sha256": scientific_configuration_sha256,
             "plan_method": "signed_landmark_restricted_cubic_spline",
@@ -300,6 +307,11 @@ def compile_landmark_spline_runtime_projection(
             "required_adjustment_columns": list(covariates),
             "categorical_adjustment_columns": list(categorical),
             "alternative_exposure_columns": [],
+            "dependence": (
+                dependence.model_dump(mode="json")
+                if dependence is not None
+                else None
+            ),
             "adjusted_absolute_risk_product": (
                 "table:landmark_adjusted_absolute_risk"
             ),

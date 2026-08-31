@@ -27,6 +27,8 @@ from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
 
 
 _PREFERRED_METHOD_BY_STRATEGY = {
+    "landmark": "landmark_analysis",
+    "cluster_robust": "cluster_robust_association",
     "restricted_cubic_spline": "restricted_cubic_spline_sensitivity",
     "linear_per_unit": "linear_per_unit_sensitivity",
     "fractional_polynomial": "fractional_polynomial_sensitivity",
@@ -136,12 +138,20 @@ def ensure_prespecified_sensitivity_steps(
         return plan, []
 
     requirement = primary.model_requirements[0]
+    dependence_group_source = (
+        getattr(requirement.dependence, "group_source", None)
+        if requirement.dependence is not None
+        else None
+    )
+    if isinstance(requirement.dependence, dict):
+        dependence_group_source = requirement.dependence.get("group_source")
     raw_inputs = list(
         dict.fromkeys(
             [
                 requirement.exposure_source,
                 requirement.outcome,
                 *requirement.covariates,
+                *([dependence_group_source] if dependence_group_source else []),
             ]
         )
     )
