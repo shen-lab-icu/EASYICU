@@ -26,7 +26,7 @@ from easyicu.webserver import (
     dataio,
     demo_sources,
     jobs,
-    literature_authority,
+    literature_search_transaction,
     patient_drilldown,
     research_run_submission,
     settings,
@@ -2810,200 +2810,28 @@ def _search_literature(
     if grant_block is not None:
         return grant_block
     try:
-        if bound_idea_run and bound_idea_id:
-            checked = idea_mining.check_prior_art(
-                {
-                    "run_id": bound_idea_run,
-                    "idea_id": bound_idea_id,
-                    "allow_network": True,
-                }
-            )
-            prior = checked.get("prior_art")
-            prior = prior if isinstance(prior, Mapping) else {}
-            raw_candidates = [
-                row
-                for row in list(prior.get("results") or [])[:requested_limit]
-                if isinstance(row, Mapping)
-            ]
-            candidates = [
-                {
-                    "citation_key": f"idea_pubmed_{str(row.get('pmid') or '').strip()}",
-                    "title": row.get("title"),
-                    "journal": row.get("journal") or row.get("source"),
-                    "year": row.get("year") or row.get("pubdate"),
-                    "doi": row.get("doi"),
-                    "pmid": row.get("pmid"),
-                    "url": (
-                        f"https://pubmed.ncbi.nlm.nih.gov/{str(row.get('pmid') or '').strip()}/"
-                        if str(row.get("pmid") or "").strip()
-                        else None
-                    ),
-                    "evidence_quote": (
-                        str(
-                            row.get("abstract_excerpt")
-                            or row.get("evidence_sentence")
-                            or (
-                                "Matched the accepted Idea Mining prior-art query: "
-                                + str(row.get("query") or "")
-                            )
-                        )[:600]
-                    ),
-                    "design_excerpt": str(
-                        row.get("design_excerpt")
-                        or row.get("abstract_excerpt")
-                        or ""
-                    )[:1200],
-                    "publication_types": [
-                        str(value)[:120]
-                        for value in list(row.get("publication_types") or [])[:12]
-                        if str(value).strip()
-                    ],
-                    "matched_queries": [str(row.get("query") or "")[:1500]]
-                    if str(row.get("query") or "").strip()
-                    else [],
-                    "matched_query_strata": ["accepted_idea_prior_art"],
-                }
-                for row in raw_candidates
-            ]
-            discovered = {
-                "status": prior.get("status"),
-                "search_performed": prior.get("search_performed"),
-                "queries_to_run": prior.get("queries_to_run") or [],
-                "network_calls": prior.get("network_calls") or 0,
-                "source_candidates": candidates,
-            }
-            receipt_binding = idea_mining.prior_art_receipt_binding(bound_idea_run)
-        else:
-            cohort_scope = (
-                study.get("cohort")
-                if isinstance(study.get("cohort"), Mapping)
-                else {}
-            )
-            data_source = (
-                study.get("data_source")
-                if isinstance(study.get("data_source"), Mapping)
-                else {}
-            )
-            analysis_design = (
-                study.get("analysis_design")
-                if isinstance(study.get("analysis_design"), Mapping)
-                else {}
-            )
-            discovered = idea_mining.discover_literature(
-                {
-                    "topic": topic,
-                    "exposure": str(study.get("primary_exposure") or "").strip(),
-                    "outcome": str(study.get("outcome") or "").strip(),
-                    "exposure_concept": str(
-                        execution_concepts.get("primary_exposure") or ""
-                    ).strip(),
-                    "outcome_concept": str(
-                        execution_concepts.get("outcome") or ""
-                    ).strip(),
-                    "population": " ".join(
-                        str(cohort_scope.get(key) or "").strip()
-                        for key in ("label", "review", "preset")
-                        if str(cohort_scope.get(key) or "").strip()
-                    ),
-                    "database": str(data_source.get("database") or "").strip(),
-                    "analysis_family": str(
-                        analysis_design.get("analysis_family") or ""
-                    ).strip(),
-                    "journal": str(params.get("journal") or "").strip(),
-                    "limit": requested_limit,
-                    "allow_network": True,
-                }
-            )
-            receipt_binding = None
-    except idea_mining.IdeaMiningWebError as exc:
-        detail = exc.detail
+        transaction = literature_search_transaction.execute_literature_search(
+            study=study,
+            topic=topic,
+            journal=str(params.get("journal") or "").strip(),
+            requested_limit=requested_limit,
+            bound_study_id=str(
+                context.session.binding.study_context_id or ""
+            ).strip(),
+        )
+    except literature_search_transaction.LiteratureSearchTransactionError as exc:
         return _result(
             context,
             status="blocked",
-            code=str(detail.get("error") or "literature_search_blocked"),
-            summary=str(
-                detail.get("reason") or "Idea Mining rejected the literature search."
-            ),
-            owner="easyicu.webserver.ideas.mining",
+            code=exc.code,
+            summary=exc.message,
+            owner=exc.owner,
         )
-    generic_authority_binding: Optional[Dict[str, Any]] = None
-    updated_study: Optional[Dict[str, Any]] = None
-    if performed := bool(discovered.get("search_performed")):
-        if not (bound_idea_run and bound_idea_id):
-            study_id = str(study.get("id") or "").strip()
-            bound_study_id = str(
-                context.session.binding.study_context_id or ""
-            ).strip()
-            stored = (
-                study_contexts.get_context(study_id)
-                if study_id and bound_study_id == study_id
-                else None
-            )
-            if stored is None and context.session.binding.study_context_id:
-                return _result(
-                    context,
-                    status="blocked",
-                    code="literature_authority_study_missing",
-                    summary=(
-                        "The bound StudyContext disappeared before its literature "
-                        "receipt could be attached. Search results were not authorized."
-                    ),
-                    owner="easyicu.webserver.literature_authority",
-                )
-            if stored is not None:
-                if int(stored.get("revision") or 0) != int(study.get("revision") or 0):
-                    return _result(
-                        context,
-                        status="blocked",
-                        code="literature_authority_study_revision_conflict",
-                        summary=(
-                            "The study changed while PubMed was being searched. "
-                            "Search again against the current study revision."
-                        ),
-                        owner="easyicu.webserver.literature_authority",
-                    )
-                try:
-                    generic_authority_binding = (
-                        literature_authority.persist_literature_authority(
-                            study=stored,
-                            discovered=discovered,
-                        )
-                    )
-                    updated_study = study_contexts.bind_literature_authority(
-                        study_id,
-                        generic_authority_binding,
-                        expected_revision=int(stored.get("revision") or 0),
-                    )
-                except literature_authority.LiteratureAuthorityError as exc:
-                    return _result(
-                        context,
-                        status="blocked",
-                        code=exc.code,
-                        summary=exc.message,
-                        owner="easyicu.webserver.literature_authority",
-                    )
-                except study_contexts.StudyContextError as exc:
-                    return _result(
-                        context,
-                        status="blocked",
-                        code=str(
-                            exc.detail.get("error")
-                            or "literature_authority_binding_failed"
-                        ),
-                        summary=(
-                            "The StudyContext changed before the literature receipt "
-                            "could be bound. Search again against the current revision."
-                        ),
-                        owner="easyicu.webserver.study_contexts",
-                    )
-
-    candidates = [
-        row
-        for row in list(discovered.get("source_candidates") or [])[
-            :requested_limit
-        ]
-        if isinstance(row, Mapping)
-    ]
+    discovered = transaction.discovered
+    candidates = list(transaction.candidates)
+    receipt_binding = transaction.idea_receipt_binding
+    generic_authority_binding = transaction.study_authority_binding
+    updated_study = transaction.updated_study
     status = str(discovered.get("status") or "search_failed")
     performed = bool(discovered.get("search_performed"))
     query_count = len(list(discovered.get("queries_to_run") or []))
