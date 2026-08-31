@@ -20,6 +20,7 @@ from easyicu.webserver.pi_copilot.contracts import (
 )
 from easyicu.webserver.pi_copilot.gateway import PiGatewayClient, _PendingRequest
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
+from easyicu.webserver.pi_copilot.tool_catalog import TOOL_CATALOG
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = REPO_ROOT / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
@@ -102,7 +103,7 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert "details.summary" in projection
     assert 'receipt.status === "blocked"' in projection
     assert 'receipt.status === "failed"' in projection
-    for name in (
+    sequential_controls = {
         "easyicu_update_study_context",
         "easyicu_mine_ideas",
         "easyicu_search_literature",
@@ -112,9 +113,13 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
         "easyicu_run",
         "easyicu_cancel",
         "easyicu_request_replan",
-    ):
-        declaration = entrypoint.split(f'name: "{name}"', 1)[1].split("}),", 1)[0]
-        assert 'executionMode: "sequential"' in declaration
+    }
+    catalog_by_name = {entry.name: entry for entry in TOOL_CATALOG}
+    assert all(
+        catalog_by_name[name].execution_mode == "sequential"
+        for name in sequential_controls
+    )
+    assert 'executionMode: "sequential"' not in entrypoint
 
 
 def test_private_runtime_integrity_is_verified_once_per_gateway_lifetime(

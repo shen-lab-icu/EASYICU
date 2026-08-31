@@ -47,6 +47,10 @@ from easyicu.webserver.pi_copilot.gateway import PiGatewayClient
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot import tools as tool_module
+from easyicu.webserver.pi_copilot.tool_catalog import (
+    ALL_TOOL_NAMES,
+    RESEARCH_TOOL_NAMES,
+)
 
 
 class FakeGateway:
@@ -3179,52 +3183,8 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
 
 
 def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
-    research_tools = {
-        "easyicu_workspace_status",
-        "easyicu_list_data_sources",
-        "easyicu_list_source_concepts",
-        "easyicu_inspect_data_package",
-        "easyicu_review_cohort",
-        "easyicu_open_data_download",
-        "easyicu_preview_icd_cohort",
-        "easyicu_review_patient_timeline",
-        "easyicu_compare_data_sources",
-        "easyicu_inspect_workflow",
-        "easyicu_inspect_context",
-        "easyicu_inspect_plan",
-        "easyicu_inspect_literature",
-        "easyicu_inspect_capability",
-        "easyicu_inspect_run",
-        "easyicu_inspect_step",
-        "easyicu_inspect_validation",
-        "easyicu_list_artifacts",
-        "easyicu_inspect_evidence",
-        "easyicu_explain_blocker",
-        "easyicu_inspect_interpretation",
-        "easyicu_inspect_manuscript",
-        "easyicu_update_study_context",
-        "easyicu_mine_ideas",
-        "easyicu_search_literature",
-        "easyicu_prepare_idea_handoff",
-        "easyicu_accept_idea_handoff",
-        "easyicu_prepare_demo_source",
-        "easyicu_start_extraction",
-        "easyicu_run",
-        "easyicu_resume",
-        "easyicu_cancel",
-        "easyicu_request_replan",
-        "easyicu_list_extensions",
-        "easyicu_load_skill",
-        "easyicu_call_mcp_tool",
-    }
-    workspace_tools = {
-        "easyicu_list_project_files",
-        "easyicu_read_project_file",
-        "easyicu_write_project_file",
-        "easyicu_edit_project_file",
-        "easyicu_check_project_file",
-        "easyicu_preview_project_file",
-    }
+    research_tools = set(RESEARCH_TOOL_NAMES)
+    workspace_tools = set(ALL_TOOL_NAMES) - research_tools
     assert tool_module.READ_TOOLS | tool_module.CONTROL_TOOLS == research_tools
     assert tool_module.WORKSPACE_TOOLS == workspace_tools
     assert tool_module.ALLOWED_TOOLS == research_tools | workspace_tools

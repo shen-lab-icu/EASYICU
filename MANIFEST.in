@@ -28,6 +28,7 @@ recursive-include src/easyicu/data *.json
 recursive-include src/easyicu/webserver/static *.html *.css *.js
 recursive-include src/easyicu/webserver/static/assets *.png *.pdf
 recursive-include src/easyicu/webserver/static/vendor *
+include src/easyicu/webserver/pi_copilot/tool_catalog.json
 include src/easyicu/webserver/pi_copilot/node_app/package.json
 include src/easyicu/webserver/pi_copilot/node_app/package-lock.json
 include src/easyicu/webserver/pi_copilot/node_app/README.md
