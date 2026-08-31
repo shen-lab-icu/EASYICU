@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -18,6 +17,7 @@ from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import capabilities
 from easyicu.webserver import dataio
 from easyicu.webserver import provider_adapter
+from easyicu.webserver import research_run_submission
 from easyicu.webserver import codex_account_sessions
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import science_workbench
@@ -25,42 +25,28 @@ from easyicu.webserver import sources as source_store
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
 from easyicu.webserver.pi_copilot.contracts import (
-    PiCopilotError,
     plan_approval_allowed,
 )
-from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 from easyicu.webserver.pi_copilot.run_authority import (
-    list_bound_run_history,
     research_pipeline_workspace,
-    resumable_planner_checkpoint_job_id,
 )
 from easyicu.webserver.routes.jobs import submit_job
 from easyicu.webserver.routes.request_parsing import body_bool, body_int
 
 control_router = APIRouter()
 artifact_router = APIRouter()
-_DEVELOPMENT_REVIEWED_EXECUTION_ENV = (
-    "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
-)
+# Compatibility export for focused tests and older local integrations. The
+# class object is shared with the deep submission owner; no policy lives here.
+PiProviderConfigStore = research_run_submission.PiProviderConfigStore
 
 
 def _server_research_pipeline_budget_mode() -> str:
-    """Resolve the server-owned development launch mode.
+    """Compatibility adapter for the submission owner's budget policy."""
 
-    The browser and model cannot select this value.  Production/default Web
-    launches remain Planner-only canaries; an operator running the bounded
-    Dev9 workflow may explicitly enable the non-paper reviewed companion.
-    """
-
-    raw = str(os.environ.get(_DEVELOPMENT_REVIEWED_EXECUTION_ENV) or "").strip()
-    if not raw:
-        return "planner_canary"
-    if raw == "1":
-        return "full_reviewed"
-    raise HTTPException(
-        status_code=500,
-        detail={"error": "research_pipeline_development_mode_invalid"},
-    )
+    try:
+        return research_run_submission.server_research_pipeline_budget_mode()
+    except research_run_submission.ResearchRunSubmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _research_pipeline_budget_mode_for_source(
@@ -68,23 +54,15 @@ def _research_pipeline_budget_mode_for_source(
     prepared_manifest: Optional[Path],
     metadata_only_planning_authorized: bool,
 ) -> str:
-    """Keep the development execution switch from forcing premature execution.
+    """Compatibility adapter for the submission owner's source policy."""
 
-    Copilot may authorize a Planner run before an export package exists.  The
-    server switch permits reviewed execution once a package is present; it does
-    not turn a plan-generation click into a manifest requirement.
-    """
-
-    # A manifest-backed package is already eligible for reviewed execution.
-    # Starting it as a planner-only canary produces a plan whose approval can
-    # never enter Execute, even though the required data authority is present.
-    # Keep catalog-only planning canary-safe, but make a prepared package
-    # reviewable/executable without requiring a hidden development env switch.
-    if prepared_manifest is not None:
-        return "full_reviewed"
-    if metadata_only_planning_authorized and prepared_manifest is None:
-        return "planner_canary"
-    return _server_research_pipeline_budget_mode()
+    try:
+        return research_run_submission.research_pipeline_budget_mode_for_source(
+            prepared_manifest=prepared_manifest,
+            metadata_only_planning_authorized=metadata_only_planning_authorized,
+        )
+    except research_run_submission.ResearchRunSubmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _provider_environment_for_agent_run(
@@ -96,61 +74,17 @@ def _provider_environment_for_agent_run(
     llm_provider: str = "",
     account_environment: Optional[Mapping[str, str]] = None,
 ) -> Optional[Mapping[str, str]]:
-    """Resolve one credential authority without returning secret values."""
-
-    source = str(credential_source or "scientific_provider").strip().lower()
-    account_provider = provider_adapter.is_user_account_provider(llm_provider)
-    if source == "codex_user_auth":
-        if run_type != "full":
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "codex_user_auth_full_run_only"},
-            )
-        if not account_provider:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "codex_user_auth_provider_required"},
-            )
-        try:
-            return provider_adapter.account_provider_environment(
-                llm_provider,
-                environ=account_environment,
-            )
-        except provider_adapter.ProviderAdapterError as exc:
-            raise HTTPException(status_code=400, detail=exc.detail) from exc
-    if engine == "research_agent_pipeline" and account_provider:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "research_pipeline_codex_user_auth_required"},
-        )
-    if account_provider:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "codex_user_auth_required"},
-        )
-    if engine == "research_agent_pipeline" and source != "pi_verified":
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "research_pipeline_pi_verified_credentials_required"},
-        )
-    if source == "scientific_provider":
-        return None
-    if source != "pi_verified":
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "agent_provider_credential_source_invalid"},
-        )
-    if engine != "research_agent_pipeline" or run_type != "full":
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "pi_provider_research_pipeline_only"},
-        )
     try:
-        return PiProviderConfigStore().research_agent_environment(
+        return research_run_submission.provider_environment_for_agent_run(
+            credential_source=credential_source,
+            engine=engine,
+            run_type=run_type,
             external_llm_opt_in=external_llm_opt_in,
+            llm_provider=llm_provider,
+            account_environment=account_environment,
         )
-    except PiCopilotError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
+    except research_run_submission.ResearchRunSubmissionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def submit_agent_run(
@@ -167,6 +101,17 @@ def submit_agent_run(
     profile or the real ResearchAgentPipeline engine after canonical AI
     opt-in, per-run opt-in, and credential checks.
     """
+    requested_engine = str(body.get("engine") or "native_summary").strip().lower()
+    if requested_engine == "research_agent_pipeline":
+        try:
+            return research_run_submission.submit_research_run(
+                body,
+                account_environment=account_environment,
+                metadata_only_planning_authorized=metadata_only_planning_authorized,
+            )
+        except research_run_submission.ResearchRunSubmissionError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
     path = str(body.get("path") or "")
     if not path:
         path = str(source_store.load_registry().get("active_path") or "")
@@ -202,54 +147,26 @@ def submit_agent_run(
     run_type = str(
         body.get("run_type") or ("full" if body_bool(body, "full_run") else "preflight")
     )
-    engine = str(body.get("engine") or "native_summary").strip().lower()
-    if engine not in {"native_summary", "research_agent_pipeline"}:
+    engine = requested_engine
+    if engine != "native_summary":
         raise HTTPException(
             status_code=400,
             detail={"error": "unsupported_agent_run_engine", "engine": engine},
         )
-    if engine == "research_agent_pipeline" and run_type != "full":
+    planner_start_mode = str(body.get("planner_start_mode") or "auto").strip().lower()
+    if planner_start_mode != "auto":
         raise HTTPException(
             status_code=400,
-            detail={"error": "research_pipeline_requires_full_run"},
-        )
-    if engine == "research_agent_pipeline" and study_context is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "research_pipeline_study_context_required"},
+            detail={"error": "planner_start_mode_research_pipeline_only"},
         )
     budget_mode = "planner_canary"
-    if engine == "research_agent_pipeline":
-        if "budget_mode" in body:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "research_pipeline_budget_mode_server_owned"},
-            )
-        source = (study_context or {}).get("data_source")
-        database = source.get("database") if isinstance(source, Mapping) else None
-        prepared_manifest = dataio.prepared_export_manifest_path(
-            Path(path).expanduser()
-        )
-        budget_mode = _research_pipeline_budget_mode_for_source(
-            prepared_manifest=prepared_manifest,
-            metadata_only_planning_authorized=metadata_only_planning_authorized,
-        )
-        if budget_mode == "full_reviewed" or prepared_manifest is not None:
-            try:
-                dataio.validate_research_pipeline_source(path, database=database)
-            except dataio.ExportCohortError as exc:
-                raise HTTPException(status_code=400, detail=exc.detail) from exc
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = body_bool(body, "external_llm_opt_in")
     literature_search_authorized = body_bool(
         body,
         "literature_search_authorized",
     )
-    if literature_search_authorized and (
-        engine != "research_agent_pipeline"
-        or run_type != "full"
-        or not external_llm_opt_in
-    ):
+    if literature_search_authorized:
         raise HTTPException(
             status_code=400,
             detail={"error": "literature_search_authorization_scope_invalid"},
@@ -283,120 +200,34 @@ def submit_agent_run(
     if not compute.get("ok"):
         raise HTTPException(status_code=400, detail=compute)
     try:
-        provider_meta = agent_runs.resolve_agent_provider_config(
-            run_type=run_type,
-            llm_provider=llm_provider,
-            external_llm_opt_in=external_llm_opt_in,
-            ai_enabled=bool(settings.get("ai_enabled")),
-            environ=provider_environment,
-        )
-    except agent_runs.AgentRunConfigError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-    try:
         if study_context is not None:
-            # Validate before a background job is created. Do not persist an
-            # ``analyze`` stage yet: capacity rejection must leave the prior
-            # context untouched.
             context_store.build_agent_context_binding(
                 study_context,
                 export_path=path,
                 request_question=body.get("question"),
             )
-        if engine == "research_agent_pipeline":
-            workspace = research_pipeline_workspace()
-            project_root = str(
-                workspace.project_root(str((study_context or {}).get("id") or ""))
-            )
-            runner_kwargs: Dict[str, Any] = {
-                "export_path": path,
-                "study_context": study_context or {},
-                "project_root": project_root,
-                "provider": provider_meta,
-                "provider_environment": provider_environment,
-                "credential_source": credential_source,
-                "budget_mode": budget_mode,
-            }
-            if literature_search_authorized:
-                runner_kwargs["literature_search_authorized"] = True
-            plan_revision_source_run_id = str(
-                body.get("plan_revision_source_run_id") or ""
-            ).strip()
-            if plan_revision_source_run_id:
-                runner_kwargs["plan_revision_source_run_id"] = (
-                    plan_revision_source_run_id
-                )
-            execution_resume_source_run_id = str(
-                body.get("execution_resume_source_run_id") or ""
-            ).strip()
-            if execution_resume_source_run_id:
-                runner_kwargs["execution_resume_source_run_id"] = (
-                    execution_resume_source_run_id
-                )
-            development_resume_source_job_id = str(
-                body.get("development_resume_source_job_id") or ""
-            ).strip()
-            if (
-                not development_resume_source_job_id
-                and not plan_revision_source_run_id
-                and not execution_resume_source_run_id
-            ):
-                # Buttons, edited/resubmitted messages, and Pi tool calls all
-                # converge here.  Recover the newest unchanged Planner prefix
-                # at this owner boundary so one frontend path cannot silently
-                # restart a six-minute plan while another resumes it.
-                development_resume_source_job_id = (
-                    resumable_planner_checkpoint_job_id(
-                        study=study_context or {},
-                        rows=list_bound_run_history(
-                            study_context_id=str(
-                                (study_context or {}).get("id") or ""
-                            ),
-                            project_root=project_root,
-                            limit=50,
-                        ),
-                        project_root=project_root,
-                    )
-                )
-            if development_resume_source_job_id:
-                runner_kwargs["development_resume_source_job_id"] = (
-                    development_resume_source_job_id
-                )
-            base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-                **runner_kwargs,
-            )
-        else:
-            project_root = body.get("project_root") or _agent_seed_run_root(
-                project_seed_dir
-            )
-            base_runner = agent_runs.make_agent_run_runner(
-                export_path=path,
-                study_id=str(
-                    (study_context or {}).get("id") or body.get("study_id") or "study"
-                ),
-                mode=str(body.get("mode") or "analysis"),
-                question=body.get("question"),
-                project_root=project_root,
-                run_type=run_type,
-                llm_provider=llm_provider,
-                external_llm_opt_in=external_llm_opt_in,
-                ai_enabled=bool(settings.get("ai_enabled")),
-                study_context=study_context,
-                provider_environment=provider_environment,
-            )
+        project_root = body.get("project_root") or _agent_seed_run_root(
+            project_seed_dir
+        )
+        base_runner = agent_runs.make_agent_run_runner(
+            export_path=path,
+            study_id=str(
+                (study_context or {}).get("id") or body.get("study_id") or "study"
+            ),
+            mode=str(body.get("mode") or "analysis"),
+            question=body.get("question"),
+            project_root=project_root,
+            run_type=run_type,
+            llm_provider=llm_provider,
+            external_llm_opt_in=external_llm_opt_in,
+            ai_enabled=bool(settings.get("ai_enabled")),
+            study_context=study_context,
+            provider_environment=provider_environment,
+        )
     except context_store.StudyContextError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
-    except PiCopilotError as exc:
+    except agent_runs.AgentRunConfigError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
-    except agent_pipeline_runs.ResearchPipelineRunError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": exc.code,
-                "message": str(exc),
-                **({"details": exc.details} if exc.details else {}),
-            },
-        ) from exc
     start_gate = threading.Event()
     start_abort: Dict[str, Any] = {}
 
@@ -493,11 +324,8 @@ def submit_agent_run(
                 "budget_mode": budget_mode,
                 "compute_target": compute.get("compute_target"),
                 "study_context_id": study_context_id or None,
-                "development_resume_source_job_id": (
-                    development_resume_source_job_id or None
-                    if engine == "research_agent_pipeline"
-                    else None
-                ),
+                "planner_start_mode": None,
+                "development_resume_source_job_id": None,
             },
         )
     except Exception:
@@ -518,11 +346,8 @@ def submit_agent_run(
         "study_context_revision": (
             int(synced_context.get("revision") or 0) if synced_context else None
         ),
-        "development_resume_source_job_id": (
-            development_resume_source_job_id or None
-            if engine == "research_agent_pipeline"
-            else None
-        ),
+        "planner_start_mode": None,
+        "development_resume_source_job_id": None,
         "audit_warning": audit_warning,
     }
 
@@ -543,7 +368,13 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
                 status_code=400,
                 detail={"error": exc.code},
             ) from exc
-    return submit_agent_run(body, account_environment=account_environment)
+    return submit_agent_run(
+        body,
+        account_environment=account_environment,
+        # This client coordinate can only narrow the run to a zero-row Planner
+        # canary; it cannot grant execution or select a more permissive budget.
+        metadata_only_planning_authorized=body_bool(body, "candidate_plan_only"),
+    )
 
 
 @control_router.post("/api/jobs/agent-run-review")
@@ -1100,7 +931,8 @@ def post_agent_run_artifact(body: Dict[str, Any]) -> dict:
         str(body.get("artifact") or body.get("name") or ""),
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
+        status_code = 409 if result.get("error") == "artifact_privacy_scan_failed" else 400
+        raise HTTPException(status_code=status_code, detail=result)
     return result
 
 
@@ -1112,7 +944,8 @@ def post_agent_run_download_artifact(body: Dict[str, Any]) -> Response:
         str(body.get("artifact") or body.get("name") or ""),
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
+        status_code = 409 if result.get("error") == "artifact_privacy_scan_failed" else 400
+        raise HTTPException(status_code=status_code, detail=result)
     filename = str(result.get("name") or "artifact.json").replace('"', "")
     return Response(
         content=result["content"],
@@ -1126,7 +959,8 @@ def post_agent_run_download_bundle(body: Dict[str, Any]) -> Response:
     """Download a zip bundle of whitelisted artifacts for one local run."""
     result = agent_runs.build_run_bundle(str(body.get("project_dir") or ""))
     if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
+        status_code = 409 if result.get("error") == "artifact_privacy_scan_failed" else 400
+        raise HTTPException(status_code=status_code, detail=result)
     filename = str(result.get("name") or "agent_run_artifacts.zip").replace('"', "")
     return Response(
         content=result["content"],
