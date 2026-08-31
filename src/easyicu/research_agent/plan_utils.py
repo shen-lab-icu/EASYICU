@@ -77,7 +77,9 @@ from .planning.cohort_contract import (
 )
 from .planning.endpoint_contract import endpoint_contract_findings as endpoint_contract_findings
 from .planning.figure_plan_shaping import (
+    augment_report_typed_product_inputs as _augment_report_typed_product_inputs,  # noqa: F401 - compatibility export
     dedicated_renderer_consumes_typed_source as _dedicated_renderer_consumes_typed_source,
+    migrate_render_step_contract as _migrate_render_step_contract,  # noqa: F401 - compatibility export
 )
 from .planning.figure_step_contract import (
     _output_declares_figure,
@@ -109,111 +111,6 @@ from .trajectory.contract import (
     trajectory_phenotyping_contract_applies,
 )
 from .trajectory.plan_contract import trajectory_plan_contract_applies
-
-
-def _migrate_render_step_contract(
-    child: AnalysisStep,
-    source_tokens: Sequence[str],
-    *,
-    intent: Optional[str] = None,
-    method: Optional[str] = None,
-) -> AnalysisStep:
-    """Rebind one render step and its cardinality contracts atomically."""
-
-    existing = {
-        str(contract.input_key): contract
-        for contract in child.input_consumption_contracts
-    }
-    contracts = [
-        existing.get(token)
-        or ArtifactConsumptionContract(input_key=token, mode="all_rows")
-        for token in source_tokens
-        if (parsed := typed_product(token)) is not None
-        and parsed[0] in {"table", "statistic"}
-    ]
-    update: Dict[str, Any] = {
-        "inputs": list(source_tokens),
-        "input_consumption_contracts": contracts,
-    }
-    if intent is not None:
-        update["intent"] = intent
-    if method is not None:
-        update["method"] = method
-    return child.model_copy(update=update)
-
-
-_REPORT_INPUT_PRODUCT_KINDS = frozenset({"manifest", "statistic", "table"})
-
-# The article contract may add these conventional product identities to an
-# already-declared locked-grid replay.  The value is the deterministic replay
-# output each identity names.  Keeping both halves together lets the mutator
-# update ``expected_outputs`` and ``robustness_replay_spec`` atomically instead
-# of leaving execution to guess what a newly added product means.
-def _augment_report_typed_product_inputs(
-    *,
-    plan: AnalysisPlan,
-) -> tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Bind report steps to prior Planner-declared result products.
-
-    This is structural dependency closure only: the Planner still chooses every
-    analysis and product.  A report consumer should not silently recompute those
-    results from raw cohort columns when their typed producers fail.
-    """
-
-    producer_counts: Dict[Tuple[str, str], int] = {}
-    for step in plan.steps or []:
-        for output in step.expected_outputs or []:
-            product = typed_product(output)
-            if product is not None:
-                producer_counts[product] = producer_counts.get(product, 0) + 1
-
-    prior_outputs: List[str] = []
-    revised_steps: List[AnalysisStep] = []
-    additions_by_step: Dict[str, List[str]] = {}
-    for step in plan.steps or []:
-        is_report = any(
-            (product := typed_product(output)) is not None and product[0] == "report"
-            for output in step.expected_outputs or []
-        )
-        inputs = list(step.inputs or [])
-        seen = set(inputs)
-        additions: List[str] = []
-        if is_report:
-            for output in prior_outputs:
-                product = typed_product(output)
-                if (
-                    product is None
-                    or product[0] not in _REPORT_INPUT_PRODUCT_KINDS
-                    or producer_counts.get(product) != 1
-                    or output in seen
-                ):
-                    continue
-                inputs.append(output)
-                additions.append(output)
-                seen.add(output)
-        if additions:
-            additions_by_step[str(step.step_id)] = additions
-            revised_steps.append(step.model_copy(update={"inputs": inputs}))
-        else:
-            revised_steps.append(step)
-        prior_outputs.extend(str(output) for output in step.expected_outputs or [])
-
-    if not additions_by_step:
-        return plan, []
-    return plan.model_copy(update={"steps": revised_steps}), [
-        ValidationFinding(
-            validator="planner_input_closure",
-            severity="info",
-            message=(
-                "Bound report consumers to unique prior typed result products "
-                "so failed producers cannot be silently recomputed from raw data."
-            ),
-            detail={
-                "reason": "report_typed_product_input_closure",
-                "added_inputs_by_step": additions_by_step,
-            },
-        )
-    ]
 
 
 def _problematic_metric_keys(

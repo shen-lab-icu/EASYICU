@@ -76,8 +76,8 @@ def _identity_transforms(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *, current, revised: (revised, []),
     )
     monkeypatch.setattr(
-        plan_authority,
-        "_augment_report_typed_product_inputs",
+        plan_authority._figure_plan,
+        "augment_report_typed_product_inputs",
         lambda *, plan: (plan, []),
     )
     monkeypatch.setattr(
@@ -96,7 +96,7 @@ def _identity_transforms(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *, plan, context, **_kwargs: (plan, []),
     )
     monkeypatch.setattr(
-        plan_authority,
+        plan_authority._figure_plan,
         "bind_deterministic_figure_panels",
         lambda *, plan: (plan, []),
     )
@@ -153,7 +153,7 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
         in {
             "_preserve_completed_step_snapshots_after_replan",
             "_preserve_figure_steps_after_replan",
-            "_augment_report_typed_product_inputs",
+            "augment_report_typed_product_inputs",
             "_cap_plan_preserving_figure_steps",
             "_project_locked_robustness_specs_after_replan",
             "augment_trajectory_plan_products",
@@ -164,7 +164,7 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
     assert relevant == [
         "_preserve_completed_step_snapshots_after_replan",
         "_preserve_figure_steps_after_replan",
-        "_augment_report_typed_product_inputs",
+        "augment_report_typed_product_inputs",
         "_cap_plan_preserving_figure_steps",
         "_project_locked_robustness_specs_after_replan",
         "augment_trajectory_plan_products",
