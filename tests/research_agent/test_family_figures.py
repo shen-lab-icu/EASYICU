@@ -104,6 +104,81 @@ def _assert_hero_covered(context, run_dir: Path, expected_family: str) -> dict:
     return status
 
 
+def test_continuous_association_uses_registered_curve_and_absolute_risk(
+    ra, tmp_path: Path
+) -> None:
+    evidence = ra.EvidenceStore(tmp_path)
+    exposure_grid = [0.2, 0.5, 0.8, 1.1, 1.4, 1.7, 2.0]
+    ratio = [0.72, 0.82, 0.91, 1.0, 1.13, 1.28, 1.45]
+    _register_table(
+        evidence,
+        tmp_path,
+        "continuous_association_curve",
+        pd.DataFrame(
+            {
+                "exposure_value": exposure_grid,
+                "reference_exposure_value": [1.1] * len(exposure_grid),
+                "adjusted_risk_ratio": ratio,
+                "ci_low": [value * 0.92 for value in ratio],
+                "ci_high": [value * 1.08 for value in ratio],
+            }
+        ),
+    )
+    risk = [0.06, 0.07, 0.08, 0.09, 0.105, 0.12, 0.14]
+    _register_table(
+        evidence,
+        tmp_path,
+        "standardized_absolute_risk",
+        pd.DataFrame(
+            {
+                "exposure_value": exposure_grid,
+                "reference_exposure_value": [1.1] * len(exposure_grid),
+                "standardized_absolute_risk": risk,
+                "ci_low": [value - 0.008 for value in risk],
+                "ci_high": [value + 0.008 for value in risk],
+            }
+        ),
+    )
+    context = _context(
+        ra,
+        "Is biomarker burden associated with renal failure?",
+        exposure="biomarker burden",
+        outcome="renal failure",
+    )
+
+    result = _run(ra, evidence, context, tmp_path)
+
+    assert result.generated is True
+    contract = json.loads(
+        (tmp_path / "publication_figures" / "easyicu_publication_figure.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+    ]
+    assert [panel["metadata"]["chart_type"] for panel in contract["panels"]] == [
+        "marginal_effect_panel",
+        "absolute_risk_curve",
+    ]
+    assert "biomarker burden" in contract["core_claim"]
+    assert "lactate" not in json.dumps(contract).lower()
+    assert not [finding for finding in result.findings if finding.severity == "error"]
+    status = summarize_article_figure_strategy_coverage(
+        context=context,
+        run_dir=tmp_path,
+    )
+    assert "primary_estimand" in status[
+        "article_figure_strategy_primary_publication_roles"
+    ]
+    assert not [
+        error
+        for error in status["article_figure_strategy_errors"]
+        if "unsupported chart type" in error
+    ]
+
+
 def test_survival_question_renders_km_and_hazard_forest(ra, tmp_path: Path):
     evidence = ra.EvidenceStore(tmp_path)
     _register_table(
