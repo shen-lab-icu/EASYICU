@@ -428,11 +428,11 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_css = _static_css("guided.css")
     index_html = _static_html("index.html")
 
-    assert "function startGuidedExtractionFlow" in guided_js
-    assert "function renderGuidedExtractionCard" in guided_js
-    assert "function scanGuidedExtractionPath" in guided_js
-    assert "function runGuidedExtractionJob" in guided_js
-    assert "function registerGuidedModuleExport" in guided_js
+    assert "function start(label)" in extract_js
+    assert "function renderCard()" in extract_js
+    assert "function scanPath()" in extract_js
+    assert "function runJob()" in extract_js
+    assert "function registerModuleExport()" in extract_js
     assert "GUIDED_EXTRACT_MODULES" in guided_js
     assert "GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30" in guided_js
     assert "data-gx-path" in extract_js
@@ -442,14 +442,14 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert 'data-gx-module-set="none"' in extract_js
     assert "format: 'parquet'" in extract_js
     assert 'data-gx-format="${fmt}"' in extract_js
-    assert "window.EU_API.startExtractionJob" in guided_js
+    assert "window.EU_API.startExtractionJob" in extract_js
     assert (
-        "new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events')"
-        in guided_js
+        "new EventSource('/api/jobs/' + encodeURIComponent(result.job_id) + '/events')"
+        in extract_js
     )
-    assert "window.EU_API.registerWorkspaceSource(out" in guided_js
-    assert "window.EU_API.scanPath(path, null)" in guided_js
-    assert "source !== 'module'" in guided_js
+    assert "window.EU_API.registerWorkspaceSource(out" in extract_js
+    assert "window.EU_API.scanPath(path, null)" in extract_js
+    assert "scan.source !== 'module'" in extract_js
     assert "No path is prefilled because every machine is different" in extract_js
     assert "goal === 'data_extraction'" in guided_js
     assert "isGuidedExtractionIntent(v)" in guided_js
@@ -566,7 +566,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert provider_pos < idea_plan_pos < guided_pos
 
     # Progressive extraction + study-design stepper owner file (screens-guided-extract.js)
-    assert "js/screens-guided-extract.js?v=20260831-state-owner1" in index_html
+    assert "js/screens-guided-extract.js?v=20260831-effect-owner1" in index_html
     extract_pos = index_html.find("screens-guided-extract.js")
     assert extract_pos != -1 and extract_pos < guided_pos
     assert "window.EU_GUIDED_EXTRACT = {" in extract_js
@@ -579,15 +579,15 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     # extraction state + rendering have one owner; the shell retains only
     # conversation coordination and delegates through its explicit interface.
     assert "const EXTRACT = window.EU_GUIDED_EXTRACT" in guided_js
-    assert "EXTRACT.render" in guided_js
+    assert "EXTRACT.renderCard()" in guided_js
     assert "let extractionState = null" in extract_js
     assert "let designState = null" in extract_js
     assert "guidedExtract" not in guided_js.split("/* ============== inline native data extraction ============== */")[0]
-    assert "function goGuidedExtractStep" in guided_js
-    assert "function commitGuidedDesign" in guided_js
+    assert "function goStep" in extract_js
+    assert "function commitStudyDesign" in extract_js
     assert "function resetGuidedDesignState" in guided_js
     assert "guidedDesignWindowHours()" in guided_js
-    assert "out_dir:" in guided_js  # export destination reaches the extraction job
+    assert "out_dir:" in extract_js  # export destination reaches the extraction job
     assert "study_design" in guided_js  # study design persisted to project memory
     # step + design controls are rendered by the owner and wired by the shell
     for marker in (
@@ -598,7 +598,8 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
         "data-gx-comparator",
         "data-gx-exportdir",
     ):
-        assert marker in guided_js, marker
+        assert marker in extract_js, marker
+        assert marker not in guided_js, marker
     # stepper CSS lives in the guided owner file, not a catch-all
     for cls in (
         ".gdx-steps",

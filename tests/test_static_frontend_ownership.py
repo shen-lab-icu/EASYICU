@@ -507,6 +507,9 @@ def test_the_guided_module_table_carries_no_hand_written_concept_counts() -> Non
     """
 
     guided = (STATIC / "js" / "screens-guided.js").read_text(encoding="utf-8")
+    extract_owner = (
+        STATIC / "js" / "screens-guided-extract.js"
+    ).read_text(encoding="utf-8")
     table = guided[guided.index("const GUIDED_EXTRACT_MODULES = [") :]
     table = table[: table.index("];")]
 
@@ -518,12 +521,40 @@ def test_the_guided_module_table_carries_no_hand_written_concept_counts() -> Non
         )
 
     # The helper must not accept a fallback again, in either owner.
-    assert "function guidedModuleConceptCount(key)" in guided
+    assert "function moduleConceptCount(key)" in extract_owner
     assert "moduleConceptCount(key, " not in guided
-    extract_owner = (STATIC / "js" / "screens-guided-extract.js").read_text(encoding="utf-8")
     assert "moduleConceptCount(key, " not in extract_owner
     # Both renderers read the same column layout.
     assert "ctx.modules.filter(m => m[3])" in extract_owner
+
+
+def test_guided_extraction_owner_contains_effects_and_dom_transitions() -> None:
+    shell = (STATIC / "js" / "screens-guided.js").read_text(encoding="utf-8")
+    owner = (STATIC / "js" / "screens-guided-extract.js").read_text(encoding="utf-8")
+
+    for marker in (
+        "function scanPath()",
+        "function registerModuleExport()",
+        "function runJob()",
+        "function handleClick(target)",
+        "function handleInput(target)",
+        "window.EU_API.startExtractionJob",
+    ):
+        assert marker in owner, marker
+        assert marker not in shell, marker
+
+    extraction_stream = (
+        "new EventSource('/api/jobs/' + "
+        "encodeURIComponent(result.job_id) + '/events')"
+    )
+    assert extraction_stream in owner
+    assert extraction_stream not in shell
+
+    assert "EXTRACT.handleClick(e.target)" in shell
+    assert "EXTRACT.handleInput(e.target)" in shell
+    assert "EXTRACT.renderCard()" in shell
+    assert "EXTRACT.start(" in shell
+    assert "data-gx-" not in shell
 
 
 def test_owner_js_files_do_not_grow_past_their_ratchet() -> None:

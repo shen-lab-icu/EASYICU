@@ -134,6 +134,36 @@
     ['vasopressor', 'Vasopressor exposure', '血管活性药物暴露', 'Shock or pressor cohort starting point.', '休克/升压药队列起点。'],
     ['respiratory', 'Respiratory failure', '呼吸衰竭', 'Respiratory support and blood-gas focused cohort.', '呼吸支持与血气相关队列。'],
   ];
+  EXTRACT.init({
+    t,
+    icon,
+    esc,
+    attr,
+    fmtInt,
+    compactPath,
+    bi,
+    modules: GUIDED_EXTRACT_MODULES,
+    coreModules: GUIDED_CORE_MODULES,
+    cohortPresets: GUIDED_COHORT_PRESETS,
+    thread: () => thread,
+    clearChips: () => { chips = []; },
+    pushUser,
+    setDataMode: value => { dataMode = value; },
+    setVal,
+    markThrough,
+    applyStudyDesign({ outcome, comparator, comparatorKind, windowLabel }) {
+      if (outcome) studyParams.outcome = outcome;
+      if (comparator && comparatorKind !== 'none') studyParams.exposure = comparator;
+      if (windowLabel) studyParams.window = windowLabel;
+      const railBits = [outcome || '', windowLabel].filter(Boolean).join(' · ');
+      if (railBits) setVal({ question: railBits });
+    },
+    renderThread,
+    renderChips,
+    renderAside,
+    scheduleGuidedSlotSave,
+    guidedJobEndError,
+  });
   function reset() {
     disconnectGuidedRunUi();
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
@@ -1262,303 +1292,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
 
   /* ============== inline native data extraction ============== */
-  function guidedModuleConceptCount(key) {
-    const groups = window.EU_CATALOG && window.EU_CATALOG.groupConcepts;
-    const members = groups && groups[key];
-    return Array.isArray(members) ? members.length : 0;
-  }
-  function guidedSelectedConceptCount() {
-    const guidedExtract = EXTRACT.state();
-    if (!guidedExtract) return 0;
-    return GUIDED_EXTRACT_MODULES
-      .filter(m => guidedExtract.modules.includes(m[0]))
-      .reduce((sum, m) => sum + guidedModuleConceptCount(m[0]), 0);
-  }
-  function guidedExtractionCohortContract() {
-    const guidedExtract = EXTRACT.state();
-    const preset = guidedExtract && guidedExtract.cohort ? guidedExtract.cohort : 'adult_first';
-    return {
-      preset,
-      age_min: preset === 'adult_first' ? 18 : 0,
-      age_max: 100,
-      min_icu_los_hours: 0,
-      observation_window_hours: guidedDesignWindowHours(),
-      exclude_readmissions: preset === 'adult_first',
-      icd_enabled: false,
-      icd_include: [],
-      icd_exclude: [],
-    };
-  }
-  function resetGuidedExtractionState() {
-    return EXTRACT.resetState(GUIDED_CORE_MODULES);
-  }
-  function resetGuidedDesignState() {
-    return EXTRACT.resetDesignState();
-  }
-  function guidedDesignOutcome() {
-    return EXTRACT.resolveOutcome(EXTRACT.design(), t);
-  }
-  function guidedDesignComparator() {
-    return EXTRACT.resolveComparator(EXTRACT.design(), t);
-  }
+  /* Extraction state, effects, rendering, and DOM transitions live in
+     screens-guided-extract.js. These accessors are the small read contract
+     used by project-memory restore and the downstream Agent handoff. */
+  function resetGuidedExtractionState() { return EXTRACT.resetState(); }
+  function resetGuidedDesignState() { return EXTRACT.resetDesignState(); }
+  function guidedDesignOutcome() { return EXTRACT.resolveOutcome(EXTRACT.design(), t); }
+  function guidedDesignComparator() { return EXTRACT.resolveComparator(EXTRACT.design(), t); }
   function guidedDesignWindowHours() {
     return EXTRACT.windowHours(EXTRACT.design()) || GUIDED_EXTRACT_WINDOW_HOURS;
   }
-  /* mirror the collected study design into the rail + agent objective, once */
-  function commitGuidedDesign() {
-    const guidedDesign = EXTRACT.design();
-    if (!guidedDesign) return;
-    const outcome = guidedDesignOutcome();
-    const comparator = guidedDesignComparator();
-    const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
-    guidedDesign.collected = !!(outcome || comparator);
-    // studyParams is the shared study frame the rail + agent default read.
-    if (outcome) studyParams.outcome = outcome;
-    if (comparator && guidedDesign.comparator !== 'none') studyParams.exposure = comparator;
-    if (windowLabel) studyParams.window = windowLabel;
-    const railBits = [outcome || '', windowLabel].filter(Boolean).join(' · ');
-    if (railBits) setVal({ question: railBits });
-  }
-  function sourceReadyForGuidedExtraction() {
-    const guidedExtract = EXTRACT.state();
-    const scan = guidedExtract && guidedExtract.scan;
-    return !!(guidedExtract && guidedExtract.path && scan && scan.ok && scan.ready && scan.source !== 'module');
-  }
-  function guidedExtractionStatusText() {
-    const guidedExtract = EXTRACT.state();
-    if (!guidedExtract) return '';
-    if (guidedExtract.scanning) return t('Analyzing folder structure...', '正在识别文件夹结构...');
-    if (guidedExtract.scanError) return esc(guidedExtract.scanError);
-    if (guidedExtract.scan && guidedExtract.scan.source === 'module') {
-      return t('This is already an EasyICU module export. Register it for review instead of extracting again.', '这是已有 EasyICU 模块导出。应注册后审阅，不需要再次抽取。');
-    }
-    if (guidedExtract.scan && !guidedExtract.scan.ready) {
-      return t('Folder was recognized but is not extraction-ready yet. Use Advanced classic settings for the one-time conversion path.', '已识别该文件夹，但尚未达到可直接抽取状态。请用高级经典设置走一次性转换。');
-    }
-    if (guidedExtract.running && guidedExtract.progress) {
-      const p = guidedExtract.progress;
-      const msg = p.message || p.phase || 'running';
-      const cur = p.current != null && p.total ? ` · ${p.current}/${p.total}` : '';
-      return esc(msg + cur);
-    }
-    if (guidedExtract.running) return t('Starting extraction job...', '正在启动抽取任务...');
-    if (guidedExtract.error) return esc(guidedExtract.error);
-    if (guidedExtract.result) return t('Extraction complete. Output registered as the active local export.', '抽取完成。输出已注册为 active 本地 export。');
-    return sourceReadyForGuidedExtraction()
-      ? t('Ready to run locally. Nothing is uploaded.', '可以在本机运行。不会上传数据。')
-      : t('Paste or choose a local ICU data folder, then analyze it before running.', '先粘贴或选择本机 ICU 数据文件夹，然后识别目录再运行。');
-  }
-  function guidedExtractStepOrder() {
-    return EXTRACT.STEP_ORDER;
-  }
-  function goGuidedExtractStep(step) {
-    const guidedExtract = EXTRACT.state();
-    if (!guidedExtract) return;
-    const order = guidedExtractStepOrder();
-    if (order.indexOf(step) < 0) return;
-    // leaving the design step commits the collected study frame into the rail + agent
-    if (guidedExtract.step === 'design' && step !== 'design') commitGuidedDesign();
-    guidedExtract.step = step;
-    renderThread();
-    renderAside();
-    scheduleGuidedSlotSave('guided_extraction_step_' + step);
-  }
-  function stepGuidedExtract(dir) {
-    const guidedExtract = EXTRACT.state();
-    if (!guidedExtract) return;
-    const order = guidedExtractStepOrder();
-    const idx = order.indexOf(guidedExtract.step || 'source');
-    const next = order[idx + dir];
-    if (next) goGuidedExtractStep(next);
-  }
-  function renderGuidedExtractionCard() {
-    if (!EXTRACT.state()) resetGuidedExtractionState();
-    if (!EXTRACT.design()) resetGuidedDesignState();
-    const guidedExtract = EXTRACT.state();
-    const guidedDesign = EXTRACT.design();
-    const progressPct = guidedExtract.progress && guidedExtract.progress.total
-      ? Math.max(0, Math.min(100, Math.round((Number(guidedExtract.progress.current || 0) / Number(guidedExtract.progress.total || 1)) * 100)))
-      : (guidedExtract.result ? 100 : 0);
-    return EXTRACT.render({
-      t, icon, esc, attr, fmtInt, compactPath,
-      ex: guidedExtract,
-      design: guidedDesign,
-      ready: sourceReadyForGuidedExtraction(),
-      statusText: guidedExtractionStatusText(),
-      selectedConcepts: guidedSelectedConceptCount(),
-      moduleConceptCount: guidedModuleConceptCount,
-      cohortPresets: GUIDED_COHORT_PRESETS,
-      modules: GUIDED_EXTRACT_MODULES,
-      coreModules: GUIDED_CORE_MODULES,
-      progressPct,
-    });
-  }
-  function startGuidedExtractionFlow(label) {
-    if (label) pushUser(label);
-    resetGuidedExtractionState();
-    dataMode = 'real';
-    setVal({ data: 'choose local folder', concepts: 'all modules', extract: 'inline Copilot' });
-    markThrough('extract', 'active');
-    thread.push({ bot: true, html: bi(
-      `We can do the core extraction flow here in Copilot. Choose a local ICU data folder, I’ll scan it first, then start the same local extraction job Classic uses.`,
-      `核心数据抽取可以直接在 Copilot 里完成。先选择本机 ICU 数据文件夹，我会先识别目录，再启动和经典视图相同的本地抽取任务。`,
-    ) });
-    thread.push({ guidedExtraction: true });
-    chips = [];
-    renderThread();
-    renderChips();
-    scheduleGuidedSlotSave('start_extraction');
-  }
-  function updateGuidedExtractionModules(mode) {
-    const guidedExtract = EXTRACT.state();
-    if (!guidedExtract) return;
-    if (mode === 'all') guidedExtract.modules = GUIDED_EXTRACT_MODULES.map(m => m[0]);
-    else if (mode === 'core') guidedExtract.modules = GUIDED_CORE_MODULES.slice();
-    else if (mode === 'none') guidedExtract.modules = [];
-  }
-  function scanGuidedExtractionPath() {
-    const guidedExtract = EXTRACT.state();
-    if (!guidedExtract || guidedExtract.scanning) return;
-    const path = String(guidedExtract.path || '').trim();
-    if (!path) {
-      guidedExtract.scan = null;
-      guidedExtract.scanError = 'Choose or paste a local folder path first.';
-      guidedExtract.error = null;
-      renderThread();
-      return;
-    }
-    if (!window.EU_API || !window.EU_API.scanPath) {
-      guidedExtract.scan = null;
-      guidedExtract.scanError = 'Folder scan API is unavailable.';
-      renderThread();
-      return;
-    }
-    guidedExtract.scanning = true;
-    guidedExtract.scan = null;
-    guidedExtract.scanError = null;
-    guidedExtract.error = null;
-    renderThread();
-    window.EU_API.scanPath(path, null).then(r => {
-      guidedExtract.scanning = false;
-      if (r && r.ok) {
-        guidedExtract.path = r.path || path;
-        guidedExtract.scan = r;
-        guidedExtract.scanError = null;
-        setVal({ data: (r.db || 'local ICU') + ' · ' + (r.source || 'source') });
-      } else {
-        guidedExtract.scan = r || null;
-        guidedExtract.scanError = (r && (r.error || r.reason)) || 'Could not recognize this folder.';
-      }
-      renderThread();
-      scheduleGuidedSlotSave('scan_extraction_folder');
-    }).catch(err => {
-      guidedExtract.scanning = false;
-      guidedExtract.scan = null;
-      guidedExtract.scanError = err.message || String(err);
-      renderThread();
-      scheduleGuidedSlotSave('scan_extraction_folder_error');
-    });
-  }
-  function registerGuidedModuleExport() {
-    const guidedExtract = EXTRACT.state();
-    if (!guidedExtract || !guidedExtract.path || !window.EU_API || !window.EU_API.registerWorkspaceSource) return;
-    guidedExtract.error = null;
-    window.EU_API.registerWorkspaceSource(guidedExtract.path, { active: true, crossdb: true, label: 'Guided selected export' })
-      .then(() => {
-        guidedExtract.result = { out_dir: guidedExtract.path, total_rows: null, files_written: null };
-        guidedExtract.registered = true;
-        setVal({ data: 'registered export', extract: 'already exported' });
-        markThrough('review', 'active');
-        renderThread();
-        scheduleGuidedSlotSave('register_module_export');
-      })
-      .catch(err => {
-        guidedExtract.error = err.message || String(err);
-        renderThread();
-        scheduleGuidedSlotSave('register_module_export_error');
-      });
-  }
-  function runGuidedExtractionJob() {
-    const guidedExtract = EXTRACT.state();
-    if (!guidedExtract || guidedExtract.running) return;
-    if (!sourceReadyForGuidedExtraction()) {
-      guidedExtract.error = 'Analyze a prepared local ICU data folder before running extraction.';
-      renderThread();
-      return;
-    }
-    if (!guidedExtract.modules.length) {
-      guidedExtract.error = 'Select at least one feature module before running.';
-      renderThread();
-      return;
-    }
-    if (!window.EU_API || !window.EU_API.startExtractionJob || !window.EventSource) {
-      guidedExtract.error = 'Extraction backend or browser event stream is unavailable.';
-      renderThread();
-      return;
-    }
-    guidedExtract.running = true;
-    guidedExtract.error = null;
-    guidedExtract.result = null;
-    guidedExtract.progress = null;
-    renderThread();
-    const scan = guidedExtract.scan || {};
-    window.EU_API.startExtractionJob({
-      path: guidedExtract.path,
-      database: scan.db_key || 'miiv',
-      modules: guidedExtract.modules.slice(),
-      format: guidedExtract.format,
-      merge: guidedExtract.merge,
-      max_patients: guidedExtract.maxPatients,
-      out_dir: (guidedExtract.exportDir || '').trim() || undefined,
-      cohort: guidedExtractionCohortContract(),
-    }).then(r => {
-      guidedExtract.jobId = r.job_id;
-      renderThread();
-      scheduleGuidedSlotSave('start_extraction_job');
-      const es = new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events');
-      es.onmessage = ev => {
-        let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-        if (m.type === 'progress') {
-          guidedExtract.progress = m;
-          renderThread();
-          return;
-        }
-        if (m.type === 'end') {
-          try { es.close(); } catch (e) {}
-          guidedExtract.running = false;
-          if (m.status === 'done') {
-            guidedExtract.result = m.result || {};
-            window.EU_LAST_EXPORT = guidedExtract.result;
-            const out = guidedExtract.result.out_dir;
-            if (out && window.EU_API && window.EU_API.registerWorkspaceSource) {
-              window.EU_API.registerWorkspaceSource(out, { active: true, crossdb: true, label: 'Guided export' })
-                .then(() => { guidedExtract.registered = true; renderAside(); })
-                .catch(err => { console.warn('[EasyICU] guided export registry update failed:', err); });
-            }
-            setVal({ extract: 'done', data: 'Guided export' });
-            markThrough('review', 'active');
-          } else {
-            guidedExtract.error = guidedJobEndError(m) || 'Extraction failed.';
-          }
-          renderThread();
-          scheduleGuidedSlotSave('finish_extraction_job');
-        }
-      };
-      es.onerror = () => {
-        try { es.close(); } catch (e) {}
-        guidedExtract.running = false;
-        guidedExtract.error = 'Extraction event stream stopped before completion.';
-        renderThread();
-        scheduleGuidedSlotSave('extraction_event_stream_error');
-      };
-    }).catch(err => {
-      guidedExtract.running = false;
-      guidedExtract.error = err.message || String(err);
-      renderThread();
-      scheduleGuidedSlotSave('start_extraction_job_error');
-    });
-  }
-
   /* ============== inline native review: patient + cohort + KM ============== */
   function resetGuidedReviewState() {
     guidedReview = {
@@ -2172,7 +1915,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (!host) return;
     host.innerHTML = thread.map(t => {
       if (t.typing) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble"><div class="typing"><span></span><span></span><span></span></div></div></div></div>`;
-      if (t.guidedExtraction) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedExtractionCard()}</div></div>`;
+      if (t.guidedExtraction) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${EXTRACT.renderCard()}</div></div>`;
       if (t.guidedReview) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedReviewCard()}</div></div>`;
       if (t.guidedAgent) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedAgentCard()}</div></div>`;
       if (t.guidedIdeaApiSetup) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${IDEA.renderGuidedIdeaApiSetupCard()}</div></div>`;
@@ -3007,7 +2750,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     if (goal === 'data_extraction') {
-      startGuidedExtractionFlow(label || guidedGoalMeta(goal).label_en);
+      EXTRACT.start(label || guidedGoalMeta(goal).label_en);
       return;
     }
     if (goal === 'review_data') {
@@ -3946,8 +3689,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
       const shell = root.querySelector('.gd-shell');
       shell.addEventListener('click', (e) => {
-        const guidedExtract = EXTRACT.state();
-        const guidedDesign = EXTRACT.design();
         const folderToggle = e.target.closest('[data-folder-menu-toggle]');
         if (folderToggle) {
           guidedFolderMenuOpen = !guidedFolderMenuOpen;
@@ -4059,93 +3800,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           chooseGuidedGoal(guidedGoalEl.dataset.guidedGoal, stripText(guidedGoalEl.textContent));
           return;
         }
-        const gxCohort = e.target.closest('[data-gx-cohort]');
-        if (gxCohort && guidedExtract) {
-          guidedExtract.cohort = gxCohort.dataset.gxCohort || 'adult_first';
-          guidedExtract.error = null;
-          renderThread();
-          scheduleGuidedSlotSave('set_extraction_cohort');
-          return;
-        }
-        const gxModule = e.target.closest('[data-gx-module]');
-        if (gxModule && guidedExtract) {
-          const key = gxModule.dataset.gxModule;
-          guidedExtract.error = null;
-          if (guidedExtract.modules.includes(key)) guidedExtract.modules = guidedExtract.modules.filter(m => m !== key);
-          else guidedExtract.modules.push(key);
-          renderThread();
-          scheduleGuidedSlotSave('toggle_extraction_module');
-          return;
-        }
-        const gxSet = e.target.closest('[data-gx-module-set]');
-        if (gxSet && guidedExtract) {
-          guidedExtract.error = null;
-          updateGuidedExtractionModules(gxSet.dataset.gxModuleSet);
-          renderThread();
-          scheduleGuidedSlotSave('set_extraction_modules');
-          return;
-        }
-        const gxFormat = e.target.closest('[data-gx-format]');
-        if (gxFormat && guidedExtract) {
-          guidedExtract.format = gxFormat.dataset.gxFormat || 'parquet';
-          guidedExtract.error = null;
-          renderThread();
-          scheduleGuidedSlotSave('set_extraction_format');
-          return;
-        }
-        const gxMax = e.target.closest('[data-gx-max]');
-        if (gxMax && guidedExtract) {
-          guidedExtract.maxPatients = gxMax.dataset.gxMax === 'all' ? null : Number(gxMax.dataset.gxMax || 500);
-          guidedExtract.error = null;
-          renderThread();
-          scheduleGuidedSlotSave('set_extraction_max_patients');
-          return;
-        }
-        const gxGoto = e.target.closest('[data-gx-goto-step]');
-        if (gxGoto && guidedExtract) {
-          goGuidedExtractStep(gxGoto.dataset.gxGotoStep);
-          return;
-        }
-        if (e.target.closest('[data-gx-step-next]')) { stepGuidedExtract(1); return; }
-        if (e.target.closest('[data-gx-step-back]')) { stepGuidedExtract(-1); return; }
-        if (e.target.closest('[data-gx-modules-expand]') && guidedExtract) {
-          guidedExtract.modulesExpanded = !guidedExtract.modulesExpanded;
-          renderThread();
-          return;
-        }
-        const gxOutcome = e.target.closest('[data-gx-outcome]');
-        if (gxOutcome && guidedDesign) {
-          guidedDesign.outcome = gxOutcome.dataset.gxOutcome || '';
-          renderThread();
-          scheduleGuidedSlotSave('set_study_outcome');
-          return;
-        }
-        const gxWindow = e.target.closest('[data-gx-window]');
-        if (gxWindow && guidedDesign) {
-          guidedDesign.window = gxWindow.dataset.gxWindow || 'whole_stay';
-          renderThread();
-          scheduleGuidedSlotSave('set_study_window');
-          return;
-        }
-        const gxComparator = e.target.closest('[data-gx-comparator]');
-        if (gxComparator && guidedDesign) {
-          guidedDesign.comparator = gxComparator.dataset.gxComparator || 'none';
-          renderThread();
-          scheduleGuidedSlotSave('set_study_comparator');
-          return;
-        }
-        if (e.target.closest('[data-gx-analyze]')) {
-          scanGuidedExtractionPath();
-          return;
-        }
-        if (e.target.closest('[data-gx-use-export]')) {
-          registerGuidedModuleExport();
-          return;
-        }
-        if (e.target.closest('[data-gx-run]')) {
-          runGuidedExtractionJob();
-          return;
-        }
+        if (EXTRACT.handleClick(e.target)) return;
         if (e.target.closest('[data-gr-refresh]')) {
           loadGuidedReviewData();
           return;
@@ -4586,35 +4241,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       });
 
       shell.addEventListener('input', (e) => {
-        const guidedExtract = EXTRACT.state();
-        const guidedDesign = EXTRACT.design();
-        const gxPath = e.target.closest('[data-gx-path]');
-        if (gxPath && guidedExtract) {
-          guidedExtract.path = gxPath.value;
-          guidedExtract.scan = null;
-          guidedExtract.scanError = null;
-          guidedExtract.error = null;
-          scheduleGuidedSlotSave('edit_extraction_path');
-          return;
-        }
-        const gxExportDir = e.target.closest('[data-gx-exportdir]');
-        if (gxExportDir && guidedExtract) {
-          guidedExtract.exportDir = gxExportDir.value;
-          scheduleGuidedSlotSave('edit_export_destination');
-          return;
-        }
-        const gxOutcomeCustom = e.target.closest('[data-gx-outcome-custom]');
-        if (gxOutcomeCustom && guidedDesign) {
-          guidedDesign.outcomeCustom = gxOutcomeCustom.value;
-          scheduleGuidedSlotSave('edit_study_outcome_custom');
-          return;
-        }
-        const gxComparatorCustom = e.target.closest('[data-gx-comparator-custom]');
-        if (gxComparatorCustom && guidedDesign) {
-          guidedDesign.comparatorCustom = gxComparatorCustom.value;
-          scheduleGuidedSlotSave('edit_study_comparator_custom');
-          return;
-        }
+        if (EXTRACT.handleInput(e.target)) return;
         const gaQuestion = e.target.closest('[data-ga-question]');
         if (gaQuestion && guidedAgent) {
           guidedAgent.question = gaQuestion.value;
@@ -4746,7 +4373,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }
     if (currentId === 'frontdoor' && isGuidedExtractionIntent(v)) {
       if (requireGuidedProjectMemory('data_extraction', v)) return;
-      startGuidedExtractionFlow(v);
+      EXTRACT.start(v);
       return;
     }
     if (currentId === 'frontdoor' && isGuidedReviewIntent(v)) {
