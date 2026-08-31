@@ -80,8 +80,7 @@ from .tool_catalog import (
 )
 from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
 from .workflow import (
-    build_research_workflow_snapshot,
-    registered_export_matches_study,
+    build_project_workflow_projection,
 )
 
 def _bounded_model_text(value: Any, limit: int = 1_200) -> str:
@@ -1771,31 +1770,11 @@ def _workflow_snapshot(
     *,
     study_override: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    study = (
-        dict(study_override)
-        if study_override is not None
-        else _bound_context(context.session.binding)
+    projection = build_project_workflow_projection(
+        study_context_id=context.session.binding.study_context_id,
+        study_override=study_override,
     )
-    registry = sources.load_registry()
-    active_job = None
-    if study and study.get("active_job_id"):
-        job = jobs.MANAGER.get(str(study["active_job_id"]))
-        active_job = project_job(job.snapshot() if job else None)
-    rows = _run_rows(context)
-    latest_run = project_run_row(rows[0]) if rows else None
-    plan_review_authority = (
-        agent_pipeline_runs.pending_review(latest_run.get("run_id"))
-        if latest_run
-        else None
-    )
-    snapshot = build_research_workflow_snapshot(
-        study=study,
-        active_export_present=registered_export_matches_study(study, registry),
-        active_job=active_job,
-        latest_run=latest_run,
-        plan_review_authority=plan_review_authority,
-    )
-    return snapshot.model_dump(mode="json")
+    return projection.workflow.model_dump(mode="json")
 
 
 def _inspect_workflow(
