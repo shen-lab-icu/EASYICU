@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -22,7 +23,12 @@ _CONFIG_PATH = state_paths.state_root() / "webserver_study_contexts.json"
 _LOCK = threading.RLock()
 
 _MAX_LISTED_CONTEXTS = 80
-_MAX_STORED_CONTEXTS = 1000
+# The byte budget below is the authoritative persistence bound. A lower count
+# cap stranded otherwise-valid local projects once routine replay/testing had
+# accumulated 1,000 small metadata-only contexts, even though the store still
+# had ample space. Keep a high secondary cardinality guard without evicting or
+# deleting history; the 4 MiB serialized-size gate remains fail-closed.
+_MAX_STORED_CONTEXTS = 4000
 _MAX_COLLECTION_ITEMS = 64
 _MAX_NESTED_TEXT = 500
 _MAX_PATH_LENGTH = 4096
@@ -2124,6 +2130,185 @@ def scientific_configuration_sha256(context: Dict[str, Any]) -> str:
     )
 
 
+def restore_turn_configuration_snapshot(
+    context_id: str,
+    snapshot: Mapping[str, Any],
+    *,
+    expected_revision: int,
+) -> Dict[str, Any]:
+    """Restore the scientific state captured before one Copilot user turn.
+
+    Pi keeps the path-free setup receipt inside the private user message.  A
+    conversation branch may therefore move backwards without making Pi the
+    scientific owner: this function validates that receipt, resolves its data
+    source only against the current Host-owned source, and commits a new CAS
+    revision.  Server-issued literature and cohort-consent receipts are cleared
+    because replaying an old receipt under a new revision would mint authority.
+    """
+
+    clean_id = _identifier(context_id, field="id")
+    if not isinstance(snapshot, Mapping):
+        raise StudyContextError(
+            {"error": "study_turn_snapshot_required", "study_context_id": clean_id}
+        )
+    if snapshot.get("schema_version") != "easyicu.pi-turn-study-snapshot/1":
+        raise StudyContextError(
+            {
+                "error": "study_turn_snapshot_schema_unsupported",
+                "study_context_id": clean_id,
+            }
+        )
+    snapshot_id = _identifier(
+        snapshot.get("study_context_id"), field="study_context_id"
+    )
+    if snapshot_id != clean_id:
+        raise StudyContextError(
+            {
+                "error": "study_turn_snapshot_context_mismatch",
+                "study_context_id": clean_id,
+                "snapshot_study_context_id": snapshot_id,
+            }
+        )
+    source_revision = snapshot.get("source_revision")
+    if (
+        isinstance(source_revision, bool)
+        or not isinstance(source_revision, int)
+        or source_revision < 0
+        or source_revision > expected_revision
+    ):
+        raise StudyContextError(
+            {
+                "error": "study_turn_snapshot_revision_invalid",
+                "study_context_id": clean_id,
+                "source_revision": source_revision,
+                "current_revision": expected_revision,
+            }
+        )
+    configuration = snapshot.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise StudyContextError(
+            {
+                "error": "study_turn_snapshot_configuration_invalid",
+                "study_context_id": clean_id,
+            }
+        )
+    current = get_context(clean_id)
+    if current is None:
+        raise StudyContextError(
+            {"error": "study_context_not_found", "study_context_id": clean_id}
+        )
+    current_revision = int(current.get("revision") or 0)
+    if current_revision != expected_revision:
+        raise StudyContextError(
+            {
+                "error": "study_context_revision_conflict",
+                "study_context_id": clean_id,
+                "expected_revision": expected_revision,
+                "current_revision": current_revision,
+            }
+        )
+
+    safe_source = configuration.get("data_source")
+    safe_source = safe_source if isinstance(safe_source, Mapping) else {}
+    current_source = current.get("data_source")
+    current_source = current_source if isinstance(current_source, Mapping) else {}
+    restored_source: Dict[str, Any] = {}
+    if safe_source:
+        if not current_source:
+            raise StudyContextError(
+                {
+                    "error": "study_turn_snapshot_source_mismatch",
+                    "study_context_id": clean_id,
+                }
+            )
+        for field in ("database", "label", "source_id", "id", "reference_release"):
+            expected = str(safe_source.get(field) or "").strip()
+            actual = str(current_source.get(field) or "").strip()
+            if expected and expected != actual:
+                raise StudyContextError(
+                    {
+                        "error": "study_turn_snapshot_source_mismatch",
+                        "study_context_id": clean_id,
+                        "field": f"data_source.{field}",
+                    }
+                )
+        path_hash = str(safe_source.get("path_hash") or "").strip()
+        source_id = str(
+            safe_source.get("source_id") or safe_source.get("id") or ""
+        ).strip()
+        if path_hash:
+            current_path = str(current_source.get("path") or "").strip()
+            current_hash = (
+                hashlib.sha256(current_path.encode("utf-8")).hexdigest()[:16]
+                if current_path
+                else ""
+            )
+            if not current_hash or not hmac.compare_digest(path_hash, current_hash):
+                raise StudyContextError(
+                    {
+                        "error": "study_turn_snapshot_source_mismatch",
+                        "study_context_id": clean_id,
+                        "field": "data_source.path_hash",
+                    }
+                )
+        elif not source_id:
+            raise StudyContextError(
+                {
+                    "error": "study_turn_snapshot_source_identity_missing",
+                    "study_context_id": clean_id,
+                }
+            )
+        restored_source = dict(current_source)
+
+    defaults: Dict[str, Any] = {
+        "question": "",
+        "purpose": "",
+        "data_source": restored_source,
+        "crossdb_selection": {},
+        "cohort": {},
+        "modules": [],
+        "outcome": "",
+        "primary_exposure": "",
+        "covariates": [],
+        "covariate_selection": "planner_selectable",
+        "covariate_rationales": {},
+        "covariate_temporal_roles": {},
+        "covariate_operationalizations": {},
+        "execution_concepts": {},
+        "analysis_design": {},
+        "sensitivity_specs": [],
+        "time_window": {},
+        "comparator": "",
+        "export_format": "",
+        "analysis_goal": "",
+        "confirmations": {},
+        # These authorities are not part of the path-free turn receipt.  More
+        # importantly, they are bound to exact earlier scopes/revisions.
+        "idea_handoff": {},
+        "literature_authority": {},
+        "cohort_eligibility_authority": {},
+    }
+    non_replayable_authorities = {
+        "idea_handoff",
+        "literature_authority",
+        "cohort_eligibility_authority",
+    }
+    for field in tuple(defaults):
+        if field == "data_source" or field in non_replayable_authorities:
+            continue
+        if field in configuration:
+            defaults[field] = configuration[field]
+    return upsert_context(
+        {"id": clean_id, **defaults},
+        active=True,
+        expected_revision=expected_revision,
+        require_revision=True,
+        lifecycle_write=False,
+        _server_literature_authority_write=True,
+        _server_cohort_eligibility_authority_write=True,
+    )
+
+
 __all__ = [
     "COHORT_ELIGIBILITY_FIELDS",
     "StudyContextError",
@@ -2144,6 +2329,7 @@ __all__ = [
     "normalize_covariate_operationalizations",
     "normalize_sensitivity_specs",
     "normalize_execution_concepts",
+    "restore_turn_configuration_snapshot",
     "validate_context_update",
     "literature_search_scope_sha256",
     "scientific_configuration_sha256",

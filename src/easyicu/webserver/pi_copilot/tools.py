@@ -2713,6 +2713,18 @@ _NESTED_STUDY_PATCH_FIELDS = frozenset(
     }
 )
 
+_COVARIATE_MODELING_ROLE_TOKENS = frozenset(
+    {
+        "binary",
+        "categorical",
+        "continuous",
+        "linear",
+        "nonlinear",
+        "nonlinear_continuous",
+        "ordinal",
+    }
+)
+
 
 def _message_explicitly_selects_first_stay(message: str) -> bool:
     """Return whether this user turn explicitly chooses one first ICU stay."""
@@ -2796,6 +2808,11 @@ def _message_explicitly_selects_primary_exposure(message: str) -> bool:
         for pattern in (
             r"主要暴露.*?(?:使用|采用|设为|定义为)",
             r"(?:确认|同意).*?主要暴露.*?(?:为|是|采用|使用)",
+            # Rendered decision buttons commonly put the chosen concept before
+            # the role: "确认将乳酸水平作为本研究的主要暴露".  That is the
+            # same explicit authority as "主要暴露采用乳酸水平" and must not
+            # loop back to another confirmation prompt.
+            r"(?:确认|同意).*?(?:作为|设为|定义为).*?(?:本研究的)?主要暴露",
             r"(?:使用|采用|设为).*?(?:sepsis|脓毒症).*?(?:定义|作为.*?暴露)",
             r"(?:sepsis|脓毒症).*?(?:定义|版本).*?(?:使用|采用)",
             r"不要使用.*?(?:sofa|sepsis|脓毒症)",
@@ -3478,9 +3495,29 @@ def _update_study_context(
         reject_sensitive_message(str(covariate))
     for rationale in (patch.get("covariate_rationales") or {}).values():
         reject_sensitive_message(str(rationale))
-    for operational in (
-        patch.get("covariate_operationalizations") or {}
-    ).values():
+    operationalizations = patch.get("covariate_operationalizations") or {}
+    invalid_operationalizations = sorted(
+        str(key)
+        for key, value in operationalizations.items()
+        if str(value or "").strip().casefold() in _COVARIATE_MODELING_ROLE_TOKENS
+    )
+    if invalid_operationalizations:
+        return _result(
+            context,
+            status="blocked",
+            code="study_covariate_operationalization_requires_column",
+            summary=(
+                "A covariate operationalization must be an exact materialized "
+                "analysis column, not a modeling role."
+            ),
+            owner="easyicu.webserver.study_contexts",
+            details={
+                "field": "covariate_operationalizations",
+                "covariates": invalid_operationalizations,
+                "reason": "modeling_role_is_not_a_materialized_column",
+            },
+        )
+    for operational in operationalizations.values():
         reject_sensitive_message(str(operational))
     for spec in patch.get("sensitivity_specs") or []:
         if isinstance(spec, Mapping):
@@ -5107,8 +5144,18 @@ def _run(
     params: Mapping[str, Any],
     *,
     plan_revision_source_run_id: str = "",
+    planner_start_mode: str = "auto",
 ) -> Dict[str, Any]:
     _require_args(params, allowed=("run_type", "llm_provider"))
+    planner_start_mode = str(planner_start_mode or "auto").strip().lower()
+    if planner_start_mode not in {"auto", "fresh", "resume_checkpoint"}:
+        return _result(
+            context,
+            status="blocked",
+            code="planner_start_mode_invalid",
+            summary="Choose a fresh plan or an explicitly validated Planner checkpoint.",
+            owner="easyicu.webserver.routes.agent",
+        )
     requested_run_type = str(params.get("run_type") or "").strip().lower()
     # The UI holds the user's one-turn intent outside the model.  When Pi uses
     # the tool's optional/default form, prefer the strongest action the user
@@ -5253,11 +5300,29 @@ def _run(
     # this adapter does not reconstruct its validation or JobManager behavior.
     from easyicu.webserver.routes.agent import submit_agent_run
 
-    development_resume_source_job_id = (
-        _development_resume_source_job_id(context, study)
-        if run_type == "full"
-        else ""
-    )
+    development_resume_source_job_id = ""
+    if (
+        run_type == "full"
+        and planner_start_mode != "fresh"
+        and not plan_revision_source_run_id
+    ):
+        development_resume_source_job_id = _development_resume_source_job_id(
+            context, study
+        )
+    if (
+        planner_start_mode == "resume_checkpoint"
+        and not development_resume_source_job_id
+    ):
+        return _result(
+            context,
+            status="blocked",
+            code="planner_checkpoint_not_available",
+            summary=(
+                "The unchanged study has no validated Planner checkpoint to "
+                "continue. Generate a fresh candidate plan instead."
+            ),
+            owner="easyicu.research_agent.planning.progressive_resume",
+        )
 
     try:
         submitted = submit_agent_run(
@@ -5272,6 +5337,11 @@ def _run(
                     "research_agent_pipeline"
                     if run_type == "full"
                     else "native_summary"
+                ),
+                **(
+                    {"planner_start_mode": planner_start_mode}
+                    if run_type == "full"
+                    else {}
                 ),
                 **(
                     {
@@ -5305,7 +5375,16 @@ def _run(
                 ),
             },
             account_environment=account_environment,
-            metadata_only_planning_authorized=run_type == "full",
+            # A normal Copilot run follows the source the researcher selected.
+            # The route keeps an unprepared source in Planner-canary mode, but
+            # a manifest-backed prepared package must produce the reviewed,
+            # execution-capable plan immediately.  Forcing every first click
+            # into a canary made the researcher generate essentially the same
+            # plan twice and, after a cohort decision, could send the retry
+            # back through the shorter preview-provider timeout.  The explicit
+            # low-level ``candidate_plan_only`` route remains available for
+            # callers that genuinely request a metadata-only preview.
+            metadata_only_planning_authorized=False,
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -5377,6 +5456,11 @@ def _run(
             # from being presented as the identity of the new job.
             "run_id_status": "pending_pipeline_start",
             **(
+                {"planner_start_mode": planner_start_mode}
+                if run_type == "full"
+                else {}
+            ),
+            **(
                 {
                     "development_resume_source_job_id": (
                         development_resume_source_job_id
@@ -5406,6 +5490,19 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
                 summary="Choose approved or rejected for the pending Research Agent plan.",
                 owner="easyicu.research_agent.pipeline",
             )
+        if decision == "approved":
+            study = _bound_context(context.session.binding)
+            if study and study.get("id"):
+                workflow = _workflow_snapshot(context, study_override=study)
+                if (
+                    str(workflow.get("next_action_code") or "")
+                    == "plan_execution_upgrade_required"
+                ):
+                    return _run(
+                        context,
+                        {"run_type": "full"},
+                        planner_start_mode="fresh",
+                    )
         grant_block = _consume_action(context, "provider_run")
         if grant_block is not None:
             return grant_block
@@ -5562,7 +5659,20 @@ def _cancel(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
 def _request_replan(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("reason",), required=("reason",))
+    _require_args(
+        params,
+        allowed=("reason", "strategy"),
+        required=("reason",),
+    )
+    strategy = str(params.get("strategy") or "fresh").strip().lower()
+    if strategy not in {"fresh", "resume_checkpoint"}:
+        return _result(
+            context,
+            status="blocked",
+            code="planner_start_mode_invalid",
+            summary="Choose a fresh plan or an explicitly validated Planner checkpoint.",
+            owner="easyicu.webserver.routes.agent",
+        )
     study = _bound_context(context.session.binding)
     latest = _select_run(context)
     artifacts = {
@@ -5636,18 +5746,10 @@ def _request_replan(
         # mutation of an unregistered nested pipeline artifact.
         # `_run` consumes the fresh provider grant and invalidates this turn
         # after submission.
-        source_run_id = ""
-        if (
-            review_declared
-            and "plan_scientific_changes_required" in pending_codes
-            and planned_digest
-            and planned_digest == current_digest
-        ):
-            source_run_id = str((latest or {}).get("run_id") or "")
         return _run(
             context,
             {"run_type": "full"},
-            plan_revision_source_run_id=source_run_id,
+            planner_start_mode=strategy,
         )
     return _result(
         context,

@@ -592,6 +592,129 @@ def test_scientific_configuration_digest_ignores_lifecycle_only_changes() -> Non
     )
 
 
+def test_turn_snapshot_restore_rewinds_scientific_state_but_preserves_source_path(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "prepared-miiv"
+    baseline = context_store.upsert_context(
+        {
+            "id": "study_branch_restore",
+            "question": "Is lactate associated with hospital mortality?",
+            "data_source": {
+                "path": str(source_path),
+                "label": "MIMIC-IV export",
+                "database": "miiv",
+            },
+            "covariates": [],
+            "covariate_selection": "planner_selectable",
+            "confirmations": {"extraction_completed": True},
+            "current_stage": "study_setup",
+        }
+    )
+    snapshot = {
+        "schema_version": "easyicu.pi-turn-study-snapshot/1",
+        "study_context_id": baseline["id"],
+        "source_revision": baseline["revision"],
+        "configuration": {
+            "question": baseline["question"],
+            "data_source": {
+                "label": "MIMIC-IV export",
+                "database": "miiv",
+                "path_hash": hashlib.sha256(
+                    str(source_path).encode("utf-8")
+                ).hexdigest()[:16],
+            },
+            "cohort": {},
+            "modules": [],
+            "outcome": "",
+            "primary_exposure": "",
+            "covariates": [],
+            "covariate_selection": "planner_selectable",
+            "confirmations": {"extraction_completed": True},
+            # Branch replay must not mint server-owned receipts from an old
+            # revision, even if the private turn payload contains them.
+            "cohort_eligibility_authority": {"forged": "old-revision"},
+        },
+    }
+    polluted = context_store.upsert_context(
+        {
+            "id": baseline["id"],
+            "covariates": ["age", "sex"],
+            "covariate_selection": "exact",
+            "covariate_rationales": {
+                "age": "Prespecified baseline demographic confounder.",
+                "sex": "Prespecified baseline demographic confounder.",
+            },
+            "covariate_temporal_roles": {
+                "age": "baseline_static",
+                "sex": "baseline_static",
+            },
+            "analysis_design": {
+                "analysis_family": "association_study",
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "model_based",
+            },
+            "current_stage": "review_blocked",
+        },
+        expected_revision=baseline["revision"],
+        require_revision=True,
+    )
+
+    restored = context_store.restore_turn_configuration_snapshot(
+        baseline["id"],
+        snapshot,
+        expected_revision=polluted["revision"],
+    )
+
+    assert restored["revision"] == polluted["revision"] + 1
+    assert restored["covariates"] == []
+    assert restored["covariate_selection"] == "planner_selectable"
+    assert restored["covariate_rationales"] == {}
+    assert restored["covariate_temporal_roles"] == {}
+    assert restored["analysis_design"] == {}
+    assert restored["data_source"]["path"] == str(source_path)
+    assert restored["confirmations"] == {"extraction_completed": True}
+    assert restored["cohort_eligibility_authority"] == {}
+    assert restored["current_stage"] == "review_blocked"
+
+
+def test_turn_snapshot_restore_fails_closed_when_source_identity_changed(
+    tmp_path: Path,
+) -> None:
+    created = context_store.upsert_context(
+        {
+            "id": "study_branch_source_conflict",
+            "data_source": {
+                "path": str(tmp_path / "new-source"),
+                "database": "miiv",
+            },
+        }
+    )
+    snapshot = {
+        "schema_version": "easyicu.pi-turn-study-snapshot/1",
+        "study_context_id": created["id"],
+        "source_revision": created["revision"],
+        "configuration": {
+            "data_source": {
+                "database": "miiv",
+                "path_hash": hashlib.sha256(
+                    str(tmp_path / "old-source").encode("utf-8")
+                ).hexdigest()[:16],
+            }
+        },
+    }
+
+    with pytest.raises(context_store.StudyContextError) as caught:
+        context_store.restore_turn_configuration_snapshot(
+            created["id"],
+            snapshot,
+            expected_revision=created["revision"],
+        )
+
+    assert caught.value.detail["error"] == "study_turn_snapshot_source_mismatch"
+    assert context_store.get_context(created["id"])["revision"] == created["revision"]
+
+
 def test_literature_scope_digest_excludes_receipt_but_not_scientific_changes() -> None:
     base = {
         "question": "Is Sepsis-3 associated with mortality?",
