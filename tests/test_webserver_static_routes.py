@@ -2296,6 +2296,7 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
     """Single-patient Time Series should show module-grouped per-feature charts,
     not a same-module multi-signal overlay."""
     viz_js = _static_js("screens-viz.js")
+    patient_domain_js = _static_js("screens-viz-patient.js")
     patient_charts_js = _static_js("screens-viz-patient-charts.js")
     patient_series_js = _static_js("screens-viz-patient-series.js")
     patient_css = _static_css("patient.css")
@@ -2328,10 +2329,10 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
     assert ".pt-matrix-details .table-scroll" in patient_css
     for unrelated_css in ("crossdb.css", "cohort.css", "patient-series.css"):
         assert ".pt-matrix-details .table-scroll" not in _static_css(unrelated_css)
-    assert "pt-matrix-details" in viz_js
-    assert "Exact value audit matrices" in viz_js
-    assert "精确值审计矩阵" in viz_js
-    assert "Data-table companion audit" in viz_js
+    assert "pt-matrix-details" in patient_domain_js
+    assert "Exact value audit matrices" in patient_domain_js
+    assert "精确值审计矩阵" in patient_domain_js
+    assert "Data-table companion audit" in patient_domain_js
 
 
 def test_native_patient_feature_catalog_has_a_dedicated_owner() -> None:
@@ -2809,6 +2810,7 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
 
 def test_native_patient_source_radios_are_real_controls() -> None:
     viz_js = _static_js("screens-viz.js")
+    patient_domain_js = _static_js("screens-viz-patient.js")
     patient_navigation_js = _static_js("screens-viz-patient-navigation.js")
     patient_tables_js = _static_js("screens-viz-patient-tables.js")
     patient_series_js = _static_js("screens-viz-patient-series.js")
@@ -2825,10 +2827,10 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     official_demo_sources_css = _static_css("official-demo-sources.css")
     index_html = _static_html("index.html")
 
-    assert 'data-datamode="real"' in viz_js
-    assert 'data-datamode="demo"' in viz_js
-    assert "Previously exported data" in viz_js
-    assert "Demo data" in viz_js
+    assert 'data-datamode="real"' in patient_domain_js
+    assert 'data-datamode="demo"' in patient_domain_js
+    assert "Previously exported data" in patient_domain_js
+    assert "Demo data" in patient_domain_js
     assert "loadPatientReviewSources" in api_js
     assert "/api/patient-review/sources" in api_js
     assert "loadPatientReviewEntities" in api_js
@@ -2837,52 +2839,52 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "/api/patient-review/entity" in api_js
     assert "loadPatientReviewTablePreview" in api_js
     assert "/api/patient-review/table-preview" in api_js
-    assert "loadPatientSources" in viz_js
-    assert "Ready to load local export" in viz_js
-    assert "No registered export is active" in viz_js
+    assert "loadPatientSources" in patient_domain_js
+    assert "Ready to load local export" in patient_domain_js
+    assert "No registered export is active" in patient_domain_js
     assert "Reading bounded Patient Review from local export" in viz_js
     assert "const wsMatchesActive = ws" in viz_js
-    assert "const patientSource = active === 'patient' ? patientActiveSourceMeta() : null" in viz_js
-    assert "route: 'patient'" in viz_js
+    assert "const patientSource = active === 'patient' ? patientReview.activeSourceMeta() : null" in viz_js
+    assert "route: 'patient'" in patient_domain_js
     assert "route: 'cohort'" in viz_js
     assert "route: 'crossdb'" in viz_js
-    assert "skeletonWorkspace(window.EU_DATA)" in viz_js
-    assert "full cohort', '完整队列'" in viz_js
-    assert "bounded browser review', '浏览器有界审阅'" in viz_js
-    assert "data-patient-export" in viz_js
-    assert "bounded_patient_review_drilldown" in viz_js
-    assert "data-pt-table-module" in viz_js
-    assert "data-pt-page-prev" in viz_js
-    assert "data-pt-page-next" in viz_js
-    assert "data-pt-page-size" in viz_js
+    assert "skeletonWorkspace(window.EU_DATA)" in patient_domain_js
+    assert "full cohort', '完整队列'" in patient_domain_js
+    assert "bounded browser review', '浏览器有界审阅'" in patient_domain_js
+    assert "data-patient-export" in patient_domain_js
+    assert "bounded_patient_review_drilldown" in patient_domain_js
+    assert "data-pt-table-module" in patient_domain_js
+    assert "data-pt-page-prev" in patient_domain_js
+    assert "data-pt-page-next" in patient_domain_js
+    assert "data-pt-page-size" in patient_domain_js
     assert "table_page" in patient_tables_js
     assert "table_page_size" in patient_tables_js
     assert "loadPatientReviewTablePreview" in patient_tables_js
     assert "loadPatientReviewTablePreview" not in viz_js
     assert "loadPatientReviewEntity" in patient_navigation_js
     assert "loadPatientReviewEntity" not in viz_js
-    assert "Pseudonymous entity" in viz_js
-    assert "伪匿名实体" in viz_js
-    assert "display_column_labels" in viz_js
-    assert "label_i18n" in viz_js
-    assert "patientModuleLabel" in viz_js
-    assert "patientColumnLabel(c, activePreview)" in viz_js
-    assert "Module table overview" in viz_js
-    assert "模块表格概览" in viz_js
-    assert "Direct clinical identifiers stay on disk." in viz_js
-    assert "data-patient-table-preview" in viz_js
-    assert "data-patient-feature-matrix" in viz_js
-    assert "patientFeatureMatrix" in viz_js
-    assert "Exact value audit matrices" in viz_js
-    assert "精确值审计矩阵" in viz_js
-    assert "Rows are time windows; columns are selected features." in viz_js
-    assert "行是时间窗口；列是已选特征。" in viz_js
+    assert "Pseudonymous entity" in patient_domain_js
+    assert "伪匿名实体" in patient_domain_js
+    assert "display_column_labels" in patient_domain_js
+    assert "label_i18n" in patient_domain_js
+    assert "patientModuleLabel" in patient_domain_js
+    assert "patientColumnLabel(c, activePreview)" in patient_domain_js
+    assert "Module table overview" in patient_domain_js
+    assert "模块表格概览" in patient_domain_js
+    assert "Direct clinical identifiers stay on disk." in patient_domain_js
+    assert "data-patient-table-preview" in patient_domain_js
+    assert "data-patient-feature-matrix" in patient_domain_js
+    assert "patientFeatureMatrix" in patient_domain_js
+    assert "Exact value audit matrices" in patient_domain_js
+    assert "精确值审计矩阵" in patient_domain_js
+    assert "Rows are time windows; columns are selected features." in patient_domain_js
+    assert "行是时间窗口；列是已选特征。" in patient_domain_js
     # Patient Overview is not a second time-series page: it renders a one-entity
     # clinical profile, category-level latest/ever signals, and module
     # availability. Curves stay in the Time Series tab.
     assert "data-patient-category-review" in patient_overview_js
-    assert "patientOverviewWorkbench" in viz_js
-    assert "EU_PATIENT_OVERVIEW.renderOverview" in viz_js
+    assert "patientOverviewWorkbench" in patient_domain_js
+    assert "EU_PATIENT_OVERVIEW.renderOverview" in patient_domain_js
     assert "patientCategoryReview" not in viz_js
     assert "function patientConceptChart(" not in viz_js
     assert "function patientCategoryCard(" not in viz_js
@@ -2913,22 +2915,22 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "Post-cleaning duplicate-time rate" in patient_overview_js
     assert "清洗后重复时间戳率" in patient_overview_js
     assert "renderQualityAudit" in patient_overview_js
-    assert "renderQualityAudit" in viz_js
+    assert "renderQualityAudit" in patient_domain_js
     assert "value == null || value === '' || typeof value === 'boolean'" in patient_overview_js
     assert "coverage across all selected entities" not in patient_overview_js
-    assert 'data-patient-module-coverage="${hasCoverage ? \'computed\' : \'not-computed\'}"' in viz_js
+    assert 'data-patient-module-coverage="${hasCoverage ? \'computed\' : \'not-computed\'}"' in patient_domain_js
     assert "q.coverage_pct == null ? 0" not in viz_js
-    assert "metricKind === 'event_rate'" in viz_js
-    assert "metricKind === 'exposure_rate'" in viz_js
+    assert "metricKind === 'event_rate'" in patient_domain_js
+    assert "metricKind === 'exposure_rate'" in patient_domain_js
     assert "Selected entity trend tiles" not in viz_js
-    assert "Table preview" in viz_js
-    assert "表格预览" in viz_js
-    assert "table_previews" in viz_js
-    assert "pseudonymous entity tokens" in viz_js
-    assert "data-patient-eligibility-flow" in viz_js
-    assert "patientEligibilityFlow" in viz_js
-    assert "Eligibility flow (ICU stays)" in viz_js
-    assert "入组筛选流程（ICU 住院）" in viz_js
+    assert "Table preview" in patient_domain_js
+    assert "表格预览" in patient_domain_js
+    assert "table_previews" in patient_domain_js
+    assert "pseudonymous entity tokens" in patient_domain_js
+    assert "data-patient-eligibility-flow" in patient_domain_js
+    assert "patientEligibilityFlow" in patient_domain_js
+    assert "Eligibility flow (ICU stays)" in patient_domain_js
+    assert "入组筛选流程（ICU 住院）" in patient_domain_js
     assert "Sepsis-3 cohort" in demo_drilldown_js
     assert "Sepsis-3 脓毒症队列" in demo_drilldown_js
     assert "suspected infection + SOFA signal" in demo_drilldown_js
@@ -2936,9 +2938,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "Review window available" not in viz_js
     assert "可用审阅时间窗" not in viz_js
     assert "cohort_attrition_metadata_only" in demo_drilldown_js
-    assert "patient-flow-diagram" in viz_js
-    assert "patient-flow-node" in viz_js
-    assert "patient-flow-side-link" in viz_js
+    assert "patient-flow-diagram" in patient_domain_js
+    assert "patient-flow-node" in patient_domain_js
+    assert "patient-flow-side-link" in patient_domain_js
     assert ".patient-table-scroll" in patient_tables_css
     assert ".patient-preview-table" in patient_tables_css
     assert ".patient-table-pager" in patient_tables_css
@@ -2982,14 +2984,18 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     )
     assert "js/screens-viz-patient-tables.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-patient-overview.js?v=20260830-viz-final1" in index_html
+    assert "js/screens-viz-patient.js?v=20260831-domain-owner1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
     assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
+        "js/screens-viz-patient.js?"
+    )
+    assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
     assert "js/screens-viz.js?v=20260830-viz-final1" in index_html
-    assert "bounded browser review', '浏览器有界审阅" in viz_js
+    assert "bounded browser review', '浏览器有界审阅" in patient_domain_js
     assert "function buildPatientDrilldown" in demo_drilldown_js
     assert "function demoTablePreviewRowContext" in demo_drilldown_js
     assert "const timepointsPerEntity = 12" in demo_drilldown_js
@@ -2999,13 +3005,13 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "row_cap: previewRows.length" in demo_drilldown_js
     assert "function buildPatientDrilldown" not in viz_js
     assert "function demoTablePreviewRowContext" not in viz_js
-    assert "Seeded observations" in viz_js
+    assert "Seeded observations" in patient_domain_js
     # Patient time-series stays per-feature, but is grouped by the backend module
     # lanes instead of a fixed vitals-only shortlist.
-    assert "function patientVitalSmallMultiples(" in viz_js
-    assert "EU_PATIENT_SERIES.renderModulePanels" in viz_js
-    assert "EU_PATIENT_SERIES.renderTimeSeriesWorkspace" in viz_js
-    assert "data-patient-series-mode" in viz_js
+    assert "function patientVitalSmallMultiples(" in patient_domain_js
+    assert "EU_PATIENT_SERIES.renderModulePanels" in patient_domain_js
+    assert "EU_PATIENT_SERIES.renderTimeSeriesWorkspace" in patient_domain_js
+    assert "data-patient-series-mode" in patient_domain_js
     assert "function renderModulePanels(" in patient_series_js
     assert "function renderTimeSeriesWorkspace(" in patient_series_js
     assert "function numericSamples(sig)" in patient_series_js
@@ -3042,7 +3048,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "source.status.active" in viz_js
     assert "demoSourceOwner.rememberOpened(sourceId)" in viz_js
     assert "function activeMetadata(registrySources, activePath)" in demo_sources_js
-    assert "data-patient-official-demo" in viz_js
+    assert "data-patient-official-demo" in patient_domain_js
     assert "data-gen" in demo_sources_js
     assert "window.EU_OFFICIAL_DEMO_SOURCES = owner" not in viz_js
     assert ".official-demo-sources" in official_demo_sources_css
@@ -3065,13 +3071,13 @@ def test_native_patient_source_radios_are_real_controls() -> None:
         "payload_scope: 'clinically_constrained_synthetic_demo_no_real_patient_rows'"
         in demo_drilldown_js
     )
-    assert "Clinically constrained synthetic fallback ready" in viz_js
-    assert "synthetic entities" in viz_js
+    assert "Clinically constrained synthetic fallback ready" in patient_domain_js
+    assert "synthetic entities" in patient_domain_js
     assert "10 stays · 19 modules · 0 errors" not in viz_js
     assert "Fast demo profile" not in viz_js
     assert (
         "fmtInt(m.review_features != null ? m.review_features : m.feature_count)"
-        in viz_js
+        in patient_domain_js
     )
     assert "fmtInt(m.observed_features != null ? m.observed_features" not in viz_js
     assert "window.__euVizResetForDataMode" in viz_js
@@ -3775,6 +3781,7 @@ def test_destination_names_consistent_across_sidebar_crumb_and_page() -> None:
     made the same screen read as three different places)."""
     app_js = _static_js("app.js")
     viz_js = _static_js("screens-viz.js")
+    patient_domain_js = _static_js("screens-viz-patient.js")
     help_js = _static_js("screens-help.js")
     dock_js = _static_js("copilot-dock.js")
     series_js = _static_js("screens-viz-patient-series.js")
@@ -3786,13 +3793,13 @@ def test_destination_names_consistent_across_sidebar_crumb_and_page() -> None:
         in app_js
     )
     # the retired aliases must not resurface anywhere user-facing
-    for src in (viz_js, help_js, dock_js, series_js):
+    for src in (viz_js, patient_domain_js, help_js, dock_js, series_js):
         assert "患者明细" not in src
         assert "跨库基准" not in src
     # the patient idle page head identifies itself as the destination, not as a
     # generic "Quick visualization" tool
-    assert "${t('Patient Review', '患者审阅')}" in viz_js
-    assert "'Quick visualization', '快速可视化'" not in viz_js
+    assert "${t('Patient Review', '患者审阅')}" in patient_domain_js
+    assert "'Quick visualization', '快速可视化'" not in patient_domain_js
     # cohort keeps one constant page title; the load-state moves to the lead
     assert (
         "<h1 style=\"margin-top:0;\">${t('Cohort Statistics', '队列统计')}</h1>"
@@ -3815,11 +3822,13 @@ def test_topbar_actions_only_appear_once_workspace_is_loaded() -> None:
     """Before any data is loaded the page body owns the single primary action;
     a context-free topbar "Render"/"Run" button is noise that confused users."""
     viz_js = _static_js("screens-viz.js")
+    patient_domain_js = _static_js("screens-viz-patient.js")
     setup_js = _static_js("screens-viz-crossdb-setup.js")
     # the pre-load Render button is gone from the patient screen
-    assert "${t('Render', '渲染')}" not in viz_js
+    assert "${t('Render', '渲染')}" not in patient_domain_js
     # each viz actionHtml falls through to an empty string when not loaded
-    assert viz_js.count("Topbar actions only exist once") == 2
+    assert viz_js.count("Topbar actions only exist once") == 1
+    assert patient_domain_js.count("Topbar actions only exist once") == 1
     assert "function actionHtml(config)" in setup_js
     assert "if (!loaded) return '';" in setup_js
     assert "${rawLoaded ? '' : `<button" in setup_js
@@ -3866,15 +3875,16 @@ def test_demo_mode_is_unmistakable_and_single_source_of_truth() -> None:
     )
     # demo mode no longer ships fake decorative sliders on the patient setup card
     viz_js = _static_js("screens-viz.js")
+    patient_domain_js = _static_js("screens-viz-patient.js")
     demo_sources_js = _static_js("screens-viz-patient-demo-sources.js")
-    assert "数据时长（小时）" not in viz_js
-    assert "选择官方去标识化 ICU 演示数据" in viz_js
+    assert "数据时长（小时）" not in patient_domain_js
+    assert "选择官方去标识化 ICU 演示数据" in patient_domain_js
     assert "官方公开 ICU 演示数据" in demo_sources_js
     assert "加载合成兜底" in demo_sources_js
     assert "processing_mode: 'real'" in demo_sources_js
-    assert "const realMode = dataMode === 'real';" in viz_js
-    assert "localStorage.setItem('easyicu_home_data', 'real')" not in viz_js[
-        viz_js.index("openPrepared: sourceId =>") : viz_js.index(
+    assert "const realMode = dataMode === 'real';" in patient_domain_js
+    assert "localStorage.setItem('easyicu_home_data', 'real')" not in patient_domain_js[
+        patient_domain_js.index("openPrepared: sourceId =>") : patient_domain_js.index(
             "root.querySelectorAll('.radio[data-datamode]')"
         )
     ]

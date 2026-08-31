@@ -53,7 +53,9 @@ OVER_BUDGET_JS = {
     # 6000 before the Idea Mining sub-flow moved to screens-guided-idea.js,
     # 4961 before its session-slot serialisation followed it.
     "screens-guided.js": 4906,
-    "screens-viz.js": 4947,
+    # 4947 before Patient Review state, effects, render, and route dispatch
+    # moved to screens-viz-patient.js.
+    "screens-viz.js": 3624,
     # Project setup/run initiation moved to Guided Copilot; this route is now
     # a project monitor only.
     "screens-agent.js": 1974,
@@ -579,6 +581,35 @@ def test_guided_review_owner_contains_state_effects_and_dom_transitions() -> Non
     assert "REVIEW.handleClick(e.target)" in shell
     assert "REVIEW.renderCard()" in shell
     assert "REVIEW.slotSnapshot()" in shell
+
+
+def test_patient_review_owner_contains_state_effects_render_and_route() -> None:
+    shell = (STATIC / "js" / "screens-viz.js").read_text(encoding="utf-8")
+    owner = (STATIC / "js" / "screens-viz-patient.js").read_text(encoding="utf-8")
+
+    assert "const patientReview = window.EU_VIZ_PATIENT;" in shell
+    assert "let patientView = 'idle';" in owner
+    assert "let patientTab = 'tables';" in owner
+    assert "let patientSeriesMode = 'lanes';" in owner
+    assert "S.patient = {" in owner
+    assert "patientReview.init({" in shell
+
+    for marker in (
+        "function loadRealPatient(",
+        "function patientTabBody(",
+        "function bindPatientSeriesControls(",
+        "data-patient-export",
+        "data-patient-use-real",
+    ):
+        assert marker in owner, marker
+        assert marker not in shell, marker
+
+    for state_declaration in (
+        "let patientView =",
+        "let patientTab =",
+        "let patientSeriesMode =",
+    ):
+        assert state_declaration not in shell
 
 
 def test_owner_js_files_do_not_grow_past_their_ratchet() -> None:
