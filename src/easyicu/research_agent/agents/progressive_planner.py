@@ -110,6 +110,13 @@ from .progressive_payload import (
     progressive_step_materialization_request,
 )
 from .plan_payload import bind_literature_citation_authority
+from .progressive_attempt import (
+    ProgressivePlannerAttemptResult,
+    ProgressivePlannerAttemptState,
+    ProgressivePlannerRunFacts,
+    bind_progressive_planner_failure_facts,
+    progressive_planner_failure_facts,
+)
 
 
 _GUIDE = load_prompt_pack()["progressive_planner"]
@@ -1620,25 +1627,21 @@ class ProgressivePlannerAgent:
 
     def __init__(self, llm: LLMClient) -> None:
         self.llm = llm
-        self.last_prompt_metrics: dict[str, Any] = {}
-        self.last_compile_receipt: Optional[ProgressivePlanCompileReceipt] = None
-        self.last_outline: Optional[ProgressivePlanOutline] = None
-        self.last_foundation: Optional[ProgressiveFoundationMaterialization] = None
-        self.last_materializations: list[ProgressiveStepMaterialization] = []
-        self.last_compile_failure_attempts: list[ProgressiveCompileReplayAttempt] = []
-        self.last_skeleton: Optional[ProgressivePlanSkeleton] = None
-        self.last_resume_validated = False
-        self.last_dropped_plan_keys: dict[str, list[str]] = {
-            "top_level": [],
-            "steps": [],
-        }
+        self._attempt = ProgressivePlannerAttemptState()
+        self._last_result: ProgressivePlannerAttemptResult | None = None
+
+    @property
+    def last_result(self) -> ProgressivePlannerAttemptResult | None:
+        """Read-only compatibility projection; production consumes run_attempt()."""
+
+        return self._last_result
 
     def capture_efficiency_metrics(self) -> None:
         """Copy the active Planner budget receipt into checkpoint metrics."""
 
         snapshot = getattr(self.llm, "efficiency_snapshot", None)
-        if callable(snapshot) and self.last_prompt_metrics:
-            self.last_prompt_metrics["efficiency_budget"] = snapshot()
+        if callable(snapshot) and self._attempt.prompt_metrics:
+            self._attempt.prompt_metrics["efficiency_budget"] = snapshot()
 
     @staticmethod
     def _request_authorities(
@@ -3118,7 +3121,7 @@ class ProgressivePlannerAgent:
                     available_product_refs=visible_product_refs,
                 )
             compiler_observation: Mapping[str, Any] | None = None
-            self.last_compile_failure_attempts = []
+            self._attempt.compile_failure_attempts = []
             host_materialization = (
                 None
                 if llm_is_mockish(self.llm)
@@ -3165,30 +3168,30 @@ class ProgressivePlannerAgent:
                     pass
                 else:
                     prefix_state = candidate_state
-                    self.last_materializations = list(prefix_state.materializations)
-                    self.last_prompt_metrics[
+                    self._attempt.materializations = list(prefix_state.materializations)
+                    self._attempt.prompt_metrics[
                         "step_materialization_payload_bytes"
                     ].append(0)
-                    self.last_prompt_metrics[
+                    self._attempt.prompt_metrics[
                         "step_materialization_schema_sha256"
                     ].append(None)
-                    self.last_prompt_metrics.setdefault(
+                    self._attempt.prompt_metrics.setdefault(
                         "host_step_materialization_count", 0
                     )
-                    self.last_prompt_metrics["host_step_materialization_count"] += 1
+                    self._attempt.prompt_metrics["host_step_materialization_count"] += 1
                     if resumed:
-                        self.last_prompt_metrics.setdefault(
+                        self._attempt.prompt_metrics.setdefault(
                             "current_run_host_step_materialization_count", 0
                         )
-                        self.last_prompt_metrics[
+                        self._attempt.prompt_metrics[
                             "current_run_host_step_materialization_count"
                         ] += 1
                     checkpoint_emitter.emit(
                         stage="step",
                         outline=outline,
                         foundation=foundation_materialization,
-                        materializations=self.last_materializations,
-                        prompt_metrics=self.last_prompt_metrics,
+                        materializations=self._attempt.materializations,
+                        prompt_metrics=self._attempt.prompt_metrics,
                     )
                     continue
             for revision in range(_MAX_COMPILE_REVISIONS + 1):
@@ -3222,17 +3225,17 @@ class ProgressivePlannerAgent:
                         step_index=step_index,
                         path="planner_request",
                     )
-                self.last_prompt_metrics[
+                self._attempt.prompt_metrics[
                     "step_materialization_attempt_payload_bytes"
                 ].append(step_payload_bytes)
-                self.last_prompt_metrics[
+                self._attempt.prompt_metrics[
                     "step_materialization_attempt_schema_sha256"
                 ].append(step_schema.authority_sha256 if step_schema else None)
                 if resumed:
-                    self.last_prompt_metrics[
+                    self._attempt.prompt_metrics[
                         "current_run_step_materialization_attempt_payload_bytes"
                     ].append(step_payload_bytes)
-                    self.last_prompt_metrics[
+                    self._attempt.prompt_metrics[
                         "current_run_step_materialization_attempt_schema_sha256"
                     ].append(step_schema.authority_sha256 if step_schema else None)
                 materialization = call_llm_with_structured_retry(
@@ -3263,8 +3266,8 @@ class ProgressivePlannerAgent:
                 )
                 self.capture_efficiency_metrics()
                 prior_materialization = (
-                    self.last_compile_failure_attempts[-1].materialization
-                    if self.last_compile_failure_attempts
+                    self._attempt.compile_failure_attempts[-1].materialization
+                    if self._attempt.compile_failure_attempts
                     else None
                 )
                 materialization = (
@@ -3354,7 +3357,7 @@ class ProgressivePlannerAgent:
                                 ],
                             )
                 except ProgressivePlanCompileError as exc:
-                    self.last_compile_failure_attempts.append(
+                    self._attempt.compile_failure_attempts.append(
                         ProgressiveCompileReplayAttempt(
                             revision=revision,
                             step_schema_authority_sha256=(
@@ -3405,38 +3408,70 @@ class ProgressivePlannerAgent:
                             step_index=exc.step_index,
                             path=exc.path,
                         ) from exc
-                    self.last_prompt_metrics["compile_revision_count"] += 1
+                    self._attempt.prompt_metrics["compile_revision_count"] += 1
                     if resumed:
-                        self.last_prompt_metrics[
+                        self._attempt.prompt_metrics[
                             "current_run_compile_revision_count"
                         ] += 1
                     compiler_observation = exc.details
                     continue
                 prefix_state = candidate_state
-                self.last_compile_failure_attempts = []
-                self.last_materializations = list(prefix_state.materializations)
-                self.last_prompt_metrics["step_materialization_payload_bytes"].append(
+                self._attempt.compile_failure_attempts = []
+                self._attempt.materializations = list(prefix_state.materializations)
+                self._attempt.prompt_metrics["step_materialization_payload_bytes"].append(
                     step_payload_bytes
                 )
-                self.last_prompt_metrics["step_materialization_schema_sha256"].append(
+                self._attempt.prompt_metrics["step_materialization_schema_sha256"].append(
                     step_schema.authority_sha256 if step_schema else None
                 )
-                self.last_prompt_metrics["step_materialization_count"] += 1
+                self._attempt.prompt_metrics["step_materialization_count"] += 1
                 if resumed:
-                    self.last_prompt_metrics[
+                    self._attempt.prompt_metrics[
                         "current_run_step_materialization_count"
                     ] += 1
                 checkpoint_emitter.emit(
                     stage="step",
                     outline=outline,
                     foundation=foundation_materialization,
-                    materializations=self.last_materializations,
-                    prompt_metrics=self.last_prompt_metrics,
+                    materializations=self._attempt.materializations,
+                    prompt_metrics=self._attempt.prompt_metrics,
                 )
                 break
         return prefix_state
 
+    def run_attempt(
+        self,
+        context: ResearchContext,
+        **kwargs: Any,
+    ) -> ProgressivePlannerAttemptResult:
+        """Run once and publish output plus provenance as one atomic value."""
+
+        self._attempt = ProgressivePlannerAttemptState()
+        self._last_result = None
+        try:
+            output = self._run_output(context, **kwargs)
+        except BaseException as error:
+            self.capture_efficiency_metrics()
+            bind_progressive_planner_failure_facts(error, self._attempt.freeze())
+            raise
+        self.capture_efficiency_metrics()
+        result = ProgressivePlannerAttemptResult(
+            output=output,
+            facts=self._attempt.freeze(),
+        )
+        self._last_result = result
+        return result
+
     def run(
+        self,
+        context: ResearchContext,
+        **kwargs: Any,
+    ) -> AnalysisPlan | ProgressivePlanOutline:
+        """Compatibility API returning only output from the atomic attempt."""
+
+        return self.run_attempt(context, **kwargs).output
+
+    def _run_output(
         self,
         context: ResearchContext,
         *,
@@ -3460,8 +3495,8 @@ class ProgressivePlannerAgent:
         required_primary_cohort_selection_mode: str | None = None,
         stop_after_outline: bool = False,
     ) -> AnalysisPlan | ProgressivePlanOutline:
-        self.last_resume_validated = False
-        self.last_compile_failure_attempts = []
+        self._attempt.resume_validated = False
+        self._attempt.compile_failure_attempts = []
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
                 "Progressive Planner know-how authority and prompt must be supplied together"
@@ -3680,7 +3715,7 @@ class ProgressivePlannerAgent:
             "suffix_request_payload_bytes": [],
         }
         if resume_checkpoint is not None:
-            self.last_prompt_metrics = restore_progressive_resume_prompt_metrics(
+            self._attempt.prompt_metrics = restore_progressive_resume_prompt_metrics(
                 checkpoint=resume_checkpoint,
                 current_prompt_metrics=current_prompt_metrics,
                 expected_dependency_sha256=(
@@ -3689,7 +3724,7 @@ class ProgressivePlannerAgent:
             )
             outline = resume_checkpoint.outline
         else:
-            self.last_prompt_metrics = current_prompt_metrics
+            self._attempt.prompt_metrics = current_prompt_metrics
 
             def parse_outline(raw: str) -> ProgressivePlanOutline:
                 parsed = _parse_model(raw, ProgressivePlanOutline)
@@ -3779,31 +3814,31 @@ class ProgressivePlannerAgent:
             direct_comparator_literature_keys=direct_keys,
             article_context=article_context,
         )
-        self.last_outline = outline
-        self.last_foundation = None
-        self.last_materializations = []
+        self._attempt.outline = outline
+        self._attempt.foundation = None
+        self._attempt.materializations = []
         outline_sha256 = canonical_sha256(outline.model_dump(mode="json"))
         if resume_checkpoint is not None:
-            if self.last_prompt_metrics.get("outline_sha256") != outline_sha256:
+            if self._attempt.prompt_metrics.get("outline_sha256") != outline_sha256:
                 raise ProgressivePlanCompileError(
                     "progressive_resume_outline_digest_mismatch",
                     "development checkpoint metrics identify another outline",
                     path="resume_checkpoint.prompt_metrics.outline_sha256",
                 )
         else:
-            self.last_prompt_metrics["outline_sha256"] = outline_sha256
+            self._attempt.prompt_metrics["outline_sha256"] = outline_sha256
             checkpoint_emitter.emit(
                 stage="outline",
                 outline=outline,
                 foundation=None,
-                materializations=self.last_materializations,
-                prompt_metrics=self.last_prompt_metrics,
+                materializations=self._attempt.materializations,
+                prompt_metrics=self._attempt.prompt_metrics,
             )
         if stop_after_outline:
             # Dependency and request authority were validated above.  A
             # resumed outline can therefore be accepted for this deliberately
             # narrower canary without materializing its executable suffix.
-            self.last_resume_validated = resume_checkpoint is not None
+            self._attempt.resume_validated = resume_checkpoint is not None
             self.capture_efficiency_metrics()
             return outline
 
@@ -3877,7 +3912,7 @@ class ProgressivePlannerAgent:
         foundation_materialization = (
             restore_progressive_resume_foundation(
                 checkpoint=resume_checkpoint,
-                prompt_metrics=self.last_prompt_metrics,
+                prompt_metrics=self._attempt.prompt_metrics,
                 request_payload_bytes=foundation_total_bytes,
                 schema_bytes=foundation_schema_bytes,
                 schema_authority_sha256=current_foundation_authority,
@@ -3887,13 +3922,13 @@ class ProgressivePlannerAgent:
         )
         resume_foundation_reused = foundation_materialization is not None
         if foundation_materialization is None:
-            self.last_prompt_metrics["foundation_request_payload_bytes"] = (
+            self._attempt.prompt_metrics["foundation_request_payload_bytes"] = (
                 foundation_total_bytes
             )
-            self.last_prompt_metrics["foundation_schema_bytes"] = (
+            self._attempt.prompt_metrics["foundation_schema_bytes"] = (
                 foundation_schema_bytes
             )
-            self.last_prompt_metrics[
+            self._attempt.prompt_metrics[
                 "foundation_structured_output_authority_sha256"
             ] = current_foundation_authority
 
@@ -3979,14 +4014,14 @@ class ProgressivePlannerAgent:
                 step.module_id == "robustness_replay" for step in outline.steps
             ),
         )
-        self.last_foundation = foundation_materialization
+        self._attempt.foundation = foundation_materialization
         if not resume_foundation_reused:
             checkpoint_emitter.emit(
                 stage="foundation",
                 outline=outline,
                 foundation=foundation_materialization,
-                materializations=self.last_materializations,
-                prompt_metrics=self.last_prompt_metrics,
+                materializations=self._attempt.materializations,
+                prompt_metrics=self._attempt.prompt_metrics,
             )
 
         selected_action_ids, selected_action_rows = _action_catalog(
@@ -4069,11 +4104,11 @@ class ProgressivePlannerAgent:
                 if stored != current
             ]
             if migrated_step_ids:
-                self.last_prompt_metrics["runtime_contract_migrated_step_ids"] = (
+                self._attempt.prompt_metrics["runtime_contract_migrated_step_ids"] = (
                     migrated_step_ids
                 )
-        self.last_materializations = list(prefix_state.materializations)
-        self.last_resume_validated = resume_checkpoint is not None
+        self._attempt.materializations = list(prefix_state.materializations)
+        self._attempt.resume_validated = resume_checkpoint is not None
 
         prefix_state = self._materialize_remaining_steps(
             prefix_state,
@@ -4107,16 +4142,19 @@ class ProgressivePlannerAgent:
             allowed_know_how_decisions=allowed_know_how_decisions,
             enforce_article_contract=enforce_article_contract,
         )
-        self.last_skeleton = skeleton
-        self.last_compile_receipt = receipt
-        self.last_prompt_metrics["final_skeleton_sha256"] = receipt.skeleton_sha256
-        self.last_prompt_metrics["compiled_plan_sha256"] = receipt.analysis_plan_sha256
+        self._attempt.skeleton = skeleton
+        self._attempt.compile_receipt = receipt
+        self._attempt.prompt_metrics["final_skeleton_sha256"] = receipt.skeleton_sha256
+        self._attempt.prompt_metrics["compiled_plan_sha256"] = receipt.analysis_plan_sha256
         return plan
 
 
 __all__ = [
+    "ProgressivePlannerAttemptResult",
     "ProgressivePlannerAgent",
+    "ProgressivePlannerRunFacts",
     "candidate_analysis_types",
+    "progressive_planner_failure_facts",
     "progressive_cohort_concept_ids",
     "select_progressive_variables",
 ]

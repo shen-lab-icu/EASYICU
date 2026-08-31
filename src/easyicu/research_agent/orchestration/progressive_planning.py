@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping
 
-from ..agents.progressive_planner import ProgressivePlannerAgent
+from ..agents.progressive_planner import (
+    ProgressivePlannerAgent,
+    ProgressivePlannerRunFacts,
+    progressive_planner_failure_facts,
+)
 from ..authority.evidence_store import sha256_of_file
 from ..planning.progressive_artifacts import (
-    ProgressiveCompileReplayAttempt,
     ProgressiveEvidenceRegistrar,
     ProgressivePlannerCheckpointRecorder,
     ProgressiveResumePersistenceReceipt,
@@ -19,63 +22,13 @@ from ..planning.progressive_artifacts import (
     persist_progressive_planning_artifacts,
 )
 from ..planning.progressive_contract import (
-    ProgressiveFoundationMaterialization,
-    ProgressivePlanCompileReceipt,
     ProgressivePlanOutline,
-    ProgressivePlanSkeleton,
     ProgressivePlannerCheckpoint,
-    ProgressiveStepMaterialization,
 )
 from ..planning.preplan_know_how import PlannerKnowHowBinding
 from ..planning import literature_design_authority as _literature_design
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .workflow import PlannerDesignCanaryComplete
-
-
-@dataclass(frozen=True)
-class ProgressivePlannerRunFacts:
-    """Success and failure facts captured together from one attempt."""
-
-    prompt_metrics: Mapping[str, Any]
-    compile_receipt: Optional[ProgressivePlanCompileReceipt]
-    outline: Optional[ProgressivePlanOutline]
-    foundation: Optional[ProgressiveFoundationMaterialization]
-    materializations: tuple[ProgressiveStepMaterialization, ...]
-    compile_failure_attempts: tuple[ProgressiveCompileReplayAttempt, ...]
-    skeleton: Optional[ProgressivePlanSkeleton]
-    resume_validated: bool
-    dropped_plan_keys: Mapping[str, tuple[str, ...]]
-
-    @property
-    def complete_for_persistence(self) -> bool:
-        return bool(
-            self.outline is not None
-            and self.foundation is not None
-            and self.materializations
-            and self.skeleton is not None
-            and self.compile_receipt is not None
-        )
-
-
-def snapshot_progressive_planner_run(
-    planner: ProgressivePlannerAgent,
-) -> ProgressivePlannerRunFacts:
-    """Capture every success or failure fact without temporal caller reads."""
-
-    return ProgressivePlannerRunFacts(
-        prompt_metrics=dict(planner.last_prompt_metrics),
-        compile_receipt=planner.last_compile_receipt,
-        outline=planner.last_outline,
-        foundation=planner.last_foundation,
-        materializations=tuple(planner.last_materializations),
-        compile_failure_attempts=tuple(planner.last_compile_failure_attempts),
-        skeleton=planner.last_skeleton,
-        resume_validated=bool(planner.last_resume_validated),
-        dropped_plan_keys={
-            str(key): tuple(str(value) for value in values)
-            for key, values in planner.last_dropped_plan_keys.items()
-        },
-    )
 
 
 @dataclass(frozen=True)
@@ -272,7 +225,7 @@ def run_progressive_planner(
         )
 
     try:
-        generated = planner.run(
+        attempt = planner.run_attempt(
             context,
             **dict(planner_kwargs),
             checkpoint_callback=recorder.record,
@@ -284,9 +237,8 @@ def run_progressive_planner(
             },
             stop_after_outline=stop_after_outline,
         )
-    except BaseException:
-        planner.capture_efficiency_metrics()
-        facts = snapshot_progressive_planner_run(planner)
+    except BaseException as error:
+        facts = progressive_planner_failure_facts(error)
         if source_chain and facts.resume_validated:
             receipt = recorder.persist_validated_resume()
             finding_sink(
@@ -305,7 +257,8 @@ def run_progressive_planner(
             )
         raise
 
-    facts = snapshot_progressive_planner_run(planner)
+    generated = attempt.output
+    facts = attempt.facts
     if source_chain:
         if not facts.resume_validated:
             raise RuntimeError(
@@ -323,6 +276,7 @@ def run_progressive_planner(
         planner,
         context,
         planning_contract_context=planning_contract_context,
+        run_prompt_metrics=facts.prompt_metrics,
     )
     if stop_after_outline:
         if not isinstance(generated, ProgressivePlanOutline):

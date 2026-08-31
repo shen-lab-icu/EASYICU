@@ -764,6 +764,18 @@
       "easyicu.research_agent.trajectory.plan_contract"
     ],
     [
+      "easyicu.research_agent.agents.progressive_attempt",
+      "easyicu.research_agent.planning.progressive_artifacts"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_attempt",
+      "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_attempt",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.agents.progressive_payload",
       "easyicu.research_agent.contracts.declared_product"
     ],
@@ -786,6 +798,10 @@
     [
       "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.agents.plan_payload"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.agents.progressive_attempt"
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
@@ -10148,9 +10164,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 2529,
+    "edge_count": 2533,
     "largest_scc_size": 0,
-    "module_count": 612,
+    "module_count": 613,
     "package_count": 32,
     "top_level_module_count": 34
   },
@@ -10170,6 +10186,7 @@
     "easyicu.research_agent.agents.core": "agents/core.py",
     "easyicu.research_agent.agents.plan_payload": "agents/plan_payload.py",
     "easyicu.research_agent.agents.planner": "agents/planner.py",
+    "easyicu.research_agent.agents.progressive_attempt": "agents/progressive_attempt.py",
     "easyicu.research_agent.agents.progressive_payload": "agents/progressive_payload.py",
     "easyicu.research_agent.agents.progressive_planner": "agents/progressive_planner.py",
     "easyicu.research_agent.agents.replanner": "agents/replanner.py",

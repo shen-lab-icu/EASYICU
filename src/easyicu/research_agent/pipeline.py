@@ -2218,6 +2218,7 @@ class ResearchAgentPipeline:
                     ),
                 )
             )
+            dropped_plan_keys: Mapping[str, Sequence[str]] = {}
 
             try:
                 planner_run_kwargs = dict(
@@ -2257,6 +2258,7 @@ class ResearchAgentPipeline:
                     plan = progressive_result.plan
                     plan_generation_mode = progressive_result.generation_mode
                     planner_prompt_metrics = dict(progressive_result.prompt_metrics)
+                    dropped_plan_keys = progressive_result.facts.dropped_plan_keys
                 else:
                     plan = planner.run(agent_context, **planner_run_kwargs)
                     planner_prompt_metrics = know_how_binding.prompt_metrics(
@@ -2264,6 +2266,7 @@ class ResearchAgentPipeline:
                         agent_context,
                         planning_contract_context=planning_contract_context,
                     )
+                    dropped_plan_keys = planner.last_dropped_plan_keys
             except PlannerArticleContractError:
                 raise
             except Exception as exc:
@@ -2290,7 +2293,6 @@ class ResearchAgentPipeline:
                 )
                 used_mock_llm = True
                 plan_generation_mode = "fallback"
-            dropped_plan_keys = getattr(planner, "last_dropped_plan_keys", None) or {}
             dropped_keys = list(dropped_plan_keys.get("top_level", [])) + list(
                 dropped_plan_keys.get("steps", [])
             )
