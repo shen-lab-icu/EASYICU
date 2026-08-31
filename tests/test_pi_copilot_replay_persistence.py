@@ -131,6 +131,29 @@ def test_replay_store_hides_superseded_branch_without_deleting_audit_rows(
     store = PiConversationReplayStore(tmp_path / "replay")
     for index in range(4):
         _turn(store, index)
+    for index in (0, 1):
+        store.append_event(
+            session_id="pi-demo",
+            project_id="project-demo",
+            job_id=f"message-{index:03d}",
+            event={
+                "type": "tool_end",
+                "tool_call_id": f"call-child-{index}",
+                "tool_name": "easyicu_run",
+                "status": "ok",
+                "code": "easyicu_full_run_submitted",
+                "job_id": f"child-{index:03d}",
+            },
+        )
+        store.archive_child_job(
+            session_id="pi-demo",
+            project_id="project-demo",
+            job={
+                "job_id": f"child-{index:03d}",
+                "kind": "agent-run",
+                "status": "done",
+            },
+        )
 
     store.supersede_from_turn_index(
         session_id="pi-demo",
@@ -148,6 +171,7 @@ def test_replay_store_hides_superseded_branch_without_deleting_audit_rows(
         "message-000",
         "message-009",
     ]
+    assert [row["job_id"] for row in current["child_jobs"]] == ["child-000"]
     persisted = json.loads(store._path("pi-demo").read_text(encoding="utf-8"))
     assert [row["job_id"] for row in persisted["turns"]] == [
         "message-000",
@@ -157,6 +181,10 @@ def test_replay_store_hides_superseded_branch_without_deleting_audit_rows(
         "message-009",
     ]
     assert all(row.get("superseded") for row in persisted["turns"][1:4])
+    assert [row["job_id"] for row in persisted["child_jobs"]] == [
+        "child-000",
+        "child-001",
+    ]
     with pytest.raises(PiCopilotError, match="cursor") as invalid:
         store.snapshot(
             session_id="pi-demo",
