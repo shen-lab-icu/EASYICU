@@ -93,12 +93,16 @@
         || stages.find(stage => stage.status !== 'complete') || stages[stages.length - 1];
       const currentIndex = Math.max(0, stages.indexOf(current));
       const next = stages.slice(currentIndex + 1).find(stage => stage.status !== 'complete');
+      const nextIsActionable = next && ['ready', 'running', 'review_required'].includes(next.status);
+      const nextCaption = nextIsActionable
+        ? tr('Next step', '下一步')
+        : tr('Later stage', '后续阶段');
       head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Research progress', '研究进度')}</div><div class="asub">${host.demoMode() ? tr('Read-only view of one registered run.', '一个已登记运行的只读预览。') : tr('Question, data, plan, and results stay together in this project.', '问题、数据、计划与结果都保存在当前项目中。')}</div>`;
       body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
         <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
         <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
         <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('stages complete', '个阶段已完成')}</span></div>
-        ${next ? `<div class="gd-pipeline-next"><span>${tr('Next step', '下一步')}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
+        ${next ? `<div class="gd-pipeline-next"><span>${nextCaption}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
       </div>
       <details class="gd-pipeline-disclosure" open><summary><span>${tr('All research stages', '全部研究阶段')}</span><small>${stages.length}</small></summary><div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
         const status = stage.status === 'complete' ? 'done' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
