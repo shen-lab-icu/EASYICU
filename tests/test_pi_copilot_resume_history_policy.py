@@ -2,16 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from easyicu.webserver import study_contexts
 from easyicu.webserver.pi_copilot import contracts, run_authority
-from easyicu.webserver.pi_copilot import tools as tool_module
 
 
 def test_cancelled_retry_does_not_hide_unchanged_planner_checkpoint(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     study = {
         "id": "study-resume-history",
@@ -42,18 +38,6 @@ def test_cancelled_retry_does_not_hide_unchanged_planner_checkpoint(
             "development_planner_checkpoint_available": True,
         },
     ]
-    monkeypatch.setattr(tool_module, "_run_rows", lambda _context: rows)
-    monkeypatch.setattr(
-        tool_module,
-        "research_pipeline_project_root",
-        lambda _study_id: root,
-    )
-
-    assert (
-        tool_module._development_resume_source_job_id(object(), study)
-        == "valid-prefix"
-    )
-
     assert (
         run_authority.resumable_planner_checkpoint_job_id(
             study=study,
@@ -65,14 +49,11 @@ def test_cancelled_retry_does_not_hide_unchanged_planner_checkpoint(
 
 
 def test_newer_nontransparent_failure_still_blocks_older_checkpoint(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     study = {"id": "study-resume-history", "revision": 1, "question": "Q"}
     digest = study_contexts.scientific_configuration_sha256(study)
-    monkeypatch.setattr(
-        tool_module,
-        "_run_rows",
-        lambda _context: [
+    rows = [
             {
                 "run_id": "run_newer-scientific-failure",
                 "study_id": study["id"],
@@ -89,10 +70,13 @@ def test_newer_nontransparent_failure_still_blocks_older_checkpoint(
                 "scientific_configuration_sha256": digest,
                 "development_planner_checkpoint_available": True,
             },
-        ],
-    )
+        ]
 
-    assert tool_module._development_resume_source_job_id(object(), study) == ""
+    assert run_authority.resumable_planner_checkpoint_job_id(
+        study=study,
+        rows=rows,
+        project_root=tmp_path,
+    ) == ""
 
 
 def test_checkpoint_seeding_is_wider_than_the_plan_resume_offer() -> None:

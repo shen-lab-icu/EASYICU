@@ -28,6 +28,7 @@ from easyicu.webserver import (
     jobs,
     literature_authority,
     patient_drilldown,
+    research_run_submission,
     settings,
     sources,
     study_contexts,
@@ -68,7 +69,6 @@ from .projections import (
 from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
-    resumable_planner_checkpoint_job_id,
 )
 from .tool_catalog import (
     ALLOWED_TOOLS,
@@ -5017,56 +5017,6 @@ def _account_environment_for_research_provider(
         )
 
 
-# Launch rejections that mean "an EasyICU step has not run yet", not "the
-# request was malformed".  These need a next action, otherwise Pi reports them
-# as an unrecoverable data problem and stops.
-_RUN_SUBMISSION_NEXT_STEP_SUMMARIES = {
-    "research_pipeline_manifest_required": (
-        "The bound directory is a converted ICU database, not a prepared "
-        "EasyICU export package, so the Research Agent has nothing "
-        "manifest-backed to bind its evidence to. This is not a bad data "
-        "source and not a permission problem: run easyicu_start_extraction to "
-        "prepare an export package from it first, then generate the plan. Do "
-        "not ask the user to re-pick or validate their folder."
-    ),
-    "no_export_files": (
-        "The bound directory carries no readable EasyICU export files yet. Run "
-        "easyicu_start_extraction to prepare the package before planning."
-    ),
-}
-
-
-def _development_resume_source_job_id(
-    context: ToolExecutionContext,
-    study: Mapping[str, Any],
-) -> str:
-    """Return one owned Planner checkpoint job for an unchanged study.
-
-    The development efficiency budget deliberately stops a long progressive
-    plan after a bounded provider turn and preserves its validated prefix.  A
-    user-authorized retry should continue that prefix, not spend the next turn
-    regenerating it.  All other terminal failures remain fresh-run only.
-    """
-
-    latest = _select_run(context)
-    if not latest:
-        return ""
-    transparent_attempt_reasons = {
-        "data_foundation_blocked",
-        "research_pipeline_cancelled",
-    }
-    rows = (
-        list(_run_rows(context))
-        if str(latest.get("gate_reason") or "") in transparent_attempt_reasons
-        else [latest]
-    )
-    return resumable_planner_checkpoint_job_id(
-        study=study,
-        rows=rows,
-        project_root=research_pipeline_project_root(str(study.get("id") or "")),
-    )
-
-
 def _run(
     context: ToolExecutionContext,
     params: Mapping[str, Any],
@@ -5109,65 +5059,11 @@ def _run(
             summary="Choose either the deterministic preflight or a full Research Agent run.",
             owner="easyicu.webserver.routes.agent",
         )
+    if run_type == "preflight":
+        grant_block = _consume_action(context, "run")
+        if grant_block is not None:
+            return grant_block
     study = _bound_context(context.session.binding)
-    if (
-        run_type == "full"
-        and context.session.binding.study_context_id
-        and study
-        and study.get("id")
-    ):
-        workflow = _workflow_snapshot(context, study_override=study)
-        # The question, identified source, and server-receipted eligibility
-        # decision block plan generation. The Planner proposes the remaining
-        # design fields for review but may not invent the study denominator.
-        planning_prerequisites_missing = list(
-            workflow.get("planning_prerequisites_missing") or []
-        )
-        if planning_prerequisites_missing:
-            # Scientific workflow readiness is an owner invariant, not a
-            # provider-permission problem.  Check it before consuming the
-            # one-turn provider grant so an out-of-order model call cannot
-            # expose internal grant names or start a premature Planner run.
-            eligibility_required = (
-                "cohort_eligibility" in planning_prerequisites_missing
-            )
-            return _result(
-                context,
-                status="blocked",
-                code=(
-                    "cohort_eligibility_confirmation_required"
-                    if eligibility_required
-                    else "study_setup_incomplete"
-                ),
-                summary=(
-                    "Confirm one cohort eligibility option before generating "
-                    "the candidate plan."
-                    if eligibility_required
-                    else "Bind the research question and data source before "
-                    "generating the candidate plan."
-                ),
-                owner=(
-                    "easyicu.webserver.pi_copilot.cohort_eligibility"
-                    if eligibility_required
-                    else "easyicu.webserver.pi_copilot.workflow"
-                ),
-                details={
-                    "next_action_code": workflow.get("next_action_code"),
-                    "planning_prerequisites_missing": planning_prerequisites_missing,
-                    "missing_setup_fields": list(
-                        workflow.get("missing_setup_fields") or []
-                    ),
-                    **(
-                        {"eligibility": cohort_eligibility.eligibility_proposal(study)}
-                        if eligibility_required
-                        else {}
-                    ),
-                },
-            )
-    grant_action = "provider_run" if run_type == "full" else "run"
-    grant_block = _consume_action(context, grant_action)
-    if grant_block is not None:
-        return grant_block
     requested_provider = str(params.get("llm_provider") or "").strip()
     if run_type == "full" and is_offline_llm_choice(requested_provider):
         return _result(
@@ -5202,150 +5098,95 @@ def _run(
             summary="Create and bind a typed StudyContext before starting an EasyICU run.",
             owner="easyicu.webserver.study_contexts",
         )
-    source = study.get("data_source")
-    source = source if isinstance(source, Mapping) else {}
-    source_path = str(source.get("path") or "").strip()
-    if not source_path:
-        return _result(
-            context,
-            status="blocked",
-            code="study_context_source_required",
-            summary=(
-                "Bind one validated registered EasyICU data source to this "
-                "StudyContext before starting a run."
-            ),
-            owner="easyicu.webserver.study_contexts",
-        )
-    account_environment = None
-    if run_type == "full":
-        account_environment, account_error = (
-            _account_environment_for_research_provider(context)
+    if run_type == "preflight":
+        source = study.get("data_source")
+        source = source if isinstance(source, Mapping) else {}
+        from easyicu.webserver.routes.agent import submit_agent_run
+
+        try:
+            submitted = submit_agent_run(
+                {
+                    "path": str(source.get("path") or ""),
+                    "study_context_id": study["id"],
+                    "question": study.get("question"),
+                    "run_type": "preflight",
+                    "llm_provider": "mock",
+                    "external_llm_opt_in": False,
+                    "engine": "native_summary",
+                }
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            return _result(
+                context,
+                status="blocked",
+                code=str(detail.get("error") or "easyicu_run_submission_blocked"),
+                summary=_bounded_model_text(detail.get("message"), 400)
+                or "The EasyICU preflight owner rejected this submission.",
+                owner="easyicu.webserver.routes.agent",
+                details=detail,
+            )
+        resume_source_job_id = ""
+    else:
+        account_environment, account_error = _account_environment_for_research_provider(
+            context
         )
         if account_error is not None:
             return account_error
-    # Import lazily to keep the route-composition module out of this package's
-    # import graph. The function remains the one existing run submission path;
-    # this adapter does not reconstruct its validation or JobManager behavior.
-    from easyicu.webserver.routes.agent import submit_agent_run
 
-    development_resume_source_job_id = ""
-    if (
-        run_type == "full"
-        and planner_start_mode != "fresh"
-        and not plan_revision_source_run_id
-    ):
-        development_resume_source_job_id = _development_resume_source_job_id(
-            context, study
-        )
-    if (
-        planner_start_mode == "resume_checkpoint"
-        and not development_resume_source_job_id
-    ):
-        return _result(
-            context,
-            status="blocked",
-            code="planner_checkpoint_not_available",
-            summary=(
-                "The unchanged study has no validated Planner checkpoint to "
-                "continue. Generate a fresh candidate plan instead."
-            ),
-            owner="easyicu.research_agent.planning.progressive_resume",
-        )
+        def authorize() -> None:
+            outcome = context.grant.consume_once("provider_run")
+            if outcome == "granted":
+                return
+            code = (
+                "pi_action_grant_consumed"
+                if outcome == "consumed"
+                else "pi_action_authorization_required"
+            )
+            raise research_run_submission.ResearchRunSubmissionError(
+                {
+                    "error": code,
+                    "message": (
+                        "The one-use provider_run grant for this message was already consumed."
+                        if outcome == "consumed"
+                        else "This action requires a one-use provider_run grant for the current message."
+                    ),
+                    "owner": "easyicu.webserver.pi_copilot",
+                }
+            )
 
-    try:
-        submitted = submit_agent_run(
-            {
-                "path": source_path,
-                "study_context_id": study["id"],
-                "question": study.get("question"),
-                "run_type": run_type,
-                "llm_provider": provider,
-                "external_llm_opt_in": run_type == "full",
-                "engine": (
-                    "research_agent_pipeline"
-                    if run_type == "full"
-                    else "native_summary"
-                ),
-                **(
-                    {"planner_start_mode": planner_start_mode}
-                    if run_type == "full"
-                    else {}
-                ),
-                **(
-                    {
-                        "credential_source": research_provider.credential_source,
-                    }
-                    if run_type == "full"
-                    else {}
-                ),
-                **(
-                    {"literature_search_authorized": True}
-                    if run_type == "full" and literature_search_authorized
-                    else {}
-                ),
-                **(
-                    {
-                        "plan_revision_source_run_id": str(
-                            plan_revision_source_run_id
-                        )
-                    }
-                    if plan_revision_source_run_id
-                    else {}
-                ),
-                **(
-                    {
-                        "development_resume_source_job_id": (
-                            development_resume_source_job_id
-                        )
-                    }
-                    if development_resume_source_job_id
-                    else {}
-                ),
-            },
-            account_environment=account_environment,
-            # A normal Copilot run follows the source the researcher selected.
-            # The route keeps an unprepared source in Planner-canary mode, but
-            # a manifest-backed prepared package must produce the reviewed,
-            # execution-capable plan immediately.  Forcing every first click
-            # into a canary made the researcher generate essentially the same
-            # plan twice and, after a cohort decision, could send the retry
-            # back through the shorter preview-provider timeout.  The explicit
-            # low-level ``candidate_plan_only`` route remains available for
-            # callers that genuinely request a metadata-only preview.
-            metadata_only_planning_authorized=False,
+        request = research_run_submission.ResearchRunSubmissionRequest(
+            study_context_id=str(study["id"]),
+            provider=provider,
+            credential_source=research_provider.credential_source,
+            external_llm_opt_in=context.session.external_llm_opt_in,
+            intent="reviewed_analysis",
+            planner_start_mode=planner_start_mode,
+            plan_revision_source_run_id=str(plan_revision_source_run_id),
+            literature_search_authorized=literature_search_authorized,
         )
-    except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {}
-        submission_code = str(detail.get("error") or "easyicu_run_submission_blocked")
-        # A single generic sentence for every launch rejection erased the
-        # owner's own diagnosis, so Pi had to guess a cause and wrote prose the
-        # user could not act on.  Carry the owning message through, and give the
-        # one rejection that is a missing *step* rather than a bad request its
-        # own next action.
-        summary = _bounded_model_text(detail.get("message"), 400) or (
-            "The existing EasyICU run submission boundary rejected the request."
-        )
-        if submission_code in _RUN_SUBMISSION_NEXT_STEP_SUMMARIES:
-            summary = _RUN_SUBMISSION_NEXT_STEP_SUMMARIES[submission_code]
-        return _result(
-            context,
-            status="blocked",
-            code=submission_code,
-            summary=summary,
-            owner="easyicu.webserver.routes.agent",
-            details={
-                key: detail.get(key)
-                for key in (
-                    "error",
-                    "message",
-                    "details",
-                    "blockers",
-                    "blocker_codes",
-                    "job_id",
+        try:
+            receipt = research_run_submission.submit_research_run(
+                request,
+                account_environment=account_environment,
+                authorize=authorize,
+            )
+        except research_run_submission.ResearchRunSubmissionError as exc:
+            details = dict(exc.detail)
+            if exc.code == "cohort_eligibility_confirmation_required":
+                details["eligibility"] = cohort_eligibility.eligibility_proposal(
+                    study
                 )
-                if detail.get(key) is not None
-            },
-        )
+            return _result(
+                context,
+                status="blocked",
+                code=exc.code,
+                summary=exc.summary,
+                owner=exc.owner,
+                details=details,
+            )
+        submitted = receipt.model_dump(mode="json")
+        resume_source_job_id = str(receipt.resume_source_job_id or "")
     result = _result(
         context,
         status="ok",
@@ -5358,9 +5199,9 @@ def _run(
             (
                 "Submitted an EasyICU Research Agent Planner continuation "
                 f"job {submitted.get('job_id')} from validated checkpoint job "
-                f"{development_resume_source_job_id}."
+                f"{resume_source_job_id}."
             )
-            if run_type == "full" and development_resume_source_job_id
+            if run_type == "full" and resume_source_job_id
             else f"Submitted full EasyICU Research Agent job {submitted.get('job_id')}."
             if run_type == "full"
             else f"Submitted deterministic EasyICU preflight job {submitted.get('job_id')}."
@@ -5390,11 +5231,9 @@ def _run(
             ),
             **(
                 {
-                    "development_resume_source_job_id": (
-                        development_resume_source_job_id
-                    )
+                    "resume_source_job_id": resume_source_job_id
                 }
-                if development_resume_source_job_id
+                if resume_source_job_id
                 else {}
             ),
         },

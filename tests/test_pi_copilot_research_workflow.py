@@ -32,6 +32,7 @@ from easyicu.webserver import (
     dataio,
     literature_authority,
     provider_adapter,
+    research_run_submission,
 )
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.literature_projection import (
@@ -52,6 +53,9 @@ from easyicu.webserver.pi_copilot.workflow import (
     build_research_workflow_snapshot,
     registered_export_matches_study,
 )
+from easyicu.webserver.pi_copilot.run_authority import (
+    resumable_planner_checkpoint_job_id,
+)
 
 
 def _request() -> Request:
@@ -67,6 +71,30 @@ def _request() -> Request:
             "server": ("testserver", 80),
             "client": ("testclient", 123),
         }
+    )
+
+
+def _record_pipeline_submission(
+    submitted: list[Any],
+    request: research_run_submission.ResearchRunSubmissionRequest,
+    *,
+    job_id: str,
+    authorize: Any = None,
+    account_environment: Any = None,
+) -> research_run_submission.ResearchRunSubmissionReceipt:
+    if authorize is not None:
+        authorize()
+    submitted.append(
+        {"request": request, "account_environment": account_environment}
+    )
+    return research_run_submission.ResearchRunSubmissionReceipt(
+        job_id=job_id,
+        kind="agent-run",
+        status="running",
+        study_context_id=request.study_context_id,
+        study_context_revision=5,
+        budget_mode="full_reviewed",
+        planner_start_mode=request.planner_start_mode,
     )
 
 
@@ -2187,18 +2215,14 @@ def test_compile_gate_failure_with_checkpoint_requires_a_fresh_plan() -> None:
     assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
 
 
-def test_run_adapter_does_not_resume_contract_failure_without_checkpoint(
+def test_submission_owner_does_not_resume_contract_failure_without_checkpoint(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     study = _complete_study()
     root = tmp_path / "projects" / study["id"]
     project_dir = root / study["id"] / "run_failed-outline"
     project_dir.mkdir(parents=True)
-    monkeypatch.setattr(
-        tool_module,
-        "_select_run",
-        lambda _context: {
+    row = {
             "run_id": "run_failed-outline",
             "study_id": study["id"],
             "run_status": "failed",
@@ -2208,29 +2232,21 @@ def test_run_adapter_does_not_resume_contract_failure_without_checkpoint(
             ),
             "project_dir": str(project_dir),
             "development_planner_checkpoint_available": False,
-        },
-    )
-    monkeypatch.setattr(
-        tool_module,
-        "research_pipeline_project_root",
-        lambda _study_id: root,
-    )
+        }
 
-    assert tool_module._development_resume_source_job_id(object(), study) == ""
+    assert resumable_planner_checkpoint_job_id(
+        study=study, rows=[row], project_root=root
+    ) == ""
 
 
-def test_run_adapter_resumes_compile_failed_checkpoint(
+def test_submission_owner_resumes_compile_failed_checkpoint(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     study = _complete_study()
     root = tmp_path / "projects" / study["id"]
     project_dir = root / study["id"] / "run_compile-revalidation"
     project_dir.mkdir(parents=True)
-    monkeypatch.setattr(
-        tool_module,
-        "_select_run",
-        lambda _context: {
+    row = {
             "run_id": "run_compile-revalidation",
             "study_id": study["id"],
             "run_status": "failed",
@@ -2240,23 +2256,18 @@ def test_run_adapter_resumes_compile_failed_checkpoint(
             ),
             "project_dir": str(project_dir),
             "development_planner_checkpoint_available": True,
-        },
-    )
-    monkeypatch.setattr(
-        tool_module,
-        "research_pipeline_project_root",
-        lambda _study_id: root,
-    )
+        }
 
     assert (
-        tool_module._development_resume_source_job_id(object(), study)
+        resumable_planner_checkpoint_job_id(
+            study=study, rows=[row], project_root=root
+        )
         == "compile-revalidation"
     )
 
 
-def test_run_adapter_recovers_checkpoint_hidden_by_empty_foundation_projection(
+def test_submission_owner_recovers_checkpoint_hidden_by_empty_foundation_projection(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     study = _complete_study()
     root = tmp_path / "projects" / study["id"]
@@ -2280,20 +2291,12 @@ def test_run_adapter_recovers_checkpoint_hidden_by_empty_foundation_projection(
         "project_dir": str(project_dir),
         "development_planner_checkpoint_available": True,
     }
-    monkeypatch.setattr(tool_module, "_select_run", lambda _context: empty_projection)
-    monkeypatch.setattr(
-        tool_module,
-        "_run_rows",
-        lambda _context: [empty_projection, checkpoint],
-    )
-    monkeypatch.setattr(
-        tool_module,
-        "research_pipeline_project_root",
-        lambda _study_id: root,
-    )
-
     assert (
-        tool_module._development_resume_source_job_id(object(), study)
+        resumable_planner_checkpoint_job_id(
+            study=study,
+            rows=[empty_projection, checkpoint],
+            project_root=root,
+        )
         == "compile-revalidation"
     )
 
@@ -4262,15 +4265,22 @@ def test_full_run_reports_setup_owner_before_provider_authorization(
         "cohort": {"preset": "adult_icu"},
     }
     monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: incomplete)
+    def reject(*_args: Any, **_kwargs: Any) -> Any:
+        raise research_run_submission.ResearchRunSubmissionError(
+            {
+                "error": "study_setup_incomplete",
+                "message": "Bind the research question and data source before generating the candidate plan.",
+                "owner": "easyicu.webserver.pi_copilot.workflow",
+                "next_action_code": "study_setup_incomplete",
+                "planning_prerequisites_missing": ["data_source"],
+                "missing_setup_fields": ["data_source", "outcome", "modules"],
+            }
+        )
+
     monkeypatch.setattr(
-        tool_module,
-        "_workflow_snapshot",
-        lambda _context, *, study_override=None: {
-            "next_action_code": "study_setup_incomplete",
-            # Only user-owned prerequisites may block plan generation.
-            "planning_prerequisites_missing": ["data_source"],
-            "missing_setup_fields": ["data_source", "outcome", "modules"],
-        },
+        research_run_submission,
+        "submit_research_run",
+        reject,
     )
     context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -4306,15 +4316,19 @@ def test_full_run_requires_server_receipted_eligibility_before_provider_authoriz
         "cohort": {"preset": "adult_icu"},
     }
     monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: study)
-    monkeypatch.setattr(
-        tool_module,
-        "_workflow_snapshot",
-        lambda _context, *, study_override=None: {
-            "next_action_code": "cohort_eligibility_confirmation_required",
-            "planning_prerequisites_missing": ["cohort_eligibility"],
-            "missing_setup_fields": ["cohort_eligibility", "outcome", "modules"],
-        },
-    )
+    def reject(*_args: Any, **_kwargs: Any) -> Any:
+        raise research_run_submission.ResearchRunSubmissionError(
+            {
+                "error": "cohort_eligibility_confirmation_required",
+                "message": "Confirm one cohort eligibility option before generating the candidate plan.",
+                "owner": "easyicu.webserver.pi_copilot.cohort_eligibility",
+                "next_action_code": "cohort_eligibility_confirmation_required",
+                "planning_prerequisites_missing": ["cohort_eligibility"],
+                "missing_setup_fields": ["cohort_eligibility", "outcome", "modules"],
+            }
+        )
+
+    monkeypatch.setattr(research_run_submission, "submit_research_run", reject)
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-unconfirmed-eligibility",
@@ -4416,26 +4430,13 @@ def test_full_run_uses_verified_pi_provider_and_prepared_source_authority(
             "question": "Bound aggregate scientific question",
         },
     )
-    from easyicu.webserver.routes import agent as agent_route
-
-    def submit(
-        body: dict[str, Any],
-        *,
-        account_environment: dict[str, str] | None = None,
-        metadata_only_planning_authorized: bool = False,
-    ) -> dict[str, Any]:
-        assert account_environment is None
-        assert metadata_only_planning_authorized is False
-        submitted.append(dict(body))
-        return {
-            "job_id": "agent-job-full",
-            "kind": "agent-run",
-            "status": "running",
-            "study_context_id": "study-workflow",
-            "study_context_revision": 5,
-        }
-
-    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
+    monkeypatch.setattr(
+        research_run_submission,
+        "submit_research_run",
+        lambda request, **kwargs: _record_pipeline_submission(
+            submitted, request, job_id="agent-job-full", **kwargs
+        ),
+    )
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-full-owner",
@@ -4454,19 +4455,12 @@ def test_full_run_uses_verified_pi_provider_and_prepared_source_authority(
     )
 
     assert result["code"] == "easyicu_full_run_submitted"
-    assert submitted == [
-        {
-            "path": "/private/prepared/source",
-            "study_context_id": "study-workflow",
-            "question": "Bound aggregate scientific question",
-            "run_type": "full",
-            "llm_provider": "openai",
-            "external_llm_opt_in": True,
-            "engine": "research_agent_pipeline",
-            "planner_start_mode": "auto",
-            "credential_source": "pi_verified",
-        }
-    ]
+    request = submitted[0]["request"]
+    assert request.study_context_id == "study-workflow"
+    assert request.provider == "openai"
+    assert request.credential_source == "pi_verified"
+    assert request.planner_start_mode == "auto"
+    assert submitted[0]["account_environment"] is None
 
 
 def test_candidate_plan_approval_starts_package_bound_run_instead_of_resuming_canary(
@@ -4539,26 +4533,13 @@ def test_failed_package_bound_run_retry_does_not_return_to_preview_canary(
             "planning_prerequisites_missing": [],
         },
     )
-    from easyicu.webserver.routes import agent as agent_route
-
-    def submit(
-        body: dict[str, Any],
-        *,
-        account_environment: dict[str, str] | None = None,
-        metadata_only_planning_authorized: bool = False,
-    ) -> dict[str, Any]:
-        assert account_environment is None
-        assert metadata_only_planning_authorized is False
-        submitted.append(dict(body))
-        return {
-            "job_id": "agent-job-package-retry",
-            "kind": "agent-run",
-            "status": "running",
-            "study_context_id": study["id"],
-            "study_context_revision": study["revision"],
-        }
-
-    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
+    monkeypatch.setattr(
+        research_run_submission,
+        "submit_research_run",
+        lambda request, **kwargs: _record_pipeline_submission(
+            submitted, request, job_id="agent-job-package-retry", **kwargs
+        ),
+    )
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-package-retry",
@@ -4576,17 +4557,13 @@ def test_failed_package_bound_run_retry_does_not_return_to_preview_canary(
     )
 
     assert result["code"] == "easyicu_full_run_submitted"
-    assert submitted[0]["planner_start_mode"] == "auto"
+    assert submitted[0]["request"].planner_start_mode == "auto"
 
 
 def _run_submission_rejection(
     monkeypatch: pytest.MonkeyPatch, detail: dict[str, Any]
 ) -> dict[str, Any]:
     """Drive easyicu_run to one owner rejection and return Pi's receipt."""
-
-    from fastapi import HTTPException
-
-    from easyicu.webserver.routes import agent as agent_route
 
     monkeypatch.setattr(
         tool_module,
@@ -4597,16 +4574,10 @@ def _run_submission_rejection(
         },
     )
 
-    def submit(
-        body: dict[str, Any],
-        *,
-        account_environment: dict[str, str] | None = None,
-        metadata_only_planning_authorized: bool = False,
-    ) -> dict[str, Any]:
-        assert metadata_only_planning_authorized is False
-        raise HTTPException(status_code=400, detail=detail)
+    def submit(*_args: Any, **_kwargs: Any) -> Any:
+        raise research_run_submission.ResearchRunSubmissionError(detail)
 
-    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
+    monkeypatch.setattr(research_run_submission, "submit_research_run", submit)
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-run-rejection",
@@ -4688,7 +4659,6 @@ def test_full_run_uses_the_codex_account_frozen_into_the_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easyicu.webserver import codex_account_sessions
-    from easyicu.webserver.routes import agent as agent_route
 
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -4708,29 +4678,27 @@ def test_full_run_uses_the_codex_account_frozen_into_the_session(
             "EASYICU_CODEX_MODEL": model,
         }
 
-    def submit(
-        body: dict[str, Any],
-        *,
-        account_environment: dict[str, str] | None = None,
-        metadata_only_planning_authorized: bool = False,
-    ) -> dict[str, Any]:
-        assert metadata_only_planning_authorized is False
-        captured["body"] = dict(body)
+    def submit(request: Any, **kwargs: Any) -> Any:
+        kwargs["authorize"]()
+        captured["request"] = request
+        account_environment = kwargs.get("account_environment")
         captured["environment"] = dict(account_environment or {})
-        return {
-            "job_id": "agent-job-codex",
-            "kind": "agent-run",
-            "status": "running",
-            "study_context_id": "study-workflow",
-            "study_context_revision": 5,
-        }
+        return research_run_submission.ResearchRunSubmissionReceipt(
+            job_id="agent-job-codex",
+            kind="agent-run",
+            status="running",
+            study_context_id=request.study_context_id,
+            study_context_revision=5,
+            budget_mode="full_reviewed",
+            planner_start_mode=request.planner_start_mode,
+        )
 
     monkeypatch.setattr(
         codex_account_sessions,
         "environment_for_binding",
         account_environment,
     )
-    monkeypatch.setattr(agent_route, "submit_agent_run", submit)
+    monkeypatch.setattr(research_run_submission, "submit_research_run", submit)
     context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-codex-owner",
@@ -4753,8 +4721,8 @@ def test_full_run_uses_the_codex_account_frozen_into_the_session(
     result = tool_module.execute_tool("easyicu_run", {}, context)
 
     assert result["code"] == "easyicu_full_run_submitted"
-    assert captured["body"]["llm_provider"] == "codex"
-    assert captured["body"]["credential_source"] == "codex_user_auth"
+    assert captured["request"].provider == "codex"
+    assert captured["request"].credential_source == "codex_user_auth"
     assert captured["environment"]["EASYICU_CODEX_MODEL"] == "gpt-5.6-luna"
 
 
@@ -7245,6 +7213,11 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
         lambda: workspace,
     )
     monkeypatch.setattr(
+        research_run_submission,
+        "resumable_planner_checkpoint_job_id",
+        lambda **_kwargs: resume_source_job_id,
+    )
+    monkeypatch.setattr(
         agent_route.PiProviderConfigStore,
         "research_agent_environment",
         lambda self, **_kwargs: dict(_PI_PROVIDER_ENVIRONMENT),
@@ -7302,7 +7275,7 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
         "planner_start_mode": planner_start_mode,
     }
     if resume_source_job_id:
-        payload["development_resume_source_job_id"] = resume_source_job_id
+        payload["development_resume_source_job_id"] = "client-forged-checkpoint"
     result = agent_route.jobs_agent_run(
         payload,
         request=_request(),
@@ -7315,6 +7288,7 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     assert result["planner_start_mode"] == planner_start_mode
     if resume_source_job_id:
         assert captured["development_resume_source_job_id"] == resume_source_job_id
+        assert result["resume_source_job_id"] == resume_source_job_id
     else:
         assert "development_resume_source_job_id" not in captured
 

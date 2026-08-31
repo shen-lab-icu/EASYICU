@@ -19,7 +19,12 @@ from easyicu.research_agent.acquisition.patient_grouping import (
 )
 from pydantic import ValidationError
 
-from easyicu.webserver import agent_pipeline_runs, guided_sessions, settings
+from easyicu.webserver import (
+    agent_pipeline_runs,
+    guided_sessions,
+    research_run_submission,
+    settings,
+)
 from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding,
     HostTurnGrant,
@@ -51,6 +56,28 @@ from easyicu.webserver.pi_copilot.tool_catalog import (
     ALL_TOOL_NAMES,
     RESEARCH_TOOL_NAMES,
 )
+
+
+def _record_pipeline_submission(
+    submitted: list[Any],
+    request: research_run_submission.ResearchRunSubmissionRequest,
+    *,
+    job_id: str,
+    authorize: Any = None,
+    **_kwargs: Any,
+) -> research_run_submission.ResearchRunSubmissionReceipt:
+    if authorize is not None:
+        authorize()
+    submitted.append(request)
+    return research_run_submission.ResearchRunSubmissionReceipt(
+        job_id=job_id,
+        kind="agent-run",
+        status="queued",
+        study_context_id=request.study_context_id,
+        study_context_revision=1,
+        budget_mode="full_reviewed",
+        planner_start_mode=request.planner_start_mode,
+    )
 
 
 class FakeGateway:
@@ -2843,7 +2870,6 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easyicu.webserver import study_contexts as study_owner
-    from easyicu.webserver.routes import agent as agent_routes
 
     study = {
         "id": "study-fresh-plan",
@@ -2883,20 +2909,12 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
             "resumable_here": True,
         },
     )
-    submitted: list[dict[str, Any]] = []
+    submitted: list[Any] = []
     monkeypatch.setattr(
-        agent_routes,
-        "submit_agent_run",
-        lambda payload, *, account_environment=None, metadata_only_planning_authorized=False: (
-            submitted.append(dict(payload))
-            or {
-                "job_id": "job-fresh-plan",
-                "kind": "agent-run",
-                "status": "queued",
-                "study_context_id": study["id"],
-                "study_context_revision": study["revision"],
-                "engine": "research_agent_pipeline",
-            }
+        research_run_submission,
+        "submit_research_run",
+        lambda request, **kwargs: _record_pipeline_submission(
+            submitted, request, job_id="job-fresh-plan", **kwargs
         ),
     )
     assert study_owner.scientific_configuration_sha256(study) != "a" * 64
@@ -2921,17 +2939,14 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
 
     assert result["code"] == "easyicu_full_run_submitted"
     assert result["details"]["job_id"] == "job-fresh-plan"
-    assert submitted[0]["study_context_id"] == study["id"]
-    assert submitted[0]["run_type"] == "full"
-    assert submitted[0]["engine"] == "research_agent_pipeline"
-    assert submitted[0]["planner_start_mode"] == "fresh"
+    assert submitted[0].study_context_id == study["id"]
+    assert submitted[0].intent == "reviewed_analysis"
+    assert submitted[0].planner_start_mode == "fresh"
 
 
 def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from easyicu.webserver.routes import agent as agent_routes
-
     study = {
         "id": "study-terminal-plan",
         "revision": 21,
@@ -2962,27 +2977,12 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
             }
         ],
     )
+    submitted: list[Any] = []
     monkeypatch.setattr(
-        tool_module,
-        "_development_resume_source_job_id",
-        lambda *_args, **_kwargs: pytest.fail(
-            "fresh planning must not inspect an old Planner checkpoint"
-        ),
-    )
-    submitted: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        agent_routes,
-        "submit_agent_run",
-        lambda payload, *, account_environment=None, metadata_only_planning_authorized=False: (
-            submitted.append(dict(payload))
-            or {
-                "job_id": "job-terminal-retry",
-                "kind": "agent-run",
-                "status": "queued",
-                "study_context_id": study["id"],
-                "study_context_revision": study["revision"],
-                "engine": "research_agent_pipeline",
-            }
+        research_run_submission,
+        "submit_research_run",
+        lambda request, **kwargs: _record_pipeline_submission(
+            submitted, request, job_id="job-terminal-retry", **kwargs
         ),
     )
     context = ToolExecutionContext(
@@ -3006,19 +3006,11 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
 
     assert result["code"] == "easyicu_full_run_submitted"
     assert result["details"]["job_id"] == "job-terminal-retry"
-    assert submitted == [
-        {
-            "path": "/private/export",
-            "study_context_id": study["id"],
-            "question": study["question"],
-            "run_type": "full",
-            "llm_provider": "openai",
-            "external_llm_opt_in": True,
-            "engine": "research_agent_pipeline",
-            "planner_start_mode": "fresh",
-            "credential_source": "pi_verified",
-        }
-    ]
+    assert len(submitted) == 1
+    assert submitted[0].study_context_id == study["id"]
+    assert submitted[0].provider == "openai"
+    assert submitted[0].planner_start_mode == "fresh"
+    assert not hasattr(submitted[0], "path")
 
 
 def test_preflight_only_history_replan_starts_fresh_pipeline_run(
@@ -3033,8 +3025,6 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
     A user-authorized replan starts a new run without mutating or reusing the
     unregistered candidate.
     """
-
-    from easyicu.webserver.routes import agent as agent_routes
 
     study = {
         "id": "study-preflight-only",
@@ -3070,20 +3060,12 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
             }
         ],
     )
-    submitted: list[dict[str, Any]] = []
+    submitted: list[Any] = []
     monkeypatch.setattr(
-        agent_routes,
-        "submit_agent_run",
-        lambda payload, *, account_environment=None, metadata_only_planning_authorized=False: (
-            submitted.append(dict(payload))
-            or {
-                "job_id": "job-fresh-after-bridge-failure",
-                "kind": "agent-run",
-                "status": "queued",
-                "study_context_id": study["id"],
-                "study_context_revision": study["revision"],
-                "engine": "research_agent_pipeline",
-            }
+        research_run_submission,
+        "submit_research_run",
+        lambda request, **kwargs: _record_pipeline_submission(
+            submitted, request, job_id="job-fresh-after-bridge-failure", **kwargs
         ),
     )
     context = ToolExecutionContext(
@@ -3107,16 +3089,15 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
 
     assert result["code"] == "easyicu_full_run_submitted"
     assert result["details"]["job_id"] == "job-fresh-after-bridge-failure"
-    assert submitted[0]["study_context_id"] == study["id"]
-    assert submitted[0]["run_type"] == "full"
-    assert submitted[0]["planner_start_mode"] == "fresh"
+    assert submitted[0].study_context_id == study["id"]
+    assert submitted[0].intent == "reviewed_analysis"
+    assert submitted[0].planner_start_mode == "fresh"
 
 
 def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easyicu.webserver import study_contexts as study_owner
-    from easyicu.webserver.routes import agent as agent_routes
 
     study = {
         "id": "study-current-plan",
@@ -3155,9 +3136,9 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
     )
     submitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        agent_routes,
-        "submit_agent_run",
-        lambda payload, *, account_environment=None, metadata_only_planning_authorized=False: submitted.append(dict(payload)),
+        research_run_submission,
+        "submit_research_run",
+        lambda request, **kwargs: submitted.append(request),
     )
     context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -5641,6 +5622,15 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
         }
     ]
 
+    pipeline_requests: list[Any] = []
+    monkeypatch.setattr(
+        research_run_submission,
+        "submit_research_run",
+        lambda request, **kwargs: _record_pipeline_submission(
+            pipeline_requests, request, job_id="scientific-job-2", **kwargs
+        ),
+    )
+
     full_context = ToolExecutionContext(
         session=PiSessionRecord(
             session_id="pi-full-test",
@@ -5653,17 +5643,10 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
 
     assert full_result["code"] == "easyicu_full_run_submitted"
     assert full_result["details"]["run_id_status"] == "pending_pipeline_start"
-    assert submitted_bodies[-1] == {
-        "path": "/private/project-export",
-        "study_context_id": "study-1",
-        "question": "Aggregate association question",
-        "run_type": "full",
-        "llm_provider": "openai",
-        "external_llm_opt_in": True,
-        "engine": "research_agent_pipeline",
-        "planner_start_mode": "auto",
-        "credential_source": "pi_verified",
-    }
+    assert pipeline_requests[-1].study_context_id == "study-1"
+    assert pipeline_requests[-1].provider == "openai"
+    assert pipeline_requests[-1].planner_start_mode == "auto"
+    assert not hasattr(pipeline_requests[-1], "path")
 
     conservative_model_context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -5681,8 +5664,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
 
     assert promoted_result["code"] == "easyicu_full_run_submitted"
     assert promoted_result["details"]["run_id_status"] == "pending_pipeline_start"
-    assert submitted_bodies[-1]["run_type"] == "full"
-    assert submitted_bodies[-1]["engine"] == "research_agent_pipeline"
+    assert pipeline_requests[-1].intent == "reviewed_analysis"
 
     literature_context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -5695,7 +5677,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
     literature_result = tool_module.execute_tool("easyicu_run", {}, literature_context)
 
     assert literature_result["code"] == "easyicu_full_run_submitted"
-    assert submitted_bodies[-1]["literature_search_authorized"] is True
+    assert pipeline_requests[-1].literature_search_authorized is True
 
 
 def test_plan_review_run_projection_cannot_be_mistaken_for_executed_analysis(
