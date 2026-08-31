@@ -1,8 +1,7 @@
 /* Guided Copilot progressive extraction + study-design stepper.
-   Owner file for the "Prepare data inside Copilot" inline card. screens-guided.js
-   owns state (guidedExtract / guidedDesign), event wiring, and the extraction job;
-   this module owns render-only HTML and the study-design vocabulary (outcome /
-   time-window / comparator presets + their resolvers), passed a ctx object.
+   Owner file for the "Prepare data inside Copilot" inline card. This module
+   owns extraction/design state, render HTML, and study-design vocabulary.
+   screens-guided.js coordinates the conversation and delegates effects here.
 
    Progressive disclosure: instead of one bubble with the whole classic form, the
    card walks source -> cohort -> study design -> modules -> export -> review, one
@@ -68,6 +67,63 @@
     ['review', 'Review', '确认'],
   ];
   const STEP_ORDER = STEPS.map(s => s[0]);
+
+  let extractionState = null;
+  let designState = null;
+
+  function createExtractionState(coreModules) {
+    return {
+      step: 'source',
+      path: '',
+      scan: null,
+      scanError: null,
+      scanning: false,
+      cohort: 'adult_first',
+      modules: Array.isArray(coreModules) ? coreModules.slice() : [],
+      modulesExpanded: false,
+      format: 'parquet',
+      exportDir: '',
+      merge: false,
+      maxPatients: 500,
+      running: false,
+      jobId: null,
+      progress: null,
+      result: null,
+      error: null,
+      warning: null,
+      registered: false,
+    };
+  }
+
+  function createDesignState() {
+    return {
+      outcome: '',
+      outcomeCustom: '',
+      window: 'whole_stay',
+      comparator: 'none',
+      comparatorCustom: '',
+      collected: false,
+    };
+  }
+
+  function resetState(coreModules) {
+    extractionState = createExtractionState(coreModules);
+    if (!designState) designState = createDesignState();
+    return extractionState;
+  }
+
+  function resetDesignState() {
+    designState = createDesignState();
+    return designState;
+  }
+
+  function clearState() {
+    extractionState = null;
+    designState = null;
+  }
+
+  function state() { return extractionState; }
+  function design() { return designState; }
 
   function stepIndicator(ctx, current) {
     const t = ctx.t;
@@ -337,7 +393,14 @@
   }
 
   window.EU_GUIDED_EXTRACT = {
+    clearState,
+    createDesignState,
+    createExtractionState,
+    design,
     render,
+    resetDesignState,
+    resetState,
+    state,
     STEP_ORDER,
     OUTCOME_PRESETS,
     WINDOW_PRESETS,

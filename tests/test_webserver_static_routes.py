@@ -423,6 +423,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     idea_js = _static_js("screens-guided-idea.js")
     projects_js = _static_js("screens-guided-projects.js")
     provider_js = _static_js("screens-guided-idea-provider.js")
+    extract_js = _static_js("screens-guided-extract.js")
     api_js = _static_js("api.js")
     guided_css = _static_css("guided.css")
     index_html = _static_html("index.html")
@@ -434,13 +435,13 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "function registerGuidedModuleExport" in guided_js
     assert "GUIDED_EXTRACT_MODULES" in guided_js
     assert "GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30" in guided_js
-    assert "data-gx-path" in guided_js
-    assert "data-gx-analyze" in guided_js
-    assert "data-gx-run" in guided_js
-    assert 'data-gx-module-set="all"' in guided_js
-    assert 'data-gx-module-set="none"' in guided_js
-    assert "format: 'parquet'" in guided_js
-    assert 'data-gx-format="${fmt}"' in guided_js
+    assert "data-gx-path" in extract_js
+    assert "data-gx-analyze" in extract_js
+    assert "data-gx-run" in extract_js
+    assert 'data-gx-module-set="all"' in extract_js
+    assert 'data-gx-module-set="none"' in extract_js
+    assert "format: 'parquet'" in extract_js
+    assert 'data-gx-format="${fmt}"' in extract_js
     assert "window.EU_API.startExtractionJob" in guided_js
     assert (
         "new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events')"
@@ -449,7 +450,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "window.EU_API.registerWorkspaceSource(out" in guided_js
     assert "window.EU_API.scanPath(path, null)" in guided_js
     assert "source !== 'module'" in guided_js
-    assert "No path is prefilled because every user machine is different" in guided_js
+    assert "No path is prefilled because every machine is different" in extract_js
     assert "goal === 'data_extraction'" in guided_js
     assert "isGuidedExtractionIntent(v)" in guided_js
     assert "function startGuidedReviewFlow" in guided_js
@@ -565,8 +566,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert provider_pos < idea_plan_pos < guided_pos
 
     # Progressive extraction + study-design stepper owner file (screens-guided-extract.js)
-    extract_js = _static_js("screens-guided-extract.js")
-    assert "js/screens-guided-extract.js?v=20260707-copilot" in index_html
+    assert "js/screens-guided-extract.js?v=20260831-state-owner1" in index_html
     extract_pos = index_html.find("screens-guided-extract.js")
     assert extract_pos != -1 and extract_pos < guided_pos
     assert "window.EU_GUIDED_EXTRACT = {" in extract_js
@@ -576,15 +576,20 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "Comparison" in extract_js
     assert "Export destination" in extract_js
     assert "resolveOutcome" in extract_js and "windowHours" in extract_js
-    # main file owns state + wiring and delegates rendering to the sibling
-    assert "window.EU_GUIDED_EXTRACT.render" in guided_js
+    # extraction state + rendering have one owner; the shell retains only
+    # conversation coordination and delegates through its explicit interface.
+    assert "const EXTRACT = window.EU_GUIDED_EXTRACT" in guided_js
+    assert "EXTRACT.render" in guided_js
+    assert "let extractionState = null" in extract_js
+    assert "let designState = null" in extract_js
+    assert "guidedExtract" not in guided_js.split("/* ============== inline native data extraction ============== */")[0]
     assert "function goGuidedExtractStep" in guided_js
     assert "function commitGuidedDesign" in guided_js
     assert "function resetGuidedDesignState" in guided_js
     assert "guidedDesignWindowHours()" in guided_js
     assert "out_dir:" in guided_js  # export destination reaches the extraction job
     assert "study_design" in guided_js  # study design persisted to project memory
-    # step + design controls are wired
+    # step + design controls are rendered by the owner and wired by the shell
     for marker in (
         "data-gx-step-next",
         "data-gx-goto-step",
