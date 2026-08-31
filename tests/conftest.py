@@ -4,6 +4,7 @@ import importlib.util
 import os
 from functools import lru_cache
 import sys
+import tempfile
 from pathlib import Path
 import types
 from typing import Any
@@ -13,6 +14,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 RESEARCH_AGENT_TEST_ROOT = REPO_ROOT / "tests" / "research_agent"
+
+# Several WebApp owners resolve their default persistence path while their
+# module is imported during pytest collection.  A fixture is therefore too
+# late to protect the user's real ~/.easyicu state.  Give the entire pytest
+# process one disposable EasyICU home before any test module can import those
+# owners; individual tests may still override the variable with monkeypatch.
+_PYTEST_EASYICU_HOME = tempfile.TemporaryDirectory(prefix="easyicu-pytest-state-")
+os.environ["EASYICU_HOME"] = _PYTEST_EASYICU_HOME.name
 
 for path in (REPO_ROOT, SRC_ROOT):
     if str(path) not in sys.path:
