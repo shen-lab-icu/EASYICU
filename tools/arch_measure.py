@@ -168,6 +168,9 @@ TARGET_FILES: List[Path] = [
     RA / "discovery" / "idea_mining.py",
     RA / "execution" / "runner.py",
     RA / "execution" / "runners" / "deterministic_robustness.py",
+    # Ratchet the progressive Planner only after its owner work landed; this
+    # keeps the baseline pinned to committed bytes rather than a transient edit.
+    RA / "agents" / "progressive_planner.py",
 ]
 # (file, function name) — first match by name (top-level or nested).
 TARGET_FUNCTIONS: List[Tuple[str, str]] = [
