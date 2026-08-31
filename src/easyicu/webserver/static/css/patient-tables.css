@@ -62,7 +62,7 @@
   color:var(--ink-4);
   font-size:13px;
 }
-.patient-preview-table th,.patient-preview-table td{font-size:13px;line-height:1.45;padding-top:11px;padding-bottom:11px}
+.eu-table.patient-preview-table th,.eu-table.patient-preview-table td{font-size:13px;line-height:1.45;padding-top:11px;padding-bottom:11px}
 @media(max-width:1100px){.pt-table-dashboard{grid-template-columns:1fr}.pt-pareto-rows button{grid-template-columns:100px minmax(110px,1fr) 72px 54px}}
 .patient-page-readout{
   display:flex;

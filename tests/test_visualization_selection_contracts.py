@@ -16,7 +16,8 @@ def _text(relative: str) -> str:
 def test_patient_visualization_selections_have_route_owned_markers() -> None:
     assert "data-pt-table-dashboard" in _text("js/screens-viz-patient-tables.js")
     assert "data-pt-module-pareto" in _text("js/screens-viz-patient-tables.js")
-    assert "slice(0, 5)" in _text("js/screens-viz-patient-series.js")
+    assert "gallerySignals(lanes, 5)" in _text("js/screens-viz-patient-series.js")
+    assert "buckets.forEach(bucket" in _text("js/screens-viz-patient-series.js")
     assert "data-patient-trajectory-summary" in _text("js/screens-viz-patient-series.js")
     assert "data-patient-distribution-latest" in _text("js/screens-viz-patient-overview.js")
     assert "data-patient-missing-record-scatter" in _text("js/screens-viz-patient-overview.js")
@@ -72,4 +73,31 @@ def test_visualization_typography_does_not_use_tiny_new_labels() -> None:
     assert "pt-table-dashboard" in owner_css
     assert "dict-audit-track" in owner_css
     assert "xdb-three-scale" in owner_css
+    patient_series_css = _text("css/patient-series.css")
+    patient_charts_js = _text("js/screens-viz-patient-charts.js")
+    for tiny in ("font-size:9px", "font-size:10.5px", "font-size:11px"):
+        assert tiny not in patient_series_css
+    assert "fontSize: 9" not in patient_charts_js
 
+
+def test_visualization_css_markers_stay_with_their_route_owners() -> None:
+    patient = _text("css/patient.css") + _text("css/patient-series.css") + _text("css/patient-tables.css")
+    cohort = _text("css/cohort.css") + _text("css/cohort-charts.css")
+    crossdb = _text("css/crossdb.css")
+    dictionary = _text("css/deepdive.css")
+
+    assert "pt-distribution-latest" in patient
+    assert "cohort-coverage-forest" not in patient
+    assert "xdb-three-scale" not in patient
+    assert "dict-audit-track" not in patient
+
+    assert "cohort-coverage-forest" in cohort
+    assert "pt-distribution-latest" not in cohort
+    assert "xdb-three-scale" not in cohort
+
+    assert "xdb-three-scale" in crossdb
+    assert "pt-distribution-latest" not in crossdb
+    assert "cohort-coverage-forest" not in crossdb
+
+    assert "dict-audit-track" in dictionary
+    assert "xdb-three-scale" not in dictionary

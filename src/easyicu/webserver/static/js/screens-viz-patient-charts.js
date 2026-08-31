@@ -389,7 +389,7 @@
         axisTick: { show: false },
         axisLabel: {
           color: colors.muted,
-          fontSize: 9,
+          fontSize: 12,
           formatter: value => formatNumber(value, 1),
         },
         splitLine: { lineStyle: { color: colors.hair } },

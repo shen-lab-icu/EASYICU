@@ -54,6 +54,10 @@
     return window.EU_PALETTE.color(index);
   }
 
+  function scientificLabel(value) {
+    return String(value == null ? '' : value).replace(/^[^A-Za-z0-9\u4e00-\u9fff]+\s*/, '');
+  }
+
   function beginCharts() {
     if (chartOwner && typeof chartOwner.begin === 'function') chartOwner.begin();
   }
@@ -303,7 +307,7 @@
           <span class="pill">${h.fmtInt(rows.length)}${scope.partial ? ` / ${h.fmtInt(scope.totalModules)}` : ''} ${h.t('modules audited', '个模块已审计')}</span>
         </div>
         ${partialScopeNotice(payload, config)}
-        ${labels.length === 2 ? `<div class="xdb-paired-coverage" data-crossdb-paired-coverage><div class="xdb-paired-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>${rows.map(row => { const values=(row.values||[]).map(value=>value&&value.present&&Number.isFinite(Number(value.coverage_pct))?Math.max(0,Math.min(100,Number(value.coverage_pct))):null); return `<div class="xdb-paired-row"><b>${h.esc(h.catalogModuleLabel(row.module))}</b><div class="xdb-paired-track">${values[0]!=null&&values[1]!=null?`<i class="xdb-paired-link" style="left:${Math.min(values[0],values[1])}%;width:${Math.abs(values[1]-values[0])}%"></i>`:''}${values.map((value,index)=>value==null?'':`<i class="xdb-paired-point" style="left:${value}%;background:${palette(index)}" title="${h.esc(labels[index])}: ${h.fmtPct(value)}"></i>`).join('')}</div><span>${values.map((value,index)=>value==null?'—':`${h.esc(labels[index])} ${h.fmtPct(value)}`).join(' · ')}</span></div>`;}).join('')}<div class="xdb-paired-legend">${labels.map((label,index)=>`<span><i style="background:${palette(index)}"></i>${h.esc(label)}</span>`).join('')}</div></div>` : ''}
+        ${labels.length === 2 ? `<div class="xdb-paired-coverage" data-crossdb-paired-coverage><div class="xdb-paired-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>${rows.map(row => { const values=(row.values||[]).map(value=>value&&value.present&&Number.isFinite(Number(value.coverage_pct))?Math.max(0,Math.min(100,Number(value.coverage_pct))):null); return `<div class="xdb-paired-row"><b>${h.esc(scientificLabel(h.catalogModuleLabel(row.module)))}</b><div class="xdb-paired-track">${values[0]!=null&&values[1]!=null?`<i class="xdb-paired-link" style="left:${Math.min(values[0],values[1])}%;width:${Math.abs(values[1]-values[0])}%"></i>`:''}${values.map((value,index)=>value==null?'':`<i class="xdb-paired-point" style="left:${value}%;background:${palette(index)}" title="${h.esc(labels[index])}: ${h.fmtPct(value)}"></i>`).join('')}</div><span>${values.map((value,index)=>value==null?'—':`${h.esc(labels[index])} ${h.fmtPct(value)}`).join(' · ')}</span></div>`;}).join('')}<div class="xdb-paired-legend">${labels.map((label,index)=>`<span><i style="background:${palette(index)}"></i>${h.esc(label)}</span>`).join('')}</div></div>` : ''}
         <details class="xdb-exact-table"><summary>${h.t('Open exact coverage table', '展开精确覆盖表')}</summary><div class="table-wrap table-scroll mt-10">
           <table class="eu-table">
             <thead><tr><th>${h.t('Module', '模块')}</th>${labels.map(label => `<th class="num">${h.esc(label)}</th>`).join('')}<th class="num">${h.t('Shared', '共享')}</th></tr></thead>
@@ -330,7 +334,7 @@
     const values = item.row.values || [];
     return `<article class="xdb-feature-detail">
       <div class="xdb-section-head">
-        <div><h2>${h.esc(meta.name || item.row.feature)}</h2><p>${h.esc(h.catalogModuleLabel(item.module.module))} · <span class="mono">${h.esc(item.row.feature)}</span>${meta.unit ? ` · ${h.esc(meta.unit)}` : ''} · ${h.fmtInt(values.reduce((sum,value)=>sum+Number(value && (value.non_null || value.n) || 0),0))} ${h.t('observed values', '个观测值')}</p></div>
+        <div><h2>${h.esc(meta.name || item.row.feature)}</h2><p>${h.esc(scientificLabel(h.catalogModuleLabel(item.module.module)))} · <span class="mono">${h.esc(item.row.feature)}</span>${meta.unit ? ` · ${h.esc(meta.unit)}` : ''} · ${h.fmtInt(values.reduce((sum,value)=>sum+Number(value && (value.non_null || value.n) || 0),0))} ${h.t('observed values', '个观测值')}</p></div>
         <span class="pill dashed">${h.fmtInt(values.filter(value => value && value.present).length)} / ${h.fmtInt(labels.length)} ${h.t('sources present', '个来源存在')}</span>
       </div>
       ${numericChart(item, labels, config)}
