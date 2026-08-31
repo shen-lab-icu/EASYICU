@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..canonical_json import canonical_sha256
@@ -140,31 +139,6 @@ _TYPED_PRODUCT_TOKEN = re.compile(
 )
 _SEPARATE_ANALYSIS_STEP = re.compile(r"\bseparate\s+analysis\s+step\b", re.I)
 _EXPLICIT_FIGURE_OUTPUT = re.compile(r"\bfigures?\b", re.I)
-
-
-@dataclass(frozen=True)
-class ProgressivePlannerRunFacts:
-    """Atomic snapshot of one Progressive Planner attempt."""
-
-    prompt_metrics: Mapping[str, Any]
-    compile_receipt: Optional[ProgressivePlanCompileReceipt]
-    outline: Optional[ProgressivePlanOutline]
-    foundation: Optional[ProgressiveFoundationMaterialization]
-    materializations: tuple[ProgressiveStepMaterialization, ...]
-    compile_failure_attempts: tuple[ProgressiveCompileReplayAttempt, ...]
-    skeleton: Optional[ProgressivePlanSkeleton]
-    resume_validated: bool
-    dropped_plan_keys: Mapping[str, tuple[str, ...]]
-
-    @property
-    def complete_for_persistence(self) -> bool:
-        return bool(
-            self.outline is not None
-            and self.foundation is not None
-            and self.materializations
-            and self.skeleton is not None
-            and self.compile_receipt is not None
-        )
 
 
 def _sealed_cohort_predicate_binding_rows(
@@ -1665,24 +1639,6 @@ class ProgressivePlannerAgent:
         snapshot = getattr(self.llm, "efficiency_snapshot", None)
         if callable(snapshot) and self.last_prompt_metrics:
             self.last_prompt_metrics["efficiency_budget"] = snapshot()
-
-    def snapshot_run_facts(self) -> ProgressivePlannerRunFacts:
-        """Return all success or failure facts from the current attempt at once."""
-
-        return ProgressivePlannerRunFacts(
-            prompt_metrics=dict(self.last_prompt_metrics),
-            compile_receipt=self.last_compile_receipt,
-            outline=self.last_outline,
-            foundation=self.last_foundation,
-            materializations=tuple(self.last_materializations),
-            compile_failure_attempts=tuple(self.last_compile_failure_attempts),
-            skeleton=self.last_skeleton,
-            resume_validated=bool(self.last_resume_validated),
-            dropped_plan_keys={
-                str(key): tuple(str(value) for value in values)
-                for key, values in self.last_dropped_plan_keys.items()
-            },
-        )
 
     @staticmethod
     def _request_authorities(
@@ -4160,7 +4116,6 @@ class ProgressivePlannerAgent:
 
 __all__ = [
     "ProgressivePlannerAgent",
-    "ProgressivePlannerRunFacts",
     "candidate_analysis_types",
     "progressive_cohort_concept_ids",
     "select_progressive_variables",
