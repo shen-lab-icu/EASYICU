@@ -3680,7 +3680,7 @@
         exact: false,
       };
     }
-    const granularity = SOFA_MATRIX_GRANULARITIES[cohortSofaMatrixGranularity] ? cohortSofaMatrixGranularity : 'medium';
+    const granularity = SOFA_MATRIX_GRANULARITIES[cohortSofaMatrixGranularity] ? cohortSofaMatrixGranularity : 'exact';
     const bins = SOFA_MATRIX_GRANULARITIES[granularity].bins;
     const paired = Number(reclass.paired_count) || Array.from(exactMap.values()).reduce((acc, value) => acc + value, 0) || 0;
     const matrix = bins.map(sourceBin => {
@@ -3738,7 +3738,7 @@
       <div class="sofa-matrix-head mt-12">
         <div>
           <div class="rc-sec-t">${cohortText('Worst-ICU severity transition matrix')}</div>
-          <p>${hasExactMatrix ? cohortText('Rows are SOFA-1 score bands; columns are SOFA-2 score bands. Use the granularity control to move from clinical bands to exact 0-24 scores.') : cohortText('Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.')}</p>
+          <p>${pairedExact ? t('Both axes run from 0 to 24; bubble size is the paired count and the dashed line marks identical scores.', '横轴与纵轴均为 0–24 分；气泡大小表示配对人数，虚线表示两版评分完全相同。') : hasExactMatrix ? cohortText('Rows are SOFA-1 score bands; columns are SOFA-2 score bands. Use the granularity control to move from clinical bands to exact 0-24 scores.') : cohortText('Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.')}</p>
         </div>
         <div class="sofa-matrix-controls">
           ${cohortSofaGranularityButtons(hasExactMatrix)}
@@ -3763,9 +3763,9 @@
           xLabel: 'SOFA-2',
           yLabel: 'SOFA-1',
           valueLabel: mode === 'count' ? 'N' : '%',
-          sameLabel: cohortText('Same severity band'),
-          upLabel: cohortText('SOFA-2 higher band'),
-          downLabel: cohortText('SOFA-2 lower band'),
+          sameLabel: pairedExact ? t('Same score', '相同分数') : cohortText('Same severity band'),
+          upLabel: pairedExact ? t('SOFA-2 higher score', 'SOFA-2 分数更高') : cohortText('SOFA-2 higher band'),
+          downLabel: pairedExact ? t('SOFA-2 lower score', 'SOFA-2 分数更低') : cohortText('SOFA-2 lower band'),
           pairedExact,
         })
         : ''}
@@ -4190,31 +4190,6 @@
         </div>
       </div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
-  }
-
-  function cohortGroupComparisonChart(rows, columns) {
-    const cols = columns || [];
-    const metrics = (rows || []).filter(r => (r.values || []).some(v => typeof v === 'number' && Number.isFinite(v)));
-    if (!metrics.length || !cols.length) return '';
-    /* One palette, from the owner. This list used to put #2563eb beside
-       #8b5cf6 — the adjacency the shared palette was reordered to remove. */
-    const colors = window.EU_PALETTE.series();
-    return `
-      <div class="cgc">
-        <div class="cgc-legend">${cols.map((c, i) => `<span><i style="background:${colors[i % colors.length]};"></i>${esc(cohortText(c))}</span>`).join('')}</div>
-        ${metrics.map(row => {
-          const vals = (row.values || []).map(v => (typeof v === 'number' && Number.isFinite(v)) ? v : null);
-          const maxV = Math.max(1, ...vals.map(v => v == null ? 0 : Math.abs(v)));
-          return `
-          <div class="cgc-row">
-            <div class="cgc-metric">${esc(cohortText(row.metric))}${row.unit ? ` <span class="mono">${esc(cohortText(row.unit))}</span>` : ''}</div>
-            <div class="cgc-bars">
-              ${vals.map((v, i) => `<div class="cgc-bar"><div class="cgc-fill" style="width:${v == null ? 0 : (Math.abs(v) / maxV * 100).toFixed(0)}%;background:${colors[i % colors.length]};"></div><span class="cgc-val">${cohortProfileValue(row, v)}</span></div>`).join('')}
-            </div>
-          </div>`;
-        }).join('')}
-        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Bars compare group summaries (medians / percentages) side by side — descriptive only, no statistical test. To test a difference, continue with this cohort in Guided Copilot.', '条形图并排对比各组的汇总值（中位数 / 百分比）—— 仅为描述性对比，未做统计检验。想检验差异，请把该队列带入「研究引导」继续。')}</span></div>
-      </div>`;
   }
 
   function cohortGroupsBody(reviewOverride) {

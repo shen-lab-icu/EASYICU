@@ -366,6 +366,27 @@
     return rows;
   }
 
+  function gallerySignals(lanes, limit = 5) {
+    const buckets = (lanes || []).map((lane, laneIndex) =>
+      ((lane && lane.signals) || [])
+        .map((sig, signalIndex) => ({ lane, sig, laneIndex, signalIndex }))
+        .filter(row => numericValues(row.sig).length >= 2)
+    ).filter(bucket => bucket.length);
+    const selected = [];
+    let depth = 0;
+    while (selected.length < limit) {
+      let added = false;
+      buckets.forEach(bucket => {
+        if (selected.length >= limit || !bucket[depth]) return;
+        selected.push(bucket[depth]);
+        added = true;
+      });
+      if (!added) break;
+      depth += 1;
+    }
+    return selected;
+  }
+
   function renderModeBar(mode, helpers) {
     const modes = [
       ['lanes', hT(helpers, 'Module overview', '模块总览'), hT(helpers, 'All modules, features, and loading states', '全部模块、特征与加载状态')],
@@ -402,7 +423,7 @@
   }
 
   function renderSinglePatient(lanes, selected, helpers) {
-    const signals = flattenSignals(lanes).slice(0, 5);
+    const signals = gallerySignals(lanes, 5);
     const xLabels = signalTimeLabels(signals.map(row => row.sig), helpers, helpers.demoHours ? helpers.demoHours() : null);
     const observedTimes = signals.flatMap(row => numericSamples(row.sig).times.map(Number).filter(Number.isFinite));
     const xDomain = observedTimes.length ? [Math.min(...observedTimes), Math.max(...observedTimes)] : null;

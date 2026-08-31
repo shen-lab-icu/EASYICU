@@ -418,7 +418,7 @@
   function heatmapSlot(spec) {
     const dense = (spec.bins || []).length > 12;
     return `${slot(
-      'heatmap',
+      spec.pairedExact ? 'paired' : 'heatmap',
       heatmapOption(spec),
       heatmapFallback(spec),
       spec.label,

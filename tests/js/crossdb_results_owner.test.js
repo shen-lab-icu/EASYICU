@@ -188,7 +188,7 @@ const qualityTab = fakeControl({ crossdbResultTab: 'quality' });
 owner.bind(rootWith({ '[data-crossdb-result-tab]': [qualityTab] }), payload, config);
 qualityTab.fire('click');
 const quality = owner.render(payload, config);
-assert.match(quality, /Quality, scope, and provenance/);
+assert.match(quality, /Quality & provenance/);
 assert.match(quality, /matched_cohort/);
 assert.match(quality, /raw rows returned/);
 

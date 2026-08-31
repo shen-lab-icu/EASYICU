@@ -27,6 +27,14 @@
   font-size:14px;
   line-height:1.45;
 }
+.pt-series-workbench-head .eyebrow,
+.pt-series-panel-head .eyebrow,
+.pt-series-workbench-head .pill,
+.pt-series-panel-head .pill,
+.pt-compare-feature .eyebrow,
+.pt-compare-feature .pill{
+  font-size:12.5px;
+}
 .pt-series-modebar{
   display:grid;
   grid-template-columns:repeat(3, minmax(0,1fr));
@@ -171,7 +179,7 @@
 .pt-catalog-scope{
   margin-top:4px;
   color:var(--ink-4);
-  font-size:10.5px;
+  font-size:12px;
 }
 .pt-feature-toolbar{
   display:flex;
@@ -184,7 +192,7 @@
   background:var(--surface-2);
   padding:9px 10px;
   color:var(--ink-4);
-  font-size:10.5px;
+  font-size:12px;
   line-height:1.4;
 }
 .pt-feature-toolbar > div,
@@ -205,7 +213,7 @@
   background:var(--surface-2);
   padding:9px 10px;
   color:var(--ink-4);
-  font-size:10.5px;
+  font-size:12px;
   line-height:1.45;
 }
 .pt-feature-inventory{
@@ -220,13 +228,13 @@
   gap:12px;
   cursor:pointer;
   color:var(--ink-3);
-  font-size:11.5px;
+  font-size:12.5px;
   font-weight:650;
   list-style-position:inside;
 }
 .pt-feature-inventory summary .mono{
   color:var(--ink-4);
-  font-size:10.5px;
+  font-size:12px;
   font-weight:500;
 }
 .pt-feature-inventory-grid{
@@ -311,24 +319,24 @@
 }
 .pt-feature-inventory-copy b{
   color:var(--ink-2);
-  font-size:10.75px;
+  font-size:12.5px;
   font-weight:600;
 }
 .pt-feature-inventory-copy span{
   margin-top:1px;
   color:var(--ink-4);
-  font-size:9px;
+  font-size:12px;
 }
 .pt-feature-inventory-item em{
   margin-left:auto;
   color:var(--ink-4);
-  font-size:9px;
+  font-size:12px;
   font-style:normal;
 }
 .pt-multi-note{
   margin:6px 2px 0;
   color:var(--ink-4);
-  font-size:10.5px;
+  font-size:12px;
   line-height:1.45;
 }
 .pt-multi-chart svg{
@@ -346,7 +354,7 @@
 }
 .pt-multi-chart .axis{
   fill:var(--ink-4);
-  font-size:11px;
+  font-size:12px;
 }
 .pt-trace-legend{
   display:grid;
