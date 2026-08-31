@@ -29,6 +29,12 @@ INPUTS = (
     "table:measurement_process",
 )
 
+LEGACY_INPUTS = (
+    "table:absolute_risk_context",
+    "table:robustness_matrix",
+    "table:robustness_summary",
+)
+
 
 def _frames() -> dict[str, pd.DataFrame]:
     return {
@@ -215,6 +221,82 @@ def test_renderer_exports_four_source_bound_panels(tmp_path: Path) -> None:
         )
         == []
     )
+
+
+def test_approved_legacy_article_step_uses_sealed_renderer_without_plan_rewrite(
+    tmp_path: Path,
+) -> None:
+    frames = {
+        LEGACY_INPUTS[0]: pd.DataFrame(
+            {
+                "label": ["Observed", "Observed", "Not measured", "Not measured"],
+                "group_value": ["observed", "observed", "no_source", "no_source"],
+                "estimate_type": [
+                    "prevalence",
+                    "outcome_risk",
+                    "prevalence",
+                    "outcome_risk",
+                ],
+                "estimate": [0.54, 0.14, 0.46, 0.09],
+                # The first lower bound is a few ulps inside its estimate.  A
+                # rendering-only error bar must clip that distance to zero.
+                "ci_low": [0.5400000000000001, 0.13, 0.45, 0.08],
+                "ci_high": [0.55, 0.15, 0.47, 0.10],
+            }
+        ),
+        LEGACY_INPUTS[1]: pd.DataFrame(
+            {
+                "spec_id": ["primary", "linear_sensitivity"],
+                "axis": ["primary", "functional_form"],
+                "converged": [True, True],
+            }
+        ),
+        LEGACY_INPUTS[2]: pd.DataFrame(
+            {
+                "axis": ["primary", "functional_form"],
+                "total_specs": [1, 1],
+                "converged_specs": [1, 1],
+                "range_low": [1.89, 1.24],
+                "range_high": [2.03, 1.27],
+            }
+        ),
+    }
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    step = AnalysisStep(
+        step_id="assemble_article_displays",
+        planned_analysis_role="auxiliary",
+        intent="Assemble the already-reviewed article display.",
+        method="visualization",
+        inputs=list(LEGACY_INPUTS),
+        expected_outputs=["figure:assemble_article_displays"],
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"} for key in LEGACY_INPUTS
+        ],
+    )
+    plan = AnalysisPlan(research_question="Association?", steps=[step])
+
+    assert landmark_association_figure_executor_owns_step(
+        step, resolved_bindings=bindings
+    )
+    selection = select_standard_executor(step, plan=plan, resolved_bindings=bindings)
+    assert selection is not None
+    assert selection.analysis_kind == "landmark_association_composite_figure"
+    summary = run_landmark_association_figure(
+        out_dir=tmp_path / "outputs",
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": step.step_id, "inputs": bindings},
+        step_id=step.step_id,
+        figure_product="assemble_article_displays",
+        input_keys=LEGACY_INPUTS,
+    )
+    assert summary["status"] == "ok"
+    assert summary["method"] == "deterministic_legacy_landmark_article_figure"
+    assert len(summary["source_data_files"]) == 3
+    assert (tmp_path / "outputs" / "assemble_article_displays.png").is_file()
 
 
 def test_renderer_moves_routine_measurement_panel_out_of_main_figure(

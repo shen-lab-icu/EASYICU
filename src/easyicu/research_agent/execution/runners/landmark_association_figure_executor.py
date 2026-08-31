@@ -40,8 +40,17 @@ _REQUIRED_COLUMNS = {
         {"label", "estimate_type", "estimate", "ci_low", "ci_high"}
     ),
     "table:robustness_summary": frozenset({"axis", "total_specs", "converged_specs"}),
+    "table:robustness_matrix": frozenset({"spec_id", "axis", "converged"}),
     "measurement_process": frozenset({"concept", "n_total", "measured_one_n"}),
 }
+
+_LEGACY_LANDMARK_ARTICLE_INPUTS = frozenset(
+    {
+        "table:absolute_risk_context",
+        "table:robustness_matrix",
+        "table:robustness_summary",
+    }
+)
 
 
 def _figure_product(value: Any) -> str | None:
@@ -98,6 +107,12 @@ def landmark_association_figure_input_profile(
     inputs: list[str] | tuple[str, ...],
 ) -> tuple[str, ...] | None:
     values = tuple(str(value or "").strip() for value in inputs)
+    if (
+        len(values) == len(_LEGACY_LANDMARK_ARTICLE_INPUTS)
+        and len(values) == len(set(values))
+        and set(values) == _LEGACY_LANDMARK_ARTICLE_INPUTS
+    ):
+        return values
     curve = _curve_input(values)
     measurement = _measurement_input(values)
     if (
@@ -141,9 +156,9 @@ def landmark_association_figure_executor_owns_step(
         or set(resolved_bindings) != set(profile)
     ):
         return False
-    curve = _curve_input(profile)
-    measurement = _measurement_input(profile)
-    assert curve is not None and measurement is not None
+    legacy_profile = set(profile) == _LEGACY_LANDMARK_ARTICLE_INPUTS
+    curve = None if legacy_profile else _curve_input(profile)
+    measurement = None if legacy_profile else _measurement_input(profile)
     return all(
         _binding_has_columns(
             resolved_bindings.get(key),
@@ -156,7 +171,7 @@ def landmark_association_figure_executor_owns_step(
             ],
         )
         for key in profile
-    )
+    ) and (legacy_profile or (curve is not None and measurement is not None))
 
 
 def landmark_association_figure_executor_code(step: AnalysisStep) -> str:
@@ -251,6 +266,268 @@ def _continuous_exposure_label(column: str) -> str:
     return clinical_names.get(token, _label(token).title())
 
 
+def _run_legacy_landmark_article_figure(
+    *,
+    out_dir: Path,
+    step_id: str,
+    figure_product: str,
+    profile: tuple[str, ...],
+    bound: Mapping[str, BoundTypedInput],
+) -> dict[str, Any]:
+    """Render the already-approved three-table article display safely.
+
+    This compatibility path deliberately preserves the reviewed plan and its
+    exact input edges.  It projects registered rows only; it never reopens the
+    cohort, model, or estimand during crash recovery.
+    """
+
+    risk = bound["table:absolute_risk_context"].frame.copy()
+    robustness = bound["table:robustness_summary"].frame.copy()
+    matrix = bound["table:robustness_matrix"].frame.copy()
+    for key, frame in (
+        ("table:absolute_risk_context", risk),
+        ("table:robustness_summary", robustness),
+        ("table:robustness_matrix", matrix),
+    ):
+        missing = _REQUIRED_COLUMNS[key] - set(frame.columns)
+        if missing:
+            raise ValueError(f"{key} is missing required columns: {sorted(missing)!r}")
+
+    shown_risk = risk.loc[
+        risk["estimate_type"].astype(str).isin(["outcome_risk", "prevalence"])
+    ].copy()
+    if shown_risk.empty:
+        raise ValueError("absolute-risk context has no displayable estimate rows")
+    _require_finite_columns(shown_risk, ("estimate", "ci_low", "ci_high"))
+
+    source_files: list[str] = []
+    for key, item in bound.items():
+        name = f"{key.partition(':')[2]}_source_data.csv"
+        source = item.frame.copy()
+        source.insert(0, "source_row_index", source.index.astype(int))
+        source.insert(1, "source_table", item.path.name)
+        source.to_csv(out_dir / name, index=False)
+        source_files.append(name)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    palette = apply_publication_style(font_size=7.0)
+    fig = plt.figure(figsize=(183 / 25.4, 112 / 25.4), constrained_layout=True)
+    grid = fig.add_gridspec(2, 2, height_ratios=(1.0, 0.72))
+    ax_context = fig.add_subplot(grid[0, 0])
+    ax_robustness = fig.add_subplot(grid[0, 1])
+    ax_matrix = fig.add_subplot(grid[1, :])
+
+    group_column = "group_value" if "group_value" in shown_risk.columns else "label"
+    display = shown_risk.copy()
+    display["group_key"] = display[group_column].astype(str)
+    group_keys = list(dict.fromkeys(display["group_key"].tolist()))
+    positions = np.arange(len(group_keys), dtype=float)
+    height = 0.34
+    series_specs = (
+        ("prevalence", "Cohort share", palette["blue_soft"], -height / 2),
+        ("outcome_risk", "Observed outcome risk", palette["orange"], height / 2),
+    )
+    for estimate_type, legend_label, color, offset in series_specs:
+        subset = display.loc[display["estimate_type"].astype(str).eq(estimate_type)]
+        if subset["group_key"].duplicated().any():
+            raise ValueError(
+                f"absolute-risk context repeats {estimate_type!r} within a group"
+            )
+        by_group = subset.set_index("group_key")
+        values = np.array(
+            [
+                100.0 * float(by_group.loc[key, "estimate"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        lower = np.array(
+            [
+                100.0 * float(by_group.loc[key, "ci_low"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        upper = np.array(
+            [
+                100.0 * float(by_group.loc[key, "ci_high"])
+                if key in by_group.index
+                else np.nan
+                for key in group_keys
+            ],
+            dtype=float,
+        )
+        valid = np.isfinite(values) & np.isfinite(lower) & np.isfinite(upper)
+        if not valid.any():
+            continue
+        # Numerical rounding can put a bound a few ulps inside its estimate.
+        # Error-bar geometry is display-only, so clip that tiny distance to 0.
+        xerr = np.vstack(
+            [
+                np.maximum(values[valid] - lower[valid], 0.0),
+                np.maximum(upper[valid] - values[valid], 0.0),
+            ]
+        )
+        ax_context.barh(
+            positions[valid] + offset,
+            values[valid],
+            height=height,
+            color=color,
+            xerr=xerr,
+            capsize=2.2,
+            label=legend_label,
+        )
+    ax_context.set_yticks(
+        positions,
+        [_measurement_state_label(value) for value in group_keys],
+        fontsize=5.8,
+    )
+    ax_context.invert_yaxis()
+    ax_context.set_xlabel("Percent")
+    ax_context.set_title("Observed data context", loc="left", pad=7)
+    ax_context.legend(frameon=False, fontsize=5.4, loc="lower right")
+    add_panel_label(ax_context, "a", x=-0.15, y=1.04, fontsize=8.0)
+
+    robustness_display = draw_robustness_coverage(
+        ax_robustness,
+        robustness,
+        color=palette["blue"],
+        label_formatter=lambda value: display_label(value),
+    )
+    add_panel_label(ax_robustness, "b", x=-0.12, y=1.04, fontsize=8.0)
+
+    matrix_display = matrix.copy()
+    matrix_display["converged_bool"] = (
+        matrix_display["converged"].astype(str).str.lower().isin({"true", "1", "yes"})
+    )
+    matrix_display = matrix_display.reset_index(drop=True)
+    matrix_positions = np.arange(len(matrix_display), dtype=float)
+    colors = [
+        palette["blue"] if value else palette["neutral"]
+        for value in matrix_display["converged_bool"]
+    ]
+    ax_matrix.barh(matrix_positions, np.ones(len(matrix_display)), color=colors)
+    ax_matrix.set_yticks(
+        matrix_positions,
+        [display_label(value) for value in matrix_display["spec_id"]],
+        fontsize=5.6,
+    )
+    ax_matrix.set_xlim(0, 1)
+    ax_matrix.set_xticks([])
+    ax_matrix.invert_yaxis()
+    ax_matrix.set_title("Prespecified checks completed", loc="left", pad=7)
+    add_panel_label(ax_matrix, "c", x=-0.07, y=1.04, fontsize=8.0)
+
+    evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
+    contract = make_figure_contract(
+        figure_id=f"figure:{figure_product}",
+        core_claim=(
+            "Registered source tables show observed risk context and completion of the prespecified robustness checks."
+        ),
+        archetype="quantitative_grid",
+        width_mm=183.0,
+        height_mm=112.0,
+        panels=[
+            {
+                "panel_id": "absolute_risk_context",
+                "title": "Observed data context",
+                "role": "descriptive_result",
+                "claim": "Direct projection of registered prevalence and observed outcome-risk rows.",
+                "evidence_ids": [evidence["table:absolute_risk_context"]],
+                "metadata": {
+                    "chart_type": "dot_interval_absolute_risk",
+                    "source_products": ["table:absolute_risk_context"],
+                    "estimate_geometry": "direct_table_projection",
+                    "source_data": ["absolute_risk_context_source_data.csv"],
+                },
+            },
+            {
+                "panel_id": "robustness_summary",
+                "title": "Robustness coverage",
+                "role": "robustness",
+                "claim": "Registered, converged, and independent specification counts; heterogeneous effects are not pooled.",
+                "evidence_ids": [evidence["table:robustness_summary"]],
+                "metadata": {
+                    "chart_type": robustness_display["chart_type"],
+                    "source_products": ["table:robustness_summary"],
+                    "source_data": ["robustness_summary_source_data.csv"],
+                    **robustness_display,
+                },
+            },
+            {
+                "panel_id": "robustness_matrix",
+                "title": "Prespecified checks completed",
+                "role": "robustness",
+                "claim": "Each registered specification is shown once by execution status only.",
+                "evidence_ids": [evidence["table:robustness_matrix"]],
+                "metadata": {
+                    "chart_type": "status_matrix",
+                    "source_products": ["table:robustness_matrix"],
+                    "source_data": ["robustness_matrix_source_data.csv"],
+                },
+            },
+        ],
+        source_data=source_files,
+        statistics_note=(
+            "All plotted values are direct projections of registered rows; no model is fit by the renderer. "
+            "Robustness estimates with different scientific meanings are not compared on one effect axis."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / figure_product,
+        contract=contract,
+        formats=("png", "svg", "pdf", "tiff"),
+        dpi=300,
+    )
+    plt.close(fig)
+    for item in bound.values():
+        if sha256_file(item.path) != item.sha256:
+            raise ValueError(f"typed input changed while rendering: {item.input_key}")
+    summary = {
+        "step_id": step_id,
+        "status": "ok",
+        "analysis_status": "ok",
+        "analysis_family": "descriptive",
+        "method": "deterministic_legacy_landmark_article_figure",
+        "deterministic_standard_analysis": "landmark_association_composite_figure",
+        "rendering_only": True,
+        "source_inputs": list(profile),
+        "input_bindings": [
+            {
+                "input_key": key,
+                "evidence_id": item.evidence_id,
+                "sha256": item.sha256,
+                "loaded": True,
+                "row_count": item.row_count,
+            }
+            for key, item in bound.items()
+        ],
+        "source_data_files": source_files,
+        "supplementary_panel_ids": [],
+        "figure_files": [
+            path.name for key, path in outputs.items() if key != "contract"
+        ],
+        "figure_path": f"{figure_product}.png",
+        "figure_contract": f"{figure_product}.figure_contract.json",
+        "contract_files": [f"{figure_product}.figure_contract.json"],
+        "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
 def run_landmark_association_figure(
     *,
     out_dir: Path,
@@ -276,6 +553,14 @@ def run_landmark_association_figure(
         step_id=step_id,
         input_keys=profile,
     )
+    if set(profile) == _LEGACY_LANDMARK_ARTICLE_INPUTS:
+        return _run_legacy_landmark_article_figure(
+            out_dir=out_dir,
+            step_id=step_id,
+            figure_product=figure_product,
+            profile=profile,
+            bound=bound,
+        )
     curve_key = _curve_input(profile)
     measurement_key = _measurement_input(profile)
     assert curve_key is not None and measurement_key is not None
@@ -423,7 +708,12 @@ def run_landmark_association_figure(
             ],
             dtype=float,
         )
-        xerr = np.vstack([values[valid] - lower[valid], upper[valid] - values[valid]])
+        xerr = np.vstack(
+            [
+                np.maximum(values[valid] - lower[valid], 0.0),
+                np.maximum(upper[valid] - values[valid], 0.0),
+            ]
+        )
         ax.barh(
             positions[valid] + offset,
             values[valid],
