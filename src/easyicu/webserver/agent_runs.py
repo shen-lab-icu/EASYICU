@@ -768,6 +768,41 @@ def list_run_history(
     }
 
 
+def _scanned_json_artifact(artifact_path: Path, raw: bytes) -> Dict[str, Any]:
+    """Decode one JSON artifact and withhold it when row-level data are present."""
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "error": "artifact_json_invalid_encoding",
+            "artifact": artifact_path.name,
+        }
+    except json.JSONDecodeError as exc:
+        return {
+            "ok": False,
+            "error": "artifact_json_invalid",
+            "artifact": artifact_path.name,
+            "message": str(exc),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "error": "artifact_json_not_object",
+            "artifact": artifact_path.name,
+        }
+    privacy_scan = _scan_artifact_payloads({artifact_path.name: payload})
+    if not privacy_scan.get("passed"):
+        return {
+            "ok": False,
+            "error": "artifact_privacy_scan_failed",
+            "artifact": artifact_path.name,
+            "privacy_scan": privacy_scan,
+        }
+    return {"ok": True, "payload": payload, "privacy_scan": privacy_scan}
+
+
 def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
     """Return one whitelisted artifact as a bounded JSON viewer payload."""
     if str(artifact_name or "").strip() not in _RUN_ARTIFACT_NAMES:
@@ -786,28 +821,11 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
             "error": path_error or "artifact_not_allowed",
             "artifact": artifact_name,
         }
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except UnicodeDecodeError:
-        return {
-            "ok": False,
-            "error": "artifact_json_invalid_encoding",
-            "artifact": artifact_name,
-        }
-    except json.JSONDecodeError as exc:
-        return {
-            "ok": False,
-            "error": "artifact_json_invalid",
-            "artifact": artifact_name,
-            "message": str(exc),
-        }
-    if not isinstance(payload, dict):
-        return {
-            "ok": False,
-            "error": "artifact_json_not_object",
-            "artifact": artifact_name,
-        }
-    privacy_scan = _scan_artifact_payloads({artifact_path.name: payload})
+    decoded = _scanned_json_artifact(artifact_path, raw)
+    if not decoded.get("ok"):
+        return decoded
+    payload = decoded["payload"]
+    privacy_scan = decoded["privacy_scan"]
     return {
         "ok": True,
         "project_dir": str(run_dir),
@@ -853,6 +871,10 @@ def read_run_artifact_bytes(project_dir: str, artifact_name: str) -> Dict[str, A
             "error": path_error or "artifact_not_allowed",
             "artifact": artifact_name,
         }
+    if artifact_path.name in _RUN_ARTIFACT_NAMES:
+        decoded = _scanned_json_artifact(artifact_path, raw)
+        if not decoded.get("ok"):
+            return decoded
     return {
         "ok": True,
         "name": artifact_path.name,
@@ -875,9 +897,10 @@ def build_run_bundle(project_dir: str) -> Dict[str, Any]:
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for artifact in artifacts:
             name = str(artifact.get("name") or "")
-            _path, raw, _path_error = _read_safe_artifact_bytes(run_dir, name)
-            if raw is not None:
-                zf.writestr(name, raw)
+            loaded = read_run_artifact_bytes(str(run_dir), name)
+            if not loaded.get("ok"):
+                return loaded
+            zf.writestr(name, loaded["content"])
     filename = f"{run_dir.name}_artifacts.zip"
     return {
         "ok": True,
@@ -1924,6 +1947,7 @@ def _strict_evidence_audit(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, An
 
 _ROW_LEVEL_KEYS = {
     "tablerows",
+    "patientrows",
     "series",
     "patient",
     "patients",
