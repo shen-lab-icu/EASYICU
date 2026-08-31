@@ -2752,45 +2752,27 @@ def vaso60(
     max_gap: pd.Timedelta = pd.Timedelta(minutes=5),
     interval: pd.Timedelta = None
 ) -> pd.DataFrame:
-    """Filter vasopressor rates to only include administrations >= 1 hour.
-    
-    Replicates R ricu's vaso60 callback:
-    - Merge rate and duration data
-    - Filter rates that fall within administration windows >= 1 hour
-    
-    Args:
-        rate_data: DataFrame with vasopressor rate (e.g., norepi_rate)
-        dur_data: DataFrame with vasopressor duration
-        max_gap: Maximum gap for merging administration windows
-        interval: Time series interval
-        
-    Returns:
-        DataFrame with rate column renamed to *60 (e.g., norepi60)
+    """Fail closed: this module never implemented the vaso60 duration contract.
+
+    ricu's ``vaso60`` keeps only vasopressor administrations lasting at least
+    60 minutes. This function ignored ``dur_data``, ``max_gap`` and
+    ``interval`` entirely and merely renamed ``*_rate`` to ``*60``, so a
+    five-minute test dose came back indistinguishable from an hour-long
+    infusion — plausible, silently wrong, and feeding SOFA cardiovascular.
+
+    The real implementation is
+    :func:`easyicu.concept.callbacks._callback_vaso60`, reached through
+    ``CALLBACK_REGISTRY``; the concept layer has always used it, and nothing
+    in the package called this one. The signature stays import-compatible
+    while callers get a stable, attributable error instead of unfiltered rates.
     """
-    if rate_data.empty:
-        return rate_data
-    
-    # Detect rate column name
-    rate_col = None
-    for col in rate_data.columns:
-        if col.endswith('_rate'):
-            rate_col = col
-            break
-    
-    if not rate_col:
-        return rate_data
-    
-    # Create output column name
-    out_col = rate_col.replace('_rate', '60')
-    
-    result = rate_data.copy()
-    result[out_col] = result[rate_col]
-    result = result.drop(columns=[rate_col])
-    
-    # If we have duration data, filter by duration >= 1 hour
-    # (Simplified implementation - full version would merge and filter)
-    
-    return result
+    raise UnsupportedClinicalScoreError(
+        "vaso60_duration_contract_not_implemented",
+        "vaso60 is unavailable here: the >=60-minute administration filter "
+        "was never implemented in this module. Resolve the vasopressor *60 "
+        "concepts through the concept layer, which dispatches the complete "
+        "_callback_vaso60 implementation.",
+    )
 
 
 def vaso_ind(
@@ -2868,48 +2850,31 @@ def vent_ind(
     min_length: pd.Timedelta = pd.Timedelta(minutes=30),
     interval: pd.Timedelta = None
 ) -> pd.DataFrame:
-    """Calculate mechanical ventilation indicator.
-    
-    Replicates R ricu's vent_ind callback:
-    - If mech_vent is available, use it directly
-    - Otherwise, match vent_start and vent_end events
-    - Create ventilation windows of at least min_length
-    
-    Args:
-        vent_start: Ventilation start events
-        vent_end: Ventilation end events
-        mech_vent: Direct mechanical ventilation indicator
-        match_win: Maximum time to match start/end events
-        min_length: Minimum ventilation duration
-        interval: Time series interval
-        
-    Returns:
-        DataFrame with 'vent_ind' column (boolean) and duration
+    """Fail closed: this module never implemented the start/end matching.
+
+    ricu's ``vent_ind`` matches ``vent_start`` against ``vent_end`` within
+    ``match_win`` and keeps windows of at least ``min_length``. This function
+    ignored ``vent_end``, ``min_length`` and ``interval``: on the fallback
+    path it marked every start event ventilated and wrote a constant
+    ``vent_dur = match_win``. That inflates the ventilated branch of
+    :func:`sofa_resp`, which skips the ``pafi < 200`` clamp when ventilated —
+    so the error direction is a worse respiratory SOFA. eICU and MIMIC-III are
+    the databases with no direct ``mech_vent`` source, i.e. exactly the ones
+    that would have taken this path.
+
+    The real implementation is
+    :func:`easyicu.concept.callbacks._callback_vent_ind`, reached through
+    ``CALLBACK_REGISTRY``; the concept layer has always used it, and nothing
+    in the package called this one. The signature stays import-compatible
+    while callers get a stable, attributable error.
     """
-    # If mech_vent is available, use it directly
-    if mech_vent is not None and not mech_vent.empty and 'mech_vent' in mech_vent.columns:
-        result = mech_vent.copy()
-        result['vent_ind'] = result['mech_vent'].notna()
-        result = result.drop(columns=['mech_vent'], errors='ignore')
-        return result
-    
-    # Otherwise process start/end events
-    # (Simplified implementation)
-    if vent_start is None or vent_start.empty:
-        return pd.DataFrame(columns=['vent_ind'])
-    
-    result = vent_start.copy()
-    result['vent_ind'] = True
-    
-    # Add duration column (simplified - uses match_win as default)
-    result['vent_dur'] = match_win
-    
-    # Remove original columns
-    for col in ['vent_start', 'vent_end']:
-        if col in result.columns:
-            result = result.drop(columns=[col])
-    
-    return result
+    raise UnsupportedClinicalScoreError(
+        "vent_ind_window_contract_not_implemented",
+        "vent_ind is unavailable here: start/end matching and the minimum "
+        "ventilation length were never implemented in this module. Resolve "
+        "the vent_ind concept through the concept layer, which dispatches the "
+        "complete _callback_vent_ind implementation.",
+    )
 
 
 def supp_o2(
