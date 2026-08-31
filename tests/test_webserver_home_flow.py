@@ -17,10 +17,20 @@ def _asset(*parts: str) -> str:
 
 
 def _home_owner() -> str:
-    source = _asset("js", "screens-extraction.js")
-    return source.split("S.entry =", 1)[1].split(
-        "/* ================= DATA EXTRACTION", 1
-    )[0]
+    source = _asset("js", "screens-entry.js")
+    return source.split("S.entry =", 1)[1]
+
+
+def test_entry_owner_is_loaded_before_extraction_without_duplicate_route_owner() -> None:
+    index = _asset("index.html")
+    entry = _asset("js", "screens-entry.js")
+    extraction = _asset("js", "screens-extraction.js")
+
+    assert index.index("js/screens-entry.js?") < index.index(
+        "js/screens-extraction.js?"
+    )
+    assert "S.entry =" in entry
+    assert "S.entry =" not in extraction
 
 
 def test_home_leads_with_three_user_intents_and_keeps_demo_secondary() -> None:
@@ -55,7 +65,7 @@ def test_home_classic_entry_names_the_real_patient_destination() -> None:
 
 
 def test_home_question_survives_language_rerender() -> None:
-    source = _asset("js", "screens-extraction.js")
+    source = _asset("js", "screens-entry.js")
     home = _home_owner()
 
     assert "let homeQuestionDraft = '';" in source
@@ -64,7 +74,7 @@ def test_home_question_survives_language_rerender() -> None:
 
 
 def test_new_home_starts_create_fresh_study_contexts() -> None:
-    source = _asset("js", "screens-extraction.js")
+    source = _asset("js", "screens-entry.js")
 
     assert "typeof store.startNew !== 'function'" in source
     assert "store.startNew(Object.assign({" in source
@@ -78,8 +88,8 @@ def test_new_home_starts_create_fresh_study_contexts() -> None:
 
 
 def test_resume_prefers_allowlisted_study_context_then_maps_legacy_branches() -> None:
-    source = _asset("js", "screens-extraction.js")
-    resume = source.split("// resume banner", 1)[1].split("setTimeout", 1)[0]
+    source = _asset("js", "screens-entry.js")
+    resume = source.split("// Resume banner", 1)[1].split("setTimeout", 1)[0]
 
     assert (
         "new Set(['guided', 'ideas', 'extraction', 'patient', 'cohort', "

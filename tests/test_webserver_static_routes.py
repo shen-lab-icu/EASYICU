@@ -2266,19 +2266,16 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert "js/screens-viz.js?v=20260823-native-preview1" in index_html
 
 
-def test_native_cohort_groups_render_comparison_bar_chart() -> None:
-    """The descriptive-split group view must visualise the per-metric profile as
-    grouped bars (legacy cohort_group_page), not only the numeric table."""
+def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
+    """The selected C01 view is the exact aggregate Table One, not legacy bars."""
     viz_js = _static_js("screens-viz.js")
     cohort_css = _static_css("cohort.css")
 
-    assert "function cohortGroupComparisonChart(" in viz_js
-    assert "cohortGroupComparisonChart(profileRows, profileColumns)" in viz_js
-    # Reuses the bounded descriptive profile payload; no new inferential stats.
-    assert "cohortProfileValue(row, v)" in viz_js
-    assert ".cgc-bar" in cohort_css
-    assert ".cgc-fill" in cohort_css
-    # The exact-value profile table stays alongside the chart (additive).
+    assert "data-cohort-table-one" in viz_js
+    assert "cohortProfileValue(row, value)" in viz_js
+    assert "function cohortGroupComparisonChart(" not in viz_js
+    assert ".cgc-bar" not in cohort_css
+    assert ".cgc-fill" not in cohort_css
     assert "Aggregate-only group characteristics" in viz_js
 
 
@@ -2895,18 +2892,17 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "模块图谱" in patient_overview_js
     assert "Export module availability" in patient_overview_js
     assert "导出模块可用性" in patient_overview_js
-    assert "data-patient-overview-missingness" in patient_overview_js
-    assert "Missingness and coverage" in patient_overview_js
-    assert "缺失率与覆盖率" in patient_overview_js
-    assert "Event / exposure prevalence" in patient_overview_js
-    assert "事件 / 暴露发生率" in patient_overview_js
-    assert "not missingness" in patient_overview_js
-    assert "不是缺失率" in patient_overview_js
+    assert "data-patient-missing-record-scatter" in patient_overview_js
+    assert "Feature-level missingness and observation volume" in patient_overview_js
+    assert "特征层面的缺失率与记录量" in patient_overview_js
+    assert "Event and exposure prevalence are excluded" in patient_overview_js
+    assert "事件与暴露发生率被排除" in patient_overview_js
+    assert "Post-cleaning duplicate-time rate" in patient_overview_js
+    assert "清洗后重复时间戳率" in patient_overview_js
     assert "renderQualityAudit" in patient_overview_js
     assert "renderQualityAudit" in viz_js
     assert "value == null || value === '' || typeof value === 'boolean'" in patient_overview_js
     assert "coverage across all selected entities" not in patient_overview_js
-    assert "entity coverage was not computed" in patient_overview_js
     assert 'data-patient-module-coverage="${hasCoverage ? \'computed\' : \'not-computed\'}"' in viz_js
     assert "q.coverage_pct == null ? 0" not in viz_js
     assert "metricKind === 'event_rate'" in viz_js
@@ -3305,7 +3301,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert "cohortSofaMatrixMode" in viz_js
     assert "data-cohort-sofa-matrix-mode" in viz_js
     assert "SOFA_MATRIX_GRANULARITIES" in viz_js
-    assert "cohortSofaMatrixGranularity = 'medium'" in viz_js
+    assert "cohortSofaMatrixGranularity = 'exact'" in viz_js
     assert "data-cohort-sofa-granularity" in viz_js
     assert "exact_score_matrix" in viz_js
     assert "cohortCharts.heatmapSlot" in viz_js
@@ -3480,9 +3476,11 @@ def test_home_data_toggle_routes_through_setdatamode() -> None:
     """Regression: the home Demo/Real toggle must go through the canonical
     setDataMode (workspace invalidation + confirm-on-switch guard), not a bare
     EU_DATA write that leaves stale workspaces bound to the wrong source."""
+    entry_js = _static_js("screens-entry.js")
     ext_js = _static_js("screens-extraction.js")
-    assert "function setHomeData(m) {" in ext_js
-    assert "if (window.setDataMode) { window.setDataMode(m); return; }" in ext_js
+    assert "function setHomeData(mode) {" in entry_js
+    assert "if (window.setDataMode) { window.setDataMode(mode); return; }" in entry_js
+    assert "function setHomeData(" not in ext_js
 
 
 def test_guided_terminal_path_opens_project_monitor_without_moving_setup_there() -> None:
@@ -3816,14 +3814,15 @@ def test_topbar_actions_only_appear_once_workspace_is_loaded() -> None:
 
 def test_result_charts_carry_reading_captions() -> None:
     """Every result-bearing chart explains what it means and what to do next:
-    KM curve, SOFA transition matrix, group comparison bars, Cross-DB density
+    KM curve, SOFA transition matrix, group comparison tables, Cross-DB density
     view, and the per-database record cards."""
     viz_js = _static_js("screens-viz.js")
     crossdb_results_js = _static_js("screens-viz-crossdb-results.js")
-    assert viz_js.count('class="viz-cap"') >= 5
+    assert viz_js.count('class="viz-cap"') >= 4
+    assert crossdb_results_js.count('class="viz-cap"') >= 2
     assert "曲线每下降一格代表一次事件" in viz_js  # KM
     assert "对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者" in viz_js  # SOFA matrix
-    assert "仅为描述性对比，未做统计检验" in viz_js  # group bars
+    assert "每行是一个基线特征" in viz_js  # group comparison tables
     assert "曲线重叠表示聚合测量分布较一致" in crossdb_results_js
     assert "不是结局结果" in crossdb_results_js
     app_css = _static_css("app.css")
