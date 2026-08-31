@@ -17,6 +17,18 @@ def _backend_entry_module():
 def test_desktop_backend_environment_isolated_from_real_home(tmp_path, monkeypatch):
     module = _backend_entry_module()
     original_home = os.environ.get("HOME")
+    # _configure_environment is an entry-point helper and intentionally writes
+    # os.environ directly. Register every key it owns with monkeypatch first so
+    # this test cannot leak desktop state into later tests in the same process.
+    for name in (
+        "EASYICU_HOME",
+        "EASYICU_RUNTIME_DIR",
+        "EASYICU_DESKTOP_SESSION_TOKEN",
+        "PYTHONUTF8",
+        "PYTHONIOENCODING",
+        "EASYICU_VERBOSE",
+    ):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
     node = tmp_path / "bin" / "node"
     node.parent.mkdir()
     node.write_text("node", encoding="utf-8")
@@ -58,8 +70,9 @@ def test_desktop_backend_rejects_relative_state_path(tmp_path):
         )
 
 
-@pytest.mark.parametrize("parent_pid", [0, 1, os.getpid()])
-def test_desktop_parent_watch_rejects_invalid_owner(parent_pid):
+@pytest.mark.parametrize("parent_pid_spec", [0, 1, "current_process"])
+def test_desktop_parent_watch_rejects_invalid_owner(parent_pid_spec):
     module = _backend_entry_module()
+    parent_pid = os.getpid() if parent_pid_spec == "current_process" else parent_pid_spec
     with pytest.raises(ValueError, match="desktop shell"):
         module._watch_parent_process(parent_pid, interval=0.01)

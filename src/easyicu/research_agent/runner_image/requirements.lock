@@ -21,3 +21,4 @@ typing-extensions==4.15.0
 duckdb==1.5.3
 patsy==1.0.2
 packaging==26.2
+send2trash==2.1.0
