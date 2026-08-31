@@ -704,6 +704,9 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
     monkeypatch,
     checkpoint_state,
 ) -> None:
+    import hashlib
+
+    from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
     from easyicu.research_agent.canonical_json import canonical_sha256
     from easyicu.research_agent.orchestration.human_review_checkpoint import (
         HumanReviewCheckpoint,
@@ -713,16 +716,66 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
         HumanReviewPending,
         HumanReviewRequest,
     )
+    from easyicu.research_agent.planning.scientific_review import (
+        PlanScientificReview,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
     from easyicu.webserver import agent_pipeline_runs
 
     run_id = f"run-{checkpoint_state}"
     run_dir = tmp_path / "pipeline" / run_id
     run_dir.mkdir(parents=True)
+    plan = AnalysisPlan(
+        revision=1,
+        research_question="What is observed in this ICU cohort?",
+        analysis_type="descriptive_epidemiology",
+        steps=[
+            AnalysisStep(
+                step_id="01_summary",
+                intent="Summarize the verified cohort denominator.",
+                method="descriptive",
+                expected_outputs=["table:cohort_summary"],
+            )
+        ],
+    )
+    initial_authority = PlanReviewAuthority.create(plan=plan)
+    scientific_review = PlanScientificReview(
+        status="ready_for_approval",
+        approval_allowed=True,
+        top_journal_candidate=False,
+        score=75,
+        dimension_scores={"study_design": 75},
+        findings=[],
+        facts={"test": True},
+        context_sha256="f" * 64,
+        plan_sha256=initial_authority.plan_sha256,
+        literature_sha256="1" * 64,
+        figure_strategy_sha256="2" * 64,
+        generated_at="2026-08-14T00:00:00Z",
+    )
+    scientific_review_raw = scientific_review.model_dump_json(indent=2)
+    (run_dir / "scientific_plan_review.json").write_text(
+        scientific_review_raw,
+        encoding="utf-8",
+    )
+    plan_review_authority = PlanReviewAuthority.create(
+        plan=plan,
+        evidence_sha256={
+            "scientific_plan_review": hashlib.sha256(
+                scientific_review_raw.encode("utf-8")
+            ).hexdigest()
+        },
+    )
     request = HumanReviewRequest.create(
         kind="scientific_stop",
         summary="Review this plan.",
-        authority_sha256="a" * 64,
-        payload={"reason": "operator_plan_approval_required"},
+        authority_sha256=canonical_sha256(
+            plan_review_authority.model_dump(mode="json")
+        ),
+        payload={
+            "reason": "operator_plan_approval_required",
+            "plan_review_authority": plan_review_authority.model_dump(mode="json"),
+        },
     )
     decisions = [
         {

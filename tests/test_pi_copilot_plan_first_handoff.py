@@ -72,12 +72,16 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
 def test_plan_first_copy_stays_in_the_guided_copilot_owner() -> None:
     confirmation = _read("js/screens-guided-pi-confirmation.js")
     shell = _read("js/screens-guided-pi.js")
+    regeneration = _read("js/screens-guided-pi-regeneration.js")
     child_job = _read("js/screens-guided-pi-childjob.js")
     css = _read("css/guided-pi.css")
 
     assert "计划与分析前数据检查已准备好" in confirmation
     assert "生成候选研究计划" in shell
-    assert "生成正式研究计划" in shell  # legacy persisted action remains replayable
+    # Legacy persisted action text remains replayable in the dedicated branch
+    # classifier rather than inflating the main Copilot screen owner.
+    assert "生成正式研究计划" in regeneration
+    assert "生成正式研究计划" not in shell
     assert "正在生成研究计划" in child_job
     assert "正在生成正式研究计划" not in child_job
     assert ".gpi-confirmation-flow" in css
@@ -141,7 +145,7 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
     assert rendered.count('class="btn ') == 2
 
 
-def test_executable_plan_review_answers_in_conversation_and_expands_the_plan() -> None:
+def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
@@ -191,8 +195,8 @@ def test_executable_plan_review_answers_in_conversation_and_expands_the_plan() -
     assert "目前还没有开始分析" in rendered
     assert "研究人群与分析单位" in rendered
     assert "暴露定义与时间窗" in rendered
-    assert "查看数据处理与完整设定" in rendered
-    assert '<details class="gpi-plan-conversation-more">' in rendered
+    assert "查看 6 项候选计划摘要" in rendered
+    assert '<details class="gpi-plan-conversation-summary">' in rendered
     assert "缺失数据处理" in rendered
     assert "9 个步骤 · 4 张表 · 3 张图" in rendered
     assert rendered.index('class="gpi-plan-conversation"') < rendered.index(
@@ -200,7 +204,7 @@ def test_executable_plan_review_answers_in_conversation_and_expands_the_plan() -
     )
 
 
-def test_scientific_plan_review_keeps_one_clear_plan_access_point() -> None:
+def test_scientific_plan_review_separates_summary_from_complete_evidence() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
@@ -231,13 +235,15 @@ def test_scientific_plan_review_keeps_one_clear_plan_access_point() -> None:
         [node, "--eval", script], check=True, capture_output=True, text=True
     ).stdout
 
-    assert "我已经根据你的研究问题生成了一份候选计划" not in rendered
+    assert "我已经根据你的研究问题生成了一份候选计划" in rendered
+    assert '<details class="gpi-plan-conversation-summary">' in rendered
+    assert "查看 1 项候选计划摘要" in rendered
     assert '<details class="gpi-confirmation-resources">' in rendered
     assert 'class="gpi-confirmation-resources is-expanded"' not in rendered
     assert "打开完整计划" in rendered
 
 
-def test_repeated_stay_review_offers_two_plain_language_actions() -> None:
+def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
@@ -271,10 +277,19 @@ def test_repeated_stay_review_offers_two_plain_language_actions() -> None:
         [node, "--eval", script], check=True, capture_output=True, text=True
     ).stdout
 
-    assert "计划已生成，但还需确认重复入院规则" in rendered
-    assert "推荐：每位患者只分析一次" in rendered
-    assert "采用推荐方案：仅保留首次入院" in rendered
-    assert "保留全部入院并处理重复记录" in rendered
-    assert rendered.count('data-gpi-next-choice=') == 2
+    assert "请选择重复 ICU 入住的研究目标" in rendered
+    assert "重复患者比例未知" in rendered
+    assert "这里没有无条件默认答案" in rendered
+    assert "研究首次 ICU 入住" in rendered
+    assert "研究每次 ICU 入住" in rendered
+    assert "获授权的患者映射" in rendered
+    assert "首次入住／再入院标记" in rendered
+    assert "核验患者分组" in rendered
+    assert "按患者聚类的稳健方差" in rendered
+    assert rendered.count('data-gpi-plan-decision-option=') == 1
+    assert 'data-gpi-plan-decision-option="all_icu_stays_clustered"' in rendered
+    assert 'data-gpi-confirm-edit' in rendered
+    assert "（推荐）" not in rendered
     assert "选择处理方式" not in rendered
-    assert 'class="gpi-plan-conversation"' not in rendered
+    assert 'class="gpi-plan-conversation"' in rendered
+    assert '<details class="gpi-plan-conversation-summary">' in rendered

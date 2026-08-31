@@ -589,6 +589,20 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
         == "confirm_formal_plan_generation"
     )
 
+    fresh_plan_generation = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "Regenerate the research plan from the prepared data.",
+            "turn_intent": "confirm_fresh_plan_generation",
+        },
+    )
+    assert fresh_plan_generation.status_code == 200
+    assert (
+        fresh_plan_generation.json()["received"]["message_intent"]
+        == "confirm_fresh_plan_generation"
+    )
+
     assert (
         client.post(
             "/api/copilot/pi/sessions/pi-test/message",
@@ -620,6 +634,23 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
     assert (
         regenerated.json()["received"]["message_intent"]
         == "confirm_formal_plan_generation"
+    )
+
+    fresh_regenerated = client.post(
+        "/api/copilot/pi/sessions/pi-test/regenerate",
+        json={
+            "project_id": "guided-project-1",
+            "message": "Regenerate the research plan from the prepared data.",
+            "allowed_actions": ["provider_run"],
+            "turn_intent": "confirm_fresh_plan_generation",
+            "user_entry_id": "entry-user-1",
+            "regeneration_intent": "user_edited_message",
+        },
+    )
+    assert fresh_regenerated.status_code == 200
+    assert (
+        fresh_regenerated.json()["received"]["message_intent"]
+        == "confirm_fresh_plan_generation"
     )
     assert (
         client.post(
