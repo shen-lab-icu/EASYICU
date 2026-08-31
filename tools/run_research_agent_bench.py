@@ -137,6 +137,9 @@ def _bind_runtime_scientific_projection_options(
         "easyicu.landmark_spline_runtime_authority/1": (
             "current_case_scientific_runtime_authority"
         ),
+        "easyicu.landmark_spline_runtime_authority/2": (
+            "current_case_scientific_runtime_authority"
+        ),
         "easyicu.landmark_survival_runtime_authority/1": (
             "current_case_scientific_runtime_authority"
         ),

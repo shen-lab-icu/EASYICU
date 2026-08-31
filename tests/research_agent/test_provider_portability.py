@@ -367,7 +367,11 @@ def test_benchmark_native_api_uses_provider_specific_model_or_fails_closed(
 
 
 def test_benchmark_anthropic_uses_native_messages_transport(monkeypatch) -> None:
-    import anthropic
+    # Anthropic is an optional webapp/agentic adapter. The dedicated CI lane
+    # installs and asserts the SDK before exercising the real adapter; a
+    # minimum local/core environment should report that absence as a skip,
+    # not as a product regression.
+    anthropic = pytest.importorskip("anthropic")
 
     from easyicu.research_agent.providers.factory import (
         provider_authorization_manifest,
