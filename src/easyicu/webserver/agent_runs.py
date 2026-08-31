@@ -867,6 +867,13 @@ def read_run_evidence_preview(
             "evidence_id": str(evidence_id or ""),
         }
     privacy_scan = _scan_artifact_payloads({"evidence_preview": payload})
+    if not privacy_scan.get("passed"):
+        return {
+            "ok": False,
+            "error": "evidence_preview_privacy_scan_failed",
+            "evidence_id": str(evidence_id or ""),
+            "privacy_scan": privacy_scan,
+        }
     return {
         "ok": True,
         "payload": payload,
