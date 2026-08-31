@@ -21,6 +21,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # 2026-08-30: no workflow declared a concurrency group, so a burst of pushes
+  # left several full runs (ci.yml medians ~39 min) racing to completion and
+  # only the last one mattered. Feature branches and PRs now cancel the run
+  # they supersede; main keeps every run so the merge record stays complete.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   build-smoke-sbom:
     name: Build, isolate, smoke and inventory runner
