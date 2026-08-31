@@ -9,13 +9,25 @@ overriding the process ``HOME``, which also relocates the user's real home.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
 
-from easyicu.webserver import state_paths
+from easyicu.webserver import state_paths, study_contexts
 
 
 WEBSERVER = Path(state_paths.__file__).resolve().parent
+
+
+def test_pytest_collection_isolates_import_time_state_paths() -> None:
+    pytest_home = Path(os.environ["EASYICU_HOME"])
+
+    assert study_contexts._CONFIG_PATH == (
+        pytest_home / ".easyicu" / "webserver_study_contexts.json"
+    )
+    assert study_contexts._CONFIG_PATH != (
+        Path.home() / ".easyicu" / "webserver_study_contexts.json"
+    )
 
 
 def test_defaults_resolve_under_the_real_home(monkeypatch) -> None:
