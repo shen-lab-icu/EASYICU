@@ -768,41 +768,13 @@ def _reject_unsupported_request(body: Dict[str, Any]) -> None:
 def _resolve_registered_source(
     body: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    registry = source_store.load_registry()
-    sources = [s for s in registry.get("sources") or [] if isinstance(s, dict)]
-    requested = body.get("source_path") or body.get("path")
-    if requested:
-        norm = _norm_path(str(requested))
-        source = next(
-            (s for s in sources if _norm_path(str(s.get("path") or "")) == norm), None
+    try:
+        selection = source_store.resolve_registered_export(
+            body.get("source_path") or body.get("path")
         )
-        if source is None:
-            raise CohortReviewError(
-                {"error": "source_not_registered", "path_hash": _hash(norm)}
-            )
-    else:
-        active = registry.get("active_path")
-        if not active:
-            raise CohortReviewError({"error": "no_active_export"})
-        active_norm = _norm_path(str(active))
-        source = next(
-            (s for s in sources if _norm_path(str(s.get("path") or "")) == active_norm),
-            None,
-        )
-        if source is None:
-            raise CohortReviewError(
-                {
-                    "error": "active_source_not_registered",
-                    "path_hash": _hash(active_norm),
-                }
-            )
-
-    desc = dataio.describe_export_source(str(source.get("path") or ""))
-    if not desc.get("ok"):
-        raise CohortReviewError(
-            {"error": "invalid_export", "detail": desc.get("error")}
-        )
-    return source, desc
+    except source_store.RegisteredExportSelectionError as exc:
+        raise CohortReviewError(dict(exc.detail)) from exc
+    return dict(selection.source), dict(selection.description)
 
 
 def _skip_expensive_whole_module_read(file_meta: Dict[str, Any], file_path: Path) -> bool:
