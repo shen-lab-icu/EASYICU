@@ -2750,31 +2750,20 @@ def aumc_drug(
     item_col: str = 'itemid',
     **kwargs
 ) -> pd.DataFrame:
-    """AmsterdamUMCdb drug callback (R ricu aumc_drug).
-    
-    Handles special processing for AmsterdamUMCdb drug administration data.
-    This may include unit conversions, rate calculations, etc.
-    
-    Args:
-        data: Input DataFrame with drug data
-        val_col: Value column
-        unit_col: Unit column
-        item_col: Item ID column
-        **kwargs: Additional arguments
-        
-    Returns:
-        Processed DataFrame
+    """Fail closed: the AmsterdamUMCdb drug contract was never implemented.
+
+    ricu's ``aumc_drug`` performs AUMC-specific dose-to-rate conversion and
+    unit standardisation. This function returned its input unchanged, so any
+    caller would have silently received raw doses labelled as processed rates.
+    No concept in ``data/concept-dict.json`` and no code path references it,
+    so raising here changes no behaviour; it only stops the stub from being
+    adopted later on the strength of its docstring.
     """
-    data = data.copy()
-    
-    # AmsterdamUMCdb-specific drug processing
-    # This is highly data-specific and would need actual AUMC data structure
-    # Placeholder implementation
-    
-    # Example: Convert doses to rates based on duration
-    # Example: Standardize units
-    
-    return data
+    raise NotImplementedError(
+        "aumc_drug is not implemented: AmsterdamUMCdb dose-to-rate conversion "
+        "and unit standardisation have no validated implementation. Resolve "
+        "AUMC drug concepts through the concept layer instead."
+    )
 
 def ts_to_win_tbl(win_dur: pd.Timedelta) -> Callable:
     """Create callback to convert time series to windowed table (R ricu ts_to_win_tbl).
