@@ -73,6 +73,7 @@ from easyicu.webserver import (
     literature_authority,
     primary_cohort,
     provider_adapter,
+    run_artifact_disclosure,
     source_identity_authority,
 )
 from easyicu.webserver import study_contexts as study_context_owner
@@ -161,23 +162,6 @@ _MATERIALIZED_FEATURE_SUFFIXES = tuple(
         key=len,
         reverse=True,
     )
-)
-_UNSAFE_PROJECTION_PATTERNS = (
-    re.compile(
-        r"(?:file://|(?<![A-Za-z0-9])/(?:Users|home|private|tmp|var|etc|opt|Volumes)/|\b[A-Za-z]:\\)",
-        re.I,
-    ),
-    re.compile(
-        r"(?:\bBearer\s+[A-Za-z0-9._~+/=-]{8,}|\bsk-[A-Za-z0-9_-]{8,}|"
-        r"\b(?:api[_-]?key|password|secret|token)\s*[:=]\s*\S+|"
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----)",
-        re.I,
-    ),
-    re.compile(
-        r"[\"']?(?:subject_id|stay_id|hadm_id|patient_id|mrn)[\"']?"
-        r"\s*[:,=]\s*[\"']?[A-Za-z0-9-]+",
-        re.I,
-    ),
 )
 
 _SAFE_PIPELINE_EXCEPTION_TYPES = frozenset(
@@ -1409,11 +1393,11 @@ def _write_pipeline_failure_projection(
             "publication_authorized": False,
         },
     }
-    privacy_scan = _projection_privacy_scan(payloads)
+    privacy_scan = run_artifact_disclosure.scan_browser_projection(payloads)
     if not privacy_scan["passed"]:
         provider_public = {}
         payloads["source_run_manifest.json"]["provider"] = {}
-        privacy_scan = _projection_privacy_scan(payloads)
+        privacy_scan = run_artifact_disclosure.scan_browser_projection(payloads)
     if not privacy_scan["passed"]:
         return False
     try:
@@ -3723,7 +3707,7 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
                 "system_validation_ledger_digest_mismatch",
                 f"The existing {name} bytes do not match the run evidence ledger.",
             )
-    privacy = _projection_privacy_scan(
+    privacy = run_artifact_disclosure.scan_browser_projection(
         {
             "system_validation_report.json": report_payload,
             "system_validation_report.html": html_text,
@@ -3771,41 +3755,6 @@ def register_system_validation_pdf(wrapper_dir: Path) -> Dict[str, Any]:
         "claim_ceiling": report.claim_ceiling,
         "publication_authorized": False,
         "artifacts": registered,
-    }
-
-
-def _projection_privacy_scan(payloads: Mapping[str, Any]) -> Dict[str, Any]:
-    """Reject host paths, credentials, and row identifiers in Web artefacts.
-
-    Aggregate result-table rows are intentionally permitted.  The scientific
-    pipeline owns their disclosure checks, while this boundary independently
-    rejects the three classes that must never cross into the browser.
-    """
-
-    hits: List[Dict[str, str]] = []
-
-    def visit(value: Any, path: str) -> None:
-        if isinstance(value, Mapping):
-            for key, child in value.items():
-                visit(child, f"{path}.{key}")
-        elif isinstance(value, (list, tuple)):
-            for index, child in enumerate(value):
-                visit(child, f"{path}[{index}]")
-        elif isinstance(value, Path):
-            hits.append({"path": path, "reason": "path_object"})
-        elif isinstance(value, str):
-            for index, pattern in enumerate(_UNSAFE_PROJECTION_PATTERNS):
-                if pattern.search(value):
-                    hits.append({"path": path, "reason": f"pattern_{index + 1}"})
-                    break
-
-    for name, payload in payloads.items():
-        visit(payload, str(name))
-    return {
-        "passed": not hits,
-        "scanned_artifacts": len(payloads),
-        "unsafe_value_count": len(hits),
-        "hits": hits[:40],
     }
 
 
@@ -3917,49 +3866,6 @@ def _system_validation_figure_gallery(
         "embedded_count": len(source_rows),
         "source_gallery_sha256": projection_payload_sha256(figure_gallery),
         "projection_corrections": [correction],
-    }
-
-
-def _privacy_blocked_payloads(
-    *,
-    run_context: Mapping[str, Any],
-    scan: Mapping[str, Any],
-) -> Dict[str, Dict[str, Any]]:
-    """Return a fixed-schema package without echoing unsafe source values."""
-
-    gate = {
-        "status": "blocked",
-        "reason": "research_pipeline_projection_privacy_blocked",
-        "reportable": False,
-        "draft_unlocked": False,
-        "checks": [
-            {
-                "id": "browser_projection_privacy",
-                "label": "Browser projection contains no host path, credential, or row identifier",
-                "passed": False,
-                "unsafe_value_count": int(scan.get("unsafe_value_count") or 0),
-            }
-        ],
-    }
-    return {
-        "run_context.json": {
-            "run_id": _clean_text(run_context.get("run_id"), 160),
-            "study_id": _clean_text(run_context.get("study_id"), 160),
-            "mode": "research_agent_pipeline",
-            "run_type": "full",
-            "engine": "easyicu.research_agent.pipeline",
-            "summary": {"projection_withheld": True},
-            "local_first": {"uploads": 0},
-        },
-        "quality_gate.json": {
-            "gate": gate,
-            "quality": [],
-            "privacy": {
-                "passed": False,
-                "unsafe_value_count": int(scan.get("unsafe_value_count") or 0),
-                "payloads_withheld": True,
-            },
-        },
     }
 
 
@@ -4259,7 +4165,7 @@ def _write_projection(
     if pdf_receipt is not None:
         payloads["manuscript_pdf_receipt.json"] = pdf_receipt
     system_validation_html: Optional[str] = None
-    privacy_scan = _projection_privacy_scan(payloads)
+    privacy_scan = run_artifact_disclosure.scan_browser_projection(payloads)
     if privacy_scan["passed"] and system_validation_applicable:
         system_report = build_system_validation_report(
             run_id=run_id,
@@ -4282,14 +4188,14 @@ def _write_projection(
         )
         payloads["system_validation_report.json"] = system_report_payload
         payloads["system_validation_report_receipt.json"] = system_validation_receipt
-        privacy_scan = _projection_privacy_scan(
+        privacy_scan = run_artifact_disclosure.scan_browser_projection(
             {
                 **payloads,
                 "system_validation_report.html": system_validation_html,
             }
         )
     if not privacy_scan["passed"]:
-        payloads = _privacy_blocked_payloads(
+        payloads = run_artifact_disclosure.privacy_blocked_projection(
             run_context=run_context,
             scan=privacy_scan,
         )
@@ -6231,7 +6137,9 @@ def refresh_literature_evidence_projection(wrapper_dir: Path) -> Dict[str, Any]:
         run_id=run_id,
         plan=plan if isinstance(plan, Mapping) else {},
     )
-    if not _projection_privacy_scan({"literature_evidence.json": payload})["passed"]:
+    if not run_artifact_disclosure.scan_browser_projection(
+        {"literature_evidence.json": payload}
+    )["passed"]:
         raise ResearchPipelineRunError(
             "research_pipeline_literature_projection_privacy_failed",
             "The literature projection failed the Web privacy boundary.",

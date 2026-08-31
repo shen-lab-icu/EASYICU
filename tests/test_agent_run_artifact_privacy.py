@@ -4,8 +4,26 @@ import json
 
 from fastapi.testclient import TestClient
 
-from easyicu.webserver import agent_runs
+from easyicu.webserver import agent_runs, run_artifact_disclosure
 from easyicu.webserver.app import app
+
+
+def test_disclosure_owner_applies_both_browser_and_artifact_policies() -> None:
+    browser_scan = run_artifact_disclosure.scan_browser_projection(
+        {"run_context.json": {"reason": "/Users/reviewer/private.csv"}}
+    )
+    artifact_scan = run_artifact_disclosure.scan_artifact_payloads(
+        {"figure_gallery.json": {"patient_rows": [{"age": 72}]}}
+    )
+
+    assert browser_scan["passed"] is False
+    assert artifact_scan["passed"] is False
+    blocked = run_artifact_disclosure.privacy_blocked_projection(
+        run_context={"run_id": "run-safe", "study_id": "study-safe"},
+        scan=browser_scan,
+    )
+    assert blocked["quality_gate.json"]["gate"]["reportable"] is False
+    assert "/Users/reviewer" not in json.dumps(blocked)
 
 
 def test_row_level_json_is_withheld_from_preview_download_and_bundle(tmp_path) -> None:
