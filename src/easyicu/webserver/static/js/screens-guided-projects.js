@@ -85,7 +85,7 @@
         : row.workflow_status === 'analysis_running'
           ? t('Analysis running', '分析中')
           : row.workflow_status === 'configured'
-            ? t('Study configured', '研究已配置')
+            ? t('Data selected', '已选择数据')
             : row.status === 'metadata_only'
               ? t('New project', '新项目')
               : (row.status === 'ready' ? t('Ready', '已就绪') : (row.status || t('Study', '研究')));

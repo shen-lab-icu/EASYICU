@@ -31,9 +31,9 @@ def test_crossdb_setup_owner_is_unique_and_wired_in_dependency_order() -> None:
     setup = _read("js/screens-viz-crossdb-setup.js")
     results = _read("js/screens-viz-crossdb-results.js")
     shell = _read("js/screens-viz.js")
-    setup_src = "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2"
-    charts_src = "js/screens-viz-crossdb-charts.js?v=20260728-shared-echarts1"
-    results_src = "js/screens-viz-crossdb-results.js?v=20260817-copilot-boundary1"
+    setup_src = "js/screens-viz-crossdb-setup.js?"
+    charts_src = "js/screens-viz-crossdb-charts.js?"
+    results_src = "js/screens-viz-crossdb-results.js?"
 
     assert index.count(setup_src) == 1
     assert index.count(results_src) == 1

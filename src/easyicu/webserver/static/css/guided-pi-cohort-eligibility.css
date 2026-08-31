@@ -20,6 +20,22 @@
   line-height: 1.45;
 }
 
+.gpi-cohort-rationale {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  line-height: 1.45;
+}
+
+.gpi-cohort-rationale span,
+.gpi-cohort-evidence summary {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .gpi-cohort-contract {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -46,6 +62,14 @@
   padding: 10px 12px;
   text-align: left;
   white-space: normal;
+}
+
+.gpi-cohort-options .btn.is-recommended {
+  order: -1;
+}
+
+.gpi-cohort-evidence summary {
+  cursor: pointer;
 }
 
 .gpi-cohort-option-contract {

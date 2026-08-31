@@ -1488,7 +1488,7 @@ def _trash_guided_project_folder(project_dir_value: Any, draft_id: str) -> None:
     try:
         project_dir = raw_path.resolve(strict=True)
         projects_root = _PROJECTS_ROOT.expanduser().resolve()
-        home_dir = Path.home().resolve()
+        home_dir = state_paths.user_home().resolve()
     except OSError as exc:
         raise GuidedProjectTrashError(
             "project_folder_not_found",
