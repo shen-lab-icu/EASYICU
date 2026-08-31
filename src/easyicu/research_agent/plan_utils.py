@@ -57,6 +57,11 @@ from .contracts.primary_cohort import (
     _is_primary_analysis_cohort_method,
     _primary_analysis_cohort_attrition_candidate,
 )
+from .contracts.product_identity import (
+    normalised_expected_output_names as _normalised_expected_output_names,
+    normalised_method_head as _normalised_method_head,
+    normalised_structured_output_names as _normalised_structured_output_names,
+)
 from .icu_rules import (
     detect_outcome_as_predictor,
     detect_overadjustment,
@@ -484,63 +489,6 @@ _CLUSTERING_CONTRACT_OUTPUTS = frozenset(
         "clustering_visualization",
     }
 )
-
-
-def _normalised_expected_output_names(
-    expected_outputs: Sequence[str] | str,
-) -> set[str]:
-    if isinstance(expected_outputs, str):
-        values = re.split(r"[\s,]+", expected_outputs)
-    else:
-        values = [str(value or "") for value in (expected_outputs or [])]
-    names: set[str] = set()
-    for raw in values:
-        value = str(raw or "").strip().lower()
-        if not value:
-            continue
-        name = value.split(":", 1)[-1].rsplit("/", 1)[-1]
-        name = re.sub(r"\.(?:csv|json|parquet|png|svg|pdf|tiff?)$", "", name)
-        names.add(name)
-    return names
-
-
-_STRUCTURED_CONTRACT_OUTPUT_KINDS = frozenset(
-    {"", "statistic", "table", "model", "manifest", "dataset", "artifact"}
-)
-
-
-def _normalised_structured_output_names(
-    expected_outputs: Sequence[str] | str,
-) -> set[str]:
-    if isinstance(expected_outputs, str):
-        values = re.split(r"[\s,]+", expected_outputs)
-    else:
-        values = [str(value or "") for value in (expected_outputs or [])]
-    names: set[str] = set()
-    for raw in values:
-        value = str(raw or "").strip().lower()
-        if not value:
-            continue
-        parsed = typed_product(value)
-        if parsed is not None and parsed[0] in _STRUCTURED_CONTRACT_OUTPUT_KINDS:
-            names.add(parsed[1])
-            continue
-        kind, separator, product = value.partition(":")
-        if separator and kind not in _STRUCTURED_CONTRACT_OUTPUT_KINDS:
-            continue
-        name = (product if separator else kind).rsplit("/", 1)[-1]
-        name = re.sub(r"\.(?:csv|json|parquet)$", "", name)
-        names.add(name)
-    return names
-
-
-def _normalised_method_head(method: str) -> str:
-    """Return the exact normalized method head before an optional ``with`` rider."""
-
-    normalized = re.sub(r"[^a-z0-9]+", "_", str(method or "").strip().lower()).strip(
-        "_"
-    )
-    return normalized.split("_with_", 1)[0]
 
 
 def _clustering_contract_applies(
