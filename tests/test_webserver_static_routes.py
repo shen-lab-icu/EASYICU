@@ -424,6 +424,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     projects_js = _static_js("screens-guided-projects.js")
     provider_js = _static_js("screens-guided-idea-provider.js")
     extract_js = _static_js("screens-guided-extract.js")
+    review_js = _static_js("screens-guided-review.js")
     api_js = _static_js("api.js")
     guided_css = _static_css("guided.css")
     index_html = _static_html("index.html")
@@ -453,13 +454,13 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "No path is prefilled because every machine is different" in extract_js
     assert "goal === 'data_extraction'" in guided_js
     assert "isGuidedExtractionIntent(v)" in guided_js
-    assert "function startGuidedReviewFlow" in guided_js
-    assert "function renderGuidedReviewCard" in guided_js
-    assert "function loadGuidedReviewData" in guided_js
-    assert "window.EU_API.loadPatientReviewDrilldown" in guided_js
-    assert "window.EU_API.loadCohortReviewSummary" in guided_js
-    assert "KM / log-rank" in guided_js
-    assert "Number at risk" in guided_js
+    assert "function start(label)" in review_js
+    assert "function renderCard()" in review_js
+    assert "function load(entityRef)" in review_js
+    assert "window.EU_API.loadPatientReviewDrilldown" in review_js
+    assert "window.EU_API.loadCohortReviewSummary" in review_js
+    assert "KM / log-rank" in review_js
+    assert "Number at risk" in review_js
     assert "goal === 'review_data'" in guided_js
     assert "isGuidedReviewIntent(v)" in guided_js
     assert "function startGuidedAgentFlow" in guided_js
@@ -569,6 +570,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "js/screens-guided-extract.js?v=20260831-effect-owner1" in index_html
     extract_pos = index_html.find("screens-guided-extract.js")
     assert extract_pos != -1 and extract_pos < guided_pos
+    assert "js/screens-guided-review.js?v=20260831-owner1" in index_html
+    review_pos = index_html.find("screens-guided-review.js")
+    assert review_pos != -1 and review_pos < guided_pos
     assert "window.EU_GUIDED_EXTRACT = {" in extract_js
     # study-design vocabulary is owned by the stepper module, not the shell
     assert "Primary outcome / endpoint" in extract_js
