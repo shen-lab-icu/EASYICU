@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,8 +12,10 @@ from types import SimpleNamespace
 import pytest
 import pandas as pd
 
-from easyicu.webserver import dataio
+from easyicu.webserver import agent_review_recovery, dataio
 from easyicu.webserver.agent_review_recovery import (
+    PendingReviewEntry,
+    PendingReviewRegistry,
     WebReviewRecoveryError,
     WebReviewRecoveryRecord,
     WebReviewRecoverySeed,
@@ -29,6 +32,47 @@ _PACKAGE_BINDING = {
     "schema_version": "easyicu.web-prepared-package-binding/1",
     "binding_sha256": "d" * 64,
 }
+
+
+def _pending_entry(run_id: str, created_at: float) -> PendingReviewEntry:
+    return PendingReviewEntry(
+        pipeline=object(),
+        pending=SimpleNamespace(run_id=run_id),
+        wrapper_dir=Path("/private/project") / run_id,
+        study={"id": "study-a"},
+        provider={},
+        acquisition=SimpleNamespace(),
+        created_at=created_at,
+    )
+
+
+def test_live_registry_owns_eviction_recovery_install_and_resume_lease() -> None:
+    registry = PendingReviewRegistry(max_entries=2)
+    oldest = _pending_entry("run-oldest", 1.0)
+    current = _pending_entry("run-current", 2.0)
+    newest = _pending_entry("run-newest", 3.0)
+    registry.register(oldest)
+    registry.register(current)
+    registry.register(newest)
+
+    assert registry.get("run-oldest") is None
+    assert registry.install_recovered("run-current", oldest) is current
+    assert registry.lease("run-current", oldest) is False
+    assert registry.lease("run-current", current) is True
+    assert registry.get("run-current") is None
+    registry.register(current)
+    assert registry.discard("run-current", expected=oldest) is False
+    assert registry.discard("run-current", expected=current) is True
+
+
+def test_pipeline_runner_delegates_live_review_lifecycle() -> None:
+    from easyicu.webserver import agent_pipeline_runs
+
+    implementation = inspect.getsource(agent_pipeline_runs.resume_research_pipeline)
+
+    assert implementation.count("resume_pending_review(") == 1
+    assert "resume_human_review(" not in implementation
+    assert "_PENDING_LOCK" not in implementation
 
 
 def _record(run_id: str = "run_a") -> WebReviewRecoveryRecord:
@@ -465,13 +509,13 @@ def test_recovery_revalidates_package_before_provider(
         resume_pid=None,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
-        "get_review_recovery_record",
+        agent_review_recovery,
+        "get_record",
         lambda _run_id: record,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
-        "_checkpoint_pending_from_record",
+        agent_review_recovery,
+        "pending_from_record",
         lambda _record, **_kwargs: pending,
     )
     provider_called = False
@@ -482,16 +526,17 @@ def test_recovery_revalidates_package_before_provider(
         raise AssertionError("provider must not be reached after package drift")
 
     monkeypatch.setattr(
-        agent_pipeline_runs.provider_adapter,
+        agent_review_recovery.provider_adapter,
         "build_research_agent_provider_client",
         provider_client,
     )
     (export / "demographics.parquet").write_bytes(b"mutated-before-recovery")
 
     with pytest.raises(WebReviewRecoveryError, match="prepared package changed"):
-        agent_pipeline_runs._recover_pending_run(
+        agent_review_recovery.recover_pending_review(
             record.run_id,
             provider_environment={},
+            reviewer_identity="easyicu_local_web_operator",
         )
 
     assert provider_called is False
@@ -516,17 +561,17 @@ def test_recovery_defers_provider_reconcile_to_locked_pipeline(
         resume_pid=None,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
-        "get_review_recovery_record",
+        agent_review_recovery,
+        "get_record",
         lambda _run_id: record,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
-        "_checkpoint_pending_from_record",
+        agent_review_recovery,
+        "pending_from_record",
         lambda _record, **_kwargs: pending,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs.provider_adapter,
+        agent_review_recovery.provider_adapter,
         "build_research_agent_provider_client",
         lambda *_args, **_kwargs: (
             object(),
@@ -558,9 +603,10 @@ def test_recovery_defers_provider_reconcile_to_locked_pipeline(
         lambda _config, *, services: SimpleNamespace(),
     )
 
-    entry = agent_pipeline_runs._recover_pending_run(
+    entry = agent_review_recovery.recover_pending_review(
         record.run_id,
         provider_environment={},
+        reviewer_identity="easyicu_local_web_operator",
     )
 
     assert entry is not None
@@ -584,17 +630,17 @@ def test_recovery_rejects_provider_endpoint_drift(
         resume_pid=None,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
-        "get_review_recovery_record",
+        agent_review_recovery,
+        "get_record",
         lambda _run_id: record,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
-        "_checkpoint_pending_from_record",
+        agent_review_recovery,
+        "pending_from_record",
         lambda _record, **_kwargs: pending,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs.provider_adapter,
+        agent_review_recovery.provider_adapter,
         "build_research_agent_provider_client",
         lambda *_args, **_kwargs: (
             object(),
@@ -608,9 +654,10 @@ def test_recovery_rejects_provider_endpoint_drift(
     )
 
     with pytest.raises(WebReviewRecoveryError, match="provider identity changed"):
-        agent_pipeline_runs._recover_pending_run(
+        agent_review_recovery.recover_pending_review(
             record.run_id,
             provider_environment={},
+            reviewer_identity="easyicu_local_web_operator",
         )
 
 
@@ -633,24 +680,24 @@ def test_rejection_recovery_does_not_rebuild_provider(
         resume_pid=None,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
-        "get_review_recovery_record",
+        agent_review_recovery,
+        "get_record",
         lambda _run_id: record,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs,
-        "_checkpoint_pending_from_record",
+        agent_review_recovery,
+        "pending_from_record",
         lambda _record, **_kwargs: pending,
     )
     monkeypatch.setattr(
-        agent_pipeline_runs.provider_adapter,
+        agent_review_recovery.provider_adapter,
         "build_research_agent_provider_client",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("rejection recovery must not rebuild the provider")
         ),
     )
     monkeypatch.setattr(
-        agent_pipeline_runs.dataio,
+        agent_review_recovery.dataio,
         "validate_research_pipeline_source",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("rejection recovery must not reopen the prepared package")
@@ -683,9 +730,10 @@ def test_rejection_recovery_does_not_rebuild_provider(
         pipeline_from_config,
     )
 
-    entry = agent_pipeline_runs._recover_pending_run(
+    entry = agent_review_recovery.recover_pending_review(
         record.run_id,
         provider_environment=None,
+        reviewer_identity="easyicu_local_web_operator",
         rejection_only=True,
     )
 
@@ -818,7 +866,7 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
     write_checkpoint(run_dir / "human_review_checkpoint.json", checkpoint)
     recovery_values = _record(run_id).model_dump(exclude={"record_sha256"})
     recovery_values["wrapper_dir"] = str(tmp_path)
-    recovered_pending = agent_pipeline_runs._checkpoint_pending_from_record(
+    recovered_pending = agent_review_recovery.pending_from_record(
         WebReviewRecoveryRecord.create(**recovery_values)
     )
     assert recovered_pending.run_id == run_id
@@ -849,7 +897,9 @@ def test_web_post_approval_recovery_reuses_exact_stored_decisions(
         created_at=1.0,
         prepared_package_binding=package_binding,
     )
-    monkeypatch.setitem(agent_pipeline_runs._PENDING, run_id, entry)
+    registry = PendingReviewRegistry()
+    monkeypatch.setattr(agent_pipeline_runs, "_PENDING_REVIEWS", registry)
+    registry.register(entry)
     monkeypatch.setattr(agent_pipeline_runs, "remove_review_recovery_record", lambda *_: None)
     monkeypatch.setattr(
         agent_pipeline_runs,

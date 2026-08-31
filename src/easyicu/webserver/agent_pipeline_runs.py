@@ -17,12 +17,10 @@ import math
 import os
 import re
 import stat
-import threading
 import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
@@ -88,15 +86,21 @@ from easyicu.webserver.pi_copilot.contracts import (
     EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
 )
 from easyicu.webserver.agent_review_recovery import (
+    PendingReviewEntry as _PendingRun,
+    PendingReviewRegistry,
+    PendingReviewResumeFailure,
+    PendingReviewResumeInProgress,
     WebReviewRecoveryError,
-    WebReviewRecoveryRecord,
     WebReviewRecoverySeed,
     get_record as get_review_recovery_record,
+    pending_from_record,
     put_record as put_review_recovery_record,
     put_recovery_seed,
+    recover_pending_review,
     register_pipeline_work_root,
     remove_record as remove_review_recovery_record,
     remove_recovery_seed,
+    resume_pending_review,
     unregister_pipeline_work_root_if_unused,
 )
 
@@ -133,8 +137,6 @@ _RUN_DOCUMENT_SPECS = {
     **_MANUSCRIPT_DOCUMENT_SPECS,
     **_SYSTEM_VALIDATION_DOCUMENT_SPECS,
 }
-_MAX_PENDING = 16
-_PENDING_LOCK = threading.RLock()
 _MATERIALIZED_FEATURE_SUFFIXES = tuple(
     sorted(
         (
@@ -193,22 +195,7 @@ def server_reviewer_identity() -> str:
     return "easyicu_local_web_operator"
 
 
-@dataclass
-class _PendingRun:
-    pipeline: Any
-    pending: Any
-    wrapper_dir: Path
-    study: Dict[str, Any]
-    provider: Dict[str, Any]
-    acquisition: Any
-    created_at: float
-    credential_source: str = "scientific_provider"
-    budget_mode: str = "full_reviewed"
-    prepared_package_binding: Optional[Dict[str, Any]] = None
-    provider_hard_stop: Optional[Any] = None
-
-
-_PENDING: Dict[str, _PendingRun] = {}
+_PENDING_REVIEWS = PendingReviewRegistry(max_entries=16)
 
 
 def _acquisition_recovery_projection(acquisition: Any) -> Dict[str, Any]:
@@ -223,65 +210,6 @@ def _acquisition_recovery_projection(acquisition: Any) -> Dict[str, Any]:
         )[:128],
         "coverage_sufficient": bool(getattr(coverage, "sufficient", False)),
     }
-
-
-def _rehydrate_acquisition_projection(payload: Mapping[str, Any]) -> Any:
-    return SimpleNamespace(
-        selection=SimpleNamespace(
-            selected_concepts=list(payload.get("selected_concepts") or ())
-        ),
-        materialized_concepts=list(payload.get("materialized_concepts") or ()),
-        coverage=SimpleNamespace(sufficient=bool(payload.get("coverage_sufficient"))),
-    )
-
-
-def _checkpoint_pending_from_record(
-    record: WebReviewRecoveryRecord,
-    *,
-    recover_recorded_decisions: bool = False,
-) -> Any:
-    from easyicu.research_agent.orchestration.human_review_checkpoint import (
-        checkpoint_path,
-        load_checkpoint,
-    )
-    from easyicu.research_agent.orchestration.human_review_restore import (
-        recover_checkpoint_decisions_from_evidence,
-    )
-    from easyicu.research_agent.orchestration.workflow import HumanReviewPending
-
-    wrapper_dir = Path(record.wrapper_dir).resolve()
-    run_dir = (wrapper_dir / "pipeline" / record.run_id).resolve()
-    try:
-        run_dir.relative_to((wrapper_dir / "pipeline").resolve())
-    except ValueError as exc:
-        raise WebReviewRecoveryError("Web review run path escaped its wrapper") from exc
-    checkpoint_file = checkpoint_path(run_dir)
-    checkpoint = (
-        recover_checkpoint_decisions_from_evidence(
-            checkpoint_file,
-            run_dir=run_dir,
-        )
-        if recover_recorded_decisions
-        else load_checkpoint(checkpoint_file, require_pending=False)
-    )
-    if checkpoint.run_id != record.run_id:
-        raise WebReviewRecoveryError("Web review checkpoint belongs to another run")
-    if checkpoint.state not in {
-        "pending",
-        "approved_pending_execution",
-        "executing",
-    }:
-        raise WebReviewRecoveryError(
-            f"Web review checkpoint state {checkpoint.state!r} is not resumable"
-        )
-    return HumanReviewPending(
-        run_id=record.run_id,
-        thread_id=record.run_id,
-        run_dir=str(run_dir),
-        requests=checkpoint.requests,
-        resume_scope="durable_checkpoint",
-        resume_pid=None,
-    )
 
 
 def _slug(value: Any) -> str:
@@ -4245,16 +4173,6 @@ def _write_projection(
     }
 
 
-def _register_pending(entry: _PendingRun) -> None:
-    with _PENDING_LOCK:
-        _PENDING[str(entry.pending.run_id)] = entry
-        while len(_PENDING) > _MAX_PENDING:
-            oldest = min(_PENDING.items(), key=lambda item: item[1].created_at)[0]
-            # Only evict the live object. Its signed recovery record and paused
-            # cumulative Provider ledger remain available after restart/pressure.
-            _PENDING.pop(oldest, None)
-
-
 def _remove_local_recovery(wrapper_dir: Path) -> None:
     remove_recovery_seed(wrapper_dir)
     unregister_pipeline_work_root_if_unused(Path(wrapper_dir).parent.parent)
@@ -4328,14 +4246,13 @@ def _finish_web_provider_hard_stop(
 
 def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     key = _clean_text(run_id, 160)
-    with _PENDING_LOCK:
-        entry = _PENDING.get(key)
+    entry = _PENDING_REVIEWS.get(key)
     if entry is None:
         try:
             record = get_review_recovery_record(key)
             if record is None:
                 return None
-            pending = _checkpoint_pending_from_record(record)
+            pending = pending_from_record(record)
             study = record.study
             credential_source = record.credential_source
             budget_mode = record.budget_mode
@@ -4427,128 +4344,6 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         and current_review_approval_allowed,
         "scientific_plan_review": scientific_plan_review,
     }
-
-
-def _recover_pending_run(
-    run_id: str,
-    *,
-    provider_environment: Optional[Mapping[str, str]],
-    rejection_only: bool = False,
-) -> Optional[_PendingRun]:
-    """Reconstruct one paused Web run from private, digest-bound coordinates."""
-
-    record = get_review_recovery_record(run_id)
-    if record is None:
-        return None
-    from easyicu.research_agent import ResearchAgentPipeline
-    from easyicu.research_agent.authority.provider_hard_stop import (
-        ProviderHardStopLedger,
-    )
-    from easyicu.research_agent.orchestration.config import PipelineConfig
-    from easyicu.research_agent.orchestration.services import PipelineServices
-
-    pending = _checkpoint_pending_from_record(
-        record,
-        recover_recorded_decisions=True,
-    )
-    wrapper_dir = Path(record.wrapper_dir).resolve()
-    if record.pipeline_config_sha256 is None:
-        # Historical /1 records predate the exact recovery digest.  They remain
-        # readable, but cannot be promoted to durable resume authority: the
-        # Pipeline checkpoint only proves a mismatch after reconstruction.
-        raise WebReviewRecoveryError(
-            "Web review recovery record predates the exact pipeline config digest"
-        )
-    try:
-        config = PipelineConfig.from_recovery_payload(
-            record.pipeline_config,
-            expected_digest=record.pipeline_config_sha256,
-        )
-    except ValueError as exc:
-        raise WebReviewRecoveryError(
-            "Web review pipeline config is inconsistent"
-        ) from exc
-    if Path(config.workdir).resolve() != (wrapper_dir / "pipeline").resolve():
-        raise WebReviewRecoveryError("Web review pipeline workdir drifted")
-    if record.budget_mode == "full_reviewed" and not record.prepared_package_binding:
-        raise WebReviewRecoveryError(
-            "Reviewed execution recovery lacks a package binding"
-        )
-    if not rejection_only and record.prepared_package_binding:
-        source = record.study.get("data_source")
-        source = source if isinstance(source, Mapping) else {}
-        try:
-            dataio.validate_research_pipeline_source(
-                str(source.get("path") or ""),
-                database=source.get("database"),
-                expected_binding=record.prepared_package_binding,
-            )
-        except dataio.ExportCohortError as exc:
-            raise WebReviewRecoveryError(
-                "Web review prepared package changed after the pause"
-            ) from exc
-    client = None
-    provider_public = dict(record.provider_public)
-    if not rejection_only:
-        client, provider_public = provider_adapter.build_research_agent_provider_client(
-            dict(record.provider_meta),
-            environ=provider_environment,
-        )
-        for key in (
-            "provider",
-            "model",
-            "credential_fingerprint",
-            "endpoint_fingerprint",
-            "credential_header",
-            "base_url_endpoint",
-            "session_binding_sha256",
-        ):
-            if provider_public.get(key) != record.provider_public.get(key):
-                raise WebReviewRecoveryError(
-                    "Web review provider identity changed after the pause"
-                )
-    # PipelineConfig cryptographically binds the paid-run stop-loss, so even a
-    # rejection-only recovery must supply its matching local enforcement
-    # service. This reloads the paused ledger without resuming its clock or
-    # rebuilding provider credentials; resume_human_review also skips
-    # provider_hard_stop.resume() when every decision is rejected.
-    task_id = record.hard_stop_task_id
-    ledger = ProviderHardStopLedger(
-        path=Path(record.hard_stop_ledger_path).resolve(),
-        task_ids=(task_id,),
-        limits=provider_adapter.web_research_agent_hard_stop_limits(record.budget_mode),
-        batch_id=task_id,
-        declaration_sha256=record.hard_stop_declaration_sha256,
-        resume_existing=True,
-    )
-    # Provider pause/reconcile state belongs to Pipeline.resume_human_review,
-    # which performs it while holding the cross-process run execution lock.
-    task = ledger.start_task(task_id)
-    pipeline = ResearchAgentPipeline.from_config(
-        config,
-        services=PipelineServices(
-            llm=client,
-            human_review_gate=_WebHumanReviewGate(),
-            provider_hard_stop=task,
-        ),
-    )
-    return _PendingRun(
-        pipeline=pipeline,
-        pending=pending,
-        wrapper_dir=wrapper_dir,
-        study=dict(record.study),
-        provider=dict(provider_public),
-        acquisition=_rehydrate_acquisition_projection(record.acquisition_projection),
-        created_at=record.created_at,
-        credential_source=record.credential_source,
-        budget_mode=record.budget_mode,
-        prepared_package_binding=(
-            dict(record.prepared_package_binding)
-            if record.prepared_package_binding
-            else None
-        ),
-        provider_hard_stop=task,
-    )
 
 
 def _compile_plan_revision_contract(
@@ -5508,7 +5303,7 @@ def make_research_pipeline_run_runner(
                     prepared_package_binding=prepared_package_binding,
                     provider_hard_stop=provider_hard_stop,
                 )
-                _register_pending(entry)
+                _PENDING_REVIEWS.register(entry)
                 return _write_projection(
                     wrapper_dir=wrapper_dir,
                     study=study,
@@ -5640,13 +5435,13 @@ def resume_research_pipeline(
             "research_pipeline_review_decision_invalid",
             "Choose approved or rejected for the pending plan review.",
         )
-    with _PENDING_LOCK:
-        entry = _PENDING.get(key)
+    entry = _PENDING_REVIEWS.get(key)
     if entry is None:
         try:
-            entry = _recover_pending_run(
+            entry = recover_pending_review(
                 key,
                 provider_environment=provider_environment,
+                reviewer_identity=server_reviewer_identity(),
                 rejection_only=resolved == "rejected",
             )
         except Exception as exc:
@@ -5660,9 +5455,7 @@ def resume_research_pipeline(
                 "research_pipeline_review_not_resumable",
                 "No saved plan review exists for this run.",
             )
-        with _PENDING_LOCK:
-            incumbent = _PENDING.setdefault(key, entry)
-            entry = incumbent
+        entry = _PENDING_REVIEWS.install_recovered(key, entry)
     if _clean_text(entry.study.get("id"), 160) != _clean_text(study_context_id, 160):
         raise ResearchPipelineRunError(
             "research_pipeline_review_study_mismatch",
@@ -5676,8 +5469,7 @@ def resume_research_pipeline(
             dict(current_study_context)
         )
         if current_digest != planned_digest:
-            with _PENDING_LOCK:
-                _PENDING.pop(key, None)
+            _PENDING_REVIEWS.discard(key, expected=entry)
             remove_review_recovery_record(key)
             _remove_local_recovery(entry.wrapper_dir)
             _finish_web_provider_hard_stop(
@@ -5785,55 +5577,27 @@ def resume_research_pipeline(
         step="human_review",
         label=f"Applying {resolved} decision to the digest-bound Research Agent plan",
     )
-    from easyicu.research_agent.orchestration.workflow import (
-        HumanReviewPending,
-        HumanReviewRejected,
-    )
-
-    # Lease the live pause before resuming it. Two approval jobs for the same
-    # button click must not both drive one workflow or pause the Provider clock
-    # underneath each other. Recoverable failures and a new pause explicitly
-    # re-register the entry below.
-    with _PENDING_LOCK:
-        if _PENDING.get(key) is not entry:
-            raise ResearchPipelineRunError(
-                "research_pipeline_review_resume_in_progress",
-                "This plan review is already being resumed by another job.",
-            )
-        _PENDING.pop(key, None)
-
     try:
-        outcome = entry.pipeline.resume_human_review(
+        resume_result = resume_pending_review(
+            _PENDING_REVIEWS,
+            entry,
             decisions,
             run_id=key,
             progress_callback=lambda event: _pipeline_progress(job, event),
         )
-    except HumanReviewRejected:
-        remove_review_recovery_record(key)
-        _remove_local_recovery(entry.wrapper_dir)
-        _finish_web_provider_hard_stop(
-            entry.provider_hard_stop,
-            error="human_review_rejected",
-        )
-        return _write_projection(
-            wrapper_dir=entry.wrapper_dir,
-            study=entry.study,
-            provider=entry.provider,
-            acquisition=entry.acquisition,
-            run_dir=Path(entry.pending.run_dir),
-            blocked_reason="human_plan_review_rejected",
-        )
-    except Exception as exc:
-        remains_resumable = bool(
-            getattr(entry.pipeline, "has_resumable_human_review", False)
-        )
+    except PendingReviewResumeInProgress as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_review_resume_in_progress",
+            "This plan review is already being resumed by another job.",
+        ) from exc
+    except PendingReviewResumeFailure as failure:
+        exc = failure.cause
+        remains_resumable = failure.resumable
         diagnostic = _write_review_resume_failure_diagnostic(
             wrapper_dir=entry.wrapper_dir,
             exc=exc,
             review_resumable=remains_resumable,
         )
-        if remains_resumable:
-            _register_pending(entry)
         if not remains_resumable:
             _finish_web_provider_hard_stop(
                 entry.provider_hard_stop,
@@ -5841,10 +5605,6 @@ def resume_research_pipeline(
             )
             remove_review_recovery_record(key)
             _remove_local_recovery(entry.wrapper_dir)
-        # Executing the approved plan is where the container runtime is used
-        # for real, so a host that stopped Docker between planning and approval
-        # fails here. That is a host-environment problem with a known fix, and
-        # naming it beats "could not resume after plan review".
         runtime_unavailable = (
             _safe_pipeline_typed_failure(exc).get("owner")
             == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER
@@ -5869,9 +5629,23 @@ def resume_research_pipeline(
                 "diagnostic": diagnostic,
             },
         ) from exc
-    if isinstance(outcome, HumanReviewPending):
-        entry.pending = outcome
-        _register_pending(entry)
+    if resume_result.state == "rejected":
+        remove_review_recovery_record(key)
+        _remove_local_recovery(entry.wrapper_dir)
+        _finish_web_provider_hard_stop(
+            entry.provider_hard_stop,
+            error="human_review_rejected",
+        )
+        return _write_projection(
+            wrapper_dir=entry.wrapper_dir,
+            study=entry.study,
+            provider=entry.provider,
+            acquisition=entry.acquisition,
+            run_dir=Path(entry.pending.run_dir),
+            blocked_reason="human_plan_review_rejected",
+        )
+    if resume_result.state == "pending":
+        outcome = resume_result.outcome
         return _write_projection(
             wrapper_dir=entry.wrapper_dir,
             study=entry.study,
@@ -5880,6 +5654,7 @@ def resume_research_pipeline(
             run_dir=Path(outcome.run_dir),
             pending=outcome,
         )
+    outcome = resume_result.outcome
     _finish_web_provider_hard_stop(entry.provider_hard_stop)
     remove_review_recovery_record(key)
     _remove_local_recovery(entry.wrapper_dir)

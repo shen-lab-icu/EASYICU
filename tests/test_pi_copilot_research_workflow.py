@@ -58,6 +58,13 @@ from easyicu.webserver.pi_copilot.run_authority import (
 )
 
 
+def _install_pending_review(monkeypatch, entry):
+    registry = agent_pipeline_runs.PendingReviewRegistry()
+    monkeypatch.setattr(agent_pipeline_runs, "_PENDING_REVIEWS", registry)
+    registry.register(entry)
+    return registry
+
+
 def _request() -> Request:
     return Request(
         {
@@ -5162,11 +5169,7 @@ def test_pending_plan_cannot_resume_after_scientific_setup_changes(
         acquisition=SimpleNamespace(),
         created_at=1.0,
     )
-    monkeypatch.setitem(
-        agent_pipeline_runs._PENDING,
-        "run-superseded-plan",
-        entry,
-    )
+    _install_pending_review(monkeypatch, entry)
     changed = {
         **original,
         "analysis_design": {
@@ -5230,11 +5233,7 @@ def test_superseded_plan_can_still_be_rejected_without_execution_revalidation(
         acquisition=SimpleNamespace(),
         created_at=1.0,
     )
-    monkeypatch.setitem(
-        agent_pipeline_runs._PENDING,
-        "run-superseded-rejection",
-        entry,
-    )
+    _install_pending_review(monkeypatch, entry)
     monkeypatch.setattr(
         agent_pipeline_runs,
         "_write_projection",
@@ -5287,9 +5286,8 @@ def test_pending_review_projects_from_the_typed_pause_run_directory(
         requests=(request,),
     )
     study = _complete_study()
-    monkeypatch.setitem(
-        agent_pipeline_runs._PENDING,
-        pending.run_id,
+    _install_pending_review(
+        monkeypatch,
         agent_pipeline_runs._PendingRun(
             pipeline=SimpleNamespace(),
             pending=pending,
@@ -5372,7 +5370,7 @@ def test_pending_plan_resume_routes_pipeline_events_to_the_resume_job(
         prepared_package_binding=package_binding,
         provider_hard_stop=hard_stop,
     )
-    monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
+    _install_pending_review(monkeypatch, entry)
     monkeypatch.setattr(
         agent_pipeline_runs,
         "_write_projection",
@@ -5462,7 +5460,7 @@ def test_recoverable_review_resume_failure_keeps_pending_run_and_pauses_budget(
         prepared_package_binding=package_binding,
         provider_hard_stop=hard_stop,
     )
-    monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
+    registry = _install_pending_review(monkeypatch, entry)
 
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
         agent_pipeline_runs.resume_research_pipeline(
@@ -5477,7 +5475,7 @@ def test_recoverable_review_resume_failure_keeps_pending_run_and_pauses_budget(
 
     assert exc.value.code == "research_pipeline_review_resume_failed"
     assert exc.value.details["review_resumable"] is True
-    assert agent_pipeline_runs._PENDING[pending.run_id] is entry
+    assert registry.get(pending.run_id) is entry
     task_row = hard_stop.ledger.snapshot()["tasks"][0]
     assert task_row["status"] == "paused"
     assert hard_stop.ledger.snapshot()["terminal"] is False
@@ -5541,23 +5539,9 @@ def test_review_resume_claim_is_exclusive_before_touching_provider_budget(
         prepared_package_binding=package_binding,
         provider_hard_stop=hard_stop,
     )
-    monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
+    registry = _install_pending_review(monkeypatch, entry)
 
-    class _ContendedLock:
-        def __init__(self) -> None:
-            self.entries = 0
-
-        def __enter__(self):
-            self.entries += 1
-            if self.entries == 2:
-                # Simulate another resume job claiming the entry after this
-                # caller read it but before this caller obtains the lease.
-                agent_pipeline_runs._PENDING.pop(pending.run_id, None)
-
-        def __exit__(self, *_args):
-            return False
-
-    monkeypatch.setattr(agent_pipeline_runs, "_PENDING_LOCK", _ContendedLock())
+    monkeypatch.setattr(registry, "lease", lambda *_args, **_kwargs: False)
     with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
         agent_pipeline_runs.resume_research_pipeline(
             run_id=pending.run_id,
@@ -7545,9 +7529,8 @@ def test_pipeline_bridge_cannot_approve_canary_when_route_is_bypassed(
             pipeline_called = True
             raise AssertionError("canary must not reach execution")
 
-    monkeypatch.setitem(
-        agent_pipeline_runs._PENDING,
-        pending.run_id,
+    _install_pending_review(
+        monkeypatch,
         agent_pipeline_runs._PendingRun(
             pipeline=_Pipeline(),
             pending=pending,
@@ -7794,7 +7777,7 @@ def test_plan_approval_revalidates_the_exact_prepared_package(
         created_at=1.0,
         prepared_package_binding=package_binding,
     )
-    monkeypatch.setitem(agent_pipeline_runs._PENDING, pending.run_id, entry)
+    _install_pending_review(monkeypatch, entry)
     export = Path(study["data_source"]["path"])
     (export / "demographics.parquet").write_bytes(b"changed-before-approval")
 
