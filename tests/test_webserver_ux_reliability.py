@@ -29,6 +29,18 @@ def _node_binary() -> str | None:
     return str(candidates[-1]) if candidates else None
 
 
+def test_guided_contract_owner_is_loaded_before_the_guided_screen() -> None:
+    index = (STATIC_JS.parent / "index.html").read_text(encoding="utf-8")
+    contracts = _js("screens-guided-contracts.js")
+    guided = _js("screens-guided.js")
+
+    assert index.index("js/screens-guided-contracts.js?") < index.index(
+        "js/screens-guided.js?"
+    )
+    assert "const BRANCH" in contracts
+    assert "const BRANCH" not in guided
+
+
 def test_guided_global_rerender_preserves_conversation_and_composer_state() -> None:
     guided = _js("screens-guided.js")
 
@@ -106,7 +118,7 @@ def test_guided_gate_contract_fails_closed_for_missing_or_unknown_results() -> N
         [
             node,
             str(Path(__file__).parents[1] / "tests" / "js" / "guided_gate_state.test.js"),
-            str(STATIC_JS / "screens-guided.js"),
+            str(STATIC_JS / "screens-guided-contracts.js"),
         ],
         check=False,
         capture_output=True,
