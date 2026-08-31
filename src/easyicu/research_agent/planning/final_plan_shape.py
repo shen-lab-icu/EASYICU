@@ -12,6 +12,20 @@ import re
 from typing import Sequence
 
 from ..contracts.declared_product import typed_product
+from ..plan_utils import (
+    _augment_report_typed_product_inputs,
+    _cap_plan_preserving_figure_steps,
+    _clustering_contract_applies,
+    _cohort_definition_contract_findings,
+    _cohort_definition_is_empty,
+    _ensure_publication_figure_step_in_plan,
+    _enforce_advanced_plan_contract,
+    _plan_expects_analysis_cohort,
+    _prediction_contract_applies,
+    _split_table_and_figure_outputs_in_plan,
+    _typed_plan_dag_findings,
+)
+from .endpoint_contract import endpoint_contract_findings
 from ..schema import AnalysisPlan
 
 
@@ -69,4 +83,19 @@ def validate_final_plan_shape(plan: AnalysisPlan) -> None:
         )
 
 
-__all__ = ["PlanShapeValidationError", "validate_final_plan_shape"]
+__all__ = [
+    "PlanShapeValidationError",
+    "_augment_report_typed_product_inputs",
+    "_cap_plan_preserving_figure_steps",
+    "_clustering_contract_applies",
+    "_cohort_definition_contract_findings",
+    "_cohort_definition_is_empty",
+    "_ensure_publication_figure_step_in_plan",
+    "_enforce_advanced_plan_contract",
+    "_plan_expects_analysis_cohort",
+    "_prediction_contract_applies",
+    "_split_table_and_figure_outputs_in_plan",
+    "_typed_plan_dag_findings",
+    "endpoint_contract_findings",
+    "validate_final_plan_shape",
+]

@@ -383,24 +383,8 @@ from ..repairs.reasons import (
     repair_reason_for_finding,
     typed_repair_ticket,
 )
-from ..plan_utils import (
-    _augment_report_typed_product_inputs,
-    _cap_plan_preserving_figure_steps,
-    _clustering_contract_applies,
-    _cohort_definition_contract_findings,
-    _cohort_definition_is_empty,
-    _cohort_definition_prose,
-    endpoint_contract_findings,
-    _normalised_expected_output_names,
-    _normalised_structured_output_names,
-    _output_declares_figure,
-    _parent_step_id_for_figure_step,
-    _plan_expects_analysis_cohort,
-    _preserve_figure_steps_after_replan,
-    _step_contract_repair_guidance,
-    _step_expects_figure,
-    _typed_plan_dag_findings,
-)
+from ..planning.endpoint_contract import endpoint_contract_findings
+from ..planning import final_plan_shape as _final_plan
 from ..orchestration.resume import (
     QuarantinedConceptDraft,
     ResumeController,
@@ -649,6 +633,7 @@ from .phase_support import (  # noqa: F401 — owner module
     _step_resolve_initial_code,
     _step_apply_authority_resume,
     _step_robustness_sensitivity_preflight_supported,
+    _step_expects_figure,
     _step_authorize_automatic_repair,
     _step_automatic_repair_authorized,
     _step_enforce_cohort_contract_on_executing_plan,
@@ -1606,7 +1591,7 @@ def run_execute_phase(
             preexecuted_step_ids=preexecuted_step_ids,
             _flush_partial_manifest=_flush_partial_manifest,
         )
-    typed_plan_preflight = _typed_plan_dag_findings(plan)
+    typed_plan_preflight = _final_plan._typed_plan_dag_findings(plan)
     primary_cohort_preflight = primary_analysis_cohort_plan_findings(plan=plan)
     trajectory_preflight = trajectory_plan_dag_findings(
         plan=plan,
@@ -1662,7 +1647,7 @@ def run_execute_phase(
         owner_declaration_preflight=owner_declaration_preflight,
     )
     final_typed_plan_findings = [
-        *_typed_plan_dag_findings(plan),
+        *_final_plan._typed_plan_dag_findings(plan),
         *primary_analysis_cohort_plan_findings(plan=plan),
         # A raw input the sealed context cannot resolve raises inside
         # _execute_one_step, and nothing wraps execute_step -- so without this

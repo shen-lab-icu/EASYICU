@@ -67,11 +67,15 @@ def _probe_conditional(tree: ast.Module, source: str) -> ast.If:
 
 
 def _called_names(node: ast.AST) -> set[str]:
-    return {
-        child.func.id
-        for child in ast.walk(node)
-        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
-    }
+    names: set[str] = set()
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        if isinstance(child.func, ast.Name):
+            names.add(child.func.id)
+        elif isinstance(child.func, ast.Attribute):
+            names.add(child.func.attr)
+    return names
 
 
 @pytest.mark.parametrize("gate", _PLAN_GATES)
