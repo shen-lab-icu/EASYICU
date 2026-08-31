@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
+from pydantic import ValidationError
 
 from easyicu.webserver import state_paths
 from easyicu.webserver import agent_runs
@@ -103,12 +104,52 @@ def submit_agent_run(
     """
     requested_engine = str(body.get("engine") or "native_summary").strip().lower()
     if requested_engine == "research_agent_pipeline":
-        try:
-            return research_run_submission.submit_research_run(
-                body,
-                account_environment=account_environment,
-                metadata_only_planning_authorized=metadata_only_planning_authorized,
+        if "budget_mode" in body:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "research_pipeline_budget_mode_server_owned"},
             )
+        try:
+            request = research_run_submission.ResearchRunSubmissionRequest(
+                study_context_id=str(body.get("study_context_id") or "").strip(),
+                provider=str(body.get("llm_provider") or body.get("provider") or "mock"),
+                credential_source=str(body.get("credential_source") or ""),
+                external_llm_opt_in=body_bool(body, "external_llm_opt_in"),
+                intent=(
+                    "candidate_plan"
+                    if metadata_only_planning_authorized
+                    else "reviewed_analysis"
+                ),
+                planner_start_mode=str(body.get("planner_start_mode") or "auto"),
+                plan_revision_source_run_id=str(
+                    body.get("plan_revision_source_run_id") or ""
+                ),
+                execution_resume_source_run_id=str(
+                    body.get("execution_resume_source_run_id") or ""
+                ),
+                literature_search_authorized=body_bool(
+                    body, "literature_search_authorized"
+                ),
+                compute_target=str(body.get("compute_target") or "local"),
+            )
+            receipt = research_run_submission.submit_research_run(
+                request,
+                account_environment=account_environment,
+            )
+            return receipt.model_dump(mode="json")
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "research_run_submission_request_invalid",
+                    "fields": sorted(
+                        {
+                            str(item.get("loc", ["request"])[0])
+                            for item in exc.errors()
+                        }
+                    ),
+                },
+            ) from exc
         except research_run_submission.ResearchRunSubmissionError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
