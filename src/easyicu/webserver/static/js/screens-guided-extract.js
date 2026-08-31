@@ -68,8 +68,44 @@
   ];
   const STEP_ORDER = STEPS.map(s => s[0]);
 
+  /* The guided shell owns the conversation, rail, and project-memory save.
+     This sub-flow owns every extraction transition and reaches the shell only
+     through these bindings. Keeping the host narrow makes the extraction
+     workflow independently characterizable without duplicating shell state. */
+  let host = {
+    t: (en) => en,
+    icon: () => '',
+    esc: (value) => String(value == null ? '' : value),
+    attr: (value) => String(value == null ? '' : value),
+    fmtInt: (value, fallback) => (value == null ? fallback : String(value)),
+    compactPath: (value) => String(value == null ? '' : value),
+    bi: (en, zh) => ({ en, zh }),
+    modules: [],
+    coreModules: [],
+    cohortPresets: [],
+    thread: () => [],
+    clearChips: () => {},
+    pushUser: () => {},
+    setDataMode: () => {},
+    setVal: () => {},
+    markThrough: () => {},
+    applyStudyDesign: () => {},
+    renderThread: () => {},
+    renderChips: () => {},
+    renderAside: () => {},
+    scheduleGuidedSlotSave: () => {},
+    guidedJobEndError: () => '',
+  };
+
   let extractionState = null;
   let designState = null;
+  let eventStream = null;
+
+  function disconnectEventStream() {
+    if (!eventStream) return;
+    try { eventStream.close(); } catch (_) {}
+    eventStream = null;
+  }
 
   function createExtractionState(coreModules) {
     return {
@@ -107,7 +143,8 @@
   }
 
   function resetState(coreModules) {
-    extractionState = createExtractionState(coreModules);
+    disconnectEventStream();
+    extractionState = createExtractionState(coreModules || host.coreModules);
     if (!designState) designState = createDesignState();
     return extractionState;
   }
@@ -118,6 +155,7 @@
   }
 
   function clearState() {
+    disconnectEventStream();
     extractionState = null;
     designState = null;
   }
@@ -392,11 +430,482 @@
       </div>`;
   }
 
+  function moduleConceptCount(key) {
+    const groups = window.EU_CATALOG && window.EU_CATALOG.groupConcepts;
+    const members = groups && groups[key];
+    return Array.isArray(members) ? members.length : 0;
+  }
+
+  function selectedConceptCount() {
+    if (!extractionState) return 0;
+    return host.modules
+      .filter(module => extractionState.modules.includes(module[0]))
+      .reduce((sum, module) => sum + moduleConceptCount(module[0]), 0);
+  }
+
+  function cohortContract() {
+    const preset = extractionState && extractionState.cohort
+      ? extractionState.cohort
+      : 'adult_first';
+    return {
+      preset,
+      age_min: preset === 'adult_first' ? 18 : 0,
+      age_max: 100,
+      min_icu_los_hours: 0,
+      observation_window_hours: windowHours(designState),
+      exclude_readmissions: preset === 'adult_first',
+      icd_enabled: false,
+      icd_include: [],
+      icd_exclude: [],
+    };
+  }
+
+  function sourceReady() {
+    const scan = extractionState && extractionState.scan;
+    return !!(
+      extractionState
+      && extractionState.path
+      && scan
+      && scan.ok
+      && scan.ready
+      && scan.source !== 'module'
+    );
+  }
+
+  function statusText() {
+    const t = host.t;
+    if (!extractionState) return '';
+    if (extractionState.scanning) return t('Analyzing folder structure...', '正在识别文件夹结构...');
+    if (extractionState.scanError) return extractionState.scanError;
+    if (extractionState.scan && extractionState.scan.source === 'module') {
+      return t('This is already an EasyICU module export. Register it for review instead of extracting again.', '这是已有 EasyICU 模块导出。应注册后审阅，不需要再次抽取。');
+    }
+    if (extractionState.scan && !extractionState.scan.ready) {
+      return t('Folder was recognized but is not extraction-ready yet. Use Advanced classic settings for the one-time conversion path.', '已识别该文件夹，但尚未达到可直接抽取状态。请用高级经典设置走一次性转换。');
+    }
+    if (extractionState.running && extractionState.progress) {
+      const progress = extractionState.progress;
+      const message = progress.message || progress.phase || 'running';
+      const count = progress.current != null && progress.total
+        ? ` · ${progress.current}/${progress.total}`
+        : '';
+      return message + count;
+    }
+    if (extractionState.running) return t('Starting extraction job...', '正在启动抽取任务...');
+    if (extractionState.error) return extractionState.error;
+    if (extractionState.result) return t('Extraction complete. Output registered as the active local export.', '抽取完成。输出已注册为 active 本地 export。');
+    return sourceReady()
+      ? t('Ready to run locally. Nothing is uploaded.', '可以在本机运行。不会上传数据。')
+      : t('Paste or choose a local ICU data folder, then analyze it before running.', '先粘贴或选择本机 ICU 数据文件夹，然后识别目录再运行。');
+  }
+
+  function commitStudyDesign() {
+    if (!designState) return;
+    const outcome = resolveOutcome(designState, host.t);
+    const comparator = resolveComparator(designState, host.t);
+    const observedWindow = windowLabel(designState, host.t);
+    designState.collected = !!(outcome || comparator);
+    host.applyStudyDesign({
+      outcome,
+      comparator,
+      comparatorKind: designState.comparator,
+      windowLabel: observedWindow,
+    });
+  }
+
+  function goStep(step) {
+    if (!extractionState || !STEP_ORDER.includes(step)) return;
+    if (extractionState.step === 'design' && step !== 'design') commitStudyDesign();
+    extractionState.step = step;
+    host.renderThread();
+    host.renderAside();
+    host.scheduleGuidedSlotSave('guided_extraction_step_' + step);
+  }
+
+  function step(direction) {
+    if (!extractionState) return;
+    const index = STEP_ORDER.indexOf(extractionState.step || 'source');
+    const next = STEP_ORDER[index + direction];
+    if (next) goStep(next);
+  }
+
+  function renderCard() {
+    if (!extractionState) resetState();
+    if (!designState) resetDesignState();
+    const progressPct = extractionState.progress && extractionState.progress.total
+      ? Math.max(0, Math.min(100, Math.round(
+        (Number(extractionState.progress.current || 0) / Number(extractionState.progress.total || 1)) * 100,
+      )))
+      : (extractionState.result ? 100 : 0);
+    return render({
+      t: host.t,
+      icon: host.icon,
+      esc: host.esc,
+      attr: host.attr,
+      fmtInt: host.fmtInt,
+      compactPath: host.compactPath,
+      ex: extractionState,
+      design: designState,
+      ready: sourceReady(),
+      statusText: statusText(),
+      selectedConcepts: selectedConceptCount(),
+      moduleConceptCount,
+      cohortPresets: host.cohortPresets,
+      modules: host.modules,
+      coreModules: host.coreModules,
+      progressPct,
+    });
+  }
+
+  function start(label) {
+    if (label) host.pushUser(label);
+    resetState();
+    host.setDataMode('real');
+    host.setVal({ data: 'choose local folder', concepts: 'all modules', extract: 'inline Copilot' });
+    host.markThrough('extract', 'active');
+    host.thread().push({ bot: true, html: host.bi(
+      `We can do the core extraction flow here in Copilot. Choose a local ICU data folder, I’ll scan it first, then start the same local extraction job Classic uses.`,
+      `核心数据抽取可以直接在 Copilot 里完成。先选择本机 ICU 数据文件夹，我会先识别目录，再启动和经典视图相同的本地抽取任务。`,
+    ) });
+    host.thread().push({ guidedExtraction: true });
+    host.clearChips();
+    host.renderThread();
+    host.renderChips();
+    host.scheduleGuidedSlotSave('start_extraction');
+  }
+
+  function updateModules(mode) {
+    if (!extractionState) return;
+    if (mode === 'all') extractionState.modules = host.modules.map(module => module[0]);
+    else if (mode === 'core') extractionState.modules = host.coreModules.slice();
+    else if (mode === 'none') extractionState.modules = [];
+  }
+
+  function scanPath() {
+    const current = extractionState;
+    if (!current || current.scanning) return;
+    const path = String(current.path || '').trim();
+    if (!path) {
+      current.scan = null;
+      current.scanError = 'Choose or paste a local folder path first.';
+      current.error = null;
+      host.renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.scanPath) {
+      current.scan = null;
+      current.scanError = 'Folder scan API is unavailable.';
+      host.renderThread();
+      return;
+    }
+    current.scanning = true;
+    current.scan = null;
+    current.scanError = null;
+    current.error = null;
+    host.renderThread();
+    window.EU_API.scanPath(path, null).then(result => {
+      if (extractionState !== current) return;
+      current.scanning = false;
+      if (result && result.ok) {
+        current.path = result.path || path;
+        current.scan = result;
+        current.scanError = null;
+        host.setVal({ data: (result.db || 'local ICU') + ' · ' + (result.source || 'source') });
+      } else {
+        current.scan = result || null;
+        current.scanError = (result && (result.error || result.reason)) || 'Could not recognize this folder.';
+      }
+      host.renderThread();
+      host.scheduleGuidedSlotSave('scan_extraction_folder');
+    }).catch(error => {
+      if (extractionState !== current) return;
+      current.scanning = false;
+      current.scan = null;
+      current.scanError = error.message || String(error);
+      host.renderThread();
+      host.scheduleGuidedSlotSave('scan_extraction_folder_error');
+    });
+  }
+
+  function registerModuleExport() {
+    const current = extractionState;
+    if (!current || !current.path || !window.EU_API || !window.EU_API.registerWorkspaceSource) return;
+    current.error = null;
+    window.EU_API.registerWorkspaceSource(current.path, {
+      active: true,
+      crossdb: true,
+      label: 'Guided selected export',
+    }).then(() => {
+      if (extractionState !== current) return;
+      current.result = { out_dir: current.path, total_rows: null, files_written: null };
+      current.registered = true;
+      host.setVal({ data: 'registered export', extract: 'already exported' });
+      host.markThrough('review', 'active');
+      host.renderThread();
+      host.scheduleGuidedSlotSave('register_module_export');
+    }).catch(error => {
+      if (extractionState !== current) return;
+      current.error = error.message || String(error);
+      host.renderThread();
+      host.scheduleGuidedSlotSave('register_module_export_error');
+    });
+  }
+
+  function finishEventStream(stream) {
+    try { stream.close(); } catch (_) {}
+    if (eventStream === stream) eventStream = null;
+  }
+
+  function runJob() {
+    const current = extractionState;
+    if (!current || current.running) return;
+    if (!sourceReady()) {
+      current.error = 'Analyze a prepared local ICU data folder before running extraction.';
+      host.renderThread();
+      return;
+    }
+    if (!current.modules.length) {
+      current.error = 'Select at least one feature module before running.';
+      host.renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.startExtractionJob || !window.EventSource) {
+      current.error = 'Extraction backend or browser event stream is unavailable.';
+      host.renderThread();
+      return;
+    }
+    disconnectEventStream();
+    current.running = true;
+    current.error = null;
+    current.result = null;
+    current.progress = null;
+    host.renderThread();
+    const scan = current.scan || {};
+    window.EU_API.startExtractionJob({
+      path: current.path,
+      database: scan.db_key || 'miiv',
+      modules: current.modules.slice(),
+      format: current.format,
+      merge: current.merge,
+      max_patients: current.maxPatients,
+      out_dir: (current.exportDir || '').trim() || undefined,
+      cohort: cohortContract(),
+    }).then(result => {
+      if (extractionState !== current) return;
+      current.jobId = result.job_id;
+      host.renderThread();
+      host.scheduleGuidedSlotSave('start_extraction_job');
+      const stream = new EventSource('/api/jobs/' + encodeURIComponent(result.job_id) + '/events');
+      eventStream = stream;
+      stream.onmessage = event => {
+        if (extractionState !== current) {
+          finishEventStream(stream);
+          return;
+        }
+        let message;
+        try { message = JSON.parse(event.data); } catch (_) { return; }
+        if (message.type === 'progress') {
+          current.progress = message;
+          host.renderThread();
+          return;
+        }
+        if (message.type !== 'end') return;
+        finishEventStream(stream);
+        current.running = false;
+        if (message.status === 'done') {
+          current.result = message.result || {};
+          window.EU_LAST_EXPORT = current.result;
+          const out = current.result.out_dir;
+          if (out && window.EU_API && window.EU_API.registerWorkspaceSource) {
+            window.EU_API.registerWorkspaceSource(out, {
+              active: true,
+              crossdb: true,
+              label: 'Guided export',
+            }).then(() => {
+              if (extractionState !== current) return;
+              current.registered = true;
+              host.renderAside();
+            }).catch(error => {
+              console.warn('[EasyICU] guided export registry update failed:', error);
+            });
+          }
+          host.setVal({ extract: 'done', data: 'Guided export' });
+          host.markThrough('review', 'active');
+        } else {
+          current.error = host.guidedJobEndError(message) || 'Extraction failed.';
+        }
+        host.renderThread();
+        host.scheduleGuidedSlotSave('finish_extraction_job');
+      };
+      stream.onerror = () => {
+        finishEventStream(stream);
+        if (extractionState !== current) return;
+        current.running = false;
+        current.error = 'Extraction event stream stopped before completion.';
+        host.renderThread();
+        host.scheduleGuidedSlotSave('extraction_event_stream_error');
+      };
+    }).catch(error => {
+      if (extractionState !== current) return;
+      current.running = false;
+      current.error = error.message || String(error);
+      host.renderThread();
+      host.scheduleGuidedSlotSave('start_extraction_job_error');
+    });
+  }
+
+  function handleClick(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    const cohort = target.closest('[data-gx-cohort]');
+    if (cohort) {
+      if (extractionState) {
+        extractionState.cohort = cohort.dataset.gxCohort || 'adult_first';
+        extractionState.error = null;
+        host.renderThread();
+        host.scheduleGuidedSlotSave('set_extraction_cohort');
+      }
+      return true;
+    }
+    const module = target.closest('[data-gx-module]');
+    if (module) {
+      if (extractionState) {
+        const key = module.dataset.gxModule;
+        extractionState.error = null;
+        extractionState.modules = extractionState.modules.includes(key)
+          ? extractionState.modules.filter(item => item !== key)
+          : extractionState.modules.concat(key);
+        host.renderThread();
+        host.scheduleGuidedSlotSave('toggle_extraction_module');
+      }
+      return true;
+    }
+    const moduleSet = target.closest('[data-gx-module-set]');
+    if (moduleSet) {
+      if (extractionState) {
+        extractionState.error = null;
+        updateModules(moduleSet.dataset.gxModuleSet);
+        host.renderThread();
+        host.scheduleGuidedSlotSave('set_extraction_modules');
+      }
+      return true;
+    }
+    const format = target.closest('[data-gx-format]');
+    if (format) {
+      if (extractionState) {
+        extractionState.format = format.dataset.gxFormat || 'parquet';
+        extractionState.error = null;
+        host.renderThread();
+        host.scheduleGuidedSlotSave('set_extraction_format');
+      }
+      return true;
+    }
+    const maxPatients = target.closest('[data-gx-max]');
+    if (maxPatients) {
+      if (extractionState) {
+        extractionState.maxPatients = maxPatients.dataset.gxMax === 'all'
+          ? null
+          : Number(maxPatients.dataset.gxMax || 500);
+        extractionState.error = null;
+        host.renderThread();
+        host.scheduleGuidedSlotSave('set_extraction_max_patients');
+      }
+      return true;
+    }
+    const goto = target.closest('[data-gx-goto-step]');
+    if (goto) { goStep(goto.dataset.gxGotoStep); return true; }
+    if (target.closest('[data-gx-step-next]')) { step(1); return true; }
+    if (target.closest('[data-gx-step-back]')) { step(-1); return true; }
+    if (target.closest('[data-gx-modules-expand]')) {
+      if (extractionState) {
+        extractionState.modulesExpanded = !extractionState.modulesExpanded;
+        host.renderThread();
+      }
+      return true;
+    }
+    const outcome = target.closest('[data-gx-outcome]');
+    if (outcome) {
+      if (designState) {
+        designState.outcome = outcome.dataset.gxOutcome || '';
+        host.renderThread();
+        host.scheduleGuidedSlotSave('set_study_outcome');
+      }
+      return true;
+    }
+    const observedWindow = target.closest('[data-gx-window]');
+    if (observedWindow) {
+      if (designState) {
+        designState.window = observedWindow.dataset.gxWindow || 'whole_stay';
+        host.renderThread();
+        host.scheduleGuidedSlotSave('set_study_window');
+      }
+      return true;
+    }
+    const comparator = target.closest('[data-gx-comparator]');
+    if (comparator) {
+      if (designState) {
+        designState.comparator = comparator.dataset.gxComparator || 'none';
+        host.renderThread();
+        host.scheduleGuidedSlotSave('set_study_comparator');
+      }
+      return true;
+    }
+    if (target.closest('[data-gx-analyze]')) { scanPath(); return true; }
+    if (target.closest('[data-gx-use-export]')) { registerModuleExport(); return true; }
+    if (target.closest('[data-gx-run]')) { runJob(); return true; }
+    return false;
+  }
+
+  function handleInput(target) {
+    if (!target || typeof target.closest !== 'function') return false;
+    const path = target.closest('[data-gx-path]');
+    if (path) {
+      if (extractionState) {
+        extractionState.path = path.value;
+        extractionState.scan = null;
+        extractionState.scanError = null;
+        extractionState.error = null;
+        host.scheduleGuidedSlotSave('edit_extraction_path');
+      }
+      return true;
+    }
+    const exportDir = target.closest('[data-gx-exportdir]');
+    if (exportDir) {
+      if (extractionState) {
+        extractionState.exportDir = exportDir.value;
+        host.scheduleGuidedSlotSave('edit_export_destination');
+      }
+      return true;
+    }
+    const customOutcome = target.closest('[data-gx-outcome-custom]');
+    if (customOutcome) {
+      if (designState) {
+        designState.outcomeCustom = customOutcome.value;
+        host.scheduleGuidedSlotSave('edit_study_outcome_custom');
+      }
+      return true;
+    }
+    const customComparator = target.closest('[data-gx-comparator-custom]');
+    if (customComparator) {
+      if (designState) {
+        designState.comparatorCustom = customComparator.value;
+        host.scheduleGuidedSlotSave('edit_study_comparator_custom');
+      }
+      return true;
+    }
+    return false;
+  }
+
   window.EU_GUIDED_EXTRACT = {
+    init(bindings) {
+      host = Object.assign({}, host, bindings || {});
+    },
     clearState,
     createDesignState,
     createExtractionState,
     design,
+    handleClick,
+    handleInput,
+    renderCard,
     render,
     resetDesignState,
     resetState,
@@ -407,6 +916,7 @@
     COMPARATOR_PRESETS,
     resolveOutcome,
     resolveComparator,
+    start,
     windowHours,
     windowLabel,
   };
