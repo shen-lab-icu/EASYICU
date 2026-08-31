@@ -240,7 +240,7 @@ def test_choosing_the_all_admissions_option_counts_as_choosing_it() -> None:
     would make the offered answer unusable.
     """
 
-    from easyicu.webserver.pi_copilot.tools import (
+    from easyicu.webserver.pi_copilot.study_context_update import (
         _message_explicitly_selects_all_stays as selects_all,
     )
 
@@ -552,20 +552,26 @@ def test_unconfirmed_eligibility_remains_a_plan_review_requirement() -> None:
         "data_source": {"database": "miiv"},
         "cohort": {"preset": "all_icu"},
     }
-    missing = workflow._setup_missing(legacy, active_export_present=False)
-    assert "cohort_eligibility" in missing
-    assert "cohort_eligibility" not in workflow._planning_prerequisites_missing(
-        missing
+    snapshot = workflow.build_research_workflow_snapshot(
+        study=legacy,
+        active_export_present=False,
+        active_job=None,
+        latest_run=None,
     )
+    missing = snapshot.missing_setup_fields
+    assert "cohort_eligibility" in missing
+    assert "cohort_eligibility" not in snapshot.planning_prerequisites_missing
 
     confirmed = {**legacy, **_confirmed_study("no_eligibility_filter")}
-    confirmed_missing = workflow._setup_missing(
-        confirmed, active_export_present=False
+    confirmed_snapshot = workflow.build_research_workflow_snapshot(
+        study=confirmed,
+        active_export_present=False,
+        active_job=None,
+        latest_run=None,
     )
+    confirmed_missing = confirmed_snapshot.missing_setup_fields
     assert "cohort_eligibility" not in confirmed_missing
-    assert "cohort_eligibility" not in workflow._planning_prerequisites_missing(
-        confirmed_missing
-    )
+    assert "cohort_eligibility" not in confirmed_snapshot.planning_prerequisites_missing
 
 
 def test_study_context_accepts_only_server_bound_authority(

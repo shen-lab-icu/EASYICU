@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import threading
 import time
@@ -53,10 +54,22 @@ from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot import tools as tool_module
 from easyicu.webserver.pi_copilot import workflow as workflow_module
+from easyicu.webserver.pi_copilot import study_context_update
 from easyicu.webserver.pi_copilot.tool_catalog import (
     ALL_TOOL_NAMES,
     RESEARCH_TOOL_NAMES,
 )
+
+
+def test_study_context_update_policy_has_one_owner_interface() -> None:
+    adapter_source = inspect.getsource(tool_module._update_study_context)
+    owner_source = inspect.getsource(study_context_update.update_study_context)
+
+    assert "update_study_context(" in adapter_source
+    assert "validate_context_update" not in adapter_source
+    assert "normalize_execution_concepts" not in adapter_source
+    assert "validate_context_update" in owner_source
+    assert "normalize_execution_concepts" in owner_source
 
 
 def _record_pipeline_submission(
@@ -4357,7 +4370,7 @@ def test_empty_covariate_patch_without_user_clear_authority_preserves_metadata()
         },
     }
 
-    merged = tool_module._merge_nested_study_patch(
+    merged = study_context_update._merge_nested_study_patch(
         current,
         {
             "covariates": [],
@@ -5841,6 +5854,18 @@ def test_phi_and_projection_boundaries_reject_rows_identifiers_and_paths() -> No
     assert projected["sensitivity_specs"][0]["spec_id"] == "landmark_24h"
     assert projected["literature_authority"]["result_count"] == 3
     assert "/private/" not in json.dumps(projected)
+
+    workflow_receipt = workflow_module.project_study_setup_receipt(
+        {
+            "id": "study-safe",
+            "revision": 1,
+            "question": "Aggregate lactate analysis",
+            "data_source": {"database": "mimiciv", "path": "/private/export"},
+        }
+    )
+    assert workflow_receipt.configuration["data_source"]["path_digest"] == projected[
+        "data_source"
+    ]["path_digest"]
 
     projected_job = project_job(
         {
