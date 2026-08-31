@@ -81,7 +81,7 @@ from easyicu.webserver.figure_presentation import verified_presentation_gallery
 from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.research_pipeline_run_preparation import (
-    ResearchPipelinePreparationOperations,
+    ResearchPipelineLaunchRequest,
     prepare_research_pipeline_run,
 )
 from easyicu.webserver.pi_copilot.contracts import (
@@ -4838,41 +4838,6 @@ def _require_execution_runtime(*, budget_mode: str, runner_image: str) -> None:
         )
 
 
-def _research_pipeline_preparation_operations() -> (
-    ResearchPipelinePreparationOperations
-):
-    """Bind the preparation owner to the current lower-layer operations."""
-
-    return ResearchPipelinePreparationOperations(
-        clean_text=_clean_text,
-        neutral_materialization_scope=_neutral_materialization_scope,
-        target_outcome=_target_outcome,
-        primary_exposure=_primary_exposure,
-        primary_exposure_aggregation=_primary_exposure_aggregation,
-        metadata_only_planning_coordinates=_metadata_only_planning_coordinates,
-        validate_primary_concept_selection=_validate_primary_concept_selection,
-        configured_covariates=_configured_covariates,
-        configured_covariate_selection=_configured_covariate_selection,
-        configured_sensitivity_specs=_configured_sensitivity_specs,
-        cohort_window=_cohort_window,
-        validate_analysis_design=_validate_analysis_design,
-        patient_grouping_for_analysis_design=_patient_grouping_for_analysis_design,
-        metadata_planning_operationalized_columns=(
-            _metadata_planning_operationalized_columns
-        ),
-        data_foundation_profile=_data_foundation_profile,
-        validated_pipeline_credential_source=_validated_pipeline_credential_source,
-        development_progressive_resume_binding=(
-            _development_progressive_resume_binding
-        ),
-        development_resume_acquisition_profile=(
-            _development_resume_acquisition_profile
-        ),
-        development_resume_literature_bundle=(_development_resume_literature_bundle),
-        require_execution_runtime=_require_execution_runtime,
-    )
-
-
 def make_research_pipeline_run_runner(
     *,
     export_path: str,
@@ -4891,57 +4856,61 @@ def make_research_pipeline_run_runner(
     """Build the JobManager runner for a real, evidence-bound pipeline run."""
 
     prepared = prepare_research_pipeline_run(
-        export_path=export_path,
-        study_context=study_context,
-        project_root=project_root,
-        provider=provider,
-        provider_environment=provider_environment,
-        credential_source=credential_source,
-        literature_search_authorized=literature_search_authorized,
-        plan_revision_source_run_id=plan_revision_source_run_id,
-        execution_resume_source_run_id=execution_resume_source_run_id,
-        development_resume_source_job_id=development_resume_source_job_id,
-        budget_mode=budget_mode,
-        runner_image=runner_image,
-        operations=_research_pipeline_preparation_operations(),
+        ResearchPipelineLaunchRequest(
+            export_path=export_path,
+            study_context=study_context,
+            project_root=project_root,
+            provider=provider,
+            provider_environment=provider_environment,
+            credential_source=credential_source,
+            literature_search_authorized=literature_search_authorized,
+            plan_revision_source_run_id=plan_revision_source_run_id,
+            execution_resume_source_run_id=execution_resume_source_run_id,
+            development_resume_source_job_id=development_resume_source_job_id,
+            budget_mode=budget_mode,
+            runner_image=runner_image,
+        )
     )
 
     def runner(job: Any) -> Dict[str, Any]:
-        export_path = prepared.export_path
-        study = prepared.study
-        project_root = prepared.project_root
-        provider = prepared.provider
-        literature_search_authorized = prepared.literature_search_authorized
-        question = prepared.question
-        database = prepared.database
-        selected_budget_mode = prepared.budget_mode
-        configured_primary_exposure = prepared.configured_primary_exposure
-        target = prepared.target
-        primary_exposure = prepared.primary_exposure
-        covariates = prepared.covariates
-        covariate_selection = prepared.covariate_selection
-        sensitivity_specs = prepared.sensitivity_specs
-        window = prepared.cohort_window
-        validated_analysis_design = prepared.validated_analysis_design
-        patient_grouping = prepared.patient_grouping
-        metadata_only_planning = prepared.metadata_only_planning
-        candidate_planning_study = prepared.materialization_study
-        metadata_planning_coordinates = prepared.metadata_planning_coordinates
-        execution_concepts = prepared.execution_concepts
-        planning_exposure_source = prepared.planning_exposure_source
-        metadata_operationalized_columns = prepared.metadata_operationalized_columns
-        prepared_package_binding = prepared.prepared_package_binding
-        foundation_profile = prepared.foundation_profile
-        selected_credential_source = prepared.credential_source
-        development_resume_binding = prepared.development_resume_binding
-        development_resume_acquisition = prepared.development_resume_acquisition
-        development_resume_literature = prepared.development_resume_literature
-        publication_skill_flags = prepared.publication_skill_flags
-        user_extension_activation = prepared.user_extension_activation
-        research_provider_environment = prepared.provider_environment
-        source_run_id = prepared.plan_revision_source_run_id
-        execution_resume_run_id = prepared.execution_resume_source_run_id
-        selected_runner_image = prepared.runner_image
+        scientific = prepared.scientific
+        authority = prepared.authority
+        execution = prepared.execution
+        export_path = execution.export_path
+        study = scientific.study
+        project_root = execution.project_root
+        provider = authority.provider
+        literature_search_authorized = authority.literature_search_authorized
+        question = scientific.question
+        database = scientific.database
+        selected_budget_mode = execution.budget_mode
+        configured_primary_exposure = scientific.configured_primary_exposure
+        target = scientific.target
+        primary_exposure = scientific.primary_exposure
+        covariates = scientific.covariates
+        covariate_selection = scientific.covariate_selection
+        sensitivity_specs = scientific.sensitivity_specs
+        window = scientific.cohort_window
+        validated_analysis_design = scientific.validated_analysis_design
+        patient_grouping = scientific.patient_grouping
+        metadata_only_planning = scientific.metadata_only_planning
+        candidate_planning_study = scientific.materialization_study
+        metadata_planning_coordinates = scientific.metadata_planning_coordinates
+        execution_concepts = scientific.execution_concepts
+        planning_exposure_source = scientific.planning_exposure_source
+        metadata_operationalized_columns = scientific.metadata_operationalized_columns
+        prepared_package_binding = scientific.prepared_package_binding
+        foundation_profile = scientific.foundation_profile
+        selected_credential_source = authority.credential_source
+        development_resume_binding = execution.development_resume_binding
+        development_resume_acquisition = execution.development_resume_acquisition
+        development_resume_literature = execution.development_resume_literature
+        publication_skill_flags = authority.publication_skill_flags
+        user_extension_activation = authority.user_extension_activation
+        research_provider_environment = authority.provider_environment
+        source_run_id = execution.plan_revision_source_run_id
+        execution_resume_run_id = execution.execution_resume_source_run_id
+        selected_runner_image = execution.runner_image
         if prepared_package_binding is not None:
             try:
                 dataio.validate_research_pipeline_source(
