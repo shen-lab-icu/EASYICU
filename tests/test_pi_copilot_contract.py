@@ -52,6 +52,7 @@ from easyicu.webserver.pi_copilot.gateway import PiGatewayClient
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot import tools as tool_module
+from easyicu.webserver.pi_copilot import workflow as workflow_module
 from easyicu.webserver.pi_copilot.tool_catalog import (
     ALL_TOOL_NAMES,
     RESEARCH_TOOL_NAMES,
@@ -424,6 +425,62 @@ def test_project_workflow_projects_active_job_for_session_timeline(
     assert study == baseline
 
 
+def test_service_and_tool_adapters_share_one_project_workflow_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study = {
+        "id": "study-one-owner",
+        "revision": 2,
+        "question": "What is the aggregate outcome?",
+    }
+    snapshot = workflow_module.build_research_workflow_snapshot(
+        study=study,
+        active_export_present=False,
+        active_job=None,
+        latest_run=None,
+    )
+    projection = workflow_module.ProjectWorkflowProjection(
+        workflow=snapshot,
+        active_job={"present": False},
+        latest_run={"present": False},
+    )
+    calls: list[tuple[str, str | None]] = []
+
+    def owner(**kwargs: Any) -> Any:
+        calls.append(
+            (
+                "override" if kwargs.get("study_override") is not None else "stored",
+                kwargs.get("study_context_id"),
+            )
+        )
+        return projection
+
+    monkeypatch.setattr(service_module, "build_project_workflow_projection", owner)
+    monkeypatch.setattr(tool_module, "build_project_workflow_projection", owner)
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    service.project_store.bind("project-one-owner", study["id"])
+
+    service_payload = service.get_project_workflow(project_id="project-one-owner")
+    tool_payload = tool_module._workflow_snapshot(
+        ToolExecutionContext(
+            session=PiSessionRecord(
+                session_id="pi-one-owner",
+                binding=AuthorityBinding(
+                    study_context_id=study["id"], study_revision=study["revision"]
+                ),
+            )
+        ),
+        study_override=study,
+    )
+
+    assert service_payload["workflow"] == tool_payload
+    assert calls == [("stored", study["id"]), ("override", study["id"])]
+
+
 def test_project_workflow_prefers_newer_project_pipeline_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -477,7 +534,7 @@ def test_project_workflow_prefers_newer_project_pipeline_run(
     selected: list[str] = []
     monkeypatch.setattr(service_module.agent_runs, "list_run_history", history)
     monkeypatch.setattr(
-        service_module.agent_pipeline_runs,
+        workflow_module.agent_pipeline_runs,
         "pending_review",
         lambda run_id: selected.append(str(run_id)) or None,
     )
@@ -528,11 +585,11 @@ def test_project_workflow_exposes_validated_analysis_results_when_publication_is
     monkeypatch.setattr(service_module.study_contexts, "get_context", lambda _: study)
     monkeypatch.setattr(service_module.sources, "load_registry", lambda: {"active_path": None})
     monkeypatch.setattr(
-        service_module,
+        workflow_module,
         "list_bound_run_history",
         lambda **_: [run_row],
     )
-    monkeypatch.setattr(service_module.agent_pipeline_runs, "pending_review", lambda _: None)
+    monkeypatch.setattr(workflow_module.agent_pipeline_runs, "pending_review", lambda _: None)
     monkeypatch.setattr(
         service_module.agent_runs,
         "read_run_review",

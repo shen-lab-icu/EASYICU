@@ -197,19 +197,18 @@ def test_the_artifact_service_stamps_the_plan_preview() -> None:
     source = Path("src/easyicu/webserver/pi_copilot/service.py").read_text(
         encoding="utf-8"
     )
-    assert "from .plan_projection import (" in source
-    assert "project_plan_reader_fields," in source
+    assert "from .plan_projection import project_plan_reader_fields" in source
     head = source.index("    def get_research_artifact(")
     tail = source.index("    def get_research_evidence_preview(", head)
     assert "project_plan_reader_fields(clean_artifact, payload)" in source[head:tail]
 
 
 def test_project_workflow_projects_the_same_plan_into_the_conversation() -> None:
-    source = Path("src/easyicu/webserver/pi_copilot/service.py").read_text(
+    source = Path("src/easyicu/webserver/pi_copilot/workflow.py").read_text(
         encoding="utf-8"
     )
-    head = source.index("    def get_project_workflow(")
-    tail = source.index("    def get_workspace_preview(", head)
+    head = source.index("def _enrich_plan_review(")
+    tail = source.index("def build_project_workflow_projection(", head)
     owner = source[head:tail]
 
     assert "project_plan_conversation_preview" in owner

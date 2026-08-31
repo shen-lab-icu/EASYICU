@@ -23,7 +23,6 @@ from easyicu.extensions import (
 
 from easyicu.webserver import state_paths
 from easyicu.webserver import (
-    agent_pipeline_runs,
     agent_runs,
     guided_sessions,
     jobs,
@@ -40,10 +39,7 @@ from easyicu.webserver.copilot_data_workbench import (
     build_snapshot as build_data_workbench_snapshot,
 )
 
-from .plan_projection import (
-    project_plan_conversation_preview,
-    project_plan_reader_fields,
-)
+from .plan_projection import project_plan_reader_fields
 from . import cohort_eligibility, plan_decisions
 from .contracts import (
     MAX_MESSAGE_CHARS,
@@ -67,7 +63,6 @@ from .provider_config import PiProviderConfigStore
 from .projections import (
     project_job,
     project_pi_replay_event,
-    project_run_outcome,
     project_transcript,
     reject_sensitive_message,
 )
@@ -85,8 +80,7 @@ from .turn_authority import (
 from .tools import extraction_workspace_resource
 from .workspace import ProjectWorkspace
 from .workflow import (
-    build_research_workflow_snapshot,
-    registered_export_matches_study,
+    build_project_workflow_projection,
 )
 
 MAX_SESSIONS = 100
@@ -2613,81 +2607,13 @@ class PiCopilotService:
 
         clean = self._assert_project_initialized(project_id)
         study_context_id = self.project_store.resolve(clean)
-        study = (
-            study_contexts.get_context(study_context_id) if study_context_id else None
-        )
-        registry = sources.load_registry()
-        active_job = None
-        if study and study.get("active_job_id"):
-            job = jobs.MANAGER.get(str(study["active_job_id"]))
-            active_job = job.snapshot() if job else None
-        rows = list_bound_run_history(
+        projection = build_project_workflow_projection(
             study_context_id=study_context_id,
-            project_root=research_pipeline_project_root(study_context_id),
-            limit=1,
         )
-        latest_run = rows[0] if rows else None
-        plan_review_authority = (
-            agent_pipeline_runs.pending_review(latest_run.get("run_id"))
-            if latest_run
-            else None
-        )
-        snapshot = build_research_workflow_snapshot(
-            study=study,
-            active_export_present=registered_export_matches_study(study, registry),
-            active_job=active_job,
-            latest_run=latest_run,
-            plan_review_authority=plan_review_authority,
-        )
-        latest_run_outcome = {"present": False}
-        if latest_run:
-            review = agent_runs.read_run_review(
-                str(latest_run.get("project_dir") or "")
-            )
-            latest_run_outcome = project_run_outcome(review)
-            payloads = review.get("artifact_payloads")
-            payloads = payloads if isinstance(payloads, Mapping) else {}
-            agent_plan = payloads.get("agent_plan.json")
-            review_summary = snapshot.plan_review_summary
-            if isinstance(review_summary, Mapping) and isinstance(agent_plan, Mapping):
-                questions = plan_decisions.pending_authorization_questions(
-                    study or {},
-                    review_summary.get("authorization_questions"),
-                )
-                enriched_questions = []
-                for question in questions:
-                    item = dict(question) if isinstance(question, Mapping) else {}
-                    if item.get("code") == "ADJUSTMENT_SET_NOT_USER_CONFIRMED":
-                        item["proposed_covariates"] = (
-                            plan_decisions.proposed_adjustment_set(agent_plan)
-                        )
-                    enriched_questions.append(item)
-                snapshot = snapshot.model_copy(
-                    update={
-                        **(
-                            {"next_action_code": "plan_scientific_changes_required"}
-                            if enriched_questions
-                            else {}
-                        ),
-                        "plan_review_summary": {
-                            **dict(review_summary),
-                            "authorization_questions": enriched_questions,
-                        }
-                    }
-                )
-            plan_preview = project_plan_conversation_preview(
-                agent_plan
-            )
-            if plan_preview:
-                snapshot = snapshot.model_copy(
-                    update={"plan_conversation_preview": plan_preview}
-                )
         return {
             "ok": True,
             "project_id": clean,
-            "workflow": snapshot.model_dump(mode="json"),
-            "active_job": project_job(active_job),
-            "latest_run": latest_run_outcome,
+            **projection.model_dump(mode="json"),
         }
 
     def get_workspace_preview(

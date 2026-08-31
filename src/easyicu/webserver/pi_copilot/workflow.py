@@ -15,13 +15,20 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
 from easyicu.webserver import study_contexts as study_context_owner
 
-from . import cohort_eligibility
+from . import cohort_eligibility, plan_decisions
 from .contracts import (
     EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
     PLAN_RESUME_OFFER_GATE_REASONS,
     plan_approval_allowed,
+)
+from .plan_projection import project_plan_conversation_preview
+from .projections import project_job, project_run_outcome
+from .run_authority import (
+    list_bound_run_history,
+    research_pipeline_project_root,
 )
 
 WorkflowStatus = Literal[
@@ -91,6 +98,16 @@ class ResearchWorkflowSnapshot(BaseModel):
     plan_conversation_preview: Optional[Mapping[str, Any]] = None
     plan_execution_ready: bool = False
     analysis_validation_retry_available: bool = False
+
+
+class ProjectWorkflowProjection(BaseModel):
+    """One adapter-neutral projection compiled from raw owner receipts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workflow: ResearchWorkflowSnapshot
+    active_job: Mapping[str, Any]
+    latest_run: Mapping[str, Any]
 
 
 def _has_mapping(value: Any) -> bool:
@@ -1064,7 +1081,111 @@ def build_research_workflow_snapshot(
     )
 
 
+def _enrich_plan_review(
+    snapshot: ResearchWorkflowSnapshot,
+    *,
+    study: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> ResearchWorkflowSnapshot:
+    """Attach conversational Plan review fields after workflow compilation."""
+
+    payloads = review.get("artifact_payloads")
+    payloads = payloads if isinstance(payloads, Mapping) else {}
+    agent_plan = payloads.get("agent_plan.json")
+    review_summary = snapshot.plan_review_summary
+    if isinstance(review_summary, Mapping) and isinstance(agent_plan, Mapping):
+        questions = plan_decisions.pending_authorization_questions(
+            study,
+            review_summary.get("authorization_questions"),
+        )
+        enriched_questions = []
+        for question in questions:
+            item = dict(question) if isinstance(question, Mapping) else {}
+            if item.get("code") == "ADJUSTMENT_SET_NOT_USER_CONFIRMED":
+                item["proposed_covariates"] = (
+                    plan_decisions.proposed_adjustment_set(agent_plan)
+                )
+            enriched_questions.append(item)
+        snapshot = snapshot.model_copy(
+            update={
+                **(
+                    {"next_action_code": "plan_scientific_changes_required"}
+                    if enriched_questions
+                    else {}
+                ),
+                "plan_review_summary": {
+                    **dict(review_summary),
+                    "authorization_questions": enriched_questions,
+                },
+            }
+        )
+    plan_preview = project_plan_conversation_preview(agent_plan)
+    if plan_preview:
+        snapshot = snapshot.model_copy(
+            update={"plan_conversation_preview": plan_preview}
+        )
+    return snapshot
+
+
+def build_project_workflow_projection(
+    *,
+    study_context_id: Optional[str],
+    study_override: Optional[Mapping[str, Any]] = None,
+) -> ProjectWorkflowProjection:
+    """Collect raw receipts once, compile once, and project only at the end."""
+
+    clean_study_id = str(study_context_id or "").strip()
+    if study_override is not None:
+        study: Mapping[str, Any] = dict(study_override)
+    elif clean_study_id:
+        study = study_context_owner.get_context(clean_study_id) or {}
+    else:
+        study = study_context_owner.get_active_context() or {}
+    if not clean_study_id:
+        clean_study_id = str(study.get("id") or "").strip()
+
+    registry = sources.load_registry()
+    active_job: Optional[Mapping[str, Any]] = None
+    active_job_id = str(study.get("active_job_id") or "").strip()
+    if active_job_id:
+        job = jobs.MANAGER.get(active_job_id)
+        active_job = job.snapshot() if job else None
+    rows = list_bound_run_history(
+        study_context_id=clean_study_id or None,
+        project_root=research_pipeline_project_root(clean_study_id or None),
+        limit=1,
+    )
+    latest_run = rows[0] if rows else None
+    plan_review_authority = (
+        agent_pipeline_runs.pending_review(str(latest_run.get("run_id") or ""))
+        if latest_run
+        else None
+    )
+
+    snapshot = build_research_workflow_snapshot(
+        study=study,
+        active_export_present=registered_export_matches_study(study, registry),
+        active_job=active_job,
+        latest_run=latest_run,
+        plan_review_authority=plan_review_authority,
+    )
+    latest_run_outcome: Mapping[str, Any] = {"present": False}
+    if latest_run:
+        review = agent_runs.read_run_review(
+            str(latest_run.get("project_dir") or "")
+        )
+        latest_run_outcome = project_run_outcome(review)
+        snapshot = _enrich_plan_review(snapshot, study=study, review=review)
+
+    return ProjectWorkflowProjection(
+        workflow=snapshot,
+        active_job=project_job(active_job),
+        latest_run=latest_run_outcome,
+    )
+
+
 __all__ = [
+    "ProjectWorkflowProjection",
     "ResearchWorkflowSnapshot",
     "ResearchWorkflowStage",
     "StudySetupReceipt",
@@ -1072,4 +1193,5 @@ __all__ = [
     "active_export_matches_study",
     "registered_export_matches_study",
     "build_research_workflow_snapshot",
+    "build_project_workflow_projection",
 ]
