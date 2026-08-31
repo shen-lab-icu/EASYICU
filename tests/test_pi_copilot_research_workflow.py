@@ -6706,11 +6706,21 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
     assert provider_called is False
 
 
+@pytest.mark.parametrize(
+    ("planner_start_mode", "resume_source_job_id"),
+    [
+        ("fresh", ""),
+        ("resume_checkpoint", "prior-canary"),
+    ],
+)
 def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
+    planner_start_mode: str,
+    resume_source_job_id: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
+    from easyicu.webserver import research_run_submission
     from easyicu.webserver.routes import agent as agent_route
 
     export = tmp_path / "raw-mimiciv"
@@ -6724,7 +6734,7 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     captured: dict[str, Any] = {}
     monkeypatch.setattr(agent_route.context_store, "get_context", lambda _id: study)
     monkeypatch.setattr(
-        agent_route,
+        research_run_submission,
         "research_pipeline_workspace",
         lambda: workspace,
     )
@@ -6760,8 +6770,8 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
         make_runner,
     )
     monkeypatch.setattr(
-        agent_route,
-        "submit_job",
+        research_run_submission,
+        "_submit_job",
         lambda _kind, _runner: SimpleNamespace(id="job-workspace", kind="agent-run", status="queued"),
     )
     monkeypatch.setattr(
@@ -6775,17 +6785,20 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
         lambda *_args, **_kwargs: None,
     )
 
+    payload = {
+        "path": str(export),
+        "study_context_id": study["id"],
+        "engine": "research_agent_pipeline",
+        "run_type": "full",
+        "credential_source": "pi_verified",
+        "external_llm_opt_in": True,
+        "project_root": str(tmp_path / "client-controlled"),
+        "planner_start_mode": planner_start_mode,
+    }
+    if resume_source_job_id:
+        payload["development_resume_source_job_id"] = resume_source_job_id
     result = agent_route.jobs_agent_run(
-        {
-            "path": str(export),
-            "study_context_id": study["id"],
-            "engine": "research_agent_pipeline",
-            "run_type": "full",
-            "credential_source": "pi_verified",
-            "external_llm_opt_in": True,
-            "project_root": str(tmp_path / "client-controlled"),
-            "development_resume_source_job_id": "prior-canary",
-        },
+        payload,
         request=_request(),
     )
 
@@ -6793,7 +6806,11 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     assert Path(captured["project_root"]) == workspace.project_root(study["id"])
     assert Path(captured["project_root"]) != tmp_path / "client-controlled"
     assert captured["budget_mode"] == "planner_canary"
-    assert captured["development_resume_source_job_id"] == "prior-canary"
+    assert result["planner_start_mode"] == planner_start_mode
+    if resume_source_job_id:
+        assert captured["development_resume_source_job_id"] == resume_source_job_id
+    else:
+        assert "development_resume_source_job_id" not in captured
 
 
 def test_monitor_history_merges_default_and_copilot_pipeline_roots(
@@ -6894,7 +6911,7 @@ def test_pipeline_development_execution_mode_is_server_owned(
     }
 
 
-def test_plan_click_stays_planner_only_until_a_prepared_package_exists(
+def test_candidate_plan_click_stays_planner_only_with_or_without_prepared_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6908,12 +6925,12 @@ def test_plan_click_stays_planner_only_until_a_prepared_package_exists(
     assert agent_route._research_pipeline_budget_mode_for_source(
         prepared_manifest=tmp_path / "manifest.json",
         metadata_only_planning_authorized=True,
-    ) == "full_reviewed"
+    ) == "planner_canary"
     monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
     assert agent_route._research_pipeline_budget_mode_for_source(
         prepared_manifest=tmp_path / "manifest.json",
         metadata_only_planning_authorized=True,
-    ) == "full_reviewed"
+    ) == "planner_canary"
     monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "1")
     assert agent_route._research_pipeline_budget_mode_for_source(
         prepared_manifest=None,
