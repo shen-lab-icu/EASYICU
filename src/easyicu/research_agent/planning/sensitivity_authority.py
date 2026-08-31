@@ -73,7 +73,12 @@ EXECUTABLE_METHODS_BY_STRATEGY: dict[str, frozenset[str]] = {
     "alternate_window": frozenset({"alternate_window_analysis"}),
     "first_stay": frozenset({"one_stay_per_patient_association", "first_stay_association"}),
     "non_readmission_restriction": frozenset({"non_readmission_restriction"}),
-    "cluster_robust": frozenset({"cluster_robust_association"}),
+    "cluster_robust": frozenset(
+        {
+            "cluster_robust_association",
+            "signed_landmark_restricted_cubic_spline",
+        }
+    ),
     "mixed_effects": frozenset({"mixed_effects_association", "mixed_effects_regression"}),
     "restricted_cubic_spline": frozenset(
         {"signed_landmark_restricted_cubic_spline", "restricted_cubic_spline_sensitivity"}
@@ -197,9 +202,15 @@ class PrespecifiedSensitivitySpec(BaseModel):
         the source catalog for a derived ``death_time``-style column.
         """
 
+        # Older saved StudyContexts may also list the event-time companion in
+        # ``execution_variables``.  It is still outcome-owner derived rather
+        # than a source-catalog concept, so never ask data materialization to
+        # resolve it as a feature module.  The dedicated landmark coordinate
+        # remains available to the runtime compiler below this boundary.
         return tuple(
             dict.fromkeys(
-                (
+                value
+                for value in (
                     *self.execution_variables,
                     *(
                         (self.observation_duration_variable,)
@@ -207,6 +218,7 @@ class PrespecifiedSensitivitySpec(BaseModel):
                         else ()
                     ),
                 )
+                if value != self.event_time_variable
             )
         )
 

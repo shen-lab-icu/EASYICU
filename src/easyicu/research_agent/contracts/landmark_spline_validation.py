@@ -96,6 +96,7 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
     schema_version: Literal[
         "easyicu.landmark_spline_runtime_receipt/1",
         "easyicu.landmark_spline_runtime_receipt/2",
+        "easyicu.landmark_spline_runtime_receipt/3",
     ]
     protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -114,6 +115,14 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
     variable_opportunity_sensitivity: (
         LandmarkSplineVariableOpportunityReceipt | None
     ) = None
+    variance_estimator: Literal["cluster_robust"] | None = None
+    cluster_unit: Literal["patient"] | None = None
+    cluster_group_source: str | None = None
+    cluster_group_derivation: Literal[
+        "identity", "prefix_before_delimiter"
+    ] | None = None
+    cluster_group_delimiter: str | None = None
+    cluster_count: int | None = Field(default=None, ge=2)
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
 
     @model_validator(mode="after")
@@ -157,6 +166,30 @@ class LandmarkSplineRuntimeReceipt(BaseModel):
                 raise ValueError("landmark population flow must be four nested stages")
             if counts[-2] != self.primary_population_n or counts[-1] != self.complete_case_n:
                 raise ValueError("landmark population flow disagrees with model receipt")
+        cluster_fields = (
+            self.variance_estimator,
+            self.cluster_unit,
+            self.cluster_group_source,
+            self.cluster_group_derivation,
+            self.cluster_count,
+        )
+        if self.schema_version.endswith("/3"):
+            if any(value is None for value in cluster_fields):
+                raise ValueError(
+                    "landmark receipt v3 requires cluster-robust execution evidence"
+                )
+            if (
+                self.cluster_group_derivation == "identity"
+                and self.cluster_group_delimiter is not None
+            ):
+                raise ValueError("identity cluster grouping cannot declare a delimiter")
+            if (
+                self.cluster_group_derivation == "prefix_before_delimiter"
+                and not self.cluster_group_delimiter
+            ):
+                raise ValueError("prefix cluster grouping requires a delimiter")
+        elif any(value is not None for value in (*cluster_fields, self.cluster_group_delimiter)):
+            raise ValueError("landmark receipt v1/v2 cannot claim clustered covariance")
         return self
 
 

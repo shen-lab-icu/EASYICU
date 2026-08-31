@@ -14,6 +14,7 @@ from ...authority.current_case_scientific_runtime import (
 )
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.capability_ids import LANDMARK_SPLINE_ANALYSIS_KIND
+from ...contracts.dependence import resolve_patient_groups
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...schema import AnalysisPlan, AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
@@ -162,6 +163,26 @@ def _adjustment_design(frame, authority: LandmarkSplineRuntimeAuthority):
     return pd.concat(pieces, axis=1) if pieces else pd.DataFrame(index=frame.index)
 
 
+def _fit_binomial_model(*, sm, outcome, design, source_frame, authority):
+    """Fit one authority-bound model with the declared covariance estimator."""
+
+    model = sm.GLM(outcome.astype(float), design, family=sm.families.Binomial())
+    dependence = authority.dependence
+    if dependence is None:
+        return model.fit(maxiter=200, disp=0), None
+    group_values = source_frame.loc[design.index, dependence.group_source]
+    if bool(group_values.isna().any()):
+        raise ValueError("signed landmark cluster group contains missing values")
+    resolved = resolve_patient_groups(group_values.tolist(), requirement=dependence)
+    fit = model.fit(
+        maxiter=200,
+        disp=0,
+        cov_type="cluster",
+        cov_kwds={"groups": list(resolved.groups)},
+    )
+    return fit, resolved.cluster_count
+
+
 def run_landmark_spline_association(
     *,
     frame: Any,
@@ -254,11 +275,13 @@ def run_landmark_spline_association(
     design = sm.add_constant(design, has_constant="add")
     if np.linalg.matrix_rank(design.to_numpy()) != design.shape[1]:
         raise ValueError("signed landmark spline design is rank deficient")
-    fit = sm.GLM(
-        model_frame["__outcome"].astype(float),
-        design,
-        family=sm.families.Binomial(),
-    ).fit(maxiter=200, disp=0)
+    fit, primary_cluster_count = _fit_binomial_model(
+        sm=sm,
+        outcome=model_frame["__outcome"],
+        design=design,
+        source_frame=working,
+        authority=sealed,
+    )
     if not bool(getattr(fit, "converged", False)):
         raise ValueError("signed landmark spline model did not converge")
 
@@ -355,11 +378,15 @@ def run_landmark_spline_association(
         axis=1,
     ).astype(float)
     linear_design = sm.add_constant(linear_design, has_constant="add")
-    linear_fit = sm.GLM(
-        model_frame["__outcome"].astype(float),
-        linear_design,
-        family=sm.families.Binomial(),
-    ).fit(maxiter=200, disp=0)
+    linear_fit, linear_cluster_count = _fit_binomial_model(
+        sm=sm,
+        outcome=model_frame["__outcome"],
+        design=linear_design,
+        source_frame=working,
+        authority=sealed,
+    )
+    if linear_cluster_count != primary_cluster_count:
+        raise ValueError("signed landmark primary and linear cluster populations drifted")
     if not bool(getattr(linear_fit, "converged", False)):
         raise ValueError("signed landmark linear sensitivity did not converge")
     coefficient = _finite(linear_fit.params[sealed.exposure_column])
@@ -424,11 +451,13 @@ def run_landmark_spline_association(
             raise ValueError(
                 f"alternative exposure definition {exposure_column!r} is rank deficient"
             )
-        definition_fit = sm.GLM(
-            definition_frame["__outcome"].astype(float),
-            definition_design,
-            family=sm.families.Binomial(),
-        ).fit(maxiter=200, disp=0)
+        definition_fit, _definition_cluster_count = _fit_binomial_model(
+            sm=sm,
+            outcome=definition_frame["__outcome"],
+            design=definition_design,
+            source_frame=working,
+            authority=sealed,
+        )
         if not bool(getattr(definition_fit, "converged", False)):
             raise ValueError(
                 f"alternative exposure definition {exposure_column!r} did not converge"
@@ -551,11 +580,13 @@ def run_landmark_spline_association(
         variable_design = sm.add_constant(variable_design, has_constant="add")
         if np.linalg.matrix_rank(variable_design.to_numpy()) != variable_design.shape[1]:
             raise ValueError("variable-opportunity sensitivity is rank deficient")
-        variable_fit = sm.GLM(
-            variable_frame["__outcome"].astype(float),
-            variable_design,
-            family=sm.families.Binomial(),
-        ).fit(maxiter=200, disp=0)
+        variable_fit, _variable_cluster_count = _fit_binomial_model(
+            sm=sm,
+            outcome=variable_frame["__outcome"],
+            design=variable_design,
+            source_frame=working,
+            authority=sealed,
+        )
         if not bool(getattr(variable_fit, "converged", False)):
             raise ValueError("variable-opportunity sensitivity did not converge")
         variable_coefficient = _finite(
@@ -597,9 +628,13 @@ def run_landmark_spline_association(
         )
     receipt = {
         "schema_version": (
-            "easyicu.landmark_spline_runtime_receipt/2"
-            if sealed.schema_version.endswith("/2")
-            else "easyicu.landmark_spline_runtime_receipt/1"
+            "easyicu.landmark_spline_runtime_receipt/3"
+            if sealed.schema_version.endswith("/3")
+            else (
+                "easyicu.landmark_spline_runtime_receipt/2"
+                if sealed.schema_version.endswith("/2")
+                else "easyicu.landmark_spline_runtime_receipt/1"
+            )
         ),
         "protocol_content_sha256": sealed.protocol_content_sha256,
         "execution_contract_sha256": sealed.execution_contract_sha256,
@@ -624,13 +659,21 @@ def run_landmark_spline_association(
         },
         "interpretation": sealed.interpretation,
     }
-    if sealed.schema_version.endswith("/2"):
+    if not sealed.schema_version.endswith("/1"):
         receipt["population_flow"] = population_flow_rows
         receipt["adjusted_absolute_risk"] = {
             "method": "marginal_standardization_over_primary_complete_case_covariates",
             "interval": "delta_method_logit_scale_95_percent_confidence_interval",
             "grid_rows": len(absolute_risk_rows),
         }
+    if sealed.schema_version.endswith("/3"):
+        assert sealed.dependence is not None
+        receipt["variance_estimator"] = sealed.dependence.variance_estimator
+        receipt["cluster_unit"] = sealed.dependence.cluster_unit
+        receipt["cluster_group_source"] = sealed.dependence.group_source
+        receipt["cluster_group_derivation"] = sealed.dependence.group_derivation
+        receipt["cluster_group_delimiter"] = sealed.dependence.delimiter
+        receipt["cluster_count"] = primary_cluster_count
     if variable_opportunity_summary is not None:
         receipt["variable_opportunity_sensitivity"] = variable_opportunity_summary
     receipt_path = _product_path(out_dir, sealed.receipt_product)
@@ -674,6 +717,12 @@ def run_landmark_spline_association(
         "n_primary_population": int(primary_mask.sum()),
         "n_complete_case": int(len(model_frame)),
         "n_events": int(model_frame["__outcome"].sum()),
+        "variance_estimator": (
+            sealed.dependence.variance_estimator
+            if sealed.dependence is not None
+            else "model_based"
+        ),
+        "cluster_count": primary_cluster_count,
         "output_files": output_files,
     }
 
