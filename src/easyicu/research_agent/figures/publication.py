@@ -25,7 +25,7 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequen
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..schema import ValidationFinding
-from ..reporting.article_display_policy import (
+from .contracts import (
     ARTICLE_DISPLAY_PURPOSE_CONFLICT,
     ArticleDisplayPolicyError,
     ArticleDisplayPolicyRequest,
