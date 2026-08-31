@@ -71,6 +71,19 @@ PLAN_RESUME_OFFER_GATE_REASONS: frozenset[str] = frozenset(
     {"research_pipeline_planner_efficiency_budget_exhausted"}
 )
 
+#: A retry button remains valid only when the preserved inner pipeline still
+#: owns a failed, approved execution checkpoint.  The Web wrapper may record a
+#: transient retry-bridge failure after the original execution failure; that
+#: wrapper error must not erase the operator's route back to the same immutable
+#: plan.  Configuration, path and checkpoint errors are deliberately absent.
+EXECUTION_RETRY_REPLAYABLE_GATE_REASONS: frozenset[str] = frozenset(
+    {
+        "research_agent_pipeline_failed_closed",
+        "research_pipeline_execution_failed",
+        "research_pipeline_execution_retry_unexpected_plan_review",
+    }
+)
+
 def plan_approval_allowed(source: Optional[Mapping[str, Any]]) -> bool:
     """Return the single fail-closed reading of a plan review's approval flag.
 

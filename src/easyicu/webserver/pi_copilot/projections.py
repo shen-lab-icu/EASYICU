@@ -343,8 +343,11 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     }
     analysis_results_available = bool(
         gate_checks.get("execution_complete") is True
-        and gate_checks.get("analysis_validated") is True
         and gate_checks.get("numeric_verified") is True
+        and (
+            gate_checks.get("analysis_validated") is True
+            or gate_checks.get("evidence_complete") is True
+        )
     )
     diagnostic_only = (
         str(gate.get("status") or "") == "blocked"

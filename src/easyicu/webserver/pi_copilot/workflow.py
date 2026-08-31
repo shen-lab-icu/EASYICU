@@ -16,12 +16,13 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from easyicu.webserver import study_contexts as study_context_owner
-from easyicu.webserver.execution_retry import (
-    preserves_approved_execution_checkpoint,
-)
 
 from . import cohort_eligibility
-from .contracts import PLAN_RESUME_OFFER_GATE_REASONS, plan_approval_allowed
+from .contracts import (
+    EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
+    PLAN_RESUME_OFFER_GATE_REASONS,
+    plan_approval_allowed,
+)
 
 WorkflowStatus = Literal[
     "blocked",
@@ -205,8 +206,6 @@ _PLANNER_PROPOSAL_FINDING_CODES = frozenset(
     {
         "OUTCOME_DEFINITION_UNRESOLVED",
         "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
-        "ADJUSTMENT_SET_NOT_USER_CONFIRMED",
-        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
     }
 )
 
@@ -638,6 +637,28 @@ def build_research_workflow_snapshot(
             return list(dict.fromkeys([*rows, *proposal_codes]))[:40]
         return rows
 
+    def projected_authorization_question(item: Mapping[str, Any]) -> Dict[str, Any]:
+        row: Dict[str, Any] = {
+            "code": str(item.get("code") or "")[:120],
+            "question": str(item.get("authorization_question") or "")[:1_200],
+        }
+        evidence = str(item.get("message") or "").strip()
+        if evidence:
+            row["evidence"] = evidence[:1_600]
+        evidence_refs = item.get("evidence_refs")
+        if isinstance(evidence_refs, list):
+            refs = [
+                str(value)[:240]
+                for value in evidence_refs[:12]
+                if str(value).strip()
+            ]
+            if refs:
+                row["evidence_refs"] = refs
+        remediation = str(item.get("remediation") or "").strip()
+        if remediation:
+            row["remediation"] = remediation[:1_600]
+        return row
+
     plan_review_summary = (
         {
             "status": str(raw_scientific_review.get("status") or "")[:40],
@@ -662,10 +683,7 @@ def build_research_workflow_snapshot(
                 if isinstance(item, Mapping) and str(item.get("code") or "").strip()
             ],
             "authorization_questions": [
-                {
-                    "code": str(item.get("code") or "")[:120],
-                    "question": str(item.get("authorization_question") or "")[:1_200],
-                }
+                projected_authorization_question(item)
                 for item in review_findings[:40]
                 if isinstance(item, Mapping)
                 and bool(item.get("requires_user_authorization"))
@@ -783,14 +801,16 @@ def build_research_workflow_snapshot(
         failed_pipeline_regeneration_required
         and has_plan
         and has_evidence
-        and preserves_approved_execution_checkpoint(run_row.get("gate_reason"))
+        and str(run_row.get("gate_reason") or "")
+        in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
     )
     analysis_validation_retry_available = bool(
         analysis_outputs_available
         and run_blocked
-        and preserves_approved_execution_checkpoint(run_row.get("gate_reason"))
+        and str(run_row.get("gate_reason") or "")
+        in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
     )

@@ -90,6 +90,27 @@ class FakeGateway:
             return {
                 "message": "Original research question",
                 "turn_index": 0,
+                "study_context_snapshot": {
+                    "schema_version": "easyicu.pi-turn-study-snapshot/1",
+                    "study_context_id": "study-test",
+                    "source_revision": 3,
+                    "configuration": {
+                        "question": "Is aggregate lactate associated with mortality?",
+                        "data_source": {
+                            "database": "mimiciv",
+                            "path_hash": hashlib.sha256(
+                                b"/private/export"
+                            ).hexdigest()[:16],
+                        },
+                        "cohort": {"cohort_size": 140},
+                        "modules": ["lactate"],
+                        "outcome": "mortality",
+                        "covariates": [],
+                        "covariate_selection": "planner_selectable",
+                        "time_window": {"hours": 24},
+                        "confirmations": {"cohort": True},
+                    },
+                },
             }
         session_id = str(params.get("session_id") or "")
         return {
@@ -519,6 +540,49 @@ def test_project_workflow_exposes_validated_analysis_results_when_publication_is
     assert "/private/" not in json.dumps(payload)
 
 
+def test_completed_numeric_results_remain_visible_during_analysis_validation_repair() -> None:
+    projected = project_job(
+        {
+            "id": "job-analysis-review",
+            "kind": "agent-run",
+            "status": "done",
+            "result": {
+                "run_id": "run-analysis-review",
+                "gate": {
+                    "status": "blocked",
+                    "reason": "research_agent_pipeline_failed_closed",
+                    "reportable": False,
+                    "checks": [
+                        {"id": "execution_complete", "passed": True},
+                        {"id": "analysis_validated", "passed": False},
+                        {"id": "numeric_verified", "passed": True},
+                        {"id": "evidence_complete", "passed": True},
+                    ],
+                },
+                "artifacts": [
+                    {
+                        "name": "result_tables.json",
+                        "sha256": "a" * 64,
+                        "bytes": 40,
+                    },
+                    {
+                        "name": "figure_gallery.json",
+                        "sha256": "b" * 64,
+                        "bytes": 50,
+                    },
+                ],
+            },
+        }
+    )
+
+    assert projected["analysis_results_available"] is True
+    assert projected["analysis_validated"] is False
+    assert [row["artifact"] for row in projected["artifact_refs"]] == [
+        "result_tables.json",
+        "figure_gallery.json",
+    ]
+
+
 @pytest.fixture
 def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     current = {
@@ -709,6 +773,258 @@ def test_edited_plan_turn_keeps_edit_and_host_transition_intents_separate(
     )
     assert regenerate["intent"] == "user_edited_message"
     assert regenerate["turn_intent"] == "confirm_formal_plan_generation"
+
+
+def test_edited_fresh_plan_turn_forwards_the_replan_transition(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-edited-fresh-plan-turn",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-edited-fresh-plan-turn",
+        message="Regenerate the research plan from the prepared data.",
+        allowed_actions=["provider_run"],
+        regenerate_user_entry_id="entry-user-1",
+        regeneration_intent="user_edited_message",
+        message_intent="confirm_fresh_plan_generation",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    regenerate = next(
+        params
+        for method, params, _context in reversed(gateway.calls)
+        if method == "session.regenerate"
+    )
+    assert regenerate["intent"] == "user_edited_message"
+    assert regenerate["turn_intent"] == "confirm_fresh_plan_generation"
+
+
+def test_edited_turn_restores_snapshot_before_building_tool_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    study_state: dict[str, Any],
+) -> None:
+    gateway = FakeGateway()
+    restored_snapshots: list[dict[str, Any]] = []
+
+    def restore_snapshot(
+        context_id: str,
+        snapshot: dict[str, Any],
+        *,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        assert context_id == study_state["id"]
+        assert expected_revision == 3
+        restored_snapshots.append(dict(snapshot))
+        study_state["revision"] = 4
+        study_state["covariates"] = []
+        study_state["covariate_selection"] = "planner_selectable"
+        return dict(study_state)
+
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "restore_turn_configuration_snapshot",
+        restore_snapshot,
+    )
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-restored-edited-turn",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-restored-edited-turn",
+        message="Regenerate the research plan from the prepared data.",
+        allowed_actions=["provider_run"],
+        regenerate_user_entry_id="entry-user-1",
+        regeneration_intent="user_edited_message",
+        message_intent="confirm_fresh_plan_generation",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    assert restored_snapshots[0]["source_revision"] == 3
+    assert gateway.tool_contexts[-1].session.binding.study_revision == 4
+
+
+def test_in_place_plan_replacement_preserves_current_study_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    study_state: dict[str, Any],
+) -> None:
+    """Replacing a plan reply must not rewind later scientific decisions."""
+
+    gateway = FakeGateway()
+    restored_snapshots: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "restore_turn_configuration_snapshot",
+        lambda context_id, snapshot, **kwargs: restored_snapshots.append(
+            dict(snapshot)
+        )
+        or dict(study_state),
+    )
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-preserved-plan-replacement",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-preserved-plan-replacement",
+        message="Regenerate the research plan from the current prepared study.",
+        allowed_actions=["provider_run"],
+        regenerate_user_entry_id="entry-user-1",
+        regeneration_intent="replace_plan_response_preserve_study",
+        message_intent="confirm_fresh_plan_generation",
+    )
+    deadline = time.monotonic() + 3
+    job = None
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert job is not None and job.status == "done"
+    assert restored_snapshots == []
+    assert gateway.tool_contexts[-1].session.binding.study_revision == 3
+    regenerate = next(
+        params
+        for method, params, _context in reversed(gateway.calls)
+        if method == "session.regenerate"
+    )
+    assert regenerate["intent"] == "replace_plan_response_preserve_study"
+    assert regenerate["turn_intent"] == "confirm_fresh_plan_generation"
+
+
+def test_regenerate_without_turn_snapshot_fails_closed(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    class MissingSnapshotGateway(FakeGateway):
+        def request(self, method: str, params: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+            if method == "session.regenerate.inspect":
+                self.calls.append((method, dict(params), kwargs.get("tool_context")))
+                return {"message": "Original research question", "turn_index": 0}
+            return super().request(method, params, **kwargs)
+
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=MissingSnapshotGateway(),
+    )
+    created = service.create_session(
+        project_id="project-missing-turn-snapshot",
+        external_llm_opt_in=True,
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        service.send_message(
+            created["session"]["session_id"],
+            project_id="project-missing-turn-snapshot",
+            message="Original research question",
+            regenerate_user_entry_id="entry-user-1",
+        )
+
+    assert caught.value.code == "pi_regenerate_study_context_snapshot_missing"
+
+
+def test_busy_regenerate_does_not_restore_study_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    created = service.create_session(
+        project_id="project-busy-regenerate",
+        external_llm_opt_in=True,
+    )
+    session_id = created["session"]["session_id"]
+    restored: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        service,
+        "_restore_regenerate_study_context",
+        lambda record, target: restored.append(dict(target)) or record,
+    )
+    service._busy_sessions.add(session_id)
+
+    try:
+        with pytest.raises(PiCopilotError) as caught:
+            service.send_message(
+                session_id,
+                project_id="project-busy-regenerate",
+                message="Original research question",
+                regenerate_user_entry_id="entry-user-1",
+            )
+    finally:
+        service._busy_sessions.discard(session_id)
+
+    assert caught.value.code == "pi_session_busy"
+    assert restored == []
+
+
+def test_capacity_rejected_regenerate_does_not_restore_study_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    created = service.create_session(
+        project_id="project-capacity-regenerate",
+        external_llm_opt_in=True,
+    )
+    session_id = created["session"]["session_id"]
+    restored: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        service,
+        "_restore_regenerate_study_context",
+        lambda record, target: restored.append(dict(target)) or record,
+    )
+
+    def reject_job(_kind: str, _runner: Any) -> Any:
+        raise service_module.jobs.JobCapacityError(max_running=8, running=8)
+
+    monkeypatch.setattr(service_module.jobs.MANAGER, "submit", reject_job)
+
+    with pytest.raises(PiCopilotError) as caught:
+        service.send_message(
+            session_id,
+            project_id="project-capacity-regenerate",
+            message="Original research question",
+            regenerate_user_entry_id="entry-user-1",
+        )
+
+    assert caught.value.code == "job_capacity_reached"
+    assert restored == []
+    assert session_id not in service._busy_sessions
 
 
 def test_explicit_prepared_source_choice_confirms_same_session_after_binding(
@@ -2604,6 +2920,7 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
     assert submitted[0]["study_context_id"] == study["id"]
     assert submitted[0]["run_type"] == "full"
     assert submitted[0]["engine"] == "research_agent_pipeline"
+    assert submitted[0]["planner_start_mode"] == "fresh"
 
 
 def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
@@ -2640,6 +2957,13 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
                 "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
             }
         ],
+    )
+    monkeypatch.setattr(
+        tool_module,
+        "_development_resume_source_job_id",
+        lambda *_args, **_kwargs: pytest.fail(
+            "fresh planning must not inspect an old Planner checkpoint"
+        ),
     )
     submitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -2687,6 +3011,7 @@ def test_terminal_blocked_plan_replan_starts_fresh_pipeline_run(
             "llm_provider": "openai",
             "external_llm_opt_in": True,
             "engine": "research_agent_pipeline",
+            "planner_start_mode": "fresh",
             "credential_source": "pi_verified",
         }
     ]
@@ -2780,6 +3105,7 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
     assert result["details"]["job_id"] == "job-fresh-after-bridge-failure"
     assert submitted[0]["study_context_id"] == study["id"]
     assert submitted[0]["run_type"] == "full"
+    assert submitted[0]["planner_start_mode"] == "fresh"
 
 
 def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
@@ -3413,6 +3739,18 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
     )
     assert accepted_rendered_exposure_affirmation["code"] == "study_context_updated"
 
+    accepted_rendered_exposure_named_choice = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"primary_exposure": "lact"},
+        ToolExecutionContext(
+            session=session,
+            user_message="确认将乳酸水平作为本研究的主要暴露",
+            allowed_actions={"configure"},
+        ),
+    )
+    assert accepted_rendered_exposure_named_choice["code"] == "study_context_updated"
+    assert writes[-1]["primary_exposure"] == "lact"
+
 
 def test_conversational_setup_keeps_confirmed_outcome_when_model_bundles_exposure(
     monkeypatch: pytest.MonkeyPatch,
@@ -3866,6 +4204,48 @@ def test_explicit_age_sex_adjustment_gets_owner_known_baseline_roles(
     }
     assert set(writes[0]["covariate_rationales"]) == {"age", "sex"}
     assert writes[0]["execution_concepts"]["covariates"] == ["age", "sex"]
+
+
+def test_covariate_operationalization_rejects_modeling_role_before_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "id": "study-covariate-column-contract",
+        "revision": 3,
+        "question": "Estimate an observational association.",
+        "active_job_id": None,
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        tool_module.study_contexts,
+        "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or raw,
+    )
+    session = PiSessionRecord(
+        session_id="pi-covariate-column-contract",
+        binding=AuthorityBinding(
+            study_context_id=current["id"],
+            study_revision=current["revision"],
+        ),
+    )
+
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {"covariate_operationalizations": {"age": "nonlinear_continuous"}},
+        ToolExecutionContext(
+            session=session,
+            user_message="年龄作为非线性连续变量建模。",
+            allowed_actions={"configure"},
+        ),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "study_covariate_operationalization_requires_column"
+    assert result["details"]["reason"] == (
+        "modeling_role_is_not_a_materialized_column"
+    )
+    assert writes == []
 
 
 def test_explicit_no_adjustment_clears_covariate_contract_atomically(
@@ -5321,6 +5701,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
         "llm_provider": "openai",
         "external_llm_opt_in": True,
         "engine": "research_agent_pipeline",
+        "planner_start_mode": "auto",
         "credential_source": "pi_verified",
     }
 
@@ -5709,10 +6090,8 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
         service_module.agent_runs,
         "read_run_artifact",
         lambda project_dir, artifact_name: {
-            "ok": True,
-            "artifact": {"name": artifact_name},
-            "payload": {"status": "withheld"},
-            "privacy_scan": {"passed": False},
+            "ok": False,
+            "error": "artifact_privacy_scan_failed",
         },
     )
     with pytest.raises(PiCopilotError) as privacy_blocked:
@@ -5811,9 +6190,8 @@ def test_project_evidence_preview_is_project_scoped_digest_pinned_and_governed(
         service_module.agent_runs,
         "read_run_evidence_preview",
         lambda *args: {
-            "ok": True,
-            "payload": {},
-            "privacy_scan": {"passed": False},
+            "ok": False,
+            "error": "evidence_preview_privacy_scan_failed",
         },
     )
     with pytest.raises(PiCopilotError) as blocked:

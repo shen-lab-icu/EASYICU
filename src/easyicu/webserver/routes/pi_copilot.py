@@ -126,6 +126,16 @@ class PiCohortEligibilitySelectionRequest(BaseModel):
     selection_event_id: Sha256Text
 
 
+class PiPlanDecisionSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    decision_code: ShortText
+    option_id: ShortText
+    expected_revision: int = Field(ge=1)
+    run_id: RunIdText
+
+
 class PiMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -150,6 +160,7 @@ class PiMessageRequest(BaseModel):
     turn_intent: (
         Literal[
             "confirm_formal_plan_generation",
+            "confirm_fresh_plan_generation",
             "confirm_planner_checkpoint_resume",
             "advance_after_data_source_confirmation",
         ]
@@ -159,7 +170,10 @@ class PiMessageRequest(BaseModel):
 
 class PiRegenerateRequest(PiMessageRequest):
     user_entry_id: ShortText
-    regeneration_intent: Literal["user_edited_message"] | None = None
+    regeneration_intent: Literal[
+        "user_edited_message",
+        "replace_plan_response_preserve_study",
+    ] | None = None
 
 
 class PiDataSourceAuthorizationRequest(BaseModel):
@@ -637,6 +651,26 @@ def post_pi_copilot_cohort_eligibility_selection(
                 body.primary_cohort_contract_sha256
             ),
             selection_event_id=body.selection_event_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/api/copilot/pi/sessions/{session_id}/plan-decision-selection"
+)
+def post_pi_copilot_plan_decision_selection(
+    session_id: ShortText,
+    body: PiPlanDecisionSelectionRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().confirm_plan_decision(
+            session_id,
+            project_id=body.project_id,
+            decision_code=body.decision_code,
+            option_id=body.option_id,
+            expected_revision=body.expected_revision,
+            run_id=body.run_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

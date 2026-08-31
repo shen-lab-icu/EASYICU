@@ -44,7 +44,7 @@ from .plan_projection import (
     project_plan_conversation_preview,
     project_plan_reader_fields,
 )
-from . import cohort_eligibility
+from . import cohort_eligibility, plan_decisions
 from .contracts import (
     MAX_MESSAGE_CHARS,
     AuthorityBinding,
@@ -1414,6 +1414,88 @@ class PiCopilotService:
             "rebound": True,
         }
 
+    @staticmethod
+    def _validated_regenerate_study_context_snapshot(
+        record: PiSessionRecord,
+        regenerate_target: Mapping[str, Any],
+    ) -> tuple[str, Mapping[str, Any]]:
+        """Validate one replay snapshot without changing persisted state."""
+
+        snapshot = regenerate_target.get("study_context_snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise PiCopilotError(
+                "pi_regenerate_study_context_snapshot_missing",
+                (
+                    "This conversation turn has no authoritative StudyContext "
+                    "snapshot, so EasyICU cannot safely replace its branch."
+                ),
+                status_code=409,
+            )
+        context_id = str(record.binding.study_context_id or "").strip()
+        if not context_id:
+            raise PiCopilotError(
+                "pi_regenerate_study_context_snapshot_missing",
+                "The conversation has no bound StudyContext to restore.",
+                status_code=409,
+            )
+        return context_id, snapshot
+
+    def _restore_regenerate_study_context(
+        self,
+        record: PiSessionRecord,
+        regenerate_target: Mapping[str, Any],
+    ) -> PiSessionRecord:
+        """Rewind EasyICU scientific state before replacing a Pi branch."""
+
+        context_id, snapshot = self._validated_regenerate_study_context_snapshot(
+            record,
+            regenerate_target,
+        )
+        try:
+            restored = study_contexts.restore_turn_configuration_snapshot(
+                context_id,
+                snapshot,
+                expected_revision=int(record.binding.study_revision),
+            )
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(
+                    exc.detail.get("error")
+                    or "pi_regenerate_study_context_restore_failed"
+                ),
+                "EasyICU could not restore the scientific state for this conversation branch.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+
+        record.binding = self._binding_for_context(
+            restored,
+            run_id=self._latest_run_id(
+                context_id,
+                project_id=record.project_id,
+            ),
+        )
+        if record.agent_mode == "research":
+            prior_authorization = record.data_source_authorization
+            current_source = self._session_source_reference(restored)
+            if (
+                prior_authorization.status == "confirmed"
+                and prior_authorization.source is not None
+                and current_source is not None
+                and prior_authorization.source.identity_sha256
+                == current_source.identity_sha256
+            ):
+                record.data_source_authorization = prior_authorization.model_copy(
+                    update={"source": current_source}
+                )
+            elif prior_authorization.status != "selection_in_progress":
+                record.data_source_authorization = self._new_session_data_authorization(
+                    restored,
+                    agent_mode=record.agent_mode,
+                )
+        self._save_record(record)
+        return record
+
     def authorize_data_source(
         self,
         session_id: str,
@@ -1724,8 +1806,12 @@ class PiCopilotService:
             # transcript is a conflict.  An explicit user edit is the opposite
             # operation: the text is meant to change, and the branch rewinds to
             # this turn so everything after it is replaced rather than appended.
+            edited_regeneration_intents = {
+                "user_edited_message",
+                "replace_plan_response_preserve_study",
+            }
             if (
-                regeneration_intent != "user_edited_message"
+                regeneration_intent not in edited_regeneration_intents
                 and str(regenerate_target.get("message") or "").strip() != text
             ):
                 raise PiCopilotError(
@@ -1733,17 +1819,10 @@ class PiCopilotService:
                     "The regenerate request no longer matches the active transcript.",
                     status_code=409,
                 )
-        tool_context = ToolExecutionContext(
-            session=record.model_copy(deep=True),
-            user_message=text,
-            allowed_actions=requested_actions,
-            authority_validator=lambda binding: self._binding_stale_details(
-                binding,
-                project_id=record.project_id,
-            ),
-            workspace=self.workspace,
-            extension_registry=self.extension_registry,
-        )
+            self._validated_regenerate_study_context_snapshot(
+                record,
+                regenerate_target,
+            )
         with self._lock:
             if record.session_id in self._busy_sessions:
                 raise PiCopilotError(
@@ -1753,7 +1832,23 @@ class PiCopilotService:
                 )
             self._busy_sessions.add(record.session_id)
 
+        start_gate = threading.Event()
+        start_abort: Dict[str, str] = {}
+        tool_context: Optional[ToolExecutionContext] = None
+
         def runner(job: jobs.Job) -> Dict[str, Any]:
+            # JobManager starts its thread immediately.  Hold the accepted job
+            # until the synchronous branch restore and tool-authority snapshot
+            # are ready; rejected busy/capacity requests never reach either
+            # mutation.
+            start_gate.wait()
+            if start_abort:
+                raise RuntimeError(
+                    str(start_abort.get("error") or "pi_message_setup_failed")
+                )
+            active_tool_context = tool_context
+            if active_tool_context is None:
+                raise RuntimeError("pi_message_tool_context_missing")
             conversation_gateway = self._conversation_gateway(
                 record,
                 refresh_account=True,
@@ -1845,7 +1940,7 @@ class PiCopilotService:
                     params,
                     timeout=COPILOT_MESSAGE_TIMEOUT_SECONDS,
                     event_sink=emit,
-                    tool_context=tool_context,
+                    tool_context=active_tool_context,
                 )
                 refreshed = self._get_record(record.session_id)
                 refreshed.pi_session_id = (
@@ -1941,6 +2036,35 @@ class PiCopilotService:
             with self._lock:
                 self._busy_sessions.discard(record.session_id)
             raise
+        try:
+            if (
+                regenerate_target is not None
+                and regeneration_intent != "replace_plan_response_preserve_study"
+            ):
+                record = self._restore_regenerate_study_context(
+                    record,
+                    regenerate_target,
+                )
+            tool_context = ToolExecutionContext(
+                session=record.model_copy(deep=True),
+                user_message=text,
+                allowed_actions=requested_actions,
+                authority_validator=lambda binding: self._binding_stale_details(
+                    binding,
+                    project_id=record.project_id,
+                ),
+                workspace=self.workspace,
+                extension_registry=self.extension_registry,
+            )
+        except Exception as exc:
+            start_abort["error"] = str(
+                getattr(exc, "code", "") or "pi_message_setup_failed"
+            )
+            with self._lock:
+                self._busy_sessions.discard(record.session_id)
+            start_gate.set()
+            raise
+        start_gate.set()
         return {
             "ok": True,
             "job_id": job.id,
@@ -2308,6 +2432,160 @@ class PiCopilotService:
             "selection": self._cohort_eligibility_selection_projection(record),
         }
 
+    def confirm_plan_decision(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        decision_code: str,
+        option_id: str,
+        expected_revision: int,
+        run_id: str,
+    ) -> Dict[str, Any]:
+        """Persist one host-rendered scientific choice without a provider turn."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        stale = self._stale_details(record)
+        if stale.get("stale"):
+            raise PiCopilotError(
+                "pi_session_authority_stale",
+                "The StudyContext or reviewed plan changed before this option was selected.",
+                status_code=409,
+                details=stale,
+            )
+        context_id = str(record.binding.study_context_id or "").strip()
+        context = study_contexts.get_context(context_id) if context_id else None
+        if context is None:
+            raise PiCopilotError(
+                "plan_decision_study_context_required",
+                "The plan choice requires a bound StudyContext.",
+                status_code=409,
+            )
+        if context.get("active_job_id"):
+            raise PiCopilotError(
+                "study_context_active_job_conflict",
+                "The plan choice cannot change while an EasyICU job is active.",
+                status_code=409,
+            )
+        current_revision = int(context.get("revision") or 0)
+        if int(expected_revision) != current_revision:
+            raise PiCopilotError(
+                "plan_decision_revision_conflict",
+                "The displayed plan choice is stale; reload the current review.",
+                status_code=409,
+                details={
+                    "expected_revision": int(expected_revision),
+                    "current_revision": current_revision,
+                },
+            )
+        bound_run_id = str(record.binding.run_id or "").strip()
+        if not bound_run_id or not hmac.compare_digest(
+            bound_run_id,
+            str(run_id or "").strip(),
+        ):
+            raise PiCopilotError(
+                "plan_decision_run_mismatch",
+                "The displayed plan choice does not belong to the bound review run.",
+                status_code=409,
+            )
+        rows = list_bound_run_history(
+            study_context_id=context_id,
+            project_root=research_pipeline_project_root(context_id),
+            limit=50,
+        )
+        row = next(
+            (item for item in rows if str(item.get("run_id") or "") == bound_run_id),
+            None,
+        )
+        if row is None:
+            raise PiCopilotError(
+                "plan_decision_run_not_found",
+                "The reviewed plan is no longer available for this project.",
+                status_code=409,
+            )
+        review = agent_runs.read_run_review(str(row.get("project_dir") or ""))
+        payloads = review.get("artifact_payloads")
+        payloads = payloads if isinstance(payloads, Mapping) else {}
+        scientific_review = payloads.get("scientific_plan_review.json")
+        findings = (
+            scientific_review.get("findings")
+            if isinstance(scientific_review, Mapping)
+            else None
+        )
+        authorized_codes = {
+            str(item.get("code") or "")
+            for item in findings or []
+            if isinstance(item, Mapping)
+            and item.get("requires_user_authorization") is True
+        }
+        clean_code = str(decision_code or "").strip()
+        if clean_code not in authorized_codes:
+            raise PiCopilotError(
+                "plan_decision_not_required_by_review",
+                "The selected decision is not an unresolved human choice in this review.",
+                status_code=409,
+                details={"decision_code": clean_code},
+            )
+        agent_plan = payloads.get("agent_plan.json")
+        if not isinstance(agent_plan, Mapping):
+            raise PiCopilotError(
+                "plan_decision_plan_missing",
+                "The reviewed plan payload is unavailable.",
+                status_code=409,
+            )
+        try:
+            compiled = plan_decisions.compile_plan_decision(
+                decision_code=clean_code,
+                option_id=option_id,
+                study=context,
+                agent_plan=agent_plan,
+            )
+            updated = study_contexts.upsert_context(
+                {"id": context_id, **compiled.patch},
+                expected_revision=current_revision,
+                require_revision=True,
+                lifecycle_write=False,
+            )
+        except plan_decisions.PlanDecisionError as exc:
+            raise PiCopilotError(
+                exc.code,
+                str(exc),
+                status_code=409,
+                details=exc.details,
+            ) from exc
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                str(exc.detail.get("error") or "plan_decision_update_blocked"),
+                "The StudyContext owner rejected the plan choice.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        record.binding = self._binding_for_context(updated, run_id=bound_run_id)
+        self._save_record(record)
+        remaining_decisions = [
+            code
+            for code in authorized_codes
+            if not plan_decisions.decision_is_resolved(updated, code)
+        ]
+        next_action = (
+            "continue_review" if remaining_decisions else compiled.next_action
+        )
+        return {
+            "ok": True,
+            "status": "confirmed",
+            "code": "plan_decision_confirmed",
+            "decision_code": clean_code,
+            "option_id": str(option_id or "").strip(),
+            "study_context_id": context_id,
+            "study_context_revision": int(updated.get("revision") or 0),
+            "display_label": {
+                "en": compiled.display_label_en,
+                "zh": compiled.display_label_zh,
+            },
+            "next_action": next_action,
+            "remaining_decision_codes": sorted(remaining_decisions),
+        }
+
     def _assert_project_initialized(self, project_id: str) -> str:
         clean = str(project_id or "").strip()
         if not clean or not self.project_store.resolve(clean):
@@ -2369,8 +2647,36 @@ class PiCopilotService:
             latest_run_outcome = project_run_outcome(review)
             payloads = review.get("artifact_payloads")
             payloads = payloads if isinstance(payloads, Mapping) else {}
+            agent_plan = payloads.get("agent_plan.json")
+            review_summary = snapshot.plan_review_summary
+            if isinstance(review_summary, Mapping) and isinstance(agent_plan, Mapping):
+                questions = plan_decisions.pending_authorization_questions(
+                    study or {},
+                    review_summary.get("authorization_questions"),
+                )
+                enriched_questions = []
+                for question in questions:
+                    item = dict(question) if isinstance(question, Mapping) else {}
+                    if item.get("code") == "ADJUSTMENT_SET_NOT_USER_CONFIRMED":
+                        item["proposed_covariates"] = (
+                            plan_decisions.proposed_adjustment_set(agent_plan)
+                        )
+                    enriched_questions.append(item)
+                snapshot = snapshot.model_copy(
+                    update={
+                        **(
+                            {"next_action_code": "plan_scientific_changes_required"}
+                            if enriched_questions
+                            else {}
+                        ),
+                        "plan_review_summary": {
+                            **dict(review_summary),
+                            "authorization_questions": enriched_questions,
+                        }
+                    }
+                )
             plan_preview = project_plan_conversation_preview(
-                payloads.get("agent_plan.json")
+                agent_plan
             )
             if plan_preview:
                 snapshot = snapshot.model_copy(
@@ -2872,6 +3178,13 @@ class PiCopilotService:
         )
         if not loaded.get("ok"):
             code = str(loaded.get("error") or "pi_research_artifact_unavailable")
+            if code == "artifact_privacy_scan_failed":
+                raise PiCopilotError(
+                    "pi_research_artifact_privacy_blocked",
+                    "The artefact preview was withheld by the EasyICU privacy scan.",
+                    status_code=409,
+                    details={"artifact": clean_artifact},
+                )
             raise PiCopilotError(
                 code,
                 "The requested EasyICU run artefact is unavailable.",
@@ -2978,6 +3291,13 @@ class PiCopilotService:
         )
         if not loaded.get("ok"):
             code = str(loaded.get("error") or "evidence_preview_unavailable")
+            if code == "evidence_preview_privacy_scan_failed":
+                raise PiCopilotError(
+                    "pi_research_evidence_privacy_blocked",
+                    "The evidence preview was withheld by the EasyICU privacy scan.",
+                    status_code=409,
+                    details={"evidence_id": clean_evidence},
+                )
             raise PiCopilotError(
                 code,
                 str(loaded.get("message") or "The evidence preview is unavailable."),
