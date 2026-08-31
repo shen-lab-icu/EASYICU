@@ -31,6 +31,7 @@ from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
     window_extends_after_anchor,
 )
+from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority
@@ -169,6 +170,12 @@ def repeat_units_possible(context: ResearchContext) -> bool:
     # review below can then offer the governed remedies: materialize patient
     # grouping or use an owner-issued one-stay/readmission restriction.
     analysis_unit = str(provenance.get("analysis_unit") or "").strip().casefold()
+    if (
+        provenance.get("evidence_stage") == "metadata_only_planning"
+        and analysis_unit == "icu_stay"
+        and context_patient_group_authority(context) is None
+    ):
+        return True
     if (
         n_stays is not None
         and n_stays > 1
@@ -310,13 +317,48 @@ def _step_requires_temporal_inference(step: AnalysisStep) -> bool:
     )
 
 
+def _signed_temporal_result_projection(
+    step: AnalysisStep, plan: AnalysisPlan
+) -> bool:
+    """Recognize a sensitivity table projected from one signed estimator.
+
+    The landmark runtime can mechanically expose separate named sensitivity
+    tables after its single signed fit.  Those child nodes consume only the
+    signed primary's products; they do not refit patient rows and therefore do
+    not need a second temporal estimator.  The graph and sensitivity ids must
+    both close exactly so Planner prose cannot obtain this exemption.
+    """
+
+    if (
+        step.planned_analysis_role != "sensitivity"
+        or step.scientific_capability is not None
+        or step.model_requirements
+        or step.family_primary_result_requirement is not None
+        or not step.sensitivity_spec_ids
+    ):
+        return False
+    candidates = [
+        primary
+        for primary in plan.steps
+        if primary.planned_analysis_role == "primary"
+        and _method_head(primary) in _EXECUTABLE_TEMPORAL_METHODS
+        and set(step.sensitivity_spec_ids).issubset(primary.sensitivity_spec_ids)
+        and set(step.inputs)
+        and set(step.inputs).issubset(primary.expected_outputs)
+    ]
+    return len(candidates) == 1
+
+
 def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
     """Require every applicable estimator to close its own temporal design."""
 
+    if plan is None:
+        return False
     applicable = [
         step
         for step in scientific_steps(plan)
         if executable_scientific_step(step) and _step_requires_temporal_inference(step)
+        and not _signed_temporal_result_projection(step, plan)
     ]
     return bool(applicable) and all(
         _method_head(step) in _EXECUTABLE_TEMPORAL_METHODS for step in applicable
@@ -365,6 +407,16 @@ def repeated_unit_design_closed(
         method = _method_head(step)
         model_requirements = tuple(step.model_requirements)
         distribution = step.exposure_outcome_distribution_spec
+        patient_group = context_patient_group_authority(context)
+        signed_landmark_dependence = bool(
+            method == "signed_landmark_restricted_cubic_spline"
+            and patient_group is not None
+            and patient_group.group_source in step.inputs
+            and any(
+                str(value).startswith("scientific_runtime_contract:")
+                for value in step.icu_rule_refs
+            )
+        )
         counts_only_distribution = bool(
             distribution is not None
             and distribution.schema_version
@@ -374,6 +426,7 @@ def repeated_unit_design_closed(
             model_requirements
             or distribution is not None
             or method in _EXECUTABLE_DEPENDENCE_METHODS
+            or signed_landmark_dependence
             or method == "non_readmission_restriction"
         ):
             continue
@@ -403,6 +456,8 @@ def repeated_unit_design_closed(
         # other's authority. Once both present contracts are closed, the step
         # is complete regardless of the human-readable method label.
         if model_requirements or distribution is not None:
+            continue
+        if signed_landmark_dependence:
             continue
         if has_patient_authority and method in _EXECUTABLE_DEPENDENCE_METHODS:
             continue
@@ -881,6 +936,33 @@ def _continuous_linearity_facts(plan: AnalysisPlan) -> dict[str, Any]:
     }
 
 
+def _model_term_domain_conflicts(
+    context: ResearchContext,
+    plan: AnalysisPlan,
+) -> list[dict[str, Any]]:
+    conflicts: list[dict[str, Any]] = []
+    for step in scientific_steps(plan):
+        for requirement in step.model_requirements:
+            for term in requirement.model_terms or ():
+                variable = context.variable(term.name)
+                if variable is None or term.coding != "continuous":
+                    continue
+                declared_levels, declared_basis = declared_domain_for_variable(variable)
+                if not declared_levels:
+                    continue
+                conflicts.append(
+                    {
+                        "step_id": step.step_id,
+                        "requirement_id": requirement.requirement_id,
+                        "variable": term.name,
+                        "coding": term.coding,
+                        "declared_basis": declared_basis,
+                        "declared_level_count": len(declared_levels),
+                    }
+                )
+    return conflicts
+
+
 def _endpoint_resolved(context: ResearchContext) -> bool:
     target = str(context.target_outcome or "").strip()
     descriptor = context.variable(target) if target else None
@@ -1145,6 +1227,7 @@ def build_plan_scientific_review(
     figure_roles = publication_readiness["figure_roles"]
     content_roles = publication_readiness["content_roles"]
     linearity = _continuous_linearity_facts(plan)
+    model_term_domain_conflicts = _model_term_domain_conflicts(context, plan)
     clinical_definitions = _clinical_definition_facts(context)
     time_anchor_alignment = primary_exposure_time_anchor_alignment(context)
     post_baseline, exposure_window = post_baseline_exposure(context)
@@ -1638,6 +1721,30 @@ def build_plan_scientific_review(
                 ),
             )
         )
+    if model_term_domain_conflicts:
+        conflict_variables = sorted(
+            {str(item["variable"]) for item in model_term_domain_conflicts}
+        )
+        findings.append(
+            PlanScientificFinding(
+                code="MODEL_TERM_CODING_CONFLICTS_WITH_DECLARED_DOMAIN",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "Continuous model coding conflicts with an owner-declared "
+                    "closed variable domain: " + ", ".join(conflict_variables)
+                ),
+                evidence_refs=[
+                    "research_context.json.variables",
+                    "analysis_plan.json.model_requirements",
+                ],
+                remediation=(
+                    "Regenerate the plan using categorical, binary, or ordinal "
+                    "coding that matches the concept owner's declared domain; do "
+                    "not reinterpret factor codes as interval measurements."
+                ),
+            )
+        )
     if linearity["linear_identity_terms"] and not linearity["functional_form_sensitivity_executable"]:
         findings.append(
             PlanScientificFinding(
@@ -1882,6 +1989,7 @@ def build_plan_scientific_review(
             "sensitivity": sensitivity,
             "robustness_readiness": robustness_readiness,
             "linearity": linearity,
+            "model_term_domain_conflicts": model_term_domain_conflicts,
             "clinical_definitions": clinical_definitions,
             "figure_roles": figure_roles,
             "content_roles": content_roles,

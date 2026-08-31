@@ -85,6 +85,77 @@ from ..trajectory.contract import infer_fixed_window_trajectory_metadata
 _observed_domain = observed_domain_for_series
 
 
+def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
+    authority = frame.attrs.get("easyicu_planning_authority")
+    if not isinstance(authority, dict):
+        return {}
+    if (
+        authority.get("kind") != "metadata_only_planning_catalog"
+        or authority.get("patient_rows_read") is not False
+    ):
+        return {}
+    projected = {
+        "evidence_stage": "metadata_only_planning",
+        "patient_rows_read": False,
+    }
+    replacement = authority.get("replacement_row_identity")
+    if replacement is None:
+        return projected
+    if not isinstance(replacement, dict):
+        raise MaterializedMetadataError(
+            "metadata-only replacement-row identity must be an object"
+        )
+    output_column = replacement.get("output_identity_column")
+    mapping_sha256 = replacement.get("mapping_file_sha256")
+    mapped_rows = replacement.get("mapped_cohort_rows")
+    derivation = replacement.get("patient_group_derivation")
+    coordinates = replacement.get("authority_coordinates")
+    if (
+        not isinstance(output_column, str)
+        or output_column not in frame.columns
+        or not isinstance(mapping_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", mapping_sha256) is None
+        or isinstance(mapped_rows, bool)
+        or not isinstance(mapped_rows, int)
+        or mapped_rows != int(len(frame))
+        or not isinstance(derivation, dict)
+        or derivation != {"algorithm": "prefix_before_:s", "delimiter": ":s"}
+        or not isinstance(coordinates, dict)
+        or coordinates.get("schema_version")
+        != "easyicu.patient_grouping_runtime_authority/1"
+        or not isinstance(coordinates.get("authority_ref"), str)
+        or not coordinates.get("authority_ref")
+        or coordinates.get("mapping_sha256") != mapping_sha256
+        or coordinates.get("grouping_derivation") != "prefix_before_:s"
+        or coordinates.get("provider_visible_values") is not False
+    ):
+        raise MaterializedMetadataError(
+            "metadata-only replacement-row identity authority is invalid"
+        )
+    safe_coordinates = {
+        key: coordinates[key]
+        for key in (
+            "schema_version",
+            "authority_ref",
+            "database",
+            "export_manifest_file",
+            "export_manifest_sha256",
+            "mapping_sha256",
+            "grouping_derivation",
+            "provider_visible_values",
+        )
+        if key in coordinates
+    }
+    projected["replacement_row_identity"] = {
+        "output_identity_column": output_column,
+        "mapping_file_sha256": mapping_sha256,
+        "mapped_cohort_rows": mapped_rows,
+        "patient_group_derivation": dict(derivation),
+        "authority_coordinates": safe_coordinates,
+    }
+    return projected
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -624,6 +695,7 @@ def build_research_context(
         provenance={
             **episode.provenance,
             **granularity.provenance(),
+            **_planning_catalog_provenance(df),
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
             **(
@@ -1306,7 +1378,10 @@ def build_naive_research_context(
         id_columns=id_cols,
         time_columns=time_cols,
         outcome_columns=out_cols,
-        provenance=granularity.provenance(),
+        provenance={
+            **granularity.provenance(),
+            **_planning_catalog_provenance(df),
+        },
     )
 
     descriptors: List[ConceptDescriptor] = []
