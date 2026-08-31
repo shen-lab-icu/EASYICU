@@ -22,6 +22,9 @@ def test_plan_contract_catch_all_is_not_an_adapter_import_surface() -> None:
     gate = (root / "gates/contract.py").read_text(encoding="utf-8")
     final_owner = (root / "planning/final_plan_shape.py").read_text(encoding="utf-8")
     cohort_owner = (root / "planning/cohort_contract.py").read_text(encoding="utf-8")
+    product_owner = (root / "contracts/product_identity.py").read_text(
+        encoding="utf-8"
+    )
     compatibility = (root / "plan_utils.py").read_text(encoding="utf-8")
     execution_owner = (root / "execution/phase_support.py").read_text(
         encoding="utf-8"
@@ -37,6 +40,8 @@ def test_plan_contract_catch_all_is_not_an_adapter_import_surface() -> None:
     assert "from ..plan_utils import (" in execution_owner
     assert "def cohort_definition_contract_issue(" in cohort_owner
     assert "issue = cohort_definition_contract_issue(plan)" in compatibility
+    assert "def normalised_structured_output_names(" in product_owner
+    assert "def _normalised_structured_output_names(" not in compatibility
 
 
 def _step(
