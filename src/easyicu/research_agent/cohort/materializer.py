@@ -82,7 +82,8 @@ from ..intake.materialized_trajectory import (
     publish_materialized_trajectory_authority,
 )
 from ..trajectory.panel import FixedWindowGrid, fixed_window_panel
-from easyicu.concept.metadata_projection import ConceptColumnRole
+from easyicu.concept.loader import _get_concept_bounds
+from easyicu.concept.metadata_projection import ConceptColumnRole, NumericBounds
 
 Window = Tuple[float, float]
 _FALSE_TOKENS = {"", "0", "false", "f", "no", "n", "none", "nan", "na", "null", "off"}
@@ -254,6 +255,54 @@ def _bounded_typed_numeric(
         label="extraction bounds",
     )
     return numeric
+
+
+def _dictionary_extraction_bounds(concept: str) -> Optional[NumericBounds]:
+    """Return canonical extraction bounds for an untyped EasyICU concept.
+
+    Native-v2 exports carry these bounds in sealed column metadata. Legacy
+    exports predate that sidecar, but still name canonical EasyICU concepts.
+    Reusing the dictionary here preserves the same pre-aggregation validity
+    rule used by fresh extraction.
+    """
+
+    minimum = _get_concept_bounds(concept, "min")
+    maximum = _get_concept_bounds(concept, "max")
+    if minimum is None and maximum is None:
+        return None
+    return NumericBounds(minimum=minimum, maximum=maximum)
+
+
+class _LegacyConceptBounds:
+    """Minimal metadata view consumed by ``_bounded_typed_numeric``."""
+
+    def __init__(self, bounds: NumericBounds) -> None:
+        self.extraction_bounds = bounds
+
+
+def _bounded_legacy_concept_numeric(
+    values: pd.Series,
+    *,
+    original: pd.Series,
+    concept: str,
+    purpose: str,
+    bounds_violation_policy: str,
+    bounds_violation_counts: dict[str, int],
+) -> pd.Series:
+    """Apply canonical extraction bounds to an untyped legacy concept."""
+
+    bounds = _dictionary_extraction_bounds(concept)
+    if bounds is None:
+        return original
+    return _bounded_typed_numeric(
+        values,
+        original=original,
+        metadata=_LegacyConceptBounds(bounds),
+        concept=concept,
+        purpose=purpose,
+        bounds_violation_policy=bounds_violation_policy,
+        bounds_violation_counts=bounds_violation_counts,
+    )
 
 
 def _normalize_typed_output_domain(
@@ -1175,7 +1224,7 @@ def _materialize_cohort_from_resolved_source(
         loaded = _load_concept(
             source_mode, source_handle, concept, database, patient_ids, unavailable
         )
-        if not metadata_collector.enabled or loaded.empty:
+        if loaded.empty or concept not in loaded.columns:
             return loaded
         loaded = loaded.copy()
         if TIME_COL in loaded.columns:
@@ -1185,6 +1234,17 @@ def _materialize_cohort_from_resolved_source(
                 concept=concept,
                 purpose="source time coordinate",
             )
+        if not metadata_collector.enabled:
+            if _dictionary_extraction_bounds(concept) is not None:
+                loaded[concept] = _bounded_legacy_concept_numeric(
+                    pd.to_numeric(loaded[concept], errors="coerce"),
+                    original=loaded[concept],
+                    concept=concept,
+                    purpose="legacy source physical value",
+                    bounds_violation_policy=bounds_violation_policy,
+                    bounds_violation_counts=bounds_violation_counts,
+                )
+            return loaded
         source_binding = metadata_collector.source_binding(concept)
         if source_binding is None:
             raise MaterializedMetadataError(
@@ -1540,6 +1600,17 @@ def _build_trajectory_long_from_resolved_source(
                     metadata=source_metadata,
                     concept=concept,
                     purpose="trajectory source physical value",
+                    bounds_violation_policy=bounds_violation_policy,
+                    bounds_violation_counts=bounds_violation_counts,
+                )
+        elif not df.empty and concept in df.columns:
+            df = df.copy()
+            if _dictionary_extraction_bounds(concept) is not None:
+                df[concept] = _bounded_legacy_concept_numeric(
+                    pd.to_numeric(df[concept], errors="coerce"),
+                    original=df[concept],
+                    concept=concept,
+                    purpose="legacy trajectory source physical value",
                     bounds_violation_policy=bounds_violation_policy,
                     bounds_violation_counts=bounds_violation_counts,
                 )
