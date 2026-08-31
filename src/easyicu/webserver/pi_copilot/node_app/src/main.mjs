@@ -45,53 +45,49 @@ const SESSION_DIR = resolve(
   process.env.EASYICU_PI_SESSION_DIR || join(process.cwd(), ".easyicu-pi-sessions"),
 );
 const CWD = resolve(process.env.EASYICU_PI_CWD || process.cwd());
-const RESEARCH_TOOL_NAMES = Object.freeze([
-  "easyicu_workspace_status",
-  "easyicu_list_data_sources",
-  "easyicu_list_source_concepts",
-  "easyicu_inspect_data_package",
-  "easyicu_review_cohort",
-  "easyicu_open_data_download",
-  "easyicu_preview_icd_cohort",
-  "easyicu_review_patient_timeline",
-  "easyicu_compare_data_sources",
-  "easyicu_inspect_workflow",
-  "easyicu_inspect_context",
-  "easyicu_inspect_plan",
-  "easyicu_inspect_literature",
-  "easyicu_inspect_capability",
-  "easyicu_inspect_run",
-  "easyicu_inspect_step",
-  "easyicu_inspect_validation",
-  "easyicu_list_artifacts",
-  "easyicu_inspect_evidence",
-  "easyicu_explain_blocker",
-  "easyicu_inspect_interpretation",
-  "easyicu_inspect_manuscript",
-  "easyicu_update_study_context",
-  "easyicu_mine_ideas",
-  "easyicu_search_literature",
-  "easyicu_prepare_idea_handoff",
-  "easyicu_accept_idea_handoff",
-  "easyicu_prepare_demo_source",
-  "easyicu_start_extraction",
-  "easyicu_run",
-  "easyicu_resume",
-  "easyicu_cancel",
-  "easyicu_request_replan",
-  "easyicu_list_extensions",
-  "easyicu_load_skill",
-  "easyicu_call_mcp_tool",
+const TOOL_CATALOG_FIELDS = new Set([
+  "name", "surface", "policy_group", "execution_mode",
+  "host_mutating", "data_source_required",
 ]);
-const WORKSPACE_TOOL_NAMES = Object.freeze([
-  "easyicu_list_project_files",
-  "easyicu_read_project_file",
-  "easyicu_write_project_file",
-  "easyicu_edit_project_file",
-  "easyicu_check_project_file",
-  "easyicu_preview_project_file",
-]);
-const ALL_TOOL_NAMES = Object.freeze([...RESEARCH_TOOL_NAMES, ...WORKSPACE_TOOL_NAMES]);
+const TOOL_CATALOG = (() => {
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(new URL("../../tool_catalog.json", import.meta.url), "utf8"));
+  } catch (error) {
+    throw Object.assign(new Error("Pi tool catalog is unreadable"), { code: "pi_tool_catalog_unreadable", cause: error });
+  }
+  if (payload?.schema_version !== "easyicu.pi-tool-catalog/1" || !Array.isArray(payload?.tools)) {
+    throw Object.assign(new Error("Pi tool catalog schema is invalid"), { code: "pi_tool_catalog_schema_invalid" });
+  }
+  const names = new Set();
+  for (const entry of payload.tools) {
+    const fields = Object.keys(entry || {});
+    if (fields.length !== TOOL_CATALOG_FIELDS.size || fields.some((field) => !TOOL_CATALOG_FIELDS.has(field))) {
+      throw Object.assign(new Error("Pi tool catalog entry is invalid"), { code: "pi_tool_catalog_entry_invalid" });
+    }
+    if (!/^easyicu_[a-z0-9_]+$/.test(entry.name) || names.has(entry.name)) {
+      throw Object.assign(new Error("Pi tool catalog name is invalid"), { code: "pi_tool_catalog_name_invalid" });
+    }
+    if (!['research', 'workspace'].includes(entry.surface)
+      || !['read', 'control', 'workspace'].includes(entry.policy_group)
+      || ((entry.surface === 'workspace') !== (entry.policy_group === 'workspace'))
+      || !['parallel', 'sequential'].includes(entry.execution_mode)
+      || typeof entry.host_mutating !== 'boolean'
+      || typeof entry.data_source_required !== 'boolean') {
+      throw Object.assign(new Error("Pi tool catalog policy is invalid"), { code: "pi_tool_catalog_policy_invalid" });
+    }
+    names.add(entry.name);
+  }
+  if (!payload.tools.length) {
+    throw Object.assign(new Error("Pi tool catalog is empty"), { code: "pi_tool_catalog_empty" });
+  }
+  return Object.freeze(payload.tools.map((entry) => Object.freeze({ ...entry })));
+})();
+const TOOL_CATALOG_BY_NAME = new Map(TOOL_CATALOG.map((entry) => [entry.name, entry]));
+const RESEARCH_TOOL_NAMES = Object.freeze(
+  TOOL_CATALOG.filter((entry) => entry.surface === "research").map((entry) => entry.name),
+);
+const ALL_TOOL_NAMES = Object.freeze(TOOL_CATALOG.map((entry) => entry.name));
 
 const sessions = new Map();
 const activeRequestBySession = new Map();
@@ -678,8 +674,15 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
 }
 
 function hostTool(sessionId, definition) {
+  const catalogEntry = TOOL_CATALOG_BY_NAME.get(definition.name);
+  if (!catalogEntry) {
+    throw Object.assign(new Error(`Uncatalogued Pi tool definition: ${definition.name}`), {
+      code: "pi_tool_definition_not_catalogued",
+    });
+  }
   return defineTool({
     ...definition,
+    executionMode: catalogEntry.execution_mode,
     execute: async (_toolCallId, params) => {
       let result;
       try {
@@ -723,6 +726,18 @@ function hostTool(sessionId, definition) {
       };
     },
   });
+}
+
+function validateToolDefinitions(tools, expectedNames) {
+  const actualNames = tools.map((tool) => tool.name);
+  if (actualNames.length !== expectedNames.length
+    || actualNames.some((name, index) => name !== expectedNames[index])) {
+    throw Object.assign(new Error("Pi tool definitions do not match the committed catalog"), {
+      code: "pi_tool_definition_catalog_mismatch",
+      details: { expected: expectedNames, actual: actualNames },
+    });
+  }
+  return tools;
 }
 
 function customTools(sessionId, agentMode, extensionSnapshot) {
@@ -854,7 +869,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
     hostTool(sessionId, { name: "easyicu_explain_blocker", label: "Explain blocker", description: "Explain the current stable EasyICU blocker code and its owning boundary.", parameters: Type.Object({ run_id: optionalRunId, job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_inspect_interpretation", label: "Interpret validated results", description: "Organize existing Research Agent claims, gates, limitations, and artifact references into an evidence-bound human-review card. This tool never calculates a new number or invents an explanation.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_inspect_manuscript", label: "Inspect manuscript draft", description: "Open the Research Agent-produced, evidence-bound manuscript draft and its governance status. Pi does not author or unlock it.", parameters: Type.Object({ run_id: optionalRunId }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_update_study_context", executionMode: "sequential", label: "Save study setup", description: "Persist typed conversational study slots through the existing StudyContext owner. Requires a host-held one-turn Configure authorization. A successful result includes the post-update study and workflow so the same reply can ask the next unresolved scientific decision. bind_source_id accepts only an already registered export; official demo catalog ids must go directly to easyicu_prepare_demo_source first.", parameters: Type.Object({
+    hostTool(sessionId, { name: "easyicu_update_study_context", label: "Save study setup", description: "Persist typed conversational study slots through the existing StudyContext owner. Requires a host-held one-turn Configure authorization. A successful result includes the post-update study and workflow so the same reply can ask the next unresolved scientific decision. bind_source_id accepts only an already registered export; official demo catalog ids must go directly to easyicu_prepare_demo_source first.", parameters: Type.Object({
       title: optionalText(160), question: optionalText(1200), purpose: optionalText(800),
       cohort: Type.Optional(studyCohort), modules: Type.Optional(Type.Array(Type.String({ maxLength: 80 }), { maxItems: 64 })),
       outcome: optionalText(500), primary_exposure: optionalText(160),
@@ -891,31 +906,33 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       bind_active_export: Type.Optional(Type.Boolean()),
       bind_source_id: optionalText(80),
     }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_mine_ideas", executionMode: "sequential", label: "Mine research ideas", description: "Create one local, metadata-only Idea Mining candidate from the bound question or a bounded source seed. Requires the one-use Idea Mining grant and never produces a novelty or scientific result claim.", parameters: Type.Object({ topic: optionalText(1200), title: optionalText(220), excerpt: optionalText(1200), journal: optionalText(160), year: Type.Optional(Type.Integer({ minimum: 1800, maximum: 2200 })), doi: optionalText(240), pmid: optionalText(80) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_search_literature", executionMode: "sequential", label: "Search PubMed literature", description: "Run the Idea Mining PubMed metadata and bounded-abstract owner. Returned rows are unreviewed retrieval candidates, never verified evidence or direct comparators until Research Agent screens them against the sealed study. With an accepted idea it persists a digest-bound prior-art receipt and requires that exact idea handoff to be accepted again before Plan/run. Otherwise, a completed search binds an exact digest receipt to StudyContext, invalidates the current turn, and must be followed by host rebind before planning. Report the receipt and stop after either authority mutation. Requires the separate one-turn literature-network grant; no full text, patient rows, or external LLM is used.", parameters: Type.Object({ topic: optionalText(1200), journal: optionalText(160), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_prepare_idea_handoff", executionMode: "sequential", label: "Prepare idea plan", description: "Create the canonical metadata-only Idea Mining plan/handoff for conversational review. Requires the one-use Idea Mining grant; it does not start analysis or make reportable claims.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: optionalText(160), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_accept_idea_handoff", executionMode: "sequential", label: "Accept selected idea", description: "After the user explicitly selects an idea, bind its canonical digest and agreed fields to the current StudyContext. Requires the one-use Idea Mining grant and stops the turn for an authority rebind.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: Type.String({ minLength: 1, maxLength: 160 }), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_prepare_demo_source", executionMode: "sequential", label: "Download and prepare official demo data", description: "Submit the allowlisted official demo-source owner to download, validate, convert, export, and register MIMIC-IV or eICU demo data locally. Requires the one-use Extraction grant; URLs and paths are never accepted from the model.", parameters: Type.Object({ source_id: Type.String({ minLength: 1, maxLength: 80 }) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_start_extraction", executionMode: "sequential", label: "Open or start feature extraction", description: "Open the native EasyICU Data Extraction workspace for an explicit local database choice, or submit the existing configured extraction owner when it is ready. Use source_mode='local' plus an exact supported database key to override a currently bound demo or older export and open the folder picker. Requires the one-use Extraction grant; raw paths never come from the model.", parameters: Type.Object({ source_mode: Type.Optional(Type.Literal("local")), database: Type.Optional(Type.Union([Type.Literal("miiv"), Type.Literal("mimic"), Type.Literal("eicu"), Type.Literal("aumc"), Type.Literal("hirid"), Type.Literal("sic")])) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_run", executionMode: "sequential", label: "Start EasyICU run", description: "Submit an EasyICU preflight or the real ResearchAgentPipeline Plan -> Execute -> Validate -> Write workflow. Preflight requires the local-run grant. Full analysis requires the separate provider-run grant and the existing scientific provider gates. The host, not the model, selects the already verified provider configuration. Submission invalidates this turn's authority: report the receipt and stop until host rebind.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_resume", executionMode: "sequential", label: "Resume EasyICU work", description: "Reattach to a live job or submit an explicit approved/rejected decision for a durable digest-bound Research Agent plan review. A terminal run_id is not resumable. A review decision needs a fresh provider-run grant.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })), run_id: optionalRunId, decision: Type.Optional(Type.Union([Type.Literal("approved"), Type.Literal("rejected")])), reviewer: Type.Optional(Type.String({ maxLength: 200 })), note: Type.Optional(Type.String({ maxLength: 1000 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_cancel", executionMode: "sequential", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_request_replan", executionMode: "sequential", label: "Request research plan", description: "Start either a fresh ResearchAgentPipeline planning run from the current prepared data or explicitly continue one validated Planner checkpoint. Fresh mode never mutates or reuses the old plan or checkpoint. Both modes require a fresh provider-run grant and fail closed when their typed authority is unavailable.", parameters: Type.Object({ strategy: Type.Union([Type.Literal("fresh"), Type.Literal("resume_checkpoint")]), reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_mine_ideas", label: "Mine research ideas", description: "Create one local, metadata-only Idea Mining candidate from the bound question or a bounded source seed. Requires the one-use Idea Mining grant and never produces a novelty or scientific result claim.", parameters: Type.Object({ topic: optionalText(1200), title: optionalText(220), excerpt: optionalText(1200), journal: optionalText(160), year: Type.Optional(Type.Integer({ minimum: 1800, maximum: 2200 })), doi: optionalText(240), pmid: optionalText(80) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_search_literature", label: "Search PubMed literature", description: "Run the Idea Mining PubMed metadata and bounded-abstract owner. Returned rows are unreviewed retrieval candidates, never verified evidence or direct comparators until Research Agent screens them against the sealed study. With an accepted idea it persists a digest-bound prior-art receipt and requires that exact idea handoff to be accepted again before Plan/run. Otherwise, a completed search binds an exact digest receipt to StudyContext, invalidates the current turn, and must be followed by host rebind before planning. Report the receipt and stop after either authority mutation. Requires the separate one-turn literature-network grant; no full text, patient rows, or external LLM is used.", parameters: Type.Object({ topic: optionalText(1200), journal: optionalText(160), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_prepare_idea_handoff", label: "Prepare idea plan", description: "Create the canonical metadata-only Idea Mining plan/handoff for conversational review. Requires the one-use Idea Mining grant; it does not start analysis or make reportable claims.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: optionalText(160), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_accept_idea_handoff", label: "Accept selected idea", description: "After the user explicitly selects an idea, bind its canonical digest and agreed fields to the current StudyContext. Requires the one-use Idea Mining grant and stops the turn for an authority rebind.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: Type.String({ minLength: 1, maxLength: 160 }), plan_edits: optionalText(1200) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_prepare_demo_source", label: "Download and prepare official demo data", description: "Submit the allowlisted official demo-source owner to download, validate, convert, export, and register MIMIC-IV or eICU demo data locally. Requires the one-use Extraction grant; URLs and paths are never accepted from the model.", parameters: Type.Object({ source_id: Type.String({ minLength: 1, maxLength: 80 }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_start_extraction", label: "Open or start feature extraction", description: "Open the native EasyICU Data Extraction workspace for an explicit local database choice, or submit the existing configured extraction owner when it is ready. Use source_mode='local' plus an exact supported database key to override a currently bound demo or older export and open the folder picker. Requires the one-use Extraction grant; raw paths never come from the model.", parameters: Type.Object({ source_mode: Type.Optional(Type.Literal("local")), database: Type.Optional(Type.Union([Type.Literal("miiv"), Type.Literal("mimic"), Type.Literal("eicu"), Type.Literal("aumc"), Type.Literal("hirid"), Type.Literal("sic")])) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_run", label: "Start EasyICU run", description: "Submit an EasyICU preflight or the real ResearchAgentPipeline Plan -> Execute -> Validate -> Write workflow. Preflight requires the local-run grant. Full analysis requires the separate provider-run grant and the existing scientific provider gates. The host, not the model, selects the already verified provider configuration. Submission invalidates this turn's authority: report the receipt and stop until host rebind.", parameters: Type.Object({ run_type: Type.Optional(Type.Union([Type.Literal("preflight"), Type.Literal("full")])) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_resume", label: "Resume EasyICU work", description: "Reattach to a live job or submit an explicit approved/rejected decision for a durable digest-bound Research Agent plan review. A terminal run_id is not resumable. A review decision needs a fresh provider-run grant.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })), run_id: optionalRunId, decision: Type.Optional(Type.Union([Type.Literal("approved"), Type.Literal("rejected")])), reviewer: Type.Optional(Type.String({ maxLength: 200 })), note: Type.Optional(Type.String({ maxLength: 1000 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_cancel", label: "Cancel EasyICU job", description: "Request cooperative cancellation of the specifically bound EasyICU job. Requires a host-held one-turn user authorization.", parameters: Type.Object({ job_id: Type.Optional(Type.String({ maxLength: 160 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_request_replan", label: "Request research plan", description: "Start either a fresh ResearchAgentPipeline planning run from the current prepared data or explicitly continue one validated Planner checkpoint. Fresh mode never mutates or reuses the old plan or checkpoint. Both modes require a fresh provider-run grant and fail closed when their typed authority is unavailable.", parameters: Type.Object({ strategy: Type.Union([Type.Literal("fresh"), Type.Literal("resume_checkpoint")]), reason: Type.String({ minLength: 1, maxLength: 1200 }) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_list_extensions", label: "List frozen user extensions", description: "List the path-free Skill and MCP descriptors frozen into this Copilot session, including content digests and explicit tool allowlists.", parameters: empty }),
-    hostTool(sessionId, { name: "easyicu_load_skill", executionMode: "sequential", label: "Load frozen Skill", description: "Load the exact reviewed instructions for one conversation Skill frozen into this session. In workspace mode, the built-in web-prototype Skill is also available.", parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_call_mcp_tool", executionMode: "sequential", label: "Call allowlisted MCP tool", description: "Call one read-only external metadata tool from a server frozen into this session. The host enforces the MCP master switch, exact server/tool allowlist, bounded JSON, privacy projection, and one-turn authorization. MCP output never becomes current-study evidence automatically.", parameters: Type.Object({ server: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }), tool: Type.String({ minLength: 1, maxLength: 128 }), arguments: Type.Optional(Type.Record(Type.String({ maxLength: 160 }), Type.Unknown())) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_load_skill", label: "Load frozen Skill", description: "Load the exact reviewed instructions for one conversation Skill frozen into this session. In workspace mode, the built-in web-prototype Skill is also available.", parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_call_mcp_tool", label: "Call allowlisted MCP tool", description: "Call one read-only external metadata tool from a server frozen into this session. The host enforces the MCP master switch, exact server/tool allowlist, bounded JSON, privacy projection, and one-turn authorization. MCP output never becomes current-study evidence automatically.", parameters: Type.Object({ server: Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9][a-z0-9-]*$" }), tool: Type.String({ minLength: 1, maxLength: 128 }), arguments: Type.Optional(Type.Record(Type.String({ maxLength: 160 }), Type.Unknown())) }, { additionalProperties: false }) }),
   ];
-  if (agentMode !== "workspace") return tools;
+  if (agentMode !== "workspace") {
+    return validateToolDefinitions(tools, RESEARCH_TOOL_NAMES);
+  }
   const projectFile = Type.String({ minLength: 1, maxLength: 240 });
   const fileSha256 = Type.String({ pattern: "^[A-Fa-f0-9]{64}$" });
-  return tools.concat([
-    hostTool(sessionId, { name: "easyicu_list_project_files", executionMode: "sequential", label: "List project files", description: "List bounded text and web artifacts in this project's isolated workspace.", parameters: empty }),
-    hostTool(sessionId, { name: "easyicu_read_project_file", executionMode: "sequential", label: "Read project file", description: "Read a bounded UTF-8 file from this project's isolated workspace.", parameters: Type.Object({ file: projectFile, start_line: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })), end_line: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_write_project_file", executionMode: "sequential", label: "Write project file", description: "Create a new bounded artifact. Existing files must be changed with the exact-edit tool. Requires the reusable host-held workspace-write capability for this message.", parameters: Type.Object({ file: projectFile, content: Type.String({ minLength: 1, maxLength: 262144 }) }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_edit_project_file", executionMode: "sequential", label: "Edit project file", description: "Apply one exact replacement after reading the artifact and passing its current SHA-256 digest. Requires the reusable host-held workspace-write capability for this message.", parameters: Type.Object({ file: projectFile, old_text: Type.String({ minLength: 1, maxLength: 120000 }), new_text: Type.String({ maxLength: 120000 }), expected_sha256: fileSha256 }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_check_project_file", executionMode: "sequential", label: "Check project file", description: "Run a bounded non-executing syntax or structure check on a project artifact.", parameters: Type.Object({ file: projectFile }, { additionalProperties: false }) }),
-    hostTool(sessionId, { name: "easyicu_preview_project_file", executionMode: "sequential", label: "Prepare web preview", description: "Preview the exact HTML bytes that already passed the bounded static check.", parameters: Type.Object({ file: projectFile, checked_sha256: fileSha256 }, { additionalProperties: false }) }),
-  ]);
+  return validateToolDefinitions(tools.concat([
+    hostTool(sessionId, { name: "easyicu_list_project_files", label: "List project files", description: "List bounded text and web artifacts in this project's isolated workspace.", parameters: empty }),
+    hostTool(sessionId, { name: "easyicu_read_project_file", label: "Read project file", description: "Read a bounded UTF-8 file from this project's isolated workspace.", parameters: Type.Object({ file: projectFile, start_line: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })), end_line: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_write_project_file", label: "Write project file", description: "Create a new bounded artifact. Existing files must be changed with the exact-edit tool. Requires the reusable host-held workspace-write capability for this message.", parameters: Type.Object({ file: projectFile, content: Type.String({ minLength: 1, maxLength: 262144 }) }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_edit_project_file", label: "Edit project file", description: "Apply one exact replacement after reading the artifact and passing its current SHA-256 digest. Requires the reusable host-held workspace-write capability for this message.", parameters: Type.Object({ file: projectFile, old_text: Type.String({ minLength: 1, maxLength: 120000 }), new_text: Type.String({ maxLength: 120000 }), expected_sha256: fileSha256 }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_check_project_file", label: "Check project file", description: "Run a bounded non-executing syntax or structure check on a project artifact.", parameters: Type.Object({ file: projectFile }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_preview_project_file", label: "Prepare web preview", description: "Preview the exact HTML bytes that already passed the bounded static check.", parameters: Type.Object({ file: projectFile, checked_sha256: fileSha256 }, { additionalProperties: false }) }),
+  ]), ALL_TOOL_NAMES);
 }
 
 async function requestHostTool(sessionId, name, args) {

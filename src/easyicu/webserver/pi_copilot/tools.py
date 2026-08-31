@@ -70,91 +70,19 @@ from .run_authority import (
     research_pipeline_project_root,
     resumable_planner_checkpoint_job_id,
 )
+from .tool_catalog import (
+    ALLOWED_TOOLS,
+    CONTROL_TOOLS,
+    DATA_SOURCE_REQUIRED_TOOLS,
+    MUTATING_HOST_TOOLS as MUTATING_HOST_TOOLS,
+    READ_TOOLS,
+    WORKSPACE_TOOLS,
+)
 from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
 from .workflow import (
     build_research_workflow_snapshot,
     registered_export_matches_study,
 )
-
-READ_TOOLS = frozenset(
-    {
-        "easyicu_workspace_status",
-        "easyicu_list_data_sources",
-        "easyicu_list_source_concepts",
-        "easyicu_inspect_data_package",
-        "easyicu_review_cohort",
-        "easyicu_open_data_download",
-        "easyicu_preview_icd_cohort",
-        "easyicu_review_patient_timeline",
-        "easyicu_compare_data_sources",
-        "easyicu_inspect_workflow",
-        "easyicu_inspect_context",
-        "easyicu_inspect_plan",
-        "easyicu_inspect_literature",
-        "easyicu_inspect_capability",
-        "easyicu_inspect_run",
-        "easyicu_inspect_step",
-        "easyicu_inspect_validation",
-        "easyicu_list_artifacts",
-        "easyicu_inspect_evidence",
-        "easyicu_explain_blocker",
-        "easyicu_inspect_interpretation",
-        "easyicu_inspect_manuscript",
-        "easyicu_resume",
-        "easyicu_list_extensions",
-        "easyicu_load_skill",
-    }
-)
-CONTROL_TOOLS = frozenset(
-    {
-        "easyicu_update_study_context",
-        "easyicu_mine_ideas",
-        "easyicu_search_literature",
-        "easyicu_prepare_idea_handoff",
-        "easyicu_accept_idea_handoff",
-        "easyicu_prepare_demo_source",
-        "easyicu_start_extraction",
-        "easyicu_run",
-        "easyicu_cancel",
-        "easyicu_request_replan",
-        "easyicu_call_mcp_tool",
-    }
-)
-WORKSPACE_TOOLS = frozenset(
-    {
-        "easyicu_list_project_files",
-        "easyicu_read_project_file",
-        "easyicu_write_project_file",
-        "easyicu_edit_project_file",
-        "easyicu_check_project_file",
-        "easyicu_preview_project_file",
-    }
-)
-ALLOWED_TOOLS = READ_TOOLS | CONTROL_TOOLS | WORKSPACE_TOOLS
-MUTATING_HOST_TOOLS = CONTROL_TOOLS | frozenset(
-    {"easyicu_write_project_file", "easyicu_edit_project_file"}
-)
-DATA_SOURCE_REQUIRED_TOOLS = frozenset(
-    {
-        "easyicu_list_source_concepts",
-        "easyicu_inspect_data_package",
-        "easyicu_review_cohort",
-        "easyicu_open_data_download",
-        "easyicu_preview_icd_cohort",
-        "easyicu_review_patient_timeline",
-        "easyicu_compare_data_sources",
-        "easyicu_inspect_run",
-        "easyicu_inspect_step",
-        "easyicu_inspect_validation",
-        "easyicu_list_artifacts",
-        "easyicu_inspect_evidence",
-        "easyicu_inspect_interpretation",
-        "easyicu_inspect_manuscript",
-        "easyicu_run",
-        "easyicu_resume",
-    }
-)
-
 
 def _bounded_model_text(value: Any, limit: int = 1_200) -> str:
     """Normalize one already-governed text field for a bounded tool result."""
@@ -6232,6 +6160,13 @@ _DISPATCH = {
     "easyicu_check_project_file": _check_project_file,
     "easyicu_preview_project_file": _preview_project_file,
 }
+_dispatch_names = frozenset(_DISPATCH)
+if _dispatch_names != ALLOWED_TOOLS:
+    raise RuntimeError(
+        "pi_tool_dispatch_catalog_mismatch:"
+        f"missing={sorted(ALLOWED_TOOLS - _dispatch_names)}:"
+        f"extra={sorted(_dispatch_names - ALLOWED_TOOLS)}"
+    )
 
 
 def execute_tool(
@@ -6282,6 +6217,7 @@ __all__ = [
     "ALLOWED_TOOLS",
     "CONTROL_TOOLS",
     "DATA_SOURCE_REQUIRED_TOOLS",
+    "MUTATING_HOST_TOOLS",
     "READ_TOOLS",
     "WORKSPACE_TOOLS",
     "execute_tool",
