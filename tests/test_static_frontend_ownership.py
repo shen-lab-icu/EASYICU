@@ -484,6 +484,16 @@ def test_the_idea_sub_flow_does_not_reach_back_into_the_guided_closure() -> None
         )
     assert "const IDEA = window.EU_GUIDED_IDEA;" in shell
 
+    extraction_owner = (
+        STATIC / "js" / "screens-guided-extract.js"
+    ).read_text(encoding="utf-8")
+    for name in ("guidedExtract", "guidedDesign"):
+        assert not re.search(rf"^  let .*\b{name}\b", shell, re.M), (
+            f"{name} must be owned by the extraction module, not the shell"
+        )
+    assert "let extractionState = null;" in extraction_owner
+    assert "let designState = null;" in extraction_owner
+
 
 def test_the_guided_module_table_carries_no_hand_written_concept_counts() -> None:
     """A number promised before extraction has to come from the catalog.
