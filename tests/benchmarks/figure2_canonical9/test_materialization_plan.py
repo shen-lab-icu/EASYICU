@@ -157,6 +157,9 @@ def test_e1_materialized_item_receives_only_its_case_protocol_overlay(tmp_path):
         "table:e2_landmark_rcs_curve",
         "table:e2_landmark_rcs_contrasts",
         "table:e2_linear_sensitivity",
+        "table:e2_adjusted_absolute_risk",
+        "table:e2_landmark_population_flow",
+        "table:e2_variable_opportunity_sensitivity",
         "log:e2_scientific_runtime_receipt",
     ]
     assert any("descriptive/prognostic" in item for item in e2_row["semantic_guardrails"])
