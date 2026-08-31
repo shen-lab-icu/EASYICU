@@ -174,6 +174,18 @@ def test_a_diagnosis_criterion_is_declared_only_when_the_owner_can_run_it() -> N
             "exclude diagnoses: condition-b"
         ], cohort
 
+    explicitly_disabled = {
+        "preset": "adult_first",
+        "icd_enabled": False,
+        "include_diagnoses": ["stale-condition-a"],
+        "exclude_diagnoses": ["stale-condition-b"],
+    }
+    assert _inclusion_criteria({"cohort": explicitly_disabled}) == []
+    assert _exclusion_criteria({"cohort": explicitly_disabled}) == []
+    assert primary_cohort.normalize_execution_cohort(explicitly_disabled)[
+        "icd_include"
+    ] == []
+
     # the dedicated ICD fields reach their own side too; before this repair the
     # web caller read only the *_diagnoses aliases and dropped these entirely
     icd = _study(preset="icd", icd_include="A41", icd_exclude="T20-T32")
