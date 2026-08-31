@@ -4069,7 +4069,7 @@ def test_extraction_reuses_project_bound_registered_export_even_when_not_global_
         },
     )
     monkeypatch.setattr(
-        tool_module,
+        tool_module.extraction_handoff,
         "compile_registered_export_handoff",
         lambda _study, _source: SimpleNamespace(
             reusable=True,
@@ -4138,7 +4138,7 @@ def test_extraction_rebuilds_registered_export_when_requested_contract_differs(
         "observation_window_hours": 24,
     }
     monkeypatch.setattr(
-        tool_module,
+        tool_module.extraction_handoff,
         "compile_registered_export_handoff",
         lambda _study, _source: SimpleNamespace(
             reusable=False,

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Optional
 
 from easyicu.webserver import dataio
 
@@ -46,6 +46,16 @@ class ExtractionHandoff:
             "reusable": self.reusable,
             "mismatch_codes": list(self.mismatch_codes),
         }
+
+
+@dataclass(frozen=True)
+class ExtractionTransaction:
+    """Path-private outcome of one bound Data Extraction transaction."""
+
+    reused: bool
+    source_id: str
+    handoff_receipt: Optional[Mapping[str, Any]]
+    submitted: Optional[Mapping[str, Any]]
 
 
 def compile_study_cohort(study: Mapping[str, Any]) -> dict[str, Any]:
@@ -128,8 +138,85 @@ def compile_registered_export_handoff(
     )
 
 
+def submit_study_extraction(
+    *,
+    study: Mapping[str, Any],
+    registered_source: Optional[Mapping[str, Any]],
+    submit: Callable[[dict[str, Any]], Mapping[str, Any]],
+) -> ExtractionTransaction:
+    """Reuse or submit the exact extraction contract bound to ``study``.
+
+    The caller adapts transport errors and projects the path-free result.  This
+    owner keeps raw paths, registered-export migration, and the submitted job
+    body inside one transaction so adapters cannot rebuild the contract.
+    """
+
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    source_path = str(source.get("path") or "").strip()
+    database = str(source.get("database") or "").strip()
+    modules = [
+        str(item) for item in (study.get("modules") or []) if str(item).strip()
+    ]
+    export_format = str(study.get("export_format") or "parquet").strip().lower()
+    handoff_receipt: Optional[Mapping[str, Any]] = None
+    registered_export_path: Optional[str] = None
+
+    if registered_source is not None:
+        handoff = compile_registered_export_handoff(study, registered_source)
+        handoff_receipt = handoff.public_receipt()
+        if handoff.reusable:
+            return ExtractionTransaction(
+                reused=True,
+                source_id=str(registered_source.get("id") or "")[:80],
+                handoff_receipt=handoff_receipt,
+                submitted=None,
+            )
+        registered_export_path = source_path
+        source_path = handoff.source_data_path
+        database = handoff.database
+        modules = list(handoff.modules)
+        export_format = handoff.export_format
+        cohort = dict(handoff.cohort)
+    else:
+        cohort = dict(study.get("cohort") or {})
+        window = study.get("time_window")
+        window = window if isinstance(window, Mapping) else {}
+        if "observation_window_hours" not in cohort:
+            hours = window.get("observation_hours")
+            if hours is None:
+                hours = window.get("hours")
+            if hours is not None:
+                cohort["observation_window_hours"] = hours
+
+    submitted = submit(
+        {
+            "path": source_path,
+            "registered_export_path": registered_export_path,
+            "database": database,
+            "modules": modules,
+            "format": export_format,
+            "merge": True,
+            "cohort": cohort,
+            "max_patients": cohort.get("max_patients"),
+            "include_feature_definitions": True,
+            "label": study.get("title"),
+            "study_context_id": study["id"],
+            "study_context_revision": int(study.get("revision") or 0),
+        }
+    )
+    return ExtractionTransaction(
+        reused=False,
+        source_id="",
+        handoff_receipt=handoff_receipt,
+        submitted=dict(submitted),
+    )
+
+
 __all__ = [
     "ExtractionHandoff",
+    "ExtractionTransaction",
     "compile_registered_export_handoff",
     "compile_study_cohort",
+    "submit_study_extraction",
 ]

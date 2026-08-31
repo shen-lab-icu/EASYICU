@@ -50,9 +50,7 @@ from .contracts import (
     plan_approval_allowed,
 )
 from . import cohort_eligibility
-from .extraction_handoff import (
-    compile_registered_export_handoff,
-)
+from . import extraction_handoff
 from .literature_tool_projection import compile_literature_tool_projection
 from .projections import (
     bounded_json_projection,
@@ -3557,51 +3555,14 @@ def _start_extraction(
             owner="easyicu.webserver.routes.jobs",
             details={"supported_formats": ["csv", "parquet"]},
         )
-    handoff_receipt: Optional[Dict[str, Any]] = None
-    registered_export_path: Optional[str] = None
     try:
-        if registered_source is not None:
-            handoff = compile_registered_export_handoff(study, registered_source)
-            handoff_receipt = handoff.public_receipt()
-            if handoff.reusable:
-                return _result(
-                    context,
-                    status="ok",
-                    code="easyicu_registered_export_reused",
-                    summary=(
-                        "The bound registered export exactly matches the requested "
-                        "cohort, window, format, and module contract; no duplicate "
-                        "extraction was started."
-                    ),
-                    owner="easyicu.webserver.pi_copilot.extraction_handoff",
-                    details={
-                        "active_export": {
-                            "present": True,
-                            "path_digest": path_digest(source_path),
-                            "source_id": str(registered_source.get("id") or "")[:80],
-                        },
-                        "extraction_contract": handoff_receipt,
-                        "resource": extraction_workspace_resource(
-                            study, state="review"
-                        ),
-                    },
-                )
-            registered_export_path = source_path
-            source_path = handoff.source_data_path
-            database = handoff.database
-            modules = list(handoff.modules)
-            export_format = handoff.export_format
-            cohort = dict(handoff.cohort)
-        else:
-            cohort = dict(study.get("cohort") or {})
-            window = study.get("time_window")
-            window = window if isinstance(window, Mapping) else {}
-            if "observation_window_hours" not in cohort:
-                hours = window.get("observation_hours")
-                if hours is None:
-                    hours = window.get("hours")
-                if hours is not None:
-                    cohort["observation_window_hours"] = hours
+        from easyicu.webserver.routes.jobs import jobs_extract
+
+        transaction = extraction_handoff.submit_study_extraction(
+            study=study,
+            registered_source=registered_source,
+            submit=jobs_extract,
+        )
     except dataio.ExportCohortError as exc:
         return _result(
             context,
@@ -3613,25 +3574,6 @@ def _start_extraction(
             ),
             owner="easyicu.webserver.pi_copilot.extraction_handoff",
             details={"reason_code": exc.error},
-        )
-    from easyicu.webserver.routes.jobs import jobs_extract
-
-    try:
-        submitted = jobs_extract(
-            {
-                "path": source_path,
-                "registered_export_path": registered_export_path,
-                "database": database,
-                "modules": modules,
-                "format": export_format,
-                "merge": True,
-                "cohort": cohort,
-                "max_patients": cohort.get("max_patients"),
-                "include_feature_definitions": True,
-                "label": study.get("title"),
-                "study_context_id": study["id"],
-                "study_context_revision": int(study.get("revision") or 0),
-            }
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -3647,6 +3589,28 @@ def _start_extraction(
                 if detail.get(key) is not None
             },
         )
+    if transaction.reused:
+        return _result(
+            context,
+            status="ok",
+            code="easyicu_registered_export_reused",
+            summary=(
+                "The bound registered export exactly matches the requested "
+                "cohort, window, format, and module contract; no duplicate "
+                "extraction was started."
+            ),
+            owner="easyicu.webserver.pi_copilot.extraction_handoff",
+            details={
+                "active_export": {
+                    "present": True,
+                    "path_digest": path_digest(source_path),
+                    "source_id": transaction.source_id,
+                },
+                "extraction_contract": transaction.handoff_receipt,
+                "resource": extraction_workspace_resource(study, state="review"),
+            },
+        )
+    submitted = dict(transaction.submitted or {})
     result = _result(
         context,
         status="ok",
@@ -3666,8 +3630,8 @@ def _start_extraction(
         }
         | {
             **(
-                {"extraction_contract": handoff_receipt}
-                if handoff_receipt is not None
+                {"extraction_contract": transaction.handoff_receipt}
+                if transaction.handoff_receipt is not None
                 else {}
             ),
             "resource": extraction_workspace_resource(
