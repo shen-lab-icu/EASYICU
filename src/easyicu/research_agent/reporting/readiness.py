@@ -105,7 +105,7 @@ from ..planning.study_design import study_design_family_for_analysis_type
 from ..research_context.cohort_granularity import format_patient_count
 from ..robustness.panel import load_robustness_panel, unexecuted_locked_spec_ids
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
-from ..plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
+from ..planning.figure_step_contract import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
 from .reviewer import run_reviewer_round
 from .result_integrity import (

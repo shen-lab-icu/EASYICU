@@ -171,18 +171,15 @@ from ..repairs.reasons import (
     repair_prompt_binding_sha256,
     typed_repair_ticket,
 )
-from ..plan_utils import (
-    _clustering_contract_applies,
-    _cohort_definition_prose,
-    _cohort_definition_contract_findings,
-    _cohort_definition_is_empty,
-    _plan_expects_analysis_cohort,
-    _normalised_expected_output_names,
-    _normalised_structured_output_names,
-    _output_declares_figure,
-    _parent_step_id_for_figure_step,
-    _step_expects_figure,
+from ..contracts.product_identity import normalised_expected_output_names as _normalised_expected_output_names
+from ..contracts.product_identity import normalised_structured_output_names as _normalised_structured_output_names
+from ..contracts.step_families import _clustering_contract_applies, _cohort_definition_contract_findings, _step_expects_figure
+from ..planning.cohort_contract import (
+    cohort_definition_is_empty as _cohort_definition_is_empty,
+    cohort_definition_prose as _cohort_definition_prose,
+    plan_expects_analysis_cohort as _plan_expects_analysis_cohort,
 )
+from ..planning.figure_step_contract import _output_declares_figure, _parent_step_id_for_figure_step
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from ..contracts.robustness_execution import (
     ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,

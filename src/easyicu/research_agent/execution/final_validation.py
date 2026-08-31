@@ -55,7 +55,7 @@ from ..contracts.survival import SURVIVAL_PRIMARY_OWNER
 from ..contracts.survival_execution import SURVIVAL_PRIMARY_ANALYSIS_KIND
 from ..gates.contract import _step_deterministic_contract_findings
 from ..gates.plausibility_receipt import plausibility_audit_receipt_findings
-from ..plan_utils import effect_output_authorized
+from ..contracts.step_families import effect_output_authorized
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .cohort_routing import (
     bound_step_execution_cohort_path as _bound_step_execution_cohort_path,

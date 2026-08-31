@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from ..research_context.typed import parse_research_context
-from ..plan_utils import (
+from ..gates.step_result_evidence import (
     _finite_float,
     _primary_effect_from_summary,
 )

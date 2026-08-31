@@ -6,10 +6,8 @@ from typing import Sequence
 
 from ..contracts.primary_cohort import primary_analysis_cohort_plan_findings
 from ..contracts.runtime import ValidationFinding
-from ..plan_utils import (
-    endpoint_contract_findings,
-    _typed_plan_dag_findings,
-)
+from .endpoint_contract import endpoint_contract_findings
+from .plan_graph import _typed_plan_dag_findings
 from .final_plan_shape import PlanShapeValidationError, validate_final_plan_shape
 from .adjustment_authority import (
     AdjustmentAuthorityError,

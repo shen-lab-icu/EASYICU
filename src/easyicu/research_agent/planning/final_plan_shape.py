@@ -12,16 +12,22 @@ import re
 from typing import Sequence
 
 from ..contracts.declared_product import typed_product
-from ..plan_utils import (
-    _cap_plan_preserving_figure_steps,
+from ..contracts.step_families import (
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
-    _cohort_definition_is_empty,
-    _ensure_publication_figure_step_in_plan,
-    _enforce_advanced_plan_contract,
-    _plan_expects_analysis_cohort,
     _prediction_contract_applies,
+)
+from .advanced_plan_contract import _enforce_advanced_plan_contract
+from .cohort_contract import (
+    cohort_definition_is_empty as _cohort_definition_is_empty,
+    plan_expects_analysis_cohort as _plan_expects_analysis_cohort,
+)
+from .figure_plan_mutation import (
+    _ensure_publication_figure_step_in_plan,
     _split_table_and_figure_outputs_in_plan,
+)
+from .plan_graph import (
+    _cap_plan_preserving_figure_steps,
     _typed_plan_dag_findings,
 )
 from .endpoint_contract import endpoint_contract_findings

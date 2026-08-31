@@ -10,10 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from ..plan_utils import (
-    _cap_plan_preserving_figure_steps,
-    _preserve_figure_steps_after_replan,
-)
+from ..planning.figure_step_contract import _preserve_figure_steps_after_replan
+from ..planning.plan_graph import _cap_plan_preserving_figure_steps
 from ..planning import figure_plan_shaping as _figure_plan
 from ..robustness.panel import (
     RobustnessSpec,
