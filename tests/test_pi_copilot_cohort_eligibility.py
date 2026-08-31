@@ -141,6 +141,7 @@ def test_a_receipted_decision_is_not_asked_again(option_id: str) -> None:
 @pytest.mark.parametrize(
     ("option_id", "repeated_admission_policy"),
     (
+        ("first_admission_only", "first_icu_admission_only"),
         ("adults_first_admission", "first_icu_admission_only"),
         ("adults_all_admissions", "all_icu_admissions"),
         ("adults_first_admission_min_stay", "first_icu_admission_only"),
@@ -183,6 +184,19 @@ def test_an_adult_option_states_its_age_floor_instead_of_trusting_the_preset() -
     assert without_floor["age_min"] == 0
     with_floor = dataio._normalize_export_cohort(by_id["adults_all_admissions"]["cohort"])  # noqa: SLF001
     assert with_floor["age_min"] == 18
+
+
+def test_first_admission_only_does_not_invent_an_adult_age_floor() -> None:
+    patch = cohort_eligibility.selection_cohort_for_option(
+        {"cohort": {}}, "first_admission_only"
+    )
+    scope = study_contexts.normalize_primary_cohort_scope({"cohort": patch})
+
+    assert scope.admission_eligibility["minimum_age_years"] == 0
+    assert (
+        scope.admission_eligibility["repeated_admission_policy"]
+        == "first_icu_admission_only"
+    )
 
 
 def test_plan_first_projection_does_not_offer_cohort_presets() -> None:

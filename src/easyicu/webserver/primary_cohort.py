@@ -159,13 +159,14 @@ def normalize_execution_cohort(cohort: Any) -> Dict[str, Any]:
     )
     try:
         # A structured include/exclude criterion is itself an executable
-        # diagnosis predicate.  Requiring a second alias-specific boolean
-        # would let StudyContext and Data Extraction disagree about the same
-        # cohort definition.
+        # diagnosis predicate when the enable flag is absent.  An explicit
+        # false value is authoritative, however: persisted StudyContexts can
+        # retain stale text after a researcher turns the ICD filter off, and
+        # re-enabling that text would execute a cohort they did not confirm.
         icd_enabled = (
             parse_bool(raw.get("icd_enabled"), default=False)
-            or preset == "icd"
-            or bool(include or exclude)
+            if "icd_enabled" in raw
+            else preset == "icd" or bool(include or exclude)
         )
         exclude_readmissions = parse_bool(
             raw.get("exclude_readmissions"),

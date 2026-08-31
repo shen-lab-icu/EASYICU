@@ -135,6 +135,17 @@ def _option(
 
 ELIGIBILITY_OPTIONS: Tuple[Dict[str, Any], ...] = (
     _option(
+        option_id="first_admission_only",
+        label_en="First ICU admission only",
+        label_zh="仅首次 ICU 入住",
+        detail_en=(
+            "Keep the current population definition without adding an age or "
+            "duration restriction, and retain only the first ICU admission."
+        ),
+        detail_zh="保留当前人群定义，不另加年龄或停留时长限制，并仅保留首次 ICU 入住。",
+        cohort={"exclude_readmissions": True},
+    ),
+    _option(
         option_id="adults_first_admission",
         label_en="Adults, first ICU admission only",
         label_zh="成人 · 仅首次 ICU 入住",
@@ -229,6 +240,7 @@ def _admission_option_id(scope: primary_cohort.NormalizedPrimaryCohortScope) -> 
         str(admission.get("repeated_admission_policy") or ""),
     )
     matches = {
+        (0, 100, 0, "first_icu_admission_only"): "first_admission_only",
         (18, 100, 0, "first_icu_admission_only"): "adults_first_admission",
         (18, 100, 0, "all_icu_admissions"): "adults_all_admissions",
         (18, 100, 24, "first_icu_admission_only"): (
