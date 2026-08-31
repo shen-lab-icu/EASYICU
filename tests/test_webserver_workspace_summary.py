@@ -20,11 +20,8 @@ from easyicu.webserver import agent_runs
 from easyicu.webserver import cohort_review
 from easyicu.webserver import copilot_sessions
 from easyicu.webserver import numeric_evidence_audit
-from easyicu.webserver.agent_runs import (
-    _ledger_payload,
-    _privacy_safe_artifacts,
-    _scan_artifact_payloads,
-)
+from easyicu.webserver import run_artifact_disclosure
+from easyicu.webserver.agent_runs import _ledger_payload
 from easyicu.webserver import dataio
 from easyicu.webserver import crossdb_review
 from easyicu.webserver import catalog as catalog_module
@@ -64,7 +61,7 @@ def test_patient_review_numeric_charttime_keeps_icu_hour_semantics() -> None:
 
 
 def test_project_artifact_governance_owns_analysis_only_projection() -> None:
-    governance = agent_runs.project_artifact_governance(
+    governance = run_artifact_disclosure.project_artifact_governance(
         {
             "ok": True,
             "gate": {"status": "analysis_only"},
@@ -89,7 +86,7 @@ def test_project_artifact_governance_owns_analysis_only_projection() -> None:
 
 
 def test_project_artifact_governance_fails_closed_without_readiness() -> None:
-    assert agent_runs.project_artifact_governance(
+    assert run_artifact_disclosure.project_artifact_governance(
         {"ok": True, "gate": {"status": "analysis_only"}}
     ) == {
         "ok": False,
@@ -108,7 +105,7 @@ def test_agent_run_signoff_is_stale_when_a_new_artifact_appears() -> None:
         {"name": "figure_gallery.json", "sha256": "b" * 64, "bytes": 20},
     ]
 
-    integrity = agent_runs._signoff_integrity(signed, current)
+    integrity = run_artifact_disclosure.signoff_integrity(signed, current)
 
     assert integrity["signoff_stale"] is True
     assert integrity["status"] == "stale"
@@ -150,7 +147,7 @@ def test_project_artifact_governance_checks_the_selected_signed_artifact() -> No
         },
     }
 
-    governance = agent_runs.project_artifact_governance(
+    governance = run_artifact_disclosure.project_artifact_governance(
         review,
         artifact={"name": "quality_gate.json", "sha256": "b" * 64, "bytes": 10},
     )
@@ -6409,7 +6406,9 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
         assert len(item["sha256"]) == 64
         assert item["bytes"] > 0
     assert (
-        _scan_artifact_payloads({"human_signoff.json": signoff_payload})["passed"]
+        run_artifact_disclosure.scan_artifact_payloads(
+            {"human_signoff.json": signoff_payload}
+        )["passed"]
         is True
     )
     text = signoff_path.read_text(encoding="utf-8")
@@ -6640,7 +6639,7 @@ def test_agent_run_signoff_requires_all_confirmations(
 
 
 def test_agent_artifact_privacy_scan_flags_row_level_payloads() -> None:
-    scan = _scan_artifact_payloads(
+    scan = run_artifact_disclosure.scan_artifact_payloads(
         {
             "run_context.json": {
                 "summary": {"stays": 3},
@@ -6677,9 +6676,11 @@ def test_agent_privacy_failure_withholds_offending_payload_and_ledger_is_honest(
             },
         },
     }
-    scan = _scan_artifact_payloads(artifacts)
+    scan = run_artifact_disclosure.scan_artifact_payloads(artifacts)
 
-    safe, bounded_scan = _privacy_safe_artifacts(artifacts, scan)
+    safe, bounded_scan = run_artifact_disclosure.safe_artifacts_after_privacy_scan(
+        artifacts, scan
+    )
     gate = safe["quality_gate.json"]["gate"]
     ledger = _ledger_payload(
         "run_privacy",
@@ -6703,7 +6704,7 @@ def test_agent_privacy_failure_withholds_offending_payload_and_ledger_is_honest(
         "run_context.json",
     ]
     final_bundle = {**safe, "evidence_ledger.json": ledger}
-    assert _scan_artifact_payloads(final_bundle)["passed"] is True
+    assert run_artifact_disclosure.scan_artifact_payloads(final_bundle)["passed"] is True
     assert str(patient_identifier) not in json.dumps(final_bundle)
 
 
