@@ -247,6 +247,25 @@ _PI_PROVIDER_ENVIRONMENT = {
 }
 
 
+def _assume_execution_runtime_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An executing launch now probes the container runtime before it starts.
+
+    That gate has its own contract tests in
+    ``test_web_execution_runtime_preflight.py``; the launches here are about
+    scope and resume authority and must not depend on the host's daemon.
+    """
+
+    from easyicu.research_agent.execution import runner as runner_module
+
+    monkeypatch.setattr(
+        runner_module,
+        "probe_runner_availability",
+        lambda kind, **_kwargs: runner_module.RunnerAvailability(
+            kind=kind, available=True, image="easyicu-research-agent:test"
+        ),
+    )
+
+
 def test_web_cancellation_is_a_typed_progress_control_signal() -> None:
     from easyicu.research_agent.orchestration.progress import ProgressControlSignal
 
@@ -1146,10 +1165,12 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
 
 def test_full_reviewed_launch_uses_a_neutral_scope_until_plan_review(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A prepared package can reach Planner before the user designs its plan."""
 
     export = _write_pipeline_export(tmp_path / "export")
+    _assume_execution_runtime_ready(monkeypatch)
 
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export),
@@ -5331,6 +5352,7 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _assume_execution_runtime_ready(monkeypatch)
     universe = tmp_path / "universe.parquet"
     universe.write_bytes(b"typed-universe-placeholder")
     acquisition = _acquisition_receipt()
@@ -5801,6 +5823,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
 ) -> None:
     if runner_image_environment is not None:
         monkeypatch.setenv("EASYICU_RUNNER_IMAGE", runner_image_environment)
+    _assume_execution_runtime_ready(monkeypatch)
     actual_run = tmp_path / "actual-pipeline-run"
     _write_real_pipeline_fixture(
         actual_run,
@@ -6092,6 +6115,7 @@ def test_web_runner_allows_server_owned_resume_for_full_reviewed_development(
         "load_progressive_planner_checkpoint_chain",
         lambda **_kwargs: [object()],
     )
+    _assume_execution_runtime_ready(monkeypatch)
 
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export_path),
@@ -6392,6 +6416,7 @@ def test_web_runner_enables_live_pubmed_only_with_host_authorization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _assume_execution_runtime_ready(monkeypatch)
     universe = tmp_path / "universe.parquet"
     universe.write_bytes(b"typed-universe-placeholder")
     acquisition = _acquisition_receipt()
@@ -6468,6 +6493,7 @@ def test_web_runner_reuses_digest_bound_web_literature_without_second_search(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _assume_execution_runtime_ready(monkeypatch)
     universe = tmp_path / "universe.parquet"
     universe.write_bytes(b"typed-universe-placeholder")
     acquisition = _acquisition_receipt()
@@ -7118,6 +7144,7 @@ def test_research_pipeline_runner_uses_in_memory_provider_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _assume_execution_runtime_ready(monkeypatch)
     actual_run = tmp_path / "actual-provider-run"
     _write_real_pipeline_fixture(
         actual_run,
@@ -7236,6 +7263,7 @@ def test_pipeline_revalidates_package_before_provider_or_acquisition(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _assume_execution_runtime_ready(monkeypatch)
     export = _write_pipeline_export(tmp_path / "export")
     study = {
         **_complete_study(),

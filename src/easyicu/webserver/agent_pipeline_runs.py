@@ -175,6 +175,7 @@ _UNSAFE_PROJECTION_PATTERNS = (
 _SAFE_PIPELINE_EXCEPTION_TYPES = frozenset(
     {
         "CodexAppServerError",
+        "ExecutionRuntimeUnavailableError",
         "PlannerEfficiencyBudgetExhausted",
         "ProgressivePlanCompileError",
         "ResearchPipelineRunError",
@@ -993,6 +994,11 @@ def _pipeline_failure_code(exc: BaseException) -> str:
         return "research_pipeline_progressive_compile_failed"
     if typed_failure.get("owner") == "easyicu.schema_validation_v1":
         return "research_pipeline_schema_validation_failed"
+    if typed_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
+        # The same code the launch preflight uses, so a runtime that went down
+        # mid-run is attributed to the host environment rather than reported as
+        # a generic execution failure of the science.
+        return "research_pipeline_execution_runtime_unavailable"
     return "research_pipeline_execution_failed"
 
 
@@ -1039,6 +1045,19 @@ _SAFE_CODEX_APP_SERVER_REASONS = frozenset(
         "codex_auth_app_server_timeout",
         "codex_auth_notification_hard_timeout",
         "codex_auth_notification_timeout",
+    }
+)
+# Mirrors the execution-runtime owner's published contract; the pairing is
+# locked by test_web_execution_runtime_preflight.py so a new reason code cannot
+# silently reach this boundary unprojected.
+_EXECUTION_RUNTIME_DIAGNOSTIC_OWNER = "easyicu.execution.runtime_v1"
+_SAFE_RUNNER_UNAVAILABLE_REASONS = frozenset(
+    {
+        "docker_daemon_unreachable",
+        "docker_executable_missing",
+        "docker_image_missing",
+        "docker_probe_failed",
+        "host_sandbox_missing",
     }
 )
 
@@ -1173,6 +1192,23 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
                     "owner": owner,
                     "reason_code": reason_code,
                 }
+        if owner == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
+            reason_code = raw.get("reason_code")
+            runner_kind = raw.get("runner_kind")
+            # The backend's own wording names a host socket path, so only the
+            # closed reason code and backend name cross this boundary. The
+            # image reference is already carried by the run's config receipt.
+            if (
+                reason_code not in _SAFE_RUNNER_UNAVAILABLE_REASONS
+                or not isinstance(runner_kind, str)
+                or re.fullmatch(r"[a-z][a-z0-9_]{0,31}", runner_kind) is None
+            ):
+                continue
+            return {
+                "owner": owner,
+                "reason_code": reason_code,
+                "runner_kind": runner_kind,
+            }
     return {}
 
 
@@ -4720,6 +4756,82 @@ def _resolve_execution_resume_wrapper(
     )
 
 
+def _submission_profile_ref(*, budget_mode: str, live_pubmed: bool) -> str:
+    """Resolve the one submission profile a budget mode selects.
+
+    The launch-time runtime preflight and the run itself have to agree on which
+    profile will be used. Compiling that mapping twice is how a preflight ends
+    up guarding a profile the run never selects, so both read it from here.
+    """
+
+    from easyicu.research_agent.orchestration.profiles import (
+        CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
+        CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF,
+        CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
+        CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
+    )
+
+    if str(budget_mode or "").strip().lower() == "full_reviewed":
+        return (
+            CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF
+            if live_pubmed
+            else CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF
+        )
+    return (
+        CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF
+        if live_pubmed
+        else CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF
+    )
+
+
+def _require_execution_runtime(*, budget_mode: str, runner_image: str) -> None:
+    """Refuse a launch whose execution backend is already known to be down.
+
+    Whether the mandated container runtime can run is a static fact a bounded
+    probe settles in seconds. Left unasked at launch, it is discovered only
+    inside the pipeline -- after the provider is authorized, the data
+    foundation is built and the cohort is materialized -- so a stopped daemon
+    costs a minute and a half of real provider spend before saying so.
+    """
+
+    from easyicu.research_agent.execution import runner as runner_module
+    from easyicu.research_agent.orchestration.profiles import get_submission_profile
+
+    required: set[str] = set()
+    for live_pubmed in (False, True):
+        # Which of the two variants a run picks depends on a literature
+        # binding resolved inside the run, so guard both.
+        profile = get_submission_profile(
+            _submission_profile_ref(budget_mode=budget_mode, live_pubmed=live_pubmed)
+        )
+        # A planner-only profile never launches generated code, and its runs
+        # must stay startable on a host with no container runtime at all.
+        if profile.planner_only:
+            continue
+        kind = str(profile.requires_runner or "").strip().lower()
+        if kind:
+            required.add(kind)
+    for kind in sorted(required):
+        availability = runner_module.probe_runner_availability(
+            kind,
+            image=(runner_image or runner_module.DockerRunner.DEFAULT_IMAGE),
+        )
+        if availability.available:
+            continue
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_runtime_unavailable",
+            "The governed execution runtime is not ready, so this run would "
+            "fail after the provider and cohort work it is about to spend. "
+            + runner_module.runner_unavailable_remediation(availability.reason_code),
+            details={
+                "owner": "easyicu.research_agent.execution.runner",
+                "reason_code": availability.reason_code,
+                "runner_kind": availability.kind,
+                "runner_image": availability.image,
+            },
+        )
+
+
 def make_research_pipeline_run_runner(
     *,
     export_path: str,
@@ -4954,6 +5066,10 @@ def make_research_pipeline_run_runner(
             "research_pipeline_runner_image_invalid",
             "The server-owned runner image must be one non-empty reference.",
         )
+    _require_execution_runtime(
+        budget_mode=selected_budget_mode,
+        runner_image=selected_runner_image,
+    )
 
     def runner(job: Any) -> Dict[str, Any]:
         if prepared_package_binding is not None:
@@ -5015,10 +5131,6 @@ def make_research_pipeline_run_runner(
             from easyicu.research_agent.execution.runner import DockerRunner
             from easyicu.research_agent.orchestration.config import PipelineConfig
             from easyicu.research_agent.orchestration.profiles import (
-                CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
-                CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF,
-                CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF,
-                CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF,
                 get_submission_profile,
             )
             from easyicu.research_agent.orchestration.services import PipelineServices
@@ -5266,18 +5378,10 @@ def make_research_pipeline_run_runner(
             live_pubmed_requested = (
                 bool(literature_search_authorized) and bound_preplan_literature is None
             )
-            if selected_budget_mode == "full_reviewed":
-                submission_profile_ref = (
-                    CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF
-                    if live_pubmed_requested
-                    else CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF
-                )
-            else:
-                submission_profile_ref = (
-                    CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF
-                    if live_pubmed_requested
-                    else CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF
-                )
+            submission_profile_ref = _submission_profile_ref(
+                budget_mode=selected_budget_mode,
+                live_pubmed=live_pubmed_requested,
+            )
             submission_profile = get_submission_profile(submission_profile_ref)
             profile_options = submission_profile.pipeline_options()
             profile_options.update(
@@ -5650,6 +5754,16 @@ def make_research_pipeline_run_runner(
                     "The deterministic host compiler rejected the bounded Planner "
                     "repairs. A local replay artifact was preserved; no analysis was run."
                 )
+            elif code == "research_pipeline_execution_runtime_unavailable":
+                # A host-environment failure, not a scientific one. Saying so
+                # is the whole point: the generic wording sent the researcher
+                # looking for a problem in their study. Reported through the
+                # raised code and message only -- ``_progress`` raises on a
+                # pending cancellation, which would replace this cause.
+                message = (
+                    "The container runtime that executes analysis code was not "
+                    "available, so no analysis was run. Start it and run again."
+                )
             else:
                 message = (
                     "The Research Agent pipeline stopped before it could produce a "
@@ -5888,9 +6002,28 @@ def resume_research_pipeline(
             )
             remove_review_recovery_record(key)
             _remove_local_recovery(entry.wrapper_dir)
+        # Executing the approved plan is where the container runtime is used
+        # for real, so a host that stopped Docker between planning and approval
+        # fails here. That is a host-environment problem with a known fix, and
+        # naming it beats "could not resume after plan review".
+        runtime_unavailable = (
+            _safe_pipeline_typed_failure(exc).get("owner")
+            == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER
+        )
         raise ResearchPipelineRunError(
-            "research_pipeline_review_resume_failed",
-            "The governed Research Agent run could not resume after plan review.",
+            (
+                "research_pipeline_execution_runtime_unavailable"
+                if runtime_unavailable
+                else "research_pipeline_review_resume_failed"
+            ),
+            (
+                "The container runtime that executes analysis code was not "
+                "available, so the approved plan did not run. Start it and "
+                "resume again."
+                if runtime_unavailable
+                else "The governed Research Agent run could not resume after "
+                "plan review."
+            ),
             details={
                 "failure_type": _pipeline_failure_category(exc),
                 "review_resumable": remains_resumable,

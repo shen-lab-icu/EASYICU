@@ -2354,9 +2354,20 @@ class DockerRunner:
                 errors="replace",
             )
             if inspect_proc.returncode != 0:
-                raise RuntimeError(
-                    "Docker image provenance inspection failed: "
-                    f"{inspect_proc.stderr.strip() or self.image}"
+                # A stopped daemon and an absent image both land here, and the
+                # host that has to act on it needs to know which one. Raise the
+                # typed availability failure rather than a bare RuntimeError
+                # whose only readable detail is the daemon's own socket path.
+                raise ExecutionRuntimeUnavailableError(
+                    RunnerAvailability(
+                        kind="docker",
+                        available=False,
+                        image=self.image,
+                        reason_code=_classify_docker_failure(
+                            str(inspect_proc.stderr or ""),
+                            str(inspect_proc.stdout or ""),
+                        ),
+                    )
                 )
             try:
                 inspected = json.loads(inspect_proc.stdout)
