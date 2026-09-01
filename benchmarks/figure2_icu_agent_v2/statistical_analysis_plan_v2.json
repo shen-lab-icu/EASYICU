@@ -43,7 +43,7 @@
   },
   "analysis_sets": {
     "declared_task_set": "All 27 frozen Heldout27 tasks form the confirmatory set. Every task-arm run remains in the denominator after its first model token unless the complete pair is invalidated by a prespecified pre-token external incident.",
-    "wp1_all_or_none_gate": "Every WP2 and WP3 task-required database-concept cell must pass WP1 before any core A/B Provider call. A failed or unresolved required cell aborts the v2.1 core formal batch. Tasks may not be removed, replaced, or silently reclassified within this protocol. WP5 uses its separately registered two-phase feasibility gate because the selected idea is not known until phase-A ideation ends.",
+    "wp1_all_or_none_gate": "Every Heldout27 patient-level database-concept cell must pass WP1 before any core A/B Provider call. A failed or unresolved Heldout27 cell aborts the v2.1 core formal batch, and tasks may not be removed, replaced, or silently reclassified. Formal Safety12 uses separately sealed neutral fixtures and external-rationale receipts rather than WP1 patient-level cells. WP5 uses its separately registered iterative discovery and phase-B feasibility gate.",
     "protocol_amendment_boundary": "If WP1 makes the 27-task suite infeasible, no v2.1 Provider call is permitted. A new externally timestamped protocol version with a new task set and claim ceiling is required.",
     "no_per_protocol_primary": true,
     "no_artifact_pseudoreplication": "Rubric items, figures, tables, claims, and evidence records are nested observations and are not independent sample-size units."
@@ -128,30 +128,31 @@
     "selection_rationale": "Nine tasks were selected before results to cover basic, intermediate, and advanced difficulty three each; all six databases; and all six analysis families. Selection is coverage-directed rather than outcome-directed.",
     "analysis": "Report task-level pass consistency, within-task score ranges, and ICC where estimable; this stage does not replace the one-shot primary endpoint."
   },
-  "idea_to_evidence3_analysis": {
-    "status": "prespecified_descriptive_multiple_case_demonstration",
+  "idea_to_evidence_showcase_analysis": {
+    "status": "descriptive_iterative_purposively_selected_flagship_showcase",
     "protocol": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_protocol_v1.json",
     "rubric": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json",
-    "population": "all three externally sealed broad clinical briefs, retained regardless of candidate quality, feasibility, execution status, effect direction, or terminal disposition",
-    "case_level_terminal_dispositions": [
+    "population": "one purposively selected flagship human-Agent workflow arising from one authentic broad research direction; no probability sample, representative case frame, or success-rate denominator is defined",
+    "showcase_terminal_dispositions": [
       "landed_reportable",
       "landed_restricted",
       "safe_nonlanding",
       "workflow_failure"
     ],
     "reporting": [
-      "display all three case timelines and dispositions without selecting a showcase subset",
-      "report every candidate idea, independent preresult score, selection reason, and nonselection reason",
-      "report the candidate funnel and mandatory-artifact completeness separately for each case",
-      "report case-level domain pass or fail without averaging away a failed data, evidence, or interpretation gate",
-      "report tokens, cost, wall time, tool calls, failed executions, and human minutes by phase and case",
-      "show one evidence-lineage diagram and the bounded manuscript paragraph for every case that reaches reporting"
+      "identify the main-paper case as a purposively selected success showcase rather than a representative or randomly selected case",
+      "display the complete append-only direction, literature, candidate, reviewer-feedback, feasibility, selection, lock, execution, and reporting timeline",
+      "report every candidate version, revision, rejection reason, feasibility failure, final selection reason, and unresolved reviewer reservation",
+      "report the candidate funnel and mandatory-artifact completeness by iteration round",
+      "report showcase-domain pass or fail without averaging away a failed data, evidence, or interpretation gate",
+      "report tokens, cost, wall time, Provider and retrieval calls, failed executions, iteration rounds, and human minutes by phase",
+      "show one evidence-lineage diagram and the bounded manuscript paragraph if the locked flagship reaches reporting"
     ],
-    "inferential_policy": "No hypothesis test, pooled effect estimate, stable success-rate estimate, or confidence interval is used to generalize from three cases. Raw case observations and complete failure or restriction narratives are primary.",
-    "candidate_pseudoreplication": "Candidate ideas, artifacts, claims, tables, and retrieval records are nested within three cases and are not treated as independent system-performance observations.",
-    "missing_and_failure_policy": "A missing artifact fails the relevant case domain. A safe gate remains safe_nonlanding; an agent-caused or contract failure remains workflow_failure. Neither may be replaced with another brief or selected idea.",
+    "inferential_policy": "No hypothesis test, pooled effect estimate, case-sampling confidence interval, success-rate estimate, or population generalization is permitted. WP5 is a qualitative and quantitative process demonstration, not a performance experiment.",
+    "candidate_pseudoreplication": "Candidate versions, artifacts, claims, tables, and retrieval records are nested within one showcase workflow and are not treated as independent system-performance observations.",
+    "iteration_and_failure_policy": "Preoutcome candidate revision or replacement is allowed within the frozen iterative discovery budget when every version and reason remains in the append-only trace. After the final phase-B lock or first patient-level outcome result, a safe gate, missing artifact, or workflow failure remains the registered terminal disposition and cannot be replaced by another candidate or result.",
     "relationship_to_confirmatory_family": "WP5 contributes no observation, endpoint, p value, multiplicity adjustment, rescue analysis, or interpretive weight to the Heldout27 confirmatory comparison.",
-    "claim_ceiling": "Three prespecified cases can illustrate workflow integrity and evidence landing but cannot establish superior ideation, universal novelty, autonomous discovery, higher productivity, clinical utility, or a population-level landing probability."
+    "claim_ceiling": "One purposively selected success showcase can illustrate iterative human-Agent workflow integrity and evidence landing but cannot establish superior ideation, universal novelty, autonomous discovery, representativeness, higher productivity, clinical utility, or an idea-landing probability."
   },
   "public_taskbank_disclosure": "Heldout27 is publicly available and is process-held-out, not guaranteed model-unseen. Runtime repository access is denied, but pretraining exposure cannot be excluded and could asymmetrically favor the EasyICU arm because only that arm can invoke EasyICU interfaces. Any later private external Blind set is reported as a separately sealed external validation, not merged into the Heldout27 denominator."
 }

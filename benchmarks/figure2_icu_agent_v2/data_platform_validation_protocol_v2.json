@@ -83,7 +83,8 @@
     }
   },
   "all_or_none_formal_input_gate": {
-    "policy": "Every database-concept cell used by any Heldout27 or Formal Safety12 task must pass before the first core WP2 or WP3 Provider call. Qualification12 has a separate post-registration authorization scope and cannot authorize core execution. A failed or unresolved cell aborts the whole core formal protocol.",
+    "policy": "Every patient-level database-concept cell required by Heldout27 must pass before the first core WP2 or WP3 Provider call. Qualification12 has a separate post-registration authorization scope and cannot authorize core execution. A failed or unresolved Heldout27 cell aborts the whole core formal protocol.",
+    "formal_safety12_boundary": "Formal Safety12 consumes sealed neutral evaluator fixtures rather than live patient-level concept extraction and therefore has no WP1 database-concept cells. Its launch authority comes from signed external-rationale and fixture-validation receipts. If a future Safety task consumes patient-level concept data, that task must declare required concepts and pass a versioned WP1 extension before authorization.",
     "no_posthoc_task_selection": "A failed cell may not be handled by deleting, replacing, or relabelling affected tasks after WP1. Remediation requires a new externally timestamped protocol and fresh qualification evidence.",
     "deterministic_zero_tolerance": [
       "requested-patient or requested-stay boundary leakage count equals zero",

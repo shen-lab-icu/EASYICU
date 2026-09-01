@@ -1,0 +1,89 @@
+请对 EasyICU Figure 2 v2.1 review candidate 做一次最终设计终审。此次只审查上一轮之后的三项限定修订及其跨文件一致性，不重新打开已经关闭的问题，除非你发现了具体回归。
+
+审查位置：
+`/Users/haibo/Documents/GitHub/EASYICU-experiment-v2-1-review-20260901`
+
+请先记录当前分支、HEAD、`git status --short` 和最新提交内容。预期工作区应当干净；请以你实际读取到的 HEAD 为准，不要相信提示词中的修改摘要。读取 `/Users/haibo/Documents/GitHub/AGENTS.md`、相关 `CLAUDE.md` 和 `/Users/haibo/Documents/GitHub/项目进度/benchmark实验/CURRENT.md`。
+
+严格边界：只读审查，不要编辑、提交、切换分支、调用 Provider/Planner、打开 Qualification12、加载患者数据或启动任何实验。当前 review candidate 仍不具有 Provider、formal batch 或 paper-result authority。
+
+背景与科学目标：
+
+1. Heldout27 配对 A/B 与 Formal Safety12 仍是正式核心实验，共 78 trajectories；WP5 不进入其分母、效应估计或假设检验。
+2. 作者明确将 WP5 定位为一个真实的人机协作科学创新成功案例，而不是 idea-generation 成功率实验。科学创新允许在文献、方法和数据可行性阶段进行多轮 generate/critique/revise；论文可以有意展示一个成功旗舰案例，但必须披露选择方式、人工贡献和完整迭代轨迹，且不得据此声称代表性、成功率、优效性、完全自主创新或普遍新颖性。
+3. 一旦开始患者级 outcome analysis，最终问题、endpoint、database、estimand、method 和 plan 必须锁定；看过 outcome 后不能换成更漂亮的 idea 或结果。若要确认 outcome 后产生的新问题，必须另开版本并使用新的验证数据。
+
+必须逐项读取并交叉核对：
+
+1. `benchmarks/figure2_icu_agent_v2/experiment_protocol_v2_1.json`
+2. `benchmarks/figure2_icu_agent_v2/idea_to_evidence_protocol_v1.json`
+3. `benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json`
+4. `benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v2.json`
+5. `benchmarks/figure2_icu_agent_v2/generic_code_agent_spec_v1.json`
+6. `benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v2.json`
+7. `benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json`
+8. `benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json`
+9. `benchmarks/figure2_icu_agent_v2/design_v2_1.py`
+10. `tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py`
+11. `benchmarks/figure2_icu_agent_v2/README.md`
+
+请重点裁决以下三项：
+
+A. Qualification12 reserve-set 消耗是否真正双臂对称
+
+- Qualification12 set 打开以后，A 或 B 任一臂的 harness、prompt、tool contract、release/gates 发生资格相关改变，是否都会消耗当前 set。
+- shared normalizer、evaluator、model route 或数值预算变化是否也会消耗当前 set。
+- 是否只能使用下一套未打开、已预注册的 reserve set；三套耗尽是否要求新设计。
+- `experiment_protocol_v2_1.json`、`generic_code_agent_spec_v1.json`、`formal_launch_contract_v1.json`、`preregistration_plan_v1.json` 和 validator 是否同义，是否仍存在 EasyICU 单边修复特权。
+
+B. WP1 与 Formal Safety12 是否已消除范围矛盾
+
+- WP1 all-or-none gate 是否只覆盖 Heldout27 所需的真实患者级 database-concept cells。
+- Formal Safety12 是否明确只消费封存的中性 evaluator fixtures，并由外部 rationale 与 fixture-validation receipts 授权，而不是虚构不存在的 `required_concepts`。
+- 如果未来 Safety task 真的读取患者级概念，是否要求显式声明 concepts 并通过 versioned WP1 extension。
+- 主协议、SAP、WP1 protocol、formal launch data receipts 和 validator 是否一致；该边界是否遗漏了任何实际会读取患者数据的 Safety12 路径。
+
+C. WP5 成功旗舰案例是否在允许真实迭代的同时保持诚实的声明边界
+
+- 是否已从“三个预设案例的成功率式展示”改为一个 purposively selected flagship showcase；case count 是否为 1，核心 78 runs 是否未改变，core + WP5 workflow count 是否为 79。
+- Phase A 是否允许在冻结预算内进行多轮人机协作：文献映射、候选生成、批评、修改、淘汰和确定性可行性检查。
+- candidate versions、人工反馈、拒绝理由和 feasibility failures 是否 append-only、不可覆盖。
+- 确定性可行性失败是否可以在未看 patient-level outcome 的前提下返回 Phase A 继续迭代。
+- 最终问题、plan、concept map、database 和 input 是否在 patient-level outcome analysis 之前锁定并哈希。
+- Phase B 是否只运行锁定的旗舰方案一次；postoutcome switching、selective retry 和 product repair 是否禁止。
+- 主文是否明确允许展示 landed flagship success case，同时强制披露 purposive selection、人类贡献和完整 discovery trace。
+- SAP 是否明确不做 hypothesis test、成功率、代表性、case-sampling CI 或总体推广；候选和 artifact 是否不构成伪重复。
+- WP5 Phase A/B 授权、first-call lock、derived-artifact boundary、preregistration amendment policy 和 launch receipts 是否互相一致。
+
+请同时检查这些修订没有回归上一轮已关闭事项：
+
+- Heldout27 仍为全部 27 题分母，共同失败仍是 concordant pairs，不删题、不改 estimand。
+- A/B 仍使用相同模型、数据内容、预算和运行环境，且无 B-only model-turn cap。
+- 盲评资源指纹、评审者独立性、WP1 35/50 风险分层审计、外部注册摘要绑定和 Provider 默认拒绝仍然成立。
+- frozen asset 数量与每个 SHA-256 是否匹配；请独立重算，不要只相信 validator。
+
+请运行无 Provider 校验：
+
+```bash
+cd /Users/haibo/Documents/GitHub/EASYICU-experiment-v2-1-review-20260901
+PYTHONPATH=. /Users/haibo/Documents/GitHub/EASYICU/.venv/bin/python -m pytest -q \
+  tests/benchmarks/figure2_icu_agent_v2/test_protocol.py \
+  tests/benchmarks/figure2_icu_agent_v2/test_readiness.py \
+  tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py
+/Users/haibo/Documents/GitHub/EASYICU/.venv/bin/ruff check \
+  benchmarks/figure2_icu_agent_v2/design_v2_1.py \
+  tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py
+PYTHONPATH=. /Users/haibo/Documents/GitHub/EASYICU/.venv/bin/python - <<'PY'
+from benchmarks.figure2_icu_agent_v2.design_v2_1 import validate_review_candidate_bundle
+print(validate_review_candidate_bundle())
+PY
+```
+
+输出格式：
+
+1. 总体结论：`同意冻结设计并进入无 Provider 实现`、`仍需小修`、`仍需大修`三选一。
+2. A/B/C 三项逐项结论：closed / partially closed / open，给出具体文件和行号。
+3. WP5 科学定位裁决：明确回答“选择并展示一个成功旗舰案例”与其当前 claim ceiling 是否匹配；不要仅因它不是随机/全量案例就否决描述性 case study，也不要放过任何暗示成功率、代表性或 outcome 后换题的文字。
+4. 新发现的外部注册前设计 blocker；实现尚未完成和未来 receipt 尚未生成必须分开列出。
+5. 当前是否同意进入 generic harness、neutral normalizer 和真实 Provider-boundary gate 的无 Provider 实现。
+6. 当前是否授权任何 Provider：必须单独回答。
