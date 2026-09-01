@@ -29,7 +29,7 @@ from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
 )
 from easyicu.research_agent.schema import AnalysisManifest
-from tests.figure2_test_support import (
+from tests.support.figure2 import (
     install_ready_input_binding,
     ready_submission_manifest_fields,
     seal_test_run_input_capsule,

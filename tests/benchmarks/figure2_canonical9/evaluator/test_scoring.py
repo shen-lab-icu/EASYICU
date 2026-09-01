@@ -49,7 +49,7 @@ from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
     load_figure2_scoring_inputs,
     seal_figure2_run_task_authority,
 )
-from tests.figure2_test_support import (
+from tests.support.figure2 import (
     install_ready_input_binding,
     ready_submission_manifest_fields,
     seal_test_run_input_capsule,

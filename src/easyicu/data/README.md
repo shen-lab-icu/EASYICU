@@ -93,6 +93,6 @@ The numerous `concept-dict.json.bak_before_*.json` files are
 **intentional checkpoints** capturing the dictionary state before each
 medication-batch ingest (batch2 → batch8, fentanyl/midazolam rate,
 etc.). They are referenced by tests
-(`tests/test_batch{2..8}_medications.py`) and by the data-engineering
+(`tests/core/test_batch{2..8}_medications.py`) and by the data-engineering
 review log. **Do not delete them and do not casually add new ones** —
 project CLAUDE.md spells this rule out.

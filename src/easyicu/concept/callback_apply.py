@@ -37,7 +37,7 @@ underscore prefix can be shed.
 
 Tests
 -----
-See ``tests/test_apply_callback.py`` for the dispatch-surface tripwire
+See ``tests/core/test_apply_callback.py`` for the dispatch-surface tripwire
 that runs every callback string in ``concept-dict.json`` /
 ``sofa2-dict.json`` through this function. Phase 2's safe-extraction
 property relies on that tripwire to detect any branch that goes

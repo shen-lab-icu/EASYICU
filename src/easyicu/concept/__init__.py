@@ -2109,7 +2109,7 @@ class ConceptResolver:
         # 🔧 REFACTOR 2026-06: 跨源池化决策收敛到单一策略函数（pooling.compute_pooling_decision）。
         # 历史上这里有三段内联代码分别计算 _block_duckdb_value_transform /
         # _block_duckdb_same_table / _block_duckdb_multi_numeric，散落难审计、易回归。
-        # 现统一由 pooling 模块计算（语义逐字等价，见 tests/test_ricu_alignment.py），
+        # 现统一由 pooling 模块计算（语义逐字等价，见 tests/core/test_ricu_alignment.py），
         # 目的都是：当一个概念有多个数值源时，禁用 DuckDB 每源预聚合，避免
         # median-of-medians，让 change_interval 做一次性跨源池化（匹配 R ricu）。
         from ..runtime.pooling import compute_pooling_decision

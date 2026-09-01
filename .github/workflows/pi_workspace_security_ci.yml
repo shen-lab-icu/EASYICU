@@ -17,10 +17,10 @@ on:
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
       - "src/easyicu/webserver/static/js/screens-agent-render.js"
       - "src/easyicu/webserver/static/index.html"
-      - "tests/test_pi_copilot_*.py"
-      - "tests/test_web_cohort_exclusion_binding.py"
-      - "tests/test_agent_run_artifact_privacy.py"
-      - "tests/test_web_figure_presentation_overlay.py"
+      - "tests/webserver/copilot/test_pi_copilot_*.py"
+      - "tests/webserver/test_web_cohort_exclusion_binding.py"
+      - "tests/webserver/test_agent_run_artifact_privacy.py"
+      - "tests/webserver/test_web_figure_presentation_overlay.py"
       - "tests/js/*.test.js"
       - "tools/run_js_contracts.py"
       - "tools/qa_pi_workspace_preview_security.py"
@@ -42,10 +42,10 @@ on:
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
       - "src/easyicu/webserver/static/js/screens-agent-render.js"
       - "src/easyicu/webserver/static/index.html"
-      - "tests/test_pi_copilot_*.py"
-      - "tests/test_web_cohort_exclusion_binding.py"
-      - "tests/test_agent_run_artifact_privacy.py"
-      - "tests/test_web_figure_presentation_overlay.py"
+      - "tests/webserver/copilot/test_pi_copilot_*.py"
+      - "tests/webserver/test_web_cohort_exclusion_binding.py"
+      - "tests/webserver/test_agent_run_artifact_privacy.py"
+      - "tests/webserver/test_web_figure_presentation_overlay.py"
       - "tests/js/*.test.js"
       - "tools/run_js_contracts.py"
       - "tools/qa_pi_workspace_preview_security.py"
@@ -82,10 +82,10 @@ jobs:
           # Auto-discover every Pi Copilot owner test so a new contract file
           # cannot exist in the repository while remaining invisible to CI.
           pytest -q -m "" \
-            tests/test_pi_copilot_*.py \
-            tests/test_web_cohort_exclusion_binding.py \
-            tests/test_agent_run_artifact_privacy.py \
-            tests/test_web_figure_presentation_overlay.py
+            tests/webserver/copilot/test_pi_copilot_*.py \
+            tests/webserver/test_web_cohort_exclusion_binding.py \
+            tests/webserver/test_agent_run_artifact_privacy.py \
+            tests/webserver/test_web_figure_presentation_overlay.py
 
       - name: Parse-check Pi sidecar owners
         if: ${{ !cancelled() }}

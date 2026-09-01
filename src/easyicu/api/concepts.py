@@ -894,7 +894,7 @@ def _get_auto_chunk_strategy(
     reproducible at those scales and has been replaced by this measurement.
     Full-database scale (~94k stays) has NOT been measured, so the fixed
     profile stays as cheap insurance rather than being relaxed.
-    See ``tests/test_sofa_partition_invariance.py``.
+    See ``tests/core/test_sofa_partition_invariance.py``.
     """
     if not _is_low_memory_chunk_candidate(
         concepts_list,
