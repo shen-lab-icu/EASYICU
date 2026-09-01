@@ -248,7 +248,7 @@
       "rrt_semantics": "no complete official eICU KDIGO stage implementation was found in the pinned maintainer tree",
       "limitations": [
         "This profile intentionally does not emit an official AKI stage.",
-        "EasyICU canonical KDIGO may consume the normalized official components, but that result remains an EasyICU harmonized phenotype."
+        "The public MIT-LCP reference port may consume the normalized official components, but that result remains a cross-database reference phenotype rather than an eICU-native AKI stage."
       ],
       "sources": [
         {
