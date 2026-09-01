@@ -963,6 +963,10 @@ def test_sidecar_environment_is_allowlisted_and_workspace_is_private(
             "LANG": "en_US.UTF-8",
             "EASYICU_PI_API_KEY": "pi-only-secret",
             "EASYICU_PI_MODEL": "gpt5.6 luna",
+            "EASYICU_PI_MAX_OPEN_SESSIONS": "6",
+            "EASYICU_PI_SESSION_IDLE_SECONDS": "900",
+            "EASYICU_PI_SOFT_RSS_MB": "800",
+            "EASYICU_PI_EMERGENCY_RSS_MB": "1200",
             "OPENAI_API_KEY": "scientific-secret",
             "ANTHROPIC_API_KEY": "scientific-secret",
             "TAVILY_API_KEY": "search-secret",
@@ -986,8 +990,26 @@ def test_sidecar_environment_is_allowlisted_and_workspace_is_private(
         "LANG": "en_US.UTF-8",
         "EASYICU_PI_API_KEY": "pi-only-secret",
         "EASYICU_PI_MODEL": "gpt5.6 luna",
+        "EASYICU_PI_MAX_OPEN_SESSIONS": "6",
+        "EASYICU_PI_SESSION_IDLE_SECONDS": "900",
+        "EASYICU_PI_SOFT_RSS_MB": "800",
+        "EASYICU_PI_EMERGENCY_RSS_MB": "1200",
         "EASYICU_PI_SESSION_DIR": str((tmp_path / "sessions").resolve()),
         "EASYICU_PI_CWD": str((tmp_path / "workspace").resolve()),
+    }
+
+
+def test_memory_diagnostics_do_not_start_a_stopped_sidecar(tmp_path: Path) -> None:
+    gateway = PiGatewayClient(app_dir=APP_DIR, session_dir=tmp_path)
+
+    assert gateway.memory_status() == {
+        "running": False,
+        "pid": None,
+        "rss_mb": 0.0,
+    }
+    assert gateway.maintain_sessions() == {
+        "running": False,
+        "maintained": False,
     }
 
 

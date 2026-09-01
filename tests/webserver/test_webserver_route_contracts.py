@@ -90,6 +90,21 @@ EXPECTED_COPILOT_ROUTES = [
 EXPECTED_PI_COPILOT_ROUTES = [
     ("GET", "/api/copilot/pi/status", "get_pi_copilot_status"),
     (
+        "GET",
+        "/api/copilot/pi/literature/sources/{pmid}",
+        "get_pi_copilot_literature_source",
+    ),
+    (
+        "GET",
+        "/api/copilot/pi/resource-status",
+        "get_pi_copilot_resource_status",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/session-maintenance",
+        "post_pi_copilot_session_maintenance",
+    ),
+    (
         "POST",
         "/api/copilot/pi/provider-config",
         "post_pi_copilot_provider_config",
@@ -216,6 +231,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "POST",
         "/api/copilot/pi/sessions/{session_id}/child-jobs/{job_id}/archive",
         "post_pi_copilot_child_job_archive",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/host-actions",
+        "post_pi_copilot_host_action",
     ),
     (
         "POST",

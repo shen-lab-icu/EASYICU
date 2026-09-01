@@ -114,7 +114,10 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
         iconHtml: () => '',
         resourceButton: resource => `<button class="gpi-resource-link">${{resource.label}}</button>`,
         sessionIsStale: () => false,
-        workflow: () => ({{ next_action_code: 'operator_plan_approval_required' }}),
+        workflow: () => ({{
+          next_action_code: 'operator_plan_approval_required',
+          plan_review_summary: {{ run_id: 'run-test' }},
+        }}),
         session: () => ({{
           archived_child_jobs: [],
           binding: {{ run_id: 'run-test' }},
@@ -217,7 +220,7 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
-        plan_review_summary: {{ authorization_questions: [], remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }} }},
+        plan_review_summary: {{ run_id: 'run-test', authorization_questions: [], remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }} }},
         plan_conversation_preview: {{ items: [{{ key: 'population_and_unit', text: '纳入符合条件的 ICU 住院。' }}] }},
       }};
       const host = {{
@@ -257,6 +260,7 @@ def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> Non
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
         plan_review_summary: {{
+          run_id: 'run-test',
           authorization_questions: [{{ code: 'REPEATED_STAY_IDENTITY_UNAVAILABLE' }}],
           remediation_buckets: {{ agent_plan_revision: [], external_evidence: [], independent_review: [] }},
         }},

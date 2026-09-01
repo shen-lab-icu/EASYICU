@@ -210,6 +210,22 @@ The metadata/JSONL retention ceiling is 100 sessions. When an older record is
 evicted, FastAPI best-effort disposes it and deletes only a `.jsonl` proven to
 be inside the private Pi session root.
 
+Persisted history and live memory have separate lifecycles. Each Node sidecar
+keeps at most eight AgentSessions hot by default, unloads non-streaming sessions
+after 30 minutes of inactivity, and uses least-recently-used disposal before
+new work. Unloading never deletes the JSONL. Active turns are protected, and a
+session is reopened from its validated JSONL when the user returns. FastAPI
+also measures the Web process tree (including sidecars), asks idle sidecars to
+release memory at the soft threshold, and rejects only new sessions/messages
+at the emergency threshold. A Web shutdown explicitly closes every sidecar.
+
+`GET /api/copilot/pi/resource-status` exposes path-free process, hot-session,
+and transcript counts. `POST /api/copilot/pi/session-maintenance` supports an
+audit plus explicitly confirmed quarantine/restore. Quarantine moves only
+unreferenced top-level JSONL files older than seven days into a private,
+manifested batch; it does not permanently delete data and cannot run during an
+opening or active Copilot turn.
+
 “Resume” has two distinct meanings:
 
 - resuming the Pi conversation is supported by the persisted Pi JSONL file;

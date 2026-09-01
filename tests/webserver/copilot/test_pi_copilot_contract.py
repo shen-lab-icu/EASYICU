@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -1598,6 +1599,79 @@ def test_runtime_status_has_local_defaults_without_secret_values(
     assert "test-only-placeholder" not in json.dumps(payload)
 
 
+def test_resource_status_reports_process_sessions_and_path_free_storage(
+    tmp_path: Path,
+) -> None:
+    session_dir = tmp_path / "pi-sessions"
+    session_dir.mkdir()
+    referenced = session_dir / "referenced.jsonl"
+    orphan = session_dir / "orphan.jsonl"
+    referenced.write_text("{}\n", encoding="utf-8")
+    orphan.write_text("{}\n", encoding="utf-8")
+    gateway = FakeGateway(session_dir=session_dir)
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    )
+    service._write_records(
+        [
+            PiSessionRecord(
+                session_id="pi-resource",
+                pi_session_file=str(referenced),
+                pinned_for_presentation=True,
+            )
+        ]
+    )
+
+    payload = service.resource_status()
+
+    assert payload["memory"]["pressure"] in {"normal", "soft"}
+    assert payload["sessions"] == {
+        "retained": 1,
+        "busy": 0,
+        "opening": 0,
+        "pinned": 1,
+    }
+    assert payload["storage"]["unreferenced_files"] == 1
+    assert str(tmp_path) not in json.dumps(payload)
+
+
+def test_service_quarantines_only_idle_unreferenced_transcripts(
+    tmp_path: Path,
+) -> None:
+    session_dir = tmp_path / "pi-sessions"
+    session_dir.mkdir()
+    referenced = session_dir / "referenced.jsonl"
+    orphan = session_dir / "orphan.jsonl"
+    referenced.write_text("{}\n", encoding="utf-8")
+    orphan.write_text("{}\n", encoding="utf-8")
+    os.utime(orphan, (1, 1))
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(session_dir=session_dir),
+    )
+    service._write_records(
+        [
+            PiSessionRecord(
+                session_id="pi-storage",
+                pi_session_file=str(referenced),
+            )
+        ]
+    )
+
+    audited = service.maintain_session_storage(action="audit")
+    moved = service.maintain_session_storage(
+        action="quarantine",
+        confirm=True,
+    )
+
+    assert audited["inventory"]["unreferenced_files"] == 1
+    assert moved["moved_files"] == 1
+    assert referenced.exists()
+    assert not orphan.exists()
+    assert moved["quarantine_id"]
+
+
 def test_development_metadata_alias_migrates_message_job_field() -> None:
     record = PiSessionRecord.model_validate(
         {
@@ -1952,6 +2026,81 @@ def test_session_retention_disposes_and_unlinks_evicted_jsonl(
         method == "session.dispose" and params["session_id"] == "pi-99"
         for method, params, _ in gateway.calls
     )
+
+
+def test_failed_session_index_save_disposes_new_sidecar_session(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeGateway(session_dir=tmp_path / "pi-sessions")
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+    )
+
+    def fail_save(_record: PiSessionRecord) -> PiSessionRecord:
+        raise OSError("index unavailable")
+
+    monkeypatch.setattr(service, "_save_record", fail_save)
+
+    with pytest.raises(OSError, match="index unavailable"):
+        service.create_session(
+            project_id="project-save-failure",
+            external_llm_opt_in=True,
+        )
+
+    created_id = gateway.calls[0][1]["session_id"]
+    assert any(
+        method == "session.dispose" and params["session_id"] == created_id
+        for method, params, _ in gateway.calls
+    )
+    assert service._opening_sessions == 0
+
+
+def test_memory_emergency_rejects_session_before_sidecar_creation(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    class EmergencyAdmission:
+        @staticmethod
+        def status() -> dict[str, object]:
+            return {"pressure": "emergency", "process_tree_rss_mb": 4096.0}
+
+        @staticmethod
+        def require_capacity() -> dict[str, object]:
+            raise PiCopilotError(
+                "pi_web_memory_pressure",
+                "memory pressure",
+                status_code=429,
+            )
+
+    gateway = FakeGateway()
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=gateway,
+        memory_admission=EmergencyAdmission(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(PiCopilotError) as raised:
+        service.create_session(
+            project_id="project-memory-block",
+            external_llm_opt_in=True,
+        )
+
+    assert raised.value.code == "pi_web_memory_pressure"
+    assert not gateway.calls
+
+
+def test_shutdown_detaches_and_closes_pi_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[bool] = []
+    fake = SimpleNamespace(close=lambda: closed.append(True))
+    monkeypatch.setattr(service_module, "_SERVICE", fake)
+
+    service_module.shutdown_pi_copilot_service()
+
+    assert closed == [True]
+    assert service_module._SERVICE is None
 
 
 def test_busy_session_retirement_is_deferred_until_message_finishes(
