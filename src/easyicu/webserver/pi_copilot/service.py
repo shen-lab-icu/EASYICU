@@ -61,6 +61,7 @@ from .project_authority import (
     ProjectStudyContextMigrationReceipt,
 )
 from .provider_config import PiProviderConfigStore
+from .resource_lifecycle import WebMemoryAdmission
 from .projections import (
     project_job,
     project_pi_replay_event,
@@ -68,6 +69,7 @@ from .projections import (
 )
 from .user_visible_text import sanitize_user_visible_text
 from .replay_store import PiConversationReplayStore
+from .session_storage import SessionStorageMaintenance
 from .run_authority import (
     latest_bound_run_id,
     list_bound_run_history,
@@ -166,6 +168,8 @@ class PiCopilotService:
             CopilotDataWorkbenchSnapshotStore
         ] = None,
         codex_gateway_pool: Optional[CodexPiGatewayPool] = None,
+        memory_admission: Optional[WebMemoryAdmission] = None,
+        storage_maintenance: Optional[SessionStorageMaintenance] = None,
     ) -> None:
         self.store_path = (
             Path(store_path)
@@ -180,6 +184,13 @@ class PiCopilotService:
         )
         self.codex_gateway_pool = codex_gateway_pool or CodexPiGatewayPool(
             template_gateway=self.gateway,
+        )
+        session_root = getattr(self.gateway, "session_dir", None)
+        if session_root is None:
+            session_root = self.store_path.parent / "pi-agent" / "sessions"
+        self.memory_admission = memory_admission or WebMemoryAdmission()
+        self.storage_maintenance = storage_maintenance or SessionStorageMaintenance(
+            Path(session_root)
         )
         self.project_store = project_store or ProjectAuthorityStore(
             None
@@ -216,6 +227,7 @@ class PiCopilotService:
         self._active_message_jobs: Dict[str, str] = {}
         self._busy_sessions: set[str] = set()
         self._pending_retirements: Dict[str, PiSessionRecord] = {}
+        self._opening_sessions = 0
         self._replay_child_watchers: set[tuple[str, str]] = set()
         self._project_initialization_locks: Dict[str, threading.RLock] = {}
         # Outstanding browser coordinates are deliberately process-local. A
@@ -231,6 +243,104 @@ class PiCopilotService:
         )
         self.workspace_root = workspace_base.expanduser().absolute()
         self.workspace = ProjectWorkspace(self.workspace_root)
+
+    def _admit_new_work(
+        self,
+        *,
+        gateway: Optional[Any] = None,
+        exclude_session_id: str = "",
+    ) -> Dict[str, Any]:
+        status = self.memory_admission.status()
+        if status.get("pressure") in {"soft", "emergency"}:
+            selected_gateway = gateway or self.gateway
+            if selected_gateway is self.gateway:
+                maintain = getattr(self.gateway, "maintain_sessions", None)
+                if callable(maintain):
+                    maintain(exclude_session_id=exclude_session_id)
+            maintain_pool = getattr(self.codex_gateway_pool, "maintain_sessions", None)
+            if callable(maintain_pool):
+                maintain_pool(exclude_session_id=exclude_session_id)
+        return self.memory_admission.require_capacity()
+
+    def resource_status(self) -> Dict[str, Any]:
+        """Return path-free process, hot-session, and transcript diagnostics."""
+
+        with self._lock:
+            records = self._read_records()
+            opening = self._opening_sessions
+            busy = len(self._busy_sessions)
+        referenced = [
+            row.pi_session_file for row in records if row.pi_session_file
+        ]
+        storage = self.storage_maintenance.inventory(referenced).public_projection()
+        gateway_status = getattr(self.gateway, "memory_status", None)
+        api_gateway = (
+            gateway_status()
+            if callable(gateway_status)
+            else {"running": False, "diagnostics_available": False}
+        )
+        memory_statuses = getattr(self.codex_gateway_pool, "memory_statuses", None)
+        return {
+            "ok": True,
+            "memory": self.memory_admission.status(),
+            "sessions": {
+                "retained": len(records),
+                "busy": busy,
+                "opening": opening,
+                "pinned": sum(row.pinned_for_presentation for row in records),
+            },
+            "gateways": {
+                "api": api_gateway,
+                "codex": memory_statuses() if callable(memory_statuses) else [],
+            },
+            "storage": storage,
+        }
+
+    def maintain_session_storage(
+        self,
+        *,
+        action: str,
+        confirm: bool = False,
+        quarantine_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Audit, quarantine, or restore private transcripts without deletion."""
+
+        clean_action = str(action or "").strip()
+        with self._lock:
+            if self._opening_sessions or self._busy_sessions:
+                raise PiCopilotError(
+                    "pi_session_maintenance_busy",
+                    "Transcript maintenance requires every Copilot turn to be idle.",
+                    status_code=409,
+                )
+            records = self._read_records()
+            referenced = [
+                row.pi_session_file for row in records if row.pi_session_file
+            ]
+            if clean_action == "audit":
+                result: Dict[str, Any] = {
+                    "status": "audited",
+                    "inventory": self.storage_maintenance.inventory(
+                        referenced
+                    ).public_projection(),
+                }
+            elif clean_action == "quarantine":
+                result = self.storage_maintenance.quarantine(
+                    referenced,
+                    confirm=bool(confirm),
+                )
+            elif clean_action == "restore":
+                result = self.storage_maintenance.restore(
+                    str(quarantine_id or ""),
+                    confirm=bool(confirm),
+                )
+            else:
+                raise PiCopilotError(
+                    "pi_session_maintenance_action_invalid",
+                    "Transcript maintenance action must be audit, quarantine, or restore.",
+                    status_code=422,
+                )
+        return {"ok": True, **result}
 
     def _project_initialization_lock(self, project_id: str) -> threading.RLock:
         with self._lock:
@@ -406,13 +516,29 @@ class PiCopilotService:
             if record.session_id in self._busy_sessions:
                 self._pending_retirements[record.session_id] = record
                 return
-        self.replay_store.retire(record.session_id)
         gateway: Any = self.gateway
         try:
             gateway = self._conversation_gateway(record)
+        except (OSError, PiCopilotError):
+            pass
+        self.replay_store.retire(record.session_id)
+        self._dispose_gateway_session(
+            gateway,
+            session_id=record.session_id,
+            session_file=record.pi_session_file,
+        )
+
+    @staticmethod
+    def _dispose_gateway_session(
+        gateway: Any,
+        *,
+        session_id: str,
+        session_file: Optional[str],
+    ) -> None:
+        try:
             gateway.request(
                 "session.dispose",
-                {"session_id": record.session_id},
+                {"session_id": session_id},
                 timeout=5,
             )
         except (OSError, PiCopilotError):
@@ -422,9 +548,9 @@ class PiCopilotService:
             "session_dir",
             None,
         )
-        if session_root is None or not record.pi_session_file:
+        if session_root is None or not session_file:
             return
-        candidate = Path(record.pi_session_file).resolve()
+        candidate = Path(session_file).resolve()
         root = Path(session_root).resolve()
         try:
             candidate.relative_to(root)
@@ -1200,6 +1326,7 @@ class PiCopilotService:
                 "Verify the Pi model service before starting a conversation.",
                 status_code=503,
             )
+        self._admit_new_work(gateway=conversation_gateway)
         context = self._resolve_project_context(
             project_id=clean_project_id,
             title=title,
@@ -1234,36 +1361,56 @@ class PiCopilotService:
                 skills=extension_activation.skills,
                 mcp_servers=(),
             )
-        state = conversation_gateway.request(
-            "session.create",
-            {
-                "session_id": session_id,
-                "thinking_level": resolved_thinking,
-                "agent_mode": resolved_mode,
-                "language": resolved_language,
-                "extension_snapshot": extension_activation.model_dump(mode="json"),
-            },
-            timeout=30,
-        )
-        record = PiSessionRecord(
-            session_id=session_id,
-            project_id=clean_project_id,
-            pi_session_id=str(state.get("pi_session_id") or "") or None,
-            pi_session_file=str(state.get("session_file") or "") or None,
-            title=str(title or "EasyICU Copilot").strip()[:160] or "EasyICU Copilot",
-            agent_mode=resolved_mode,
-            language=resolved_language,
-            thinking_level=resolved_thinking,
-            external_llm_opt_in=True,
-            extension_activation=extension_activation,
-            research_provider=selected_model_connection,
-            binding=binding,
-            data_source_authorization=self._new_session_data_authorization(
-                context,
+        state: Dict[str, Any] = {}
+        record: Optional[PiSessionRecord] = None
+        session_created = False
+        with self._lock:
+            self._opening_sessions += 1
+        try:
+            state = conversation_gateway.request(
+                "session.create",
+                {
+                    "session_id": session_id,
+                    "thinking_level": resolved_thinking,
+                    "agent_mode": resolved_mode,
+                    "language": resolved_language,
+                    "extension_snapshot": extension_activation.model_dump(mode="json"),
+                },
+                timeout=30,
+            )
+            session_created = True
+            record = PiSessionRecord(
+                session_id=session_id,
+                project_id=clean_project_id,
+                pi_session_id=str(state.get("pi_session_id") or "") or None,
+                pi_session_file=str(state.get("session_file") or "") or None,
+                title=str(title or "EasyICU Copilot").strip()[:160]
+                or "EasyICU Copilot",
                 agent_mode=resolved_mode,
-            ),
-        )
-        self._save_record(record)
+                language=resolved_language,
+                thinking_level=resolved_thinking,
+                external_llm_opt_in=True,
+                extension_activation=extension_activation,
+                research_provider=selected_model_connection,
+                binding=binding,
+                data_source_authorization=self._new_session_data_authorization(
+                    context,
+                    agent_mode=resolved_mode,
+                ),
+            )
+            self._save_record(record)
+        except Exception:
+            if session_created:
+                self._dispose_gateway_session(
+                    conversation_gateway,
+                    session_id=session_id,
+                    session_file=str(state.get("session_file") or "") or None,
+                )
+            raise
+        finally:
+            with self._lock:
+                self._opening_sessions = max(0, self._opening_sessions - 1)
+        assert record is not None
         return {
             "ok": True,
             "session": self._public_session(record, gateway_state=state),
@@ -1923,6 +2070,10 @@ class PiCopilotService:
                 "The message requested an unknown host action capability.",
                 details={"actions": unknown_actions},
             )
+        self._admit_new_work(
+            gateway=self._conversation_gateway(record),
+            exclude_session_id=record.session_id,
+        )
         opened_state = self._ensure_open(record)
         if not regenerate_user_entry_id and not message_intent:
             workflow = build_project_workflow_projection(
@@ -3856,17 +4007,25 @@ def get_pi_copilot_service() -> PiCopilotService:
         return _SERVICE
 
 
-def reset_pi_copilot_service_for_tests() -> None:
+def shutdown_pi_copilot_service() -> None:
+    """Close the singleton without creating one during WebApp shutdown."""
+
     global _SERVICE
     with _SERVICE_LOCK:
-        if _SERVICE is not None:
-            _SERVICE.close()
+        service = _SERVICE
         _SERVICE = None
+    if service is not None:
+        service.close()
+
+
+def reset_pi_copilot_service_for_tests() -> None:
+    shutdown_pi_copilot_service()
 
 
 __all__ = [
     "ALLOWED_TURN_ACTIONS",
     "PiCopilotService",
     "get_pi_copilot_service",
+    "shutdown_pi_copilot_service",
     "reset_pi_copilot_service_for_tests",
 ]

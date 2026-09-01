@@ -37,6 +37,16 @@ class FakeService:
     def runtime_status(self) -> dict:
         return {"ok": True, "runtime": {"status": "ready"}}
 
+    def resource_status(self) -> dict:
+        return {
+            "ok": True,
+            "memory": {"pressure": "normal"},
+            "storage": {"unreferenced_files": 2},
+        }
+
+    def maintain_session_storage(self, **kwargs) -> dict:
+        return {"ok": True, "received": kwargs}
+
     def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
         """The API-key branch of session creation compiles a binding first."""
         return ResearchProviderBinding(model="fake-configured-model")
@@ -219,6 +229,31 @@ def test_status_and_create_routes_preserve_strict_boolean_opt_in(monkeypatch) ->
     )
     assert unknown.status_code == 422
     assert created.json()["received"]["project_id"] == "guided-project-1"
+
+
+def test_resource_status_and_storage_maintenance_are_typed(monkeypatch) -> None:
+    fake = FakeService()
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+
+    status = client.get("/api/copilot/pi/resource-status")
+    assert status.status_code == 200
+    assert status.json()["memory"]["pressure"] == "normal"
+
+    audited = client.post(
+        "/api/copilot/pi/session-maintenance",
+        json={"action": "audit"},
+    )
+    assert audited.status_code == 200
+    assert audited.json()["received"] == {
+        "action": "audit",
+        "confirm": False,
+        "quarantine_id": None,
+    }
+    assert client.post(
+        "/api/copilot/pi/session-maintenance",
+        json={"action": "quarantine", "confirm": "true"},
+    ).status_code == 422
 
 
 def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None:

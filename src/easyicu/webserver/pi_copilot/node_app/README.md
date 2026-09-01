@@ -57,6 +57,10 @@ Optional variables:
 - `EASYICU_PI_MAX_COST_USD_PER_MESSAGE`
 - `EASYICU_PI_MAX_COST_USD_PER_SESSION`
 - `EASYICU_PI_SESSION_DIR` (normally supplied by the Python host)
+- `EASYICU_PI_MAX_OPEN_SESSIONS` (default `8` in-memory AgentSessions per sidecar)
+- `EASYICU_PI_SESSION_IDLE_SECONDS` (default `1800`; idle sessions are unloaded, not deleted)
+- `EASYICU_PI_SOFT_RSS_MB` (default 10% of host RAM, bounded to 512–2048 MiB)
+- `EASYICU_PI_EMERGENCY_RSS_MB` (default 15% of host RAM, bounded to 768–3072 MiB)
 
 The four pricing/cost variables are an all-or-none contract. When a provider
 publishes reliable prices, the shell conservatively reserves the maximum input
@@ -84,6 +88,14 @@ private path is the AgentSession's logical workspace; it is not an
 operating-system sandbox for the Node process itself.
 Raw model reasoning is forced off and is not streamed or returned in session
 transcripts.
+
+AgentSessions are a bounded hot cache. Idle and least-recently-used sessions
+are disposed before admitting new work, while active or streaming sessions are
+protected. Disposal releases Node/SDK memory but preserves the private JSONL,
+so reopening the conversation restores its history. At the emergency RSS
+threshold the sidecar rejects new work with `pi_shell_memory_pressure`; the Web
+process has an additional process-tree admission guard configured by
+`EASYICU_WEB_SOFT_RSS_MB` and `EASYICU_WEB_EMERGENCY_RSS_MB`.
 
 See `docs/pi_copilot_integration_architecture.md` for authority, PHI, session,
 failure, and upgrade contracts.

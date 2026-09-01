@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, Mapping, Optional
 
+import psutil
+
 from .contracts import (
     PROTOCOL_VERSION,
     PiCopilotError,
@@ -62,6 +64,10 @@ _CHILD_ENV_KEYS = frozenset(
         "EASYICU_PI_OUTPUT_PRICE_USD_PER_1M_TOKENS",
         "EASYICU_PI_MAX_COST_USD_PER_MESSAGE",
         "EASYICU_PI_MAX_COST_USD_PER_SESSION",
+        "EASYICU_PI_MAX_OPEN_SESSIONS",
+        "EASYICU_PI_SESSION_IDLE_SECONDS",
+        "EASYICU_PI_SOFT_RSS_MB",
+        "EASYICU_PI_EMERGENCY_RSS_MB",
     }
 )
 
@@ -829,6 +835,53 @@ class PiGatewayClient:
             if not row.done.is_set():
                 row.error = error
                 row.done.set()
+
+    def memory_status(self) -> Dict[str, Any]:
+        """Read sidecar RSS and bounded hot-session state without starting it."""
+
+        with self._state_lock:
+            process = self._process
+        if process is None or process.poll() is not None:
+            return {"running": False, "pid": None, "rss_mb": 0.0}
+        pid = int(process.pid)
+        try:
+            rss_mb = round(psutil.Process(pid).memory_info().rss / (1024**2), 1)
+        except (psutil.Error, OSError):
+            rss_mb = 0.0
+        status: Dict[str, Any] = {
+            "running": True,
+            "pid": pid,
+            "rss_mb": rss_mb,
+        }
+        try:
+            runtime = self.request("runtime.memory", {}, timeout=5)
+        except (OSError, PiCopilotError) as exc:
+            status["diagnostic_error"] = getattr(exc, "code", "pi_gateway_io_error")
+        else:
+            status.update(runtime)
+            status["running"] = True
+        return status
+
+    def maintain_sessions(self, *, exclude_session_id: str = "") -> Dict[str, Any]:
+        """Ask an already-running sidecar to unload safe idle sessions."""
+
+        with self._state_lock:
+            process = self._process
+        if process is None or process.poll() is not None:
+            return {"running": False, "maintained": False}
+        try:
+            status = self.request(
+                "runtime.maintain",
+                {"exclude_session_id": str(exclude_session_id or "")},
+                timeout=5,
+            )
+        except (OSError, PiCopilotError) as exc:
+            return {
+                "running": process.poll() is None,
+                "maintained": False,
+                "diagnostic_error": getattr(exc, "code", "pi_gateway_io_error"),
+            }
+        return {"running": True, "maintained": True, **status}
 
     def close(self) -> None:
         with self._state_lock:

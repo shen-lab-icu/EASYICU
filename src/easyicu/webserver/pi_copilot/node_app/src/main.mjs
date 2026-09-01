@@ -34,6 +34,10 @@ import {
   ShellBudgetGuard,
 } from "./shell-budget.mjs";
 import { hostPostToolFinalization } from "./post-tool-finalization.mjs";
+import {
+  HotSessionLifecycle,
+  sessionLifecycleConfig,
+} from "./session-lifecycle.mjs";
 
 const PROTOCOL_VERSION = "easyicu.pi-copilot/1";
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -91,6 +95,11 @@ const ALL_TOOL_NAMES = Object.freeze(TOOL_CATALOG.map((entry) => entry.name));
 
 const sessions = new Map();
 const activeRequestBySession = new Map();
+const sessionLifecycle = new HotSessionLifecycle({
+  sessions,
+  activeRequests: activeRequestBySession,
+  config: sessionLifecycleConfig(),
+});
 const pendingToolResponses = new Map();
 const HOST_LANGUAGE_MARKER = "\n\n[EASYICU_INTERNAL_RESPONSE_LANGUAGE_V1]\n";
 const OWNER_CONTEXT_MARKER = "\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n";
@@ -216,7 +225,10 @@ function createPersistedSessionManager() {
   const sessionFile = join(SESSION_DIR, `${timestamp}_${randomUUID()}.jsonl`);
   writeFileSync(sessionFile, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
-    return SessionManager.open(sessionFile, SESSION_DIR, CWD);
+    return {
+      manager: SessionManager.open(sessionFile, SESSION_DIR, CWD),
+      sessionFile,
+    };
   } catch (error) {
     rmSync(sessionFile, { force: true });
     throw error;
@@ -1132,12 +1144,20 @@ async function createSession(params) {
     if (existing.extensionActivationSha256 !== extensionSnapshot.activation_sha256) {
       throw Object.assign(new Error("Copilot session extension activation cannot change"), { code: "pi_session_extension_scope_mismatch" });
     }
+    sessionLifecycle.touch(externalId);
     return sessionState(existing);
   }
+  sessionLifecycle.admit({ incoming: 1 });
   const { runtime, selected, config } = await getModelRuntime();
-  const manager = params.session_file
-    ? SessionManager.open(safeSessionFile(params.session_file), SESSION_DIR, CWD)
-    : createPersistedSessionManager();
+  let manager;
+  let createdSessionFile = "";
+  if (params.session_file) {
+    manager = SessionManager.open(safeSessionFile(params.session_file), SESSION_DIR, CWD);
+  } else {
+    const persisted = createPersistedSessionManager();
+    manager = persisted.manager;
+    createdSessionFile = persisted.sessionFile;
+  }
   const thinkingLevel = "off";
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: true },
@@ -1145,66 +1165,83 @@ async function createSession(params) {
     // disables them and lets every outbound call cross ShellBudgetGuard once.
     retry: { enabled: false, maxRetries: 0 },
   });
-  const { session } = await createAgentSession({
-    cwd: CWD,
-    agentDir: dirname(SESSION_DIR),
-    model: selected,
-    thinkingLevel,
-    modelRuntime: runtime,
-    resourceLoader: resourceLoader(agentMode, extensionSnapshot, language),
-    sessionManager: manager,
-    settingsManager,
-    noTools: "builtin",
-    tools: agentMode === "workspace" ? ALL_TOOL_NAMES : RESEARCH_TOOL_NAMES,
-    customTools: customTools(externalId, agentMode, extensionSnapshot),
-  });
-  const unsubscribe = session.subscribe((event) => {
-    const requestId = activeRequestBySession.get(externalId);
-    if (!requestId) return;
-    const normalized = normalizePiEvent(event);
-    if (normalized) emit({ kind: "event", request_id: requestId, session_id: externalId, event: normalized });
-  });
-  const record = {
-    externalId,
-    agentMode,
-    language,
-    extensionActivationSha256: extensionSnapshot.activation_sha256,
-    session,
-    sessionManager: manager,
-    unsubscribe,
-    sessionTokenBudget: config.sessionTokenBudget,
-    maxTokens: config.maxTokens,
-  };
-  const originalStreamFunction = session.agent.streamFunction;
-  record.budgetGuard = new ShellBudgetGuard({
-    tokenBudget: config.sessionTokenBudget,
-    maxOutputTokens: config.maxTokens,
-    maxProviderCallsPerMessage: config.maxProviderCallsPerMessage,
-    maxProviderCallsPerSession: config.maxProviderCallsPerSession,
-    consumedTokens: () => session.getSessionStats().tokens.total,
-    initialProviderCalls: session.getSessionStats().assistantMessages,
-    persistedEntries: typeof manager?.getEntries === "function" ? manager.getEntries() : [],
-    pricing: config.pricing,
-  });
-  session.agent.streamFunction = (model, context, options = {}) => lazyStream(
-    model,
-    async () => {
-      const hostFinalization = hostPostToolFinalization(model, context, record.language);
-      if (hostFinalization) return hostFinalization;
-      record.budgetGuard.authorize(context, options);
-      const budgetReceipt = record.budgetGuard.receipt();
-      manager.appendCustomEntry(
-        budgetReceipt.schema_version,
-        budgetReceipt,
-      );
-      return await originalStreamFunction(model, context, {
-        ...options,
-        maxRetries: 0,
-      });
-    },
-  );
-  sessions.set(externalId, record);
-  return sessionState(record);
+  let session;
+  try {
+    ({ session } = await createAgentSession({
+      cwd: CWD,
+      agentDir: dirname(SESSION_DIR),
+      model: selected,
+      thinkingLevel,
+      modelRuntime: runtime,
+      resourceLoader: resourceLoader(agentMode, extensionSnapshot, language),
+      sessionManager: manager,
+      settingsManager,
+      noTools: "builtin",
+      tools: agentMode === "workspace" ? ALL_TOOL_NAMES : RESEARCH_TOOL_NAMES,
+      customTools: customTools(externalId, agentMode, extensionSnapshot),
+    }));
+  } catch (error) {
+    if (createdSessionFile) rmSync(createdSessionFile, { force: true });
+    throw error;
+  }
+  let unsubscribe = null;
+  try {
+    unsubscribe = session.subscribe((event) => {
+      const requestId = activeRequestBySession.get(externalId);
+      if (!requestId) return;
+      const normalized = normalizePiEvent(event);
+      if (normalized) emit({ kind: "event", request_id: requestId, session_id: externalId, event: normalized });
+    });
+    const record = {
+      externalId,
+      agentMode,
+      language,
+      extensionActivationSha256: extensionSnapshot.activation_sha256,
+      session,
+      sessionManager: manager,
+      unsubscribe,
+      sessionTokenBudget: config.sessionTokenBudget,
+      maxTokens: config.maxTokens,
+      lastAccessedAt: Date.now(),
+    };
+    const originalStreamFunction = session.agent.streamFunction;
+    record.budgetGuard = new ShellBudgetGuard({
+      tokenBudget: config.sessionTokenBudget,
+      maxOutputTokens: config.maxTokens,
+      maxProviderCallsPerMessage: config.maxProviderCallsPerMessage,
+      maxProviderCallsPerSession: config.maxProviderCallsPerSession,
+      consumedTokens: () => session.getSessionStats().tokens.total,
+      initialProviderCalls: session.getSessionStats().assistantMessages,
+      persistedEntries: typeof manager?.getEntries === "function" ? manager.getEntries() : [],
+      pricing: config.pricing,
+    });
+    session.agent.streamFunction = (model, context, options = {}) => lazyStream(
+      model,
+      async () => {
+        const hostFinalization = hostPostToolFinalization(model, context, record.language);
+        if (hostFinalization) return hostFinalization;
+        record.budgetGuard.authorize(context, options);
+        const budgetReceipt = record.budgetGuard.receipt();
+        manager.appendCustomEntry(
+          budgetReceipt.schema_version,
+          budgetReceipt,
+        );
+        return await originalStreamFunction(model, context, {
+          ...options,
+          maxRetries: 0,
+        });
+      },
+    );
+    sessions.set(externalId, record);
+    sessionLifecycle.enforceHotLimit({ excludeSessionId: externalId });
+    return sessionState(record);
+  } catch (error) {
+    try { unsubscribe?.(); } catch {}
+    try { session.dispose(); } catch {}
+    sessions.delete(externalId);
+    if (createdSessionFile) rmSync(createdSessionFile, { force: true });
+    throw error;
+  }
 }
 
 async function promptSession(requestId, params) {
@@ -1221,6 +1258,8 @@ async function promptSession(requestId, params) {
   if (activeRequestBySession.has(sessionId)) {
     throw Object.assign(new Error("Copilot session already has an active prompt"), { code: "pi_session_busy" });
   }
+  sessionLifecycle.admit({ excludeSessionId: sessionId });
+  sessionLifecycle.touch(sessionId);
   record.budgetGuard.beginMessage();
   activeRequestBySession.set(sessionId, requestId);
   const activeTools = record.session.getActiveToolNames();
@@ -1292,6 +1331,8 @@ async function regenerateSession(requestId, params) {
   if (activeRequestBySession.has(sessionId) || record.session.isStreaming) {
     throw Object.assign(new Error("Copilot session already has an active prompt"), { code: "pi_session_busy" });
   }
+  sessionLifecycle.admit({ excludeSessionId: sessionId });
+  sessionLifecycle.touch(sessionId);
   const target = regenerateTarget(record, params.user_entry_id);
   const supplied = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
@@ -1381,6 +1422,17 @@ async function handleRequest(request) {
           workspace: [...ALL_TOOL_NAMES],
         },
       };
+    case "runtime.memory":
+      assertExactKeys(params, new Set(), "pi_runtime_memory_invalid");
+      return { pid: process.pid, ...sessionLifecycle.status() };
+    case "runtime.maintain": {
+      assertExactKeys(params, new Set(["exclude_session_id"]), "pi_runtime_maintain_invalid");
+      const excludeSessionId = boundedText(params.exclude_session_id, 160).trim();
+      sessionLifecycle.suspendIdle({ excludeSessionId });
+      sessionLifecycle.enforceHotLimit({ excludeSessionId });
+      sessionLifecycle.relieveMemoryPressure({ excludeSessionId });
+      return { pid: process.pid, ...sessionLifecycle.status() };
+    }
     case "session.create":
       return await createSession(params);
     case "session.prompt":
@@ -1389,6 +1441,7 @@ async function handleRequest(request) {
       assertExactKeys(params, new Set(["session_id", "user_entry_id"]), "pi_regenerate_inspect_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());
       if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+      sessionLifecycle.touch(record.externalId);
       const target = regenerateTarget(record, params.user_entry_id);
       return {
         message: target.message,
@@ -1402,6 +1455,7 @@ async function handleRequest(request) {
       assertExactKeys(params, new Set(["session_id", "transcript_cursor", "transcript_limit"]), "pi_session_state_invalid");
       const record = sessions.get(boundedText(params.session_id, 160).trim());
       if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+      sessionLifecycle.touch(record.externalId);
       const transcriptLimit = params.transcript_limit === undefined
         ? 100 : Number(params.transcript_limit);
       if (!Number.isInteger(transcriptLimit) || transcriptLimit < 1 || transcriptLimit > 200) {
@@ -1422,13 +1476,8 @@ async function handleRequest(request) {
     case "session.dispose": {
       assertExactKeys(params, new Set(["session_id"]), "pi_session_dispose_invalid");
       const sessionId = boundedText(params.session_id, 160).trim();
-      const record = sessions.get(sessionId);
-      if (record) {
-        record.unsubscribe?.();
-        record.session.dispose();
-        sessions.delete(sessionId);
-      }
-      return { disposed: Boolean(record), session_id: sessionId };
+      const disposed = sessionLifecycle.dispose(sessionId, { suspension: false });
+      return { disposed, session_id: sessionId };
     }
     default:
       throw Object.assign(new Error(`unknown method: ${boundedText(request.method, 160)}`), { code: "pi_method_unknown", requestId });
@@ -1475,11 +1524,7 @@ async function handleLine(line) {
 }
 
 async function shutdown() {
-  for (const record of sessions.values()) {
-    try { record.unsubscribe?.(); } catch {}
-    try { record.session.dispose(); } catch {}
-  }
-  sessions.clear();
+  sessionLifecycle.shutdown();
   try { rmSync(temporaryModelDir, { recursive: true, force: true }); } catch {}
 }
 

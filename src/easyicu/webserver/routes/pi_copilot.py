@@ -265,6 +265,14 @@ class PiPresentationPinRequest(BaseModel):
     pinned: StrictBool = True
 
 
+class PiSessionMaintenanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["audit", "quarantine", "restore"] = "audit"
+    confirm: StrictBool = False
+    quarantine_id: ShortText | None = None
+
+
 class PiProjectInitializeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -354,6 +362,28 @@ def get_pi_copilot_literature_source(pmid: ShortText) -> dict:
             else 404 if code == "literature_source_not_found" else 502
         )
         raise HTTPException(status_code=status, detail=exc.detail) from exc
+
+
+@router.get("/api/copilot/pi/resource-status")
+def get_pi_copilot_resource_status() -> dict:
+    try:
+        return get_pi_copilot_service().resource_status()
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/session-maintenance")
+def post_pi_copilot_session_maintenance(
+    body: PiSessionMaintenanceRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().maintain_session_storage(
+            action=body.action,
+            confirm=body.confirm,
+            quarantine_id=body.quarantine_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
 
 
 @router.post("/api/copilot/pi/provider-config")
