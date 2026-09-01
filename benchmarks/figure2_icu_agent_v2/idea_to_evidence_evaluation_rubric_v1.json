@@ -1,0 +1,96 @@
+{
+  "schema_version": "easyicu.idea_to_evidence_evaluation_rubric/1",
+  "rubric_ref": "easyicu.figure2_icu_agent_v2/idea-to-evidence3-rubric-20260901-v1-review",
+  "status": "review_candidate_no_run_authority",
+  "evaluation_units": {
+    "workflow_case": "Each of the three externally sealed broad briefs is one case and remains in all case-level summaries.",
+    "candidate_idea": "Every registered candidate is retained for idea-quality and selection-process summaries but is not an independent replicate of system performance.",
+    "artifact": "Artifacts and claims are nested evidence and never inflate the case denominator."
+  },
+  "confirmatory_status": "descriptive_only_no_hypothesis_test",
+  "case_terminal_disposition": {
+    "landed_reportable": "The selected idea passes deterministic feasibility, executes the approved analysis once, produces all mandatory artifacts, and passes evidence-bound scientific review without postresult repair.",
+    "landed_restricted": "The selected idea executes, but diagnostics or evidence impose a prespecified restriction that is transparently carried into the report.",
+    "safe_nonlanding": "The case terminates at a legitimate literature, identification, data-authority, feasibility, or publication gate without substituting a different idea after selection.",
+    "workflow_failure": "The workflow fails for an agent-caused, artifact, budget, execution, or contract reason that is not a scientifically appropriate gate."
+  },
+  "mandatory_case_artifacts": [
+    "sealed broad brief",
+    "complete query and retrieval ledger",
+    "unaltered candidate registry and nonselection log",
+    "independent preresult candidate scores",
+    "selected-idea and protocol receipt",
+    "human plan-review record",
+    "selected-idea data-feasibility and input-seal receipt",
+    "code, cohort, result, diagnostic, and sensitivity artifacts when execution is authorized",
+    "EvidenceStore manifest and artifact digests",
+    "bounded report, limitations, and manuscript-ready paragraph",
+    "receipt-linked replayable product demonstration trace, including any safe stop or workflow failure",
+    "tokens, cost, wall time, tool calls, failed executions, and human minutes"
+  ],
+  "candidate_idea_review": {
+    "timing": "Before patient-level extraction, outcome analysis, and final candidate selection.",
+    "reviewers": [
+      "one ICU clinical reviewer independent of EasyICU implementation",
+      "one methods reviewer independent of EasyICU implementation"
+    ],
+    "dimensions": {
+      "clinical_relevance": "1 to 5",
+      "question_clarity": "1 to 5",
+      "bounded_novelty_relative_to_retrieved_evidence": "1 to 5",
+      "data_and_method_feasibility": "1 to 5",
+      "risk_and_claim_boundary_quality": "1 to 5"
+    },
+    "selection_rule": "Reviewers independently score every candidate, then select one candidate using the frozen dimensions and document the reason. Disagreement is adjudicated before data results exist. There is no second selection after feasibility or execution outcomes.",
+    "blinding": "Reviewers see the broad brief, candidate registry, literature evidence map, and database capability summaries, but not patient-level data, outcome results, or later workflow artifacts.",
+    "reliability": "Report raw paired reviewer scores and agreement descriptively. With only three briefs, no reliability threshold or hypothesis test is inferred from candidate counts."
+  },
+  "case_level_domains": [
+    {
+      "domain": "idea_process_integrity",
+      "pass_rule": "The sealed brief, all candidates, evidence map, reviewer scores, selection, and nonselection reasons are complete and temporally ordered."
+    },
+    {
+      "domain": "protocol_specificity",
+      "pass_rule": "The selected question specifies population, exposure or index, outcome, time origin, estimand, method, missing-data policy, diagnostics, sensitivity analyses, and claim ceiling before outcome analysis."
+    },
+    {
+      "domain": "data_authority",
+      "pass_rule": "Every required concept and identity boundary has a passing source-authority and deterministic feasibility receipt before phase B."
+    },
+    {
+      "domain": "execution_validity",
+      "pass_rule": "The approved plan is executed once with complete code, denominators, results, diagnostics, sensitivities, and terminal receipt, or terminates at a documented safe gate."
+    },
+    {
+      "domain": "evidence_traceability",
+      "pass_rule": "Every headline number and manuscript claim resolves to a retained artifact and digest, with no unbound or manually inserted result."
+    },
+    {
+      "domain": "interpretation_ceiling",
+      "pass_rule": "The terminal report reflects null or positive results, limitations, scope reductions, and failed diagnostics without upgrading authority."
+    }
+  ],
+  "prespecified_descriptive_outputs": [
+    "all three case timelines and terminal dispositions",
+    "candidate funnel for each case: generated, reviewable, selected, nonselected, feasibility-pass, executed, and landed",
+    "complete candidate scores and documented selection reasons",
+    "mandatory-artifact completeness by case",
+    "case-level domain pass or fail matrix",
+    "time, tokens, billed cost, tool calls, failed executions, and human minutes by phase and case",
+    "all safe gates, restrictions, workflow failures, and nonselection reasons",
+    "one evidence-lineage diagram per case",
+    "one receipt-linked end-to-end product timeline per case"
+  ],
+  "analysis_rules": {
+    "all_cases_reported": true,
+    "successful_case_selection_forbidden": true,
+    "positive_result_preference_forbidden": true,
+    "candidate_pseudoreplication_forbidden": true,
+    "hypothesis_tests": "none",
+    "aggregate_success_rate_claim": "forbidden",
+    "uncertainty": "Show raw case-level observations. Do not present a three-case proportion as a stable population estimate.",
+    "missing_artifact": "A missing mandatory artifact fails its case-level domain and remains visible; it is not repaired after the terminal timestamp."
+  },
+  "claim_ceiling": "The rubric supports a transparent multiple-case demonstration of workflow integrity and evidence landing. It does not support claims that EasyICU generates better ideas than humans or other agents, discovers universally novel questions, increases publication output, or improves clinical outcomes."
+}

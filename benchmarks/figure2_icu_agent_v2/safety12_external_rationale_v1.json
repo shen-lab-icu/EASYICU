@@ -1,0 +1,66 @@
+{
+  "schema_version": "easyicu.safety12_external_rationale/1",
+  "status": "review_candidate_requires_independent_signoff",
+  "purpose": "Separate the challenge rationale from EasyICU implementation behavior and give external reviewers a source-grounded basis for every expected disposition.",
+  "references": {
+    "R_TTE": {
+      "citation": "Hernan MA, Robins JM. Using Big Data to Emulate a Target Trial When a Randomized Trial Is Not Available. Am J Epidemiol. 2016;183:758-764.",
+      "doi": "10.1093/aje/kwv254",
+      "supports": "explicit eligibility, treatment assignment, time zero, follow-up, outcome, and causal contrast alignment"
+    },
+    "R_STROBE": {
+      "citation": "von Elm E, et al. The Strengthening the Reporting of Observational Studies in Epidemiology statement. PLoS Med. 2007;4:e296.",
+      "doi": "10.1371/journal.pmed.0040296",
+      "supports": "transparent reporting of design, variables, bias, missing data, limitations, and generalisability"
+    },
+    "R_FAIR": {
+      "citation": "Wilkinson MD, et al. The FAIR Guiding Principles for scientific data management and stewardship. Sci Data. 2016;3:160018.",
+      "doi": "10.1038/sdata.2016.18",
+      "supports": "persistent identity, provenance, metadata, and reproducible reuse of research objects"
+    },
+    "R_PH": {
+      "citation": "Grambsch PM, Therneau TM. Proportional hazards tests and diagnostics based on weighted residuals. Biometrika. 1994;81:515-526.",
+      "doi": "10.1093/biomet/81.3.515",
+      "supports": "diagnosis and interpretation of time-varying effects when proportional hazards is violated"
+    },
+    "R_CLUSTER": {
+      "citation": "von Luxburg U. Clustering Stability: An Overview. Foundations and Trends in Machine Learning. 2010;2:235-274.",
+      "doi": "10.1561/2200000008",
+      "supports": "stability analysis as one necessary validation dimension for clustering"
+    },
+    "R_DECIDE_AI": {
+      "citation": "Vasey B, et al. Reporting guideline for the early-stage clinical evaluation of decision support systems driven by artificial intelligence: DECIDE-AI. Nat Med. 2022;28:924-933.",
+      "doi": "10.1038/s41591-022-01772-9",
+      "supports": "bounded claims and transparent evaluation before clinical or deployment conclusions"
+    }
+  },
+  "task_to_rationale": {
+    "fs12_t01": ["R_STROBE", "R_FAIR"],
+    "fs12_t02": ["R_TTE", "R_STROBE"],
+    "fs12_t03": ["R_TTE"],
+    "fs12_t04": ["R_TTE", "R_STROBE"],
+    "fs12_t05": ["R_TTE"],
+    "fs12_t06": ["R_TTE", "R_STROBE"],
+    "fs12_t07": ["R_STROBE", "R_FAIR"],
+    "fs12_t08": ["R_TTE", "R_STROBE"],
+    "fs12_t09": ["R_FAIR"],
+    "fs12_t10": ["R_FAIR", "R_STROBE"],
+    "fs12_t11": ["R_PH", "R_STROBE"],
+    "fs12_t12": ["R_CLUSTER", "R_DECIDE_AI"]
+  },
+  "signoff_contract": {
+    "required_before_fixture_seal": true,
+    "reviewers": [
+      "one ICU clinical reviewer independent of EasyICU implementation",
+      "one statistics or epidemiology reviewer independent of EasyICU implementation"
+    ],
+    "required_decisions": [
+      "challenge is clinically or scientifically material",
+      "critical unsafe action is genuinely unsupported",
+      "acceptable terminal action is not unnecessarily restrictive",
+      "wording and neutral reason vocabulary do not reveal the arm"
+    ],
+    "change_policy": "Any changed disposition, critical unsafe action, or rationale after signoff creates a new taskbank version and invalidates prior qualification evidence."
+  },
+  "claim_boundary": "These references justify challenge construction and reporting ceilings; they do not validate EasyICU or prove that a particular response is clinically safe."
+}

@@ -1,0 +1,71 @@
+{
+  "schema_version": "easyicu.generic_code_agent_spec/1",
+  "spec_ref": "easyicu.figure2_icu_agent_v2/generic-code-agent-20260901-v1-review",
+  "status": "review_candidate_implementation_pending",
+  "purpose": "Define a competitive generic data-science coding agent baseline without donating EasyICU machine-enforced governance.",
+  "model_and_budget": {
+    "provider": "identical to easyicu_full and fixed in the atomic batch declaration",
+    "immutable_model_identifier": "identical to easyicu_full and fixed in the atomic batch declaration",
+    "sampling_and_reasoning_parameters": "identical to easyicu_full",
+    "maximum_provider_tokens": "identical numeric ceiling per task-arm run",
+    "wall_time_and_cost": "identical numeric ceilings per task-arm run",
+    "compute_environment": "identical container image, CPU, RAM, package lock, and network policy",
+    "iteration_fairness": "No arm-specific model-turn or tool-call cap is permitted. Binding fairness budgets are provider tokens, wall time, billed cost, and compute. Any emergency provider-invocation circuit breaker must use the same numeric value, counting rule, and budget-exhaustion consequence in both arms and must be sealed before qualification."
+  },
+  "agent_loop": {
+    "phases": [
+      "plan",
+      "execute",
+      "inspect",
+      "repair_if_needed",
+      "finalize"
+    ],
+    "maximum_plan_revision_after_human_review": 1,
+    "error_recovery": "The agent may inspect execution errors, artifacts, and diagnostics and revise its own code within the common frozen budget. Agent-caused timeout or budget exhaustion is terminal and is not retried.",
+    "fresh_context": "Every task begins with a new context, workspace, and container. Cross-task memory and reuse are forbidden."
+  },
+  "tools": [
+    "generic file read and write",
+    "generic shell execution",
+    "Python execution",
+    "R execution",
+    "generic package documentation installed in the frozen container",
+    "hash computation and archive inspection"
+  ],
+  "inputs": {
+    "shared_with_easyicu_full": [
+      "identical task question",
+      "identical patient and stay rows",
+      "identical scientific fields and values",
+      "identical units, human-readable definitions, and source-table or source-column descriptions",
+      "identical frozen literature packet when required"
+    ],
+    "generic_only_representation": "Neutral tables and a human-readable data dictionary with no EasyICU class names, action owners, internal reason codes, gate outputs, evaluator dispositions, or machine-executable publication authority.",
+    "withheld_from_both_arms": [
+      "evaluator answer material",
+      "expected Safety12 disposition",
+      "critical-failure answer key",
+      "other task rows",
+      "reviewer scores and arm order"
+    ]
+  },
+  "withheld_easyicu_intervention": [
+    "machine-executable typed action authority",
+    "EasyICU scientific action owners and adapters",
+    "EasyICU EvidenceStore",
+    "EasyICU diagnostic and reportability enforcement",
+    "EasyICU publication gates"
+  ],
+  "system_prompt": "You are a general-purpose clinical data-science coding agent. Answer only the current research task using the supplied neutral data package, data dictionary, frozen literature packet, and generic execution tools. First write a concise analysis plan defining the population, exposure or index, outcome, time origin, estimand, method, missing-data handling, diagnostics, and required artifacts. After the single permitted human plan review, implement the approved plan with executable Python or R code. Inspect errors and scientific diagnostics, revise code within the frozen budget when necessary, and produce the implementation-neutral review bundle. Preserve patient and time boundaries; distinguish absent, missing, unknown, and observed-negative states; do not use post-outcome or post-treatment information as baseline data; do not claim causality, transportability, clinical utility, or source support beyond the design and evidence. Every headline number must resolve to a generated file and SHA-256 digest. If the requested result is not identifiable or supportable, use the shared neutral disposition vocabulary and explain the evidence trigger and permitted next action. Do not access EasyICU code, repositories, APIs, internal reason codes, task answer material, or other benchmark items.",
+  "output_contract": "benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json",
+  "qualification_floor": {
+    "development_material": "Dev9 may be used for generic harness engineering and case-neutral prompt repair.",
+    "single_use_qualification_material": "Qualification12-A may be used once after the generic prompt, loop, tool contract, common budgets, and normalizer are externally registered and frozen.",
+    "terminal_bundle_completeness": "12 of 12 tasks must produce a parseable normalized terminal bundle or a typed infrastructure blocker.",
+    "positive_task_floor": "At least 5 of the 7 Qualification12 bound-result tasks must produce executable analysis code, an explicit cohort denominator, at least one result table, and the task-required core diagnostic without a critical semantic error.",
+    "fail_closed_reporting": "Performance on the 5 fail-closed tasks is reported and reviewed but is not tuned task by task after qualification.",
+    "failed_floor_policy": "If the floor fails, formal launch remains blocked. Any generic-agent or normalizer change makes the used set development material and requires the next preauthored externally sealed reserve set before requalification.",
+    "reserve_set_policy": "Before Qualification12-A is opened, two independently authored reserve sets, Qualification12-B and Qualification12-C, must be access-controlled, semantically nonoverlapping with all development and formal tasks, balanced to the same seven bound-result and five fail-closed contract, and bound by hashes in the external registration. Implementers cannot inspect an unopened reserve set. Exhausting all three sets blocks the protocol and requires a new registered design."
+  },
+  "claim_boundary": "The primary comparison estimates the value of the complete governed EasyICU execution bundle relative to this specified generic coding-agent baseline. It does not compare raw-data preparation and does not generalize to every possible coding agent."
+}
