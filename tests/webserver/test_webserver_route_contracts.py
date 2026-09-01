@@ -570,7 +570,7 @@ def test_agent_artifact_route_method_path_and_operation_name_snapshot() -> None:
 
 
 def test_route_owner_boundaries() -> None:
-    package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
+    package_root = Path(__file__).parents[2] / "src" / "easyicu" / "webserver"
     app_source = (package_root / "app.py").read_text(encoding="utf-8")
     guided_source = (package_root / "routes" / "guided.py").read_text(encoding="utf-8")
     copilot_source = (package_root / "routes" / "copilot.py").read_text(
@@ -694,7 +694,7 @@ def test_route_owner_boundaries() -> None:
 
 
 def test_patient_review_eligibility_owner_boundary() -> None:
-    package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
+    package_root = Path(__file__).parents[2] / "src" / "easyicu" / "webserver"
     patient_package = package_root / "patient_drilldown"
     facade_source = (patient_package / "__init__.py").read_text(encoding="utf-8")
     eligibility_source = (patient_package / "eligibility.py").read_text(

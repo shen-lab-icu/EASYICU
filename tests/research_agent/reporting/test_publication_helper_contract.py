@@ -124,7 +124,7 @@ def test_stable_direct_helper_api_writes_declared_bundle(tmp_path) -> None:
 
 def test_coder_contract_requires_direct_host_api() -> None:
     prompt = (
-        Path(__file__).parents[2]
+        Path(__file__).parents[3]
         / "src/easyicu/research_agent/providers/prompts/v1/coder.txt"
     ).read_text(encoding="utf-8")
 

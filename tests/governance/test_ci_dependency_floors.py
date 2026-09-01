@@ -16,7 +16,7 @@ try:
 except ModuleNotFoundError:  # Python 3.10 runtime
     import tomli as tomllib
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 AGENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "research_agent_ci.yml"
 

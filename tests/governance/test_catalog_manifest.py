@@ -4,7 +4,7 @@ from easyicu.catalog_manifest import catalog_manifest, render_catalog_summary_ma
 
 
 def test_catalog_summary_is_generated_and_counts_live_registries() -> None:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     manifest = catalog_manifest()
     committed = (root / "docs/catalog_summary.md").read_text(encoding="utf-8")
 

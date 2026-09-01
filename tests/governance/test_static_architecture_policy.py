@@ -9,7 +9,7 @@ except ModuleNotFoundError:  # Python 3.10 runtime
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_new_research_agent_files_do_not_inherit_f401_f841_ignores() -> None:

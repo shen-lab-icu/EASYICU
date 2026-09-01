@@ -26,7 +26,7 @@ from easyicu.research_agent.gates.product_promise import (
 )
 
 _PHASE = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src/easyicu/research_agent/execution/phase.py"
 )
 

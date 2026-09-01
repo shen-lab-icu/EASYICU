@@ -24,7 +24,7 @@ def test_easyicu_cli_exposes_explicit_copilot_install() -> None:
 
 
 def test_pi_event_projection_is_in_both_distribution_manifests() -> None:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[3]
     manifest = (root / "MANIFEST.in").read_text(encoding="utf-8")
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
 

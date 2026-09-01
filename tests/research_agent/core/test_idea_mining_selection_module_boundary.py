@@ -17,7 +17,7 @@ def test_idea_mining_reexports_selection_by_identity() -> None:
 
 def test_idea_mining_selection_is_a_leaf_module() -> None:
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

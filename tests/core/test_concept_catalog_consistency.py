@@ -24,7 +24,7 @@ from easyicu.concept.catalog import (
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "src" / "easyicu" / "data"
 CATALOG_DIR = REPO_ROOT / "benchmarks" / "catalogs"
 STATIC_DATA_CATALOG_JS = (

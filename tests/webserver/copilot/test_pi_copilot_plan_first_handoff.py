@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 
-STATIC = Path(__file__).parents[1] / "src" / "easyicu" / "webserver" / "static"
+STATIC = Path(__file__).parents[3] / "src" / "easyicu" / "webserver" / "static"
 
 
 def _read(relative: str) -> str:

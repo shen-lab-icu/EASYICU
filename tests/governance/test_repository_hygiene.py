@@ -3,7 +3,7 @@ from pathlib import Path
 from tools.audit_repository_hygiene import audit_repository
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_repository_layout_has_one_owner_per_content_class() -> None:

@@ -160,7 +160,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
 @pytest.mark.parametrize("leaf", sorted(RETIRED_TOP_LEVEL_MODULES))
 def test_retired_top_level_module_is_absent(leaf: str) -> None:
     package_root = (
-        Path(__file__).resolve().parents[2] / "src" / "easyicu" / "research_agent"
+        Path(__file__).resolve().parents[3] / "src" / "easyicu" / "research_agent"
     )
     assert not (package_root / f"{leaf}.py").exists()
     assert importlib.util.find_spec(f"easyicu.research_agent.{leaf}") is None

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-DICT_PATH = Path(__file__).resolve().parents[1] / "src" / "easyicu" / "data" / "concept-dict.json"
+DICT_PATH = Path(__file__).resolve().parents[2] / "src" / "easyicu" / "data" / "concept-dict.json"
 
 
 @pytest.fixture(scope="module")

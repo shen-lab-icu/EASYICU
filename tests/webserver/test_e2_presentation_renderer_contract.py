@@ -7,7 +7,7 @@ from tools.render_e2_presentation_figures import resolve_output_run_dir
 
 def test_e2_renderer_does_not_invent_unbound_study_labels() -> None:
     renderer = (
-        Path(__file__).resolve().parents[1] / "tools" / "render_e2_presentation_figures.py"
+        Path(__file__).resolve().parents[2] / "tools" / "render_e2_presentation_figures.py"
     ).read_text(encoding="utf-8")
 
     for unbound_claim in (

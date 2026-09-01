@@ -20,7 +20,7 @@ import sys
 import pytest
 
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 TOOLS_DIR = REPO_ROOT / "tools"
 LOCK_PATH = REPO_ROOT / "baselines" / "LOCK.json"
 PAPER_CITED_BASELINES = {

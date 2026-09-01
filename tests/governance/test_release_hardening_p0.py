@@ -10,7 +10,7 @@ from pathlib import Path
 import easyicu
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _module_function_count(path: Path, name: str) -> int:

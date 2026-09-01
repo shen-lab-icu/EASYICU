@@ -338,7 +338,7 @@ def test_result_digest_revalidates_model_copies() -> None:
 
 
 def test_experimental_runner_is_not_wired_into_production_selection() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     selection = (
         root / "src/easyicu/research_agent/execution/runners/selection.py"
     ).read_text(encoding="utf-8")

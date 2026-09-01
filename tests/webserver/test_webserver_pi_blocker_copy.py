@@ -17,10 +17,10 @@ import re
 
 
 STATIC = (
-    Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
+    Path(__file__).resolve().parents[2] / "src" / "easyicu" / "webserver" / "static"
 )
 PI_COPILOT = (
-    Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "pi_copilot"
+    Path(__file__).resolve().parents[2] / "src" / "easyicu" / "webserver" / "pi_copilot"
 )
 
 

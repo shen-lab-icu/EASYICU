@@ -45,7 +45,7 @@ from easyicu.research_agent.research_context.typed import (
     raw_contract_inputs_for_step,
 )
 
-_SRC = Path(__file__).resolve().parents[2] / "src" / "easyicu" / "research_agent"
+_SRC = Path(__file__).resolve().parents[3] / "src" / "easyicu" / "research_agent"
 
 
 def _receipt(flow) -> dict:

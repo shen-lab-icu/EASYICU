@@ -5,7 +5,7 @@ from pathlib import Path
 from easyicu.webserver.catalog import build_concept_lineage
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 STATIC = ROOT / "src" / "easyicu" / "webserver" / "static"
 
 

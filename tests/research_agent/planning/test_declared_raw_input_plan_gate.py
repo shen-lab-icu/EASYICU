@@ -35,7 +35,7 @@ from easyicu.research_agent.schema import (
 )
 
 _PHASE = (
-    pathlib.Path(__file__).resolve().parents[2]
+    pathlib.Path(__file__).resolve().parents[3]
     / "src/easyicu/research_agent/execution/phase.py"
 )
 

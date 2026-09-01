@@ -179,7 +179,7 @@ def test_extraction_does_not_leak_universe_columns_into_process_state():
 
     Measured 2026-08-18 at ``4868315``: running this module left
     ``{age, death, los_icu, sofa2, stay_id}`` registered for the rest of the
-    process, and ``tests/research_agent/test_plan_lifecycle_authority.py``
+    process, and ``tests/research_agent/planning/test_plan_lifecycle_authority.py``
     then stopped raising on an unsealed materialized ``stay_id`` -- two
     fail-closed assertions passing only because nothing had touched cohort
     repair first. That is the failure this test exists to keep dead: the

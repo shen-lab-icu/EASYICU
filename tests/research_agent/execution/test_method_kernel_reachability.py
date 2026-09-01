@@ -37,7 +37,7 @@ from easyicu.research_agent.contracts.method_kernels import (
     UNREACHABLE_MODULE_NAMES,
 )
 
-_SRC = Path(__file__).resolve().parents[2] / "src"
+_SRC = Path(__file__).resolve().parents[3] / "src"
 _METHODS_DIR = _SRC / "easyicu" / "research_agent" / "methods"
 
 

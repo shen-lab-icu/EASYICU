@@ -42,7 +42,7 @@ from easyicu.research_agent.audits.validators import (  # noqa: E402
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep  # noqa: E402
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
 _REAL_STEP_ID = "07_primary_adjusted_association"
 _COVARIATES = ["age", "sex", "charlson_max"]
 

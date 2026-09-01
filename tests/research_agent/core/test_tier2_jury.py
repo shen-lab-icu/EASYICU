@@ -64,7 +64,7 @@ def _tier_protocol_path() -> Path | None:
     if configured:
         candidates.append(Path(configured))
     candidates.append(
-        Path(__file__).resolve().parents[3]
+        Path(__file__).resolve().parents[4]
         / "easyicu写作"
         / "00_当前投稿_20260516"
         / "02_npj_Digital_Medicine"
@@ -261,7 +261,7 @@ def test_real_judge_parser_tolerates_reasoning_preamble():
 
 
 def test_cli_smoke_with_mock_judges(tmp_path):
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     if not (repo_root / "tools" / "run_tier2_jury.py").exists():
         # tools/run_tier2_jury.py is excluded from the slimmed public
         # repository surface (see 874db1c); the CLI smoke can only run where

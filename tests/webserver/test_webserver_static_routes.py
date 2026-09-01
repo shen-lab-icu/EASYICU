@@ -12,7 +12,7 @@ from easyicu.webserver.app import app
 from easyicu.webserver.routes.request_parsing import body_bool as _body_bool
 
 STATIC_DIR = (
-    Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
+    Path(__file__).resolve().parents[2] / "src" / "easyicu" / "webserver" / "static"
 )
 
 
@@ -1023,7 +1023,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     ideas_css = _static_css("ideas.css")
     guided_css = _static_css("guided.css")
     agent_runs_py = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "src"
         / "easyicu"
         / "webserver"

@@ -8,7 +8,7 @@ import pytest
 
 
 STATIC_JS = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "src"
     / "easyicu"
     / "webserver"
@@ -117,7 +117,7 @@ def test_guided_gate_contract_fails_closed_for_missing_or_unknown_results() -> N
     result = subprocess.run(
         [
             node,
-            str(Path(__file__).parents[1] / "tests" / "js" / "guided_gate_state.test.js"),
+            str(Path(__file__).parents[2] / "tests" / "js" / "guided_gate_state.test.js"),
             str(STATIC_JS / "screens-guided-contracts.js"),
         ],
         check=False,

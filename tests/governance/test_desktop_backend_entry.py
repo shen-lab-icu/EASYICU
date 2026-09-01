@@ -6,7 +6,7 @@ import pytest
 
 
 def _backend_entry_module():
-    path = Path(__file__).parents[1] / "desktop" / "backend_entry.py"
+    path = Path(__file__).parents[2] / "desktop" / "backend_entry.py"
     spec = importlib.util.spec_from_file_location("easyicu_desktop_backend_entry", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

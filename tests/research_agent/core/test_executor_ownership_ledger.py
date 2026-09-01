@@ -32,7 +32,7 @@ from tools.measure_executor_ownership import (  # noqa: E402
     unowned_products,
 )
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
 _TOOL = Path("tools/measure_executor_ownership.py")
 
 # The one step that carries the defect, in each run's own spelling.

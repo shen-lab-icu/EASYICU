@@ -52,7 +52,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
 _COVARIATES = ["age", "sex", "charlson_max"]
 
 

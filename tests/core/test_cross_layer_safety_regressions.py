@@ -740,7 +740,7 @@ def test_p1_2_known_aliases_still_resolve(name):
 def test_p1_3_runner_image_is_declared_as_package_data():
     """DockerRunner's docstring points users at these files; ship them."""
 
-    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+    pyproject = (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(
         encoding="utf-8"
     )
     for asset in ("runner_image/Dockerfile", "runner_image/requirements.lock"):
@@ -748,7 +748,7 @@ def test_p1_3_runner_image_is_declared_as_package_data():
             asset in pyproject
         ), f"{asset} missing from [tool.setuptools.package-data]"
 
-    manifest = (Path(__file__).resolve().parents[1] / "MANIFEST.in").read_text(
+    manifest = (Path(__file__).resolve().parents[2] / "MANIFEST.in").read_text(
         encoding="utf-8"
     )
     assert "runner_image" in manifest, "runner_image missing from the sdist manifest"

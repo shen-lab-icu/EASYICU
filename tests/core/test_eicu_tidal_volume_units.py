@@ -172,7 +172,7 @@ def test_lab_tv_explicit_ml_source_quarantines_only_uncredible_small_values() ->
 
 def test_catalog_scopes_callbacks_to_respiratory_sources() -> None:
     catalog_path = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "src"
         / "easyicu"
         / "data"

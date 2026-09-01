@@ -20,7 +20,7 @@ from easyicu.table import ICUTable
 from easyicu.utils.callback_utils import mimic_dur_incv, mimic_dur_inmv
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 CONCEPT_DICT = REPO_ROOT / "src" / "easyicu" / "data" / "concept-dict.json"
 
 

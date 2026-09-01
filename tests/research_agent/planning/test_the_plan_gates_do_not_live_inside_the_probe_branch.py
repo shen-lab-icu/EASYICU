@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 _PHASE = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src"
     / "easyicu"
     / "research_agent"

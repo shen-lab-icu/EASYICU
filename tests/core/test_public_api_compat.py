@@ -590,7 +590,7 @@ def test_the_package_still_imports_without_deprecation_noise() -> None:
 def test_package_import_is_a_small_lazy_facade() -> None:
     """A plain import must not initialize data, plotting, cache, or agent code."""
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     env = {
         **os.environ,
         "PYTHONPATH": str(repo_root / "src"),

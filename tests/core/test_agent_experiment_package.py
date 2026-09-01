@@ -150,7 +150,7 @@ def test_artifact_escape_is_rejected(tmp_path: Path):
 
 def test_checked_in_registry_has_unique_ids_and_code_bindings():
     registry_path = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "benchmarks"
         / "agent_experiments"
         / "registry.json"

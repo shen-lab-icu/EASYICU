@@ -470,7 +470,7 @@ def test_retired_graph_builder_cannot_recreate_a_shadow_dispatcher() -> None:
 
 
 def test_production_modules_do_not_import_langgraph() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     production = root / "src" / "easyicu" / "research_agent"
     offenders = []
     for path in production.rglob("*.py"):
@@ -481,7 +481,7 @@ def test_production_modules_do_not_import_langgraph() -> None:
 
 
 def test_langgraph_is_not_a_packaged_dependency() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = list(project["project"]["dependencies"])
     for extra_dependencies in project["project"].get(
@@ -493,7 +493,7 @@ def test_langgraph_is_not_a_packaged_dependency() -> None:
 
 
 def test_langgraph_is_not_in_the_runner_lock() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     lock_lines = (
         root / "src/easyicu/research_agent/runner_image/requirements.lock"
     ).read_text(encoding="utf-8").splitlines()
@@ -502,7 +502,7 @@ def test_langgraph_is_not_in_the_runner_lock() -> None:
 
 
 def test_langgraph_is_not_installed_by_ci() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     offenders = []
     for path in (root / ".github" / "workflows").glob("*.yml"):
         if "langgraph" in path.read_text(encoding="utf-8").lower():

@@ -725,7 +725,7 @@ class UserPreferences(BaseModel):
 RESEARCH_CONTEXT_SCHEMA_VERSION = "easyicu.research_context/1"
 
 # Field set that constitutes the immutable schema. A test under
-# ``tests/research_agent/test_research_context_schema.py`` asserts the
+# ``tests/research_agent/planning/test_research_context_schema.py`` asserts the
 # actual ``ResearchContext.model_fields`` match this set so any silent
 # field rename / addition / removal will fail in CI. Bump
 # ``RESEARCH_CONTEXT_SCHEMA_VERSION`` when intentionally changing the

@@ -273,7 +273,7 @@ def test_sidecar_projection_preserves_expected_database() -> None:
     if node is None:
         pytest.skip("Node is not installed")
     projection = (
-        Path(__file__).parents[1]
+        Path(__file__).parents[3]
         / "src/easyicu/webserver/pi_copilot/node_app/src/event-projection.mjs"
     ).as_uri()
     script = f"""
@@ -352,7 +352,7 @@ def test_registered_export_download_opens_exact_source_in_native_workspace(
 
 def test_native_workspace_uses_extraction_owner_and_mimic_safe_recommendation() -> None:
     static_root = (
-        Path(__file__).parents[1]
+        Path(__file__).parents[3]
         / "src"
         / "easyicu"
         / "webserver"

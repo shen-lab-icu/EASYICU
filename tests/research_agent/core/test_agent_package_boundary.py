@@ -47,14 +47,14 @@ assert package + '.core' not in sys.modules
 assert package + '.agentic_coder' not in sys.modules
 """
     env = dict(os.environ)
-    source_root = str(Path(__file__).resolve().parents[2] / "src")
+    source_root = str(Path(__file__).resolve().parents[3] / "src")
     env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
     subprocess.run([sys.executable, "-c", script], check=True, env=env)
 
 
 def test_flat_agent_implementation_files_are_absent() -> None:
     package_root = (
-        Path(__file__).resolve().parents[2] / "src" / "easyicu" / "research_agent"
+        Path(__file__).resolve().parents[3] / "src" / "easyicu" / "research_agent"
     )
     assert not (package_root / "agents.py").exists()
     assert not (package_root / "agentic_coder.py").exists()

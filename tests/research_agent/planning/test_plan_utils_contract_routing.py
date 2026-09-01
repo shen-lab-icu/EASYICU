@@ -20,7 +20,7 @@ from easyicu.research_agent.schema import AnalysisStep
 
 
 def test_plan_contract_owners_do_not_depend_on_compatibility_catch_all() -> None:
-    root = Path(__file__).resolve().parents[2] / "src/easyicu/research_agent"
+    root = Path(__file__).resolve().parents[3] / "src/easyicu/research_agent"
     gate = (root / "gates/contract.py").read_text(encoding="utf-8")
     final_owner = (root / "planning/final_plan_shape.py").read_text(encoding="utf-8")
     compatibility = (root / "plan_utils.py").read_text(encoding="utf-8")

@@ -9,7 +9,7 @@ from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
 
 
 def _repo_config(name: str):
-    config_path = Path(__file__).resolve().parents[1] / "src/easyicu/data/data-sources.json"
+    config_path = Path(__file__).resolve().parents[2] / "src/easyicu/data/data-sources.json"
     return DataSourceRegistry.from_json(config_path).get(name)
 
 

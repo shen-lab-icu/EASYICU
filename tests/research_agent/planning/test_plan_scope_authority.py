@@ -263,6 +263,6 @@ for name in {_PHASE_PLAN_SCOPE_NAMES!r}:
     assert getattr(consumer, name) is getattr(canonical, name), name
 """
     env = dict(os.environ)
-    source_root = str(Path(__file__).resolve().parents[2] / "src")
+    source_root = str(Path(__file__).resolve().parents[3] / "src")
     env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
     subprocess.run([sys.executable, "-c", script], check=True, env=env)

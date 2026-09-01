@@ -204,7 +204,7 @@ def test_docs_icu_agent_bench_md_matches_live_renderer(ra):
 
     import pytest
 
-    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
     doc_path = repo_root / "docs" / "icu_agent_bench.md"
     if not doc_path.exists():
         # docs/*.md is excluded from the slimmed public repository surface

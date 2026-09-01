@@ -22,7 +22,7 @@ from easyicu.webserver.pi_copilot.gateway import PiGatewayClient, _PendingReques
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
 from easyicu.webserver.pi_copilot.tool_catalog import TOOL_CATALOG
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 APP_DIR = REPO_ROOT / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
 
 

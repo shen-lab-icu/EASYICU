@@ -44,7 +44,7 @@ from easyicu.research_agent.schema import (
     RobustnessReplaySpec,
 )
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
 _REAL_STEP_ID = "09_standard_robustness_sensitivity"
 
 # The real declaration, minus the one product it spells twice (see
@@ -287,7 +287,7 @@ def test_every_capability_file_is_one_the_runner_collects() -> None:
     """
 
     source = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src/easyicu/research_agent/execution/runners/deterministic_robustness.py"
     ).read_text(encoding="utf-8")
     anchor = "product_files = {"

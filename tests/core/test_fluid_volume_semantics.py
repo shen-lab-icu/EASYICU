@@ -285,7 +285,7 @@ def test_loader_preserves_canonical_time_metadata_after_callback_renames_index()
 
 def test_total_input_dictionary_declares_interval_semantics():
     dictionary_path = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "src"
         / "easyicu"
         / "data"

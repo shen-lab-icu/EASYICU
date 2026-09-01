@@ -124,7 +124,7 @@ def test_the_entrypoint_prints_the_image_when_declared(
 def test_run_as_a_subprocess_refuses_without_the_variable() -> None:
     """End-to-end: the exact invocation a shell launcher makes."""
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     completed = subprocess.run(
         [sys.executable, "-m", "tools.bench_runner_image"],
         cwd=repo_root,

@@ -15,7 +15,7 @@ import pytest
 
 from easyicu.webserver import study_intent
 
-STATIC = Path(__file__).resolve().parents[1] / "src/easyicu/webserver/static"
+STATIC = Path(__file__).resolve().parents[2] / "src/easyicu/webserver/static"
 
 
 def _values(result):

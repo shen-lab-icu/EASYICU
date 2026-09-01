@@ -819,7 +819,7 @@ def test_export_stage_uses_canonical_all_module_runner(
 
 
 def test_demo_source_owner_split_is_directional_and_facade_stays_thin() -> None:
-    webserver = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
+    webserver = Path(__file__).parents[2] / "src" / "easyicu" / "webserver"
     facade = (webserver / "demo_sources.py").read_text(encoding="utf-8")
     contracts = (webserver / "demo_source_contracts.py").read_text(encoding="utf-8")
     storage = (webserver / "demo_source_storage.py").read_text(encoding="utf-8")

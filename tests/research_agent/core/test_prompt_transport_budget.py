@@ -523,7 +523,7 @@ def test_payload_bytes_reads_mapping_messages() -> None:
 
 
 _AGENT_ROOT = (
-    pathlib.Path(__file__).resolve().parents[2] / "src" / "easyicu" / "research_agent"
+    pathlib.Path(__file__).resolve().parents[3] / "src" / "easyicu" / "research_agent"
 )
 
 # Call sites allowed to take a budgeted role client raw, each with the reason.

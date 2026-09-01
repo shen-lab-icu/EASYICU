@@ -41,7 +41,7 @@ def test_code_repair_reexports_helpers_by_identity() -> None:
 def test_code_repair_helpers_is_a_leaf_module() -> None:
     """The helper module must not import its parent repair implementation."""
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

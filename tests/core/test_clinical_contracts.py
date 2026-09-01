@@ -38,7 +38,7 @@ from easyicu.scores.sofa2 import (
 from easyicu.table import ICUTable
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 _SOFA2_COMPONENT_NAMES = {
     "sofa2_resp",

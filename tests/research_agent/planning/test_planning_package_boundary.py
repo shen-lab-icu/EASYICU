@@ -30,7 +30,7 @@ def test_planning_module_has_one_canonical_home(leaf: str) -> None:
 
 def test_planning_package_is_lazy() -> None:
     package_path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src/easyicu/research_agent/planning/__init__.py"
     )
     tree = ast.parse(package_path.read_text(encoding="utf-8"))
@@ -45,7 +45,7 @@ def test_registry_regeneration_commands_use_canonical_modules() -> None:
     import os
 
     env = dict(os.environ)
-    source_root = str(Path(__file__).resolve().parents[2] / "src")
+    source_root = str(Path(__file__).resolve().parents[3] / "src")
     env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
     for module_name in (
         "easyicu.research_agent.planning.capability_registry",

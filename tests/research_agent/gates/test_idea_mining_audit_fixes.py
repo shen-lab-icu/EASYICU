@@ -40,7 +40,7 @@ from easyicu.research_agent.discovery.idea_mining_schema import (
 from easyicu.research_agent.literature import CitationRecord
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 _HAS_ICD = (
     REPO / "benchmarks" / "catalogs" / "icd_cohort_catalog_miiv.json"
 ).exists()

@@ -96,8 +96,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "table:table_one output contract",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_table_one_executor.py::test_standard_executor_selects_table_one_before_any_coder_path",
-            "tests/research_agent/test_table_one_executor.py::test_table_one_executor_rejects_tampered_bound_cohort",
+            "tests/research_agent/core/test_table_one_executor.py::test_standard_executor_selects_table_one_before_any_coder_path",
+            "tests/research_agent/core/test_table_one_executor.py::test_table_one_executor_rejects_tampered_bound_cohort",
         ),
     ),
     *_adapter_group(
@@ -116,8 +116,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "declared missingness output roles",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_deterministic_missingness_runner.py::test_structured_availability_contract_is_selected_before_any_coder_path",
-            "tests/research_agent/test_deterministic_missingness_runner.py::test_genuinely_absent_declared_input_still_blocks",
+            "tests/research_agent/execution/test_deterministic_missingness_runner.py::test_structured_availability_contract_is_selected_before_any_coder_path",
+            "tests/research_agent/execution/test_deterministic_missingness_runner.py::test_genuinely_absent_declared_input_still_blocks",
         ),
     ),
     *_adapter_group(
@@ -133,8 +133,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "closed ordered levels plus binary and continuous outcomes",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_ordered_stratified_executor.py::test_typed_owner_executes_and_replays_without_coder",
-            "tests/research_agent/test_ordered_stratified_executor.py::test_method_label_without_typed_spec_does_not_select_owner",
+            "tests/research_agent/core/test_ordered_stratified_executor.py::test_typed_owner_executes_and_replays_without_coder",
+            "tests/research_agent/core/test_ordered_stratified_executor.py::test_method_label_without_typed_spec_does_not_select_owner",
         ),
         typed_subcontracts=("association.ordinal_trend",),
     ),
@@ -151,8 +151,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "typed exposure and covariate term roster",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_adjusted_association_executor.py::test_the_real_fresh19_primary_step_is_claimed_once_covariates_are_declared",
-            "tests/research_agent/test_adjusted_association_executor.py::test_an_unimplemented_method_family_is_not_claimed",
+            "tests/research_agent/core/test_adjusted_association_executor.py::test_the_real_fresh19_primary_step_is_claimed_once_covariates_are_declared",
+            "tests/research_agent/core/test_adjusted_association_executor.py::test_an_unimplemented_method_family_is_not_claimed",
         ),
     ),
     *_adapter_group(
@@ -168,8 +168,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "exact cohort and estimator identity",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_deterministic_robustness_preflight.py::test_preflight_fails_closed_without_completed_primary_estimate",
-            "tests/research_agent/test_deterministic_robustness_preflight.py::test_preflight_fails_closed_without_locked_specs",
+            "tests/research_agent/core/test_deterministic_robustness_preflight.py::test_preflight_fails_closed_without_completed_primary_estimate",
+            "tests/research_agent/core/test_deterministic_robustness_preflight.py::test_preflight_fails_closed_without_locked_specs",
         ),
     ),
     *_adapter_group(
@@ -190,8 +190,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "one registered prediction action and its exact products",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_prediction_model_executor.py::test_prediction_owner_selects_only_exact_action_contract",
-            "tests/research_agent/test_prediction_model_executor.py::test_prediction_workflow_is_group_safe_source_bound_and_renderable",
+            "tests/research_agent/core/test_prediction_model_executor.py::test_prediction_owner_selects_only_exact_action_contract",
+            "tests/research_agent/core/test_prediction_model_executor.py::test_prediction_workflow_is_group_safe_source_bound_and_renderable",
         ),
     ),
     *_adapter_group(
@@ -211,8 +211,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "one Cox model requirement and proportional-hazards policy",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_survival_primary_executor.py::test_primary_survival_contract_selects_a_fully_sealed_host_executor",
-            "tests/research_agent/test_survival_primary_executor.py::test_primary_survival_plan_cannot_fall_back_to_coder_without_bound_input",
+            "tests/research_agent/core/test_survival_primary_executor.py::test_primary_survival_contract_selects_a_fully_sealed_host_executor",
+            "tests/research_agent/core/test_survival_primary_executor.py::test_primary_survival_plan_cannot_fall_back_to_coder_without_bound_input",
         ),
         typed_subcontracts=(
             "time_to_event.km_logrank",
@@ -238,8 +238,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "candidate k grid, selection rule and stability design",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_cross_sectional_phenotyping_executor.py::test_phenotyping_owner_selects_only_the_exact_action_contract",
-            "tests/research_agent/test_cross_sectional_phenotyping_executor.py::test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable",
+            "tests/research_agent/core/test_cross_sectional_phenotyping_executor.py::test_phenotyping_owner_selects_only_the_exact_action_contract",
+            "tests/research_agent/core/test_cross_sectional_phenotyping_executor.py::test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable",
         ),
         typed_subcontracts=(
             "phenotyping.cluster_sizes",
@@ -259,8 +259,8 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
             "typed upstream assignment and feature products",
         ),
         validation_test_refs=(
-            "tests/research_agent/test_trajectory_stability_executor.py::test_executor_is_case_neutral_and_replayable",
-            "tests/research_agent/test_trajectory_stability_executor.py::test_executor_fails_closed_on_untrusted_input_binding",
+            "tests/research_agent/figures/test_trajectory_stability_executor.py::test_executor_is_case_neutral_and_replayable",
+            "tests/research_agent/figures/test_trajectory_stability_executor.py::test_executor_fails_closed_on_untrusted_input_binding",
         ),
     ),
 )

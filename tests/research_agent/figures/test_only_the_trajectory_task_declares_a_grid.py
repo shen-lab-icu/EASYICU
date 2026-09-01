@@ -25,7 +25,7 @@ import sys
 
 import pytest
 
-_REPO = pathlib.Path(__file__).resolve().parents[2]
+_REPO = pathlib.Path(__file__).resolve().parents[3]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 

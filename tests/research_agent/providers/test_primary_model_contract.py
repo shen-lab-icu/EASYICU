@@ -2022,7 +2022,7 @@ def test_contract_repair_log_preserves_structured_issue_details() -> None:
 
 def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
     prompt = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"
@@ -2061,7 +2061,7 @@ def test_planner_prompt_declares_typed_model_requirements() -> None:
 
 def test_replanner_preserves_requirements_without_cross_family_drift() -> None:
     prompt = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

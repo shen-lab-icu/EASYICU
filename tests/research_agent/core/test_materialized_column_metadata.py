@@ -2484,7 +2484,7 @@ def test_materialization_rejects_symlinked_output_root_before_artifact_write(
 
 def test_materialized_metadata_lifecycle_has_no_orchestration_imports() -> None:
     module_path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

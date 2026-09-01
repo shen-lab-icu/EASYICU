@@ -9,7 +9,7 @@ import pytest
 
 
 STATIC_DIR = (
-    Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
+    Path(__file__).resolve().parents[2] / "src" / "easyicu" / "webserver" / "static"
 )
 
 
@@ -71,7 +71,7 @@ def test_patient_demo_fidelity_contract_executes() -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is unavailable")
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [
             node,
@@ -99,7 +99,7 @@ def test_patient_echarts_owner_contract_executes() -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is unavailable")
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [
             node,
@@ -128,7 +128,7 @@ def test_patient_series_owner_contract_executes() -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is unavailable")
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [
             node,
@@ -155,7 +155,7 @@ def test_patient_official_demo_source_owner_contract_executes() -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is unavailable")
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [
             node,

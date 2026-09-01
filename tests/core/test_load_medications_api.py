@@ -20,7 +20,7 @@ import sys
 import pandas as pd
 import pytest
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
 from easyicu import api  # noqa: E402

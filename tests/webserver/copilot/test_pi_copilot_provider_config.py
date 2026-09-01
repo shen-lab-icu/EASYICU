@@ -18,7 +18,7 @@ from easyicu.webserver.pi_copilot.provider_config import (
 
 def test_pi_provider_owner_uses_shared_url_security_not_scientific_adapter() -> None:
     source = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[3]
         / "src/easyicu/webserver/pi_copilot/provider_config.py"
     ).read_text(encoding="utf-8")
     assert "provider_url_security" in source

@@ -25,7 +25,7 @@ stays) is still unmeasured.
 Run it with a real prepared database on hand::
 
     EASYICU_DATA_PATH=/Volumes/外置硬盘/databases/mimiciv \\
-      pytest tests/test_sofa_partition_invariance.py --run-real
+      pytest tests/core/test_sofa_partition_invariance.py --run-real
 """
 
 from __future__ import annotations

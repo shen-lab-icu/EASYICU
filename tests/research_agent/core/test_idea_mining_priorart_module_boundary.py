@@ -40,7 +40,7 @@ def test_idea_mining_priorart_is_a_leaf_module() -> None:
     """The helper module must not import idea_mining at module top (would be a
     cycle, since idea_mining imports it)."""
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"
