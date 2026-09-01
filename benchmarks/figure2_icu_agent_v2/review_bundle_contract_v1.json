@@ -1,0 +1,92 @@
+{
+  "schema_version": "easyicu.arm_neutral_review_bundle/1",
+  "contract_ref": "easyicu.figure2_icu_agent_v2/review-bundle-20260901-v1-review",
+  "status": "review_candidate_normalizer_implementation_pending",
+  "applies_to": [
+    "easyicu_full",
+    "generic_code_agent"
+  ],
+  "canonical_files": [
+    "01_plan.json",
+    "02_cohort.json",
+    "03_results.json",
+    "04_diagnostics.json",
+    "05_evidence_manifest.json",
+    "06_report.md",
+    "07_run_receipt.json"
+  ],
+  "normalization": {
+    "fixed_field_order": true,
+    "fixed_file_names": true,
+    "fixed_missing_value_representation": true,
+    "fixed_timestamp_precision": true,
+    "free_text_redaction": "Remove system self-identification and arm-specific boilerplate without changing scientific content, numeric values, limitations, or disposition.",
+    "forbidden_markers": [
+      "EasyICU product or package name",
+      "arm labels",
+      "internal stage identifiers",
+      "owner module, class, or function names",
+      "internal reason-code prefixes",
+      "source checkout and repository paths",
+      "arm-specific log formatting",
+      "arm-diagnostic resource profiles including raw model-turn counts, provider-call counts, tool-call sequences, stage-shaped timing, token distributions, or per-tool latency"
+    ],
+    "content_preservation": "The normalizer may project and redact identifiers but may not repair, add, delete, reinterpret, or recompute scientific content.",
+    "blinded_run_receipt_projection": {
+      "reviewer_visible_fields": [
+        "neutral terminal status",
+        "within every frozen budget: yes or no",
+        "neutral failure category when applicable",
+        "mandatory artifact presence flags"
+      ],
+      "reviewer_hidden_until_scores_lock": [
+        "raw wall time",
+        "provider tokens and billed cost",
+        "model-turn and provider-call counts",
+        "tool-call counts, types, order, and latency",
+        "internal stages, retries, logs, and timestamps finer than the neutral terminal receipt requires"
+      ],
+      "efficiency_analysis": "The unredacted receipt is released only after both independent primary and dimension scores, arm guesses, and adjudication inputs are locked. It is then used for prespecified unblinded efficiency analyses and audit."
+    }
+  },
+  "plan_review_projection": {
+    "fields": [
+      "population",
+      "eligibility",
+      "exposure_or_index",
+      "outcome",
+      "time_origin",
+      "estimand",
+      "method",
+      "missing_data",
+      "diagnostics",
+      "artifacts",
+      "limitations"
+    ],
+    "reviewer_visibility": "Only the normalized plan and neutral data definitions are visible; producing arm, internal workflow, and evaluator answer material remain hidden.",
+    "checklist_identity": "The same frozen checklist, time allowance, and one-revision limit apply to both arms."
+  },
+  "outcome_review_projection": {
+    "implementation_neutral": true,
+    "reviewer_visibility": "The normalized scientific artifacts, their hashes, and the frozen implementation-neutral rubric only.",
+    "arm_guess_after_review": "Each reviewer records predicted arm and confidence after completing the independent scientific rating."
+  },
+  "blinding_pilot": {
+    "material": "Dev9 and Qualification12 outputs not used in the paper denominator",
+    "success_criteria": [
+      "zero forbidden-marker findings",
+      "no content-changing normalizer diff",
+      "reviewer arm-guess accuracy and exact 95% confidence interval reported",
+      "binary primary-endpoint kappa at least 0.70 on qualification material"
+    ],
+    "failure_policy": "Formal launch remains blocked while forbidden markers, content-changing projection, or inadequate reliability remain unresolved."
+  },
+  "audit": {
+    "pre_normalization_digest_required": true,
+    "post_normalization_digest_required": true,
+    "redaction_log_required": true,
+    "redaction_log_hidden_from_blinded_reviewers": true,
+    "source_artifacts_retained_for_adjudication": true,
+    "raw_resource_receipt_access": "restricted to the unblinded audit custodian until blinded scientific scoring and arm guesses are locked"
+  }
+}

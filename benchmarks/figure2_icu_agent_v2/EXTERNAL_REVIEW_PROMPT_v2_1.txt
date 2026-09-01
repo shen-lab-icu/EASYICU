@@ -1,0 +1,96 @@
+v2.1 第一轮外部只读复审提示词（历史留档，已由 EXTERNAL_REREVIEW_PROMPT_v2_1.txt 取代）
+
+请对 EasyICU Figure 2 ICU Research Agent benchmark v2.1 做一次严格、只读、可复现的实验设计复审。
+
+## 审查位置与边界
+
+- 独立 worktree：`/Users/haibo/Documents/GitHub/EASYICU-experiment-v2-1-review-20260901`
+- 分支：`codex/experiment-v2-1-review-20260901`
+- 基线 commit：`79c8ed548a05fa25c9e8d1da5e428899839a09ae`
+- 先读取 `/Users/haibo/Documents/GitHub/AGENTS.md`、该 worktree 内相关 `CLAUDE.md` 和 `项目进度/benchmark实验/CURRENT.md`。
+- 只读审查：不要编辑文件、不要提交、不要切换分支、不要调用 Provider/模型、不要启动正式实验、不要读取真实患者数据。
+- 不要把下面的修改摘要当成事实；必须逐项打开实际文件、核对交叉引用和 SHA-256，并运行无 Provider 的本地校验。
+
+## 必须审查的文件
+
+1. `benchmarks/figure2_icu_agent_v2/experiment_protocol_v2_1.json`
+2. `benchmarks/figure2_icu_agent_v2/heldout27_evaluation_rubric_v2.json`
+3. `benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v2.json`
+4. `benchmarks/figure2_icu_agent_v2/generic_code_agent_spec_v1.json`
+5. `benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json`
+6. `benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v2.json`
+7. `benchmarks/figure2_icu_agent_v2/formal_safety12_taskbank_v2.jsonl`
+8. `benchmarks/figure2_icu_agent_v2/formal_safety12_rubric_v2.json`
+9. `benchmarks/figure2_icu_agent_v2/safety12_external_rationale_v1.json`
+10. `benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json`
+11. `benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json`
+12. `benchmarks/figure2_icu_agent_v2/idea_to_evidence_protocol_v1.json`
+13. `benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json`
+14. `benchmarks/figure2_icu_agent_v2/design_v2_1.py`
+15. `tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py`
+16. 原始 `heldout27_taskbank_v1.jsonl`、`action_space_v1.json`、Qualification12 taskbank，以及历史 v1 protocol，用于检查污染、循环评分和版本边界。
+
+## 请重点验证的修订
+
+此前审查提出了循环 rubric、伪预注册、B 臂缺失、未接入运行门禁、六库数据未就绪、n=27 功效不足、scope-down 归类含混、盲法不足、计划审查不对称、安全题缺少外部依据、WP1 缺少独立实现比较与阈值等问题。请验证 v2.1 是否真正解决，而不是只改措辞：
+
+1. 主要终点是否真正按“任务”为唯一统计单位，并要求回答冻结的问题、结局、暴露/索引、time zero 和 analysis family；`required_stages` 是否已完全退出 A/B 评分，只保留 A 臂内部审计。
+2. `appropriate_safe_noncompletion` 是否只作为次要结局，且不会把 Heldout27 的 scope-down、restricted report、拒绝或改 estimand 计为主要成功。
+3. B 臂是否是有竞争力且可复现的 generic coding agent，而不是弱化版聊天机器人；它是否获得相同模型、token/时间/费用/容器/数据内容/一次计划审查，并拥有 plan→execute→inspect→repair→finalize 循环；Qualification12 的 5/7 正向任务最低门槛是否合理且不会造成结果导向调参。
+4. 标准化 review bundle 是否实现内容保持、固定字段/文件顺序、redaction 审计、盲法 pilot 和评分后 arm guess；是否还存在能直接泄露 A/B 身份的字段或 artifact style。
+5. SAP 的 exact two-sided McNemar 功效值是否可复算；n=27 是否被明确表述为对小到中等差异功效不足；非显著是否没有被解释为等效或非劣。
+6. WP1 是否为真正的 all-or-none gate：任一正式任务所需 database-concept cell 未通过，就在第一次 Provider call 之前中止整个 v2.1，不能事后删除/替换任务。请核对 ricu 的支持范围：其官方 vignette 只覆盖 MIMIC-III、MIMIC-IV、eICU、HiRID、AmsterdamUMCdb，因此 SICdb 应使用独立 source-native 实现审计，不能声称 ricu 覆盖 SICdb。
+7. WP1 的零容忍项、抽样人工审计和独立实现分歧裁决是否足够可执行；是否仍缺少必须在正式冻结前填入的具体概念级阈值或样本量依据。
+8. Safety12 是否已降为次要的 fail-closed behavior characterization，而非“临床安全”确认性结论；neutral disposition、外部方法学 rationale、独立评审和 fixture seal 是否足以降低 EasyICU 自定义答案的循环性。
+9. 当前状态是否诚实地保持为 `review_candidate_no_formal_run_authority`，而不是自称已预注册或已正式冻结；外部时间戳、私有 evaluator 材料托管、amendment policy 和 atomic batch declaration 是否形成完整链条。
+10. `formal_launch_contract_v1.json` 与 `design_v2_1.py` 是否真正 fail closed；在当前状态下任何尝试授权 Provider call 是否都会拒绝。
+11. 公共 Heldout27 可能带来的预训练/项目暴露不对称是否被充分披露。若没有 Blind6 私有外部集，能否仍把结果称为“process-held-out paired benchmark”，其论文 claim ceiling 应怎样写。
+12. 新增 WP5 Idea-to-Evidence3 是否被正确定位为三例、无对照、描述性的 workflow demonstration，而没有混入 Heldout27 确认性分母或暗示 ideation superiority。
+13. WP5 是否真正防止 cherry-picking：三个外部 broad brief 是否全部保留；每例五至八个 candidate 是否完整登记；idea 是否在患者数据和结局分析前选择；后续不可因不可行、阴性或失败而换 idea、换数据库或只展示成功案例。
+14. WP5 的两阶段授权是否自洽：phase A 只能访问封存 brief、受控文献检索和非患者 metadata；selected idea/plan 作为注册算法的派生物被哈希；无 Provider 的 WP1 extension 通过后才可启动 phase B。请特别检查它是否与 core batch 的 first-call lock、外部预注册和正式启动契约冲突。
+15. WP5 的 idea 评价是否合理：bounded novelty 只能相对于检索到的证据，不能声称 universal novelty；candidate 评分不是独立系统样本；n=3 不做显著性检验、成功率或总体推广。两个人工 checkpoint 是否与“非 fully autonomous”边界一致。每例的产品演示是否被真实 receipt 和事件时间线绑定，且不会用重构 UI 隐藏 safe stop、失败或受限结论。
+16. 正式运行数、可选 Repeatability9、WP5 三个 workflow、reviewer workload、顺序/疲劳效应和预算是否内部一致、现实可行。
+
+## 我们有意没有照单全收的建议
+
+请独立判断以下决定是否合理，并给出比“同意/不同意”更具体的理由：
+
+- 没有增加连续复合 co-primary endpoint；九维分数保留为次要分析，因为复合平均可能掩盖 critical failure，且引入权重与多重性问题。
+- 不会因为 reviewer 猜对 arm 而排除样本；arm guess 只用于量化盲法完整性。
+- 不会因为人工 plan review 修改过计划而排除 run；改动与耗时作为次要结局记录。
+- WP1 失败不会在同一协议中自动删除相应任务；必须中止并重新外部登记新版本，避免结果前的机会性缩小任务集。
+- Blind6 私有外部集强烈推荐，但没有把它设为 Heldout27 “process-held-out”称谓的绝对前提；若你不同意，请给出可发表层面的具体替代方案和成本。
+- WP5 使用三个完整披露的外部 broad brief、无 B 臂、无推断检验；它用于说明工作流落地，不用于证明 idea 质量优于其他系统。请判断这种定位是否足以进入主文，还是只能放补充材料。
+
+## 请运行的只读校验
+
+```bash
+cd /Users/haibo/Documents/GitHub/EASYICU-experiment-v2-1-review-20260901
+python -m ruff check benchmarks/figure2_icu_agent_v2/design_v2_1.py tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py
+python -m pytest tests/benchmarks/figure2_icu_agent_v2/test_protocol.py tests/benchmarks/figure2_icu_agent_v2/test_readiness.py tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py -q
+python - <<'PY'
+from benchmarks.figure2_icu_agent_v2.design_v2_1 import validate_review_candidate_bundle
+print(validate_review_candidate_bundle())
+PY
+```
+
+另外请自行复算 SHA-256、Heldout27 随机顺序/arm-first 平衡和 SAP 的 exact McNemar power，不要只相信测试实现本身。
+
+## 输出格式
+
+请按以下结构回答：
+
+1. **总体结论**：`可进入外部复审/预注册准备`、`需小修后再审`、`需大修` 三选一。
+2. **已解决问题**：逐项给文件、字段或行号证据。
+3. **仍然阻断外部预注册的问题**：按 P0/P1/P2 排序；明确哪些是设计缺陷、哪些只是实现/receipt 尚未完成。
+4. **统计审查**：主要 estimand、功效、CI、multiplicity、缺失/失败处理、重复性阶段是否合理。
+5. **公平性与盲法审查**：A/B 能力、输入等价、B 臂竞争力、标准化 bundle、arm guess 的残余偏倚。
+6. **WP1、Safety12 与 WP5 审查**：外部依据、阈值、独立实现、all-or-none 门禁、两阶段授权、反 cherry-picking 和 claim ceiling。
+7. **对六项争议决定的裁决**：每项给“保留/修改”及理由。
+8. **最小修改清单**：只列进入外部预注册前不可缺少的修改，不要把正式运行后才产生的 receipt 当作当前设计文件缺陷。
+9. **最终回答三个问题**：
+   - 当前 v2.1 是否比 v2 有实质性改进？
+   - 当前是否可以调用任何正式 Provider？
+   - 如果只能再做三件事，优先做什么？
+
+请保持审稿人立场，不替作者辩护；同时不要把“尚未执行的启动门禁”误判成“协议没有定义门禁”。

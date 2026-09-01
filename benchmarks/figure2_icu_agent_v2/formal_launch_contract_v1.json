@@ -1,0 +1,76 @@
+{
+  "schema_version": "easyicu.figure2_formal_launch_contract/1",
+  "status": "fail_closed_no_current_authority",
+  "provider_call_default": "deny",
+  "required_receipts": {
+    "design": [
+      "validated v2.1 bundle receipt",
+      "independent external preregistration receipt",
+      "clean exact-head commit and tag receipt"
+    ],
+    "data": [
+      "WP1 all-or-none pass receipt",
+      "native-v2 input manifest with per-task digests",
+      "no patient or task partition leakage receipt"
+    ],
+    "evaluation": [
+      "signed Heldout27 review sheets",
+      "signed Safety12 external rationale and fixture receipts",
+      "signed WP5 idea-to-evidence rubric and external broad-brief template",
+      "normalizer blinding-pilot receipt",
+      "reviewer identity, conflict declarations, independence eligibility check, available-hours declaration, session batching and breaks, replacement coverage, and adjudication capacity"
+    ],
+    "qualification_preconditions": [
+      "independent external registration receipt bound to the clean exact-head design and implementation commit",
+      "frozen EasyICU and generic-agent harnesses, prompts, tool contracts, normalizer, evaluator, model route, and numeric budgets",
+      "Qualification12-A and two unopened access-controlled reserve-set digests with independent authorship and semantic nonoverlap receipts",
+      "empty qualification output directory and scheduler dry-run with Provider access disabled",
+      "signed qualification12 atomic declaration naming the exact set and every call coordinate"
+    ],
+    "qualification": [
+      "EasyICU Qualification12 pass receipt",
+      "generic-arm Qualification12 floor pass receipt",
+      "reviewer-reliability gate receipt"
+    ],
+    "runtime": [
+      "clean exact-head focused and required CI receipt",
+      "container image digest and package lock",
+      "provider route and immutable model identifier",
+      "matched token, time, cost, compute, sampling, and network budgets",
+      "no arm-specific model-turn, provider-call, or tool-call cap; any emergency provider-invocation circuit breaker is numerically identical in both arms",
+      "repository and undeclared-network denial probe; WP5 phase A permits only its separately declared literature-retrieval route"
+    ],
+    "batch": [
+      "one signed atomic core batch declaration binding every core receipt and digest",
+      "scheduler dry-run receipt with no Provider access",
+      "formal output directory confirmed empty"
+    ],
+    "wp5_phase_a": [
+      "all 78 WP2 and WP3 core runs have terminal immutable receipts",
+      "three externally authored and sealed broad briefs with identities and digests",
+      "brief semantic nonoverlap audit against all benchmark splits",
+      "WP5 protocol, rubric, reviewer panel, phase-A budget, retrieval route, and case order sealed",
+      "signed WP5 phase-A ideation declaration"
+    ],
+    "wp5_phase_b_per_case": [
+      "complete immutable candidate registry and preresult selection receipt",
+      "selected idea and approved one-revision plan digests",
+      "passing selected-idea WP1-extension and native-v2 input-seal receipts",
+      "phase-B model, budget, input, and output coordinates",
+      "signed per-case WP5 phase-B declaration"
+    ]
+  },
+  "authorization_scopes": {
+    "qualification12": "Requires every qualification_preconditions receipt and authorizes only the named Qualification12 set. It grants no core or paper authority. Any harness or normalizer change consumes the used set and requires the next unopened preregistered reserve set.",
+    "core_wp2_wp3": "Requires every design, data, evaluation, qualification, runtime, and batch receipt.",
+    "wp5_phase_a": "Requires the frozen core release, all core terminal receipts, and every wp5_phase_a receipt; it cannot access patient rows or outcome results.",
+    "wp5_phase_b_case": "Requires the same frozen release plus every wp5_phase_b_per_case receipt for the requested case; a failed deterministic feasibility gate permanently denies phase B for that case."
+  },
+  "authorization_rule": "A Provider call is authorized only within one explicitly requested scope when every receipt for that scope is present, valid, mutually consistent, bound to the same clean release and protocol digest, and the corresponding signed atomic declaration names that exact call coordinate.",
+  "failure_rule": "Missing, stale, mismatched, unverifiable, or partially passing evidence returns a typed denial. No warning-only or partial-database launch exists.",
+  "current_authority": {
+    "formal_batch_authorized": false,
+    "provider_calls_authorized": false,
+    "reason": "This repository contains only a review candidate and no external registration, input, qualification, evaluator, runtime, or atomic-batch receipts."
+  }
+}

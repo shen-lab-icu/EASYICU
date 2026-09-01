@@ -1,4 +1,65 @@
-# Figure 2 ICU Research Agent benchmark v2
+# Figure 2 ICU Research Agent benchmark
+
+## Current design status (v2.1 review candidate)
+
+`experiment_protocol_v2_1.json` is the current review candidate. It is not an
+external preregistration and grants no Provider-call, formal-batch, or paper
+result authority. The tracked v1 owner remains historical and executable only
+for its original development contract.
+
+The v2.1 candidate adds:
+
+- a competitive generic coding-agent arm with a frozen plan/execute/inspect/
+  repair/finalize loop and a minimum Qualification12 competence floor, with no
+  B-only model-turn cap and two sealed reserve qualification sets;
+- an implementation-neutral review bundle, normalizer audit, blinding pilot,
+  post-score arm-guess assessment, and a blinded receipt projection that hides
+  architecture-diagnostic resource profiles until scoring is locked;
+- one binary task-level primary endpoint: answering the frozen question as
+  specified and being reportable without postrun repair;
+- an estimation-first paired SAP with exact McNemar sensitivity calculations,
+  explicit low-power language, and no continuous co-primary endpoint;
+- an all-or-none six-database WP1 gate, an external implementation comparator
+  on its five supported databases, a source-native SICdb audit, risk-tiered
+  35/50-record semantic audits, and mandatory fresh re-audit after correction;
+- a secondary Safety12 characterization with neutral dispositions, external
+  rationale sources, and independent reviewer sign-off;
+- a separate three-case Idea-to-Evidence demonstration that starts from
+  externally sealed broad clinical briefs, retains every candidate and failed
+  case, selects one idea before patient-level analysis, and follows it through
+  deterministic feasibility, governed execution, EvidenceStore, and bounded
+  manuscript text;
+- an external preregistration plan and a formal launch contract that defaults
+  to denial, including a post-registration Qualification12-only authorization
+  scope before any core or paper-facing run;
+- partially independent Heldout27 review: at least one scoring reviewer and
+  every adjudicator are external to implementation and manuscript authorship,
+  with conflicts and workload capacity sealed before qualification.
+
+WP5 is deliberately not a third arm or an extension of the Heldout27
+denominator. It has no comparator and supports only a descriptive multiple-case
+workflow claim. Three externally authored briefs must all be shown; safe
+nonlanding, workflow failure, null findings, and restricted reports cannot be
+replaced by a more attractive case. Phase-A idea mining uses only declared
+literature retrieval and nonpatient metadata. Each selected idea must then pass
+a deterministic WP1 extension before phase-B patient-data analysis can begin.
+
+Run the no-Provider design check with:
+
+```bash
+python -m pytest tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py -q
+```
+
+`design_v2_1.validate_review_candidate_bundle()` validates asset digests,
+task identity and coverage, schedule reproduction, rubric neutrality, safety
+rationale coverage, exact power scenarios, the generic-arm floor, WP1 scope,
+and fail-closed launch status. It cannot call a model or authorize a run.
+
+Before any formal call, follow `preregistration_plan_v1.json`, satisfy every
+receipt in `formal_launch_contract_v1.json`, and replace the internal review
+candidate with an externally timestamped immutable package.
+
+## Historical v1 owner
 
 This directory is the versioned experiment owner for the Biomni-aligned EasyICU
 evaluation design:

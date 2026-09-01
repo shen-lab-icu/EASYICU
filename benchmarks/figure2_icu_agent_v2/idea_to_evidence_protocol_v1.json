@@ -1,0 +1,133 @@
+{
+  "schema_version": "easyicu.idea_to_evidence_protocol/1",
+  "protocol_ref": "easyicu.figure2_icu_agent_v2/idea-to-evidence3-20260901-v1-review",
+  "status": "review_candidate_external_briefs_pending",
+  "work_package": "WP5_IDEA_TO_EVIDENCE3",
+  "purpose": "Demonstrate whether the frozen EasyICU Research Agent can generate and transparently register candidate ideas from a broad clinical research brief and then carry the one idea selected by two independent human reviewers through a prespecified research plan, governed analysis, evidence-bound artifacts, and a bounded manuscript-ready conclusion.",
+  "evaluation_role": "prespecified_multiple_case_workflow_demonstration",
+  "case_count": 3,
+  "comparison_arm": null,
+  "selection_authority": "The Agent generates and registers candidates; two independent human reviewers select one before patient-level extraction or outcome analysis. The Agent does not autonomously select the research question.",
+  "relationship_to_confirmatory_ab": "WP5 is not part of the Heldout27 denominator, does not estimate A-versus-B superiority, and cannot modify or rescue WP2 or WP3 results.",
+  "external_brief_contract": {
+    "manifest_status": "three_briefs_must_be_authored_and_externally_sealed_before_wp5_ideation",
+    "authoring": "A clinical and methods panel independent of EasyICU implementation authors three broad ICU research themes after seeing the brief template but before seeing any WP5 output.",
+    "required_brief_fields": [
+      "brief_id",
+      "broad_clinical_domain",
+      "intended_decision_or_knowledge_gap",
+      "population_boundary",
+      "explicit_exclusions",
+      "acceptable_databases",
+      "date_authored",
+      "author_conflict_declarations"
+    ],
+    "forbidden_brief_fields": [
+      "fixed exposure or predictor",
+      "fixed outcome",
+      "fixed analysis method",
+      "expected direction or numeric result",
+      "preferred publication claim"
+    ],
+    "coverage": "The three briefs must represent three distinct clinical domains and collectively permit at least three of the six supported databases; the Agent chooses the final database only through the prespecified candidate-selection process.",
+    "contamination_check": "Independent evaluators must certify that no brief reproduces a Dev9, Qualification12, Heldout27, or Formal Safety12 question. Semantic overlap findings are resolved before external sealing.",
+    "all_cases_retained": "All three sealed briefs remain in the reported denominator regardless of novelty, feasibility, execution success, effect direction, or terminal disposition."
+  },
+  "workflow_stages": [
+    {
+      "stage_id": "I01_BRIEF_INGESTION",
+      "required_artifact": "immutable brief receipt and conflict declaration",
+      "gate": "The brief is externally sealed, contains no fixed research answer, and is the only case-specific starting material."
+    },
+    {
+      "stage_id": "I02_BOUNDED_EVIDENCE_MAPPING",
+      "required_artifact": "query log, retrieval receipts, literature snapshot, inclusion log, and evidence-gap map",
+      "gate": "Every literature or metadata claim resolves to a declared query, retrieved source, timestamp, and digest; retrieval completeness is not claimed."
+    },
+    {
+      "stage_id": "I03_CANDIDATE_IDEA_REGISTRY",
+      "required_artifact": "registry containing five to eight candidate ideas with PICO or equivalent elements, bounded novelty statement, relevance, feasibility, risks, and rejection reasons",
+      "gate": "No candidate is deleted after registration. If fewer than five defensible candidates exist, the case records the shortfall rather than inventing filler ideas."
+    },
+    {
+      "stage_id": "I04_PRERESULT_SELECTION",
+      "required_artifact": "two independent candidate score sheets, adjudication if needed, selected-idea receipt, and complete nonselection log",
+      "gate": "Selection occurs before patient-level extraction or outcome analysis, using only the frozen rubric. One candidate is selected; later infeasibility cannot trigger substitution with another candidate."
+    },
+    {
+      "stage_id": "I05_PROTOCOL_TRANSLATION",
+      "required_artifact": "question, population, exposure or index, outcome, time origin, estimand, method, missing-data policy, diagnostics, sensitivity analyses, and claim ceiling",
+      "gate": "Clinical and methods reviewers approve at most one plan revision before any outcome result exists."
+    },
+    {
+      "stage_id": "I06_DATA_FEASIBILITY_AND_INPUT_SEAL",
+      "required_artifact": "selected-idea concept map, source-authority audit, WP1-extension receipt, native-v2 input manifest, and immutable analysis packet",
+      "gate": "Every selected-idea database-concept cell passes deterministic validation before the data-analysis Provider phase. Failure terminates the case as safe_nonlanding; the idea, database, or endpoint is not replaced."
+    },
+    {
+      "stage_id": "I07_GOVERNED_EXECUTION",
+      "required_artifact": "executable code, run receipts, cohort and denominator record, results, diagnostics, sensitivity analyses, and resource receipt",
+      "gate": "The approved plan is executed once in fresh context under the frozen release and budget. No postresult plan change, selective retry, or product repair is allowed."
+    },
+    {
+      "stage_id": "I08_EVIDENCE_AND_REPORTING",
+      "required_artifact": "EvidenceStore manifest, artifact digests, figure or table package, bounded interpretation, limitations, manuscript-ready paragraph, and a replayable provenance-preserving product demonstration trace",
+      "gate": "Every headline number and claim resolves to an artifact and stays within the design, data, diagnostics, and literature authority."
+    }
+  ],
+  "two_phase_execution": {
+    "phase_a_ideation": "I01 through I05 may use the frozen model with only the sealed brief, declared literature retrieval, nonpatient metadata, and six-database capability summaries. Patient rows, outcome results, benchmark taskbanks, and repository access are forbidden.",
+    "interphase_gate": "After one idea and plan are selected, I06 runs deterministically with no Provider call. The selected idea and plan are immutable. A passing receipt permits phase B; a failed receipt terminates the case without replacement.",
+    "phase_b_analysis": "I07 through I08 use the same frozen EasyICU release and declared model configuration with only the sealed selected-idea input packet.",
+    "derived_artifact_boundary": "The selected idea and plan are prespecified outputs of the registered selection algorithm, not posthoc protocol amendments; their hashes are bound in the phase-B declaration."
+  },
+  "run_policy": {
+    "easyicu_only_workflow_runs": 3,
+    "one_fresh_case_context": true,
+    "cross_case_memory": false,
+    "reuse_existing_output": false,
+    "postresult_repair": false,
+    "failed_case_replacement": false,
+    "human_checkpoints": [
+      "preresult candidate selection",
+      "pre-execution plan review"
+    ],
+    "human_postresult_repair": false,
+    "budget_status": "separate phase-A and phase-B token, wall-time, cost, retrieval, and human-time ceilings must be numerically frozen in the WP5 atomic declarations"
+  },
+  "sequence_and_contamination_firewall": {
+    "sequence": "Run WP5 only after every core WP2 and WP3 pair has a terminal immutable receipt. WP5 may occur before or after blinded scoring, but cannot change core artifacts, code, prompts, rubrics, or analyses.",
+    "release_identity": "Use the same immutable EasyICU code, container, owner contracts, and publication gates as the core formal batch. Any product change creates a new descriptive demonstration version and cannot be used to repair the registered WP5 cases.",
+    "benchmark_firewall": "The WP5 runtime cannot read Dev9, Qualification12, Heldout27, Formal Safety12, their rubrics, or their outputs.",
+    "manuscript_firewall": "WP5 findings are reported separately from WP2 effect estimates and cannot be used to redefine the primary endpoint, subgroups, or interpretation."
+  },
+  "literature_retrieval_policy": {
+    "access": "Only a declared literature-search and page-retrieval route is allowed during I02; arbitrary web, repository, email, and messaging access remain denied.",
+    "reproducibility": "Record query strings, databases or APIs, search timestamps, returned identifiers, inclusion decisions, retrieved content digests, and unavailable sources.",
+    "novelty_boundary": "Novelty means not identified as already answered within the bounded retrieved evidence set as of the search timestamp. It is not universal novelty or proof that no prior study exists."
+  },
+  "terminal_dispositions": [
+    "landed_reportable",
+    "landed_restricted",
+    "safe_nonlanding",
+    "workflow_failure"
+  ],
+  "demonstration_package": {
+    "required_for_every_case": "A timestamped event timeline maps each visible Idea Mining, selection, planning, execution, evidence, and reporting screen or event to the underlying immutable receipt. Cases that stop safely still show the stopping gate and reason.",
+    "allowed_media": [
+      "replayable application event trace",
+      "receipt-linked screenshots",
+      "screen recording generated from the real case run",
+      "manuscript workflow figure derived from the same receipts"
+    ],
+    "prohibited": [
+      "simulated scientific results presented as real",
+      "reconstructed success path that hides failed or restricted stages",
+      "manual number insertion",
+      "UI-only claims without matching run and artifact receipts"
+    ],
+    "paper_role": "The demonstration package communicates the workflow; scientific authority remains with the underlying frozen artifacts and reviews."
+  },
+  "evaluation_rubric": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json",
+  "claim_ceiling": "WP5 can demonstrate transparent end-to-end workflow completion, bounded idea selection, governed execution, and evidence traceability in three prespecified cases. It cannot establish superior ideation, universal novelty, research productivity, clinical utility, autonomous science, or a population-level success rate."
+}

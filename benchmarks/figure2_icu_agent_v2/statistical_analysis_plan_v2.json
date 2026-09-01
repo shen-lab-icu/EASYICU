@@ -1,0 +1,157 @@
+{
+  "schema_version": "easyicu.figure2_statistical_analysis_plan/2",
+  "sap_ref": "easyicu.figure2_icu_agent_v2/sap-20260901-v2.1-review",
+  "status": "review_candidate_no_results_seen",
+  "analysis_unit": "task",
+  "confirmatory_family": {
+    "population": "all 27 Heldout27 tasks with one declared run in each arm",
+    "arms": [
+      "easyicu_full",
+      "generic_code_agent"
+    ],
+    "primary_endpoint": "reportable_as_specified_without_postrun_repair",
+    "primary_effect": "paired absolute risk difference, easyicu_full minus generic_code_agent",
+    "alpha": 0.05,
+    "sidedness": "two_sided",
+    "hypothesis_test": "exact McNemar test on discordant task pairs",
+    "intervals": [
+      "Wilson 95% confidence interval for each arm-specific proportion",
+      "task-paired nonparametric bootstrap percentile 95% confidence interval for the absolute risk difference using 100000 replicates and seed 20260901"
+    ],
+    "interpretation_priority": [
+      "effect magnitude",
+      "confidence interval precision",
+      "paired discordance pattern",
+      "exact p value"
+    ],
+    "estimation_first_statement": "The paired risk difference and its confidence interval are the primary interpretation. The exact McNemar p value is supplementary and does not convert an imprecise estimate into evidence of equivalence or absence of effect.",
+    "no_continuous_coprimary_endpoint": "The nine dimension scores remain secondary because a composite could average away critical failures and would add multiplicity and subjective weighting."
+  },
+  "a_priori_sensitivity_and_power": {
+    "method": "Exact two-sided McNemar rejection probabilities enumerated under paired multinomial probabilities p10 for easyicu_full-only success and p01 for generic_code_agent-only success, alpha 0.05.",
+    "n_pairs": 27,
+    "scenarios": [
+      {"p10": 0.20, "p01": 0.05, "risk_difference": 0.15, "power": 0.194},
+      {"p10": 0.25, "p01": 0.05, "risk_difference": 0.20, "power": 0.345, "pairs_for_80_percent_power": 61},
+      {"p10": 0.30, "p01": 0.05, "risk_difference": 0.25, "power": 0.505, "pairs_for_80_percent_power": 45},
+      {"p10": 0.35, "p01": 0.05, "risk_difference": 0.30, "power": 0.650, "pairs_for_80_percent_power": 36},
+      {"p10": 0.40, "p01": 0.05, "risk_difference": 0.35, "power": 0.768},
+      {"p10": 0.50, "p01": 0.05, "risk_difference": 0.45, "power": 0.918}
+    ],
+    "interpretation_boundary": "The 27-pair design is underpowered for small or moderate paired differences. A non-significant result must not be interpreted as equivalence, non-inferiority, or evidence that the arms do not differ. For intuition, an exact two-sided McNemar test cannot reject at alpha 0.05 with five or fewer discordant pairs even when every discordance favors one arm; six versus zero gives p=0.03125.",
+    "concordant_scientific_noncompletion": "Tasks on which both arms appropriately or inappropriately fail remain in the 27-task estimand and both arm-specific denominators; they are concordant pairs, not excluded or invalid observations. Report their count and reasons and provide descriptive sensitivity scenarios for the information carried by discordant pairs, but never delete tasks, change the primary denominator, or reinterpret joint noncompletion as an effective-sample exclusion."
+  },
+  "analysis_sets": {
+    "declared_task_set": "All 27 frozen Heldout27 tasks form the confirmatory set. Every task-arm run remains in the denominator after its first model token unless the complete pair is invalidated by a prespecified pre-token external incident.",
+    "wp1_all_or_none_gate": "Every WP2 and WP3 task-required database-concept cell must pass WP1 before any core A/B Provider call. A failed or unresolved required cell aborts the v2.1 core formal batch. Tasks may not be removed, replaced, or silently reclassified within this protocol. WP5 uses its separately registered two-phase feasibility gate because the selected idea is not known until phase-A ideation ends.",
+    "protocol_amendment_boundary": "If WP1 makes the 27-task suite infeasible, no v2.1 Provider call is permitted. A new externally timestamped protocol version with a new task set and claim ceiling is required.",
+    "no_per_protocol_primary": true,
+    "no_artifact_pseudoreplication": "Rubric items, figures, tables, claims, and evidence records are nested observations and are not independent sample-size units."
+  },
+  "invalid_run_and_retry_policy": {
+    "counts_as_failure_without_retry": [
+      "agent-caused exception",
+      "agent-caused timeout",
+      "budget exhaustion",
+      "invalid tool use",
+      "analysis or artifact failure after the first model token",
+      "refusal or safe block on a Heldout27 bound-result task"
+    ],
+    "pair_may_be_void_and_repeated": [
+      "verified provider or infrastructure outage before the first model token",
+      "verified corrupt sealed input affecting both arms before execution",
+      "verified scheduler failure that prevents one member of a pair from starting"
+    ],
+    "controls": [
+      "The full A/B pair is repeated; never one arm alone.",
+      "The invalid receipt remains archived and excluded with a prespecified reason code.",
+      "No scientific output from the invalid pair may be inspected before the repeat decision."
+    ]
+  },
+  "secondary_analyses": {
+    "appropriate_safe_noncompletion": "Report the paired task-level proportion of runs that fail the primary endpoint but correctly block, request clarification, or narrow scope without authorizing an unsupported claim. It never substitutes for primary success.",
+    "nine_dimension_scores": "Report paired task-level distributions and paired bootstrap median differences with 95% confidence intervals; no confirmatory multiplicity-adjusted claims.",
+    "efficiency": "After blinded scientific scores, arm guesses, and adjudication inputs are locked, unblind raw resource receipts and report paired median differences and IQRs for wall time, provider tokens, billed cost, tool calls, failed executions, and human-review minutes. Raw resource profiles are never visible during blinded primary scoring.",
+    "failure_modes": "Report predeclared neutral failure-category counts and paired task-level transitions descriptively.",
+    "failed_hard_gate_count": "Report the per-task number of failed hard gates from zero to nine and its paired task-level difference as a descriptive severity indicator with a paired bootstrap interval. It is not a co-primary endpoint, is not an interval scale, and receives no additional hypothesis test.",
+    "subgroups": "Database, difficulty, and analysis-family summaries are exploratory only; no subgroup superiority claim is authorized.",
+    "mechanism_trace": "Within easyicu_full, compare the first pre-governance candidate disposition with the terminal authorized disposition. This is mechanism evidence, not a causal component ablation.",
+    "initial_plan_quality": "Score the normalized pre-review plan before human feedback using the frozen arm-neutral plan checklist.",
+    "human_plan_review_effort": "Report review minutes, requested changes, accepted changes, and unresolved reservations by arm. Human review is part of both evaluated workflows and pairs are never excluded because review changed a plan.",
+    "plan_change_stratification": "Descriptively report primary success and review effort for runs with versus without a substantive pre-execution plan change, by arm. This does not change the primary denominator and authorizes no interaction or subgroup claim."
+  },
+  "safety12_analysis": {
+    "population": "all 12 Formal Safety12 task pairs",
+    "outcomes": [
+      "correct_safe_disposition",
+      "unsafe_authorization",
+      "unnecessary_refusal",
+      "reason_category_accuracy"
+    ],
+    "reporting": "Report counts, proportions, and exact Clopper-Pearson 95% confidence intervals by arm; paired comparisons are exploratory.",
+    "claim_ceiling": "The Safety12 analysis supports fail-closed behavior under prespecified challenges, not clinical safety."
+  },
+  "reviewer_reliability": {
+    "binary_primary": "Cohen kappa with 95% bootstrap confidence interval using only the two independent pre-adjudication ratings",
+    "dimension_scores": "quadratic-weighted kappa with 95% bootstrap confidence interval for each dimension",
+    "qualification_target": "binary kappa at least 0.70 before formal launch",
+    "adjudicated_scores_excluded_from_reliability": true,
+    "blinding_integrity": "After each independent review, reviewers guess the producing arm and report confidence. Report guess accuracy with an exact binomial 95% confidence interval. Do not exclude correctly guessed or incorrectly guessed bundles from the primary analysis.",
+    "blinding_consequence_rule": "If the exact 95% confidence-interval lower bound for arm-guess accuracy exceeds 0.50, label blinding as partially compromised in the abstract or main results and discuss the plausible direction of review bias. The primary analysis remains complete and no bundle is excluded.",
+    "review_order": "Bundles are independently randomized within reviewer, balanced across arm and difficulty in blocks, with a prespecified recalibration break after qualification and before formal review."
+  },
+  "missingness": {
+    "agent_or_artifact_missing": "score primary endpoint as failure",
+    "single_reviewer_missing": "obtain a replacement independent review before unblinding",
+    "non_evaluable_after_unblinding": "retain as failure in the primary analysis and report a best-case sensitivity analysis"
+  },
+  "multiplicity": {
+    "single_confirmatory_endpoint": true,
+    "secondary_endpoints": "descriptive and explicitly exploratory",
+    "prohibited": "Selecting a different dimension, subgroup, threshold, or run subset as the primary result after observing outcomes"
+  },
+  "repeatability_stage": {
+    "status": "prespecified_optional_stage_two",
+    "task_ids": [
+      "icu27_t02",
+      "icu27_t08",
+      "icu27_t09",
+      "icu27_t12",
+      "icu27_t16",
+      "icu27_t24",
+      "icu27_t17",
+      "icu27_t22",
+      "icu27_t27"
+    ],
+    "design": "The original primary run is replicate one; each arm receives two additional fresh-context runs per selected task.",
+    "additional_runs": 36,
+    "selection_rationale": "Nine tasks were selected before results to cover basic, intermediate, and advanced difficulty three each; all six databases; and all six analysis families. Selection is coverage-directed rather than outcome-directed.",
+    "analysis": "Report task-level pass consistency, within-task score ranges, and ICC where estimable; this stage does not replace the one-shot primary endpoint."
+  },
+  "idea_to_evidence3_analysis": {
+    "status": "prespecified_descriptive_multiple_case_demonstration",
+    "protocol": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_protocol_v1.json",
+    "rubric": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json",
+    "population": "all three externally sealed broad clinical briefs, retained regardless of candidate quality, feasibility, execution status, effect direction, or terminal disposition",
+    "case_level_terminal_dispositions": [
+      "landed_reportable",
+      "landed_restricted",
+      "safe_nonlanding",
+      "workflow_failure"
+    ],
+    "reporting": [
+      "display all three case timelines and dispositions without selecting a showcase subset",
+      "report every candidate idea, independent preresult score, selection reason, and nonselection reason",
+      "report the candidate funnel and mandatory-artifact completeness separately for each case",
+      "report case-level domain pass or fail without averaging away a failed data, evidence, or interpretation gate",
+      "report tokens, cost, wall time, tool calls, failed executions, and human minutes by phase and case",
+      "show one evidence-lineage diagram and the bounded manuscript paragraph for every case that reaches reporting"
+    ],
+    "inferential_policy": "No hypothesis test, pooled effect estimate, stable success-rate estimate, or confidence interval is used to generalize from three cases. Raw case observations and complete failure or restriction narratives are primary.",
+    "candidate_pseudoreplication": "Candidate ideas, artifacts, claims, tables, and retrieval records are nested within three cases and are not treated as independent system-performance observations.",
+    "missing_and_failure_policy": "A missing artifact fails the relevant case domain. A safe gate remains safe_nonlanding; an agent-caused or contract failure remains workflow_failure. Neither may be replaced with another brief or selected idea.",
+    "relationship_to_confirmatory_family": "WP5 contributes no observation, endpoint, p value, multiplicity adjustment, rescue analysis, or interpretive weight to the Heldout27 confirmatory comparison.",
+    "claim_ceiling": "Three prespecified cases can illustrate workflow integrity and evidence landing but cannot establish superior ideation, universal novelty, autonomous discovery, higher productivity, clinical utility, or a population-level landing probability."
+  },
+  "public_taskbank_disclosure": "Heldout27 is publicly available and is process-held-out, not guaranteed model-unseen. Runtime repository access is denied, but pretraining exposure cannot be excluded and could asymmetrically favor the EasyICU arm because only that arm can invoke EasyICU interfaces. Any later private external Blind set is reported as a separately sealed external validation, not merged into the Heldout27 denominator."
+}

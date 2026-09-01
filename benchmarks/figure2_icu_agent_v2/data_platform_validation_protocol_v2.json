@@ -1,0 +1,120 @@
+{
+  "schema_version": "easyicu.data_platform_validation_protocol/2",
+  "protocol_ref": "easyicu.figure3_data_platform/20260901-v2.1-review",
+  "status": "review_candidate_inputs_pending_seal",
+  "purpose": "Evaluate the deterministic six-database research substrate separately from the LLM-agent comparison.",
+  "databases": [
+    "miiv",
+    "mimic",
+    "eicu",
+    "aumc",
+    "hirid",
+    "sic"
+  ],
+  "concept_scope": "The union of concepts required by the frozen Heldout27 taskbank plus concepts required to establish patient, admission, ICU-stay, time-origin, and outcome identity.",
+  "validation_domains": [
+    {
+      "domain": "source_and_schema_identity",
+      "checks": [
+        "database and version identity",
+        "source table and column lineage",
+        "patient, admission, and ICU-stay key authority",
+        "prepared-package and source-contract digests"
+      ]
+    },
+    {
+      "domain": "concept_state_and_coverage",
+      "checks": [
+        "observed value",
+        "patient-level missing value",
+        "structurally unavailable source",
+        "unknown or uncertified coverage",
+        "mapping or extraction failure"
+      ]
+    },
+    {
+      "domain": "clinical_semantics",
+      "checks": [
+        "unit conversion",
+        "time origin and observation window",
+        "event ordering",
+        "directly observed versus derived value",
+        "treatment and outcome coverage",
+        "repeated stay and patient boundary"
+      ]
+    },
+    {
+      "domain": "reproducibility_and_partition_safety",
+      "checks": [
+        "one-shot versus partitioned extraction equality",
+        "no requested-patient boundary leakage",
+        "stable row-identity and artifact digests",
+        "receipt-to-artifact reproducibility"
+      ]
+    },
+    {
+      "domain": "resource_profile",
+      "checks": [
+        "wall time",
+        "peak resident memory",
+        "peak swap where applicable",
+        "output bytes",
+        "terminal status and failure reason"
+      ]
+    }
+  ],
+  "reference_standard": {
+    "automated": "Frozen source contracts, source documentation, schema invariants, unit tables, time-boundary checks, and independently recomputed digests.",
+    "manual": "For every available transformed concept, inspect a deterministic stratified source-to-output sample per database-concept cell. Standard transformed cells require at least 35 records; critical unit, time-origin, identity, exposure, outcome, repeated-stay, or derived-value cells require at least 50 records. Inspect all records if fewer than the required tier are eligible.",
+    "sampling": "Initial sampling seed 20260901; strata must include boundary times, unit conversions, duplicate events, missing values, and repeated stays when present. Any post-remediation audit uses a new externally recorded seed and a fresh nonoverlapping sample when enough eligible records exist.",
+    "sample_size_rationale": "Thirty-five all-agree observations place the two-sided Wilson 95% lower bound above 0.90; fifty provides a larger defect-discovery audit for the highest-risk transformations. These samples are audit aids, not proof that unsampled records are error-free and not substitutes for deterministic zero-tolerance checks.",
+    "reviewers": "One data-engineering reviewer and one clinically qualified reviewer independently sign the high-risk concept audit before adjudication.",
+    "independent_implementation_comparator": {
+      "overlapping_databases": [
+        "miiv",
+        "mimic",
+        "eicu",
+        "aumc",
+        "hirid"
+      ],
+      "implementation": "ricu from its frozen container version, using an independently written extraction specification rather than EasyICU mappings",
+      "scope_boundary": "ricu is an external implementation comparator, not a gold standard; disagreement triggers source-level adjudication.",
+      "sicdb_exception": "The frozen ricu support set does not include SICdb. SICdb therefore requires a separately implemented source-native SQL or dataframe extraction and source-documentation audit; no ricu claim is made for SICdb."
+    }
+  },
+  "all_or_none_formal_input_gate": {
+    "policy": "Every database-concept cell used by any Heldout27 or Formal Safety12 task must pass before the first core WP2 or WP3 Provider call. Qualification12 has a separate post-registration authorization scope and cannot authorize core execution. A failed or unresolved cell aborts the whole core formal protocol.",
+    "no_posthoc_task_selection": "A failed cell may not be handled by deleting, replacing, or relabelling affected tasks after WP1. Remediation requires a new externally timestamped protocol and fresh qualification evidence.",
+    "deterministic_zero_tolerance": [
+      "requested-patient or requested-stay boundary leakage count equals zero",
+      "receipt or artifact digest mismatch count equals zero",
+      "silent unit-conversion error count equals zero",
+      "silent time-origin or observation-window error count equals zero",
+      "unresolved source, patient, admission, ICU-stay, exposure, or outcome identity count equals zero"
+    ],
+    "discrepancy_classification": "Before any audit output is inspected, discrepancies are classified as critical when they change source identity, cohort membership, concept state, value, unit, time boundary, patient or stay boundary, exposure, outcome, derivation, or task interpretation. Cosmetic formatting or documentation-only findings may be noncritical but remain reported.",
+    "sampled_audit_rule": "A single critical sampled discrepancy immediately fails the database-concept cell. The source cause is adjudicated, any correction is versioned, the pre-fix audit is archived, and the full tier-sized audit is repeated with the new seed and fresh sample. Release requires zero critical discrepancies in the fresh audit; same-record reinspection alone cannot authorize the cell. Report every pre- and post-remediation numerator, denominator, and confidence interval.",
+    "independent_implementation_rule": "Every disagreement with the independent implementation comparator is adjudicated against source rows and documentation. Neither EasyICU nor the comparator wins by default. Release requires zero residual unexplained critical disagreement; pre-adjudication disagreement counts and exact intervals remain reported."
+  },
+  "release_thresholds": {
+    "deterministic_checks": "Every listed zero-tolerance check passes exactly with count zero.",
+    "sampled_critical_semantics": "Zero critical discrepancies in the complete fresh tier-sized audit after any remediation.",
+    "independent_implementation": "Zero residual unexplained critical disagreements after source-level adjudication.",
+    "noncritical_findings": "All are documented with disposition and reviewer sign-off; none may conceal or reclassify a scientific-semantic disagreement.",
+    "authority_boundary": "No agreement proportion or confidence interval overrides a deterministic or sampled critical failure."
+  },
+  "prespecified_outcomes": [
+    "concept-state classification agreement",
+    "source-to-output value and unit agreement",
+    "time-window and identity-boundary agreement",
+    "partition-invariance pass rate",
+    "reproducible-digest pass rate",
+    "task-concept coverage by database",
+    "wall-time and peak-memory profile"
+  ],
+  "failure_policy": "Any unresolved source identity, patient-boundary leakage, silent unit conversion, structural-absence collapse, or receipt mismatch fails the affected database-concept cell and blocks its use in formal agent runs.",
+  "protocol_failure_policy": "Because formal inputs are all-or-none, any affected-cell failure blocks all formal A/B runs under this protocol version.",
+  "analysis": "Report counts, denominators, proportions, exact confidence intervals where sampling is used, and a six-database concept-state heatmap. Do not treat database-concept cells as independent patient outcomes.",
+  "claim_ceiling": "This work package supports deterministic data-substrate validity and reproducibility. It does not demonstrate agent superiority, causal validity, clinical utility, or clinical safety.",
+  "run_count_boundary": "These deterministic extractions and audits are not counted as LLM trajectories."
+}

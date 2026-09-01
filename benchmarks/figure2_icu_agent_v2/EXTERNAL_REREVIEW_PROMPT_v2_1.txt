@@ -1,0 +1,71 @@
+请对 EasyICU Figure 2 v2.1 review candidate 做第二轮严格、只读、差异聚焦的复审。
+
+审查位置：
+`/Users/haibo/Documents/GitHub/EASYICU-experiment-v2-1-review-20260901`
+
+请先记录当前分支、HEAD、git status，并读取 `/Users/haibo/Documents/GitHub/AGENTS.md`、相关 `CLAUDE.md` 以及 `/Users/haibo/Documents/GitHub/项目进度/benchmark实验/CURRENT.md`。只读审查：不要编辑、提交、切换分支、调用 Provider、运行 Qualification12、加载患者数据或启动任何实验。
+
+背景：你上一轮结论为“需小修后再审”，提出主终点评审者独立性、B-only 12 turns、盲评资源指纹、WP1 非零容忍域放行规则、共同科学性失败的功效解释，以及若干 P2 项。作者已进行有界修改。不要相信下面的摘要，必须逐项读取实际文件、独立重算哈希，并检查跨文件一致性。
+
+必须复审：
+
+1. `benchmarks/figure2_icu_agent_v2/experiment_protocol_v2_1.json`
+2. `benchmarks/figure2_icu_agent_v2/heldout27_evaluation_rubric_v2.json`
+3. `benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v2.json`
+4. `benchmarks/figure2_icu_agent_v2/generic_code_agent_spec_v1.json`
+5. `benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json`
+6. `benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v2.json`
+7. `benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json`
+8. `benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json`
+9. `benchmarks/figure2_icu_agent_v2/idea_to_evidence_protocol_v1.json`
+10. `benchmarks/figure2_icu_agent_v2/design_v2_1.py`
+11. `tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py`
+
+请重点裁决以下修改是否真正关闭问题：
+
+1. Heldout27 是否要求至少一名 scoring reviewer 和所有 adjudicator 独立于 EasyICU 实现且不是论文作者；利益冲突、资格与工作量是否在看输出前封存。
+2. B 臂的 `maximum_model_turns=12` 是否已删除；是否明确禁止任何 arm-specific turn/provider-call/tool-call cap；共同公平预算是否仍以 token、wall time、费用和算力为核心；共同 emergency circuit breaker 是否要求相同数值、计数规则和失败后果。
+3. 盲评 `07_run_receipt.json` 是否只显示中性终态、预算合规、失败类别和 artifact flags；原始时间、token、费用、turn/provider/tool-call 序列是否在科学评分、arm guess 和 adjudication 输入锁定前隐藏；内容是否仍可供解盲后效率分析和审计。
+4. WP1 是否现在具有风险分层样本量：普通转换 cell 至少35条，关键单位/时间/身份/暴露/结局/派生值 cell 至少50条；一条 critical discrepancy 是否立即失败；修复后是否必须新 seed、新鲜样本、重新完成整个 tier audit；独立实现裁决后残余未解释 critical disagreement 是否必须为0。
+5. 请判断上述35/50规则是否可执行、是否被正确定位为 defect-discovery audit，而不是把抽样一致率冒充全量正确性。若不同意，请给出具体替代规则，不要只说“需要更大样本”。
+6. `evidence and reportability bundle` 是否通过 review-sheet alias 中性化；forbidden vocabulary 是否覆盖 reportability/publication authority，而不修改历史 v1 taskbank。
+7. WP5 是否明确为“系统生成并登记候选，两名独立人类在患者数据和结局分析前选择一个”，且禁止声称 Agent 自主选择研究问题。
+8. 外部注册 receipt 是否绑定 protocol、validator、validator tests、commit 和 annotated tag；protocol 不把自身摘要递归塞入 frozen_assets 的处理是否合理。
+9. Qualification12 是否已有独立的 post-registration `qualification12` 授权 scope：外部时间戳先于任何 Provider call；Qualification12-A 和两个未打开 reserve sets 预注册；任何 harness/normalizer 修改消耗已用题集并只能用下一个 reserve set；Qualification12 不授予 core 或 paper authority。
+10. 请特别检查完整顺序是否闭合：无 Provider 实现 → clean commit/tag → 外部注册 → Qualification12 scope 与确定性 WP1 → core atomic declaration → 78 core runs → 同一 immutable release 下的 WP5。
+11. core first-call lock 是否现在覆盖到三个 WP5 case 全部终态，同时只允许注册过的 WP5 derived artifacts 在 interphase 增加。
+12. arm-guess CI 下界大于0.5时是否预设标注“blinding partially compromised”；plan changed/unchanged 和 failed hard gate count 是否仅为描述性次要输出，不改变分母、不增加新的确认性检验。
+
+关于你上一轮 P1-e，作者没有把共同科学性失败当作“有效样本排除”。当前立场是：
+
+- 双方共同失败仍属于27个预设任务，保留在两臂分母和配对风险差 estimand 中；
+- 它们在 McNemar 中是 concordant pairs，而不是 invalid observations；
+- SAP 增加 discordant-information 的描述性敏感性和 exact-test 直观边界；
+- 禁止删题、改分母或把共同失败解释为有效样本排除。
+
+请从统计原理独立裁决这一处理。若仍认为它是 P1 阻断项，请明确指出当前无条件 p10/p01 功效模型哪里错误，并给出不改变预设 estimand、不事后删题的可执行修复。
+
+请运行：
+
+```bash
+cd /Users/haibo/Documents/GitHub/EASYICU-experiment-v2-1-review-20260901
+python -m ruff check benchmarks/figure2_icu_agent_v2/design_v2_1.py tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py
+python -m pytest tests/benchmarks/figure2_icu_agent_v2/test_protocol.py tests/benchmarks/figure2_icu_agent_v2/test_readiness.py tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py -q
+python - <<'PY'
+from benchmarks.figure2_icu_agent_v2.design_v2_1 import validate_review_candidate_bundle
+print(validate_review_candidate_bundle())
+PY
+```
+
+请另行独立重算全部 frozen asset SHA-256、Heldout27 schedule/arm-first 和 SAP exact McNemar power，不要只相信 validator。
+
+输出格式：
+
+1. 总体结论：`可进入实现与正式预注册准备`、`仍需小修`、`仍需大修`三选一。
+2. 上轮 P1/P2 逐项状态：closed / partially closed / open，并给文件与行号。
+3. 对共同科学性失败与 McNemar estimand 的最终裁决。
+4. 新发现的问题，只列外部注册前必须修的真实设计缺陷；把实现缺口和未来 receipt 分开。
+5. 是否同意下一步进入 generic harness + normalizer 的无 Provider 实现。
+6. 当前是否授权任何 Provider：必须单独回答。
+
+请保持独立审稿人立场，也不要把“尚未生成的正式 receipt”误判为“协议没有定义门禁”。

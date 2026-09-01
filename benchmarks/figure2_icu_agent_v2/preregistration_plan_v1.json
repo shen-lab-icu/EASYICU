@@ -1,0 +1,48 @@
+{
+  "schema_version": "easyicu.figure2_preregistration_plan/1",
+  "status": "review_candidate_not_registered",
+  "candidate_protocol": "benchmarks/figure2_icu_agent_v2/experiment_protocol_v2_1.json",
+  "required_external_action": "Before any Provider call, deposit an immutable package in an independent registry or embargoed repository that provides a third-party timestamp and immutable identifier.",
+  "registration_package": [
+    "clean isolated commit and tag",
+    "protocol and every frozen design asset",
+    "statistical analysis plan and exact power code",
+    "task identities and schedule",
+    "generic-arm specification",
+    "exact EasyICU and generic-agent harness, prompt, tool, normalizer, evaluator, validator, and validator-test sources",
+    "Qualification12-A and two access-controlled independently authored reserve-set identities and digests",
+    "review-bundle and blinding contract",
+    "WP1 and Safety12 protocols",
+    "WP5 idea-to-evidence protocol, evaluation rubric, external broad-brief template, semantic nonoverlap procedure, two-phase authorization template, and descriptive analysis plan",
+    "analysis code skeleton with no outcomes",
+    "versioned amendment policy"
+  ],
+  "private_evaluator_material": {
+    "policy": "Challenge fixtures, expected Safety12 dispositions, completed item review sheets, and the three WP5 broad briefs may be placed in an access-controlled embargoed deposit, but their identities, hashes, authorship and conflict declarations, and custodian must be included in the public registration record.",
+    "custody": "A named evaluator who is not an EasyICU implementer controls access until scoring is complete."
+  },
+  "required_receipt_fields": [
+    "registry_name",
+    "immutable_registration_id",
+    "registration_timestamp_utc",
+    "embargo_or_public_status",
+    "package_sha256",
+    "protocol_sha256",
+    "validator_sha256",
+    "validator_test_sha256",
+    "design_commit",
+    "annotated_tag",
+    "registrant_identity",
+    "amendment_policy_acknowledged"
+  ],
+  "derived_wp5_artifact_policy": "The WP5 selected idea, approved plan, concept map, and phase-B input are registered outputs of the frozen phase-A selection algorithm. Their post-phase-A hashes are appended to the WP5 phase-B declaration and are not amendments. Changing the brief, candidate registry, selection rule, selected idea, or plan after seeing feasibility or outcome evidence is an amendment and terminates the case.",
+  "post_registration_sequence": [
+    "authorize Qualification12-A only through the qualification12 scope; it remains nonpaper qualification evidence",
+    "run WP1 deterministically under the registered thresholds, in parallel if useful because it makes no Provider call",
+    "if a harness or normalizer changes after qualification, archive the used set and use only the next unopened preregistered reserve set",
+    "authorize the core WP2/WP3 batch only after qualification, blinding, WP1, input, reviewer, runtime, and atomic-batch receipts pass",
+    "authorize WP5 only after the complete core batch is terminal, under its separate phase-A and per-case phase-B scopes"
+  ],
+  "amendment_policy": "Any change after external timestamping and before the first core Provider call requires a versioned amendment that identifies the changed files and rationale. After the first core Provider call, core code and design are immutable. WP5 may add only the prespecified derived artifacts at its registered interphase boundary; any scientific or implementation change requires abandoning the affected batch and registering a new protocol version.",
+  "language_boundary": "Until the external receipt validates, describe v2.1 only as an internal review candidate. Do not call it frozen, preregistered, or formally launched."
+}
