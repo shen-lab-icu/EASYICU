@@ -2,8 +2,8 @@
 
 The experiment-specific receipt gate runs before the production provider
 trust check and before any prompt can reach a transport.  The current design
-candidate authorizer is deliberately fail-closed, so this module cannot launch
-a Provider call until a future registered release replaces that authority.
+candidate authorizer is executable but deliberately fail-closed because no
+trusted external signer key is registered.
 """
 
 from __future__ import annotations
@@ -12,9 +12,11 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
 from easyicu.research_agent.providers.client_trust import authorized_complete
+from easyicu.research_agent.providers.hard_stop import HardStopClient
 from easyicu.research_agent.providers.protocol import LLMMessage
+from easyicu.research_agent.authority.provider_hard_stop import TaskProviderHardStop
 
-from .design_v2_1 import authorize_formal_provider_call
+from .formal_authority import authorize_formal_provider_call
 
 
 _FORMAL_SCOPES = frozenset(
@@ -41,12 +43,17 @@ class FormalCallCoordinate:
                 raise ValueError(f"{field_name} must be a non-empty string")
 
 
+class FormalProviderBudgetMissingError(RuntimeError):
+    reason_code = "FORMAL_PROVIDER_BUDGET_MISSING"
+
+
 def complete_formal_provider_call(
     client: Any,
     messages: Sequence[LLMMessage],
     *,
     receipts: Mapping[str, Any],
     coordinate: FormalCallCoordinate,
+    provider_hard_stop: TaskProviderHardStop | None = None,
     **kwargs: Any,
 ) -> str:
     """Authorize one exact experiment call before trusted transport dispatch."""
@@ -56,7 +63,20 @@ def complete_formal_provider_call(
         "call_coordinate": asdict(coordinate),
     }
     authorize_formal_provider_call(authority_payload)
-    return authorized_complete(client, messages, **kwargs)
+    if provider_hard_stop is None:
+        raise FormalProviderBudgetMissingError(
+            "Formal Provider transport requires the shared durable hard-stop budget"
+        )
+    budgeted_client = HardStopClient(
+        client,
+        role=coordinate.arm,
+        task=provider_hard_stop,
+    )
+    return authorized_complete(budgeted_client, messages, **kwargs)
 
 
-__all__ = ["FormalCallCoordinate", "complete_formal_provider_call"]
+__all__ = [
+    "FormalCallCoordinate",
+    "FormalProviderBudgetMissingError",
+    "complete_formal_provider_call",
+]

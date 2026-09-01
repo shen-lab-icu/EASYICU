@@ -15,6 +15,7 @@ from benchmarks.figure2_icu_agent_v2.generic_code_agent_harness import (
     DockerRunnerBackend,
     GenericCodeAgentHarness,
     GenericExecutionResult,
+    GenericBudgetExhausted,
     PlanReviewDecision,
 )
 from benchmarks.figure2_icu_agent_v2.formal_provider_gate import FormalCallCoordinate
@@ -22,6 +23,7 @@ from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     normalize_review_bundle,
 )
 from easyicu.research_agent.providers.protocol import LLMMessage
+from easyicu.research_agent.execution.runner import DockerRunner
 
 
 PLAN = {
@@ -37,6 +39,7 @@ PLAN = {
     "artifacts": ["cohort table", "result table"],
     "limitations": ["observational design"],
 }
+MANDATORY_ARTIFACTS = ("cohort flow", "result table", "core diagnostic")
 
 
 class _OfflineModel:
@@ -77,6 +80,11 @@ def _finalize_action():
         "headline_evidence": [
             {"claim": "risk difference", "artifact": "03_results.json"}
         ],
+        "artifact_inventory": {
+            "cohort flow": ["02_cohort.json"],
+            "result table": ["03_results.json"],
+            "core diagnostic": ["04_diagnostics.json"],
+        },
     }
 
 
@@ -102,6 +110,7 @@ def test_offline_generic_harness_executes_and_writes_complete_bundle(tmp_path: P
     result = harness.run(
         task_prompt="Estimate the association.",
         neutral_input_description="cohort.parquet and dictionary.json",
+        mandatory_artifacts=MANDATORY_ARTIFACTS,
         output_dir=tmp_path / "bundle",
         review_plan=lambda plan: PlanReviewDecision("approve"),
     )
@@ -118,12 +127,20 @@ def test_offline_generic_harness_executes_and_writes_complete_bundle(tmp_path: P
     manifest = json.loads(
         (result.output_dir / "05_evidence_manifest.json").read_text()
     )
-    assert set(manifest["files"]) == {
+    assert set(manifest["harness_computed_file_digests"]) == {
         "01_plan.json",
         "02_cohort.json",
         "03_results.json",
         "04_diagnostics.json",
         "06_report.md",
+    }
+    assert manifest["agent_asserted_headline_evidence"] == [
+        {"claim": "risk difference", "artifact": "03_results.json"}
+    ]
+    assert receipt["mandatory_artifact_presence"] == {
+        "cohort flow": True,
+        "result table": True,
+        "core diagnostic": True,
     }
     normalized = normalize_review_bundle(result.output_dir)
     assert tuple(normalized.files) == CANONICAL_FILES
@@ -142,6 +159,7 @@ def test_one_plan_revision_then_approval(tmp_path: Path):
     result = harness.run(
         task_prompt="Estimate the association.",
         neutral_input_description="neutral input package",
+        mandatory_artifacts=MANDATORY_ARTIFACTS,
         output_dir=tmp_path / "bundle",
         review_plan=review_once,
     )
@@ -155,7 +173,7 @@ def test_one_plan_revision_then_approval(tmp_path: Path):
 
 def test_execution_timeout_is_terminal_without_model_retry(tmp_path: Path):
     model = _OfflineModel(
-        [PLAN, {"action": "execute", "language": "r", "code": "print(1)"}]
+        [PLAN, {"action": "execute", "language": "shell", "code": "echo 1"}]
     )
     harness = GenericCodeAgentHarness(
         model=model,
@@ -165,6 +183,7 @@ def test_execution_timeout_is_terminal_without_model_retry(tmp_path: Path):
     result = harness.run(
         task_prompt="Estimate the association.",
         neutral_input_description="neutral input package",
+        mandatory_artifacts=MANDATORY_ARTIFACTS,
         output_dir=tmp_path / "bundle",
         review_plan=lambda plan: PlanReviewDecision("approve"),
     )
@@ -176,6 +195,9 @@ def test_execution_timeout_is_terminal_without_model_retry(tmp_path: Path):
     )
     receipt = json.loads((result.output_dir / "07_run_receipt.json").read_text())
     assert receipt["failure_category"] == "execution_timeout"
+    assert receipt["mandatory_artifact_presence"] == {
+        label: False for label in MANDATORY_ARTIFACTS
+    }
     normalized = normalize_review_bundle(result.output_dir)
     assert tuple(normalized.files) == CANONICAL_FILES
 
@@ -187,6 +209,7 @@ def test_nonfinite_or_extra_action_fields_produce_terminal_bundle(tmp_path: Path
     result = harness.run(
         task_prompt="Estimate.",
         neutral_input_description="neutral package",
+        mandatory_artifacts=MANDATORY_ARTIFACTS,
         output_dir=tmp_path / "bundle",
         review_plan=lambda plan: PlanReviewDecision("approve"),
     )
@@ -204,6 +227,7 @@ def test_invalid_initial_plan_produces_terminal_bundle(tmp_path: Path):
     result = harness.run(
         task_prompt="Estimate.",
         neutral_input_description="neutral package",
+        mandatory_artifacts=MANDATORY_ARTIFACTS,
         output_dir=tmp_path / "bundle",
         review_plan=lambda plan: PlanReviewDecision("approve"),
     )
@@ -212,6 +236,53 @@ def test_invalid_initial_plan_produces_terminal_bundle(tmp_path: Path):
     assert sorted(path.name for path in result.output_dir.iterdir()) == sorted(
         CANONICAL_FILES
     )
+
+
+def test_shared_budget_exhaustion_produces_terminal_bundle(tmp_path: Path):
+    class ExhaustedModel:
+        def complete(self, *, phase, messages):
+            del phase, messages
+            raise GenericBudgetExhausted
+
+    harness = GenericCodeAgentHarness(
+        model=ExhaustedModel(),
+        executor=_OfflineExecutor(),
+        resource_snapshot=lambda: {"within_frozen_budget": False},
+    )
+
+    result = harness.run(
+        task_prompt="Estimate.",
+        neutral_input_description="neutral package",
+        mandatory_artifacts=MANDATORY_ARTIFACTS,
+        output_dir=tmp_path / "bundle",
+        review_plan=lambda plan: PlanReviewDecision("approve"),
+    )
+
+    assert result.failure_category == "budget_exhausted"
+    receipt = json.loads((result.output_dir / "07_run_receipt.json").read_text())
+    assert receipt["within_frozen_budget"] is False
+    assert all(not value for value in receipt["mandatory_artifact_presence"].values())
+
+
+def test_empty_referenced_result_is_reported_absent(tmp_path: Path):
+    action = _finalize_action()
+    action["results"] = {}
+    harness = GenericCodeAgentHarness(
+        model=_OfflineModel([PLAN, action]),
+        executor=_OfflineExecutor(),
+    )
+
+    result = harness.run(
+        task_prompt="Estimate.",
+        neutral_input_description="neutral package",
+        mandatory_artifacts=MANDATORY_ARTIFACTS,
+        output_dir=tmp_path / "bundle",
+        review_plan=lambda plan: PlanReviewDecision("approve"),
+    )
+
+    receipt = json.loads((result.output_dir / "07_run_receipt.json").read_text())
+    assert result.terminal_status == "completed"
+    assert receipt["mandatory_artifact_presence"]["result table"] is False
 
 
 class _RunnerResult:
@@ -223,30 +294,38 @@ class _RunnerResult:
     artefacts = []
 
 
-class _RunnerSpy:
+class _RunnerSpy(DockerRunner):
     def __init__(self):
         self.calls = []
+        self.network = "none"
+        self.cpu_limit = "4"
+        self.memory_limit = "8g"
+        self.pids_limit = 256
+        self.open_files_limit = 4096
+        self.timeout_seconds = 300.0
 
     def run(self, *, step_id, code):
         self.calls.append((step_id, code))
         return _RunnerResult()
 
 
-@pytest.mark.parametrize(
-    ("language", "interpreter"), [("r", "Rscript"), ("shell", "bash")]
-)
 def test_docker_adapter_uses_fixed_interpreter_without_host_shell(
-    language: str,
-    interpreter: str,
 ):
     runner = _RunnerSpy()
     backend = DockerRunnerBackend(runner)
 
-    backend.execute(action_id="generic_0001", language=language, code="echo $HOME")
+    backend.execute(
+        action_id="generic_0001", language="shell", code="echo $HOME"
+    )
 
     wrapper = runner.calls[0][1]
-    assert f"subprocess.run([{interpreter!r}, str(script_path)]" in wrapper
+    assert "subprocess.run(['bash', str(script_path)]" in wrapper
     assert "shell=True" not in wrapper
+
+
+def test_docker_adapter_rejects_non_docker_backend():
+    with pytest.raises(TypeError, match="requires a DockerRunner"):
+        DockerRunnerBackend(object())
 
 
 def test_formal_gateway_denies_before_transport():
@@ -278,7 +357,7 @@ def test_formal_gateway_denies_before_transport():
         )
 
     assert getattr(exc_info.value, "reason_code", None) == (
-        "FORMAL_PROVIDER_CALL_NOT_AUTHORIZED"
+        "FORMAL_AUTHORITY_SIGNER_NOT_REGISTERED"
     )
     assert transport.called is False
 

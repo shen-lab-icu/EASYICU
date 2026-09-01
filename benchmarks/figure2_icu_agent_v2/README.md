@@ -64,11 +64,14 @@ rationale coverage, exact power scenarios, the generic-arm floor, WP1 scope,
 and fail-closed launch status. It cannot call a model or authorize a run.
 
 `generic_code_agent_harness.py` implements the frozen generic baseline loop
-and adapts the existing isolated DockerRunner to Python, R, and shell.
+and adapts the existing isolated DockerRunner to Python and in-container shell.
 `formal_generic_runner.py` is its only Provider-backed formal entry point and
 routes every model turn through `formal_provider_gate.py`. The current launch
-contract still denies every Provider call; the offline tests use injected
-fakes and do not grant qualification or formal-run authority.
+contract still denies every Provider call. `formal_authority.py` is the
+executable authority owner: it verifies an Ed25519-signed atomic declaration
+against the preregistered public key and binds every required receipt plus the
+exact call coordinate. This review candidate intentionally has no registered
+key; offline test keys do not grant qualification or formal-run authority.
 
 Before any formal call, follow `preregistration_plan_v1.json`, satisfy every
 receipt in `formal_launch_contract_v1.json`, and replace the internal review

@@ -30,9 +30,13 @@
     "protocol_sha256",
     "validator_sha256",
     "validator_test_sha256",
+    "formal_authority_sha256",
+    "formal_authority_test_sha256",
     "design_commit",
     "annotated_tag",
     "registrant_identity",
+    "trusted_authority_signer_identity",
+    "trusted_authority_ed25519_public_key_base64",
     "amendment_policy_acknowledged"
   ],
   "derived_wp5_artifact_policy": "WP5 candidate versions, reviewer feedback, rejection reasons, and deterministic feasibility findings are append-only outputs of the frozen iterative discovery contract. Preoutcome revision or replacement is permitted within the registered phase-A budget. The final selected idea, approved plan, concept map, and phase-B input are locked and hashed before patient-level outcome analysis. Changing them after phase-B lock or after seeing an outcome result terminates the registered showcase; a new question requires a separately versioned case and fresh validation data.",

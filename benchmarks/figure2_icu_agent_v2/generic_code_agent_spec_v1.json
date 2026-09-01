@@ -1,7 +1,7 @@
 {
   "schema_version": "easyicu.generic_code_agent_spec/1",
   "spec_ref": "easyicu.figure2_icu_agent_v2/generic-code-agent-20260901-v1-review",
-  "status": "review_candidate_harness_implemented_no_formal_authority",
+  "status": "review_candidate_harness_and_authority_implemented_no_registered_signer",
   "purpose": "Define a competitive generic data-science coding agent baseline without donating EasyICU machine-enforced governance.",
   "model_and_budget": {
     "provider": "identical to easyicu_full and fixed in the atomic batch declaration",
@@ -27,15 +27,15 @@
   "implementation": {
     "harness_owner": "benchmarks/figure2_icu_agent_v2/generic_code_agent_harness.py",
     "formal_provider_owner": "benchmarks/figure2_icu_agent_v2/formal_generic_runner.py",
-    "execution_backend": "The generic harness reuses the frozen isolated DockerRunner. Python runs directly; R and shell use fixed Rscript and bash argv wrappers inside the same container without host-shell execution.",
+    "formal_authority_owner": "benchmarks/figure2_icu_agent_v2/formal_authority.py",
+    "execution_backend": "The generic harness requires the frozen isolated DockerRunner with network disabled and every resource ceiling enabled. Python runs directly; shell actions use a fixed bash argv wrapper inside the same container without host-shell execution. R is not advertised because the frozen image does not contain a registered R runtime and package lock.",
     "formal_provider_rule": "Every formal generic-arm model turn must pass through complete_formal_provider_call before transport. Offline model injection is development-only and has no formal authority.",
-    "budget_owner_boundary": "The harness imposes no arm-specific iteration cap. The identically configured Provider budget wrapper, cost meter, wall clock, and container ceilings remain external frozen authorities and must fail closed before or during a call."
+    "budget_owner_boundary": "The harness imposes no arm-specific iteration cap. Formal model turns and Docker executions are bound to the same durable task-level Provider hard-stop ledger, while billed-cost reconciliation and frozen container ceilings remain shared authorities. Exhaustion fails closed before or during a call or execution."
   },
   "tools": [
     "generic file read and write",
     "generic shell execution",
     "Python execution",
-    "R execution",
     "generic package documentation installed in the frozen container",
     "hash computation and archive inspection"
   ],
@@ -63,7 +63,7 @@
     "EasyICU diagnostic and reportability enforcement",
     "EasyICU publication gates"
   ],
-  "system_prompt": "You are a general-purpose clinical data-science coding agent. Answer only the current research task using the supplied neutral data package, data dictionary, frozen literature packet, and generic execution tools. First write a concise analysis plan defining the population, exposure or index, outcome, time origin, estimand, method, missing-data handling, diagnostics, and required artifacts. After the single permitted human plan review, implement the approved plan with executable Python or R code. Inspect errors and scientific diagnostics, revise code within the frozen budget when necessary, and produce the implementation-neutral review bundle. Preserve patient and time boundaries; distinguish absent, missing, unknown, and observed-negative states; do not use post-outcome or post-treatment information as baseline data; do not claim causality, transportability, clinical utility, or source support beyond the design and evidence. Every headline number must resolve to a generated file and SHA-256 digest. If the requested result is not identifiable or supportable, use the shared neutral disposition vocabulary and explain the evidence trigger and permitted next action. Do not access EasyICU code, repositories, APIs, internal reason codes, task answer material, or other benchmark items.",
+  "system_prompt": "You are a general-purpose clinical data-science coding agent. Answer only the current research task using the supplied neutral data package, data dictionary, frozen literature packet, and generic execution tools. First write a concise analysis plan defining the population, exposure or index, outcome, time origin, estimand, method, missing-data handling, diagnostics, and required artifacts. After the single permitted human plan review, implement the approved plan with executable Python or shell code. Inspect errors and scientific diagnostics, revise code within the frozen budget when necessary, and produce the implementation-neutral review bundle. Preserve patient and time boundaries; distinguish absent, missing, unknown, and observed-negative states; do not use post-outcome or post-treatment information as baseline data; do not claim causality, transportability, clinical utility, or source support beyond the design and evidence. Every headline number must resolve to a generated file and SHA-256 digest. If the requested result is not identifiable or supportable, use the shared neutral disposition vocabulary and explain the evidence trigger and permitted next action. Do not access EasyICU code, repositories, APIs, internal reason codes, task answer material, or other benchmark items.",
   "output_contract": "benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json",
   "qualification_floor": {
     "development_material": "Dev9 may be used for generic harness engineering and case-neutral prompt repair.",

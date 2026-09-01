@@ -44,11 +44,12 @@ _REDACTIONS = (
     ),
 )
 _STATIC_REJECTED_MARKERS = (
-    re.compile(r"\b(?:FORMAL_PROVIDER|WP5_|SAFETY12_|EASYICU_)[A-Z0-9_]*\b"),
+    re.compile(
+        r"\b(?:FORMAL_|GENERIC_|REVIEW_BUNDLE_|WP5_|SAFETY12_|EASYICU_)"
+        r"[A-Z0-9_]*\b"
+    ),
     re.compile(r"\bI\d{2}_[A-Z][A-Z0-9_]+\b"),
 )
-_SCREAMING_CASE_MARKER = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){2,}\b")
-_SCREAMING_CASE_ALLOWLIST = frozenset()
 _PATH_MARKER = re.compile(
     r"(?<![:\w])/(?:Users|home|workspace|workspaces|tmp|var/tmp|mnt|opt|app)/"
     r"[^\s\]\[(){}<>'\"]+"
@@ -197,12 +198,6 @@ def _reject_forbidden_markers(text: str, *, file_name: str, location: str) -> No
             raise ReviewBundleNormalizationError(
                 "REVIEW_BUNDLE_UNSAFE_MARKER",
                 f"{file_name}:{location}",
-            )
-    for match in _SCREAMING_CASE_MARKER.finditer(text):
-        if match.group(0) not in _SCREAMING_CASE_ALLOWLIST:
-            raise ReviewBundleNormalizationError(
-                "REVIEW_BUNDLE_UNSAFE_MARKER",
-                f"{file_name}:{location}:{match.group(0)}",
             )
     if any(pattern.search(text) for pattern in _RESOURCE_FINGERPRINTS):
         raise ReviewBundleNormalizationError(
@@ -396,6 +391,28 @@ def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
                 raise ReviewBundleNormalizationError(
                     "REVIEW_BUNDLE_RECEIPT_FIELD_MISSING",
                     repr(missing),
+                )
+            artifact_presence = receipt["mandatory_artifact_presence"]
+            if (
+                not isinstance(receipt["terminal_status"], str)
+                or not receipt["terminal_status"].strip()
+                or not isinstance(receipt["within_frozen_budget"], bool)
+                or (
+                    receipt["failure_category"] is not None
+                    and not isinstance(receipt["failure_category"], str)
+                )
+                or not isinstance(artifact_presence, dict)
+                or not artifact_presence
+                or any(
+                    not isinstance(label, str)
+                    or not label.strip()
+                    or not isinstance(present, bool)
+                    for label, present in artifact_presence.items()
+                )
+            ):
+                raise ReviewBundleNormalizationError(
+                    "REVIEW_BUNDLE_RECEIPT_FIELD_INVALID",
+                    name,
                 )
             projected = {field: receipt[field] for field in _RECEIPT_VISIBLE_FIELDS}
             normalized, findings = _normalize_value(

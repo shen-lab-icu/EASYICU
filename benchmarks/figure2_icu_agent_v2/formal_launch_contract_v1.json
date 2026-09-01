@@ -2,6 +2,16 @@
   "schema_version": "easyicu.figure2_formal_launch_contract/1",
   "status": "fail_closed_no_current_authority",
   "provider_call_default": "deny",
+  "authority_owner": "benchmarks/figure2_icu_agent_v2/formal_authority.py",
+  "signature_verification": {
+    "algorithm": "Ed25519",
+    "trusted_signer_id": null,
+    "trusted_public_key_base64": null,
+    "registration_rule": "The signer identity and public key must be fixed in the independently timestamped preregistration package before any formal Provider call. A test key, agent-generated key, mutable environment variable, or key supplied inside a run receipt is not trusted authority.",
+    "signed_payload_schema": "easyicu.figure2_atomic_declaration/1",
+    "receipt_payload_schema": "easyicu.figure2_launch_receipt/1; every required receipt must have status=passed, a release binding, evidence digest, issuer, and UTC issue time; the external registration receipt must additionally satisfy every preregistration required_receipt_field and bind the same signer key",
+    "canonicalization": "UTF-8 JSON with sorted keys, no insignificant whitespace, ensure_ascii=false, and NaN forbidden"
+  },
   "required_receipts": {
     "design": [
       "validated v2.1 bundle receipt",
@@ -67,11 +77,11 @@
     "wp5_phase_a": "Requires the frozen core release, all core terminal receipts, and every wp5_phase_a receipt. It permits bounded iterative Provider calls over the sealed direction, declared literature, nonpatient metadata, and neutral deterministic-feasibility receipts, but cannot access patient rows or patient-level outcome results.",
     "wp5_phase_b_showcase": "Requires the same frozen release plus every wp5_phase_b_showcase receipt. It authorizes only the locked flagship input and forbids postoutcome substitution, selective retry, or product repair."
   },
-  "authorization_rule": "A Provider call is authorized only within one explicitly requested scope when every receipt for that scope is present, valid, mutually consistent, bound to the same clean release and protocol digest, and the corresponding signed atomic declaration names that exact call coordinate.",
+  "authorization_rule": "A Provider call is authorized only within one explicitly requested scope when every receipt for that scope is present, valid, mutually consistent, bound to the same clean release and protocol digest, and the Ed25519-verified atomic declaration from the preregistered signer names that exact call coordinate.",
   "failure_rule": "Missing, stale, mismatched, unverifiable, or partially passing evidence returns a typed denial. No warning-only or partial-database launch exists.",
   "current_authority": {
     "formal_batch_authorized": false,
     "provider_calls_authorized": false,
-    "reason": "This repository contains only a review candidate and no external registration, input, qualification, evaluator, runtime, or atomic-batch receipts."
+    "reason": "This repository contains only a review candidate: no trusted external signer key is registered and no external registration, input, qualification, evaluator, runtime, or atomic-batch receipts exist."
   }
 }

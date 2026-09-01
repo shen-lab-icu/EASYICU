@@ -28,6 +28,8 @@ def test_review_candidate_bundle_validates_without_run_authority() -> None:
     assert receipt["safety_task_count"] == 12
     assert receipt["idea_to_evidence_case_count"] == 1
     assert receipt["generic_harness_implemented"] is True
+    assert receipt["formal_authority_owner_implemented"] is True
+    assert receipt["trusted_signer_registered"] is False
     assert receipt["review_bundle_normalizer_implemented"] is True
     assert receipt["provider_calls_authorized"] is False
     assert receipt["formal_batch_authorized"] is False
@@ -52,7 +54,25 @@ def test_formal_provider_call_fails_closed() -> None:
     with pytest.raises(DesignContractError) as exc_info:
         authorize_formal_provider_call({})
 
-    assert exc_info.value.reason_code == "FORMAL_PROVIDER_CALL_NOT_AUTHORIZED"
+    assert exc_info.value.reason_code == "FORMAL_AUTHORITY_SIGNER_NOT_REGISTERED"
+
+
+def test_formal_gate_static_contract_rejects_transport_before_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unsafe_gate = tmp_path / "unsafe_formal_provider_gate.py"
+    unsafe_gate.write_text(
+        "def unsafe():\n"
+        "    authorized_complete()\n"
+        "    authorize_formal_provider_call()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(design_v2_1, "FORMAL_PROVIDER_GATE_PATH", unsafe_gate)
+
+    with pytest.raises(DesignContractError) as exc_info:
+        validate_review_candidate_bundle()
+
+    assert exc_info.value.reason_code == "FORMAL_PROVIDER_GATE_SEQUENCE_INVALID"
 
 
 def test_qualification_set_consumption_is_symmetric() -> None:
