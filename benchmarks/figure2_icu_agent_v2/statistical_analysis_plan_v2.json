@@ -140,19 +140,20 @@
       "workflow_failure"
     ],
     "reporting": [
-      "identify the main-paper case as a purposively selected success showcase rather than a representative or randomly selected case",
+      "identify the main-paper case as the registered purposively selected flagship and report its terminal disposition; if it lands, identify it as a success demonstration rather than a representative or randomly selected case",
       "display the complete append-only direction, literature, candidate, reviewer-feedback, feasibility, selection, lock, execution, and reporting timeline",
       "report every candidate version, revision, rejection reason, feasibility failure, final selection reason, and unresolved reviewer reservation",
       "report the candidate funnel and mandatory-artifact completeness by iteration round",
-      "report showcase-domain pass or fail without averaging away a failed data, evidence, or interpretation gate",
+      "report independently signed mandatory-artifact completeness and showcase-domain pass or fail without averaging away a failed data, evidence, or interpretation gate",
+      "state whether the broad research direction was internally authored and distinguish phase-A collaborators from the independent terminal evaluators",
       "report tokens, cost, wall time, Provider and retrieval calls, failed executions, iteration rounds, and human minutes by phase",
       "show one evidence-lineage diagram and the bounded manuscript paragraph if the locked flagship reaches reporting"
     ],
     "inferential_policy": "No hypothesis test, pooled effect estimate, case-sampling confidence interval, success-rate estimate, or population generalization is permitted. WP5 is a qualitative and quantitative process demonstration, not a performance experiment.",
     "candidate_pseudoreplication": "Candidate versions, artifacts, claims, tables, and retrieval records are nested within one showcase workflow and are not treated as independent system-performance observations.",
-    "iteration_and_failure_policy": "Preoutcome candidate revision or replacement is allowed within the frozen iterative discovery budget when every version and reason remains in the append-only trace. After the final phase-B lock or first patient-level outcome result, a safe gate, missing artifact, or workflow failure remains the registered terminal disposition and cannot be replaced by another candidate or result.",
+    "iteration_and_failure_policy": "Preoutcome candidate revision or replacement is allowed within the frozen iterative discovery budget when every version and reason remains in the append-only trace. Once the phase-B declaration is signed, the registered flagship's terminal disposition is the WP5 result. A safe gate, missing artifact, safe_nonlanding, or workflow_failure is reported as the WP5 outcome, cannot be replaced by another candidate or result, and may not be withdrawn from the manuscript.",
     "relationship_to_confirmatory_family": "WP5 contributes no observation, endpoint, p value, multiplicity adjustment, rescue analysis, or interpretive weight to the Heldout27 confirmatory comparison.",
-    "claim_ceiling": "One purposively selected success showcase can illustrate iterative human-Agent workflow integrity and evidence landing but cannot establish superior ideation, universal novelty, autonomous discovery, representativeness, higher productivity, clinical utility, or an idea-landing probability."
+    "claim_ceiling": "One purposively selected registered flagship can illustrate iterative human-Agent workflow integrity and, if reached, evidence landing, but cannot establish superior ideation, universal novelty, autonomous discovery, representativeness, higher productivity, clinical utility, or an idea-landing probability."
   },
   "public_taskbank_disclosure": "Heldout27 is publicly available and is process-held-out, not guaranteed model-unseen. Runtime repository access is denied, but pretraining exposure cannot be excluded and could asymmetrically favor the EasyICU arm because only that arm can invoke EasyICU interfaces. Any later private external Blind set is reported as a separately sealed external validation, not merged into the Heldout27 denominator."
 }

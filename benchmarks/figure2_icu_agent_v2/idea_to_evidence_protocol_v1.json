@@ -11,7 +11,7 @@
   "relationship_to_confirmatory_ab": "WP5 is a purposively selected descriptive showcase. It is not part of the Heldout27 denominator, does not estimate an idea-landing rate or A-versus-B superiority, and cannot modify or rescue WP2 or WP3 results.",
   "initial_direction_contract": {
     "manifest_status": "one_real_broad_research_direction_and_the_iterative_discovery_contract_must_be_externally_sealed_before_wp5_ideation",
-    "authoring": "The study team or an invited clinical collaborator supplies one authentic broad ICU research direction. External authorship is not required because WP5 demonstrates collaborative workflow rather than unbiased case sampling.",
+    "authoring": "The study team or an invited clinical collaborator supplies one authentic broad ICU research direction. External authorship is not required because WP5 demonstrates collaborative workflow rather than unbiased case sampling. The manuscript must state whether the direction was internally authored.",
     "required_fields": [
       "direction_id",
       "broad_clinical_domain",
@@ -29,7 +29,7 @@
       "claim that the case is representative of all possible research directions"
     ],
     "contamination_check": "Independent evaluators certify before sealing that the initial direction does not reproduce a Dev9, Qualification12, Heldout27, or Formal Safety12 question.",
-    "showcase_selection_disclosure": "The flagship is purposively selected to demonstrate a successful end-to-end workflow. This is permitted because WP5 estimates no success rate, superiority effect, or representative population quantity. The complete append-only discovery trace and selection rationale must remain visible."
+    "showcase_selection_disclosure": "The flagship is purposively selected after outcome-blind feasibility to maximize the chance of an informative end-to-end demonstration. This is permitted because WP5 estimates no success rate, superiority effect, or representative population quantity. The complete append-only discovery trace, selection rationale, internal or external direction authorship, and registered terminal disposition must remain visible."
   },
   "workflow_stages": [
     {
@@ -89,6 +89,7 @@
     "postoutcome_candidate_replacement": false,
     "reuse_existing_outcome_result": false,
     "postresult_product_repair": false,
+    "terminal_reporting_rule": "Once the phase-B declaration is signed, the registered flagship's terminal disposition is the WP5 result. If it terminates as safe_nonlanding or workflow_failure, that disposition is reported as the WP5 outcome; WP5 may not be withdrawn from the manuscript after phase B is declared.",
     "human_checkpoints": [
       "iterative clinical and methods feedback",
       "final question and protocol lock",
@@ -128,7 +129,7 @@
       "manual number insertion",
       "UI-only claims without matching run and artifact receipts"
     ],
-    "paper_role": "The main paper may intentionally present the landed flagship success case. The case-selection and iteration trace must be disclosed, and scientific authority remains with the locked analysis and evidence artifacts."
+    "paper_role": "The main paper presents the registered flagship case and its terminal disposition. If the case lands, it may be presented as a successful workflow demonstration; otherwise the registered safe_nonlanding or workflow_failure disposition remains reportable. The case-selection and iteration trace must be disclosed, and scientific authority remains with the locked analysis and evidence artifacts."
   },
   "evaluation_rubric": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json",
   "claim_ceiling": "WP5 can demonstrate that one purposively selected, transparently iterated human-Agent case reached an evidence-bound scientific output under the frozen workflow. It cannot estimate an idea-generation or landing rate, establish superior ideation, prove universal novelty, support autonomous-science claims, or generalize scientific validity beyond the showcase."

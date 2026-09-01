@@ -45,6 +45,9 @@ version and rejection reason remains visible. The final idea and plan are
 locked only after feasibility passes and before patient-level outcome analysis.
 After that lock, a failed, null, or restricted analysis cannot be replaced by a
 more attractive candidate or result.
+Once the phase-B declaration is signed, the registered terminal disposition is
+reported even if it is `safe_nonlanding` or `workflow_failure`; WP5 cannot be
+withdrawn from the manuscript because it did not land.
 
 Run the no-Provider design check with:
 

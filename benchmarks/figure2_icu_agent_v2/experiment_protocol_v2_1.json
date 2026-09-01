@@ -9,7 +9,7 @@
     "EasyICU provides a reproducible typed research substrate across six ICU databases when the deterministic validation work package passes.",
     "With the same model and scientifically equivalent data content, the complete EasyICU Research Agent may improve task-level reportability without postrun repair relative to a matched generic code agent if the paired primary result supports that claim.",
     "Formal Safety12 may characterize differences in correct fail-closed disposition under twelve prespecified challenge categories as a secondary analysis.",
-    "WP5 may demonstrate one transparently and purposively selected flagship success case: the Agent and human reviewers iteratively generate, critique, revise, and register candidate ideas before patient-level outcome analysis, then lock one feasible idea and carry it through governed execution, evidence binding, and bounded reporting."
+    "WP5 may demonstrate one transparently and purposively selected registered flagship case: the Agent and human reviewers iteratively generate, critique, revise, and register candidate ideas before patient-level outcome analysis, then lock one feasible idea and carry it through governed execution, evidence binding, and bounded reporting. If it lands, it may be presented as a success demonstration; otherwise its registered terminal disposition remains the WP5 result."
   ],
   "prohibited_claims": [
     "fully autonomous research because one human plan review remains mandatory",
@@ -52,7 +52,7 @@
     {
       "role": "statistical_analysis_plan",
       "path": "benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v2.json",
-      "sha256": "301b87e614e87a3cfcae9c6de5fbdc58d3be996eb855105abbfaa35be581b3f5"
+      "sha256": "dd89208ad0f5afb7b94ddc5f8237484315336c9cdf160dd8fc34630933b6d034"
     },
     {
       "role": "formal_safety12_taskbank",
@@ -62,7 +62,7 @@
     {
       "role": "formal_safety12_rubric",
       "path": "benchmarks/figure2_icu_agent_v2/formal_safety12_rubric_v2.json",
-      "sha256": "7882f7cfceba73280536779ab9d9fbe4577346fdce869c0720d4972851142211"
+      "sha256": "abaa6c428303a7d9488303f84f69e21cc80eabd8cb8bd54a8ccb2da8e9567c24"
     },
     {
       "role": "safety12_external_rationale",
@@ -87,22 +87,22 @@
     {
       "role": "preregistration_plan",
       "path": "benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json",
-      "sha256": "cfd228f2ef1a32d10c4de1574142daac9c006172cf4d3723e1992dc776153b1d"
+      "sha256": "e98a9b70208f164fb0ed9a9bee03daf00a0eae731b697efd1d9719593e65be3a"
     },
     {
       "role": "formal_launch_contract",
       "path": "benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json",
-      "sha256": "fd3e7d1d0a95425ffacdac7c74eced271536c7c7693c177c664182536aa98695"
+      "sha256": "c35901a6d9e7dd23bf626f441c3f434a82222bbdafd0a425335f5e2ab76d889d"
     },
     {
       "role": "idea_to_evidence_protocol",
       "path": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_protocol_v1.json",
-      "sha256": "bda54e1a5be98b05ac193184be2f61eae1ad9e4aa7232374393539a90b123fb0"
+      "sha256": "c96f9537389bd3b09b1eaa391dd344d8231c7f663ba6d48fa09dc1dcfecb66af"
     },
     {
       "role": "idea_to_evidence_evaluation_rubric",
       "path": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json",
-      "sha256": "525630a4837d1bf330fa4594fcec3a357822fe3825f467745e9956a1f8381acf"
+      "sha256": "a2022ea6fc1308e100bb1c32cc6f2fd6fc04b1c88bb3ccd6abd8950422722a54"
     }
   ],
   "work_packages": [
