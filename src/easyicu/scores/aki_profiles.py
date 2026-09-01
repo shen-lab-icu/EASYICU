@@ -1,10 +1,12 @@
-"""Versioned source-native AKI phenotype profiles.
+"""Versioned public-reference and source-native AKI phenotype profiles.
 
-The canonical EasyICU phenotype remains :func:`kdigo_stages`.  This module
-adds explicitly selected compatibility profiles for database-maintainer or
-study-author implementations.  A source-native profile never replaces the
-canonical columns and never silently turns an unavailable implementation into
-an EasyICU-defined AKI stage.
+Current renal exports use a pinned MIT-LCP semantic reference port alongside
+an explicitly selected database-maintainer or study-author profile.  The
+historical EasyICU strict phenotype remains callable for sealed-release
+reproduction and evidence-quality receipts, but is not emitted as the current
+disease definition.  A source-native profile never replaces reference columns
+and never silently turns an unavailable implementation into an EasyICU-defined
+AKI stage.
 """
 
 from __future__ import annotations

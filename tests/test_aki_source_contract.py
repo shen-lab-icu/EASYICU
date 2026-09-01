@@ -26,6 +26,7 @@ def test_kdigo_uses_explicit_phenotype_input_contracts() -> None:
         "kdigo_urine_input",
         "weight",
         "acute_rrt_input",
+        "crrt_mode_input",
     ]
     assert dictionary["kdigo_creat"]["concepts"] == [
         "kdigo_creatinine_input"
