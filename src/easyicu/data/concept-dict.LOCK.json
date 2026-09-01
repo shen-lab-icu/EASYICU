@@ -1,18 +1,13 @@
 {
   "finalized": true,
-  "finalized_note": "定稿 2026-08-19 — 基于干净提交 9913f31c 对六库 renal 及其 KDIGO 依赖闭包重新读取原始数据，保留经验证的其余 18 个模块。AKI 肌酐使用真实观测的 prior-only 168 小时历史，不采用未来值或 eGFR 回推；尿量、急性 RRT、跨库时间轴与缺失可判定合同保持显式。六库全行规则复算和 M1 三库 1,759,552 条记录复算均为零不一致，90 例去标识轨迹审计完成。",
-  "locked_for_extraction_run": "full6_native_v2_kdigo_7d_baseline_9913f31c_20260819",
-  "concept_dict_sha256": "e3fd2fcb9d4a65fdaa58c5bc1edece0b1d8e7c685c13310bedef86fdd7138b00",
+  "finalized_note": "定稿 2026-09-01 — 基于干净提交 d34ca8a5 对六库 renal 模块重新读取原始数据，并从已封存的 9913f31c 发布复用其余 18 个模块。公开 AKI 合同采用固定的 MIT-LCP KDIGO 参考移植，同时发布各数据库 source-native 对照或显式不可用回执；公开参考使用广义活动性 RRT，MIMIC-IV native 保留官方 CRRT 模式语义。六库字段、范围、时序、缺失状态与来源提交审计通过，旧 strict/harmonized 疾病字段未进入新 renal 导出。",
+  "locked_for_extraction_run": "full6_native_v3_aki_ref_native_d34ca8a5_20260901",
+  "concept_dict_sha256": "b3b6f9ee52a4d4789c38303556391612ead09a91e913529aecb2e47e599106e9",
   "sofa2_dict_sha256": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
-  "total_concepts": 254,
-  "own_concepts_not_in_ricu": 130,
+  "total_concepts": 255,
+  "own_concepts_not_in_ricu": 131,
   "new_this_round": [
-    "vent_mode",
-    "vent_breath_seq",
-    "driving_pres_controlled",
-    "kdigo_creatinine_input",
-    "kdigo_urine_input",
-    "acute_rrt_input"
+    "crrt_mode_input"
   ],
   "extraction_contract": {
     "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
@@ -34,16 +29,16 @@
   "gates_passed": {
     "aggregate_arity_violations": 0,
     "json_roundtrip": true,
-    "concept_catalog_tests": "Targeted 2026-08-19 KDIGO/source-contract/release-sealer gate: 67 passed after the 168-hour prior-only baseline refresh; prior broader related suite: 360 passed, 3 skipped.",
+    "concept_catalog_tests": "Targeted 2026-09-01 AKI reference/source-native, source-contract and release-related suite: 160 passed.",
     "extract_chunk_cap_tests": "39 passed (tests/test_extract_chunk_cap.py — never > 3 chunks any db/module)",
     "module_extraction_tests": "test_concept_bounds_enforcement updated to the one-wide-file-per-module contract",
-    "full_pipeline_smoke": "Six databases completed raw renal re-extraction at clean commit 9913f31c; the remaining 18 validated modules were byte-reused from the clean 82abec4b parent. Whole-export creatinine-stage recomputation and M1 three-database urine/final-stage recomputation found zero contradictions."
+    "full_pipeline_smoke": "Six databases completed raw renal re-extraction and native republishing at clean commit d34ca8a5; the remaining 18 validated modules were byte-reused from the sealed 9913f31c release. The six final renal Parquets passed the reference/native field, stage-range, temporal-use, missingness-status, legacy-column exclusion and provenance audit."
   },
   "audit_coverage": {
     "own103_vs_official_code": "38 fixes (aggregate arity, plr dimension, 3 units, eICU blood-product wrong-table, HiRID route errors)",
     "recall_sweep": "43 fixes (near-broken SIC mean_airway_pres/calcium_iv/bicarbonate/nitroglycerin; AUMC packed_rbc/ft4/retic; class-vs-molecule enoxaparin/milrinone/warfarin; eICU wrong-table nicardipine/diltiazem/pantoprazole)",
     "cross_db_distribution_scan": "235 concepts scanned; all our-own >=3x outliers resolved or explained (ferritin/myoglobin = true assay-selection difference, ng/mL==ug/L identity)",
     "vent_mode": "new harmonised mode concepts (MIMIC-IV/III/AUMC/HiRID); driving_pres_controlled = mode-conditioned driving pressure",
-    "final_data_distribution_check": "PASSED — candidate full6_native_v2_m1_renal_resp_outcome_d78c5b3a_20260817 contains 6 x 19 readable native-v2 modules with refreshed dependency closure. Death/timed-death counts are AUMC 2473/2473, eICU 18004/0 (structurally unavailable), HiRID 2062/2062, MIMIC-III 5813/5813, MIMIC-IV 9466/9466 and SIC 2100/2100; negative source times remain explicit (AUMC 299, MIMIC-III 90, MIMIC-IV 28). HiRID and SIC strict Sepsis modules remain explicitly unavailable because their sources lack the required infection evidence."
+    "final_data_distribution_check": "PASSED — candidate full6_native_v3_aki_ref_native_d34ca8a5_20260901 contains 6 x 19 readable native-v2 modules. Reference AKI stage is materialized in all six databases; source-native stage is materialized for MIMIC-III/MIMIC-IV, while AUMC/SIC future-looking case endpoints are not embedded in hourly exports, eICU remains components-only, and HiRID fails closed without the required auxiliary source. MIMIC-IV reference/native differences are consistent with the intentional broad-active-RRT versus official-CRRT distinction."
   }
 }
