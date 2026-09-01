@@ -6,6 +6,7 @@ does not load patient data, and cannot launch an experiment.
 
 from __future__ import annotations
 
+import ast
 from collections import Counter
 import hashlib
 import json
@@ -33,6 +34,8 @@ IDEA_TO_EVIDENCE_PROTOCOL_PATH = PACKAGE_ROOT / "idea_to_evidence_protocol_v1.js
 IDEA_TO_EVIDENCE_RUBRIC_PATH = (
     PACKAGE_ROOT / "idea_to_evidence_evaluation_rubric_v1.json"
 )
+GENERIC_HARNESS_PATH = PACKAGE_ROOT / "generic_code_agent_harness.py"
+FORMAL_GENERIC_RUNNER_PATH = PACKAGE_ROOT / "formal_generic_runner.py"
 
 
 class DesignContractError(ValueError):
@@ -265,6 +268,60 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("SAFETY12_PATIENT_ROW_BOUNDARY_MISSING", safety_fixture_boundary)
 
     generic_spec = _load_json(GENERIC_SPEC_PATH)
+    if generic_spec["status"] != (
+        "review_candidate_harness_implemented_no_formal_authority"
+    ):
+        _fail("GENERIC_HARNESS_STATUS_INVALID", generic_spec["status"])
+    implementation = generic_spec["implementation"]
+    if implementation["harness_owner"] != str(
+        GENERIC_HARNESS_PATH.relative_to(REPO_ROOT)
+    ) or implementation["formal_provider_owner"] != str(
+        FORMAL_GENERIC_RUNNER_PATH.relative_to(REPO_ROOT)
+    ):
+        _fail("GENERIC_HARNESS_OWNER_DRIFT", repr(implementation))
+    if not GENERIC_HARNESS_PATH.is_file() or not FORMAL_GENERIC_RUNNER_PATH.is_file():
+        _fail("GENERIC_HARNESS_IMPLEMENTATION_MISSING", repr(implementation))
+    formal_runner_tree = ast.parse(
+        FORMAL_GENERIC_RUNNER_PATH.read_text(encoding="utf-8")
+    )
+    formal_runner_imports = {
+        node.module
+        for node in ast.walk(formal_runner_tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    formal_runner_imports.update(
+        alias.name
+        for node in ast.walk(formal_runner_tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    )
+    formal_runner_calls = {
+        node.func.id
+        for node in ast.walk(formal_runner_tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    forbidden_provider_imports = {
+        module
+        for module in formal_runner_imports
+        if module.startswith("easyicu.research_agent.providers.")
+        and module != "easyicu.research_agent.providers.protocol"
+    }
+    if forbidden_provider_imports:
+        _fail(
+            "FORMAL_GENERIC_PROVIDER_GATE_BYPASS",
+            "provider import: " + ", ".join(sorted(forbidden_provider_imports)),
+        )
+    if "authorized_complete" in formal_runner_calls:
+        _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", "direct authorized_complete")
+    if any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "complete"
+        for node in ast.walk(formal_runner_tree)
+    ):
+        _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", "direct .complete call")
+    if "complete_formal_provider_call" not in formal_runner_calls:
+        _fail("FORMAL_GENERIC_PROVIDER_GATE_MISSING", repr(formal_runner_calls))
     floor = generic_spec["qualification_floor"]
     if "At least 5 of the 7" not in floor["positive_task_floor"]:
         _fail("GENERIC_QUALIFICATION_FLOOR_DRIFT", repr(floor))
@@ -351,6 +408,15 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("WP5_TERMINAL_EVALUATOR_INDEPENDENCE_MISSING", evaluator_text)
     if "all six showcase domains" not in terminal_evaluation["scope"]:
         _fail("WP5_TERMINAL_EVALUATION_SCOPE_MISSING", repr(terminal_evaluation))
+    if not any(
+        "signed independent terminal-evaluation receipt" in artifact
+        and "final terminal disposition" in artifact
+        for artifact in wp5_rubric["mandatory_showcase_artifacts"]
+    ):
+        _fail(
+            "WP5_TERMINAL_EVALUATION_RECEIPT_MISSING",
+            repr(wp5_rubric["mandatory_showcase_artifacts"]),
+        )
     interpretation_domain = next(
         domain
         for domain in wp5_rubric["showcase_domains"]
@@ -421,6 +487,10 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("WP1_COMPARATOR_SCOPE_INVALID", repr(comparator))
 
     review_contract = _load_json(REVIEW_CONTRACT_PATH)
+    if review_contract["status"] != (
+        "review_candidate_normalizer_implemented_no_formal_authority"
+    ):
+        _fail("BLINDING_NORMALIZER_STATUS_INVALID", review_contract["status"])
     preservation = review_contract["normalization"]["content_preservation"]
     if "may not repair, add, delete, reinterpret, or recompute" not in preservation:
         _fail("BLINDING_NORMALIZER_CONTENT_MUTATION", preservation)
@@ -428,6 +498,12 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     if not any("arm-diagnostic resource profiles" in marker for marker in forbidden_markers):
         _fail("BLINDING_RESOURCE_FINGERPRINT_GUARD_MISSING", repr(forbidden_markers))
     receipt_projection = review_contract["normalization"]["blinded_run_receipt_projection"]
+    visible_fields = receipt_projection["reviewer_visible_fields"]
+    if not any(
+        "always present and null when not applicable" in field
+        for field in visible_fields
+    ):
+        _fail("BLINDING_FAILURE_CATEGORY_SHAPE_AMBIGUOUS", repr(visible_fields))
     if "model-turn and provider-call counts" not in receipt_projection["reviewer_hidden_until_scores_lock"]:
         _fail("BLINDING_RAW_RESOURCE_PROJECTION_INVALID", repr(receipt_projection))
 
@@ -497,6 +573,8 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         "safety_task_count": len(safety_tasks),
         "idea_to_evidence_case_count": wp5_protocol["case_count"],
         "frozen_asset_count": len(protocol["frozen_assets"]),
+        "generic_harness_implemented": True,
+        "review_bundle_normalizer_implemented": True,
         "provider_calls_authorized": False,
         "formal_batch_authorized": False,
     }

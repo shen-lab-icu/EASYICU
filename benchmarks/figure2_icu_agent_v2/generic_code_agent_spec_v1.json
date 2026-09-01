@@ -1,7 +1,7 @@
 {
   "schema_version": "easyicu.generic_code_agent_spec/1",
   "spec_ref": "easyicu.figure2_icu_agent_v2/generic-code-agent-20260901-v1-review",
-  "status": "review_candidate_implementation_pending",
+  "status": "review_candidate_harness_implemented_no_formal_authority",
   "purpose": "Define a competitive generic data-science coding agent baseline without donating EasyICU machine-enforced governance.",
   "model_and_budget": {
     "provider": "identical to easyicu_full and fixed in the atomic batch declaration",
@@ -23,6 +23,13 @@
     "maximum_plan_revision_after_human_review": 1,
     "error_recovery": "The agent may inspect execution errors, artifacts, and diagnostics and revise its own code within the common frozen budget. Agent-caused timeout or budget exhaustion is terminal and is not retried.",
     "fresh_context": "Every task begins with a new context, workspace, and container. Cross-task memory and reuse are forbidden."
+  },
+  "implementation": {
+    "harness_owner": "benchmarks/figure2_icu_agent_v2/generic_code_agent_harness.py",
+    "formal_provider_owner": "benchmarks/figure2_icu_agent_v2/formal_generic_runner.py",
+    "execution_backend": "The generic harness reuses the frozen isolated DockerRunner. Python runs directly; R and shell use fixed Rscript and bash argv wrappers inside the same container without host-shell execution.",
+    "formal_provider_rule": "Every formal generic-arm model turn must pass through complete_formal_provider_call before transport. Offline model injection is development-only and has no formal authority.",
+    "budget_owner_boundary": "The harness imposes no arm-specific iteration cap. The identically configured Provider budget wrapper, cost meter, wall clock, and container ceilings remain external frozen authorities and must fail closed before or during a call."
   },
   "tools": [
     "generic file read and write",

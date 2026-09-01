@@ -1,7 +1,7 @@
 {
   "schema_version": "easyicu.arm_neutral_review_bundle/1",
   "contract_ref": "easyicu.figure2_icu_agent_v2/review-bundle-20260901-v1-review",
-  "status": "review_candidate_normalizer_implementation_pending",
+  "status": "review_candidate_normalizer_implemented_no_formal_authority",
   "applies_to": [
     "easyicu_full",
     "generic_code_agent"
@@ -36,7 +36,7 @@
       "reviewer_visible_fields": [
         "neutral terminal status",
         "within every frozen budget: yes or no",
-        "neutral failure category when applicable",
+        "neutral failure category field always present and null when not applicable",
         "mandatory artifact presence flags"
       ],
       "reviewer_hidden_until_scores_lock": [

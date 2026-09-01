@@ -25,7 +25,8 @@
     "EvidenceStore manifest and artifact digests",
     "bounded report, limitations, and manuscript-ready paragraph",
     "receipt-linked replayable product demonstration trace",
-    "tokens, cost, wall time, Provider and retrieval calls, failed executions, iteration rounds, and human minutes"
+    "tokens, cost, wall time, Provider and retrieval calls, failed executions, iteration rounds, and human minutes",
+    "signed independent terminal-evaluation receipt containing both evaluators' mandatory-artifact completeness ratings, all six showcase-domain ratings, disagreements, adjudication when required, and the final terminal disposition"
   ],
   "iterative_candidate_review": {
     "timing": "Discovery feedback and final selection occur before patient-level outcome analysis. Deterministic feasibility summaries may inform preoutcome iteration, but patient rows and outcome results are hidden from phase-A Provider calls and human candidate selection.",

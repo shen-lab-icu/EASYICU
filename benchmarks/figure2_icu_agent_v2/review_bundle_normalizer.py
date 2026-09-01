@@ -7,9 +7,12 @@ normalized under the closed rules fail before a reviewer bundle is emitted.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping
@@ -24,6 +27,7 @@ CANONICAL_FILES = (
     "06_report.md",
     "07_run_receipt.json",
 )
+ACTION_SPACE_PATH = Path(__file__).resolve().parent / "action_space_v1.json"
 _SCIENTIFIC_JSON_FILES = frozenset(CANONICAL_FILES[:5])
 _RECEIPT_VISIBLE_FIELDS = (
     "terminal_status",
@@ -38,15 +42,29 @@ _REDACTIONS = (
         re.compile(r"\b(?:easyicu_full|generic_code_agent)\b", re.IGNORECASE),
         "the producing workflow",
     ),
-    (
-        "repository_path",
-        re.compile(r"(?:/Users/[^\s\]\[(){}<>'\"]+|\bsrc/easyicu/[^\s\]\[(){}<>'\"]*)"),
-        "<redacted-path>",
-    ),
 )
-_REJECTED_MARKERS = (
+_STATIC_REJECTED_MARKERS = (
     re.compile(r"\b(?:FORMAL_PROVIDER|WP5_|SAFETY12_|EASYICU_)[A-Z0-9_]*\b"),
     re.compile(r"\bI\d{2}_[A-Z][A-Z0-9_]+\b"),
+)
+_SCREAMING_CASE_MARKER = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){2,}\b")
+_SCREAMING_CASE_ALLOWLIST = frozenset()
+_PATH_MARKER = re.compile(
+    r"(?<![:\w])/(?:Users|home|workspace|workspaces|tmp|var/tmp|mnt|opt|app)/"
+    r"[^\s\]\[(){}<>'\"]+"
+    r"|\b(?:src/easyicu|benchmarks/figure2_icu_agent_v2)/[^\s\]\[(){}<>'\"]+"
+)
+_RESOURCE_FINGERPRINTS = (
+    re.compile(
+        r"\b(?:model[ _-]?turns?|provider[ _-]?calls?|tool[ _-]?calls?|"
+        r"provider[ _-]?tokens?|billed[ _-]?cost|per[ _-]?tool[ _-]?latency|"
+        r"stage[ _-]?shaped[ _-]?timing)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b\d+(?:\.\d+)?\s*(?:input|output|provider)?\s*tokens?\b",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -55,6 +73,30 @@ class ReviewBundleNormalizationError(ValueError):
         self.reason_code = reason_code
         self.detail = detail
         super().__init__(f"{reason_code}: {detail}")
+
+
+@lru_cache(maxsize=1)
+def _internal_markers() -> tuple[frozenset[str], frozenset[str]]:
+    try:
+        payload = json.loads(ACTION_SPACE_PATH.read_text(encoding="utf-8"))
+        stages = payload["stages"]
+        stage_ids = frozenset(stage["stage_id"] for stage in stages)
+        reason_codes = frozenset(
+            reason
+            for stage in stages
+            for reason in stage["failure_reason_codes"]
+        )
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ReviewBundleNormalizationError(
+            "REVIEW_BUNDLE_MARKER_AUTHORITY_INVALID",
+            str(ACTION_SPACE_PATH),
+        ) from exc
+    if len(stage_ids) != 11 or len(reason_codes) != 22:
+        raise ReviewBundleNormalizationError(
+            "REVIEW_BUNDLE_MARKER_AUTHORITY_INVALID",
+            f"stages={len(stage_ids)}, reason_codes={len(reason_codes)}",
+        )
+    return stage_ids, reason_codes
 
 
 @dataclass(frozen=True)
@@ -70,6 +112,17 @@ def _sha256(payload: bytes) -> str:
 
 
 def _load_json_object(raw: bytes, name: str) -> dict[str, Any]:
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ReviewBundleNormalizationError(
+                    "REVIEW_BUNDLE_JSON_KEY_DUPLICATE",
+                    f"{name}:{key}",
+                )
+            result[key] = value
+        return result
+
     def reject_constant(value: str) -> None:
         raise ReviewBundleNormalizationError(
             "REVIEW_BUNDLE_NONFINITE_JSON",
@@ -77,7 +130,11 @@ def _load_json_object(raw: bytes, name: str) -> dict[str, Any]:
         )
 
     try:
-        value = json.loads(raw.decode("utf-8"), parse_constant=reject_constant)
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_constant,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ReviewBundleNormalizationError(
             "REVIEW_BUNDLE_JSON_INVALID",
@@ -88,7 +145,70 @@ def _load_json_object(raw: bytes, name: str) -> dict[str, Any]:
             "REVIEW_BUNDLE_JSON_SHAPE_INVALID",
             name,
         )
+    _reject_nonfinite_json(value, file_name=name, location="")
     return value
+
+
+def _reject_nonfinite_json(value: Any, *, file_name: str, location: str) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ReviewBundleNormalizationError(
+            "REVIEW_BUNDLE_NONFINITE_JSON",
+            f"{file_name}:{location}",
+        )
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_nonfinite_json(
+                item,
+                file_name=file_name,
+                location=f"{location}/{index}",
+            )
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_nonfinite_json(
+                item,
+                file_name=file_name,
+                location=f"{location}/{key}",
+            )
+
+
+def _redact_path(match: re.Match[str]) -> str:
+    value = match.group(0)
+    trailing = ""
+    while value and value[-1] in ".,;:!?":
+        trailing = value[-1] + trailing
+        value = value[:-1]
+    return "<redacted-path>" + trailing
+
+
+def _contains_exact_marker(text: str, marker: str) -> bool:
+    return bool(re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", text))
+
+
+def _reject_forbidden_markers(text: str, *, file_name: str, location: str) -> None:
+    stage_ids, reason_codes = _internal_markers()
+    for marker in sorted(stage_ids | reason_codes):
+        if _contains_exact_marker(text, marker):
+            raise ReviewBundleNormalizationError(
+                "REVIEW_BUNDLE_UNSAFE_MARKER",
+                f"{file_name}:{location}:{marker}",
+            )
+    for pattern in _STATIC_REJECTED_MARKERS:
+        if pattern.search(text):
+            raise ReviewBundleNormalizationError(
+                "REVIEW_BUNDLE_UNSAFE_MARKER",
+                f"{file_name}:{location}",
+            )
+    for match in _SCREAMING_CASE_MARKER.finditer(text):
+        if match.group(0) not in _SCREAMING_CASE_ALLOWLIST:
+            raise ReviewBundleNormalizationError(
+                "REVIEW_BUNDLE_UNSAFE_MARKER",
+                f"{file_name}:{location}:{match.group(0)}",
+            )
+    if any(pattern.search(text) for pattern in _RESOURCE_FINGERPRINTS):
+        raise ReviewBundleNormalizationError(
+            "REVIEW_BUNDLE_RESOURCE_FINGERPRINT",
+            f"{file_name}:{location}",
+        )
 
 
 def _redact_text(text: str, *, file_name: str, location: str) -> tuple[str, list[dict[str, str]]]:
@@ -105,13 +225,52 @@ def _redact_text(text: str, *, file_name: str, location: str) -> tuple[str, list
                     "replacement_count": str(count),
                 }
             )
-    for pattern in _REJECTED_MARKERS:
-        if pattern.search(output):
-            raise ReviewBundleNormalizationError(
-                "REVIEW_BUNDLE_UNSAFE_MARKER",
-                f"{file_name}:{location}",
-            )
+    output, path_count = _PATH_MARKER.subn(_redact_path, output)
+    if path_count:
+        findings.append(
+            {
+                "file": file_name,
+                "location": location,
+                "rule": "repository_path",
+                "replacement_count": str(path_count),
+            }
+        )
+    _reject_forbidden_markers(
+        output,
+        file_name=file_name,
+        location=location,
+    )
     return output, findings
+
+
+def _numeric_leaf_multiset(value: Any) -> Counter[tuple[str, str]]:
+    leaves: Counter[tuple[str, str]] = Counter()
+    if isinstance(value, bool) or value is None:
+        return leaves
+    if isinstance(value, int):
+        leaves[("int", str(value))] += 1
+    elif isinstance(value, float):
+        leaves[("float", repr(value))] += 1
+    elif isinstance(value, list):
+        for item in value:
+            leaves.update(_numeric_leaf_multiset(item))
+    elif isinstance(value, dict):
+        for item in value.values():
+            leaves.update(_numeric_leaf_multiset(item))
+    return leaves
+
+
+def _assert_numeric_content_preserved(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    *,
+    file_name: str,
+) -> None:
+    if _numeric_leaf_multiset(before) != _numeric_leaf_multiset(after):
+        raise ReviewBundleNormalizationError(
+            "REVIEW_BUNDLE_NUMERIC_CONTENT_CHANGED",
+            file_name,
+        )
 
 
 def _normalize_value(
@@ -214,6 +373,7 @@ def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
                 file_name=name,
                 location="",
             )
+            _assert_numeric_content_preserved(value, normalized, file_name=name)
             output = _canonical_json(normalized)
         elif name == "06_report.md":
             try:

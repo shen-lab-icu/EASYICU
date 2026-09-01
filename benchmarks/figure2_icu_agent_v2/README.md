@@ -52,13 +52,23 @@ withdrawn from the manuscript because it did not land.
 Run the no-Provider design check with:
 
 ```bash
-python -m pytest tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py -q
+python -m pytest \
+  tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py \
+  tests/benchmarks/figure2_icu_agent_v2/test_formal_runtime_v2_1.py \
+  tests/benchmarks/figure2_icu_agent_v2/test_generic_code_agent_harness.py -q
 ```
 
 `design_v2_1.validate_review_candidate_bundle()` validates asset digests,
 task identity and coverage, schedule reproduction, rubric neutrality, safety
 rationale coverage, exact power scenarios, the generic-arm floor, WP1 scope,
 and fail-closed launch status. It cannot call a model or authorize a run.
+
+`generic_code_agent_harness.py` implements the frozen generic baseline loop
+and adapts the existing isolated DockerRunner to Python, R, and shell.
+`formal_generic_runner.py` is its only Provider-backed formal entry point and
+routes every model turn through `formal_provider_gate.py`. The current launch
+contract still denies every Provider call; the offline tests use injected
+fakes and do not grant qualification or formal-run authority.
 
 Before any formal call, follow `preregistration_plan_v1.json`, satisfy every
 receipt in `formal_launch_contract_v1.json`, and replace the internal review
