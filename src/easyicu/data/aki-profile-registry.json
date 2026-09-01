@@ -1,22 +1,53 @@
 {
   "schema_version": "easyicu_aki_profile_registry_v1",
-  "contract_status": "FROZEN_BEFORE_SOURCE_NATIVE_COMPARISON",
-  "default_profile": "EASYICU_KDIGO_STRICT_PRIOR_V1",
-  "selection_rule": "Cross-database analyses use the canonical profile unless a source-native profile is explicitly requested. Source-native outputs never overwrite canonical outputs.",
+  "contract_status": "REFERENCE_AND_SOURCE_NATIVE_V2",
+  "default_profile": "MIT_LCP_KDIGO_REFERENCE_PORT_V1",
+  "selection_rule": "Cross-database analyses use the public MIT-LCP-anchored reference port. Source-native outputs are parallel comparison fields, carry their own time-scale and future-information receipts, and never overwrite the reference output.",
   "reliability_scale": {
     "A": "Public, version-pinned, complete phenotype implementation maintained by the database or study authors; still inherits documented clinical and ascertainment limitations.",
     "B": "Public and version-pinned source-native implementation with material departures from complete dynamic KDIGO or restricted source prerequisites; suitable for compatibility or sensitivity analyses.",
     "C": "Official source component or partial renal phenotype only; not a complete AKI staging authority.",
-    "H": "EasyICU harmonized phenotype intended for cross-database comparability; not a database-native definition."
+    "R": "Public-reference semantic port used consistently across databases; differences from the pinned upstream implementation are explicit.",
+    "H": "Historical EasyICU phenotype retained only to reproduce sealed releases; not emitted by the current renal contract."
   },
   "profiles": {
+    "MIT_LCP_KDIGO_REFERENCE_PORT_V1": {
+      "database": "all",
+      "authority_level": "PUBLIC_REFERENCE_SEMANTIC_PORT",
+      "reliability_grade": "R",
+      "fidelity": "MIT_LCP_THRESHOLDS_WITH_CROSS_DATABASE_ACTIVE_RRT_PORT",
+      "output_kind": "DYNAMIC_KDIGO_STAGE_0_TO_3",
+      "recommended_role": "PRIMARY_CROSS_DATABASE_REFERENCE",
+      "upstream_repository": "https://github.com/MIT-LCP/mimic-code",
+      "upstream_commit": "d20b49a71ebb8cafc6febb0821432778592192d5",
+      "uses_future_information": false,
+      "missing_to_stage_zero": true,
+      "baseline_semantics": "lowest observed strictly prior creatinine in [t-48h,t) and [t-168h,t)",
+      "urine_semantics": "MIT-LCP thresholds applied to complete 6h/12h/24h normalized urine windows",
+      "rrt_semantics": "active RRT evidence across databases; broader than the CRRT-only component in the pinned MIMIC-IV SQL",
+      "postprocessing": "six-hour past-only rolling maximum at evaluated event rows",
+      "limitations": [
+        "This is a transparent cross-database semantic port, not a database-native official field outside MIMIC-IV.",
+        "The treatment component uses all active RRT because CRRT modality is not uniformly available across databases.",
+        "Hourly source aggregation can differ from the exact event timestamps used by the upstream SQL."
+      ],
+      "sources": [
+        {
+          "type": "maintainer_code",
+          "title": "MIMIC-IV KDIGO derived concepts",
+          "url": "https://github.com/MIT-LCP/mimic-code/tree/d20b49a71ebb8cafc6febb0821432778592192d5/mimic-iv/concepts/organfailure"
+        }
+      ]
+    },
     "EASYICU_KDIGO_STRICT_PRIOR_V1": {
       "database": "all",
       "authority_level": "EASYICU_HARMONIZED_CONTRACT",
       "reliability_grade": "H",
       "fidelity": "NATIVE_IMPLEMENTATION",
       "output_kind": "DYNAMIC_KDIGO_STAGE_0_TO_3_WITH_ASCERTAINMENT",
-      "recommended_role": "PRIMARY_CROSS_DATABASE",
+      "recommended_role": "HISTORICAL_REPRODUCTION_ONLY",
+      "deprecated": true,
+      "not_emitted_by_current_renal_contract": true,
       "uses_future_information": false,
       "missing_to_stage_zero": false,
       "baseline_semantics": "lowest observed strictly prior creatinine in [t-48h,t) and [t-168h,t)",

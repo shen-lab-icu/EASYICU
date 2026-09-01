@@ -7425,28 +7425,16 @@ def _callback_kdigo_aki(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """Calculate KDIGO AKI staging based on creatinine and urine output.
-    
-    KDIGO stages:
-    - Stage 0: No AKI
-    - Stage 1: Creatinine >=0.3 mg/dL increase in 48h OR >=1.5x baseline, or UO <0.5 mL/kg/h for 6-12h
-    - Stage 2: Creatinine >=2x baseline, or UO <0.5 mL/kg/h for >=12h  
-    - Stage 3: Creatinine >=3x baseline OR >=4.0 mg/dL OR RRT, or UO <0.3 mL/kg/h for >=24h or anuria
-    
-    Args:
-        tables: Dictionary containing phenotype-specific KDIGO inputs and weight
-        ctx: Callback context
-        
-    Returns:
-        ICUTable with aki_stage column (0-3)
-    """
-    from easyicu.scores.kdigo_aki import kdigo_stages, _detect_id_col, _detect_time_col
+    """Build public-reference and source-native AKI layers for renal export."""
+    from easyicu.scores.aki_profiles import build_renal_aki_bundle
+    from easyicu.scores.kdigo_aki import _detect_id_col, _detect_time_col
     
     # Extract DataFrames from tables
     crea_tbl = tables.get('kdigo_creatinine_input')
     urine_tbl = tables.get('kdigo_urine_input')
     weight_tbl = tables.get('weight')
     rrt_tbl = tables.get('acute_rrt_input')
+    crrt_tbl = tables.get('crrt_mode_input')
     
     # Convert to DataFrames
     def to_df(tbl):
@@ -7462,6 +7450,7 @@ def _callback_kdigo_aki(
     urine_df = to_df(urine_tbl)
     weight_df = to_df(weight_tbl)
     rrt_df = to_df(rrt_tbl)
+    crrt_df = to_df(crrt_tbl)
 
     def rename_value(frame, source_name, target_name):
         if frame is None or target_name in frame.columns:
@@ -7473,25 +7462,41 @@ def _callback_kdigo_aki(
     crea_df = rename_value(crea_df, 'kdigo_creatinine_input', 'crea')
     urine_df = rename_value(urine_df, 'kdigo_urine_input', 'urine')
     rrt_df = rename_value(rrt_df, 'acute_rrt_input', 'rrt')
-    
-    if crea_df is None or crea_df.empty:
+    crrt_df = rename_value(crrt_df, 'crrt_mode_input', 'rrt')
+
+    component_frames = (crea_df, urine_df, rrt_df)
+    if not any(
+        isinstance(frame, pd.DataFrame) and not frame.empty
+        for frame in component_frames
+    ):
         return ICUTable(
-            data=pd.DataFrame(columns=['stay_id', 'charttime', 'aki_stage', 'aki']),
+            data=pd.DataFrame(
+                columns=['stay_id', 'charttime', 'aki_stage_reference']
+            ),
             id_columns=['stay_id'],
             index_column='charttime',
-            value_column='aki_stage'
+            value_column='aki_stage_reference'
         )
-    
+
     # Detect ID and time columns using the same helpers as kdigo_aki.py
-    id_col = _detect_id_col(crea_df) or 'stay_id'
-    time_col = _detect_time_col(crea_df) or 'charttime'
-    
-    # Calculate KDIGO stages
-    result = kdigo_stages(
+    anchor = next(
+        frame
+        for frame in component_frames
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    )
+    id_col = _detect_id_col(anchor) or 'stay_id'
+    time_col = _detect_time_col(anchor) or 'charttime'
+    database = getattr(
+        getattr(ctx.data_source, "config", None), "name", ""
+    )
+
+    result = build_renal_aki_bundle(
+        database=database,
         crea_df=crea_df,
         urine_df=urine_df,
         weight_df=weight_df,
         rrt_df=rrt_df,
+        crrt_df=crrt_df,
         id_col=id_col,
         time_col=time_col,
         urine_source_is_rate=(
@@ -7509,17 +7514,19 @@ def _callback_kdigo_aki(
     
     if result.empty:
         return ICUTable(
-            data=pd.DataFrame(columns=[id_col, time_col, 'aki_stage', 'aki']),
+            data=pd.DataFrame(
+                columns=[id_col, time_col, 'aki_stage_reference']
+            ),
             id_columns=[id_col],
             index_column=time_col,
-            value_column='aki_stage'
+            value_column='aki_stage_reference'
         )
-    
+
     return ICUTable(
         data=result,
         id_columns=[id_col],
         index_column=time_col,
-        value_column='aki_stage'
+        value_column='aki_stage_reference'
     )
 
 

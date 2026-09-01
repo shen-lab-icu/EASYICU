@@ -845,40 +845,42 @@ def test_native_arrow_schema_normalises_backend_large_strings() -> None:
     assert normalized.metadata == {b"owner": b"native-v2"}
 
 
-def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
+def test_native_schema_preserves_aki_v2_reference_native_and_evidence_receipts() -> None:
     dictionary = api.load_dictionary(include_sofa2=True)
     receipt_columns = [
-        "aki_assessable",
-        "aki_severe",
-        "aki_severe_creat",
-        "aki_severe_uo",
-        "aki_severe_rrt",
-        "aki_severe_assessable",
-        "aki_severe_ascertainment",
-        "aki_ascertainment",
-        "aki_assessment_reason",
-        "observation_window_coverage",
-        "creatinine_ascertainment",
-        "urine_ascertainment",
-        "rrt_ascertainment",
+        "aki_reference",
+        "aki_severe_reference",
+        "aki_source_native",
+        "aki_severe_source_native",
+        "aki_reference_uses_future",
+        "aki_source_native_uses_future",
+        "aki_reference_profile",
+        "aki_reference_status",
+        "aki_source_native_profile",
+        "aki_source_native_status",
+        "kidney_observation_window_coverage",
+        "creatinine_evidence_status",
+        "urine_evidence_status",
+        "rrt_evidence_status",
     ]
     frame = pd.DataFrame(
         {
             "stay_id": [101, 102],
             "charttime": [0.0, 1.0],
-            "aki_assessable": [1, 0],
-            "aki_severe": [1, None],
-            "aki_severe_creat": [1, 0],
-            "aki_severe_uo": [0, None],
-            "aki_severe_rrt": [0, None],
-            "aki_severe_assessable": [1, 0],
-            "aki_severe_ascertainment": ["positive", "indeterminate"],
-            "aki_ascertainment": ["positive", "indeterminate"],
-            "aki_assessment_reason": ["positive", "indeterminate"],
-            "observation_window_coverage": ["complete", "partial"],
-            "creatinine_ascertainment": ["positive", "negative"],
-            "urine_ascertainment": ["negative", "indeterminate"],
-            "rrt_ascertainment": ["negative", "indeterminate"],
+            "aki_reference": [1, 0],
+            "aki_severe_reference": [1, 0],
+            "aki_source_native": [1, None],
+            "aki_severe_source_native": [0, None],
+            "aki_reference_uses_future": [0, 0],
+            "aki_source_native_uses_future": [0, 0],
+            "aki_reference_profile": ["ref-v1", "ref-v1"],
+            "aki_reference_status": ["evaluated", "evaluated"],
+            "aki_source_native_profile": ["native-v1", "native-v1"],
+            "aki_source_native_status": ["evaluated", "not_available"],
+            "kidney_observation_window_coverage": ["complete", "partial"],
+            "creatinine_evidence_status": ["positive", "negative"],
+            "urine_evidence_status": ["negative", "indeterminate"],
+            "rrt_evidence_status": ["negative", "indeterminate"],
         }
     )
 
@@ -890,21 +892,22 @@ def test_native_schema_preserves_kdigo_ascertainment_receipt_families() -> None:
     )
 
     boolean_columns = [
-        "aki_assessable",
-        "aki_severe",
-        "aki_severe_creat",
-        "aki_severe_uo",
-        "aki_severe_rrt",
-        "aki_severe_assessable",
+        "aki_reference",
+        "aki_severe_reference",
+        "aki_source_native",
+        "aki_severe_source_native",
+        "aki_reference_uses_future",
+        "aki_source_native_uses_future",
     ]
     category_columns = [
-        "aki_severe_ascertainment",
-        "aki_ascertainment",
-        "aki_assessment_reason",
-        "observation_window_coverage",
-        "creatinine_ascertainment",
-        "urine_ascertainment",
-        "rrt_ascertainment",
+        "aki_reference_profile",
+        "aki_reference_status",
+        "aki_source_native_profile",
+        "aki_source_native_status",
+        "kidney_observation_window_coverage",
+        "creatinine_evidence_status",
+        "urine_evidence_status",
+        "rrt_evidence_status",
     ]
     assert all(str(canonical[column].dtype) == "boolean" for column in boolean_columns)
     assert all(str(canonical[column].dtype) == "string" for column in category_columns)

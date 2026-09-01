@@ -200,7 +200,7 @@
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
   "kdigo_aki_2012": {
-    "concepts": ["kdigo_aki", "kdigo_creat", "kdigo_uo", "kdigo_creatinine_input", "kdigo_urine_input", "acute_rrt_input"],
+    "concepts": ["kdigo_aki", "kdigo_creat", "kdigo_uo", "kdigo_creatinine_input", "kdigo_urine_input", "acute_rrt_input", "crrt_mode_input"],
     "definition": "KDIGO acute kidney injury staging",
     "version": "2012",
     "source_id": "KDIGO 2012 AKI guideline",

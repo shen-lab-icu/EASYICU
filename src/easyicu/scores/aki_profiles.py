@@ -32,6 +32,54 @@ from .kdigo_aki import (
 
 _REGISTRY_FILE = "aki-profile-registry.json"
 _PROFILE_PREFIX = "aki_source_native"
+_REFERENCE_PROFILE_ID = "MIT_LCP_KDIGO_REFERENCE_PORT_V1"
+
+RENAL_AKI_BUNDLE_OUTPUTS = (
+    "aki_reference",
+    "aki_stage_reference",
+    "aki_severe_reference",
+    "aki_stage_creat_reference",
+    "aki_stage_uo_reference",
+    "aki_stage_rrt_reference",
+    "aki_stage_reference_smoothed_6h",
+    "aki_reference_profile",
+    "aki_reference_status",
+    "aki_reference_authority",
+    "aki_reference_reliability_grade",
+    "aki_reference_fidelity",
+    "aki_reference_rrt_scope",
+    "aki_reference_uses_future",
+    "aki_source_native",
+    "aki_stage_source_native",
+    "aki_severe_source_native",
+    "aki_stage_creat_source_native",
+    "aki_stage_uo_source_native",
+    "aki_stage_crrt_source_native",
+    "aki_stage_source_native_smoothed",
+    "aki_source_native_profile",
+    "aki_source_native_status",
+    "aki_source_native_authority",
+    "aki_source_native_reliability_grade",
+    "aki_source_native_fidelity",
+    "aki_source_native_ascertainment",
+    "aki_source_native_reason",
+    "aki_source_native_time_scale",
+    "aki_source_native_uses_future",
+    "kidney_observation_window_coverage",
+    "creatinine_evidence_status",
+    "creatinine_evidence_reason",
+    "urine_evidence_status",
+    "rrt_evidence_status",
+    "creat_low_past_48hr",
+    "creat_low_past_7day",
+    "creat_baseline_n_48h",
+    "creat_baseline_n_7d",
+    "creat_baseline_source",
+    "creat_pre_icu_history_observed",
+    "uo_rt_6hr",
+    "uo_rt_12hr",
+    "uo_rt_24hr",
+)
 
 
 class AKIProfileError(ValueError):
@@ -131,6 +179,282 @@ def apply_source_native_aki(
     return apply_aki_profile(profile.profile_id, **kwargs)
 
 
+def apply_reference_aki(**kwargs: Any) -> pd.DataFrame:
+    """Apply the registry-selected cross-database public reference profile."""
+
+    profile_id = str(load_aki_profile_registry()["default_profile"])
+    if profile_id != _REFERENCE_PROFILE_ID:
+        raise AKIProfileError(
+            "The registry default is not the supported public reference profile: "
+            f"{profile_id!r}"
+        )
+    return apply_aki_profile(profile_id, **kwargs)
+
+
+def build_renal_aki_bundle(
+    database: str,
+    *,
+    crea_df: Optional[pd.DataFrame] = None,
+    urine_df: Optional[pd.DataFrame] = None,
+    weight_df: Optional[pd.DataFrame] = None,
+    rrt_df: Optional[pd.DataFrame] = None,
+    crrt_df: Optional[pd.DataFrame] = None,
+    id_col: Optional[str] = None,
+    time_col: Optional[str] = None,
+    crea_col: str = "crea",
+    urine_col: str = "urine",
+    weight_col: str = "weight",
+    urine_source_is_rate: bool = False,
+    time_unit: Optional[str] = None,
+    interval: Optional[pd.Timedelta] = None,
+    observation_window_coverage: Optional[Mapping[Any, str]] = None,
+    rrt_source_complete: bool = False,
+) -> pd.DataFrame:
+    """Build the renal export's reference, quality, and native AKI layers.
+
+    Future-looking case-level native profiles (AUMC and SICdb) remain in the
+    explicit profile API but are not broadcast onto a dynamic hourly table.
+    This prevents a first-168-hour endpoint from silently becoming an early
+    predictor.  Their profile and non-embedding reason are still exported.
+    """
+
+    normalized_database = _normalize_database(database)
+    common_kwargs = {
+        "crea_df": crea_df,
+        "urine_df": urine_df,
+        "weight_df": weight_df,
+        "rrt_df": rrt_df,
+        "id_col": id_col,
+        "time_col": time_col,
+        "crea_col": crea_col,
+        "urine_col": urine_col,
+        "weight_col": weight_col,
+        "time_unit": time_unit,
+    }
+    reference = apply_reference_aki(**common_kwargs)
+    resolved_id, resolved_time = _component_keys(
+        (crea_df, urine_df, rrt_df), id_col, time_col
+    )
+
+    # Keep evidence receipts, but do not publish the historical strict disease
+    # label or its assessable/non-assessable cohort split.
+    quality = kdigo_stages(
+        crea_df=crea_df,
+        urine_df=urine_df,
+        weight_df=weight_df,
+        rrt_df=rrt_df,
+        id_col=resolved_id,
+        time_col=resolved_time,
+        crea_col=crea_col,
+        urine_col=urine_col,
+        weight_col=weight_col,
+        urine_source_is_rate=urine_source_is_rate,
+        time_unit=time_unit,
+        interval=interval,
+        observation_window_coverage=observation_window_coverage,
+        rrt_source_complete=rrt_source_complete,
+    )
+    quality_columns = {
+        "observation_window_coverage": "kidney_observation_window_coverage",
+        "creatinine_ascertainment": "creatinine_evidence_status",
+        "creatinine_ascertainment_reason": "creatinine_evidence_reason",
+        "urine_ascertainment": "urine_evidence_status",
+        "rrt_ascertainment": "rrt_evidence_status",
+        "creat_low_past_48hr": "creat_low_past_48hr",
+        "creat_low_past_7day": "creat_low_past_7day",
+        "creat_baseline_n_48h": "creat_baseline_n_48h",
+        "creat_baseline_n_7d": "creat_baseline_n_7d",
+        "creat_baseline_source": "creat_baseline_source",
+        "creat_pre_icu_history_observed": "creat_pre_icu_history_observed",
+        "uo_rt_6hr": "uo_rt_6hr",
+        "uo_rt_12hr": "uo_rt_12hr",
+        "uo_rt_24hr": "uo_rt_24hr",
+    }
+    available_quality = [
+        column for column in quality_columns if column in quality.columns
+    ]
+    result = reference.merge(
+        quality[[resolved_id, resolved_time, *available_quality]].rename(
+            columns=quality_columns
+        ),
+        on=[resolved_id, resolved_time],
+        how="outer",
+        validate="one_to_one",
+        sort=False,
+    )
+
+    native_profile = default_source_native_profile(normalized_database)
+    if normalized_database in {"aumc", "sic"}:
+        result["aki_stage_source_native"] = pd.Series(
+            pd.NA, index=result.index, dtype="Int64"
+        )
+        result["aki_source_native"] = pd.Series(
+            pd.NA, index=result.index, dtype="boolean"
+        )
+        result["aki_source_native_profile"] = native_profile.profile_id
+        result["aki_source_native_status"] = (
+            "case_level_future_endpoint_not_embedded_in_dynamic_renal"
+        )
+        result["aki_source_native_authority"] = native_profile.authority_level
+        result["aki_source_native_reliability_grade"] = (
+            native_profile.reliability_grade
+        )
+        result["aki_source_native_fidelity"] = native_profile.fidelity
+        result["aki_source_native_ascertainment"] = "not_embedded"
+        result["aki_source_native_reason"] = (
+            "source-native profile remains available through apply_aki_profile; "
+            "it is not repeated across earlier hourly rows"
+        )
+    else:
+        native_kwargs = dict(common_kwargs)
+        if normalized_database == "miiv":
+            native_kwargs["rrt_df"] = crrt_df
+            if crrt_df is None:
+                native = _unavailable_profile_frame(
+                    crea_df,
+                    urine_df,
+                    rrt_df,
+                    id_col=resolved_id,
+                    time_col=resolved_time,
+                    reason="mimic_iv_crrt_mode_source_unavailable",
+                )
+                native = _stamp_profile(
+                    native,
+                    native_profile,
+                    status="not_evaluable_required_crrt_source_missing",
+                    ascertainment="indeterminate",
+                )
+            else:
+                native = apply_source_native_aki(
+                    normalized_database, **native_kwargs
+                )
+        else:
+            native = apply_source_native_aki(
+                normalized_database, **native_kwargs
+            )
+        result = result.merge(
+            native,
+            on=[resolved_id, resolved_time],
+            how="outer",
+            validate="one_to_one",
+            sort=False,
+        )
+        for column in (
+            "aki_source_native_profile",
+            "aki_source_native_status",
+            "aki_source_native_authority",
+            "aki_source_native_reliability_grade",
+            "aki_source_native_fidelity",
+        ):
+            if column in result:
+                result[column] = result[column].ffill().bfill()
+
+    result["aki_source_native_time_scale"] = native_profile.output_kind
+    result["aki_source_native_uses_future"] = bool(
+        native_profile.payload["uses_future_information"]
+    )
+    if "aki_stage_source_native" not in result:
+        result["aki_stage_source_native"] = pd.Series(
+            pd.NA, index=result.index, dtype="Int64"
+        )
+    native_stage = result["aki_stage_source_native"].astype("Int64")
+    result["aki_severe_source_native"] = (
+        native_stage.ge(2).where(native_stage.notna()).astype("boolean")
+    )
+    # The profile adapters carry internal compatibility columns.  The renal
+    # module is a versioned physical contract, so never leak those columns (or
+    # the deprecated strict phenotype) into current exports.
+    keep = [
+        resolved_id,
+        resolved_time,
+        *[column for column in RENAL_AKI_BUNDLE_OUTPUTS if column in result],
+    ]
+    return (
+        result[keep]
+        .sort_values([resolved_id, resolved_time], kind="stable")
+        .reset_index(drop=True)
+    )
+
+
+def load_renal_aki_bundle(
+    database: str,
+    *,
+    data_path: Optional[str] = None,
+    patient_ids: Optional[list[Any]] = None,
+    max_patients: Optional[int] = None,
+    verbose: bool = True,
+    preloaded_data: Optional[Mapping[str, pd.DataFrame]] = None,
+) -> pd.DataFrame:
+    """Load normalized inputs and build the current renal AKI contract.
+
+    ``load_kdigo_aki`` remains available for historical reproduction.  New
+    physical renal exports call this loader and therefore cannot silently
+    inherit the deprecated strict phenotype columns.
+    """
+
+    from easyicu.api import load_concepts
+
+    preloaded = dict(preloaded_data or {})
+    aliases = {
+        "kdigo_creatinine_input": ("kdigo_creatinine_input", "crea"),
+        "kdigo_urine_input": ("kdigo_urine_input", "urine"),
+        "weight": ("weight",),
+        "acute_rrt_input": ("acute_rrt_input", "rrt"),
+        "crrt_mode_input": ("crrt_mode_input", "crrt"),
+    }
+
+    def load_component(name: str) -> Optional[pd.DataFrame]:
+        for alias in aliases[name]:
+            frame = preloaded.get(alias)
+            if isinstance(frame, pd.DataFrame):
+                return frame
+        try:
+            frame = load_concepts(
+                concepts=[name],
+                database=database,
+                data_path=data_path,
+                patient_ids=patient_ids,
+                max_patients=max_patients,
+                verbose=verbose,
+            )
+        except (KeyError, FileNotFoundError, ValueError):
+            if name == "crrt_mode_input":
+                return None
+            raise
+        return frame if isinstance(frame, pd.DataFrame) else None
+
+    crea_df = load_component("kdigo_creatinine_input")
+    urine_df = load_component("kdigo_urine_input")
+    weight_df = load_component("weight")
+    rrt_df = load_component("acute_rrt_input")
+    crrt_df = load_component("crrt_mode_input")
+
+    def rename_value(
+        frame: Optional[pd.DataFrame], source: str, target: str
+    ) -> Optional[pd.DataFrame]:
+        if frame is None or target in frame or source not in frame:
+            return frame
+        return frame.rename(columns={source: target})
+
+    crea_df = rename_value(crea_df, "kdigo_creatinine_input", "crea")
+    urine_df = rename_value(urine_df, "kdigo_urine_input", "urine")
+    rrt_df = rename_value(rrt_df, "acute_rrt_input", "rrt")
+    crrt_df = rename_value(crrt_df, "crrt_mode_input", "rrt")
+
+    return build_renal_aki_bundle(
+        database=database,
+        crea_df=crea_df,
+        urine_df=urine_df,
+        weight_df=weight_df,
+        rrt_df=rrt_df,
+        crrt_df=crrt_df,
+        urine_source_is_rate=_normalize_database(database) == "hirid",
+        time_unit="hours",
+        interval=pd.Timedelta(hours=1),
+        rrt_source_complete=rrt_df is not None,
+    )
+
+
 def apply_aki_profile(
     profile_id: str,
     *,
@@ -174,6 +498,35 @@ def apply_aki_profile(
         "time_unit": time_unit,
     }
 
+    if profile_id == _REFERENCE_PROFILE_ID:
+        result = _mimic_iv_profile(**kwargs).rename(
+            columns={
+                "aki_stage_creat": "aki_stage_creat_reference",
+                "aki_stage_uo": "aki_stage_uo_reference",
+                "aki_stage_crrt": "aki_stage_rrt_reference",
+                "aki_stage_source_native": "aki_stage_reference",
+                "aki_source_native": "aki_reference",
+                "aki_stage_source_native_smoothed": (
+                    "aki_stage_reference_smoothed_6h"
+                ),
+                "aki_source_native_ascertainment": (
+                    "aki_reference_ascertainment"
+                ),
+            }
+        )
+        result["aki_severe_reference"] = result["aki_stage_reference"].ge(2)
+        result["aki_reference_profile"] = profile.profile_id
+        result["aki_reference_status"] = "evaluated_semantic_port"
+        result["aki_reference_authority"] = profile.authority_level
+        result["aki_reference_reliability_grade"] = profile.reliability_grade
+        result["aki_reference_fidelity"] = profile.fidelity
+        result["aki_reference_rrt_scope"] = (
+            "all_active_rrt_cross_database_port"
+        )
+        result["aki_reference_uses_future"] = bool(
+            profile.payload["uses_future_information"]
+        )
+        return result
     if profile_id == "EASYICU_KDIGO_STRICT_PRIOR_V1":
         result = kdigo_stages(
             crea_df=crea_df,
@@ -330,6 +683,13 @@ def _stamp_profile(
         result = result.rename(columns={"aki_stage": "aki_stage_source_native"})
     if "aki" in result and "aki_source_native" not in result:
         result = result.rename(columns={"aki": "aki_source_native"})
+    result = result.rename(
+        columns={
+            "aki_stage_creat": "aki_stage_creat_source_native",
+            "aki_stage_uo": "aki_stage_uo_source_native",
+            "aki_stage_crrt": "aki_stage_crrt_source_native",
+        }
+    )
     result[f"{_PROFILE_PREFIX}_profile"] = profile.profile_id
     result[f"{_PROFILE_PREFIX}_status"] = status
     result[f"{_PROFILE_PREFIX}_authority"] = profile.authority_level

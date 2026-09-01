@@ -253,26 +253,31 @@ def test_module_parquet_normalisation_reuses_canonical_numeric_frame():
     assert normalised is frame
 
 
-def test_renal_module_exports_kdigo_ascertainment_receipt():
-    """A full AKI negative must remain distinguishable from missing inputs."""
+def test_renal_module_exports_reference_native_and_evidence_receipts():
+    """Current renal exports separate phenotype layers from data quality."""
     renal = set(EXTRACT_MODULES["renal"])
     assert {
-        "aki_stage",
-        "aki_severe",
-        "aki_severe_creat",
-        "aki_severe_uo",
-        "aki_severe_rrt",
-        "aki_severe_assessable",
-        "aki_severe_ascertainment",
-        "aki_assessable",
-        "aki_ascertainment",
-        "observation_window_coverage",
-        "creatinine_ascertainment",
-        "creatinine_ascertainment_reason",
-        "urine_ascertainment",
-        "rrt_ascertainment",
+        "aki_reference",
+        "aki_stage_reference",
+        "aki_severe_reference",
+        "aki_source_native",
+        "aki_stage_source_native",
+        "aki_severe_source_native",
+        "aki_reference_profile",
+        "aki_source_native_profile",
+        "kidney_observation_window_coverage",
+        "creatinine_evidence_status",
+        "creatinine_evidence_reason",
+        "urine_evidence_status",
+        "rrt_evidence_status",
         "creat_baseline_n_48h",
         "creat_baseline_n_7d",
         "creat_baseline_source",
         "creat_pre_icu_history_observed",
     }.issubset(renal)
+    assert {
+        "aki",
+        "aki_stage",
+        "aki_assessable",
+        "aki_ascertainment",
+    }.isdisjoint(renal)

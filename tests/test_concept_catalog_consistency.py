@@ -154,7 +154,9 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # sensitivity and clause-specific/legacy ascertainment outputs. 288 -> 293.
     # 2026-08-12: +six nullable severe-AKI endpoint/receipt outputs. 293 -> 299.
     # 2026-08-22: +three fixed-horizon event/censoring-time companions. 304 -> 307.
-    assert len(CONCEPT_DICTIONARY) == 307
+    # 2026-09-01: replace 19 historical AKI/strict outputs with 35 explicit
+    # public-reference, source-native, and evidence-receipt fields. 307 -> 323.
+    assert len(CONCEPT_DICTIONARY) == 323
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
@@ -254,13 +256,13 @@ def test_composite_output_sources_are_valid() -> None:
         assert source_concept in dict_concepts or source_concept in special_sources
 
     assert {
-        "aki_assessable",
-        "aki_ascertainment",
-        "aki_assessment_reason",
-        "observation_window_coverage",
-        "creatinine_ascertainment",
-        "urine_ascertainment",
-        "rrt_ascertainment",
+        "aki_stage_reference",
+        "aki_stage_source_native",
+        "aki_source_native_status",
+        "kidney_observation_window_coverage",
+        "creatinine_evidence_status",
+        "urine_evidence_status",
+        "rrt_evidence_status",
     } <= {
         output
         for output, source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
