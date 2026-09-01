@@ -7186,6 +7186,28 @@
   "callback": "acute_rrt_input",
   "target": "ts_tbl"
  },
+ "crrt_mode_input": {
+  "class_name": "lgl_cncpt",
+  "description": "MIMIC-IV CRRT-mode documentation used only by the pinned MIT-LCP source-native AKI profile",
+  "clinical_status": "source_native_profile_input",
+  "canonical_definition": true,
+  "requires_explicit_opt_in": false,
+  "definition_source": "MIT-LCP mimic-code crrt.sql itemid 227290",
+  "definition_version": "d20b49a71ebb8cafc6febb0821432778592192d5",
+  "clinical_contract_id": "kdigo_aki_2012",
+  "category": "renal",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": 227290,
+     "callback": "transform_fun(set_val(TRUE))"
+    }
+   ]
+  }
+ },
  "kdigo_creatinine_input": {
   "class_name": "rec_cncpt",
   "description": "Phenotype-specific serum-creatinine input for KDIGO AKI",
@@ -7220,19 +7242,20 @@
  },
  "kdigo_aki": {
   "class_name": "rec_cncpt",
-  "description": "KDIGO Acute Kidney Injury staging (0-3) based on creatinine and urine output",
+  "description": "Public-reference KDIGO staging plus a source-native comparison or explicit unavailability receipt",
   "clinical_status": "validated_definition",
   "canonical_definition": true,
   "requires_explicit_opt_in": false,
-  "definition_source": "KDIGO 2012 AKI guideline",
-  "definition_version": "2012",
+  "definition_source": "KDIGO 2012; MIT-LCP mimic-code pinned reference; EasyICU source-native profile registry",
+  "definition_version": "reference_and_source_native_v2",
   "clinical_contract_id": "kdigo_aki_2012",
   "category": "renal",
   "concepts": [
    "kdigo_creatinine_input",
    "kdigo_urine_input",
    "weight",
-   "acute_rrt_input"
+   "acute_rrt_input",
+   "crrt_mode_input"
   ],
   "callback": "kdigo_aki",
   "target": "ts_tbl"

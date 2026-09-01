@@ -5,7 +5,9 @@ from easyicu.scores.aki_profiles import (
     AKIProfileError,
     AKIProfilePrerequisiteError,
     apply_aki_profile,
+    apply_reference_aki,
     apply_source_native_aki,
+    build_renal_aki_bundle,
     compare_aki_profiles,
     default_source_native_profile,
     get_aki_profile,
@@ -20,13 +22,15 @@ HIRID = "HIRID_AKI_EWS_2024_BTAE212"
 SICDB = "SICDB_NATIVE_KDIGO_AKI_168_44A27CC8"
 AUMC = "AUMC_LEGACY_ACUTE_RENAL_FAILURE_8906394D"
 EICU = "EICU_OFFICIAL_RENAL_COMPONENTS_34CECE8C"
+REFERENCE = "MIT_LCP_KDIGO_REFERENCE_PORT_V1"
 
 
-def test_registry_has_harmonized_and_all_six_database_profiles():
+def test_registry_defaults_to_public_reference_and_has_six_native_profiles():
     registry = load_aki_profile_registry()
 
-    assert registry["contract_status"] == "FROZEN_BEFORE_SOURCE_NATIVE_COMPARISON"
-    assert len(registry["profiles"]) == 7
+    assert registry["contract_status"] == "REFERENCE_AND_SOURCE_NATIVE_V2"
+    assert registry["default_profile"] == REFERENCE
+    assert len(registry["profiles"]) == 8
     assert {profile.database for profile in list_aki_profiles()} == {
         "all",
         "aumc",
@@ -91,6 +95,7 @@ def test_profile_entry_points_are_stable_top_level_exports():
 
     expected = {
         "apply_aki_profile",
+        "apply_reference_aki",
         "apply_source_native_aki",
         "compare_aki_profiles",
         "get_aki_profile",
@@ -99,6 +104,81 @@ def test_profile_entry_points_are_stable_top_level_exports():
 
     assert expected <= set(STABLE_EXPORTS)
     assert all(hasattr(easyicu, name) for name in expected)
+
+
+def test_reference_profile_is_not_the_historical_strict_phenotype():
+    creatinine = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0, 60], "crea": [1.0, 1.1]}
+    )
+
+    result = apply_reference_aki(
+        crea_df=creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+    )
+
+    assert result["aki_stage_reference"].tolist() == [0, 0]
+    assert result["aki_reference"].tolist() == [False, False]
+    assert result["aki_reference_profile"].eq(REFERENCE).all()
+    assert result["aki_reference_rrt_scope"].eq(
+        "all_active_rrt_cross_database_port"
+    ).all()
+    assert not any("strict" in column for column in result)
+    assert not any("harmonized" in column for column in result)
+
+
+def test_renal_bundle_separates_cross_database_rrt_from_miiv_native_crrt():
+    creatinine = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0, 60], "crea": [1.0, 1.1]}
+    )
+    active_rrt = pd.DataFrame(
+        {"stay_id": [1], "charttime": [60], "rrt": [True]}
+    )
+    no_crrt_mode = pd.DataFrame(columns=["stay_id", "charttime", "rrt"])
+
+    result = build_renal_aki_bundle(
+        "miiv",
+        crea_df=creatinine,
+        rrt_df=active_rrt,
+        crrt_df=no_crrt_mode,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+        rrt_source_complete=True,
+    )
+
+    at_rrt = result.loc[result["charttime"].eq(60)].iloc[0]
+    assert at_rrt["aki_stage_reference"] == 3
+    assert at_rrt["aki_stage_source_native"] == 0
+    assert at_rrt["aki_reference_rrt_scope"] == (
+        "all_active_rrt_cross_database_port"
+    )
+    assert at_rrt["aki_source_native_status"] == "evaluated"
+    assert "aki_assessable" not in result
+    assert "aki_ascertainment" not in result
+    assert "creatinine_evidence_status" in result
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_future_case_native_profile_is_not_broadcast_into_dynamic_renal(database):
+    creatinine = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0, 1], "crea": [1.0, 4.5]}
+    )
+
+    result = build_renal_aki_bundle(
+        database,
+        crea_df=creatinine,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="hours",
+    )
+
+    assert result["aki_stage_source_native"].isna().all()
+    assert result["aki_source_native_status"].eq(
+        "case_level_future_endpoint_not_embedded_in_dynamic_renal"
+    ).all()
+    assert result["aki_source_native_uses_future"].all()
 
 
 def test_canonical_profile_adds_namespaced_columns_without_losing_original():
