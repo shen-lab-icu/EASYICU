@@ -47,8 +47,8 @@ jobs:
 
       - name: Run conversion and extraction portability regressions
         run: |
-          pytest -q -m "" tests/test_arrow_converter.py tests/test_converter_optimizations.py tests/test_data_converter_hirid.py tests/test_derived_concept_callbacks.py tests/test_concept_outcome_fail_closed.py tests/test_extract_chunk_cap.py tests/test_extract_module_grouping.py
-          pytest -q -m "" tests/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
+          pytest -q -m "" tests/core/test_arrow_converter.py tests/core/test_converter_optimizations.py tests/core/test_data_converter_hirid.py tests/core/test_derived_concept_callbacks.py tests/core/test_concept_outcome_fail_closed.py tests/core/test_extract_chunk_cap.py tests/core/test_extract_module_grouping.py
+          pytest -q -m "" tests/core/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
 
   test:
     name: tests (py${{ matrix.python-version }})
@@ -101,11 +101,16 @@ jobs:
           python -m vulture src/easyicu --min-confidence 100 --sort-by-size \
             || test "$?" -eq 3
 
+      - name: Collect full test suite
+        run: |
+          pytest --collect-only -q -m "" > /tmp/easyicu-collected-tests.txt
+          tail -n 1 /tmp/easyicu-collected-tests.txt
+
       - name: Run test suite
         run: |
           # Exercise fail-closed backend selection without development overrides.
           # Kept serial and unfiltered: it asserts on runner selection itself.
-          pytest tests/research_agent/test_runner.py -q -m ""
+          pytest tests/research_agent/execution/test_runner.py -q -m ""
           # Remaining offline integration tests may use the ephemeral Actions host.
           # -m "" cancels the pytest.ini dev default (-m "not slow"): CI always
           # runs the slow/integration tier. -n auto spreads it over the runner's
@@ -113,7 +118,7 @@ jobs:
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
             pytest -q -m "" -n auto --dist loadfile \
-              --ignore=tests/research_agent/test_runner.py
+              --ignore=tests/research_agent/execution/test_runner.py
 
   packaging:
     name: wheel + sdist install

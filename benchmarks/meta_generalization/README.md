@@ -96,7 +96,7 @@ python tools/run_research_agent_bench.py \
 - `tools/audit_qualification12_literature_design_pack.py` — zero-Provider audit
   of question identity, typed authority, seven-dimension coverage, and optional
   external source-file digests.
-- `tests/research_agent/test_meta_benchmark_spec.py` — a coverage lint: asserts
+- `tests/research_agent/core/test_meta_benchmark_spec.py` — a coverage lint: asserts
   the spec spans all six axes, includes enough fail-closed probes, and does not
   simply re-test canonical-9 coordinates. It validates the *spec*, not a run.
 

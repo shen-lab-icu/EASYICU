@@ -1,6 +1,6 @@
 """EHRFlowBench-style benchmark runner for the research agent (T2.1).
 
-For every :class:`tests.bench.items.BenchItem` we run the same cohort
+For every :class:`tests.support.benchmark_cases.items.BenchItem` we run the same cohort
 through ``ResearchAgentPipeline`` using the requested benchmark arm(s).
 By default this preserves the historical two-arm context ablation —
 once with the ICU-aware context (this work) and once with the naive
@@ -778,7 +778,7 @@ def _kinds_complete(manifest: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _bench_item_to_task(item):
-    """Adapt a ``tests.bench`` BenchItem to a minimal ``ICUAgentBenchTask``.
+    """Adapt a ``tests.support.benchmark_cases`` BenchItem to a minimal ``ICUAgentBenchTask``.
 
     This lets the §M1 five-dimension Tier-1 scorecard be computed from a run's
     readiness artifacts for legacy and external bench items too. Legacy items
@@ -4092,7 +4092,7 @@ def main() -> int:
         SUPPORTED_CLI_ACCOUNT_NAMES,
         SUPPORTED_PROVIDER_NAMES,
     )
-    from tests.bench import ANALYSIS_BENCH_ITEMS, RULE_BENCH_ITEMS  # type: ignore
+    from tests.support.benchmark_cases import ANALYSIS_BENCH_ITEMS, RULE_BENCH_ITEMS  # type: ignore
 
     default_submission_profile_ref = _default_submission_profile_ref()
     parser = argparse.ArgumentParser(description=__doc__)

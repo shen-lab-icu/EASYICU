@@ -1,0 +1,1 @@
+"""Research Agent figure tests."""

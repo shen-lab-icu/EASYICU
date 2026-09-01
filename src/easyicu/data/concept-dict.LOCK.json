@@ -35,7 +35,7 @@
     "aggregate_arity_violations": 0,
     "json_roundtrip": true,
     "concept_catalog_tests": "Targeted 2026-08-19 KDIGO/source-contract/release-sealer gate: 67 passed after the 168-hour prior-only baseline refresh; prior broader related suite: 360 passed, 3 skipped.",
-    "extract_chunk_cap_tests": "39 passed (tests/test_extract_chunk_cap.py — never > 3 chunks any db/module)",
+    "extract_chunk_cap_tests": "39 passed (tests/core/test_extract_chunk_cap.py — never > 3 chunks any db/module)",
     "module_extraction_tests": "test_concept_bounds_enforcement updated to the one-wide-file-per-module contract",
     "full_pipeline_smoke": "Six databases completed raw renal re-extraction at clean commit 9913f31c; the remaining 18 validated modules were byte-reused from the clean 82abec4b parent. Whole-export creatinine-stage recomputation and M1 three-database urine/final-stage recomputation found zero contradictions."
   },

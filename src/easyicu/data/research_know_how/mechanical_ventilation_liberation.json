@@ -5,7 +5,7 @@
   "title": "Mechanical ventilation liberation outcomes",
   "summary": "Candidate coordinates for invasive-ventilation duration, liberation, extubation, or weaning outcomes. Ventilation episodes, readiness landmarks, competing death, reintubation, and discharge must be operationalized from observable timestamps.",
   "clinical_topics": ["mechanical ventilation", "weaning", "liberation", "extubation", "reintubation", "ventilator-free days"],
-  "topic_aliases": ["mechanical ventilation", "mechanical ventilation liberation", "ventilator liberation", "ventilator weaning", "extubation failure", "ventilator-free days", "机械通气", "机械通气脱机", "拔管失败", "呼吸机脱离"],
+  "topic_aliases": ["mechanical ventilation", "mechanical ventilation liberation", "ventilator liberation", "ventilator weaning", "extubation failure", "reintubation", "ventilator-free days", "机械通气", "机械通气脱机", "撤机", "脱机", "拔管失败", "再插管", "呼吸机脱离"],
   "study_families": ["association", "time_to_event", "prediction"],
   "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
   "design_candidates": {

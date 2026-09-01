@@ -1,0 +1,41 @@
+name: Frontend contracts CI
+
+on:
+  push:
+    paths:
+      - "src/easyicu/webserver/static/js/**"
+      - "tests/js/**"
+      - "tools/run_js_contracts.py"
+      - ".github/workflows/frontend_contracts_ci.yml"
+  pull_request:
+    paths:
+      - "src/easyicu/webserver/static/js/**"
+      - "tests/js/**"
+      - "tools/run_js_contracts.py"
+      - ".github/workflows/frontend_contracts_ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  contracts:
+    name: JavaScript owner contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Parse-check and run all JavaScript owner contracts
+        run: |
+          node --version
+          python tools/run_js_contracts.py

@@ -238,7 +238,7 @@ def main() -> int:
         cli_account_profile,
         provider_profile,
     )
-    from tests.bench import ANALYSIS_BENCH_ITEMS  # type: ignore
+    from tests.support.benchmark_cases import ANALYSIS_BENCH_ITEMS  # type: ignore
 
     all_items = [it.key for it in ANALYSIS_BENCH_ITEMS]
 
