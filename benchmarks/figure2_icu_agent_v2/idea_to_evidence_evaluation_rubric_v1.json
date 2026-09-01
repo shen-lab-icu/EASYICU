@@ -44,6 +44,15 @@
     "final_lock_rule": "The reviewers approve one flagship and its analysis plan after deterministic feasibility but before patient-level outcome analysis. After the phase-B declaration, no outcome-driven question, endpoint, database, method, or candidate switch may replace it.",
     "reliability": "Report the two reviewers' scores, disagreements, and resolution descriptively. The showcase does not estimate reviewer reliability or system-level success."
   },
+  "terminal_showcase_evaluation": {
+    "evaluators": [
+      "one ICU clinical evaluator independent of EasyICU implementation and not a manuscript author",
+      "one methods evaluator independent of EasyICU implementation and not a manuscript author"
+    ],
+    "scope": "After execution or gate outputs are sealed and before the final terminal disposition is signed, both evaluators independently assess mandatory-artifact completeness and all six showcase domains. Their signed ratings bind the final disposition before any manuscript result is drafted.",
+    "role_separation": "Terminal evaluators do not author the initial direction, drive phase-A revisions, select the flagship, repair artifacts, or change immutable workflow outputs.",
+    "disagreement_rule": "Report both independent ratings and resolve disagreements by a third qualified evaluator who is independent of EasyICU implementation and not a manuscript author; never average away a failed domain."
+  },
   "showcase_domains": [
     {
       "domain": "iterative_idea_process_integrity",
@@ -67,7 +76,7 @@
     },
     {
       "domain": "interpretation_ceiling",
-      "pass_rule": "The report discloses purposive selection and human contribution and reflects null or positive results, limitations, scope reductions, and failed diagnostics without upgrading authority."
+      "pass_rule": "The report discloses purposive selection, human contribution, and whether the broad direction was internally authored, and reflects null or positive results, limitations, scope reductions, and failed diagnostics without upgrading authority."
     }
   ],
   "prespecified_descriptive_outputs": [

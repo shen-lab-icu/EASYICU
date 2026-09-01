@@ -10,12 +10,12 @@
     ],
     "data": [
       "WP1 Heldout27 all-or-none pass receipt",
-      "native-v2 Heldout27 input manifests and sealed Safety12 fixture manifests with per-task digests",
+      "native-v2 Heldout27 input manifests and sealed Safety12 fixture manifests with per-task digests and certification that every Safety12 fixture contains no patient-level rows",
       "no patient or task partition leakage receipt"
     ],
     "evaluation": [
       "signed Heldout27 review sheets",
-      "signed Safety12 external rationale and fixture receipts",
+      "signed Safety12 external rationale and fixture receipts certifying that acceptable terminal actions are proposed and justified rather than executed against patient data",
       "signed WP5 idea-to-evidence showcase rubric and initial-direction template",
       "normalizer blinding-pilot receipt",
       "reviewer identity, conflict declarations, independence eligibility check, available-hours declaration, session batching and breaks, replacement coverage, and adjudication capacity"
@@ -57,6 +57,7 @@
       "final selected idea, approved locked plan, and preoutcome timing digests",
       "passing selected-idea WP1-extension and native-v2 input-seal receipts",
       "phase-B model, budget, input, and output coordinates",
+      "signed identity, conflict, and independence declarations for the ICU clinical and methods evaluators who assess mandatory-artifact completeness and all six showcase domains after terminal outputs are sealed and before the final disposition is signed; neither evaluator may implement EasyICU or author the manuscript",
       "signed WP5 flagship phase-B declaration"
     ]
   },

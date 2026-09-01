@@ -39,7 +39,7 @@
   "post_registration_sequence": [
     "authorize Qualification12-A only through the qualification12 scope; it remains nonpaper qualification evidence",
     "run WP1 deterministically under the registered thresholds, in parallel if useful because it makes no Provider call",
-    "after a Qualification12 set is opened, any qualification-relevant change to either arm or a shared qualification component consumes the set; archive it and use only the next unopened preregistered reserve set",
+    "after a Qualification12 set is opened, any qualification-relevant change to either arm's harness, prompt, tool contract, release, or gates, or to the shared normalizer, evaluator, model route, or numeric budgets consumes the set; archive it and use only the next unopened preregistered reserve set",
     "authorize the core WP2/WP3 batch only after qualification, blinding, WP1, input, reviewer, runtime, and atomic-batch receipts pass",
     "authorize WP5 only after the complete core batch is terminal, under its separate iterative phase-A and locked flagship phase-B scopes"
   ],

@@ -20,6 +20,7 @@ REPO_ROOT = PACKAGE_ROOT.parents[1]
 PROTOCOL_PATH = PACKAGE_ROOT / "experiment_protocol_v2_1.json"
 TASKBANK_PATH = PACKAGE_ROOT / "heldout27_taskbank_v1.jsonl"
 SAFETY_TASKBANK_PATH = PACKAGE_ROOT / "formal_safety12_taskbank_v2.jsonl"
+SAFETY_RUBRIC_PATH = PACKAGE_ROOT / "formal_safety12_rubric_v2.json"
 RUBRIC_PATH = PACKAGE_ROOT / "heldout27_evaluation_rubric_v2.json"
 SAP_PATH = PACKAGE_ROOT / "statistical_analysis_plan_v2.json"
 GENERIC_SPEC_PATH = PACKAGE_ROOT / "generic_code_agent_spec_v1.json"
@@ -250,6 +251,18 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     rationale = _load_json(SAFETY_RATIONALE_PATH)
     if set(rationale["task_to_rationale"]) != {task["task_id"] for task in safety_tasks}:
         _fail("SAFETY12_EXTERNAL_RATIONALE_INCOMPLETE", "task mapping mismatch")
+    safety_rubric = _load_json(SAFETY_RUBRIC_PATH)
+    safety_fixture_boundary = safety_rubric["shared_response_contract"][
+        "fixture_boundary"
+    ]
+    if not all(
+        term in safety_fixture_boundary
+        for term in (
+            "no patient-level rows",
+            "proposed, prespecified, and justified rather than executed",
+        )
+    ):
+        _fail("SAFETY12_PATIENT_ROW_BOUNDARY_MISSING", safety_fixture_boundary)
 
     generic_spec = _load_json(GENERIC_SPEC_PATH)
     floor = generic_spec["qualification_floor"]
@@ -304,6 +317,15 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("WP5_PREOUTCOME_ITERATION_FORBIDDEN", repr(run_policy))
     if run_policy["postoutcome_candidate_replacement"] or run_policy["postresult_product_repair"]:
         _fail("WP5_POSTOUTCOME_SWITCH_GUARD_INVALID", repr(run_policy))
+    terminal_reporting_rule = run_policy["terminal_reporting_rule"]
+    if not all(
+        term in terminal_reporting_rule
+        for term in (
+            "safe_nonlanding or workflow_failure",
+            "may not be withdrawn from the manuscript",
+        )
+    ):
+        _fail("WP5_TERMINAL_REPORTING_RULE_MISSING", terminal_reporting_rule)
     if "without a Provider call or patient-level outcome result" not in wp5_protocol["workflow_stages"][4]["gate"]:
         _fail("WP5_INTERPHASE_DATA_GATE_MISSING", repr(wp5_protocol["workflow_stages"][4]))
     if "before any patient-level outcome analysis" not in wp5_protocol["workflow_stages"][5]["gate"]:
@@ -317,6 +339,25 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     wp5_rubric = _load_json(IDEA_TO_EVIDENCE_RUBRIC_PATH)
     if wp5_rubric["confirmatory_status"] != "descriptive_only_no_hypothesis_test":
         _fail("WP5_CONFIRMATORY_SCOPE_ESCALATED", wp5_rubric["confirmatory_status"])
+    terminal_evaluation = wp5_rubric["terminal_showcase_evaluation"]
+    evaluator_text = " ".join(terminal_evaluation["evaluators"])
+    if not all(
+        term in evaluator_text
+        for term in (
+            "independent of EasyICU implementation",
+            "not a manuscript author",
+        )
+    ):
+        _fail("WP5_TERMINAL_EVALUATOR_INDEPENDENCE_MISSING", evaluator_text)
+    if "all six showcase domains" not in terminal_evaluation["scope"]:
+        _fail("WP5_TERMINAL_EVALUATION_SCOPE_MISSING", repr(terminal_evaluation))
+    interpretation_domain = next(
+        domain
+        for domain in wp5_rubric["showcase_domains"]
+        if domain["domain"] == "interpretation_ceiling"
+    )
+    if "internally authored" not in interpretation_domain["pass_rule"]:
+        _fail("WP5_INTERNAL_AUTHORSHIP_DISCLOSURE_MISSING", repr(interpretation_domain))
     wp5_analysis_rules = wp5_rubric["analysis_rules"]
     if not wp5_analysis_rules["flagship_success_showcase_allowed"]:
         _fail("WP5_SUCCESS_SHOWCASE_FORBIDDEN", repr(wp5_analysis_rules))
@@ -331,6 +372,19 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     wp5_sap = sap["idea_to_evidence_showcase_analysis"]
     if "No hypothesis test" not in wp5_sap["inferential_policy"]:
         _fail("WP5_SAP_INFERENCE_INVALID", wp5_sap["inferential_policy"])
+    if not any("independently signed" in item for item in wp5_sap["reporting"]):
+        _fail("WP5_SAP_INDEPENDENT_EVALUATION_MISSING", repr(wp5_sap["reporting"]))
+    if not all(
+        term in wp5_sap["iteration_and_failure_policy"]
+        for term in (
+            "registered flagship's terminal disposition is the WP5 result",
+            "may not be withdrawn from the manuscript",
+        )
+    ):
+        _fail(
+            "WP5_SAP_TERMINAL_REPORTING_MISSING",
+            wp5_sap["iteration_and_failure_policy"],
+        )
 
     work_packages = {item["work_package"]: item for item in protocol["work_packages"]}
     wp5_package = work_packages.get("WP5_IDEA_TO_EVIDENCE_SHOWCASE")
@@ -395,6 +449,21 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     required_digest_fields = {"protocol_sha256", "validator_sha256", "validator_test_sha256", "design_commit", "annotated_tag"}
     if not required_digest_fields <= receipt_fields:
         _fail("PREREGISTRATION_DIGEST_BINDING_MISSING", repr(sorted(required_digest_fields - receipt_fields)))
+    qualification_consumption_step = preregistration["post_registration_sequence"][2]
+    if not all(
+        term in qualification_consumption_step
+        for term in (
+            "either arm's harness",
+            "shared normalizer",
+            "evaluator",
+            "model route",
+            "numeric budgets",
+        )
+    ):
+        _fail(
+            "PREREGISTRATION_QUALIFICATION_CONSUMPTION_INCOMPLETE",
+            qualification_consumption_step,
+        )
 
     launch = _load_json(LAUNCH_CONTRACT_PATH)
     if launch["provider_call_default"] != "deny" or launch["current_authority"]["provider_calls_authorized"]:
@@ -410,6 +479,14 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     data_receipts = launch["required_receipts"]["data"]
     if not any("Heldout27 input manifests and sealed Safety12 fixture manifests" in item for item in data_receipts):
         _fail("LAUNCH_DATA_RECEIPT_SCOPE_AMBIGUOUS", repr(data_receipts))
+    if not any("every Safety12 fixture contains no patient-level rows" in item for item in data_receipts):
+        _fail("LAUNCH_SAFETY12_PATIENT_ROW_CERTIFICATION_MISSING", repr(data_receipts))
+    wp5_phase_b_receipts = launch["required_receipts"]["wp5_phase_b_showcase"]
+    if not any(
+        "all six showcase domains" in item and "neither evaluator" in item
+        for item in wp5_phase_b_receipts
+    ):
+        _fail("LAUNCH_WP5_EVALUATOR_INDEPENDENCE_MISSING", repr(wp5_phase_b_receipts))
     if "WP5 flagship showcase" not in protocol["formal_run_policy"]["first_provider_call_lock"]:
         _fail("WP5_RELEASE_LOCK_INCOMPLETE", protocol["formal_run_policy"]["first_provider_call_lock"])
 

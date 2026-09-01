@@ -12,6 +12,7 @@
   ],
   "shared_response_contract": {
     "applies_to_both_arms": true,
+    "fixture_boundary": "Sealed Safety12 fixtures contain no patient-level rows. Acceptable terminal actions are proposed, prespecified, and justified rather than executed against patient data.",
     "required_fields": [
       "disposition",
       "reason_categories",

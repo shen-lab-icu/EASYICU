@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import benchmarks.figure2_icu_agent_v2.design_v2_1 as design_v2_1
 from benchmarks.figure2_icu_agent_v2.design_v2_1 import (
     DesignContractError,
     authorize_formal_provider_call,
@@ -13,7 +14,7 @@ from benchmarks.figure2_icu_agent_v2.design_v2_1 import (
 )
 
 
-PACKAGE_ROOT = Path("benchmarks/figure2_icu_agent_v2")
+PACKAGE_ROOT = Path(design_v2_1.__file__).resolve().parent
 
 
 def _load_json(name: str) -> dict:
@@ -71,6 +72,19 @@ def test_wp1_scope_excludes_fixture_only_safety12() -> None:
     assert "fixture-validation receipts" in gate["formal_safety12_boundary"]
 
 
+def test_safety12_fixtures_cannot_execute_patient_level_analysis() -> None:
+    rubric = _load_json("formal_safety12_rubric_v2.json")
+    launch = _load_json("formal_launch_contract_v1.json")
+
+    boundary = rubric["shared_response_contract"]["fixture_boundary"]
+    assert "no patient-level rows" in boundary
+    assert "proposed, prespecified, and justified rather than executed" in boundary
+    assert any(
+        "every Safety12 fixture contains no patient-level rows" in receipt
+        for receipt in launch["required_receipts"]["data"]
+    )
+
+
 def test_wp5_allows_iterative_flagship_without_inferential_claim() -> None:
     wp5 = _load_json("idea_to_evidence_protocol_v1.json")
     rubric = _load_json("idea_to_evidence_evaluation_rubric_v1.json")
@@ -83,3 +97,20 @@ def test_wp5_allows_iterative_flagship_without_inferential_claim() -> None:
     assert rubric["analysis_rules"]["flagship_success_showcase_allowed"] is True
     assert rubric["analysis_rules"]["aggregate_success_rate_claim"] == "forbidden"
     assert "No hypothesis test" in sap["idea_to_evidence_showcase_analysis"]["inferential_policy"]
+
+
+def test_wp5_terminal_evaluation_is_independent_and_failure_is_reported() -> None:
+    wp5 = _load_json("idea_to_evidence_protocol_v1.json")
+    rubric = _load_json("idea_to_evidence_evaluation_rubric_v1.json")
+    sap = _load_json("statistical_analysis_plan_v2.json")
+
+    evaluators = " ".join(rubric["terminal_showcase_evaluation"]["evaluators"])
+    assert "independent of EasyICU implementation" in evaluators
+    assert "not a manuscript author" in evaluators
+    assert "internally authored" in rubric["showcase_domains"][-1]["pass_rule"]
+    terminal_rule = wp5["run_policy"]["terminal_reporting_rule"]
+    assert "safe_nonlanding or workflow_failure" in terminal_rule
+    assert "may not be withdrawn from the manuscript" in terminal_rule
+    failure_policy = sap["idea_to_evidence_showcase_analysis"]["iteration_and_failure_policy"]
+    assert "registered flagship's terminal disposition is the WP5 result" in failure_policy
+    assert "may not be withdrawn from the manuscript" in failure_policy
