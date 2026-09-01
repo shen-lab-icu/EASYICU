@@ -38,7 +38,8 @@
       "resource_and_terminal_run_receipt"
     ],
     "fairness_rule": "The evaluator scores scientific content and traceability, not use of an EasyICU class, field name, reason code, or file layout. EasyICU artifacts and generic-agent artifacts must be projected into the same review schema before blinding.",
-    "generic_arm_equivalence": "The generic arm may construct its evidence manifest and hashes with generic code and shell tools; absence of the EasyICU EvidenceStore API is not itself a scoring failure."
+    "generic_arm_equivalence": "The generic arm may construct its evidence manifest and hashes with generic code and shell tools; absence of the EasyICU EvidenceStore API is not itself a scoring failure.",
+    "manifest_interpretation_warning": "Harness-computed file digests prove only the bytes of named review files. Agent-asserted headline evidence and mandatory-artifact inventory remain unverified assertions until blinded HG04 and HG06 review confirms that the referenced artifacts are present, readable, internally consistent, and agree with every displayed value."
   },
   "hard_gates": [
     {

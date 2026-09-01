@@ -47,7 +47,7 @@
     {
       "role": "heldout27_evaluation_rubric",
       "path": "benchmarks/figure2_icu_agent_v2/heldout27_evaluation_rubric_v2.json",
-      "sha256": "cc4cdba507dbdc17a00f2ee7b532c35415761fbcb6abcc5d0803e2afed0139cf"
+      "sha256": "b8b1e033c03f2f9b82d25960756643ed294c9e9cb3a386e31681ef5c4f9963ac"
     },
     {
       "role": "statistical_analysis_plan",
@@ -77,7 +77,7 @@
     {
       "role": "generic_code_agent_spec",
       "path": "benchmarks/figure2_icu_agent_v2/generic_code_agent_spec_v1.json",
-      "sha256": "ee5207b8f9e63a241ade6dbec8f2b936f0f405860431b5ca7b0eaaf4d76ab053"
+      "sha256": "b733290f5396360ac0b1c9635700ad7ecd468b79f0455346053f4d41dbafe230"
     },
     {
       "role": "review_bundle_contract",
@@ -87,12 +87,12 @@
     {
       "role": "preregistration_plan",
       "path": "benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json",
-      "sha256": "e98a9b70208f164fb0ed9a9bee03daf00a0eae731b697efd1d9719593e65be3a"
+      "sha256": "ed92e648a56e2db3db461347cb663973d56816b55e03d717a01296e4813dba1f"
     },
     {
       "role": "formal_launch_contract",
       "path": "benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json",
-      "sha256": "c35901a6d9e7dd23bf626f441c3f434a82222bbdafd0a425335f5e2ab76d889d"
+      "sha256": "4490f37ecb09da5a91ae37335e0d86bb54109e808284b36075b7efb068a7be0f"
     },
     {
       "role": "idea_to_evidence_protocol",
@@ -193,7 +193,7 @@
       "frozen_spec": "benchmarks/figure2_icu_agent_v2/generic_code_agent_spec_v1.json",
       "model": "exactly shared with easyicu_full and frozen in the later atomic batch declaration",
       "capabilities": [
-        "generic Python, R, shell, file read, and file write tools",
+        "generic Python, in-container shell, file read, and file write tools",
         "the same frozen statistical packages and execution container",
         "a neutral human-readable schema and data dictionary",
         "freedom to write, run, inspect, and revise analysis code within the frozen run budget",

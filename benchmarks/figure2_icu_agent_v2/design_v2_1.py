@@ -15,6 +15,9 @@ from pathlib import Path
 import random
 from typing import Any, NoReturn
 
+from .design_errors import DesignContractError
+from .formal_authority import authorize_formal_provider_call
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PACKAGE_ROOT.parents[1]
@@ -36,15 +39,8 @@ IDEA_TO_EVIDENCE_RUBRIC_PATH = (
 )
 GENERIC_HARNESS_PATH = PACKAGE_ROOT / "generic_code_agent_harness.py"
 FORMAL_GENERIC_RUNNER_PATH = PACKAGE_ROOT / "formal_generic_runner.py"
-
-
-class DesignContractError(ValueError):
-    """Stable design-contract failure."""
-
-    def __init__(self, reason_code: str, detail: str) -> None:
-        self.reason_code = reason_code
-        self.detail = detail
-        super().__init__(f"{reason_code}: {detail}")
+FORMAL_AUTHORITY_PATH = PACKAGE_ROOT / "formal_authority.py"
+FORMAL_PROVIDER_GATE_PATH = PACKAGE_ROOT / "formal_provider_gate.py"
 
 
 def _fail(reason_code: str, detail: str) -> NoReturn:
@@ -243,6 +239,18 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     gates = {gate["gate_id"] for gate in rubric["hard_gates"]}
     if "HG09_TASK_QUESTION_ANSWERED" not in gates:
         _fail("PRIMARY_GATE_MISSING", "HG09_TASK_QUESTION_ANSWERED")
+    manifest_warning = rubric["arm_neutral_review_bundle"].get(
+        "manifest_interpretation_warning", ""
+    )
+    if not all(
+        term in manifest_warning
+        for term in (
+            "Harness-computed file digests prove only",
+            "unverified assertions",
+            "HG04 and HG06",
+        )
+    ):
+        _fail("REVIEW_MANIFEST_ASSERTION_BOUNDARY_MISSING", manifest_warning)
 
     safety_tasks = _load_jsonl(SAFETY_TASKBANK_PATH)
     if len(safety_tasks) != 12 or len({task["challenge_category"] for task in safety_tasks}) != 12:
@@ -269,7 +277,7 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
 
     generic_spec = _load_json(GENERIC_SPEC_PATH)
     if generic_spec["status"] != (
-        "review_candidate_harness_implemented_no_formal_authority"
+        "review_candidate_harness_and_authority_implemented_no_registered_signer"
     ):
         _fail("GENERIC_HARNESS_STATUS_INVALID", generic_spec["status"])
     implementation = generic_spec["implementation"]
@@ -277,51 +285,107 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         GENERIC_HARNESS_PATH.relative_to(REPO_ROOT)
     ) or implementation["formal_provider_owner"] != str(
         FORMAL_GENERIC_RUNNER_PATH.relative_to(REPO_ROOT)
+    ) or implementation["formal_authority_owner"] != str(
+        FORMAL_AUTHORITY_PATH.relative_to(REPO_ROOT)
     ):
         _fail("GENERIC_HARNESS_OWNER_DRIFT", repr(implementation))
-    if not GENERIC_HARNESS_PATH.is_file() or not FORMAL_GENERIC_RUNNER_PATH.is_file():
-        _fail("GENERIC_HARNESS_IMPLEMENTATION_MISSING", repr(implementation))
-    formal_runner_tree = ast.parse(
-        FORMAL_GENERIC_RUNNER_PATH.read_text(encoding="utf-8")
-    )
-    formal_runner_imports = {
-        node.module
-        for node in ast.walk(formal_runner_tree)
-        if isinstance(node, ast.ImportFrom) and node.module
-    }
-    formal_runner_imports.update(
-        alias.name
-        for node in ast.walk(formal_runner_tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    )
-    formal_runner_calls = {
-        node.func.id
-        for node in ast.walk(formal_runner_tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    forbidden_provider_imports = {
-        module
-        for module in formal_runner_imports
-        if module.startswith("easyicu.research_agent.providers.")
-        and module != "easyicu.research_agent.providers.protocol"
-    }
-    if forbidden_provider_imports:
-        _fail(
-            "FORMAL_GENERIC_PROVIDER_GATE_BYPASS",
-            "provider import: " + ", ".join(sorted(forbidden_provider_imports)),
+    if not all(
+        path.is_file()
+        for path in (
+            GENERIC_HARNESS_PATH,
+            FORMAL_GENERIC_RUNNER_PATH,
+            FORMAL_AUTHORITY_PATH,
         )
-    if "authorized_complete" in formal_runner_calls:
-        _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", "direct authorized_complete")
+    ):
+        _fail("GENERIC_HARNESS_IMPLEMENTATION_MISSING", repr(implementation))
+    protected_trees = {
+        path.name: ast.parse(path.read_text(encoding="utf-8"))
+        for path in (
+            FORMAL_GENERIC_RUNNER_PATH,
+            GENERIC_HARNESS_PATH,
+            FORMAL_PROVIDER_GATE_PATH,
+            FORMAL_AUTHORITY_PATH,
+        )
+    }
+    imports_by_file: dict[str, set[str]] = {}
+    calls_by_file: dict[str, list[ast.Call]] = {}
+    for name, tree in protected_trees.items():
+        imports = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        }
+        imports.update(
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        )
+        imports_by_file[name] = imports
+        calls_by_file[name] = [
+            node for node in ast.walk(tree) if isinstance(node, ast.Call)
+        ]
+        if "importlib" in imports or any(
+            isinstance(call.func, ast.Name) and call.func.id == "__import__"
+            for call in calls_by_file[name]
+        ):
+            _fail("FORMAL_GENERIC_DYNAMIC_IMPORT_FORBIDDEN", name)
+
+    for name in (
+        FORMAL_GENERIC_RUNNER_PATH.name,
+        GENERIC_HARNESS_PATH.name,
+        FORMAL_AUTHORITY_PATH.name,
+    ):
+        forbidden_provider_imports = {
+            module
+            for module in imports_by_file[name]
+            if module.startswith("easyicu.research_agent.providers.")
+            and module != "easyicu.research_agent.providers.protocol"
+        }
+        if forbidden_provider_imports:
+            _fail(
+                "FORMAL_GENERIC_PROVIDER_GATE_BYPASS",
+                f"{name}: " + ", ".join(sorted(forbidden_provider_imports)),
+            )
+        if any(
+            isinstance(call.func, ast.Name) and call.func.id == "authorized_complete"
+            for call in calls_by_file[name]
+        ):
+            _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", name)
+
+    formal_runner_calls = calls_by_file[FORMAL_GENERIC_RUNNER_PATH.name]
+    runner_named_calls = {
+        call.func.id for call in formal_runner_calls if isinstance(call.func, ast.Name)
+    }
     if any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "complete"
-        for node in ast.walk(formal_runner_tree)
+        isinstance(call.func, ast.Attribute) and call.func.attr == "complete"
+        for call in formal_runner_calls
     ):
         _fail("FORMAL_GENERIC_PROVIDER_GATE_BYPASS", "direct .complete call")
-    if "complete_formal_provider_call" not in formal_runner_calls:
-        _fail("FORMAL_GENERIC_PROVIDER_GATE_MISSING", repr(formal_runner_calls))
+    if "complete_formal_provider_call" not in runner_named_calls:
+        _fail("FORMAL_GENERIC_PROVIDER_GATE_MISSING", repr(runner_named_calls))
+
+    gate_calls = calls_by_file[FORMAL_PROVIDER_GATE_PATH.name]
+    gate_named_calls = {
+        call.func.id for call in gate_calls if isinstance(call.func, ast.Name)
+    }
+    if not {"authorize_formal_provider_call", "authorized_complete"} <= gate_named_calls:
+        _fail("FORMAL_PROVIDER_GATE_SEQUENCE_MISSING", repr(gate_named_calls))
+    authority_lines = [
+        call.lineno
+        for call in gate_calls
+        if isinstance(call.func, ast.Name)
+        and call.func.id == "authorize_formal_provider_call"
+    ]
+    transport_lines = [
+        call.lineno
+        for call in gate_calls
+        if isinstance(call.func, ast.Name) and call.func.id == "authorized_complete"
+    ]
+    if not authority_lines or not transport_lines or max(authority_lines) >= min(
+        transport_lines
+    ):
+        _fail("FORMAL_PROVIDER_GATE_SEQUENCE_INVALID", FORMAL_PROVIDER_GATE_PATH.name)
     floor = generic_spec["qualification_floor"]
     if "At least 5 of the 7" not in floor["positive_task_floor"]:
         _fail("GENERIC_QUALIFICATION_FLOOR_DRIFT", repr(floor))
@@ -522,7 +586,17 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
 
     preregistration = _load_json(PREREGISTRATION_PLAN_PATH)
     receipt_fields = set(preregistration["required_receipt_fields"])
-    required_digest_fields = {"protocol_sha256", "validator_sha256", "validator_test_sha256", "design_commit", "annotated_tag"}
+    required_digest_fields = {
+        "protocol_sha256",
+        "validator_sha256",
+        "validator_test_sha256",
+        "formal_authority_sha256",
+        "formal_authority_test_sha256",
+        "design_commit",
+        "annotated_tag",
+        "trusted_authority_signer_identity",
+        "trusted_authority_ed25519_public_key_base64",
+    }
     if not required_digest_fields <= receipt_fields:
         _fail("PREREGISTRATION_DIGEST_BINDING_MISSING", repr(sorted(required_digest_fields - receipt_fields)))
     qualification_consumption_step = preregistration["post_registration_sequence"][2]
@@ -544,6 +618,29 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     launch = _load_json(LAUNCH_CONTRACT_PATH)
     if launch["provider_call_default"] != "deny" or launch["current_authority"]["provider_calls_authorized"]:
         _fail("FORMAL_LAUNCH_FAIL_CLOSED_INVALID", repr(launch["current_authority"]))
+    if launch.get("authority_owner") != str(FORMAL_AUTHORITY_PATH.relative_to(REPO_ROOT)):
+        _fail("FORMAL_AUTHORITY_OWNER_INVALID", repr(launch.get("authority_owner")))
+    signature_verification = launch.get("signature_verification", {})
+    if signature_verification.get("algorithm") != "Ed25519":
+        _fail("FORMAL_AUTHORITY_ALGORITHM_INVALID", repr(signature_verification))
+    receipt_schema = signature_verification.get("receipt_payload_schema", "")
+    if not all(
+        term in receipt_schema
+        for term in (
+            "easyicu.figure2_launch_receipt/1",
+            "status=passed",
+            "same signer key",
+        )
+    ):
+        _fail("FORMAL_AUTHORITY_RECEIPT_SCHEMA_MISSING", receipt_schema)
+    if any(
+        signature_verification.get(field) is not None
+        for field in ("trusted_signer_id", "trusted_public_key_base64")
+    ):
+        _fail(
+            "REVIEW_CANDIDATE_SIGNER_PREMATURELY_REGISTERED",
+            repr(signature_verification),
+        )
     expected_scopes = {"qualification12", "core_wp2_wp3", "wp5_phase_a", "wp5_phase_b_showcase"}
     if set(launch["authorization_scopes"]) != expected_scopes:
         _fail("FORMAL_LAUNCH_SCOPE_INVALID", repr(launch["authorization_scopes"]))
@@ -574,18 +671,12 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         "idea_to_evidence_case_count": wp5_protocol["case_count"],
         "frozen_asset_count": len(protocol["frozen_assets"]),
         "generic_harness_implemented": True,
+        "formal_authority_owner_implemented": True,
+        "trusted_signer_registered": False,
         "review_bundle_normalizer_implemented": True,
         "provider_calls_authorized": False,
         "formal_batch_authorized": False,
     }
-
-
-def authorize_formal_provider_call(receipts: dict[str, Any]) -> NoReturn:
-    """Deny launch until a future sealed contract explicitly enables it."""
-    del receipts
-    launch = _load_json(LAUNCH_CONTRACT_PATH)
-    reason = launch["current_authority"]["reason"]
-    _fail("FORMAL_PROVIDER_CALL_NOT_AUTHORIZED", reason)
 
 
 __all__ = [

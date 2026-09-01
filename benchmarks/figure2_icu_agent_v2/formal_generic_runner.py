@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from easyicu.research_agent.authority.provider_hard_stop import (
+    ProviderHardStopExceeded,
+    TaskProviderHardStop,
+)
+from easyicu.research_agent.execution.runner import DockerRunner
 from easyicu.research_agent.providers.protocol import LLMMessage
 
 from .formal_provider_gate import (
@@ -13,7 +18,9 @@ from .formal_provider_gate import (
     complete_formal_provider_call,
 )
 from .generic_code_agent_harness import (
+    DockerRunnerBackend,
     GenericCodeAgentHarness,
+    GenericBudgetExhausted,
     GenericExecutionBackend,
     GenericHarnessResult,
     PlanReviewDecision,
@@ -49,6 +56,7 @@ class FormalGenericModelGateway:
     task_id: str
     max_tokens: int
     temperature: float
+    provider_hard_stop: TaskProviderHardStop | None = None
     _call_number: int = 0
 
     def complete(self, *, phase: str, messages: Sequence[LLMMessage]) -> str:
@@ -60,14 +68,18 @@ class FormalGenericModelGateway:
             arm="generic_code_agent",
             call_id=f"generic_{self._call_number:04d}",
         )
-        return complete_formal_provider_call(
-            self.client,
-            messages,
-            receipts=self.receipts,
-            coordinate=coordinate,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-        )
+        try:
+            return complete_formal_provider_call(
+                self.client,
+                messages,
+                receipts=self.receipts,
+                coordinate=coordinate,
+                provider_hard_stop=self.provider_hard_stop,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+        except ProviderHardStopExceeded as exc:
+            raise GenericBudgetExhausted from exc
 
 
 class FormalGenericCodeAgentRunner:
@@ -82,7 +94,8 @@ class FormalGenericCodeAgentRunner:
         task_id: str,
         max_tokens: int,
         temperature: float,
-        executor: GenericExecutionBackend,
+        docker_runner: DockerRunner,
+        provider_hard_stop: TaskProviderHardStop,
         resource_snapshot: Callable[[], Mapping[str, Any]],
     ) -> None:
         gateway = FormalGenericModelGateway(
@@ -92,39 +105,71 @@ class FormalGenericCodeAgentRunner:
             task_id=task_id,
             max_tokens=max_tokens,
             temperature=temperature,
+            provider_hard_stop=provider_hard_stop,
         )
+
         def validated_resource_snapshot() -> Mapping[str, Any]:
             snapshot = dict(resource_snapshot())
-            required = {
-                "within_frozen_budget",
-                "provider_tokens",
-                "provider_calls",
-                "billed_cost",
-            }
+            required = {"within_frozen_budget", "billed_cost"}
             missing = sorted(required.difference(snapshot))
             if missing:
                 raise FormalGenericResourceReceiptError(missing)
+            try:
+                provider_hard_stop.assert_active()
+                hard_stop_active = True
+            except ProviderHardStopExceeded:
+                hard_stop_active = False
+            snapshot["within_frozen_budget"] = bool(
+                snapshot["within_frozen_budget"] and hard_stop_active
+            )
+            accounting = provider_hard_stop.accounting_summary()
+            conservative = accounting.get("conservative_upper_bound")
+            if not isinstance(conservative, Mapping):
+                raise FormalGenericResourceReceiptError(
+                    ("conservative_upper_bound",)
+                )
+            snapshot["provider_calls"] = conservative.get("n_calls")
+            snapshot["provider_tokens"] = conservative.get("total_tokens")
+            snapshot["accounted_cost_upper_bound_usd"] = conservative.get(
+                "estimated_cost_usd"
+            )
             return snapshot
 
+        executor: GenericExecutionBackend = DockerRunnerBackend(
+            docker_runner,
+            task_hard_stop=provider_hard_stop,
+        )
         self._harness = GenericCodeAgentHarness(
             model=gateway,
             executor=executor,
             resource_snapshot=validated_resource_snapshot,
         )
+        self._provider_hard_stop = provider_hard_stop
 
     def run(
         self,
         *,
         task_prompt: str,
         neutral_input_description: str,
+        mandatory_artifacts: Sequence[str],
         output_dir: Path,
         review_plan: Callable[[Mapping[str, Any]], PlanReviewDecision],
     ) -> GenericHarnessResult:
+        def review_without_charging_human_wait(
+            plan: Mapping[str, Any],
+        ) -> PlanReviewDecision:
+            self._provider_hard_stop.pause()
+            try:
+                return review_plan(plan)
+            finally:
+                self._provider_hard_stop.resume()
+
         return self._harness.run(
             task_prompt=task_prompt,
             neutral_input_description=neutral_input_description,
+            mandatory_artifacts=mandatory_artifacts,
             output_dir=output_dir,
-            review_plan=review_plan,
+            review_plan=review_without_charging_human_wait,
         )
 
 
