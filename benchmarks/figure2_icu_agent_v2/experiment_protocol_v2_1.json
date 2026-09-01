@@ -77,12 +77,12 @@
     {
       "role": "generic_code_agent_spec",
       "path": "benchmarks/figure2_icu_agent_v2/generic_code_agent_spec_v1.json",
-      "sha256": "b8c70f33b64db6f4ee1076ebf2e1a05455967a3d600cc757b507849a7b1fcc70"
+      "sha256": "ee5207b8f9e63a241ade6dbec8f2b936f0f405860431b5ca7b0eaaf4d76ab053"
     },
     {
       "role": "review_bundle_contract",
       "path": "benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json",
-      "sha256": "9d7490f3b447fcd09fe3103bae6d406a4b93465ec36a1b4e31c9159e0b87826a"
+      "sha256": "c11d3daccae9483894e4e55adce9186e9b25aa216354e239a64db65220a9ba0e"
     },
     {
       "role": "preregistration_plan",
@@ -102,7 +102,7 @@
     {
       "role": "idea_to_evidence_evaluation_rubric",
       "path": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json",
-      "sha256": "a2022ea6fc1308e100bb1c32cc6f2fd6fc04b1c88bb3ccd6abd8950422722a54"
+      "sha256": "c2aeb23829a137fa1fdd05e0251651d3963ca57fb818c4a3bad74202116c16c1"
     }
   ],
   "work_packages": [

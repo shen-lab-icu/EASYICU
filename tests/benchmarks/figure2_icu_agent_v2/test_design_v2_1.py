@@ -27,6 +27,8 @@ def test_review_candidate_bundle_validates_without_run_authority() -> None:
     assert receipt["heldout_task_count"] == 27
     assert receipt["safety_task_count"] == 12
     assert receipt["idea_to_evidence_case_count"] == 1
+    assert receipt["generic_harness_implemented"] is True
+    assert receipt["review_bundle_normalizer_implemented"] is True
     assert receipt["provider_calls_authorized"] is False
     assert receipt["formal_batch_authorized"] is False
 
@@ -107,6 +109,10 @@ def test_wp5_terminal_evaluation_is_independent_and_failure_is_reported() -> Non
     evaluators = " ".join(rubric["terminal_showcase_evaluation"]["evaluators"])
     assert "independent of EasyICU implementation" in evaluators
     assert "not a manuscript author" in evaluators
+    assert any(
+        "signed independent terminal-evaluation receipt" in artifact
+        for artifact in rubric["mandatory_showcase_artifacts"]
+    )
     assert "internally authored" in rubric["showcase_domains"][-1]["pass_rule"]
     terminal_rule = wp5["run_policy"]["terminal_reporting_rule"]
     assert "safe_nonlanding or workflow_failure" in terminal_rule

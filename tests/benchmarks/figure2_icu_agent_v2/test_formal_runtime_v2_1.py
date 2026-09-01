@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import benchmarks.figure2_icu_agent_v2.formal_provider_gate as formal_provider_gate
+import benchmarks.figure2_icu_agent_v2.review_bundle_normalizer as review_bundle_normalizer
 from benchmarks.figure2_icu_agent_v2.design_v2_1 import DesignContractError
 from benchmarks.figure2_icu_agent_v2.formal_provider_gate import (
     FormalCallCoordinate,
@@ -18,6 +19,19 @@ from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
 )
 from easyicu.research_agent.providers.protocol import LLMMessage
 from easyicu.research_agent.providers.client_trust import ProviderConfigurationError
+
+
+_ACTION_SPACE = json.loads(
+    review_bundle_normalizer.ACTION_SPACE_PATH.read_text(encoding="utf-8")
+)
+_INTERNAL_MARKERS = sorted(
+    {stage["stage_id"] for stage in _ACTION_SPACE["stages"]}
+    | {
+        reason
+        for stage in _ACTION_SPACE["stages"]
+        for reason in stage["failure_reason_codes"]
+    }
+)
 
 
 class _TransportSpy:
@@ -150,6 +164,132 @@ def test_normalizer_preserves_science_and_hides_arm_resource_fingerprints(
         "arm_label",
         "repository_path",
     }
+
+
+@pytest.mark.parametrize("marker", _INTERNAL_MARKERS)
+def test_normalizer_rejects_every_frozen_internal_marker(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    _write_bundle(tmp_path)
+    (tmp_path / "06_report.md").write_text(
+        f"Internal marker: {marker}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReviewBundleNormalizationError) as exc_info:
+        normalize_review_bundle(tmp_path)
+
+    assert exc_info.value.reason_code == "REVIEW_BUNDLE_UNSAFE_MARKER"
+
+
+def test_normalizer_redacts_container_and_repository_paths(tmp_path: Path) -> None:
+    _write_bundle(tmp_path)
+    manifest = {
+        "paths": [
+            "/workspace/run/out.csv",
+            "/home/agent/plan.py",
+            "benchmarks/figure2_icu_agent_v2/heldout27_taskbank_v1.jsonl",
+            "/Users/example/out.csv.",
+        ]
+    }
+    (tmp_path / "05_evidence_manifest.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+
+    result = normalize_review_bundle(tmp_path)
+    normalized = json.loads(result.files["05_evidence_manifest.json"])
+
+    assert normalized["paths"] == [
+        "<redacted-path>",
+        "<redacted-path>",
+        "<redacted-path>",
+        "<redacted-path>.",
+    ]
+
+
+@pytest.mark.parametrize(
+    "fingerprint",
+    [
+        "analysis completed after 37 model turns",
+        "the workflow made 52 tool calls",
+        "provider_calls=4",
+        "provider tokens: 1200",
+        "per-tool latency was retained",
+    ],
+)
+def test_normalizer_rejects_resource_fingerprints_outside_raw_receipt(
+    tmp_path: Path,
+    fingerprint: str,
+) -> None:
+    _write_bundle(tmp_path)
+    (tmp_path / "03_results.json").write_text(
+        json.dumps({"estimate": 1.25, "note": fingerprint}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReviewBundleNormalizationError) as exc_info:
+        normalize_review_bundle(tmp_path)
+
+    assert exc_info.value.reason_code == "REVIEW_BUNDLE_RESOURCE_FINGERPRINT"
+
+
+def test_normalizer_detects_numeric_content_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_bundle(tmp_path)
+    original = review_bundle_normalizer._normalize_value
+
+    def corrupt_numeric_content(value, *, file_name, location):
+        normalized, findings = original(
+            value,
+            file_name=file_name,
+            location=location,
+        )
+        if file_name == "03_results.json" and location == "":
+            normalized["estimate"] = 9.99
+        return normalized, findings
+
+    monkeypatch.setattr(
+        review_bundle_normalizer,
+        "_normalize_value",
+        corrupt_numeric_content,
+    )
+
+    with pytest.raises(ReviewBundleNormalizationError) as exc_info:
+        normalize_review_bundle(tmp_path)
+
+    assert exc_info.value.reason_code == "REVIEW_BUNDLE_NUMERIC_CONTENT_CHANGED"
+
+
+def test_normalizer_rejects_overflowed_json_number_with_typed_reason(
+    tmp_path: Path,
+) -> None:
+    _write_bundle(tmp_path)
+    (tmp_path / "03_results.json").write_text(
+        '{"estimate": 1e400}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReviewBundleNormalizationError) as exc_info:
+        normalize_review_bundle(tmp_path)
+
+    assert exc_info.value.reason_code == "REVIEW_BUNDLE_NONFINITE_JSON"
+
+
+def test_normalizer_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    _write_bundle(tmp_path)
+    (tmp_path / "03_results.json").write_text(
+        '{"estimate": 1.25, "estimate": 9.99}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReviewBundleNormalizationError) as exc_info:
+        normalize_review_bundle(tmp_path)
+
+    assert exc_info.value.reason_code == "REVIEW_BUNDLE_JSON_KEY_DUPLICATE"
 
 
 def test_normalizer_rejects_unknown_internal_marker(tmp_path: Path) -> None:
