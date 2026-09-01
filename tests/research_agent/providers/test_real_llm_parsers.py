@@ -716,7 +716,7 @@ def test_planner_retries_dictionary_concept_absent_from_sealed_typed_input(
     """A legal global concept is not executable authority for every cohort."""
 
     from easyicu.research_agent.agents.core import PlannerAgent
-    from tests.research_agent.test_materialized_column_metadata import (
+    from tests.research_agent.core.test_materialized_column_metadata import (
         _build_v2_context,
     )
 
@@ -761,7 +761,7 @@ def test_planner_retries_non_column_step_and_model_references(tmp_path) -> None:
     """Semantic labels must not survive as executable typed dataframe fields."""
 
     from easyicu.research_agent.agents.core import PlannerAgent
-    from tests.research_agent.test_materialized_column_metadata import (
+    from tests.research_agent.core.test_materialized_column_metadata import (
         _build_v2_context,
     )
 
@@ -812,7 +812,7 @@ def test_typed_binding_gate_covers_robustness_fields(tmp_path) -> None:
         CohortSchemaError,
         validate_plan_typed_bindings_against_context,
     )
-    from tests.research_agent.test_materialized_column_metadata import (
+    from tests.research_agent.core.test_materialized_column_metadata import (
         _build_v2_context,
     )
 
@@ -868,7 +868,7 @@ def test_typed_binding_gate_rejects_direct_suffix_with_wrong_window(tmp_path) ->
         ConceptPredicate,
         TimeWindow,
     )
-    from tests.research_agent.test_materialized_column_metadata import (
+    from tests.research_agent.core.test_materialized_column_metadata import (
         _build_v2_context,
     )
 
@@ -926,7 +926,7 @@ def test_typed_binding_gate_accepts_direct_static_column_without_window(
         TimeWindow,
     )
     from easyicu.research_agent.schema import AnalysisStep
-    from tests.research_agent.test_materialized_column_metadata import (
+    from tests.research_agent.core.test_materialized_column_metadata import (
         _build_v2_context,
     )
 
@@ -974,7 +974,7 @@ def test_typed_binding_gate_rejects_identity_coordinate_as_raw_step_input(
         validate_plan_typed_bindings_against_context,
     )
     from easyicu.research_agent.schema import AnalysisStep
-    from tests.research_agent.test_materialized_column_metadata import (
+    from tests.research_agent.core.test_materialized_column_metadata import (
         _build_v2_context,
     )
 
@@ -1017,7 +1017,7 @@ def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) ->
     import json
 
     from easyicu.research_agent.agents.core import PlannerAgent
-    from tests.research_agent.test_materialized_column_metadata import (
+    from tests.research_agent.core.test_materialized_column_metadata import (
         _build_v2_context,
     )
 
@@ -1114,7 +1114,7 @@ def test_planner_retries_primary_cohort_that_erases_its_closed_comparison(
     """Eligibility cannot erase a Planner-declared downstream contrast."""
 
     from easyicu.research_agent.agents.core import PlannerAgent
-    from tests.research_agent.test_materialized_column_metadata import (
+    from tests.research_agent.core.test_materialized_column_metadata import (
         _build_v2_context,
     )
 

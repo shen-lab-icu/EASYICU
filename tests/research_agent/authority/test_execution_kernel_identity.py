@@ -10,7 +10,7 @@ from easyicu.research_agent.execution.kernel_identity import (
 
 
 def test_execution_kernel_manifest_tracks_runtime_not_control_plane() -> None:
-    package_root = Path(__file__).resolve().parents[2] / "src" / "easyicu"
+    package_root = Path(__file__).resolve().parents[3] / "src" / "easyicu"
 
     paths = execution_kernel_relative_paths(package_root)
 

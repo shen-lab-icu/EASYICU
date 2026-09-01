@@ -40,7 +40,7 @@ def test_idea_mining_reexports_schema_by_identity() -> None:
 def test_idea_mining_schema_is_a_leaf_module() -> None:
     """The schema module must not import idea_mining at module top (cycle)."""
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

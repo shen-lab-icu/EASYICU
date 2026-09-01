@@ -40,11 +40,11 @@ from easyicu.research_agent.authority.typed_binding import (
 )
 
 PROMPT = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src/easyicu/research_agent/providers/prompts/v1/coder.txt"
 )
 PHASE = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src/easyicu/research_agent/execution/phase.py"
 )
 

@@ -42,7 +42,7 @@ loaded = sorted(name for name in sys.modules if name.startswith(package + '.'))
 assert loaded == [], loaded
 """
     env = dict(os.environ)
-    source_root = str(Path(__file__).resolve().parents[2] / "src")
+    source_root = str(Path(__file__).resolve().parents[3] / "src")
     env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
     subprocess.run([sys.executable, "-c", script], check=True, env=env)
 
@@ -66,7 +66,7 @@ def _resolved_imports(path: Path, module_name: str) -> set[str]:
 
 
 def test_command_line_tools_use_canonical_evaluation_paths() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     expected = {
         "tools/run_cross_model_check.py": {
             "easyicu.research_agent.evaluation.cross_model_panel"

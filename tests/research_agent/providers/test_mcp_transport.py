@@ -391,7 +391,7 @@ async def test_real_stdio_transport_uses_official_client(tmp_path: Path) -> None
             "--transport",
             "stdio",
         ],
-        cwd=str(Path(__file__).resolve().parents[2]),
+        cwd=str(Path(__file__).resolve().parents[3]),
         env=env,
     )
 

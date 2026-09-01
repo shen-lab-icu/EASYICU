@@ -31,7 +31,7 @@ import pytest
 from easyicu.research_agent.script_runtime import to_jsonable, write_json
 
 PROMPT = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src/easyicu/research_agent/providers/prompts/v1/coder.txt"
 )
 

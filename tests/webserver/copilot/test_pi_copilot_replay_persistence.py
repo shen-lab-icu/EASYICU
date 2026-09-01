@@ -572,7 +572,7 @@ def test_historical_data_package_link_never_rebuilds_against_new_revision(
 
 
 def test_node_and_browser_owners_use_cursor_pages_without_a_last_100_slice() -> None:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[3]
     node = (
         root
         / "src/easyicu/webserver/pi_copilot/node_app/src/main.mjs"

@@ -13,7 +13,7 @@ from easyicu.load_concepts import ConceptLoader
 from easyicu.utils.compat import POINT_EVENT_CONCEPTS, WINDOW_CONCEPTS, expand_interval_rows
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DICTIONARIES = (
     ROOT / "src/easyicu/data/concept-dict.json",
     ROOT / "src/easyicu/data/sofa2-dict.json",

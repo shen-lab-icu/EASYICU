@@ -35,7 +35,7 @@ loaded = sorted(name for name in sys.modules if name.startswith(package + '.'))
 assert loaded == [], loaded
 """
     env = dict(os.environ)
-    source_root = str(Path(__file__).resolve().parents[2] / "src")
+    source_root = str(Path(__file__).resolve().parents[3] / "src")
     env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
     subprocess.run([sys.executable, "-c", script], check=True, env=env)
 
@@ -48,7 +48,7 @@ def test_root_context_api_resolves_to_canonical_builder() -> None:
 
 def test_research_context_does_not_own_evidence_registration() -> None:
     package_dir = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

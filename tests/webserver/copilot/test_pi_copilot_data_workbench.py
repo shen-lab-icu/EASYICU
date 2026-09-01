@@ -107,7 +107,7 @@ def test_single_source_workbench_tools_require_exact_source_id(
 
 def test_copilot_schema_and_prompt_forbid_implicit_source_fallback() -> None:
     main = (
-        Path(__file__).parents[1]
+        Path(__file__).parents[3]
         / "src/easyicu/webserver/pi_copilot/node_app/src/main.mjs"
     ).read_text(encoding="utf-8")
 

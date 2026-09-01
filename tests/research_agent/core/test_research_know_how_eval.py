@@ -21,7 +21,7 @@ from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
 
 def test_counting_client_remains_a_registered_planner_wrapper() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     tool_path = repo_root / "tools/run_research_know_how_planner_ab.py"
     spec = importlib.util.spec_from_file_location("easyicu_planner_ab_tool", tool_path)
     assert spec is not None and spec.loader is not None
@@ -201,7 +201,7 @@ def test_peak_lactate_and_trajectory_questions_retrieve_different_cards() -> Non
 def test_canonical9_review_packet_is_bound_to_exact_card_content(
     card_id: str, packet_name: str
 ) -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     card_payload = json.loads(
         (repo_root / f"src/easyicu/data/research_know_how/{card_id}.json").read_text(
             encoding="utf-8"
@@ -264,7 +264,7 @@ def test_canonical9_review_packet_is_bound_to_exact_card_content(
 
 
 def test_full0717_source_attestation_review_input_is_non_authorizing() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     packet = json.loads(
         (
             repo_root / "docs/reviews/full0717_source_attestation_20260722.json"

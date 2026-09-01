@@ -30,7 +30,7 @@ import re
 from pathlib import Path
 
 _WRITER_PROMPT = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src"
     / "easyicu"
     / "research_agent"

@@ -252,7 +252,7 @@ def test_the_effect_column_is_one_the_validators_reader_actually_accepts(
 def test_the_message_names_only_columns_its_own_reader_takes() -> None:
     """A fail-closed message whose implied fix does not satisfy the check."""
 
-    out_dir_without_table = Path(__file__).parent
+    out_dir_without_table = Path(__file__).parents[1]
     assert PrimaryModelContractValidator._coefficient_rows(out_dir_without_table) is (
         None
     )

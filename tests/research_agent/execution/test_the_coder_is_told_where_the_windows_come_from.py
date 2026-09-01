@@ -28,7 +28,7 @@ from __future__ import annotations
 import pathlib
 
 _CODER = (
-    pathlib.Path(__file__).resolve().parents[2]
+    pathlib.Path(__file__).resolve().parents[3]
     / "src/easyicu/research_agent/providers/prompts/v1/coder.txt"
 )
 

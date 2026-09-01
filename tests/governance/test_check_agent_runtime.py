@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _tool():
-    path = Path(__file__).resolve().parents[1] / "tools" / "check_agent_runtime.py"
+    path = Path(__file__).resolve().parents[2] / "tools" / "check_agent_runtime.py"
     spec = importlib.util.spec_from_file_location("check_agent_runtime", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

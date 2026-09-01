@@ -10,7 +10,7 @@ from tools.audit_capability_inventory import (
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_every_zero_inbound_module_has_an_explicit_disposition() -> None:

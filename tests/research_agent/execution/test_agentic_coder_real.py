@@ -4,7 +4,7 @@ Marked ``needs_real_data`` → skipped by default. Run with::
 
     EASYICU_DATA_PATH=/path/to/db \
     EASYICU_TEST_COHORT_PARQUET=/path/to/a/cohort.parquet \
-    pytest tests/research_agent/test_agentic_coder_real.py --run-real -q
+    pytest tests/research_agent/execution/test_agentic_coder_real.py --run-real -q
 
 This is the test the offline suite cannot be: it answers the open question the
 unit tests deliberately leave open — *can the Codex/Claude CLI sandbox actually

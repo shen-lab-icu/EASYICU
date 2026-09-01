@@ -26,7 +26,7 @@ Design constraints
 * **Extensible.** A new ``VariableRole`` or ``AggregationRule`` is
   classified by :func:`_variable_kind` and inherits any matching
   matrix entry. Tests under
-  ``tests/research_agent/test_method_compatibility.py`` lock the
+  ``tests/research_agent/execution/test_method_compatibility.py`` lock the
   expected behaviour for the current enum set.
 
 This module imports only from :mod:`easyicu.research_agent.schema`.

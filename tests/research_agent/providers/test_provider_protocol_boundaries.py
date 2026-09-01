@@ -147,7 +147,7 @@ def test_protocol_has_no_concrete_provider_or_pipeline_dependency() -> None:
 
 
 def test_production_entrypoints_cannot_construct_provider_clients_outside_factory():
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     targets = [
         root / "src" / "easyicu" / "research_agent",
         root / "tools",
@@ -180,7 +180,7 @@ def test_production_entrypoints_cannot_construct_provider_clients_outside_factor
 
 
 def test_all_external_entry_surfaces_route_through_provider_factory():
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     paths = (
         "src/easyicu/research_agent/cli.py",
         "src/easyicu/research_agent/replication_cli.py",
@@ -213,7 +213,7 @@ def test_production_prompt_calls_use_the_authorized_delivery_boundary() -> None:
     only a registrant may deliver (here).
     """
 
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     targets = [root / name for name in ("src", "tools", "scripts", "examples")]
     violations: list[str] = []
     for target in targets:
@@ -242,7 +242,7 @@ def test_production_prompt_calls_use_the_authorized_delivery_boundary() -> None:
 
 
 def test_provider_trust_registration_is_confined_to_reviewed_owners() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     targets = [root / name for name in ("src", "tools", "scripts", "examples")]
     allowed = {
         # This list IS the right mechanism here: "who may register provider

@@ -21,7 +21,7 @@ from easyicu.concept.metadata_projection import (
 )
 from easyicu.concept.schema import ConceptDefinition
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DICT_PATH = ROOT / "src" / "easyicu" / "data" / "concept-dict.json"
 MODULE_PATH = ROOT / "src" / "easyicu" / "concept" / "metadata_projection.py"
 

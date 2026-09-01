@@ -11,7 +11,7 @@ from easyicu.research_agent.planning.literature_design_authority import (
 from easyicu.research_agent.schema import ResearchContext
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 PACK_PATH = (
     ROOT
     / "benchmarks"

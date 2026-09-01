@@ -29,7 +29,7 @@ from pydantic import ValidationError
 from easyicu.research_agent.agents.core import _declared_field_names
 from easyicu.research_agent.schema import AnalysisStep, PlannedModelRequirement
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
 # The real fresh19 primary step, whose requirement carries no adjustment set.
 _REAL_STEP_ID = "07_primary_adjusted_association"
 

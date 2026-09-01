@@ -33,7 +33,7 @@ from easyicu.research_agent.execution.runners.prediction_validation_executor imp
 )
 
 
-DATA = Path(__file__).parent / "data"
+DATA = Path(__file__).parents[1] / "data"
 SOURCE = DATA / "oracle_prediction_validation.csv"
 RUN_ID = "run_prediction_validation_v3"
 
@@ -551,7 +551,7 @@ def test_analysis_policy_is_closed_and_planner_remains_unwired() -> None:
             }
         )
 
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     selection = (
         root / "src/easyicu/research_agent/execution/runners/selection.py"
     ).read_text(encoding="utf-8")

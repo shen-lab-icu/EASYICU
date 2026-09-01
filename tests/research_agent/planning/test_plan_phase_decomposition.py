@@ -8,7 +8,7 @@ from pathlib import Path
 
 def test_plan_phase_stage_functions_stay_bounded() -> None:
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

@@ -38,7 +38,7 @@ import pytest
 
 
 def test_runner_release_base_is_digest_pinned_and_matches_lockfile() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     image_root = root / "src/easyicu/research_agent/runner_image"
     dockerfile = (image_root / "Dockerfile").read_text(encoding="utf-8")
     lock = dict(
@@ -54,7 +54,7 @@ def test_runner_release_base_is_digest_pinned_and_matches_lockfile() -> None:
 
 
 def test_runner_image_workflow_builds_smokes_and_generates_sbom() -> None:
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     workflow = (root / ".github/workflows/research_runner_image_ci.yml").read_text(
         encoding="utf-8"
     )
@@ -66,7 +66,7 @@ def test_runner_image_workflow_builds_smokes_and_generates_sbom() -> None:
     assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
     assert "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" in workflow
     assert "src/easyicu/research_agent/execution/kernel_identity.py" in workflow
-    assert "tests/research_agent/test_execution_kernel_identity.py" in workflow
+    assert "tests/research_agent/authority/test_execution_kernel_identity.py" in workflow
     assert "format: cyclonedx-json" in workflow
 
 

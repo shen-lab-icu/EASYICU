@@ -21,7 +21,7 @@ from easyicu.research_agent.contracts.method_packages import (
     MethodPackage,
 )
 
-ROOT = Path(__file__).resolve().parents[2] / "src" / "easyicu" / "research_agent"
+ROOT = Path(__file__).resolve().parents[3] / "src" / "easyicu" / "research_agent"
 
 
 def test_method_package_contract_is_frozen_and_complete() -> None:

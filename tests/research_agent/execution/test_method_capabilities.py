@@ -74,7 +74,7 @@ def test_curated_packages_are_declared_in_pyproject_methods_extra(ra):
     'allowed in the prompt' implies 'reproducibly installable', not 'happens to
     be on one machine'."""
     mc = _mod()
-    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
     pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
     block = re.search(r"\nmethods\s*=\s*\[(.*?)\]", pyproject, re.S)
     assert block, "pyproject must declare a [methods] optional-dependencies extra"
@@ -103,7 +103,7 @@ def test_coder_prompt_embeds_capability_block(ra):
 
 def test_reference_docker_image_matches_advertised_capabilities(ra):
     mc = _mod()
-    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
     dockerfile = (
         (
             repo_root

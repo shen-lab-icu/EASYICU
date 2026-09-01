@@ -154,7 +154,7 @@ def test_sic_death_loader_requests_authoritative_disposition_column():
             )
 
     dictionary = ConceptDictionary.from_json(
-        Path(__file__).parents[1] / "src/easyicu/data/concept-dict.json"
+        Path(__file__).parents[2] / "src/easyicu/data/concept-dict.json"
     )
     source = SicDataSource()
 

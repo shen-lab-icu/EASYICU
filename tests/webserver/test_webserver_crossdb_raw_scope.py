@@ -10,7 +10,7 @@ import pytest
 from easyicu.webserver import crossdb_review
 
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 STATIC = ROOT / "src" / "easyicu" / "webserver" / "static"
 
 

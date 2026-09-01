@@ -9,7 +9,7 @@ import pytest
 
 def _load_script():
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "scripts"
         / "discovery_aki_definition_sensitivity.py"
     )

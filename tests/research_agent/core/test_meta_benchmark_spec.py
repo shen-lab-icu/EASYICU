@@ -17,7 +17,7 @@ from easyicu.research_agent.planning.capability_registry import get_capability
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 
 _SPEC = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "benchmarks"
     / "meta_generalization"
     / "meta_benchmark.jsonl"

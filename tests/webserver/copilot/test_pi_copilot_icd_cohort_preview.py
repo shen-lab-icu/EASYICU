@@ -313,7 +313,7 @@ def test_icd_preview_resource_replays_and_uses_extraction_renderer() -> None:
         "media_type": "application/json",
     }
 
-    static = Path(__file__).parents[1] / "src/easyicu/webserver/static"
+    static = Path(__file__).parents[3] / "src/easyicu/webserver/static"
     embedded = (static / "js/screens-viz-embedded.js").read_text(encoding="utf-8")
     preview = (static / "js/screens-guided-pi-preview.js").read_text(
         encoding="utf-8"
@@ -325,7 +325,7 @@ def test_icd_preview_resource_replays_and_uses_extraction_renderer() -> None:
     assert "return 'extraction'" in embedded
     assert ".gpi-icd-flow" in css
 
-    node = Path(__file__).parents[1] / "src/easyicu/webserver/pi_copilot/node_app/src"
+    node = Path(__file__).parents[3] / "src/easyicu/webserver/pi_copilot/node_app/src"
     main = (node / "main.mjs").read_text(encoding="utf-8")
     event_projection = (node / "event-projection.mjs").read_text(encoding="utf-8")
     assert 'name: "easyicu_preview_icd_cohort"' in main

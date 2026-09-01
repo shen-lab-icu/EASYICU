@@ -73,7 +73,7 @@ def test_reporting_write_phase_entrypoint_is_importable() -> None:
 
 def test_reporting_write_phase_does_not_import_pipeline_at_module_top() -> None:
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"
@@ -95,7 +95,7 @@ def test_write_phase_keeps_stages_bounded() -> None:
     """The public phase remains orchestration, not another monolithic owner."""
 
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"
@@ -125,7 +125,7 @@ def test_publication_figure_activation_precedes_analysis_pause() -> None:
     """A Writer pause must not skip the deterministic article-display suffix."""
 
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

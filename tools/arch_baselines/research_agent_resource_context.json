@@ -1,7 +1,8 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/reporting/article_contract.py"
+      "src/easyicu/research_agent/planning/cohort_contract.py",
+      "src/easyicu/research_agent/schema.py"
     ],
     "summary_changes": {}
   },
@@ -384,9 +385,17 @@
         "src/easyicu/research_agent/reporting/article_contract.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Refresh deterministic source hashes after the test-owner directory migration; provider calls and patient-data reads remain zero.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/cohort_contract.py",
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 context envelope after the committed planning, execution, figure, and prompt-contract repairs. All nine fixtures remain within existing limits; this baseline is architecture evidence only and grants no scientific or publication authority.",
+  "baseline_reason": "Refresh deterministic source hashes after the test-owner directory migration; provider calls and patient-data reads remain zero.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -406,7 +415,7 @@
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "79c013db5b2b6f14bf0d1463dbcc614ab2e1943a3e670f0f25454bacfd55c3eb",
-    "src/easyicu/research_agent/planning/cohort_contract.py": "1ab0475e41e56685dd0cc4fac96f5a02fb04db84c29791800585a78f9da5f4db",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "8a77e4ee1e765a24ac1275fef72d12c95af95c5d3ab1301460534e264374eb81",
     "src/easyicu/research_agent/planning/figure_strategy.py": "fb38bee2e099043411707383c6144793d898a123323a2be7989cc832978f2923",
     "src/easyicu/research_agent/planning/study_design.py": "8c26e3d42c1397839e3347317b90ceadab56beee58a500170cb182535aca7a3c",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "c8312eb455d0a65d8c3936bbf8f770cb15a64925923e679cc2509bcf5036d649",
@@ -420,7 +429,7 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "19504cd710883a9d81f00fed772cba4b7c1e75d4f0ef88f22b70c6016d019e4b",
+    "src/easyicu/research_agent/schema.py": "34682167038591c1850a8386162ebdf5b8c7f9b283d9611a7448e114562aa4fa",
     "tools/research_agent_resource_baseline.py": "4f3fe0d9c859ff713fe1cbdaa9dc47ebe5041b60b2be08fd8b8087d115bd3712"
   },
   "summary": {
@@ -526,7 +535,7 @@
       "question": "Estimate Sepsis-3 prevalence and mortality association.",
       "resource_added_bytes": 4657,
       "resource_allowlist_sha256": "bdf3d416e565ee1e1d3c5a2fc47838fab40b1b524953445340aaee6fe091a7e8",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "descriptive",
       "selected_know_how": [
@@ -633,8 +642,8 @@
       "planning_contract_sha256": "3190e1f9e1df66402bce811049e69d4622a189f38ef5ae1cf619a86190aa84b4",
       "question": "Estimate the association of first-24-hour peak lactate with in-hospital mortality.",
       "resource_added_bytes": 4419,
-      "resource_allowlist_sha256": "b0ea26e6b7d2a9db0920e533ecf977021d18f2201df42efb4989a2921db72958",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_allowlist_sha256": "8425b083b1c1310e40c47d0e55a1d7a167c8246bfb5e836380aabf936dd9398e",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [
@@ -735,8 +744,8 @@
       "planning_contract_sha256": "577eaeb275808a2b83a4454d82c5426aa62a5ca6f0f4d171fa0c8389018c2f82",
       "question": "Estimate the KDIGO AKI stage gradient for mortality and length of stay.",
       "resource_added_bytes": 0,
-      "resource_allowlist_sha256": "b0ea26e6b7d2a9db0920e533ecf977021d18f2201df42efb4989a2921db72958",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_allowlist_sha256": "8425b083b1c1310e40c47d0e55a1d7a167c8246bfb5e836380aabf936dd9398e",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [],
@@ -829,8 +838,8 @@
       "planning_contract_sha256": "96533b82bd9e70d1d82f9ae84d6d8c14d44efe68c06222192a1aae2a9e2423b6",
       "question": "Assess hepatobiliary SOFA and bilirubin missingness in mortality analysis.",
       "resource_added_bytes": 0,
-      "resource_allowlist_sha256": "b0ea26e6b7d2a9db0920e533ecf977021d18f2201df42efb4989a2921db72958",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_allowlist_sha256": "8425b083b1c1310e40c47d0e55a1d7a167c8246bfb5e836380aabf936dd9398e",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [],
@@ -936,8 +945,8 @@
       "planning_contract_sha256": "760d4789da8e5161e82c92ddd5841de1a4558f0c7eb03be121334ef4a0c14513",
       "question": "Build a first-24-hour mortality risk prediction model.",
       "resource_added_bytes": 4640,
-      "resource_allowlist_sha256": "72a976b73568ab1ed5129766b0366ce68463e47e09ab4b2c1dcddbdf62bc4aad",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_allowlist_sha256": "353e34f54581acd05c5d457bf1ff864bd1521a219da40800d755378faa6f65db",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "prediction",
       "selected_know_how": [
@@ -1040,7 +1049,7 @@
       "question": "Discover candidate sepsis subphenotypes from labs and vital signs.",
       "resource_added_bytes": 4500,
       "resource_allowlist_sha256": "61fe53327e49a922d31adbc835b46a0f06e20e5e49091667592a92baa098a578",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "phenotyping",
       "selected_know_how": [
@@ -1123,7 +1132,7 @@
             "bytes": 4643,
             "included": true,
             "required": true,
-            "sha256": "972edd0474acec879316234eebf74f342ffbf2394141e15f7757db19f869a903"
+            "sha256": "8dc1edce6b51c3cbc55ad1993069ed79e0495d6a3379874ceda8b3986ce93eb5"
           }
         },
         "system_bytes": 7616,
@@ -1153,16 +1162,16 @@
       "planning_contract_sha256": "affe548555957a4212b7593fac8b7f2abf5bee7ef02fe74fd14fa1415c64ad17",
       "question": "Estimate mechanical ventilation survival and 28-day mortality.",
       "resource_added_bytes": 4643,
-      "resource_allowlist_sha256": "77919396ad97bd2dcade2597795214cec1286516424e1e07a86eee1d914c1335",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_allowlist_sha256": "cbdc057474f66ede5568ab7b6fc23d22e245102a4a6b9a6244501c9266ffa9bf",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "time_to_event",
       "selected_know_how": [
         {
           "card_id": "mechanical_ventilation_liberation",
           "data_readiness": "partial",
-          "file_sha256": "44a8ec17d899e612489455c942285284b50f49de69f8951441a3511a4e6a262f",
-          "score": 0.840526,
+          "file_sha256": "79ece9edf2e7c3a00066a72253ecf3c391cade9c99d7daa8e7718b6054a16f1e",
+          "score": 0.839091,
           "version": "1.0.0"
         }
       ],
@@ -1269,7 +1278,7 @@
       "question": "Compare vasopressor strategies with a confounding-aware causal analysis.",
       "resource_added_bytes": 4533,
       "resource_allowlist_sha256": "e6752b6437ea591ace799b991da9d953c655dbab0558d31954820fcae1a56cf4",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "causal_emulation",
       "selected_know_how": [
@@ -1370,7 +1379,7 @@
       "question": "Cluster longitudinal ICU trajectories into stable subphenotypes.",
       "resource_added_bytes": 4500,
       "resource_allowlist_sha256": "61fe53327e49a922d31adbc835b46a0f06e20e5e49091667592a92baa098a578",
-      "resource_catalog_sha256": "578d2add2b9ae889955d0b5957c161836628fe6e38c0edfd1ad942ba407c9cb9",
+      "resource_catalog_sha256": "3520c3f2643191486ebd874948302f6614d058275fb45aa9b5f799b35aedccbe",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "phenotyping",
       "selected_know_how": [

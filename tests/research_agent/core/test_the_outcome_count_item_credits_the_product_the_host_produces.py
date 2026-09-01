@@ -152,7 +152,7 @@ def _ran_with_the_alias(run_dir: Path) -> bool:
         return (
             subprocess.run(
                 ["git", "merge-base", "--is-ancestor", _ALIAS_COMMIT, sha],
-                cwd=Path(__file__).resolve().parents[2],
+                cwd=Path(__file__).resolve().parents[3],
                 capture_output=True,
                 timeout=20,
             ).returncode

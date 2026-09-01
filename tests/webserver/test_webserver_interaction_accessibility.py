@@ -5,7 +5,7 @@ import re
 
 
 STATIC_JS = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "src"
     / "easyicu"
     / "webserver"

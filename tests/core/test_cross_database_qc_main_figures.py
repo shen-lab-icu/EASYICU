@@ -11,7 +11,7 @@ import pytest
 
 
 SCRIPT = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "scripts"
     / "figures"
     / "QC-A03_main_figures.py"

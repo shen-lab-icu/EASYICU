@@ -12,7 +12,7 @@ from easyicu.research_agent.discovery.idea_mining_funnel import (
 
 
 def _load_runner() -> ModuleType:
-    path = Path(__file__).resolve().parents[2] / "scripts" / "mine_discovery_gpt54.py"
+    path = Path(__file__).resolve().parents[3] / "scripts" / "mine_discovery_gpt54.py"
     spec = importlib.util.spec_from_file_location("mine_discovery_gpt54", path)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)

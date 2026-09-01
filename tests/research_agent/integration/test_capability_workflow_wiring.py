@@ -107,7 +107,7 @@ def _target_profile(*, name: str = "capability_activated") -> SubmissionProfile:
 def test_missing_capability_pauses_real_pipeline_before_provider(
     ra, tmp_path: Path
 ) -> None:
-    from tests.research_agent import (
+    from tests.research_agent.integration import (
         test_trajectory_stability_pipeline_success as fixture,
     )
 
@@ -197,7 +197,7 @@ def test_approved_capability_enters_coder_only_on_pinned_new_image(
     ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from easyicu.research_agent.execution import phase as execute_phase
-    from tests.research_agent import (
+    from tests.research_agent.integration import (
         test_trajectory_stability_pipeline_success as fixture,
     )
 
@@ -295,7 +295,7 @@ def test_wrong_runtime_image_fails_before_provider(
         source_profile_ref=PENDING_PROFILE_REF,
         target_profile_ref=target.ref,
     )
-    from tests.research_agent import (
+    from tests.research_agent.integration import (
         test_trajectory_stability_pipeline_success as fixture,
     )
 

@@ -31,7 +31,7 @@ from easyicu.research_agent.agents.core import _build_planner_user_prompt  # noq
 from easyicu.research_agent.figures import publication
 
 _CODER_PROMPT = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src"
     / "easyicu"
     / "research_agent"

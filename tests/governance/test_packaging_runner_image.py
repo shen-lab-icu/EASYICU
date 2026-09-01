@@ -7,7 +7,7 @@ verified by building a wheel and looking inside it.
 
 Opt-in because a build takes ~1 minute:
 
-    pytest tests/test_packaging_runner_image.py --run-packaging
+    pytest tests/governance/test_packaging_runner_image.py --run-packaging
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import zipfile
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 REQUIRED_RUNNER_IMAGE_ASSETS = (
     "easyicu/research_agent/runner_image/Dockerfile",

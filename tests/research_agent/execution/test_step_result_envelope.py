@@ -586,7 +586,7 @@ def test_v2_reader_preserves_v1_shadow_digest_compatibility(tmp_path: Path) -> N
 def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     tmp_path: Path,
 ) -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     run_dir = tmp_path / "run"
     step_out = run_dir / "steps" / "01_analysis" / "outputs"
     evidence_dir = run_dir / "evidence"
@@ -725,7 +725,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
 
 
 def test_sealed_envelope_wires_live_final_validation_consumer() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     pipeline_source = (repo_root / "src/easyicu/research_agent/pipeline.py").read_text(
         encoding="utf-8"
     )

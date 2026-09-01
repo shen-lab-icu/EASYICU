@@ -6,7 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOL_PATH = REPO_ROOT / "tools/research_agent_resource_baseline.py"
 BASELINE_PATH = REPO_ROOT / "tools/arch_baselines/research_agent_resource_context.json"
 

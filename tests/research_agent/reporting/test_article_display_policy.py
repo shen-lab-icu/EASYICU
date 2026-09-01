@@ -109,7 +109,7 @@ def test_figure_contract_receives_policy_receipt_without_case_routing() -> None:
 def test_policy_source_contains_no_development_case_or_variable_names() -> None:
     source = (
         (
-            Path(__file__).parents[2]
+            Path(__file__).parents[3]
             / "src/easyicu/research_agent/reporting/article_display_policy.py"
         )
         .read_text(encoding="utf-8")
@@ -131,7 +131,7 @@ def test_policy_source_contains_no_development_case_or_variable_names() -> None:
 
 
 def test_all_statically_declared_runtime_roles_are_owned_by_the_policy() -> None:
-    source_root = Path(__file__).parents[2] / "src/easyicu/research_agent"
+    source_root = Path(__file__).parents[3] / "src/easyicu/research_agent"
     roles: set[str] = set()
     patterns = (
         re.compile(r'article_role\s*=\s*["\']([a-z][a-z0-9_]*)["\']'),

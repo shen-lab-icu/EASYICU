@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _module():
-    path = Path(__file__).parents[1] / "tools" / "research_agent_framework_release.py"
+    path = Path(__file__).parents[2] / "tools" / "research_agent_framework_release.py"
     spec = importlib.util.spec_from_file_location("framework_release", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

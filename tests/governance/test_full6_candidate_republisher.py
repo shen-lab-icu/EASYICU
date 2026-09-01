@@ -8,7 +8,7 @@ import pytest
 
 
 SCRIPT = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "scripts"
     / "releases"
     / "EX-A02_republish_full6_candidate.py"

@@ -31,7 +31,7 @@ import pytest
 
 
 PROMPT_SCOPE = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src"
     / "easyicu"
     / "research_agent"

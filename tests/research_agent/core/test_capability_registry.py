@@ -401,7 +401,7 @@ def test_committed_docs_matrix_matches_the_registry_render():
     # docs/capability_matrix.md is generated from the registry; if it drifts,
     # regenerate with:
     #   python -m easyicu.research_agent.planning.capability_registry > docs/capability_matrix.md
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     doc = repo_root / "docs" / "capability_matrix.md"
     assert doc.exists(), "docs/capability_matrix.md missing — regenerate it"
     committed = doc.read_text(encoding="utf-8").rstrip("\n")

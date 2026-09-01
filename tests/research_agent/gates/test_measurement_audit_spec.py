@@ -40,7 +40,7 @@ from easyicu.research_agent.schema import (
     MeasurementAuditSpec,
 )
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "real_plan_steps_fresh17_fresh19.json"
 
 
 def _real_step(label: str, step_id: str) -> dict:

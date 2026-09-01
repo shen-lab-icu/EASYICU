@@ -32,7 +32,7 @@ from easyicu.research_agent.methods.ordered_trends import (
 )
 
 _CODER_PROMPT = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "src"
     / "easyicu"
     / "research_agent"

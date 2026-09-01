@@ -7,7 +7,7 @@ deterministically, and where does the framework fail closed?* The answer used to
 be implicit, spread across the preflight
 dispatch ladder in ``execution.phase``, the ``FAMILY_RENDERERS`` table, and the
 readiness gates in ``reporting.readiness``. Here it is declared once, rendered to a
-matrix, and kept honest by ``tests/research_agent/test_capability_registry.py``,
+matrix, and kept honest by ``tests/research_agent/core/test_capability_registry.py``,
 which cross-checks every claim below against the code that is actually wired
 (``AUXILIARY_DETERMINISTIC_RUNNERS`` and ``figures.FAMILY_RENDERERS``). If a
 runner is added or removed without updating

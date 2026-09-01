@@ -11,13 +11,13 @@ import pytest
 
 
 AUDIT_SCRIPT = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "scripts"
     / "figures"
     / "QC-A02_easyicu_cross_database_reliability_audit.py"
 )
 FIGURE_SCRIPT = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "scripts"
     / "figures"
     / "QC-A01_cross_database_distributions.py"

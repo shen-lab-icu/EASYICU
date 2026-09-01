@@ -53,7 +53,7 @@ def test_first_batch_has_19_unique_case_neutral_analysis_only_adapters() -> None
 
 
 def test_every_adapter_names_a_real_owner_and_real_validation_tests() -> None:
-    repo = Path(__file__).resolve().parents[2]
+    repo = Path(__file__).resolve().parents[3]
     for item in HIGH_FREQUENCY_METHOD_ADAPTERS:
         module = importlib.import_module(item.owner_module)
         assert callable(getattr(module, item.owner_entrypoint, None)), item.adapter_id

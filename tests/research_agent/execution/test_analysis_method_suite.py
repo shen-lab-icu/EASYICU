@@ -238,7 +238,7 @@ def test_dynamic_prediction_reuses_reviewed_temporal_and_sklearn_resources():
 def test_docs_analysis_method_suite_matches_registry():
     # docs/analysis_method_suite.md is generated from the registry; regenerate with:
     #   python -m easyicu.research_agent.planning.analysis_method_suite > docs/analysis_method_suite.md
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     doc = repo_root / "docs" / "analysis_method_suite.md"
     assert doc.exists(), "docs/analysis_method_suite.md missing — regenerate it"
     committed = doc.read_text(encoding="utf-8").rstrip("\n")

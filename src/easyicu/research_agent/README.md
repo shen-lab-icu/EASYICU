@@ -223,7 +223,7 @@ Two invariants enforce this split:
    (mock, API, or the local Codex account engine). Stronger engines hallucinate more
    confidently, so this gate *gains* value as the brain improves. Do not add an
    engine-specific "trusted" path that lets some provider's numbers skip
-   binding; `tests/research_agent/test_numeric_provenance_engine_agnostic.py`
+   binding; `tests/research_agent/authority/test_numeric_provenance_engine_agnostic.py`
    fails if you do.
 
 **Opt-in agentic coder (altitude-2a).** Setting
@@ -237,7 +237,7 @@ still come from our pipeline, never from the CLI's own run. It is **off by
 default**, degrades to the LLM `CoderAgent` when the CLI is absent, and applies
 the same method-compatibility check. The real CLI-driven loop is validated
 under `needs_real_data`; the offline unit tests
-(`tests/research_agent/test_agentic_coder.py`) lock the delegation/fallback
+(`tests/research_agent/execution/test_agentic_coder.py`) lock the delegation/fallback
 contract.
 
 S1 idea-triage note: `concept_availability.real_data_concept_feasibility`

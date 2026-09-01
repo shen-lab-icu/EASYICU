@@ -16,7 +16,7 @@ from easyicu.research_agent.discovery.idea_mining_extended_feasibility import (
     ExtendedFeasibilityIndex,
 )
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 ICD_CATALOG = REPO / "benchmarks" / "catalogs" / "icd_cohort_catalog_miiv.json"
 _HAS_ICD = ICD_CATALOG.exists()
 

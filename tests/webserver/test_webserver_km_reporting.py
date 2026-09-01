@@ -18,7 +18,7 @@ from easyicu.webserver import cohort_review
 
 
 STATIC = (
-    Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
+    Path(__file__).resolve().parents[2] / "src" / "easyicu" / "webserver" / "static"
 )
 
 

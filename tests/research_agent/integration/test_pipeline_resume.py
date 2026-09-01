@@ -279,7 +279,7 @@ def test_resume_recomputes_plan_revision_findings_instead_of_carrying_them(
 
 def test_pipeline_resume_is_a_leaf_module() -> None:
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"
@@ -301,7 +301,7 @@ def test_pipeline_resume_is_a_leaf_module() -> None:
 
 def test_execution_phase_delegates_resume_policy_to_resume_controller() -> None:
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"

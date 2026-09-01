@@ -155,7 +155,7 @@ def test_pipeline_production_callsite_binds_only_reviewed_current_profile_memory
         read_verified_content,
     )
     from easyicu.research_agent.execution import phase as execute_phase
-    from tests.research_agent import (
+    from tests.research_agent.integration import (
         test_trajectory_stability_pipeline_success as fixture,
     )
 

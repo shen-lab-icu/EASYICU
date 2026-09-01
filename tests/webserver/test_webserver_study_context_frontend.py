@@ -11,8 +11,8 @@ from easyicu.webserver import study_contexts
 from tools.run_js_contracts import CONTRACTS
 
 
-STATIC = Path(__file__).parents[1] / "src" / "easyicu" / "webserver" / "static"
-ROOT = Path(__file__).parents[1]
+STATIC = Path(__file__).parents[2] / "src" / "easyicu" / "webserver" / "static"
+ROOT = Path(__file__).parents[2]
 
 
 def _read(relative: str) -> str:

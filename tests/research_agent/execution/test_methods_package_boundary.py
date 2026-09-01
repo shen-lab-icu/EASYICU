@@ -26,7 +26,7 @@ METHOD_MODULES = (
 
 def test_statistical_methods_are_owned_by_methods_package() -> None:
     package_root = (
-        Path(__file__).resolve().parents[2] / "src" / "easyicu" / "research_agent"
+        Path(__file__).resolve().parents[3] / "src" / "easyicu" / "research_agent"
     )
     methods_root = package_root / "methods"
 

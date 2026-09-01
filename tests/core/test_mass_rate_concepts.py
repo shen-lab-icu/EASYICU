@@ -38,7 +38,7 @@ import pathlib
 
 import pytest
 
-DICT = pathlib.Path(__file__).resolve().parents[1] / "src" / "easyicu" / "data" / "concept-dict.json"
+DICT = pathlib.Path(__file__).resolve().parents[2] / "src" / "easyicu" / "data" / "concept-dict.json"
 
 
 RATE_CONCEPTS = [

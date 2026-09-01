@@ -18,7 +18,7 @@ def test_orchestration_finalize_entrypoints_are_importable() -> None:
 
 def test_orchestration_finalize_does_not_import_pipeline_at_module_top() -> None:
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "src"
         / "easyicu"
         / "research_agent"
