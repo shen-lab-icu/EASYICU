@@ -13,12 +13,12 @@
     "Qualification12-A and two access-controlled independently authored reserve-set identities and digests",
     "review-bundle and blinding contract",
     "WP1 and Safety12 protocols",
-    "WP5 idea-to-evidence protocol, evaluation rubric, external broad-brief template, semantic nonoverlap procedure, two-phase authorization template, and descriptive analysis plan",
+    "WP5 idea-to-evidence showcase protocol, evaluation rubric, authentic broad-direction template, append-only iterative discovery contract, semantic nonoverlap procedure, final-lock rule, two-phase authorization template, and descriptive analysis plan",
     "analysis code skeleton with no outcomes",
     "versioned amendment policy"
   ],
   "private_evaluator_material": {
-    "policy": "Challenge fixtures, expected Safety12 dispositions, completed item review sheets, and the three WP5 broad briefs may be placed in an access-controlled embargoed deposit, but their identities, hashes, authorship and conflict declarations, and custodian must be included in the public registration record.",
+    "policy": "Challenge fixtures, expected Safety12 dispositions, and completed item review sheets may be placed in an access-controlled embargoed deposit, but their identities, hashes, authorship and conflict declarations, and custodian must be included in the public registration record. The WP5 initial direction may be public or embargoed, but its identity, digest, authorship, reviewer roles, and purposive-showcase status must be registered.",
     "custody": "A named evaluator who is not an EasyICU implementer controls access until scoring is complete."
   },
   "required_receipt_fields": [
@@ -35,14 +35,14 @@
     "registrant_identity",
     "amendment_policy_acknowledged"
   ],
-  "derived_wp5_artifact_policy": "The WP5 selected idea, approved plan, concept map, and phase-B input are registered outputs of the frozen phase-A selection algorithm. Their post-phase-A hashes are appended to the WP5 phase-B declaration and are not amendments. Changing the brief, candidate registry, selection rule, selected idea, or plan after seeing feasibility or outcome evidence is an amendment and terminates the case.",
+  "derived_wp5_artifact_policy": "WP5 candidate versions, reviewer feedback, rejection reasons, and deterministic feasibility findings are append-only outputs of the frozen iterative discovery contract. Preoutcome revision or replacement is permitted within the registered phase-A budget. The final selected idea, approved plan, concept map, and phase-B input are locked and hashed before patient-level outcome analysis. Changing them after phase-B lock or after seeing an outcome result terminates the registered showcase; a new question requires a separately versioned case and fresh validation data.",
   "post_registration_sequence": [
     "authorize Qualification12-A only through the qualification12 scope; it remains nonpaper qualification evidence",
     "run WP1 deterministically under the registered thresholds, in parallel if useful because it makes no Provider call",
-    "if a harness or normalizer changes after qualification, archive the used set and use only the next unopened preregistered reserve set",
+    "after a Qualification12 set is opened, any qualification-relevant change to either arm or a shared qualification component consumes the set; archive it and use only the next unopened preregistered reserve set",
     "authorize the core WP2/WP3 batch only after qualification, blinding, WP1, input, reviewer, runtime, and atomic-batch receipts pass",
-    "authorize WP5 only after the complete core batch is terminal, under its separate phase-A and per-case phase-B scopes"
+    "authorize WP5 only after the complete core batch is terminal, under its separate iterative phase-A and locked flagship phase-B scopes"
   ],
-  "amendment_policy": "Any change after external timestamping and before the first core Provider call requires a versioned amendment that identifies the changed files and rationale. After the first core Provider call, core code and design are immutable. WP5 may add only the prespecified derived artifacts at its registered interphase boundary; any scientific or implementation change requires abandoning the affected batch and registering a new protocol version.",
+  "amendment_policy": "Any change after external timestamping and before the first core Provider call requires a versioned amendment that identifies the changed files and rationale. After the first core Provider call, core code and design are immutable. WP5 may append only the prespecified phase-A discovery records and add the locked final artifacts at its registered interphase boundary. Product changes or postoutcome changes to the final question, endpoint, database, method, or plan require abandoning the affected showcase and registering a new version.",
   "language_boundary": "Until the external receipt validates, describe v2.1 only as an internal review candidate. Do not call it frozen, preregistered, or formally launched."
 }

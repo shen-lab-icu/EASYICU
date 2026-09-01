@@ -227,6 +227,8 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
         _fail("HELDOUT_ORDER_DRIFT", repr(order))
     if arm_first != schedule["heldout27_arm_first"]:
         _fail("HELDOUT_ARM_BALANCE_DRIFT", repr(arm_first))
+    if schedule.get("wp5_showcase_id") != "ite_showcase_01":
+        _fail("WP5_SHOWCASE_IDENTITY_INVALID", repr(schedule.get("wp5_showcase_id")))
 
     rubric = _load_json(RUBRIC_PATH)
     if rubric["primary_endpoint"]["name"] != "reportable_as_specified_without_postrun_repair":
@@ -261,6 +263,12 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     reserve_policy = floor["reserve_set_policy"]
     if "Qualification12-B and Qualification12-C" not in reserve_policy:
         _fail("QUALIFICATION_RESERVE_SET_POLICY_MISSING", reserve_policy)
+    symmetric_consumption = protocol["splits"]["qualification12"]["set_consumption_policy"]
+    required_consumption_terms = ("either arm", "shared normalizer", "consumes that set", "next unopened")
+    if not all(term in symmetric_consumption for term in required_consumption_terms):
+        _fail("QUALIFICATION_SET_CONSUMPTION_ASYMMETRIC", symmetric_consumption)
+    if not all(term in floor["failed_floor_policy"] for term in ("either arm", "shared normalizer")):
+        _fail("GENERIC_QUALIFICATION_CONSUMPTION_DRIFT", floor["failed_floor_policy"])
 
     sap = _load_json(SAP_PATH)
     for scenario in sap["a_priori_sensitivity_and_power"]["scenarios"]:
@@ -269,63 +277,82 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
             _fail("MCNEMAR_POWER_DRIFT", f"{scenario}: recomputed {actual_power:.6f}")
 
     wp5_protocol = _load_json(IDEA_TO_EVIDENCE_PROTOCOL_PATH)
-    if wp5_protocol["case_count"] != 3 or wp5_protocol["comparison_arm"] is not None:
+    if wp5_protocol["case_count"] != 1 or wp5_protocol["comparison_arm"] is not None:
         _fail("WP5_CASE_DESIGN_INVALID", repr(wp5_protocol))
     if "does not autonomously select" not in wp5_protocol["selection_authority"]:
         _fail("WP5_HUMAN_SELECTION_AUTHORITY_MISSING", wp5_protocol["selection_authority"])
     expected_wp5_stages = [f"I{index:02d}_{suffix}" for index, suffix in (
-        (1, "BRIEF_INGESTION"),
+        (1, "DIRECTION_INGESTION"),
         (2, "BOUNDED_EVIDENCE_MAPPING"),
-        (3, "CANDIDATE_IDEA_REGISTRY"),
-        (4, "PRERESULT_SELECTION"),
-        (5, "PROTOCOL_TRANSLATION"),
-        (6, "DATA_FEASIBILITY_AND_INPUT_SEAL"),
+        (3, "ITERATIVE_CANDIDATE_REGISTRY"),
+        (4, "HUMAN_SCIENTIFIC_DELIBERATION"),
+        (5, "DATA_FEASIBILITY_AND_INPUT_DRAFT"),
+        (6, "FINAL_QUESTION_PROTOCOL_AND_INPUT_SEAL"),
         (7, "GOVERNED_EXECUTION"),
         (8, "EVIDENCE_AND_REPORTING"),
     )]
     actual_wp5_stages = [stage["stage_id"] for stage in wp5_protocol["workflow_stages"]]
     if actual_wp5_stages != expected_wp5_stages:
         _fail("WP5_STAGE_ORDER_INVALID", repr(actual_wp5_stages))
-    brief_contract = wp5_protocol["external_brief_contract"]
-    if "All three sealed briefs remain" not in brief_contract["all_cases_retained"]:
-        _fail("WP5_ALL_CASES_RULE_MISSING", brief_contract["all_cases_retained"])
+    direction_contract = wp5_protocol["initial_direction_contract"]
+    if "purposively selected" not in direction_contract["showcase_selection_disclosure"]:
+        _fail("WP5_PURPOSIVE_SHOWCASE_DISCLOSURE_MISSING", repr(direction_contract))
     run_policy = wp5_protocol["run_policy"]
-    if run_policy["failed_case_replacement"] or run_policy["postresult_repair"]:
-        _fail("WP5_CHERRY_PICKING_GUARD_INVALID", repr(run_policy))
-    if "before the data-analysis Provider phase" not in wp5_protocol["workflow_stages"][5]["gate"]:
-        _fail("WP5_INTERPHASE_DATA_GATE_MISSING", repr(wp5_protocol["workflow_stages"][5]))
+    if not run_policy["iterative_phase_a_allowed"] or not run_policy["append_only_candidate_history"]:
+        _fail("WP5_ITERATIVE_DISCOVERY_DISABLED", repr(run_policy))
+    if not run_policy["preoutcome_candidate_revision_or_replacement"]:
+        _fail("WP5_PREOUTCOME_ITERATION_FORBIDDEN", repr(run_policy))
+    if run_policy["postoutcome_candidate_replacement"] or run_policy["postresult_product_repair"]:
+        _fail("WP5_POSTOUTCOME_SWITCH_GUARD_INVALID", repr(run_policy))
+    if "without a Provider call or patient-level outcome result" not in wp5_protocol["workflow_stages"][4]["gate"]:
+        _fail("WP5_INTERPHASE_DATA_GATE_MISSING", repr(wp5_protocol["workflow_stages"][4]))
+    if "before any patient-level outcome analysis" not in wp5_protocol["workflow_stages"][5]["gate"]:
+        _fail("WP5_FINAL_LOCK_TIMING_MISSING", repr(wp5_protocol["workflow_stages"][5]))
     demonstration = wp5_protocol["demonstration_package"]
-    if "immutable receipt" not in demonstration["required_for_every_case"]:
+    if "immutable receipts" not in demonstration["required_for_showcase"]:
         _fail("WP5_DEMONSTRATION_RECEIPT_BINDING_MISSING", repr(demonstration))
-    if not any("hides failed" in item for item in demonstration["prohibited"]):
-        _fail("WP5_DEMONSTRATION_SELECTION_GUARD_MISSING", repr(demonstration))
+    if not any("postoutcome switching" in item for item in demonstration["prohibited"]):
+        _fail("WP5_POSTOUTCOME_SELECTION_GUARD_MISSING", repr(demonstration))
 
     wp5_rubric = _load_json(IDEA_TO_EVIDENCE_RUBRIC_PATH)
     if wp5_rubric["confirmatory_status"] != "descriptive_only_no_hypothesis_test":
         _fail("WP5_CONFIRMATORY_SCOPE_ESCALATED", wp5_rubric["confirmatory_status"])
     wp5_analysis_rules = wp5_rubric["analysis_rules"]
-    if not wp5_analysis_rules["all_cases_reported"] or not wp5_analysis_rules["successful_case_selection_forbidden"]:
-        _fail("WP5_REPORTING_SELECTION_INVALID", repr(wp5_analysis_rules))
+    if not wp5_analysis_rules["flagship_success_showcase_allowed"]:
+        _fail("WP5_SUCCESS_SHOWCASE_FORBIDDEN", repr(wp5_analysis_rules))
+    if not wp5_analysis_rules["purposive_selection_must_be_disclosed"]:
+        _fail("WP5_PURPOSIVE_SELECTION_HIDDEN", repr(wp5_analysis_rules))
+    if not wp5_analysis_rules["complete_append_only_discovery_trace_required"]:
+        _fail("WP5_DISCOVERY_TRACE_OPTIONAL", repr(wp5_analysis_rules))
+    if not wp5_analysis_rules["postoutcome_candidate_switch_forbidden"]:
+        _fail("WP5_POSTOUTCOME_SWITCH_ALLOWED", repr(wp5_analysis_rules))
     if wp5_analysis_rules["hypothesis_tests"] != "none":
         _fail("WP5_HYPOTHESIS_TEST_FORBIDDEN", wp5_analysis_rules["hypothesis_tests"])
-    wp5_sap = sap["idea_to_evidence3_analysis"]
+    wp5_sap = sap["idea_to_evidence_showcase_analysis"]
     if "No hypothesis test" not in wp5_sap["inferential_policy"]:
         _fail("WP5_SAP_INFERENCE_INVALID", wp5_sap["inferential_policy"])
 
     work_packages = {item["work_package"]: item for item in protocol["work_packages"]}
-    wp5_package = work_packages.get("WP5_IDEA_TO_EVIDENCE3")
-    if wp5_package is None or wp5_package["case_count"] != 3:
+    wp5_package = work_packages.get("WP5_IDEA_TO_EVIDENCE_SHOWCASE")
+    if wp5_package is None or wp5_package["case_count"] != 1:
         _fail("WP5_WORK_PACKAGE_MISSING", repr(wp5_package))
     if wp5_package["confirmatory_denominator_effect"] != 0:
         _fail("WP5_CONFIRMATORY_DENOMINATOR_CHANGED", repr(wp5_package))
     formal_policy = protocol["formal_run_policy"]
-    if formal_policy["wp5_descriptive_workflow_runs"] != 3 or formal_policy["core_plus_wp5_workflows"] != 81:
+    if formal_policy["wp5_descriptive_workflow_runs"] != 1 or formal_policy["core_plus_wp5_workflows"] != 79:
         _fail("WP5_RUN_COUNT_DRIFT", repr(formal_policy))
 
     wp1 = _load_json(WP1_PATH)
     gate_text = wp1["all_or_none_formal_input_gate"]["policy"]
-    if "Every database-concept cell" not in gate_text or "aborts the whole core formal protocol" not in gate_text:
+    if "Every patient-level database-concept cell required by Heldout27" not in gate_text:
         _fail("WP1_ALL_OR_NONE_GATE_MISSING", gate_text)
+    safety_boundary = wp1["all_or_none_formal_input_gate"]["formal_safety12_boundary"]
+    if "sealed neutral evaluator fixtures" not in safety_boundary or "has no WP1 database-concept cells" not in safety_boundary:
+        _fail("WP1_SAFETY12_SCOPE_CONTRADICTION", safety_boundary)
+    if "separately sealed neutral fixtures" not in protocol["input_fairness"]["all_or_none_gate"]:
+        _fail("PROTOCOL_SAFETY12_INPUT_BOUNDARY_MISSING", protocol["input_fairness"]["all_or_none_gate"])
+    if "separately sealed neutral fixtures" not in sap["analysis_sets"]["wp1_all_or_none_gate"]:
+        _fail("SAP_SAFETY12_INPUT_BOUNDARY_MISSING", sap["analysis_sets"]["wp1_all_or_none_gate"])
     manual_audit = wp1["reference_standard"]["manual"]
     if "at least 35" not in manual_audit or "at least 50" not in manual_audit:
         _fail("WP1_RISK_TIER_SAMPLE_SIZE_MISSING", manual_audit)
@@ -372,12 +399,18 @@ def validate_review_candidate_bundle() -> dict[str, Any]:
     launch = _load_json(LAUNCH_CONTRACT_PATH)
     if launch["provider_call_default"] != "deny" or launch["current_authority"]["provider_calls_authorized"]:
         _fail("FORMAL_LAUNCH_FAIL_CLOSED_INVALID", repr(launch["current_authority"]))
-    expected_scopes = {"qualification12", "core_wp2_wp3", "wp5_phase_a", "wp5_phase_b_case"}
+    expected_scopes = {"qualification12", "core_wp2_wp3", "wp5_phase_a", "wp5_phase_b_showcase"}
     if set(launch["authorization_scopes"]) != expected_scopes:
         _fail("FORMAL_LAUNCH_SCOPE_INVALID", repr(launch["authorization_scopes"]))
     if "external registration receipt" not in launch["required_receipts"]["qualification_preconditions"][0]:
         _fail("QUALIFICATION_REGISTRATION_PRECONDITION_MISSING", repr(launch["required_receipts"]))
-    if "all three WP5 cases" not in protocol["formal_run_policy"]["first_provider_call_lock"]:
+    qualification_scope = launch["authorization_scopes"]["qualification12"]
+    if "either arm" not in qualification_scope or "shared normalizer" not in qualification_scope:
+        _fail("LAUNCH_QUALIFICATION_CONSUMPTION_ASYMMETRIC", qualification_scope)
+    data_receipts = launch["required_receipts"]["data"]
+    if not any("Heldout27 input manifests and sealed Safety12 fixture manifests" in item for item in data_receipts):
+        _fail("LAUNCH_DATA_RECEIPT_SCOPE_AMBIGUOUS", repr(data_receipts))
+    if "WP5 flagship showcase" not in protocol["formal_run_policy"]["first_provider_call_lock"]:
         _fail("WP5_RELEASE_LOCK_INCOMPLETE", protocol["formal_run_policy"]["first_provider_call_lock"])
 
     return {

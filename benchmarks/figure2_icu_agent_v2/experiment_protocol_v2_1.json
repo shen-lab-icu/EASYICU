@@ -9,7 +9,7 @@
     "EasyICU provides a reproducible typed research substrate across six ICU databases when the deterministic validation work package passes.",
     "With the same model and scientifically equivalent data content, the complete EasyICU Research Agent may improve task-level reportability without postrun repair relative to a matched generic code agent if the paired primary result supports that claim.",
     "Formal Safety12 may characterize differences in correct fail-closed disposition under twelve prespecified challenge categories as a secondary analysis.",
-    "WP5 may demonstrate a transparent idea-to-evidence workflow in three prespecified broad clinical briefs: the system generates and registers candidate ideas, two independent human reviewers select one before patient-level analysis, and the selected idea proceeds through protocol translation, deterministic feasibility, governed execution, evidence binding, and bounded reporting."
+    "WP5 may demonstrate one transparently and purposively selected flagship success case: the Agent and human reviewers iteratively generate, critique, revise, and register candidate ideas before patient-level outcome analysis, then lock one feasible idea and carry it through governed execution, evidence binding, and bounded reporting."
   ],
   "prohibited_claims": [
     "fully autonomous research because one human plan review remains mandatory",
@@ -23,7 +23,7 @@
     "efficiency superiority unless supported by the prespecified secondary estimates and uncertainty intervals",
     "equivalence or noninferiority from a nonsignificant difference",
     "absence of asymmetric benchmark familiarity because public task patterns and project code may differ in pretraining or context exposure",
-    "superior ideation, universal novelty, higher research productivity, autonomous scientific discovery, or a population-level idea-landing rate from three WP5 cases",
+    "superior ideation, universal novelty, higher research productivity, autonomous scientific discovery, representativeness, or an idea-landing rate from one purposively selected WP5 showcase",
     "idea-to-evidence superiority because WP5 has no comparison arm",
     "the claim that the Agent autonomously selected the WP5 research question",
     "externally standardized or community benchmark status for this process-held-out paired evaluation suite"
@@ -52,7 +52,7 @@
     {
       "role": "statistical_analysis_plan",
       "path": "benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v2.json",
-      "sha256": "3c735066dd059f06ce1665502f47fdf56c79dcf405c0c790a5b4db91019f909e"
+      "sha256": "301b87e614e87a3cfcae9c6de5fbdc58d3be996eb855105abbfaa35be581b3f5"
     },
     {
       "role": "formal_safety12_taskbank",
@@ -72,12 +72,12 @@
     {
       "role": "data_platform_validation_protocol",
       "path": "benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v2.json",
-      "sha256": "6c3f3625cefc0a13042bd683e96b80ea78ca0a7868ac11cb33210522ceaa1999"
+      "sha256": "5101b01ff091a7eb73630600bf225248e05bcd348c1ae492436d8c9944f9c2cc"
     },
     {
       "role": "generic_code_agent_spec",
       "path": "benchmarks/figure2_icu_agent_v2/generic_code_agent_spec_v1.json",
-      "sha256": "6189fbe692d880a507e07cc9b3ce71f82302794623889dae3f76abbaa78289bb"
+      "sha256": "b8c70f33b64db6f4ee1076ebf2e1a05455967a3d600cc757b507849a7b1fcc70"
     },
     {
       "role": "review_bundle_contract",
@@ -87,22 +87,22 @@
     {
       "role": "preregistration_plan",
       "path": "benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json",
-      "sha256": "daa83f02001581ae69da0899a22008831ef9a40f764bd3f282b9c9976e6fa022"
+      "sha256": "cfd228f2ef1a32d10c4de1574142daac9c006172cf4d3723e1992dc776153b1d"
     },
     {
       "role": "formal_launch_contract",
       "path": "benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json",
-      "sha256": "9038c23b70c3175cc7955287f8ae97f7df9ccbacb502cf7378315344a04db6d0"
+      "sha256": "fd3e7d1d0a95425ffacdac7c74eced271536c7c7693c177c664182536aa98695"
     },
     {
       "role": "idea_to_evidence_protocol",
       "path": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_protocol_v1.json",
-      "sha256": "86790d8fbd713f6300f3cefdb01fc3e4cd521825727a66d8f63c40b480747424"
+      "sha256": "bda54e1a5be98b05ac193184be2f61eae1ad9e4aa7232374393539a90b123fb0"
     },
     {
       "role": "idea_to_evidence_evaluation_rubric",
       "path": "benchmarks/figure2_icu_agent_v2/idea_to_evidence_evaluation_rubric_v1.json",
-      "sha256": "93fb06cc366603d88dcc6a7afce552e5923170c2b73e41bdb85d9d6e21fa65e8"
+      "sha256": "525630a4837d1bf330fa4594fcec3a357822fe3825f467745e9956a1f8381acf"
     }
   ],
   "work_packages": [
@@ -135,12 +135,12 @@
       "additional_runs": 36
     },
     {
-      "work_package": "WP5_IDEA_TO_EVIDENCE3",
-      "type": "prespecified_multiple_case_workflow_demonstration",
-      "authority": "end-to-end workflow integrity and evidence landing in three disclosed cases only",
-      "case_count": 3,
+      "work_package": "WP5_IDEA_TO_EVIDENCE_SHOWCASE",
+      "type": "descriptive_iterative_flagship_case_study",
+      "authority": "end-to-end human-Agent workflow integrity and evidence landing in one purposively selected disclosed showcase only",
+      "case_count": 1,
       "arms": 1,
-      "workflow_runs": 3,
+      "workflow_runs": 1,
       "protocol_role": "idea_to_evidence_protocol",
       "confirmatory_denominator_effect": 0
     }
@@ -156,7 +156,8 @@
       "task_count": 12,
       "paper_authority": "forbidden",
       "easyicu_gate": "All seven bound-result items and all five fail-closed items must pass their frozen task contracts; any confident result on a fail-closed item fails qualification.",
-      "generic_arm_gate": "All twelve tasks must produce terminal normalized bundles. Among the seven bound-result tasks, at least five must contain executable analysis code, a cohort denominator, a result table, the task-required core diagnostic, and no critical semantic error. Failure triggers only arm-generic harness repair followed by a completely new Qualification12 set; it may not drive task-specific tuning or task removal."
+      "generic_arm_gate": "All twelve tasks must produce terminal normalized bundles. Among the seven bound-result tasks, at least five must contain executable analysis code, a cohort denominator, a result table, the task-required core diagnostic, and no critical semantic error. Failure blocks formal launch and may not drive task-specific tuning or task removal.",
+      "set_consumption_policy": "After a Qualification12 set is opened, any qualification-relevant change to either arm's harness, prompt, tool contract, release or gates, or to the shared normalizer, evaluator, model route, or numeric budgets consumes that set on identical terms. Requalification may use only the next unopened preregistered reserve set; exhausting all three sets requires a new registered design."
     },
     "heldout27": {
       "purpose": "paired confirmatory primary evaluation",
@@ -168,9 +169,9 @@
       "task_count": 12,
       "paper_authority": "eligible_only_after_all_launch_gates"
     },
-    "idea_to_evidence3": {
-      "purpose": "three-case descriptive workflow demonstration from broad brief to evidence-bound report",
-      "case_count": 3,
+    "idea_to_evidence_showcase": {
+      "purpose": "one-case descriptive iterative human-Agent showcase from a broad research direction to an evidence-bound report",
+      "case_count": 1,
       "comparison_arm": null,
       "paper_authority": "descriptive_case_study_only_after_wp5_gates"
     }
@@ -208,7 +209,7 @@
     }
   },
   "input_fairness": {
-    "all_or_none_gate": "WP1 must pass for every WP2 and WP3 formal task input before the first core Provider call; partial-database or posthoc reduced task sets are forbidden under this protocol version. WP5 follows its registered two-phase gate because its selected question is a prespecified derived output of idea mining.",
+    "all_or_none_gate": "WP1 must pass for every Heldout27 patient-level database-concept input before the first core Provider call; partial-database or posthoc reduced Heldout27 task sets are forbidden under this protocol version. Formal Safety12 uses separately sealed neutral fixtures and external rationale receipts rather than WP1 patient-level concept cells. WP5 follows its registered two-phase gate because its final question is a prespecified derived output of iterative idea mining.",
     "shared": [
       "identical task question",
       "identical patient and stay rows",
@@ -250,11 +251,11 @@
   "authorization_sequence": [
     "complete the no-Provider design, harness, normalizer, validator, and evaluator implementation",
     "create a clean exact-head commit and tag and obtain the independent external registration receipt",
-    "use only the qualification12 scope to run Qualification12-A and the blinding pilot under frozen budgets; any implementation change requires an unopened preregistered reserve set",
+    "use only the qualification12 scope to run Qualification12-A and the blinding pilot under frozen budgets; any qualification-relevant change to either arm or a shared qualification component consumes the opened set and requires the next unopened preregistered reserve set",
     "run the deterministic WP1 six-database gate under the registered thresholds; this may proceed in parallel with qualification because it makes no Provider call",
     "after qualification, WP1, reviewer reliability, input, runtime, and evaluator receipts pass, sign the core WP2/WP3 atomic batch declaration",
     "run all 78 core trajectories to terminal immutable receipts",
-    "run WP5 phase A and per-case phase B only through their separately authorized scopes using the same immutable release"
+    "run the iterative WP5 phase A and the locked flagship phase B only through their separately authorized scopes using the same immutable release"
   ],
   "formal_schedule": {
     "randomization_seed": 20260901,
@@ -345,18 +346,14 @@
       "generic_code_agent",
       "easyicu_full"
     ],
-    "wp5_case_order": [
-      "ite3_b01",
-      "ite3_b02",
-      "ite3_b03"
-    ],
-    "wp5_sequence": "WP5 begins only after all 78 WP2 and WP3 core runs have terminal immutable receipts. Each case runs phase-A ideation, deterministic interphase feasibility, then phase-B analysis only if authorized; cases are never replaced or selectively omitted."
+    "wp5_showcase_id": "ite_showcase_01",
+    "wp5_sequence": "WP5 begins only after all 78 WP2 and WP3 core runs have terminal immutable receipts. One bounded phase-A human-Agent discovery process may iterate through literature, candidates, feedback, and deterministic feasibility before the final question, plan, and input are locked. Phase B then runs the locked flagship once if authorized; postoutcome substitution is forbidden."
   },
   "formal_run_policy": {
     "primary_runs_per_task_arm": 1,
     "core_formal_runs": 78,
-    "wp5_descriptive_workflow_runs": 3,
-    "core_plus_wp5_workflows": 81,
+    "wp5_descriptive_workflow_runs": 1,
+    "core_plus_wp5_workflows": 79,
     "optional_repeatability_additional_runs": 36,
     "workflow_count_boundary": "A WP5 workflow may contain multiple frozen-budget model and tool calls; its one-case workflow count is not a claim about Provider-call count.",
     "reuse_existing": false,
@@ -366,8 +363,8 @@
     "selective_arm_retry": false,
     "failures_remain_in_denominator": true,
     "external_pre_token_incident_policy": "Only a verified external incident before the first model token may void a run; the complete A/B pair must be repeated without inspecting scientific output.",
-    "first_provider_call_lock": "After the first core formal Provider call, code, prompts, taskbanks, rubrics, SAP, model, provider route, container, budgets, network policy, and review instructions remain immutable through all 78 core terminal receipts and, if WP5 remains declared under this release, through terminal disposition of all three WP5 cases. Core inputs remain immutable through the core batch; only the prespecified derived WP5 artifacts may be added at the registered interphase boundary.",
-    "wp5_derived_input_boundary": "WP5 brief identities, selection algorithm, rubric, two-phase budgets, and retrieval policy are externally registered before phase A. The selected idea, approved plan, and phase-B input are derived artifacts bound after phase A and deterministic feasibility; they may not change code, prompts, rubrics, or the registered selection rule."
+    "first_provider_call_lock": "After the first core formal Provider call, code, prompts, taskbanks, rubrics, SAP, model, provider route, container, budgets, network policy, and review instructions remain immutable through all 78 core terminal receipts and, if WP5 remains declared under this release, through terminal disposition of the WP5 flagship showcase. Core inputs remain immutable through the core batch; only the prespecified append-only WP5 discovery records and locked phase-B artifacts may be added at the registered boundaries.",
+    "wp5_derived_input_boundary": "The WP5 initial direction, iterative discovery contract, rubric, phase budgets, retrieval policy, reviewer roles, and final-lock rule are externally registered before phase A. Candidate versions and feasibility findings are appended during phase A; the final idea, approved plan, concept map, and phase-B input are locked and bound before patient-level outcome analysis. They may not change code, prompts, rubrics, or the registered discovery and lock rules."
   },
   "mechanism_analysis": {
     "additional_provider_calls": 0,
@@ -387,26 +384,26 @@
   "launch_gates": [
     "this review candidate is converted into an immutable external preregistration package with an independent timestamp or embargo receipt before any Provider call",
     "fresh native-v2 typed inputs and neutral generic-arm projections are sealed for all required databases and tasks",
-    "WP1 critical data-platform checks pass for every database-concept cell used in a formal task",
+    "WP1 critical data-platform checks pass for every Heldout27 patient-level database-concept cell; Formal Safety12 is governed by its separate sealed-fixture and external-rationale receipts",
     "Heldout27 task-specific review sheets are mechanically instantiated from the frozen rubric and signed by clinical and methods reviewers",
     "Formal Safety12 fixtures are sealed and independently verified to exhibit their prespecified challenge",
-    "three externally authored WP5 broad briefs, the semantic nonoverlap audit, WP5 rubric, literature-retrieval route, phase budgets, reviewer panel, and two-phase declaration template are externally sealed",
+    "one authentic WP5 broad research direction, its semantic nonoverlap audit, iterative discovery contract, rubric, literature-retrieval route, phase budgets, reviewer roles, final-lock rule, and two-phase declaration template are externally sealed",
     "Qualification12 passes all twelve EasyICU task contracts without a critical unsafe authorization",
     "the generic harness passes the frozen Qualification12 completeness and minimum scientific-competence floor without task-specific tuning",
-    "Qualification12-A plus two access-controlled independently authored reserve sets are externally registered before Qualification12-A is opened; a changed harness or normalizer can use only the next unopened reserve set",
+    "Qualification12-A plus two access-controlled independently authored reserve sets are externally registered before Qualification12-A is opened; any qualification-relevant change to either arm or a shared qualification component consumes the opened set and can use only the next unopened reserve set",
     "the arm-neutral normalizer and fixed review-bundle schema pass the Dev9 and Qualification12 blinding pilot with zero forbidden arm markers",
     "unadjudicated binary reviewer kappa is at least 0.70 on qualification material",
     "primary-reviewer independence eligibility, conflicts, available hours, session batching, breaks, replacement coverage, and adjudication capacity are sealed",
     "exact code commit, clean exact-head CI, container digest, provider route, immutable model identifier, budgets, network policy, and reviewer identities are sealed",
     "runtime denies repository and undeclared network access",
     "the formal launch contract validates the external registration receipt and a signed atomic core batch declaration that hashes this protocol and every runtime coordinate",
-    "WP5 phase A is separately denied until the core batch is terminal and its sealed brief manifest and ideation declaration validate; each WP5 phase B is separately denied until the selected-idea WP1-extension and input-seal receipts validate"
+    "WP5 phase A is separately denied until the core batch is terminal and its sealed initial-direction and iterative-discovery declarations validate; WP5 phase B is separately denied until the final question and protocol lock, selected-idea WP1-extension, and input-seal receipts validate"
   ],
   "current_authority": {
     "provider_calls_authorized": false,
     "planner_calls_authorized": false,
     "formal_batch_authorized": false,
     "paper_result_authority": false,
-    "reason": "This is a review candidate, not a formal preregistration. External timestamping, qualification and reserve-set seals, data seals, safety rationale sign-off, B-arm qualification, blinding validation, reviewer eligibility and capacity, WP5 external briefs and two-phase receipts, exact runtime coordinates, clean exact-head release evidence, and atomic declarations remain outstanding."
+    "reason": "This is a review candidate, not a formal preregistration. External timestamping, qualification and reserve-set seals, data seals, safety rationale sign-off, B-arm qualification, blinding validation, reviewer eligibility and capacity, the WP5 initial direction and two-phase receipts, exact runtime coordinates, clean exact-head release evidence, and atomic declarations remain outstanding."
   }
 }

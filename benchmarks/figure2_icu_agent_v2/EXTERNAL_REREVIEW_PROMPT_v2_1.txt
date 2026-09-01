@@ -1,3 +1,5 @@
+v2.1 第二轮外部只读复审提示词（历史留档，已由 EXTERNAL_FINAL_DESIGN_REVIEW_PROMPT_v2_1.txt 取代）
+
 请对 EasyICU Figure 2 v2.1 review candidate 做第二轮严格、只读、差异聚焦的复审。
 
 审查位置：

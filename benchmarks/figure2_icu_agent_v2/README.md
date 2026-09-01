@@ -24,11 +24,11 @@ The v2.1 candidate adds:
   35/50-record semantic audits, and mandatory fresh re-audit after correction;
 - a secondary Safety12 characterization with neutral dispositions, external
   rationale sources, and independent reviewer sign-off;
-- a separate three-case Idea-to-Evidence demonstration that starts from
-  externally sealed broad clinical briefs, retains every candidate and failed
-  case, selects one idea before patient-level analysis, and follows it through
-  deterministic feasibility, governed execution, EvidenceStore, and bounded
-  manuscript text;
+- a separate Idea-to-Evidence flagship case study that permits bounded
+  human-Agent generate/critique/revise cycles, retains an append-only discovery
+  trace, locks one purposively selected feasible idea before patient-level
+  outcome analysis, and follows it through governed execution, EvidenceStore,
+  and bounded manuscript text;
 - an external preregistration plan and a formal launch contract that defaults
   to denial, including a post-registration Qualification12-only authorization
   scope before any core or paper-facing run;
@@ -37,12 +37,14 @@ The v2.1 candidate adds:
   with conflicts and workload capacity sealed before qualification.
 
 WP5 is deliberately not a third arm or an extension of the Heldout27
-denominator. It has no comparator and supports only a descriptive multiple-case
-workflow claim. Three externally authored briefs must all be shown; safe
-nonlanding, workflow failure, null findings, and restricted reports cannot be
-replaced by a more attractive case. Phase-A idea mining uses only declared
-literature retrieval and nonpatient metadata. Each selected idea must then pass
-a deterministic WP1 extension before phase-B patient-data analysis can begin.
+denominator. It has no comparator and supports only a descriptive, purposively
+selected flagship workflow claim. Phase A may iterate over candidate ideas with
+human clinical and methods feedback, declared literature retrieval, nonpatient
+metadata, and neutral deterministic feasibility receipts. Every candidate
+version and rejection reason remains visible. The final idea and plan are
+locked only after feasibility passes and before patient-level outcome analysis.
+After that lock, a failed, null, or restricted analysis cannot be replaced by a
+more attractive candidate or result.
 
 Run the no-Provider design check with:
 
