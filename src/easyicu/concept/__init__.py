@@ -577,7 +577,13 @@ def _estimate_cached_bytes(value: object) -> int:
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
-    def __init__(self, dictionary: ConceptDictionary, cache_dir: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        dictionary: ConceptDictionary,
+        cache_dir: Optional[Path] = None,
+        *,
+        use_pickle: bool = False,
+    ) -> None:
         self.dictionary = dictionary
         # Cache for icustays table to avoid repeated loading
         self._icustays_cache: Optional[pd.DataFrame] = None
@@ -613,6 +619,31 @@ class ConceptResolver:
         self._cache_total_bytes = 0
         self._cache_evictions = 0
         self.cache_dir = cache_dir if cache_dir else None
+        # The cross-call disk cache stores ICUTable subclasses (IdTbl/TsTbl/
+        # WinTbl) whose type and metadata do not survive a plain parquet round
+        # trip, so its only serializer is pickle — and pickle.load executes the
+        # payload before anything gets to inspect it. ``easyicu.api``'s cache
+        # already states the rule for that: pickle is a trusted-local
+        # compatibility opt-in, never the default, because a cache directory
+        # can be shared, synced or written by another process.
+        #
+        # This cache read the same rule and then ignored it: it gated on
+        # ``cache_dir`` alone. Setting a cache directory is not consent to
+        # deserialize arbitrary objects out of it, so the opt-in is now
+        # explicit and separate. Without it a ``cache_dir`` simply gets no
+        # disk cache; there is no safe serializer at this layer to fall back
+        # to, and silently caching through an unsafe one is the failure mode
+        # being removed.
+        self.use_pickle = bool(use_pickle)
+        if self.cache_dir is not None and not self.use_pickle:
+            logger.warning(
+                "ConceptResolver cache_dir=%s is set without use_pickle=True; "
+                "the cross-call disk cache stays disabled. Pass "
+                "use_pickle=True only for a cache directory you fully "
+                "control — loading one writes arbitrary code execution into "
+                "this process.",
+                self.cache_dir,
+            )
         self.cache_schema_version = "1"
         self.dictionary_signature = self._compute_dictionary_signature()
 
@@ -7974,31 +8005,46 @@ class ConceptResolver:
         data_source: ICUDataSource,
         cache_key: str,
     ) -> Optional[ICUTable]:
-        """Load a concept from disk cache if available."""
-        if self.cache_dir is None:
+        """Load a concept from disk cache if the pickle opt-in was given.
+
+        Note the isinstance check below runs *after* ``pickle.load`` has
+        already executed the payload — it documents the expected shape, it
+        does not make an untrusted file safe. That is why the opt-in gate is
+        in front of it rather than behind it.
+        """
+        if self.cache_dir is None or not self.use_pickle:
             return None
-            
+
         try:
             import pickle
             from pathlib import Path
-            
-            # Create cache file path
-            cache_file = Path(self.cache_dir) / f"{cache_key}.pkl"
+
+            # Create cache file path. The suffix matches easyicu.api's cache so
+            # the two agree on which files carry executable content.
+            cache_file = Path(self.cache_dir) / f"{cache_key}.trusted.pkl"
             if not cache_file.exists():
                 return None
-                
+
             # Load from cache
             with open(cache_file, "rb") as f:
                 cached_data = pickle.load(f)
-                
+
             # Verify the cached data is an ICUTable or WinTbl/TsTbl/IdTbl
             if isinstance(cached_data, ICUTable) or hasattr(cached_data, 'data'):
                 return cached_data
-                
-        except Exception:
-            # If anything goes wrong, silently return None to force recomputation
-            pass
-            
+            logger.warning(
+                "Ignoring disk cache entry for concept %r: expected an "
+                "ICUTable, found %s",
+                concept_name, type(cached_data).__name__,
+            )
+        except Exception as exc:
+            # A miss must not be silent: a corrupt or unreadable cache entry
+            # otherwise reads as a cold cache and gets rewritten every call.
+            logger.warning(
+                "Disk cache read failed for concept %r (%s: %s); recomputing",
+                concept_name, type(exc).__name__, exc,
+            )
+
         return None
 
     def _store_in_disk_cache(
@@ -8008,27 +8054,30 @@ class ConceptResolver:
         cache_key: str,
         result: ICUTable,
     ) -> None:
-        """Store a concept result in disk cache."""
-        if self.cache_dir is None:
+        """Store a concept result in disk cache if the pickle opt-in was given."""
+        if self.cache_dir is None or not self.use_pickle:
             return
-            
+
         try:
             import pickle
             from pathlib import Path
-            
+
             # Ensure cache directory exists
             Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
-            
+
             # Create cache file path
-            cache_file = Path(self.cache_dir) / f"{cache_key}.pkl"
-            
+            cache_file = Path(self.cache_dir) / f"{cache_key}.trusted.pkl"
+
             # Store in cache
             with open(cache_file, "wb") as f:
                 pickle.dump(result, f)
-                
-        except Exception:
-            # If anything goes wrong, silently continue without caching
-            pass
+
+        except Exception as exc:
+            logger.warning(
+                "Disk cache write failed for concept %r (%s: %s); continuing "
+                "without caching",
+                concept_name, type(exc).__name__, exc,
+            )
 
     def _expand_dependencies(self, requested: List[str]) -> List[str]:
         """Return dependency-closed list of concept names."""
