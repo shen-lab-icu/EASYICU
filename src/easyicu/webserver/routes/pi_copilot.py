@@ -144,8 +144,12 @@ class PiIdeaSourceRequest(BaseModel):
 
     source_type: Literal["pdf", "url", "manual"]
     title: Annotated[str, StringConstraints(strip_whitespace=True, max_length=220)] = ""
-    excerpt: Annotated[str, StringConstraints(strip_whitespace=True, max_length=1200)] = ""
-    journal: Annotated[str, StringConstraints(strip_whitespace=True, max_length=160)] = ""
+    excerpt: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=1200)
+    ] = ""
+    journal: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=160)
+    ] = ""
     year: int | None = Field(default=None, ge=1800, le=2200)
     doi: Annotated[str, StringConstraints(strip_whitespace=True, max_length=240)] = ""
     pmid: Annotated[str, StringConstraints(strip_whitespace=True, max_length=80)] = ""
@@ -196,10 +200,13 @@ class PiMessageRequest(BaseModel):
 
 class PiRegenerateRequest(PiMessageRequest):
     user_entry_id: ShortText
-    regeneration_intent: Literal[
-        "user_edited_message",
-        "replace_plan_response_preserve_study",
-    ] | None = None
+    regeneration_intent: (
+        Literal[
+            "user_edited_message",
+            "replace_plan_response_preserve_study",
+        ]
+        | None
+    ) = None
 
 
 class PiDataSourceAuthorizationRequest(BaseModel):
@@ -339,7 +346,11 @@ def get_pi_copilot_literature_source(pmid: ShortText) -> dict:
         return idea_mining.review_literature_source(pmid)
     except idea_mining.IdeaMiningWebError as exc:
         code = str(exc.detail.get("error") or "literature_source_unavailable")
-        status = 422 if code == "literature_source_pmid_invalid" else 404 if code == "literature_source_not_found" else 502
+        status = (
+            422
+            if code == "literature_source_pmid_invalid"
+            else 404 if code == "literature_source_not_found" else 502
+        )
         raise HTTPException(status_code=status, detail=exc.detail) from exc
 
 
@@ -644,9 +655,7 @@ def get_pi_copilot_research_document(
 def get_pi_copilot_sessions(
     project_id: Annotated[str, Query(min_length=1, max_length=160)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
-    agent_mode: Annotated[
-        str | None, Query(pattern="^(research|workspace)$")
-    ] = None,
+    agent_mode: Annotated[str | None, Query(pattern="^(research|workspace)$")] = None,
 ) -> dict:
     try:
         return get_pi_copilot_service().list_sessions(
@@ -695,9 +704,7 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
         _raise_http(exc)
 
 
-@router.post(
-    "/api/copilot/pi/sessions/{session_id}/cohort-eligibility-selection"
-)
+@router.post("/api/copilot/pi/sessions/{session_id}/cohort-eligibility-selection")
 def post_pi_copilot_cohort_eligibility_selection(
     session_id: ShortText,
     body: PiCohortEligibilitySelectionRequest,
@@ -708,18 +715,14 @@ def post_pi_copilot_cohort_eligibility_selection(
             project_id=body.project_id,
             option_id=body.option_id,
             expected_revision=body.expected_revision,
-            primary_cohort_contract_sha256=(
-                body.primary_cohort_contract_sha256
-            ),
+            primary_cohort_contract_sha256=(body.primary_cohort_contract_sha256),
             selection_event_id=body.selection_event_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
 
 
-@router.post(
-    "/api/copilot/pi/sessions/{session_id}/plan-decision-selection"
-)
+@router.post("/api/copilot/pi/sessions/{session_id}/plan-decision-selection")
 def post_pi_copilot_plan_decision_selection(
     session_id: ShortText,
     body: PiPlanDecisionSelectionRequest,

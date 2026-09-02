@@ -68,9 +68,7 @@ _AGENT_PROJECTS_PATH = _CONFIG_DIR / "webserver_agent_project_seeds.json"
 
 _PRIOR_ART_ADJUDICATION_FILENAME = "idea_prior_art_adjudication.json"
 _BOUNDED_FEASIBILITY_FILENAME = "bounded_sample_feasibility.json"
-_PRIOR_ART_DECISIONS = frozenset(
-    {"already_answered", "differentiated", "uncertain"}
-)
+_PRIOR_ART_DECISIONS = frozenset({"already_answered", "differentiated", "uncertain"})
 _CONFIRMED_DEFINITION_FIELDS = (
     "research_question",
     "population",
@@ -1025,12 +1023,12 @@ def plan_idea(body: Dict[str, Any]) -> Dict[str, Any]:
             )
             if readiness.get(key) is not None
         }
-        plan["prior_art_adjudication"] = readiness.get(
-            "prior_art_adjudication_summary"
-        ) or {}
-        plan["source_feasibility_summary"] = readiness.get(
-            "source_feasibility_summary"
-        ) or {}
+        plan["prior_art_adjudication"] = (
+            readiness.get("prior_art_adjudication_summary") or {}
+        )
+        plan["source_feasibility_summary"] = (
+            readiness.get("source_feasibility_summary") or {}
+        )
     out = {
         "ok": True,
         "schema_version": "easyicu.web_idea_plan/1",
@@ -1216,9 +1214,9 @@ def adjudicate_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
                 "pmid": str(row.get("pmid") or "")[:32] or None,
                 "title": _clean(row.get("title"), 500),
                 "disposition": str(screen.get("disposition") or "exclude")[:24],
-                "evidence_role": str(
-                    screen.get("evidence_role") or "related_context"
-                )[:48],
+                "evidence_role": str(screen.get("evidence_role") or "related_context")[
+                    :48
+                ],
                 "rationale": _clean(screen.get("rationale"), 500),
                 "population_match": bool(screen.get("population_match")),
                 "exposure_match": bool(screen.get("exposure_match")),
@@ -1307,10 +1305,13 @@ def prior_art_adjudication_binding(run_id: str, idea_id: str) -> Dict[str, Any]:
         ) from exc
     if not isinstance(payload, Mapping):
         raise IdeaMiningWebError({"error": "idea_prior_art_adjudication_invalid"})
-    if str(payload.get("run_id") or "") != run_id or str(
-        payload.get("idea_id") or ""
-    ) != idea_id:
-        raise IdeaMiningWebError({"error": "idea_prior_art_adjudication_identity_mismatch"})
+    if (
+        str(payload.get("run_id") or "") != run_id
+        or str(payload.get("idea_id") or "") != idea_id
+    ):
+        raise IdeaMiningWebError(
+            {"error": "idea_prior_art_adjudication_identity_mismatch"}
+        )
     current_definition = _confirmed_definition(run_id, idea_id)
     if payload.get("definition_sha256") != current_definition["definition_sha256"]:
         raise IdeaMiningWebError(
@@ -1339,13 +1340,17 @@ def prior_art_adjudication_binding(run_id: str, idea_id: str) -> Dict[str, Any]:
         "prior_art_adjudication_summary": {
             "decision": decision,
             "rationale": str(payload.get("rationale") or "")[:1200],
-            "screening": payload.get("screening")
-            if isinstance(payload.get("screening"), Mapping)
-            else {},
+            "screening": (
+                payload.get("screening")
+                if isinstance(payload.get("screening"), Mapping)
+                else {}
+            ),
             "comparison_axes": list(payload.get("comparison_axes") or [])[:6],
-            "authority": payload.get("authority")
-            if isinstance(payload.get("authority"), Mapping)
-            else {},
+            "authority": (
+                payload.get("authority")
+                if isinstance(payload.get("authority"), Mapping)
+                else {}
+            ),
         },
     }
 
@@ -1379,9 +1384,7 @@ def _validated_concept_bindings(value: Any) -> Dict[str, Any]:
     raw_covariates = value.get("covariates") or []
     if not isinstance(raw_covariates, list) or len(raw_covariates) > 32:
         raise IdeaMiningWebError({"error": "idea_concept_bindings_invalid"})
-    out["covariates"] = list(
-        dict.fromkeys(concept_id(item) for item in raw_covariates)
-    )
+    out["covariates"] = list(dict.fromkeys(concept_id(item) for item in raw_covariates))
     return out
 
 
@@ -1847,12 +1850,12 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
         )
         if readiness.get(key) is not None
     }
-    plan["prior_art_adjudication"] = readiness.get(
-        "prior_art_adjudication_summary"
-    ) or {}
-    plan["source_feasibility_summary"] = readiness.get(
-        "source_feasibility_summary"
-    ) or {}
+    plan["prior_art_adjudication"] = (
+        readiness.get("prior_art_adjudication_summary") or {}
+    )
+    plan["source_feasibility_summary"] = (
+        readiness.get("source_feasibility_summary") or {}
+    )
     handoff = {
         "ok": True,
         "schema_version": "easyicu.web_idea_handoff/1",
@@ -3869,9 +3872,10 @@ def idea_execution_readiness_binding(
                 ),
             }
         )
-    if str(feasibility.get("run_id") or "") != run_id or str(
-        feasibility.get("idea_id") or ""
-    ) != idea_id:
+    if (
+        str(feasibility.get("run_id") or "") != run_id
+        or str(feasibility.get("idea_id") or "") != idea_id
+    ):
         raise IdeaMiningWebError({"error": "idea_source_feasibility_identity_mismatch"})
     if feasibility.get("prior_art_adjudication_binding") != adjudication:
         raise IdeaMiningWebError(
@@ -3890,9 +3894,7 @@ def idea_execution_readiness_binding(
         )
     construct_answerability = feasibility.get("construct_answerability")
     if not isinstance(construct_answerability, list) or not construct_answerability:
-        raise IdeaMiningWebError(
-            {"error": "idea_construct_answerability_required"}
-        )
+        raise IdeaMiningWebError({"error": "idea_construct_answerability_required"})
     unresolved_constructs = [
         (
             str(row.get("construct_id") or "unknown_construct")
@@ -3938,11 +3940,7 @@ def idea_execution_readiness_binding(
     }
     required = list(
         dict.fromkeys(
-            [
-                bindings[role]
-                for role in _CONCEPT_BINDING_ROLES
-                if bindings.get(role)
-            ]
+            [bindings[role] for role in _CONCEPT_BINDING_ROLES if bindings.get(role)]
             + list(bindings.get("covariates") or [])
         )
     )
@@ -3971,13 +3969,19 @@ def idea_execution_readiness_binding(
                 for key in ("source_id", "label", "database", "demo_like")
                 if source.get(key) is not None
             },
-            "cohort": feasibility.get("cohort")
-            if isinstance(feasibility.get("cohort"), Mapping)
-            else {},
-            "feature_statistics": list(feasibility.get("feature_statistics") or [])[:12],
-            "design_answerability": feasibility.get("design_answerability")
-            if isinstance(feasibility.get("design_answerability"), Mapping)
-            else {},
+            "cohort": (
+                feasibility.get("cohort")
+                if isinstance(feasibility.get("cohort"), Mapping)
+                else {}
+            ),
+            "feature_statistics": list(feasibility.get("feature_statistics") or [])[
+                :12
+            ],
+            "design_answerability": (
+                feasibility.get("design_answerability")
+                if isinstance(feasibility.get("design_answerability"), Mapping)
+                else {}
+            ),
             "construct_answerability": construct_answerability[:12],
             "missing_required_concepts": list(
                 feasibility.get("missing_required_concepts") or []
@@ -4461,7 +4465,11 @@ _CONVERSATIONAL_PAIR_PROFILES = (
     (
         "lactate_aki",
         (
-            (r"lactate|lactic|乳酸", ("lactate", "lactate clearance"), r"\blactat(?:e|ic|emia)\b"),
+            (
+                r"lactate|lactic|乳酸",
+                ("lactate", "lactate clearance"),
+                r"\blactat(?:e|ic|emia)\b",
+            ),
             (
                 r"aki|acute kidney injury|急性肾损伤",
                 ("acute kidney injury", "AKI"),
@@ -4494,7 +4502,11 @@ _CONVERSATIONAL_PAIR_PROFILES = (
         (
             (
                 r"sedation|sedative|镇静|镇静药",
-                ("sedation interruption", "sedative discontinuation", "sedation weaning"),
+                (
+                    "sedation interruption",
+                    "sedative discontinuation",
+                    "sedation weaning",
+                ),
                 r"sedat(?:ion|ive)|sedative discontinuation|sedation interruption",
             ),
             (
@@ -4537,9 +4549,9 @@ def _conversational_literature_scope(source: Dict[str, Any]) -> str:
         clauses = []
         for _, aliases, _ in dimensions:
             clauses.append(
-                "(" + " OR ".join(
-                    _pubmed_title_abstract_clause(value) for value in aliases
-                ) + ")"
+                "("
+                + " OR ".join(_pubmed_title_abstract_clause(value) for value in aliases)
+                + ")"
             )
         return " AND ".join(clauses)
 
@@ -4602,9 +4614,9 @@ def _conversational_candidate_scope(source: Dict[str, Any], *, base_scope: str) 
     if pair_profile:
         _, dimensions = pair_profile
         return " AND ".join(
-            "(" + " OR ".join(
-                _pubmed_title_abstract_clause(alias) for alias in aliases[:2]
-            ) + ")"
+            "("
+            + " OR ".join(_pubmed_title_abstract_clause(alias) for alias in aliases[:2])
+            + ")"
             for _, aliases, _ in dimensions
         )
     if re.search(r"nighttime|nocturnal|overnight|夜间|夜班", text, re.I):
@@ -5064,17 +5076,21 @@ def _pubmed_article_records(
     return rows
 
 
-def _literature_article_kind(publication_types: Iterable[str]) -> str:
+def _literature_article_kind(
+    publication_types: Iterable[str],
+    *,
+    title: str = "",
+    abstract: str = "",
+) -> str:
     labels = {str(value or "").strip().lower() for value in publication_types}
+    text = f"{title} {abstract}".lower()
     if labels & {"meta-analysis", "systematic review"}:
         return "systematic_review"
     if labels & {"editorial", "comment", "letter", "news"}:
         return "editorial_commentary"
     if labels & {"guideline", "practice guideline", "consensus development conference"}:
         return "guideline_consensus"
-    if labels & {"clinical trial protocol", "research support, non-u.s. gov't"} and any(
-        "protocol" in value for value in labels
-    ):
+    if "clinical trial protocol" in labels or "protocol" in text:
         return "protocol"
     if "review" in labels:
         return "narrative_review"
@@ -5086,6 +5102,12 @@ def _literature_article_kind(publication_types: Iterable[str]) -> str:
         "evaluation study",
         "multicenter study",
     }:
+        return "original_research"
+    if "journal article" in labels and re.search(
+        r"\b(cohort|trial|cross-sectional|case-control|retrospective|prospective|"
+        r"observational|randomized|randomised|we studied|we evaluated|we enrolled)\b",
+        text,
+    ):
         return "original_research"
     return "other"
 
@@ -5100,9 +5122,7 @@ def _pmc_full_text_evidence(pmcid: str) -> Dict[str, Any]:
     normalized = str(pmcid or "").strip().upper()
     if not re.fullmatch(r"PMC[0-9]{1,12}", normalized):
         return {"status": "unavailable", "reason": "no_pmc_full_text_link"}
-    params = parse.urlencode(
-        {"db": "pmc", "id": normalized[3:], "retmode": "xml"}
-    )
+    params = parse.urlencode({"db": "pmc", "id": normalized[3:], "retmode": "xml"})
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?" + params
     try:
         with request.urlopen(url, timeout=_NETWORK_TIMEOUT_SEC) as resp:
@@ -5194,7 +5214,11 @@ def review_literature_source(pmid: str) -> Dict[str, Any]:
         "year": article.get("year"),
         "doi": _clean(article.get("doi"), 240) or None,
         "publication_types": publication_types,
-        "article_kind": _literature_article_kind(publication_types),
+        "article_kind": _literature_article_kind(
+            publication_types,
+            title=str(article.get("title") or ""),
+            abstract=str(article.get("abstract_excerpt") or ""),
+        ),
         "abstract_excerpt": _clean(article.get("abstract_excerpt"), 1_200),
         "full_text": full_text,
         "authority": {
@@ -5746,7 +5770,12 @@ def _conversational_prior_art_screen(
             ),
             default=0,
         )
-        score = 4 * sum(dimension_matches) + 3 * sum(title_matches) + int(icu) + stratum_score
+        score = (
+            4 * sum(dimension_matches)
+            + 3 * sum(title_matches)
+            + int(icu)
+            + stratum_score
+        )
         matched_dimensions = [
             f"{profile_name}_{index + 1}"
             for index, matched in enumerate(dimension_matches)

@@ -1442,12 +1442,14 @@ def test_value_difference_does_not_become_practice_variation() -> None:
     }
     base_scope = idea_mining._conversational_literature_scope(source)
 
-    assert idea_mining._conversational_candidate_scope(
-        source, base_scope=base_scope
-    ) == base_scope
-    assert idea_mining._conversational_variation_scope(
-        source, base_scope=base_scope
-    ) == base_scope
+    assert (
+        idea_mining._conversational_candidate_scope(source, base_scope=base_scope)
+        == base_scope
+    )
+    assert (
+        idea_mining._conversational_variation_scope(source, base_scope=base_scope)
+        == base_scope
+    )
 
 
 def test_prior_art_rejects_untracked_or_mismatched_legacy_run_identity(
@@ -1967,6 +1969,19 @@ def test_literature_article_kind_changes_interpretation_by_publication_type(
     assert idea_mining._literature_article_kind(publication_types) == expected
 
 
+def test_literature_article_kind_uses_bounded_design_text_when_pubmed_is_generic() -> (
+    None
+):
+    assert (
+        idea_mining._literature_article_kind(
+            ["Journal Article"],
+            title="Delayed awakening after sedation interruption",
+            abstract="We conducted a retrospective cohort study in adult ICU patients.",
+        )
+        == "original_research"
+    )
+
+
 def test_design_excerpt_preserves_late_outcome_axis_after_exposure_synonyms() -> None:
     excerpt = idea_mining._study_design_excerpt(
         (
@@ -2211,9 +2226,7 @@ def test_typed_adjudication_and_source_bound_feasibility_form_current_readiness(
         "time_zero": "ICU admission",
         "time_window": "Exposure 0-24 hours; follow-up through hospital discharge",
     }
-    idea_mining.plan_idea(
-        {"run_id": run_id, "idea_id": idea_id, "plan_fields": fields}
-    )
+    idea_mining.plan_idea({"run_id": run_id, "idea_id": idea_id, "plan_fields": fields})
     prior = {
         "ok": True,
         "run_id": run_id,
