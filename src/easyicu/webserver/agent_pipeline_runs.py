@@ -3326,6 +3326,7 @@ class _ExecutionResumeTarget:
 
     wrapper_dir: Path
     pipeline_run_id: str
+    pipeline_config_sha256: str
 
 
 @dataclass(frozen=True)
@@ -3533,11 +3534,81 @@ def _resolve_execution_resume_wrapper(
             "research_pipeline_execution_retry_checkpoint_ambiguous",
             "The failed run contains more than one resumable execution checkpoint.",
         )
-    run_dir, _, _ = resumable[0]
+    run_dir, checkpoint, _ = resumable[0]
     return _ExecutionResumeTarget(
         wrapper_dir=wrapper_dir,
         pipeline_run_id=run_dir.name,
+        pipeline_config_sha256=str(checkpoint.pipeline_config_sha256),
     )
+
+
+def _validated_execution_retry_config(
+    *,
+    current_config: Any,
+    target: _ExecutionResumeTarget,
+    recovery_seed: Optional[WebReviewRecoverySeed],
+    current_scientific_digest: str,
+    prepared_package_binding: Optional[Mapping[str, Any]],
+) -> Any:
+    """Restore the approved config, or prove the rebuilt config is identical."""
+
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+
+    if recovery_seed is None:
+        if current_config.canonical_digest() != target.pipeline_config_sha256:
+            raise ResearchPipelineRunError(
+                "research_pipeline_execution_retry_recovery_seed_missing",
+                "The approved run's exact recovery configuration is missing and "
+                "the rebuilt configuration does not match its checkpoint; "
+                "generate a new plan.",
+            )
+        return current_config
+    if (
+        recovery_seed.scientific_configuration_sha256
+        != current_scientific_digest
+        or recovery_seed.prepared_package_binding
+        != prepared_package_binding
+        or recovery_seed.pipeline_config_sha256
+        != target.pipeline_config_sha256
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_recovery_seed_superseded",
+            "The approved run's recovery configuration no longer binds the "
+            "current study, prepared package, and checkpoint; generate a new plan.",
+        )
+    try:
+        restored = PipelineConfig.from_recovery_payload(
+            recovery_seed.pipeline_config,
+            expected_digest=recovery_seed.pipeline_config_sha256,
+        )
+    except ValueError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_recovery_seed_invalid",
+            "The approved run's exact recovery configuration is invalid; "
+            "generate a new plan.",
+        ) from exc
+    if Path(restored.workdir).resolve() != (
+        target.wrapper_dir / "pipeline"
+    ).resolve():
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_recovery_seed_invalid",
+            "The approved run's recovery configuration points outside the "
+            "selected pipeline.",
+        )
+    return restored
+
+
+def _cleanup_recovery_after_projection(
+    *,
+    wrapper_dir: Path,
+    projection: Mapping[str, Any],
+) -> None:
+    """Keep retry authority for failed execution; prune it after a true finish."""
+
+    gate = projection.get("gate")
+    reason = gate.get("reason") if isinstance(gate, Mapping) else None
+    if reason not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS:
+        _remove_local_recovery(wrapper_dir)
 
 
 def _materialization_concept_roster(
@@ -4120,45 +4191,16 @@ def make_research_pipeline_run_runner(
                 else None
             )
             if execution_resume_target is not None:
-                if original_recovery_seed is None:
-                    raise ResearchPipelineRunError(
-                        "research_pipeline_execution_retry_recovery_seed_missing",
-                        "The approved run's exact recovery configuration is missing; "
-                        "generate a new plan.",
-                    )
                 current_scientific_digest = (
                     study_context_owner.scientific_configuration_sha256(study)
                 )
-                if (
-                    original_recovery_seed.scientific_configuration_sha256
-                    != current_scientific_digest
-                    or original_recovery_seed.prepared_package_binding
-                    != prepared_package_binding
-                ):
-                    raise ResearchPipelineRunError(
-                        "research_pipeline_execution_retry_recovery_seed_superseded",
-                        "The approved run's recovery configuration no longer binds "
-                        "the current study and prepared package; generate a new plan.",
-                    )
-                try:
-                    config = PipelineConfig.from_recovery_payload(
-                        original_recovery_seed.pipeline_config,
-                        expected_digest=(
-                            original_recovery_seed.pipeline_config_sha256
-                        ),
-                    )
-                except ValueError as exc:
-                    raise ResearchPipelineRunError(
-                        "research_pipeline_execution_retry_recovery_seed_invalid",
-                        "The approved run's exact recovery configuration is invalid; "
-                        "generate a new plan.",
-                    ) from exc
-                if Path(config.workdir).resolve() != (wrapper_dir / "pipeline").resolve():
-                    raise ResearchPipelineRunError(
-                        "research_pipeline_execution_retry_recovery_seed_invalid",
-                        "The approved run's recovery configuration points outside "
-                        "the selected pipeline.",
-                    )
+                config = _validated_execution_retry_config(
+                    current_config=config,
+                    target=execution_resume_target,
+                    recovery_seed=original_recovery_seed,
+                    current_scientific_digest=current_scientific_digest,
+                    prepared_package_binding=prepared_package_binding,
+                )
             pipeline = ResearchAgentPipeline.from_config(
                 config,
                 services=PipelineServices(
@@ -4329,14 +4371,18 @@ def make_research_pipeline_run_runner(
                     pending=outcome,
                 )
             _finish_web_provider_hard_stop(provider_hard_stop)
-            _remove_local_recovery(wrapper_dir)
-            return _write_projection(
+            projection = _write_projection(
                 wrapper_dir=wrapper_dir,
                 study=study,
                 provider=provider_public,
                 acquisition=acquisition,
                 run_dir=Path(outcome.manifest_path).parent,
             )
+            _cleanup_recovery_after_projection(
+                wrapper_dir=wrapper_dir,
+                projection=projection,
+            )
+            return projection
         except ResearchPipelineRunError as exc:
             _finish_web_provider_hard_stop(
                 provider_hard_stop,
@@ -4679,14 +4725,18 @@ def resume_research_pipeline(
     outcome = resume_result.outcome
     _finish_web_provider_hard_stop(entry.provider_hard_stop)
     remove_review_recovery_record(key)
-    _remove_local_recovery(entry.wrapper_dir)
-    return _write_projection(
+    projection = _write_projection(
         wrapper_dir=entry.wrapper_dir,
         study=entry.study,
         provider=entry.provider,
         acquisition=entry.acquisition,
         run_dir=Path(outcome.manifest_path).parent,
     )
+    _cleanup_recovery_after_projection(
+        wrapper_dir=entry.wrapper_dir,
+        projection=projection,
+    )
+    return projection
 
 
 def refresh_literature_evidence_projection(wrapper_dir: Path) -> Dict[str, Any]:
