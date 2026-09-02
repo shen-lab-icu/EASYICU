@@ -10,7 +10,7 @@
     if (!api || typeof api.loadPiCopilotResearchArtifact !== 'function') {
       throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
     }
-    const loader = window.EU_GUIDED_PI_REPORT_ARTIFACTS;
+    const loader = window.EasyICU.guidedPi.require('reportArtifacts');
     if (!loader || typeof loader.load !== 'function') throw new Error('The report artifact loader is unavailable.');
     const rows = await loader.load(
       api, projectId, runId,
@@ -37,5 +37,5 @@
     return renderer.manuscriptProvenanceView(payload || {});
   }
 
-  window.EU_GUIDED_PI_ARTICLE_REPORT = { load, render };
+  window.EasyICU.guidedPi.declare('articleReport', { load, render });
 })();

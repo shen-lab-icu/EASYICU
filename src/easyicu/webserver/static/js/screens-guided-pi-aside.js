@@ -19,7 +19,7 @@
     const displayProjectTitle = host.displayProjectTitle;
 
     function syncProjectWorkflowAside() {
-      const demo = host.demoMode() && window.EU_GUIDED_PI_DEMO;
+      const demo = host.demoMode() && window.EasyICU.guidedPi.optional('demo');
       const workflow = demo && typeof demo.workflow === 'function' ? demo.workflow() : host.workflow();
       if (host.shell() !== 'pi' || (!host.demoMode() && !projectId())) return;
       const aside = document.getElementById('gdStudyAside');
@@ -115,5 +115,5 @@
     return { syncProjectWorkflowAside };
   }
 
-  window.EU_GUIDED_PI_ASIDE = { create };
+  window.EasyICU.guidedPi.declare('aside', { create });
 })();

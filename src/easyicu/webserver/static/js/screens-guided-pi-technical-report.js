@@ -20,7 +20,7 @@
     if (!api || typeof api.loadPiCopilotResearchArtifact !== 'function') {
       throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
     }
-    const loader = window.EU_GUIDED_PI_REPORT_ARTIFACTS;
+    const loader = window.EasyICU.guidedPi.require('reportArtifacts');
     if (!loader || typeof loader.load !== 'function') throw new Error('The report artifact loader is unavailable.');
     const rows = await loader.load(api, projectId, runId, SOURCE_ARTIFACTS, resource, ['figure_gallery.json']);
     const provenance = rows['manuscript_provenance.json'];
@@ -101,8 +101,9 @@
     const p = payload && typeof payload === 'object' ? payload : {};
     const context = p.run_context && typeof p.run_context === 'object' ? p.run_context : {};
     const manifest = p.source_manifest && typeof p.source_manifest === 'object' ? p.source_manifest : {};
-    const registeredSummary = window.EU_GUIDED_PI_RESULT_SUMMARY
-      ? window.EU_GUIDED_PI_RESULT_SUMMARY.summarize(p.result_tables || {})
+    const resultSummary = window.EasyICU.guidedPi.optional('resultSummary');
+    const registeredSummary = resultSummary
+      ? resultSummary.summarize(p.result_tables || {})
       : { claims: [], exposureLevels: [] };
     const claims = claimRows(p).concat(registeredSummary.claims || []);
     const total = claimByField(claims, [/^cohort\.n_stays$/, /^n_total$/]);
@@ -163,5 +164,5 @@
     </div>`;
   }
 
-  window.EU_GUIDED_PI_TECHNICAL_REPORT = { load, render };
+  window.EasyICU.guidedPi.declare('technicalReport', { load, render });
 })();

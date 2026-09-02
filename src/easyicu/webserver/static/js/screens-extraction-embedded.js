@@ -177,7 +177,7 @@
   function confirmSourceBinding(event) {
     const button = event.currentTarget;
     const owner = window.EU_EXTRACTION_NATIVE_OWNER;
-    const copilot = window.EU_GUIDED_PI;
+    const copilot = window.EasyICU.guidedPi.optional('shell');
     if (!owner || typeof owner.bindSourceToCopilot !== 'function'
         || !copilot || typeof copilot.confirmDataSourceBinding !== 'function') return;
     button.disabled = true;
@@ -228,7 +228,7 @@
       ? store.refreshActiveFromServer()
       : Promise.resolve();
     return Promise.resolve(refreshed).then(() => owner.syncToCopilot()).then(receipt => {
-      const copilot = window.EU_GUIDED_PI;
+      const copilot = window.EasyICU.guidedPi.optional('shell');
       const rebound = copilot && typeof copilot.rebind === 'function' ? copilot.rebind() : null;
       return Promise.resolve(rebound).then(() => {
         if (copilot && typeof copilot.notifyExtractionHandoff === 'function') copilot.notifyExtractionHandoff(receipt);

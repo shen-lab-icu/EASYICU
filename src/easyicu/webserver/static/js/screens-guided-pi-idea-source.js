@@ -152,7 +152,7 @@
   function consume() { const value = clone(pending); pending = null; error = ''; return value; }
   function reset() { pending = null; reading = false; error = ''; }
 
-  window.EU_GUIDED_PI_IDEA_SOURCE = Object.freeze({
+  window.EasyICU.guidedPi.declare('ideaSource', {
     consume, controls, handleChange, handleClick, hasSource, prepareForMessage, reset, status,
     suggestsIdeaMining,
   });

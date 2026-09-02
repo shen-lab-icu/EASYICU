@@ -31,7 +31,7 @@
   function safeResource(value) {
     if (!value || typeof value !== 'object') return null;
     if (value.kind === 'demo_artifact') {
-      const demo = window.EU_GUIDED_PI_DEMO;
+      const demo = window.EasyICU.guidedPi.optional('demo');
       const artifact = String(value.artifact || '').trim();
       if (!/^[A-Za-z0-9_.-]+\.json$/.test(artifact) || artifact.length > 160) return null;
       if (!demo || typeof demo.hasArtifact !== 'function' || !demo.hasArtifact(artifact)) return null;
@@ -54,7 +54,7 @@
       };
     }
     if (value.kind === 'literature_source') {
-      const literature = window.EU_GUIDED_PI_LITERATURE;
+      const literature = window.EasyICU.guidedPi.optional('literature');
       const authorityClass = value.authority_class === 'literature_method'
         ? 'literature_method' : 'literature_retrieval_candidate';
       const url = literature && typeof literature.safeUrl === 'function'
@@ -215,7 +215,7 @@
     };
   }
   function resourceKey(resource) {
-    const owner = window.EU_GUIDED_PI_RESOURCES;
+    const owner = window.EasyICU.guidedPi.require('resources');
     if (owner && typeof owner.create === 'function') {
       const identity = owner.create({ esc });
       if (identity && typeof identity.key === 'function') return identity.key(resource);
@@ -262,9 +262,9 @@
   function isResearchReport() { return !!state.resource && state.resource.kind === 'research_report'; }
   function researchReportOwner() {
     if (!isResearchReport()) return null;
-    if (state.resource.artifact === 'full_analysis_report.json') return window.EU_GUIDED_PI_ANALYSIS_REPORT;
-    if (state.resource.artifact === 'article_report.json') return window.EU_GUIDED_PI_ARTICLE_REPORT;
-    return window.EU_GUIDED_PI_TECHNICAL_REPORT;
+    if (state.resource.artifact === 'full_analysis_report.json') return window.EasyICU.guidedPi.require('analysisReport');
+    if (state.resource.artifact === 'article_report.json') return window.EasyICU.guidedPi.require('articleReport');
+    return window.EasyICU.guidedPi.require('technicalReport');
   }
   function isEvidenceBoundResource() { return isResearchArtifact() || isResearchReport(); }
   function isResearchDocument() { return !!state.resource && (state.resource.kind === 'research_document' || state.resource.kind === 'system_validation_document'); }
@@ -378,7 +378,7 @@
     } else if (state.error) {
       body = `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${esc(state.error)}</span></div>`;
     } else if (isLiteratureSource()) {
-      const renderer = window.EU_GUIDED_PI_LITERATURE;
+      const renderer = window.EasyICU.guidedPi.require('literature');
       body = renderer && typeof renderer.renderSource === 'function'
         ? renderer.renderSource(state.resource)
         : `<div class="gpi-preview-state error">${esc(tr('Literature renderer unavailable', '文献渲染器不可用'))}</div>`;
@@ -395,7 +395,7 @@
       body = `<div data-gpi-workbench-mount></div>`;
     } else if (state.mode === 'structured' && isStructuredArtifact()) {
       const renderer = window.AGENT_RENDER;
-      const literature = window.EU_GUIDED_PI_LITERATURE;
+      const literature = window.EasyICU.guidedPi.require('literature');
       const report = researchReportOwner();
       body = isResearchReport() && report && typeof report.render === 'function'
         ? report.render(state.payload || {})
@@ -412,7 +412,7 @@
         : `<pre class="gpi-preview-code" tabindex="0"><code>${esc(JSON.stringify(state.payload || {}, null, 2))}</code></pre>`;
     } else if (state.mode === 'evidence' && activeEvidenceTab()) {
       const item = activeEvidenceTab();
-      const renderer = window.EU_GUIDED_PI_EVIDENCE_PREVIEW;
+      const renderer = window.EasyICU.guidedPi.require('evidencePreview');
       body = item.loading
         ? `<div class="gpi-preview-state"><span class="gpi-preview-spinner"></span>${tr('Loading digest-pinned evidence…', '正在加载摘要锁定的证据…')}</div>`
         : item.error
@@ -468,8 +468,8 @@
       <div class="gpi-preview-body">${body}</div>`;
     if (state.mode === 'workbench' && (isDataPackageReview() || isDataWorkbenchSnapshot()) && !state.loading && !state.error) {
       const owner = isDataWorkbenchSnapshot()
-        ? window.EU_GUIDED_PI_DATA_PREVIEW
-        : window.EU_GUIDED_PI_WORKBENCH_PREVIEW;
+        ? window.EasyICU.guidedPi.require('dataPreview')
+        : window.EasyICU.guidedPi.require('workbenchPreview');
       const mount = state.host.querySelector('[data-gpi-workbench-mount]');
       if (owner && typeof owner.mount === 'function') owner.mount(mount, state.payload || {}, state.resource.view);
     }
@@ -489,7 +489,7 @@
     const evidenceId = String(button.dataset.evidenceId || '').trim();
     const sha256 = String(button.dataset.evidenceSha256 || '').trim().toLowerCase();
     if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return;
-    const renderer = window.EU_GUIDED_PI_EVIDENCE_PREVIEW;
+    const renderer = window.EasyICU.guidedPi.require('evidencePreview');
     const claimPanel = typeof button.closest === 'function' ? button.closest('[data-gpi-claim-panel]') : null;
     state.activeClaimId = String(button.dataset.gpiClaim || (claimPanel && claimPanel.dataset.gpiClaimPanel) || state.activeClaimId || '').trim();
     const label = String(button.dataset.evidenceLabel || evidenceId).slice(0, 160);
@@ -546,7 +546,7 @@
         }
         payload = await api.loadPiCopilotLiteratureSource(state.resource.pmid);
       } else if (isDemoArtifact()) {
-        const demo = window.EU_GUIDED_PI_DEMO;
+        const demo = window.EasyICU.guidedPi.optional('demo');
         if (!demo || typeof demo.artifact !== 'function') throw new Error(tr('The product-demo artifact owner is unavailable.', '产品演示产物 owner 不可用。'));
         const item = typeof demo.previewArtifact === 'function'
           ? await demo.previewArtifact(state.resource.artifact)
@@ -753,5 +753,5 @@
     if (panel) panel.scrollIntoView({ block: 'nearest' });
   }
 
-  window.EU_GUIDED_PI_PREVIEW = { mount, open, close, clearProject, setWorkflowContext };
+  window.EasyICU.guidedPi.declare('preview', { mount, open, close, clearProject, setWorkflowContext });
 })();

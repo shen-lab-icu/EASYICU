@@ -38,5 +38,5 @@
     </header>`;
   }
 
-  window.EU_GUIDED_PI_HEADER = { render };
+  window.EasyICU.guidedPi.declare('header', { render });
 })();

@@ -73,8 +73,9 @@
         const resource = event.target.closest('[data-gpi-resource-kind]');
         if (resource) {
           const descriptor = RESOURCE_OWNER.fromButton(resource);
-          if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
-            window.EU_GUIDED_PI_PREVIEW.open(
+          const preview = window.EasyICU.guidedPi.optional('preview');
+          if (preview && preview.open) {
+            preview.open(
               descriptor, projectId(), previewWorkflowContext(),
             );
             const artifact = String((descriptor && descriptor.artifact) || '');
@@ -210,8 +211,9 @@
           state.editingMessageId = '';
           state.pendingEntryIntent = '';
           rememberSession('');
-          if (window.EU_GUIDED_PI_PROJECT && window.EU_GUIDED_PI_PROJECT.syncLocation) {
-            window.EU_GUIDED_PI_PROJECT.syncLocation(projectId(), '');
+          const project = window.EasyICU.guidedPi.optional('project');
+          if (project && project.syncLocation) {
+            project.syncLocation(projectId(), '');
           }
           render();
         }
@@ -298,5 +300,5 @@
     return Object.freeze({ dismissHeaderOverflow, wire });
   }
 
-  window.EU_GUIDED_PI_EVENTS = Object.freeze({ create });
+  window.EasyICU.guidedPi.declare('events', { create });
 })();

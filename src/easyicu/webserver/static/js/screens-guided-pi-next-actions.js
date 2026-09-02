@@ -384,5 +384,5 @@
     return `<section class="gpi-next-step" aria-label="${title}"><strong>${title}</strong><p>${esc(prompt)}</p>${actions}</section>`;
   }
 
-  window.EU_GUIDED_PI_NEXT_ACTIONS = { bodyText, project, render, renderPast, governedPlanGrants };
+  window.EasyICU.guidedPi.declare('nextActions', { bodyText, project, render, renderPast, governedPlanGrants });
 })();

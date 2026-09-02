@@ -15,6 +15,9 @@ def _read(relative: str) -> str:
     return (STATIC / relative).read_text(encoding="utf-8")
 
 
+MODULES_SOURCE = _read("js/screens-guided-pi-modules.js")
+
+
 def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> None:
     node = shutil.which("node")
     if node is None:
@@ -23,6 +26,7 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const host = {{
         tr: (en, zh) => zh || en,
@@ -34,7 +38,7 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
         session: () => ({{ archived_child_jobs: [] }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       const spec = confirmation.workflowConfirmation();
       process.stdout.write(JSON.stringify({{
         title: spec.title,
@@ -107,6 +111,7 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const host = {{
         tr: (en, zh) => zh || en,
@@ -128,7 +133,7 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
         }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
     completed = subprocess.run(
@@ -158,6 +163,7 @@ def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'operator_plan_approval_required',
@@ -188,7 +194,7 @@ def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
         }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
     completed = subprocess.run(
@@ -217,6 +223,7 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
@@ -233,7 +240,7 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
         session: () => ({{ archived_child_jobs: [], binding: {{ run_id: 'run-test' }} }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
     rendered = subprocess.run(
@@ -256,6 +263,7 @@ def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> Non
     owner = _read("js/screens-guided-pi-confirmation.js")
     script = f"""
       global.window = {{}};
+      eval({MODULES_SOURCE!r});
       eval({owner!r});
       const workflow = {{
         next_action_code: 'plan_scientific_changes_required',
@@ -276,7 +284,7 @@ def test_repeated_stay_review_offers_one_typed_decision_and_cohort_edit() -> Non
         session: () => ({{ archived_child_jobs: [], binding: {{ run_id: 'run-test' }} }}),
         busy: () => false,
       }};
-      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create(host);
+      const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
     rendered = subprocess.run(

@@ -453,5 +453,5 @@
     </div>`;
   }
 
-  window.EU_GUIDED_PI_LITERATURE = { renderArtifact, renderSource, safeUrl };
+  window.EasyICU.guidedPi.declare('literature', { renderArtifact, renderSource, safeUrl });
 })();

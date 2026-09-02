@@ -35,27 +35,41 @@ CONTRACTS: dict[str, list[str]] = {
     "crossdb_setup_owner.test.js": ["screens-viz-crossdb-setup.js"],
     "crossdb_source_choice.test.js": ["screens-viz-crossdb-source.js"],
     "e2_reports_security.test.js": [
+        "screens-guided-pi-modules.js",
         "screens-guided-pi-analysis-report.js",
         "screens-guided-pi-article-report.js",
     ],
-    "extraction_embedded_scroll.test.js": ["screens-extraction-embedded.js"],
-    "extraction_embedded_handoff.test.js": ["screens-extraction-embedded.js"],
+    "extraction_embedded_scroll.test.js": [
+        "screens-guided-pi-modules.js",
+        "screens-extraction-embedded.js",
+    ],
+    "extraction_embedded_handoff.test.js": [
+        "screens-guided-pi-modules.js",
+        "screens-extraction-embedded.js",
+    ],
     "extraction_icd_source_binding.test.js": ["screens-icd.js"],
-    "evidence_preview_security.test.js": ["screens-guided-pi-evidence-preview.js"],
+    "evidence_preview_security.test.js": [
+        "screens-guided-pi-modules.js",
+        "screens-guided-pi-evidence-preview.js",
+    ],
     "extraction_job_continuity.test.js": ["screens-extraction-job-continuity.js"],
     "extraction_study_roundtrip.test.js": ["screens-extraction-study-context.js"],
     "guided_gate_state.test.js": ["screens-guided-contracts.js"],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],
-    # Loads the plan-confirmation owner itself; takes no arguments.
+    # Loads the module registry and plan-confirmation owner itself; takes no arguments.
     "guided_plan_resource_authority.test.js": [],
+    "guided_pi_modules.test.js": ["screens-guided-pi-modules.js"],
     "viz_embedded_workbench.test.js": [],
     "guided_idea_flow.test.js": ["screens-guided-idea.js"],
     "guided_project_handoff.test.js": [
         "product-labels.js",
         "screens-guided-projects.js",
     ],
-    "guided_workflow_copy.test.js": ["screens-guided-pi-aside.js"],
+    "guided_workflow_copy.test.js": [
+        "screens-guided-pi-modules.js",
+        "screens-guided-pi-aside.js",
+    ],
     "guided_side_panels.test.js": ["screens-guided-panels.js"],
     # Reads the whole js/ directory itself; takes no arguments.
     "job_continuity_404.test.js": [],
@@ -97,6 +111,7 @@ CONTRACTS: dict[str, list[str]] = {
         "product-labels.js",
     ],
     "technical_report_security.test.js": [
+        "screens-guided-pi-modules.js",
         "screens-guided-pi-technical-report.js"
     ],
 }

@@ -108,7 +108,7 @@
     return target ? String(target.dataset.gpiDataSourceAction || '') : '';
   }
 
-  window.EU_GUIDED_PI_DATA_CONSENT = {
+  window.EasyICU.guidedPi.declare('dataConsent', {
     authorization,
     requiresConfirmation,
     selectionInProgress,
@@ -116,5 +116,5 @@
     renderPast,
     render,
     actionFromEvent,
-  };
+  });
 })();

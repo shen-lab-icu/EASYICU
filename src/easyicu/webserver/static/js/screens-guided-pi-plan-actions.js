@@ -435,5 +435,5 @@
     });
   }
 
-  window.EU_GUIDED_PI_PLAN_ACTIONS = Object.freeze({ create });
+  window.EasyICU.guidedPi.declare('planActions', { create });
 })();

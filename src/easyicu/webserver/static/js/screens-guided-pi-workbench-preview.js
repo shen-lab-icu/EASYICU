@@ -163,5 +163,5 @@
     if (status) status.addEventListener('change', () => { view.status = status.value; repaint(); });
   }
 
-  window.EU_GUIDED_PI_WORKBENCH_PREVIEW = { mount };
+  window.EasyICU.guidedPi.declare('workbenchPreview', { mount });
 })();

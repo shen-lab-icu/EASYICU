@@ -10,8 +10,10 @@ function confirmation(review) {
   const context = { window: {} };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+    '../../src/easyicu/webserver/static/js/screens-guided-pi-modules.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname,
     '../../src/easyicu/webserver/static/js/screens-guided-pi-confirmation.js'), 'utf8'), context);
-  return context.window.EU_GUIDED_PI_CONFIRMATION.create({
+  return context.window.EasyICU.guidedPi.require('confirmation').create({
     workflow: () => ({ next_action_code: 'plan_scientific_changes_required', plan_review_summary: review }),
     session: () => ({ binding: { run_id: 'newer-failed-child' }, archived_child_jobs: [] }),
     tr: en => en, esc: String, iconHtml: () => '', resourceButton: () => '',

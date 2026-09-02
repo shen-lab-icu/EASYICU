@@ -227,11 +227,11 @@
     });
   }
 
-  window.EU_GUIDED_PI_REPLAY = {
+  window.EasyICU.guidedPi.declare('replay', {
     hydrate,
     lifecycleTurns,
     childJobPresentation,
     preferredSessionId,
     retryFailedExecution,
-  };
+  });
 })();

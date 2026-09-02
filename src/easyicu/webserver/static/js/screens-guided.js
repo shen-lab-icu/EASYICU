@@ -2006,7 +2006,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) {
           if (window.EU_GUIDED_PROJECT_CONTINUITY) window.EU_GUIDED_PROJECT_CONTINUITY.forget(row.id);
           selectedGuidedDraft = null;
-          if (window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) window.EU_GUIDED_PI.bindProject(null);
+          const copilot = window.EasyICU.guidedPi.optional('shell');
+          if (copilot && copilot.bindProject) copilot.bindProject(null);
         }
       }
       if (window.EU_GUIDED_PROJECTS && window.EU_GUIDED_PROJECTS.setProjectManagement) {
@@ -2284,9 +2285,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function piProjectShellActive() {
     return !!(
-      window.EU_GUIDED_PI &&
-      window.EU_GUIDED_PI.isActive &&
-      window.EU_GUIDED_PI.isActive()
+      window.EasyICU.guidedPi.optional('shell') &&
+      window.EasyICU.guidedPi.require('shell').isActive &&
+      window.EasyICU.guidedPi.require('shell').isActive()
     );
   }
   function bindProjectToPi(result, row) {
@@ -2299,11 +2300,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       (row && (row.question || row.study_id || row.run_label)) || projectId,
     );
     let binding = null;
-    if (projectId && window.EU_GUIDED_PI && window.EU_GUIDED_PI.bindProject) {
+    const copilot = window.EasyICU.guidedPi.optional('shell');
+    if (projectId && copilot && copilot.bindProject) {
       if (window.EU_GUIDED_PROJECT_CONTINUITY) {
         window.EU_GUIDED_PROJECT_CONTINUITY.remember(projectId);
       }
-      binding = window.EU_GUIDED_PI.bindProject({ id: projectId, title });
+      binding = copilot.bindProject({ id: projectId, title });
     }
     renderAside();
     renderSessions();
@@ -3431,11 +3433,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderGuidedFolderDialog();
       renderGuidedDraftRemovalDialog();
       renderAside();
-      if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.mount) {
-        window.EU_GUIDED_PI_PREVIEW.mount(root.querySelector('#gdPreviewAside'));
+      const preview = window.EasyICU.guidedPi.optional('preview');
+      if (preview && preview.mount) {
+        preview.mount(root.querySelector('#gdPreviewAside'));
       }
       renderSessions();
-      const piOwner = window.EU_GUIDED_PI;
+      const piOwner = window.EasyICU.guidedPi.require('shell');
       let piReady = Promise.resolve();
       if (piOwner && piOwner.mount) {
         if (piOwner.setProjectDiscoveryLoading) piOwner.setProjectDiscoveryLoading(true);

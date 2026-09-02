@@ -557,8 +557,8 @@
   function hasArtifact(name) { return Object.prototype.hasOwnProperty.call(artifacts(), String(name || '')); }
   function artifactLabel(name) { const item = artifacts()[String(name || '')]; return item ? item.title : String(name || ''); }
 
-  window.EU_GUIDED_PI_DEMO = {
+  window.EasyICU.guidedPi.declare('demo', {
     messages, workflow, artifact, previewArtifact, hasArtifact, artifactLabel,
     reviewResources, primaryDocument: () => reviewResources()[0], sourceRunId: SOURCE_RUN_ID,
-  };
+  });
 })();

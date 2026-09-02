@@ -76,5 +76,7 @@
     return null;
   }
 
-  window.EU_GUIDED_PI_STARTERS = { render, actionFromEvent, actionFromDiscoveryChoice };
+  window.EasyICU.guidedPi.declare('starters', {
+    render, actionFromEvent, actionFromDiscoveryChoice,
+  });
 })();

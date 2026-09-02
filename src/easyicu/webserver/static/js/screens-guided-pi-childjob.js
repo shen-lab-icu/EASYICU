@@ -112,7 +112,7 @@
         completeRunningPipelineSteps(activity);
         const gate = event.result && event.result.gate;
         const pending = Boolean(event.result && event.result.human_review_pending);
-        const replayOwner = window.EU_GUIDED_PI_REPLAY;
+        const replayOwner = window.EasyICU.guidedPi.require('replay');
         const errorCode = String(event.error || '').split(':', 1)[0].trim();
         const presentation = replayOwner && typeof replayOwner.childJobPresentation === 'function'
           ? replayOwner.childJobPresentation({
@@ -226,7 +226,7 @@
       const activity = childActivity(jobId, String(job.kind || ''));
       activity.childJobPlanAttempt = isPlanAttempt(job);
       activity.childJobCreatedAt = Number(job.created_at_epoch);
-      const replayOwner = window.EU_GUIDED_PI_REPLAY;
+      const replayOwner = window.EasyICU.guidedPi.require('replay');
       const presentation = replayOwner && typeof replayOwner.childJobPresentation === 'function'
         ? replayOwner.childJobPresentation(job, tr) : {};
       activity.expanded = activity.status === 'running' || Boolean(presentation.expanded);
@@ -283,5 +283,5 @@
     };
   }
 
-  window.EU_GUIDED_PI_CHILDJOB = { create };
+  window.EasyICU.guidedPi.declare('childJob', { create });
 })();
