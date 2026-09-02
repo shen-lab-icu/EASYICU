@@ -3555,14 +3555,39 @@ def _validated_execution_retry_config(
     from easyicu.research_agent.orchestration.config import PipelineConfig
 
     if recovery_seed is None:
-        if current_config.canonical_digest() != target.pipeline_config_sha256:
-            raise ResearchPipelineRunError(
-                "research_pipeline_execution_retry_recovery_seed_missing",
-                "The approved run's exact recovery configuration is missing and "
-                "the rebuilt configuration does not match its checkpoint; "
-                "generate a new plan.",
+        candidates = [current_config]
+        # A live-search plan may bind its retrieved literature into StudyContext
+        # after approval. Rebuilding from that updated context selects the
+        # no-search profile, even though the approved config used the live-search
+        # profile. Reconstruct that one known pre-approval variant and let the
+        # checkpoint digest decide; the resumed pipeline reuses the registered
+        # exact literature and performs no second retrieval.
+        from easyicu.research_agent.orchestration.profiles import (
+            get_submission_profile,
+        )
+
+        live_profile = get_submission_profile(
+            _submission_profile_ref(
+                budget_mode="full_reviewed",
+                live_pubmed=True,
             )
-        return current_config
+        )
+        live_payload = current_config.recovery_payload()
+        live_payload.update(live_profile.pipeline_options())
+        live_payload["bound_preplan_literature"] = None
+        try:
+            candidates.append(PipelineConfig(**live_payload))
+        except (TypeError, ValueError):
+            pass
+        for candidate in candidates:
+            if candidate.canonical_digest() == target.pipeline_config_sha256:
+                return candidate
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_recovery_seed_missing",
+            "The approved run's exact recovery configuration is missing and "
+            "the bounded reconstructed variants do not match its checkpoint; "
+            "generate a new plan.",
+        )
     if (
         recovery_seed.scientific_configuration_sha256
         != current_scientific_digest

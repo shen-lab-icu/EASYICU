@@ -244,6 +244,47 @@ def test_execution_retry_rejects_missing_seed_when_checkpoint_digest_drifted(
     )
 
 
+def test_execution_retry_reconstructs_approved_live_search_profile(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.profiles import get_submission_profile
+    from easyicu.webserver.research_launch_runtime import _submission_profile_ref
+
+    wrapper = tmp_path / "projects" / "study" / "run-wrapper"
+    no_search = get_submission_profile(
+        _submission_profile_ref(budget_mode="full_reviewed", live_pubmed=False)
+    )
+    live_search = get_submission_profile(
+        _submission_profile_ref(budget_mode="full_reviewed", live_pubmed=True)
+    )
+    current = PipelineConfig(
+        workdir=wrapper / "pipeline",
+        **no_search.pipeline_options(),
+    )
+    approved = PipelineConfig(
+        workdir=wrapper / "pipeline",
+        **live_search.pipeline_options(),
+    )
+    target = agent_pipeline_runs._ExecutionResumeTarget(
+        wrapper_dir=wrapper.resolve(),
+        pipeline_run_id="run-analysis",
+        pipeline_config_sha256=approved.canonical_digest(),
+    )
+
+    restored = agent_pipeline_runs._validated_execution_retry_config(
+        current_config=current,
+        target=target,
+        recovery_seed=None,
+        current_scientific_digest="a" * 64,
+        prepared_package_binding=None,
+    )
+
+    assert restored.canonical_digest() == approved.canonical_digest()
+    assert restored.enable_pubmed is True
+    assert restored.bound_preplan_literature is None
+
+
 def test_failed_projection_keeps_retry_seed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
