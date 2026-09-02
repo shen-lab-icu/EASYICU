@@ -101,6 +101,7 @@ from .writer_evidence import (
     _render_writer_evidence_digest_v2,
 )
 from .writer_evidence_repair import decide_writer_evidence_repairs
+from .writer_repair_decision import drop_every_sentence
 from ..replication.notebook import (
     NotebookStep,
     build_notebook,
@@ -286,13 +287,8 @@ def _deterministically_drop_rejected_writer_sentences(
         while (span := _writer_repair_target_span(repaired, sentence)) is not None:
             repaired = repaired[: span[0]] + repaired[span[1] :]
     applied = [
-        {
-            "index": index,
-            "action": "drop",
-            "evidence_ids": [],
-            "sentence": sentence[:500],
-        }
-        for index, sentence in enumerate(sentences)
+        {**decision.as_dict(), "sentence": sentence[:500]}
+        for decision, sentence in zip(drop_every_sentence(len(sentences)), sentences)
     ]
     return repaired, applied
 
@@ -392,14 +388,10 @@ def _drop_residual_strict_writer_sentences(
         rejected = [*result_sentences, *claim_sentences]
         if not rejected:
             raise
-        drop_decisions = [
-            {"index": index, "action": "drop", "evidence_ids": []}
-            for index in range(len(rejected))
-        ]
         cleaned, applied = _apply_writer_evidence_repair_decisions(
             scaffold,
             missing_sentences=rejected,
-            decisions=drop_decisions,
+            decisions=drop_every_sentence(len(rejected)),
             allowed_claim_refs=(),
         )
         # Fail closed if anything outside the exact first-gate rejection set
