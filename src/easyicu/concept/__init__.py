@@ -494,6 +494,7 @@ from .errors import (  # noqa: F401
     ConceptError,
     ConceptExtractionUnavailable,
 )
+from .relative_time import coerce_mixed_time_column
 
 
 
@@ -5113,36 +5114,17 @@ class ConceptResolver:
                         if 'time' in key.lower() or key == 'charttime':
                             # Bug 32 fix: DuckDB返回float64(相对小时)，非DuckDB返回datetime64
                             # concat后变为object dtype — 统一为float
-                            original = combined[key]
-                            numeric_vals = pd.to_numeric(original, errors='coerce')
-                            dt_mask = numeric_vals.isna() & original.notna()
-                            if dt_mask.any():
-                                dt_vals = pd.to_datetime(original[dt_mask], errors='coerce')
-                                if dt_vals.notna().any():
-                                    # 加载 intime 以转换 datetime → 相对小时
-                                    intime_col = None
-                                    if 'intime' in combined.columns:
-                                        intime_col = pd.to_datetime(combined.loc[dt_mask, 'intime'], errors='coerce')
-                                    else:
-                                        try:
-                                            icu_tbl = data_source.load_table('icustays',
-                                                columns=[id_columns[0], 'intime'], verbose=False)
-                                            icu_df = icu_tbl.data if hasattr(icu_tbl, 'data') else icu_tbl
-                                            if pd.api.types.is_datetime64_any_dtype(icu_df['intime']):
-                                                if hasattr(icu_df['intime'].dt, 'tz') and icu_df['intime'].dt.tz is not None:
-                                                    icu_df['intime'] = icu_df['intime'].dt.tz_localize(None)
-                                            combined = combined.merge(
-                                                icu_df[[id_columns[0], 'intime']], on=id_columns[0], how='left')
-                                            intime_col = pd.to_datetime(combined.loc[dt_mask, 'intime'], errors='coerce')
-                                        except Exception:
-                                            pass
-                                    if intime_col is not None:
-                                        if hasattr(intime_col.dt, 'tz') and intime_col.dt.tz is not None:
-                                            intime_col = intime_col.dt.tz_localize(None)
-                                        if hasattr(dt_vals.dt, 'tz') and dt_vals.dt.tz is not None:
-                                            dt_vals = dt_vals.dt.tz_localize(None)
-                                        rel_hours = np.floor((dt_vals - intime_col).dt.total_seconds() / 3600.0)
-                                        numeric_vals.loc[dt_mask] = rel_hours
+                            combined, numeric_vals = coerce_mixed_time_column(
+                                combined,
+                                key,
+                                concept_id=concept_name,
+                                database=(
+                                    getattr(getattr(data_source, 'config', None), 'name', '')
+                                    or 'unknown'
+                                ),
+                                id_columns=id_columns,
+                                data_source=data_source,
+                            )
                             combined[key] = numeric_vals
         combined = combined.reset_index(drop=True)
         agg_value = self._coerce_final_aggregator(aggregator)
