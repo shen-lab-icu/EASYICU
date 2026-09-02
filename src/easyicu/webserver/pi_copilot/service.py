@@ -40,7 +40,7 @@ from easyicu.webserver.copilot_data_workbench import (
 )
 
 from .plan_projection import project_plan_reader_fields
-from . import cohort_eligibility, plan_decisions
+from . import cohort_eligibility, plan_decisions, plan_review_progress
 from .contracts import (
     MAX_MESSAGE_CHARS,
     AuthorityBinding,
@@ -2679,7 +2679,7 @@ class PiCopilotService:
             and item.get("requires_user_authorization") is True
         }
         clean_code = str(decision_code or "").strip()
-        if clean_code not in authorized_codes:
+        if clean_code not in authorized_codes or plan_decisions.decision_is_resolved(context, clean_code):
             raise PiCopilotError(
                 "plan_decision_not_required_by_review",
                 "The selected decision is not an unresolved human choice in this review.",
@@ -2694,6 +2694,7 @@ class PiCopilotService:
                 status_code=409,
             )
         try:
+            plan_review_progress.validate_choice_source(context, row)
             compiled = plan_decisions.compile_plan_decision(
                 decision_code=clean_code,
                 option_id=option_id,
@@ -2705,6 +2706,10 @@ class PiCopilotService:
                 expected_revision=current_revision,
                 require_revision=True,
                 lifecycle_write=False,
+            )
+            plan_review_progress.record_choice(
+                before=context, after=updated, run=row,
+                decision_code=clean_code, option_id=option_id,
             )
         except plan_decisions.PlanDecisionError as exc:
             raise PiCopilotError(
