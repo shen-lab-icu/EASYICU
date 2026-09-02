@@ -1,5 +1,7 @@
 /* Copilot right-preview adapter for the native Data Extraction owner. */
 (function () {
+  const { esc } = window.EU_HTML;
+
   let host = null;
   let options = {};
   let sourceBindingCoordinate = '';
@@ -19,12 +21,6 @@
     ].join(':');
   }
 
-  function escapeHtml(value) {
-    return String(value == null ? '' : value).replace(/[&<>"']/g, character => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    })[character]);
-  }
-
   function jobSummary(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return '';
     const status = String(snapshot.status || 'running');
@@ -34,9 +30,9 @@
     const tone = status === 'done' ? 'ok' : (status === 'failed' || status === 'cancelled' ? 'bad' : 'info');
     return `<div class="note ${tone} gpi-extraction-job" role="status">
       <div class="ico">${icon(status === 'done' ? 'check' : (tone === 'bad' ? 'alert' : 'activity'), 14)}</div>
-      <div class="body"><div class="t">${escapeHtml(status === 'done' ? t('Extraction completed', '数据提取已完成') : status === 'running' ? t('Extraction is running', '数据提取正在运行') : t('Extraction task stopped', '数据提取任务已停止'))}</div>
-      <div class="d">${escapeHtml((latest && (latest.message || latest.step)) || t('The live details also remain in the Copilot activity timeline.', '实时详情也会保留在 Copilot 活动时间线中。'))}</div>
-      ${status === 'done' ? `<div class="gpi-extraction-job-metrics"><span>${t('Rows', '行数')} <b>${escapeHtml(result.total_rows == null ? '—' : result.total_rows)}</b></span><span>${t('Data files', '数据文件')} <b>${escapeHtml(result.file_count == null ? (result.files_written == null ? '—' : result.files_written) : result.file_count)}</b></span></div>` : ''}
+      <div class="body"><div class="t">${esc(status === 'done' ? t('Extraction completed', '数据提取已完成') : status === 'running' ? t('Extraction is running', '数据提取正在运行') : t('Extraction task stopped', '数据提取任务已停止'))}</div>
+      <div class="d">${esc((latest && (latest.message || latest.step)) || t('The live details also remain in the Copilot activity timeline.', '实时详情也会保留在 Copilot 活动时间线中。'))}</div>
+      ${status === 'done' ? `<div class="gpi-extraction-job-metrics"><span>${t('Rows', '行数')} <b>${esc(result.total_rows == null ? '—' : result.total_rows)}</b></span><span>${t('Data files', '数据文件')} <b>${esc(result.file_count == null ? (result.files_written == null ? '—' : result.files_written) : result.file_count)}</b></span></div>` : ''}
       </div><button class="btn sm ghost" type="button" data-gpi-extraction-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
     </div>`;
   }
@@ -49,9 +45,9 @@
 
     const summary = owner.setupSummary();
     const meta = [
-      `${t('Cohort', '队列')} · <b>${escapeHtml(summary.cohort || '—')}</b>`,
-      `${t('Modules', '模块')} · <b>${escapeHtml(summary.moduleCount == null ? 0 : summary.moduleCount)}</b>`,
-      `${t('Concepts', '概念')} · <b>${escapeHtml(summary.conceptCount == null ? 0 : summary.conceptCount)}</b>`,
+      `${t('Cohort', '队列')} · <b>${esc(summary.cohort || '—')}</b>`,
+      `${t('Modules', '模块')} · <b>${esc(summary.moduleCount == null ? 0 : summary.moduleCount)}</b>`,
+      `${t('Concepts', '概念')} · <b>${esc(summary.conceptCount == null ? 0 : summary.conceptCount)}</b>`,
     ].map(row => `<span>${row}</span>`).join('');
     const run = custom.querySelector('[data-ex-run="custom"]');
     const runDisabled = !summary.runnable || !run || run.disabled;
@@ -104,7 +100,7 @@
     const source = snapshot.data_source || {};
     express.innerHTML = `<div class="cfg-head">
       <div class="cfg-ico">${icon('db', 17)}</div>
-      <div class="grow"><div class="cfg-h">${t('Data source identified', '已识别数据来源')}</div><div class="cfg-sub">${escapeHtml(source.label || source.database || '—')}</div></div>
+      <div class="grow"><div class="cfg-h">${t('Data source identified', '已识别数据来源')}</div><div class="cfg-sub">${esc(source.label || source.database || '—')}</div></div>
     </div>
     <div class="cfg-body">
       <div class="note info"><div class="ico">${icon('shield', 14)}</div><div class="body">
@@ -148,9 +144,9 @@
         <div><span>${sourceBinding ? t('Local data', '本地数据') : t('Native Data Extraction', '原生数据提取')}</span><strong>${sourceBinding ? t('Bind one source before the research conversation', '开始研究对话前先绑定一个数据来源') : t('The same owner as Classic Workspace', '与经典工作台共用同一个功能 owner')}</strong></div>
         <div class="row gap-8">${extractionActions}</div>
       </div>
-      ${options.syncReceipt ? `<div class="note ok gpi-extraction-sync-receipt" role="status"><div class="ico">${icon('check', 13)}</div><div class="body"><div class="t">${t('Synced to Copilot', '已同步到 Copilot')}</div><div class="d">${escapeHtml(syncReceiptMessage)}</div></div></div>` : ''}
-      ${options.syncError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Copilot sync failed', 'Copilot 同步失败')}</div><div class="d">${escapeHtml(options.syncError)}</div></div></div>` : ''}
-      ${options.downloadError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Download blocked', '下载已阻止')}</div><div class="d">${escapeHtml(options.downloadError)}</div></div></div>` : ''}
+      ${options.syncReceipt ? `<div class="note ok gpi-extraction-sync-receipt" role="status"><div class="ico">${icon('check', 13)}</div><div class="body"><div class="t">${t('Synced to Copilot', '已同步到 Copilot')}</div><div class="d">${esc(syncReceiptMessage)}</div></div></div>` : ''}
+      ${options.syncError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Copilot sync failed', 'Copilot 同步失败')}</div><div class="d">${esc(options.syncError)}</div></div></div>` : ''}
+      ${options.downloadError ? `<div class="note bad" role="alert"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Download blocked', '下载已阻止')}</div><div class="d">${esc(options.downloadError)}</div></div></div>` : ''}
       ${jobSummary(options.jobSnapshot)}
       <div class="gpi-extraction-native">${owner.render()}</div>
     </div>`;

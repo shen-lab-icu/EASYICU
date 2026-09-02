@@ -2,18 +2,10 @@
 (function () {
   'use strict';
 
+  const { esc } = window.EU_HTML;
+
   function text(en, zh) {
     return window.EU_LANG === 'zh' ? zh : en;
-  }
-
-  function escapeHtml(value) {
-    return String(value == null ? '' : value).replace(/[&<>"']/g, character => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    })[character]);
   }
 
   function registeredPaths() {
@@ -80,7 +72,7 @@
       : [];
     if (!sources.length || snapshot.error || snapshot.job) {
       return sourceOwner && typeof sourceOwner.render === 'function'
-        ? sourceOwner.render({ t: text, esc: escapeHtml }, { scope: 'crossdb', showFallback: false })
+        ? sourceOwner.render({ t: text, esc }, { scope: 'crossdb', showFallback: false })
         : `<div class="note warn"><div class="body"><div class="d">${text('Official demo-source controls are unavailable.', '官方演示数据源控件暂不可用。')}</div></div></div>`;
     }
     return `<div class="crossdb-demo-pair" data-official-demo-sources data-demo-source-scope="crossdb">
@@ -93,18 +85,18 @@
           <div class="crossdb-demo-source-main">
             <span class="crossdb-demo-source-icon">DB</span>
             <div>
-              <small>${escapeHtml(provenance.provider || 'PhysioNet')} · ${escapeHtml(source.version || '')}</small>
-              <b>${escapeHtml(source.title || source.id)}</b>
-              <span>${escapeHtml(officialScope(source))} · ${escapeHtml(download.size_label || '')} · ${escapeHtml(source.database || '')}</span>
+              <small>${esc(provenance.provider || 'PhysioNet')} · ${esc(source.version || '')}</small>
+              <b>${esc(source.title || source.id)}</b>
+              <span>${esc(officialScope(source))} · ${esc(download.size_label || '')} · ${esc(source.database || '')}</span>
             </div>
           </div>
           <div class="crossdb-demo-source-action">
-            <span class="pill ${status.tone}">${escapeHtml(status.label)}</span>
-            ${status.active ? '' : `<button class="btn sm" type="button" data-demo-source-prepare="${escapeHtml(source.id)}">${text('Prepare', '准备数据')}</button>`}
+            <span class="pill ${status.tone}">${esc(status.label)}</span>
+            ${status.active ? '' : `<button class="btn sm" type="button" data-demo-source-prepare="${esc(source.id)}">${text('Prepare', '准备数据')}</button>`}
           </div>
           <details>
             <summary>${text('License & provenance', '许可与溯源')}</summary>
-            <p>${escapeHtml(license.name || 'ODbL 1.0')} · ${text('deidentified real records', '去标识化真实记录')}</p>
+            <p>${esc(license.name || 'ODbL 1.0')} · ${text('deidentified real records', '去标识化真实记录')}</p>
           </details>
         </article>`;
       }).join('')}
