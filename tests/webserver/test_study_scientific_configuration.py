@@ -114,6 +114,33 @@ def test_decision_state_and_patch_helpers_have_one_owner() -> None:
     ]
 
 
+def test_repeated_stay_decision_requires_matching_typed_design() -> None:
+    stale = ScientificConfiguration.inspect(
+        {
+            "cohort": {"exclude_readmissions": False},
+            "analysis_design": {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "model_based",
+            },
+            "confirmations": {"plan_repeated_stays_clustered": True},
+        }
+    )
+    clustered = ScientificConfiguration.inspect(
+        {
+            "cohort": {"exclude_readmissions": False},
+            "analysis_design": {
+                "analysis_unit": "icu_stay",
+                "variance_estimator": "cluster_robust",
+                "cluster_unit": "patient",
+            },
+            "confirmations": {"plan_repeated_stays_clustered": True},
+        }
+    )
+
+    assert not stale.decision_is_resolved("REPEATED_STAY_IDENTITY_UNAVAILABLE")
+    assert clustered.decision_is_resolved("REPEATED_STAY_IDENTITY_UNAVAILABLE")
+
+
 def test_owner_has_no_adapter_or_runtime_dependency() -> None:
     source = Path("src/easyicu/webserver/study_scientific_configuration.py").read_text(
         encoding="utf-8"
