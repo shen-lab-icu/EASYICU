@@ -1,5 +1,44 @@
 # Figure 2 ICU Research Agent benchmark v2
 
+## 2026-09-01 design freeze
+
+The prospective paper design is frozen in `experiment_protocol_v2.json` and
+`design_freeze_manifest_v2.json`.  It replaces the future formal design in the
+historical aware-only v1 protocol without modifying or reinterpreting any prior
+development evidence.  The frozen paper program separates three questions:
+
+1. deterministic six-database substrate validation without LLM trajectories;
+2. a paired 27-task comparison of `easyicu_full` with a matched
+   `generic_code_agent` using the same model and scientifically equivalent data;
+3. a paired 12-task challenge set for prespecified fail-closed behavior.
+
+The core design contains 78 formal runs.  A prespecified nine-task repeatability
+stage adds 36 runs only after the core batch.  The primary endpoint is binary
+task-level `reportable_without_postrun_repair`; rubric subitems and artifacts are
+not independent sample-size units.
+
+This is a **design freeze, not a formal-run freeze**.  Provider, Planner, formal
+batch, and paper-result authority remain false until fresh inputs, Safety12
+fixtures, dual human sign-off, exact clean code/image/model/provider identities,
+budgets, network policy, CI, and the atomic batch declaration are sealed.  Run:
+
+```bash
+python -c "from benchmarks.figure2_icu_agent_v2.freeze_v2 import validate_design_freeze; print(validate_design_freeze())"
+```
+
+The v2 design assets are:
+
+- `heldout27_evaluation_rubric_v1.json` — implementation-neutral primary and
+  secondary evaluation contract;
+- `statistical_analysis_plan_v1.json` — paired analysis, denominator, retry,
+  reliability, and interpretation rules;
+- `formal_safety12_taskbank_v1.jsonl` and `formal_safety12_rubric_v1.json` —
+  twelve distinct end-to-end challenge categories;
+- `data_platform_validation_protocol_v1.json` — deterministic data-foundation
+  validation, kept outside the LLM A/B denominator;
+- `freeze_v2.py` — fail-closed identity, digest, schedule, and authority
+  validator.
+
 This directory is the versioned experiment owner for the Biomni-aligned EasyICU
 evaluation design:
 
@@ -21,15 +60,18 @@ or effect direction.
 
 ## Owner and public contract
 
-`protocol.py` owns strict loading and validation of:
+`protocol.py` continues to own strict loading and validation of the historical
+v1 bundle:
 
 - `action_space_v1.json` — the 11-stage research workflow, owner boundaries,
   expected artifacts, and stable failure codes;
 - `experiment_protocol_v1.json` — split identity, scoring dimensions,
-  contamination firewall, and aware-only formal run policy;
+  contamination firewall, and the superseded aware-only formal run policy;
 - `heldout27_taskbank_v1.jsonl` — the complete item-level scientific contract.
 
-Call `validate_experiment_bundle()` before any development or formal operation.
+Call `validate_experiment_bundle()` for historical v1 development operations and
+`validate_design_freeze()` for the prospective v2 design.  Neither receipt
+grants Provider or formal-batch authority.
 It fails closed on digest, path, task identity/order, stage coverage, database,
 analysis-family, difficulty, or prompt-leakage drift.
 
