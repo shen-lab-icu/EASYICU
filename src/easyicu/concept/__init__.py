@@ -29,6 +29,7 @@ from ..datasource import (
 from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
 from .availability_signal import ConceptAvailabilityRecord
+from .data_source_contract import ConceptDataSourceStorage
 from ..utils import compat
 
 logger = logging.getLogger(__name__)
@@ -67,115 +68,12 @@ WINDOW_AGGREGATE_OVERRIDES: Dict[str, tuple] = {
 }
 
 
-def _declare_dur_var_hours(frame) -> None:
-    """Record that ``frame``'s ``dur_var`` is now expressed in hours.
-
-    Every timedelta→hours conversion below must call this, otherwise the
-    public expansion path has to guess the unit back from the values.
-    """
-
-    from ..table.duration import UNIT_HOURS, set_dur_var_unit
-
-    set_dur_var_unit(frame, UNIT_HOURS)
-
-
-def _normalize_source_dur_var_hours(
-    frame,
-    *,
-    concept_name: str,
-    source_frame=None,
-):
-    """Normalize one source frame before row-binding multiple concept sources.
-
-    ``DataFrame.attrs`` is not reliably retained by column projection or
-    ``pd.concat``.  Recover the producer declaration from the pre-projection
-    frame, convert the source duration exactly once, and return a frame whose
-    numeric ``dur_var`` is explicitly in hours.
-    """
-
-    if "dur_var" not in frame.columns:
-        return frame
-
-    from ..table.duration import (
-        UNIT_HOURS,
-        get_dur_var_unit,
-        resolve_dur_var_hours,
-        set_dur_var_unit,
-    )
-
-    declared = get_dur_var_unit(frame) or get_dur_var_unit(source_frame)
-    if declared:
-        set_dur_var_unit(frame, declared)
-    if pd.api.types.is_numeric_dtype(
-        frame["dur_var"]
-    ) or pd.api.types.is_timedelta64_dtype(frame["dur_var"]):
-        frame["dur_var"] = resolve_dur_var_hours(
-            frame,
-            concept=concept_name,
-        )
-        set_dur_var_unit(frame, UNIT_HOURS)
-    return frame
-
-
-def _drop_negative_source_end_durations(
-    frame: pd.DataFrame,
-    *,
-    concept_name: str,
-    source_table: str,
-    column: str = "dur_var",
-) -> pd.DataFrame:
-    """Drop raw end-before-start records before strict duration validation.
-
-    ``resolve_dur_var_hours`` intentionally rejects every negative duration:
-    once a value has reached the generic window layer, it cannot distinguish
-    a corrupt source record from a producer/unit bug.  Here that provenance is
-    still known: ``column`` was just calculated as source end minus source
-    start.  Public ICU datasets contain a handful of such malformed records,
-    so quarantine those rows with an explicit warning while keeping the
-    generic window contract fail-closed for all other negative durations.
-    """
-
-    if column not in frame.columns or frame.empty:
-        return frame
-    values = pd.to_numeric(frame[column], errors="coerce")
-    invalid = values < 0
-    count = int(invalid.sum())
-    if not count:
-        return frame
-    logger.warning(
-        "dropping %d raw end-before-start row(s) for concept %r from table %r",
-        count,
-        concept_name,
-        source_table,
-    )
-    return frame.loc[~invalid].copy()
-
-
-def _source_duration_is_end(source) -> bool:
-    """Return whether a configured source duration column stores an end time.
-
-    This is schema semantics and must never be inferred from sampled patient
-    values.  The old ``head(100)``/80% heuristic made the same eICU
-    ``drugstopoffset`` column switch meaning when the patient batch boundary
-    changed, so 45k and 67k exports produced different D10 time grids.
-
-    Future dictionaries can declare ``params.dur_is_end`` explicitly.
-    Existing ricu-compatible sources use unambiguous end/stop column names.
-    """
-
-    params = getattr(source, "params", None) or {}
-    explicit = params.get("dur_is_end")
-    if isinstance(explicit, str):
-        normalized = explicit.strip().lower()
-        if normalized in {"true", "1", "yes"}:
-            return True
-        if normalized in {"false", "0", "no"}:
-            return False
-    elif explicit is not None:
-        return bool(explicit)
-
-    name = re.sub(r"[^a-z0-9]+", "", str(getattr(source, "dur_var", "")).lower())
-    return "end" in name or "stop" in name
+from .source_duration import (  # noqa: E402
+    declare_dur_var_hours as _declare_dur_var_hours,
+    drop_negative_source_end_durations as _drop_negative_source_end_durations,
+    normalize_source_dur_var_hours as _normalize_source_dur_var_hours,
+    source_duration_is_end as _source_duration_is_end,
+)
 
 
 def resolve_window_aggregate(concept_name: str, agg_method):
@@ -395,88 +293,9 @@ def _is_patient_id_filter_column(column: object, effective_id_var: Optional[str]
     }
 
 
-def _expand_wintbl_vectorized(
-    data: pd.DataFrame,
-    *,
-    idx_col: str,
-    dur_col: str,
-    id_cols: List[str],
-    value_columns: List[str],
-    interval_hours: float,
-    end_mode: str = "raw",
-    duration_zero_single: bool = False,
-) -> pd.DataFrame:
-    """Vectorized WinTbl -> time-series expansion.
-
-    Replaces two iterrows-based loops in this module:
-
-    * ``end_mode="raw"`` mirrors the recursive-concept callback path,
-      where ``end = start + duration`` and ``duration <= 0`` emits a
-      single point at the floored start when ``duration_zero_single``.
-    * ``end_mode="floored_clamped"`` mirrors the post-load WinTbl
-      expansion path, where
-      ``end = max(floor((floored_start + duration) / interval) * interval, 0)``.
-
-    The helper produces identical rows to the original loops (verified on
-    synthetic frames covering positive / zero / negative durations and
-    multiple interval choices). It runs ~200x faster than ``iterrows`` on
-    a 100k-row WinTbl on a typical laptop because all expansion is done
-    with ``np.repeat`` + cumulative offsets instead of Python-level loops.
-    """
-    base_cols = [idx_col]
-    base_cols += [c for c in id_cols if c in data.columns and c not in base_cols]
-    base_cols += [
-        c
-        for c in value_columns
-        if c in data.columns and c != dur_col and c not in base_cols
-    ]
-
-    if data.empty:
-        return pd.DataFrame(columns=base_cols)
-
-    start = pd.to_numeric(data[idx_col], errors="coerce").to_numpy(dtype=np.float64)
-    dur = pd.to_numeric(data[dur_col], errors="coerce").to_numpy(dtype=np.float64)
-    start = np.where(np.isnan(start), 0.0, start)
-    dur = np.where(np.isnan(dur), 0.0, dur)
-
-    start_aligned = np.floor(start / interval_hours) * interval_hours
-
-    if end_mode == "raw":
-        end_eff = start + dur
-        n_pts = np.floor((end_eff - start_aligned) / interval_hours).astype(np.int64) + 1
-        if duration_zero_single:
-            n_pts = np.where(dur <= 0.0, 1, n_pts)
-    elif end_mode == "floored_clamped":
-        end_eff = np.floor((start_aligned + dur) / interval_hours) * interval_hours
-        end_eff = np.maximum(end_eff, 0.0)
-        n_pts = np.floor((end_eff - start_aligned) / interval_hours).astype(np.int64) + 1
-    else:
-        raise ValueError(f"Unknown end_mode: {end_mode!r}")
-
-    n_pts = np.maximum(n_pts, 1)
-    total = int(n_pts.sum())
-    if total == 0:
-        return pd.DataFrame(columns=base_cols)
-
-    row_idx = np.repeat(np.arange(len(start)), n_pts)
-    offsets = np.arange(total) - np.repeat(
-        np.concatenate(([0], np.cumsum(n_pts)[:-1])), n_pts
-    )
-    times = start_aligned[row_idx] + offsets.astype(np.float64) * interval_hours
-
-    out: Dict[str, np.ndarray] = {idx_col: times}
-    seen = {idx_col}
-    for col in id_cols:
-        if col in data.columns and col not in seen:
-            out[col] = data[col].to_numpy()[row_idx]
-            seen.add(col)
-    for col in value_columns:
-        if col in seen or col == dur_col:
-            continue
-        if col in data.columns:
-            out[col] = data[col].to_numpy()[row_idx]
-            seen.add(col)
-    return pd.DataFrame(out)
+from .window_expansion import (  # noqa: E402
+    expand_wintbl_vectorized as _expand_wintbl_vectorized,
+)
 
 
 # --------------------------------------------------------------------------
@@ -2004,6 +1823,7 @@ class ConceptResolver:
         availability_context: Optional[_AvailabilityLoadContext] = None,
         **kwargs,  # Additional parameters for callbacks
     ) -> ICUTable:
+        storage: ConceptDataSourceStorage = data_source
         # 🔧 批量加载模式：减少诊断输出
         batch_loading = kwargs.get('_batch_loading', False)
         if batch_loading:
@@ -2189,7 +2009,7 @@ class ConceptResolver:
             # 如果无匹配则直接跳过（节省数秒），有匹配则转化为精确 ids 过滤器利用谓词下推。
             _rgx_pre_matched_ids = None  # 保存预匹配结果，供后续 regex 过滤使用
             if (getattr(source, 'regex', None) and source.sub_var and 
-                source.ids is None and hasattr(data_source, '_resolve_loader_from_disk')):
+                source.ids is None and hasattr(storage, 'resolve_loader_from_disk')):
                 try:
                     import re as _re_module
                     # 使用实例级缓存：同一表的 DISTINCT 值只查询一次
@@ -2200,7 +2020,7 @@ class ConceptResolver:
                     if _distinct_cache_key in self._rgx_distinct_cache:
                         _all_vals = self._rgx_distinct_cache[_distinct_cache_key]
                     else:
-                        _table_path = data_source._resolve_loader_from_disk(source.table)
+                        _table_path = storage.resolve_loader_from_disk(source.table)
                         if _table_path is not None and isinstance(_table_path, Path):
                             import duckdb as _ddb
                             _con = _ddb.connect()
@@ -2513,9 +2333,9 @@ class ConceptResolver:
                     # 通用检查：表是否有分桶目录或扁平parquet目录 + 源是否有 sub_var + ids + 无复杂 callback
                     _has_bucket_dir = False
                     try:
-                        _bucket_dir_check = data_source._resolve_bucket_directory(source.table)
+                        _bucket_dir_check = storage.resolve_bucket_directory(source.table)
                         if _bucket_dir_check is None:
-                            _bucket_dir_check = data_source._resolve_flat_parquet_directory(source.table)
+                            _bucket_dir_check = storage.resolve_flat_parquet_directory(source.table)
                         _has_bucket_dir = _bucket_dir_check is not None
                     except Exception:
                         pass
@@ -2615,10 +2435,10 @@ class ConceptResolver:
                                     _idtbl_sub_var = source.sub_var
                                     _idtbl_val_var = getattr(source, 'value_var', None) or 'value'
                                     # Resolve bucket/flat directory
-                                    _idtbl_bucket_dir = data_source._resolve_bucket_directory(source.table)
+                                    _idtbl_bucket_dir = storage.resolve_bucket_directory(source.table)
                                     _idtbl_flat_dir = None
                                     if _idtbl_bucket_dir is None:
-                                        _idtbl_flat_dir = data_source._resolve_flat_parquet_directory(source.table)
+                                        _idtbl_flat_dir = storage.resolve_flat_parquet_directory(source.table)
                                     if _idtbl_bucket_dir is not None or _idtbl_flat_dir is not None:
                                         # Build read_parquet source: 显式文件列表，过滤 AppleDouble (._*.parquet)
                                         # 否则在 macFUSE/NTFS/exFAT 上 DuckDB 的 ** glob 会把 macOS sidecar 元数据
@@ -3171,7 +2991,7 @@ class ConceptResolver:
                             _wt_agg_func = aggregator.upper()
 
                         # Find parquet files
-                        _wt_table_path = data_source._resolve_loader_from_disk(source.table)
+                        _wt_table_path = storage.resolve_loader_from_disk(source.table)
                         if _wt_table_path is not None:
                             _wt_dir = Path(_wt_table_path) if not isinstance(_wt_table_path, Path) else _wt_table_path
                             _wt_glob = _duckdb_path(_wt_dir / '*.parquet') if _wt_dir.is_dir() else _duckdb_path(_wt_dir)
@@ -3515,9 +3335,9 @@ class ConceptResolver:
                     # 比缓存整张表更高效且内存友好
                     skip_cache_for_bucket_table = False
                     try:
-                        _cache_skip_dir = data_source._resolve_bucket_directory(source.table)
+                        _cache_skip_dir = storage.resolve_bucket_directory(source.table)
                         if _cache_skip_dir is None:
-                            _cache_skip_dir = data_source._resolve_flat_parquet_directory(source.table)
+                            _cache_skip_dir = storage.resolve_flat_parquet_directory(source.table)
                         if _cache_skip_dir is not None:
                             skip_cache_for_bucket_table = True
                             if DEBUG_MODE and verbose:
