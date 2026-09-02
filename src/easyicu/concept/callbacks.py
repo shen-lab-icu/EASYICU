@@ -8331,7 +8331,8 @@ def _load_vent_mode_map():
         import json as _json
         from pathlib import Path as _Path
         _p = _Path(__file__).resolve().parents[1] / "data" / "vent_mode_map.json"
-        _VENT_MODE_MAP_CACHE = _json.load(open(_p, encoding="utf-8"))
+        with _p.open(encoding="utf-8") as _handle:
+            _VENT_MODE_MAP_CACHE = _json.load(_handle)
     return _VENT_MODE_MAP_CACHE
 
 

@@ -218,7 +218,7 @@ def run_landmark_spline_association(
     ):
         working[column] = pd.to_numeric(working[column], errors="coerce")
     outcome_values = set(working[sealed.outcome_column].dropna().unique().tolist())
-    if not outcome_values.issubset({0, 1, 0.0, 1.0}):
+    if not outcome_values.issubset({0, 1}):
         raise ValueError("signed landmark outcome is not binary")
     event_without_time = working[sealed.outcome_column].eq(1) & working[
         sealed.outcome_time_column

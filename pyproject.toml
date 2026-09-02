@@ -175,9 +175,61 @@ pillow = "PIL"
 pymupdf = "fitz"
 
 [tool.ruff.lint]
-# Keep the first project-wide gate conservative while the historical lint
-# backlog is retired. This mirrors Ruff's default error-focused families.
-select = ["E4", "E7", "E9", "F"]
+# The first project-wide gate was Ruff's default error-focused families while
+# the historical lint backlog was retired. It has been widened to add the two
+# families that catch defects this project actually cares about:
+#
+#   B — flake8-bugbear: real bugs, not style.
+#   S — flake8-bandit: the security lane.
+#
+# Widening them wholesale would have meant a ~700-line sweep across hundreds of
+# files, which is exactly the broad refactor CONTRIBUTING tells us not to do.
+# So each family is enabled with today's backlog pinned in `ignore` below. The
+# point is the ratchet: every *other* rule in B and S is now enforced, so a new
+# `eval`, `exec`, `shell=True`, `verify=False`, or `yaml.load` cannot land
+# unnoticed, and each ignored rule can be retired one at a time in its own
+# reviewable commit.
+select = ["E4", "E7", "E9", "F", "B", "S"]
+
+ignore = [
+    # --- deliberate, not backlog ------------------------------------------
+    # `assert` in library code. Audited 2026-09-02: every one narrows a type
+    # behind a pydantic model validator or an `if ... raise` immediately above
+    # it. Verified empirically too — the 11,248-test research-agent suite run
+    # under PYTHONOPTIMIZE=1 (all asserts stripped) produces a byte-identical
+    # failure set. None of them is a fail-closed gate.
+    "S101",
+    # Suspicious URL open. All 18 sites use pinned literal hosts (NCBI
+    # eutils, PhysioNet with a pinned redirect handler, Tavily).
+    "S310",
+    # "Hardcoded password". All 10 are parse tokens and environment variable
+    # *names*, not values.
+    "S105",
+    # Subprocess without shell=True. The step runner deliberately builds
+    # argument vectors and never passes a shell string.
+    "S603",
+    "S607",
+
+    # --- backlog, pinned; retire one rule per commit ----------------------
+    "B905",  # 187 — zip() without an explicit strict=
+    "B023",  # 45  — closures over a loop variable; audited, all are invoked
+             #       within the same iteration, so none currently misfires
+    "B008",  # 38  — function call in a default argument
+    "B007",  # 31  — unused loop control variable
+    "B904",  # 24  — raise without `from` inside except; hurts diagnosability
+    "B028",  # 3   — warnings.warn without stacklevel
+    "S110",  # 133 — try/except/pass. This is the silent-swallow pattern the
+             #       2026-09 audit is about; retiring it is its own project.
+    "S112",  # 82  — try/except/continue, same family
+    "S608",  # 54  — SQL built by string interpolation (DuckDB, internal)
+    "S324",  # 9   — sha1/md5 used as content keys, not as a MAC
+    "S314",  # 6   — ElementTree on PubMed responses
+    "S108",  # 5   — literal /tmp in the sandbox subprocess environment
+    "S311",  # 2   — random used for sampling, not for secrets
+    "S301",  # 2   — the two sanctioned pickle sites, both opt-in gated
+    "S104",  # 1   — a comparison against "0.0.0.0", not a bind
+    "S106",  # 1   — an argument named `token` that carries a receipt id
+]
 
 [tool.ruff.lint.per-file-ignores]
 # Public re-export surface and large transition modules retain compatibility
@@ -242,7 +294,12 @@ select = ["E4", "E7", "E9", "F"]
 "src/easyicu/scores/__init__.py" = ["E701"]
 "src/easyicu/scripts/extract_features.py" = ["E701", "F401", "F841"]
 "src/easyicu/visualization/*.py" = ["E741", "F401"]
-"tests/**/*.py" = ["E402", "E702", "E741", "F401", "F841"]
+# S102/S107/B017/B018 are test-suite idioms, not defects: `exec` is how the
+# research-agent tests run the generated analysis code that is under test.
+"tests/**/*.py" = [
+    "E402", "E702", "E741", "F401", "F841",
+    "S102", "S107", "B017", "B018",
+]
 "tests/research_agent/core/test_cost.py" = ["F811"]
 "tests/research_agent/core/test_skills.py" = ["F821"]
 "tests/research_agent/gates/test_validators.py" = ["F821"]

@@ -1001,8 +1001,8 @@ def fill_gaps(
             return None
         if isinstance(limits_obj, pd.DataFrame):
             return limits_obj.copy()
-        if hasattr(limits_obj, "data") and isinstance(getattr(limits_obj, "data"), pd.DataFrame):
-            return getattr(limits_obj, "data").copy()
+        if hasattr(limits_obj, "data") and isinstance(limits_obj.data, pd.DataFrame):
+            return limits_obj.data.copy()
         if _is_sequence_like(limits_obj):
             seq = list(limits_obj)
             if len(seq) != 2:

@@ -567,11 +567,7 @@ def annotate_with_attempt_history(
     # can therefore preserve useful per-attempt diagnostics without ever
     # touching raw model text or parser messages.
     try:
-        setattr(
-            exc,
-            "easyicu_structured_attempt_metadata",
-            safe_structured_attempt_metadata(attempts),
-        )
+        exc.easyicu_structured_attempt_metadata = safe_structured_attempt_metadata(attempts)
     except Exception:
         pass
     note = (
@@ -591,7 +587,7 @@ def annotate_with_attempt_history(
     if isinstance(notes, list):
         notes.append(note)
     else:
-        setattr(exc, "__notes__", [note])
+        exc.__notes__ = [note]
 
 
 class StructuredResponseFailure(RuntimeError):
@@ -749,11 +745,7 @@ def call_llm_with_structured_retry(
             # transport failure so the Web artifact has the complete sequence.
             annotate_with_attempt_history(exc, attempts or [terminal_attempt], role=role)
             try:
-                setattr(
-                    exc,
-                    "easyicu_structured_attempt_metadata",
-                    safe_structured_attempt_metadata(all_attempts),
-                )
+                exc.easyicu_structured_attempt_metadata = safe_structured_attempt_metadata(all_attempts)
             except Exception:
                 pass
             raise

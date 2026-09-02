@@ -702,7 +702,7 @@ def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
 
     可以节省约 50-60% 的内存
     """
-    if hasattr(df, "data") and isinstance(getattr(df, "data"), pd.DataFrame):
+    if hasattr(df, "data") and isinstance(df.data, pd.DataFrame):
         df.data = _compress_dtypes(df.data, verbose=verbose)
         return df
 

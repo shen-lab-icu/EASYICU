@@ -209,7 +209,7 @@ class _AvailabilityLoadContext:
     def set_sources(self, concept_name: str, sources: Iterable[object]) -> None:
         table_names = tuple(
             dict.fromkeys(
-                str(getattr(source, "table"))
+                str(source.table)
                 for source in sources
                 if getattr(source, "table", None)
             )

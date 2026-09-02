@@ -145,8 +145,8 @@ def _reader_contrast_labels(
     labels: list[str] = []
     ordinal_scope = re.sub(r"_(max|min|first|last)$", "", exposure_name)
     for row in frame.itertuples(index=False):
-        comparison_value = getattr(row, "exposure_level")
-        reference_value = getattr(row, "reference_level")
+        comparison_value = row.exposure_level
+        reference_value = row.reference_level
         comparison = scoped_label_lookup(
             exposure_name, comparison_value, display_labels
         )
