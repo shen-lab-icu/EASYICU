@@ -29,7 +29,7 @@ function latestStudyContextUpdate(context) {
   const receipt = result.details && typeof result.details === "object"
     ? result.details
     : {};
-  if (receipt.status !== "ok" || receipt.code !== "study_context_updated") return null;
+  if (!call || receipt.status !== "ok" || receipt.code !== "study_context_updated") return null;
   return { call, receipt };
 }
 
@@ -70,15 +70,12 @@ function initialQuestionSaveNeedsDataSourceSelection(update) {
     && missing.includes("data_source");
 }
 
-function initialQuestionSaveNeedsDataPreparation(update) {
-  const args = update?.call?.arguments;
+function studyUpdateIsReadyForPlanning(update) {
   const workflow = update?.receipt?.details?.workflow;
-  const missing = workflow?.missing_setup_fields;
-  if (!args || typeof args !== "object" || !Array.isArray(missing)) return false;
-  if (!String(args.question || "").trim() || !confirmedDataSource(workflow)) return false;
-  if (args.outcome || args.primary_exposure || args.time_window) return false;
-  return workflow.next_action_code === "study_setup_incomplete"
-    && ["outcome", "primary_exposure", "time_window"].some((field) => missing.includes(field));
+  // Unconfirmed design proposals may have been omitted by the update owner.
+  // Those are execution requirements, not reasons to reopen initial setup.
+  // Read the returned workflow, never infer readiness from the model's args.
+  return workflow?.next_action_code === "provider_ready_to_generate_plan";
 }
 
 function finalizedMessage(model, text) {
@@ -220,7 +217,7 @@ function dataSourceSelectionText(language, catalog) {
  * Finalize the narrow initial-question save path from the typed EasyICU receipt.
  * The first provider call still interprets the user's question and invokes the
  * owner tool. A second provider call is unnecessary here because the browser
- * already owns the confirmed-source transition and data-preparation review.
+ * already owns source selection and the candidate-plan confirmation.
  */
 export function hostPostToolFinalization(model, context, language) {
   const literatureSearch = mandatoryIdeaLiteratureSearch(context);
@@ -234,9 +231,9 @@ export function hostPostToolFinalization(model, context, language) {
       dataSourceSelectionText(language, latestDataSourceCatalog(context)),
     ));
   }
-  if (!initialQuestionSaveNeedsDataPreparation(update)) return null;
+  if (!studyUpdateIsReadyForPlanning(update)) return null;
   const text = language === "zh"
-    ? "研究问题和当前研究设置已保存；尚未开始数据提取或分析。\n\n**下一步：**请选择数据来源操作：\n- 使用当前已确认的数据来源"
-    : "The research question and current study setup are saved; extraction and analysis have not started.\n\n**Next step:** Choose a data-source action:\n- Use the currently confirmed data source";
+    ? "研究问题和数据源已就绪，可以生成候选研究计划，供你审阅。尚未开始数据提取或分析。"
+    : "The research question and data source are ready for a candidate research plan for your review. Data extraction and analysis have not started.";
   return completedStream(finalizedMessage(model, text));
 }

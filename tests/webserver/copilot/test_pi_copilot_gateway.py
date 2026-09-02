@@ -88,15 +88,9 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert "easyicu.pi-turn-study-snapshot/1" in entrypoint
     assert 'turnIntent === "advance_after_data_source_confirmation"' in entrypoint
     assert 'customType: "easyicu_host_transition"' in entrypoint
-    assert "do not ask the next setup question" in entrypoint
-    assert "one concise data-preparation confirmation, not a study plan" in entrypoint
-    assert "MUST infer and propose one concrete recommended value" in entrypoint
-    assert "none may be omitted, described as unresolved, or deferred" in entrypoint
-    assert "Do not propose or discuss dependence handling" in entrypoint
-    assert "数据准备确认（不是正式研究计划）" in entrypoint
-    assert "do not offer an individual outcome, cohort, or time-window question" in entrypoint
-    assert "do not emit Markdown heading markers such as #, ##, or ###" in entrypoint
-    assert "exactly two hyphen-prefixed Markdown bullets; never use a numbered list" in entrypoint
+    assert "extraction is not a prerequisite for generating a candidate plan" in entrypoint
+    assert "Do not invent data-preparation inputs" in entrypoint
+    assert "one concise data-preparation confirmation, not a study plan" not in entrypoint
     assert "the next unresolved key scientific decision" not in entrypoint
     assert "pi_regenerate_intent_invalid" in entrypoint
     projection = (APP_DIR / "src" / "event-projection.mjs").read_text(encoding="utf-8")
@@ -254,7 +248,7 @@ def test_initial_question_update_uses_host_finalization_without_second_provider_
         role: 'toolResult', toolCallId: 'call-1', toolName: 'easyicu_update_study_context',
         isError: false, content: [], details: {{
           status: 'ok', code: 'study_context_updated', details: {{ workflow: {{
-            next_action_code: 'study_setup_incomplete',
+            next_action_code: 'provider_ready_to_generate_plan',
             missing_setup_fields: ['outcome', 'primary_exposure', 'time_window'],
             study_setup_receipt: {{ configuration: {{ data_source: {{ database: 'miiv' }} }} }},
           }} }},

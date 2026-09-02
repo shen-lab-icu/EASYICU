@@ -598,32 +598,6 @@ def build_research_workflow_snapshot(
             ),
         ),
         ResearchWorkflowStage(
-            id="extraction",
-            label="Feature extraction",
-            status=(
-                "complete"
-                if extraction_receipted
-                else "running"
-                if extraction_running
-                else "ready"
-                if setup_ready
-                else "blocked"
-            ),
-            owner="easyicu.webserver.routes.jobs",
-            reason_code=(
-                "approved_analysis_input_receipt"
-                if (analysis_complete or analysis_outputs_available)
-                and not prepared_export_receipted
-                else "active_export_ready"
-                if extraction_receipted
-                else "extraction_running"
-                if extraction_running
-                else "extraction_ready"
-                if setup_ready
-                else "study_setup_incomplete"
-            ),
-        ),
-        ResearchWorkflowStage(
             id="plan",
             label="Analysis plan",
             status=(
@@ -658,6 +632,32 @@ def build_research_workflow_snapshot(
                 else "cohort_eligibility_confirmation_required"
                 if eligibility_confirmation_required
                 else "active_export_or_setup_required"
+            ),
+        ),
+        ResearchWorkflowStage(
+            id="extraction",
+            label="Feature extraction",
+            status=(
+                "complete"
+                if extraction_receipted
+                else "running"
+                if extraction_running
+                else "ready"
+                if setup_ready
+                else "blocked"
+            ),
+            owner="easyicu.webserver.routes.jobs",
+            reason_code=(
+                "approved_analysis_input_receipt"
+                if (analysis_complete or analysis_outputs_available)
+                and not prepared_export_receipted
+                else "active_export_ready"
+                if extraction_receipted
+                else "extraction_running"
+                if extraction_running
+                else "extraction_ready"
+                if setup_ready
+                else "study_setup_incomplete"
             ),
         ),
         ResearchWorkflowStage(
