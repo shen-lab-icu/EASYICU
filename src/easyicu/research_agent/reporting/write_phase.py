@@ -100,6 +100,10 @@ from .writer_evidence import (
     _render_writer_evidence_digest,
     _render_writer_evidence_digest_v2,
 )
+from .manuscript_state import (
+    MANIFEST_COMMENT_RE as _MANIFEST_COMMENT_RE,
+)
+from .manuscript_state import ManuscriptState, render_not_generated
 from .writer_evidence_repair import decide_writer_evidence_repairs
 from .writer_repair_decision import drop_every_sentence
 from ..replication.notebook import (
@@ -654,12 +658,6 @@ def _writer_probe_banner(failed_steps: Sequence[str]) -> str:
         "> be used as a manuscript scaffold for publication.\n"
         f"> Failed steps: {failed_text}"
     )
-
-
-_MANIFEST_COMMENT_RE = re.compile(
-    r"<!--\s*(?P<level>warning|error)\s*:\s*see manifest\s*-->",
-    flags=re.I,
-)
 
 
 def _manifest_comment_counts(text: str) -> Dict[str, int]:
@@ -2286,11 +2284,11 @@ def _bind_and_review_manuscript(
                 detail={"blockers": manuscript_output_blockers},
             )
         )
-        bound = (
-            "# Manuscript scaffold not generated\n\n"
+        bound = render_not_generated(
+            ManuscriptState.blocked("writer_produced_no_bindable_prose"),
             "The manuscript writer failed or produced no substantive "
             "evidence-bound prose for this run. See manifest findings for the "
-            "writer and evidence-binding errors.\n"
+            "writer and evidence-binding errors.",
         )
     # Value-level provenance binding: attach a footnote next to every
     # numeric value in the manuscript pointing to the exact step /
@@ -3320,10 +3318,13 @@ def run_write_phase(
             )
             bound_path = run_dir / "manuscript_scaffold_bound.md"
             bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "This run stopped after a requested analysis checkpoint before "
-                "all planned analysis steps completed. Review the completed "
-                "step outputs and resume from the next step when ready.\n",
+                render_not_generated(
+                    ManuscriptState.paused("paused_before_all_steps_completed"),
+                    "This run stopped after a requested analysis checkpoint "
+                    "before all planned analysis steps completed. Review the "
+                    "completed step outputs and resume from the next step when "
+                    "ready.",
+                ),
                 encoding="utf-8",
             )
             return blocked_write_result(
@@ -3346,12 +3347,15 @@ def run_write_phase(
             )
             bound_path = run_dir / "manuscript_scaffold_bound.md"
             bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "Strict fail-closed policy blocked manuscript drafting because "
-                "one or more required analysis steps did not complete successfully.\n\n"
-                "Review `author_review_note.md`, `run_status.json`, "
-                "`evidence_audit.json`, `numeric_audit.json`, and "
-                "`claim_ledger.csv` for the diagnostic record.\n",
+                render_not_generated(
+                    ManuscriptState.blocked("execution_gate_did_not_pass"),
+                    "Strict fail-closed policy blocked manuscript drafting "
+                    "because one or more required analysis steps did not "
+                    "complete successfully.\n\n"
+                    "Review `author_review_note.md`, `run_status.json`, "
+                    "`evidence_audit.json`, `numeric_audit.json`, and "
+                    "`claim_ledger.csv` for the diagnostic record.",
+                ),
                 encoding="utf-8",
             )
             return blocked_write_result(
@@ -3382,11 +3386,13 @@ def run_write_phase(
         )
         bound_path = run_dir / "manuscript_scaffold_bound.md"
         bound_path.write_text(
-            "# Manuscript scaffold not generated\n\n"
-            "This run stopped after the analysis phase. Review the "
-            "`results_report.md`, tables, figures and manifest, then "
-            "rerun with manuscript drafting enabled when the analysis "
-            "is ready.\n",
+            render_not_generated(
+                ManuscriptState.paused("stop_after_analysis_requested"),
+                "This run stopped after the analysis phase. Review the "
+                "`results_report.md`, tables, figures and manifest, then "
+                "rerun with manuscript drafting enabled when the analysis "
+                "is ready.",
+            ),
             encoding="utf-8",
         )
         return blocked_write_result(

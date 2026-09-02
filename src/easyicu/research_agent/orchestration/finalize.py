@@ -47,6 +47,10 @@ from ..methods.multiple_testing import build_multiple_testing_report
 from ..methods.sensitivity import compute_e_value
 from ..replication.report import _literature_provenance_note
 from ..reporting.readiness import render_report, write_readiness_artifacts
+from ..reporting.manuscript_state import (
+    ManuscriptState,
+    render_not_generated,
+)
 from ..reporting.supplement_inventory import write_supplement_inventory
 from ..reporting.supplement_package import write_supplement_package
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
@@ -1400,7 +1404,10 @@ def finalise_aborted(
     )
     bound_path = run_dir / "manuscript_scaffold_bound.md"
     bound_path.write_text(
-        f"# Manuscript scaffold not generated\n\nPipeline aborted: {reason}.\n",
+        render_not_generated(
+            ManuscriptState.blocked("pipeline_aborted"),
+            f"Pipeline aborted: {reason}.",
+        ),
         encoding="utf-8",
     )
     execution_identity = execution_identity_for_pipeline(pipeline)

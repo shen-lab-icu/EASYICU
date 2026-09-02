@@ -108,6 +108,10 @@ from .reporting.reporting_checklist import (
     build_tripod_ai_checklist,
     choose_checklist,
 )
+from .reporting.manuscript_state import (
+    ManuscriptState,
+    render_not_generated,
+)
 from .reporting.reviewer import run_reviewer_round
 from .authority.provenance import (
     ProvenanceBundle,
@@ -8292,9 +8296,11 @@ def _pipeline_run___write_invoker(
         )
         bound_path = run_dir / "manuscript_scaffold_bound.md"
         bound_path.write_text(
-            "# Manuscript scaffold not generated\n\n"
-            "STRICT evidence enforcement failed before final binding.\n\n"
-            f"Error: {exc}\n",
+            render_not_generated(
+                ManuscriptState.blocked("strict_evidence_enforcement_failed"),
+                "STRICT evidence enforcement failed before final binding.\n\n"
+                f"Error: {exc}",
+            ),
             encoding="utf-8",
         )
         _emit_progress(

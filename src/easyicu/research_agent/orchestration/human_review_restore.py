@@ -53,6 +53,10 @@ from .human_review_checkpoint import (
 from .progress import ResumableProgressChannel
 from .profiles import is_paper_facing_profile
 from .workflow import HumanReviewDecision, HumanReviewPending, build_pipeline_workflow
+from ..reporting.manuscript_state import (
+    ManuscriptState,
+    render_not_generated,
+)
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -729,9 +733,11 @@ def restore_durable_human_review_pause(
             )
             bound_path = run_dir / "manuscript_scaffold_bound.md"
             bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "STRICT evidence enforcement failed before final binding.\n\n"
-                f"Error: {exc}\n",
+                render_not_generated(
+                    ManuscriptState.blocked("strict_evidence_enforcement_failed"),
+                    "STRICT evidence enforcement failed before final binding."
+                    f"\n\nError: {exc}",
+                ),
                 encoding="utf-8",
             )
             emit_progress(
