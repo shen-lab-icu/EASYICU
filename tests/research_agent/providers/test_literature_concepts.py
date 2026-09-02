@@ -12,6 +12,20 @@ def test_materialized_concepts_share_one_literature_phrase_owner() -> None:
     assert direct_evidence_search.concept_phrase("lact_first") == "lactate"
 
 
+def test_protocol_definition_is_not_used_as_fluid_balance_search_phrase() -> None:
+    identity = literature_concept_identity("fluid_balance_cumulative")
+
+    assert identity is not None
+    assert identity.canonical_phrase == "cumulative fluid balance"
+    assert literature_concept_phrase("fluid_balance_cumulative") == (
+        "cumulative fluid balance"
+    )
+    assert "pre-admission" not in identity.canonical_phrase
+    assert literature_concept_phrase("Mechanical ventilation liberation outcomes") == (
+        "ventilator liberation"
+    )
+
+
 def test_unknown_concepts_use_neutral_owner_supplied_fallbacks() -> None:
     assert literature_concept_phrase("creatinine_first", fallback="Creatinine") == (
         "Creatinine"

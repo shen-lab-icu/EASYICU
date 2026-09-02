@@ -132,6 +132,7 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "static/assets/demo/*.html",
         "static/assets/demo/*.pdf",
         "static/vendor/echarts/*",
+        "pi_copilot/tool_catalog.json",
         "pi_copilot/node_app/package.json",
         "pi_copilot/node_app/package-lock.json",
         "pi_copilot/node_app/README.md",

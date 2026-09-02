@@ -52,6 +52,7 @@ from .analysis_types import (
     get_analysis_type,
     validate_host_authorized_analysis_family,
 )
+from .adjustment_authority import AdjustmentSetAuthority
 from .cohort_contract import (
     CohortDefinition,
     CohortSchemaError,
@@ -84,6 +85,7 @@ from .scientific_action_catalog import (
     validate_plan_scientific_action_selections,
 )
 from .scientific_review import post_baseline_exposure
+from .sensitivity_authority import FUNCTIONAL_FORM_EXECUTABLE_METHODS
 
 
 _OWNER = "easyicu.planning.progressive_compiler_v1"
@@ -183,6 +185,98 @@ def _fail(
 
 def _variable_index(context: ResearchContext) -> dict[str, Any]:
     return {variable.name: variable for variable in context.variables}
+
+
+def _binary_level_index(value: Any) -> int | None:
+    token = str("" if value is None else value).strip().casefold()
+    if token in {"0", "0.0", "false", "no", "n", "absent", "negative"}:
+        return 0
+    if token in {"1", "1.0", "true", "yes", "y", "present", "positive"}:
+        return 1
+    return None
+
+
+def required_binary_display_label_scopes(
+    context: ResearchContext,
+    steps: Sequence[Any],
+) -> tuple[str, ...]:
+    """Return primary binary figure scopes that need Planner-owned labels.
+
+    An outline does not yet contain executable ``primary_exposure`` fields, so
+    the host may use only the context-declared primary exposure when that exact
+    variable is present in a distribution step. A compiled skeleton supplies
+    the field directly. In both cases the observed domain must be a closed
+    binary encoding understood by the figure layer; the host never invents
+    scientific labels.
+    """
+
+    variables = _variable_index(context)
+    required: list[str] = []
+    for step in steps:
+        if getattr(step, "module_id", None) != "exposure_outcome_distribution":
+            continue
+        scope = str(getattr(step, "primary_exposure", None) or "").strip()
+        if not scope:
+            candidate = str(context.primary_exposure or "").strip()
+            variable_names = tuple(getattr(step, "variable_names", ()) or ())
+            if candidate and candidate in variable_names:
+                scope = candidate
+        descriptor = variables.get(scope)
+        domain = descriptor.observed_domain if descriptor is not None else None
+        if not scope or not isinstance(domain, Mapping) or not domain.get("is_binary"):
+            continue
+        levels = observed_levels_for(name=scope, variables=variables)
+        if {_binary_level_index(level) for level in levels} != {0, 1}:
+            continue
+        if scope not in required:
+            required.append(scope)
+    return tuple(required)
+
+
+def required_reader_display_label_keys(
+    context: ResearchContext,
+    design_selection: Any,
+) -> tuple[str, ...]:
+    """Return exact plan variables that need Planner-owned reader labels.
+
+    The Web plan review renders the selected design's ``required_variables``.
+    Those identifiers are executable coordinates, not presentation copy, so
+    the Planner must bind their reader-facing names in the same sealed
+    foundation instead of leaving the UI to guess scientific semantics.
+    """
+
+    selected = getattr(design_selection, "selected", None)
+    if selected is None:
+        return ()
+    id_columns = set(context.cohort.id_columns)
+    variable_roles = {
+        variable.name: str(getattr(variable.role, "value", variable.role) or "")
+        .strip()
+        .casefold()
+        for variable in context.variables
+    }
+    return tuple(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in getattr(selected, "required_variables", ()) or ()
+            if str(value or "").strip()
+            and str(value or "").strip() not in id_columns
+            and variable_roles.get(str(value or "").strip()) != "id"
+        )
+    )
+
+
+def _is_mechanical_identifier_label(key: str, value: str) -> bool:
+    """Reject underscore replacement masquerading as reader-facing copy."""
+
+    if not any(character in key for character in "_-0123456789"):
+        return False
+    normalized_key = " ".join(key.casefold().split())
+    humanized_key = " ".join(
+        key.casefold().replace("_", " ").replace("-", " ").split()
+    )
+    normalized_value = " ".join(value.casefold().split())
+    return normalized_value in {normalized_key, humanized_key}
 
 
 def progressive_cohort_concept_ids(
@@ -290,10 +384,49 @@ def validate_progressive_foundation(
     analysis_type: str,
     require_robustness_intent: bool = False,
     robustness_replay_required: bool = False,
+    required_binary_display_label_scopes: Sequence[str] = (),
+    required_reader_display_label_keys: Sequence[str] = (),
 ) -> None:
     """Fail before step generation when a sealed Foundation cannot compile."""
 
     _validate_progressive_cohort_intent(foundation.cohort, context=context)
+    labels = {
+        str(item.key or "").strip(): " ".join(str(item.value or "").split())
+        for item in foundation.display_labels
+    }
+    for raw_key in dict.fromkeys(required_reader_display_label_keys):
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        value = labels.get(key, "")
+        if not value or _is_mechanical_identifier_label(key, value):
+            raise _fail(
+                "progressive_required_reader_display_labels_missing",
+                "the selected design requires a Planner-authored reader label "
+                f"for {key!r}; copy the exact variable key and derive a concise "
+                "clinical label only from sealed concept metadata",
+                path="display_labels",
+                detail={"required_key": key},
+            )
+    for raw_scope in dict.fromkeys(required_binary_display_label_scopes):
+        scope = str(raw_scope or "").strip()
+        if not scope:
+            continue
+        reference = labels.get(f"{scope}=0", "")
+        comparison = labels.get(f"{scope}=1", "")
+        if (
+            not reference
+            or not comparison
+            or reference.casefold() == comparison.casefold()
+        ):
+            raise _fail(
+                "progressive_required_binary_display_labels_missing",
+                "a primary binary figure requires distinct Planner-authored "
+                f"reader labels for {scope!r}; declare exactly {scope}=0 and "
+                f"{scope}=1 from the sealed concept metadata",
+                path="display_labels",
+                detail={"required_scope": scope},
+            )
     if robustness_replay_required and not foundation.robustness_intents:
         raise _fail(
             "progressive_foundation_robustness_intent_missing",
@@ -697,6 +830,19 @@ def _compile_binary_association_sensitivity_capability(
             step_index=step_index,
             path="outputs",
         )
+    if (
+        "functional_form" in str(step.step_id or "").casefold()
+        and str(step.custom_method or "").strip().casefold()
+        not in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+    ):
+        raise _fail(
+            "progressive_functional_form_method_unsupported",
+            "functional-form sensitivity must select one exact host-supported "
+            "method: " + ", ".join(sorted(FUNCTIONAL_FORM_EXECUTABLE_METHODS)),
+            step=step,
+            step_index=step_index,
+            path="custom_method",
+        )
     parent_refs = [
         reference
         for reference in step.product_inputs
@@ -1071,6 +1217,7 @@ def _compile_model_terms(
     variables: Mapping[str, Any],
     step: ProgressiveSkeletonStep,
     step_index: int,
+    authorized_time_zero_covariates: frozenset[str] = frozenset(),
 ) -> tuple[list[ModelTermSpec], list[str], list[str], str, str]:
     names = [item.name for item in step.model_terms]
     _require_variables(
@@ -1090,6 +1237,40 @@ def _compile_model_terms(
         )
     compiled: list[ModelTermSpec] = []
     for index, item in enumerate(step.model_terms):
+        variable = variables[item.name]
+        variable_role = str(getattr(variable.role, "value", variable.role) or "")
+        if item.role == "covariate" and item.name != step.outcome and variable_role in {
+            "id",
+            "time",
+            "index",
+            "meta",
+            "outcome",
+        }:
+            raise _fail(
+                "progressive_covariate_semantic_role_ineligible",
+                f"covariate {item.name!r} has owner-declared semantic role "
+                f"{variable_role!r}; baseline adjustment covariates cannot be "
+                "identifiers, time coordinates, metadata, or outcomes",
+                step=step,
+                step_index=step_index,
+                path=f"model_terms[{index}]",
+            )
+        if (
+            item.role == "covariate"
+            and variable_role
+            in {"vital", "lab", "intervention", "ordinal_score", "composite_score"}
+            and item.name not in authorized_time_zero_covariates
+        ):
+            raise _fail(
+                "progressive_covariate_time_zero_authority_missing",
+                f"covariate {item.name!r} has owner-declared dynamic clinical "
+                f"role {variable_role!r}, but no exact user-reviewed "
+                "at-or-before-time-zero authority; availability in the source "
+                "catalog is not baseline adjustment authority",
+                step=step,
+                step_index=step_index,
+                path=f"model_terms[{index}]",
+            )
         observed = observed_levels_for(name=item.name, variables=dict(variables))
         declared, _declared_basis = declared_domain_for_variable(
             variables[item.name]
@@ -1234,11 +1415,21 @@ def _compile_adjusted_association(
         step_index=step_index,
         path="adjusted_association",
     )
+    adjustment_authority = AdjustmentSetAuthority.from_context(context)
+    temporal_roles = adjustment_authority.operational_temporal_roles
+    authorized_time_zero_covariates = frozenset(
+        name
+        for name in adjustment_authority.operational_covariates
+        if adjustment_authority.selection == "exact"
+        and temporal_roles.get(name)
+        in {"baseline_static", "at_or_before_time_zero"}
+    )
     terms, covariates, exposure_levels, reference, primary_contrast = (
         _compile_model_terms(
             variables=variables,
             step=step,
             step_index=step_index,
+            authorized_time_zero_covariates=authorized_time_zero_covariates,
         )
     )
     if outcome in covariates:
@@ -2128,6 +2319,12 @@ def compile_progressive_plan(
         robustness_replay_required=any(
             step.module_id == "robustness_replay" for step in skeleton.steps
         ),
+        required_binary_display_label_scopes=(
+            required_binary_display_label_scopes(context, skeleton.steps)
+        ),
+        required_reader_display_label_keys=(
+            required_reader_display_label_keys(context, skeleton.design_selection)
+        ),
     )
     allowed_modules = set(progressive_module_ids_for_analysis_types((canonical_type,)))
     for index, step in enumerate(skeleton.steps):
@@ -2367,5 +2564,7 @@ __all__ = [
     "assert_immutable_prefix",
     "compile_progressive_plan",
     "progressive_cohort_concept_ids",
+    "required_binary_display_label_scopes",
+    "required_reader_display_label_keys",
     "validate_progressive_foundation",
 ]

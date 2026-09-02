@@ -68,6 +68,13 @@ COPY src/easyicu/research_agent/runner_image/requirements.lock /opt/easyicu-runn
 RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
         -r /opt/easyicu-runner/requirements.lock
 
+# Planner-owned display labels may be multilingual. Keep the font layer after
+# the expensive scientific dependency layer so adding or updating glyph
+# coverage does not invalidate the locked Python-package cache.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
 # Generated analysis imports EasyICU's publication-figure and audit helpers.
 # Install the repository package itself without resolving dependencies again;
 # the complete runtime set is pinned above and is captured by DockerRunner. The

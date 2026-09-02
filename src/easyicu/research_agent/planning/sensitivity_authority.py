@@ -98,6 +98,14 @@ EXECUTABLE_METHODS_BY_STRATEGY: dict[str, frozenset[str]] = {
 }
 
 
+FUNCTIONAL_FORM_EXECUTABLE_METHODS = frozenset().union(
+    EXECUTABLE_METHODS_BY_STRATEGY["restricted_cubic_spline"],
+    EXECUTABLE_METHODS_BY_STRATEGY["linear_per_unit"],
+    EXECUTABLE_METHODS_BY_STRATEGY["fractional_polynomial"],
+    EXECUTABLE_METHODS_BY_STRATEGY["categorical"],
+)
+
+
 class PrespecifiedSensitivitySpec(BaseModel):
     """One immutable, user-reviewed robustness commitment.
 

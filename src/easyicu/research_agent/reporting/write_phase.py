@@ -46,6 +46,12 @@ from ..authority.runtime_artifacts import (
     verified_run_evidence_path,
 )
 from ..figures.skill import PublicationFigureSkill
+from ..figures.contracts import (
+    figure_contract_label,
+    figure_contract_paths,
+    figure_contract_tier,
+    read_figure_contract,
+)
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
 from .manuscript_literature import (
@@ -125,6 +131,8 @@ class RuntimeProvenanceMismatchError(RuntimeError):
 
 def _latex_figure_paths(
     evidence_records: Sequence[Any],
+    *,
+    run_dir: Optional[Path] = None,
 ) -> Tuple[List[Tuple[str, str]], Tuple[str, ...]]:
     """Choose one LaTeX-safe export for each registered logical figure.
 
@@ -173,12 +181,80 @@ def _latex_figure_paths(
         current = selected.get(logical_key)
         if current is None or candidate[:2] < current[:2]:
             selected[logical_key] = candidate
-    chosen = [
-        (evidence_id, relative_path)
-        for _priority, _index, evidence_id, relative_path in sorted(
-            selected.values(), key=lambda row: row[1]
-        )
+    chosen_rows = [
+        (logical_key, *row)
+        for logical_key, row in sorted(selected.items(), key=lambda item: item[1][1])
     ]
+    if run_dir is not None:
+        contract_by_stem: Dict[str, Tuple[Path, str, set[str]]] = {}
+        for contract_path in figure_contract_paths(run_dir):
+            name = contract_path.name
+            stem = (
+                name[: -len(".figure_contract.json")]
+                if name.endswith(".figure_contract.json")
+                else contract_path.stem
+            )
+            raw = read_figure_contract(contract_path)
+            roles = {
+                str(panel.get("role") or "").strip().lower()
+                for panel in (raw.get("panels") or [])
+                if isinstance(panel, Mapping) and str(panel.get("role") or "").strip()
+            }
+            contract_by_stem[stem] = (
+                contract_path,
+                figure_contract_tier(contract_path, run_dir),
+                roles,
+            )
+
+        primary_roles = {
+            role
+            for _path, tier, roles in contract_by_stem.values()
+            if tier == "primary_publication"
+            for role in roles
+        }
+        primary_like_roles = {
+            "descriptive_result",
+            "primary_estimand",
+            "relationship",
+        }
+        reader_rows: List[Tuple[int, int, str, str]] = []
+        for logical_key, _priority, index, evidence_id, relative_path in chosen_rows:
+            contract = contract_by_stem.get(logical_key)
+            if contract is None:
+                reader_rows.append((1, index, evidence_id, relative_path))
+                continue
+            contract_path, tier, roles = contract
+            if (
+                tier == "supporting_step"
+                and primary_roles
+                and roles
+                and roles <= primary_roles
+                and bool(roles & primary_like_roles)
+            ):
+                # The canonical publication figure already covers this
+                # scientific display. Keep the step artifact in the evidence
+                # ledger, but do not duplicate it in the reader PDF.
+                continue
+            if tier == "primary_publication":
+                label = "Primary publication figure"
+                rank = 0
+            else:
+                label = figure_contract_label(contract_path)
+                if label.casefold().startswith("figure:"):
+                    label = label.split(":", 1)[1]
+                label = label.replace("_", " ").strip()
+                label = label[:1].upper() + label[1:] if label else "Supporting figure"
+                rank = 1
+            reader_rows.append((rank, index, label, relative_path))
+        chosen = [
+            (label, relative_path)
+            for _rank, _index, label, relative_path in sorted(reader_rows)
+        ]
+    else:
+        chosen = [
+            (evidence_id, relative_path)
+            for _logical_key, _priority, _index, evidence_id, relative_path in chosen_rows
+        ]
     omitted = tuple(
         identifier
         for logical_key, identifier in unrepresented.items()
@@ -1303,6 +1379,9 @@ def _render_or_resume_writer_scaffold(
         return scaffold
 
     administrative_authority = load_manuscript_administrative_authority(run_dir)
+    reader_display_labels = dict(
+        getattr(execute_result.plan, "display_labels", {}) or {}
+    )
     literature_digest = render_writer_literature_digest(
         literature,
         plan=execute_result.plan,
@@ -1319,6 +1398,7 @@ def _render_or_resume_writer_scaffold(
             evidence_ids=preferred_evidence_names,
             evidence_digest=writer_evidence_digest,
             literature_digest=literature_digest,
+            reader_display_labels=reader_display_labels,
             administrative_authority=administrative_authority,
         )
 
@@ -1330,6 +1410,7 @@ def _render_or_resume_writer_scaffold(
             evidence_ids=preferred_evidence_names,
             evidence_digest=writer_evidence_digest,
             literature_digest=literature_digest,
+            reader_display_labels=reader_display_labels,
             administrative_authority=administrative_authority,
         )
     except Exception as exc:
@@ -1931,6 +2012,35 @@ def _draft_manuscript(
     )
 
 
+def _repair_bound_display_language(
+    bound: str,
+    *,
+    reader_display_labels: Mapping[str, str],
+    manuscript_language: str,
+    findings: List[ValidationFinding],
+) -> str:
+    from .manuscript_quality import repair_incompatible_reader_labels
+
+    repaired, repairs = repair_incompatible_reader_labels(
+        bound,
+        reader_display_labels=reader_display_labels,
+        manuscript_language=manuscript_language,
+    )
+    if repairs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_display_language",
+                severity="warning",
+                message=(
+                    "Removed UI-locale display labels that conflicted with the "
+                    "selected manuscript language."
+                ),
+                detail={"repairs": list(repairs)},
+            )
+        )
+    return repaired
+
+
 def _bind_and_review_manuscript(
     pipeline: Any,
     *,
@@ -1945,6 +2055,8 @@ def _bind_and_review_manuscript(
     writer_probe_mode: bool,
     writer_probe_failed_steps: Sequence[str],
     run_dir: Path,
+    reader_display_labels: Mapping[str, str],
+    manuscript_language: str,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
     scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
@@ -2088,6 +2200,12 @@ def _bind_and_review_manuscript(
                 detail={"removed_sentences": removed_numeric_sentences},
             )
         )
+    bound = _repair_bound_display_language(
+        bound,
+        reader_display_labels=reader_display_labels,
+        manuscript_language=manuscript_language,
+        findings=findings,
+    )
     from .manuscript_quality import repair_reader_structure_from_existing_prose
 
     bound, post_filter_structural_repairs = repair_reader_structure_from_existing_prose(
@@ -2447,7 +2565,10 @@ def _publish_and_audit_manuscript(
             # logical figure; publication TIFF remains registered for release
             # but is not a LaTeX input.
             fig_paths_for_latex, figures_without_latex_export = (
-                _latex_figure_paths(current_verified_evidence_records)
+                _latex_figure_paths(
+                    current_verified_evidence_records,
+                    run_dir=run_dir,
+                )
             )
             if figures_without_latex_export:
                 findings.append(
@@ -2463,7 +2584,11 @@ def _publish_and_audit_manuscript(
                     )
                 )
             tex = scaffold_to_latex(
-                markdown=bound,
+                # The bound manuscript remains the auditable authority on
+                # disk.  The PDF is a reader artifact, so render the existing
+                # deterministic reader projection rather than exposing raw
+                # numeric-footnote definitions and evidence identifiers.
+                markdown=render_reader_manuscript(bound),
                 title=manuscript_title
                 or f"EasyICU research-agent: {context.research_question}",
                 authors=manuscript_authors or ["EasyICU research-agent"],
@@ -3325,6 +3450,8 @@ def run_write_phase(
         writer_probe_mode=writer_probe_mode,
         writer_probe_failed_steps=writer_probe_failed_steps,
         run_dir=run_dir,
+        reader_display_labels=dict(execute_result.plan.display_labels or {}),
+        manuscript_language=run_language,
     )
     bound_path = binding.bound_path
     manuscript_critique = binding.manuscript_critique

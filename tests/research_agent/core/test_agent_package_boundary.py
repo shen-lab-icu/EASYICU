@@ -79,3 +79,31 @@ def test_production_pipeline_imports_agent_implementations_directly() -> None:
         assert "easyicu.research_agent.agents" not in imported
         assert "easyicu.research_agent.agentic_coder" not in imported
         assert "easyicu.research_agent.agents.core" in imported
+
+
+def test_manuscript_facade_forwards_reader_display_labels(monkeypatch) -> None:
+    from easyicu.research_agent.agents import manuscript, roles
+
+    captured = {}
+
+    class _Writer:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return "draft"
+
+    monkeypatch.setattr(manuscript, "WriterAgent", _Writer)
+    agent = roles.ManuscriptAgent(object())
+
+    result = agent.run(
+        context=object(),
+        evidence_ids=("result",),
+        reader_display_labels={"raw_column": "Clinical label"},
+    )
+
+    assert result == "draft"
+    assert captured["reader_display_labels"] == {
+        "raw_column": "Clinical label"
+    }

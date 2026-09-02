@@ -40,7 +40,7 @@ from easyicu.research_agent.repairs.coordination import (
     deterministic_concept_audit_repair,
 )
 
-_TESTS = Path(__file__).parent
+_TESTS = Path(__file__).parents[1]
 
 #: (attribute name as monkeypatched, the real callable it stands in for).
 #: Entries are added when a host function acquires a keyword argument, which is
@@ -90,7 +90,7 @@ def _double_signatures() -> Iterator[tuple[str, str, str, set[str]]]:
     finds nothing at all.
     """
 
-    for path in sorted(_TESTS.glob("test_*.py")):
+    for path in sorted(_TESTS.rglob("test_*.py")):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:  # pragma: no cover - a broken test file is its own failure

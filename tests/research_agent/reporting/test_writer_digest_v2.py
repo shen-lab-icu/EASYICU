@@ -36,10 +36,25 @@ from easyicu.research_agent.reporting.writer_evidence import (
     _render_writer_evidence_digest,
     _render_writer_evidence_digest_v2,
 )
+from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
 
 def _record(step_id: str, status: str, summary: dict) -> dict:
     return {"step_id": step_id, "status": status, "step_summary": summary}
+
+
+def _context(*, n_stays: int, n_patients: int) -> ResearchContext:
+    return ResearchContext(
+        research_question="Test a prespecified ICU association.",
+        cohort=CohortDescriptor(
+            cohort_name="test cohort",
+            database="synthetic",
+            n_patients=n_patients,
+            n_stays=n_stays,
+        ),
+        variables=[],
+        target_outcome="outcome",
+    )
 
 
 def _register_step_evidence(
@@ -791,7 +806,7 @@ def test_writer_digest_prioritizes_owner_issued_non_ph_survival_results() -> Non
     )
 
 
-def test_primary_digest_flattens_unique_nested_p_value_beside_effect(
+def test_primary_digest_keeps_functional_form_p_value_out_of_primary_effect(
     tmp_path: Path,
 ) -> None:
     digest = _render_writer_evidence_digest(
@@ -812,4 +827,38 @@ def test_primary_digest_flattens_unique_nested_p_value_beside_effect(
     )
 
     assert '"primary_or": 1.96' in digest
-    assert '"p_value": 0.619' in digest
+    assert '"p_value": 0.619' not in digest
+    assert '"functional_form_nonlinearity_p_value": 0.619' in digest
+
+
+def test_primary_digest_labels_source_context_and_projects_population_flow(
+    tmp_path: Path,
+) -> None:
+    context = _context(n_stays=94_458, n_patients=73_221)
+    digest = _render_writer_evidence_digest(
+        per_step_records=[
+            _record(
+                "primary_model",
+                "ok",
+                {
+                    "scientific_runtime_receipt": {
+                        "population_flow": {
+                            "source_cohort": 94_458,
+                            "alive_and_under_observation_at_landmark": 74_526,
+                            "valid_exposure_primary_population": 44_111,
+                            "complete_case_model_population": 44_111,
+                        }
+                    }
+                },
+            )
+        ],
+        context=context,
+        run_dir=tmp_path,
+        include_robustness_panel=False,
+    )
+
+    assert '"source_export_n_stays": 94458' in digest
+    assert '"source_population_role": "pre_analysis_source_export"' in digest
+    assert '"n_stays": 94458' not in digest
+    assert '"registered_population_flow"' in digest
+    assert '"alive_and_under_observation_at_landmark": 74526' in digest

@@ -28,6 +28,7 @@ from easyicu.research_agent.planning.dependence_authority import (
     context_dependence_authority,
 )
 from easyicu.research_agent.planning.scientific_review import (
+    _continuous_linearity_facts,
     _endpoint_resolved,
     _sensitivity_facts,
     build_plan_scientific_review,
@@ -265,6 +266,32 @@ def test_locked_complete_case_replay_credits_exact_typed_sensitivity_id() -> Non
     assert facts["executed_spec_ids"] == ["complete_case_primary"]
     assert facts["missing_spec_ids"] == []
     assert facts["typed_executable"] == ["missing"]
+
+
+def test_compiler_bound_functional_form_step_is_a_distinct_typed_axis() -> None:
+    from easyicu.research_agent.contracts.association_execution import (
+        ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+    )
+
+    functional_form = AnalysisStep(
+        step_id="functional_form_check",
+        planned_analysis_role="sensitivity",
+        intent="Compare the prespecified nonlinear and linear covariate forms.",
+        method="restricted_cubic_spline_sensitivity",
+        inputs=["table:adjusted_association_estimates", "age"],
+        expected_outputs=["table:functional_form_sensitivity"],
+        sensitivity_spec_ids=["candidate_age_functional_form"],
+        scientific_capability=ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+    )
+    plan = _plan().model_copy(update={"steps": [*_plan().steps, functional_form]})
+
+    facts = _sensitivity_facts(_context(), plan)
+
+    assert "functional_form" in facts["executable"]
+    assert "functional_form" in facts["typed_executable"]
+    assert _continuous_linearity_facts(plan)[
+        "functional_form_sensitivity_executable"
+    ] is True
 
 
 def test_signed_landmark_primary_credits_its_typed_runtime_coordinates() -> None:

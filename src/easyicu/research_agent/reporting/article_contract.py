@@ -148,7 +148,16 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
     "causal_protocol": ("target trial", "time zero", "estimand"),
     "balance_positivity": ("balance", "positivity", "weight distribution"),
     "causal_contrast": ("causal contrast", "iptw", "g-computation"),
-    "distribution": ("distribution", "prevalence", "density"),
+    "distribution": (
+        "distribution",
+        "prevalence",
+        "density",
+        # The governed descriptive adapter publishes this typed product rather
+        # than the older ``table:distribution_prevalence`` spelling.  It owns
+        # both the exposure prevalence denominator and the outcome-by-exposure
+        # cells, so it satisfies the descriptive distribution display role.
+        "exposure_outcome_distribution",
+    ),
     "descriptive_result": (
         "prevalence",
         "incidence",

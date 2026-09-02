@@ -382,3 +382,37 @@ def test_host_claim_placement_fails_closed_without_results_section() -> None:
 
     assert placement.inserted_claim_refs == ()
     assert placement.missing_claim_refs == (claim.claim_ref,)
+
+
+def test_host_claim_remains_present_after_deterministic_reader_rounding() -> None:
+    claim = ScientificClaim(
+        schema_version="easyicu.scientific_claim/2",
+        claim_id="observed_absolute_risk_level_0",
+        claim_type="descriptive_absolute_risk",
+        exposure="group=0",
+        outcome="death",
+        direction="descriptive_only",
+        estimand=(
+            "observed absolute risk was 1/3 "
+            "(33.333333 percent; counts only, no confidence interval)"
+        ),
+        population="the primary cohort",
+        analysis_role="primary",
+        status="supported",
+        step_id="distribution",
+        evidence_id="distribution_summary",
+    )
+    expanded = expand_scientific_claim_tokens(
+        "## Results\n\n### Primary association\n\n" + claim.placeholder + "\n",
+        resolve_claim=lambda ref: claim if ref == claim.claim_ref else None,
+    ).scaffold
+    assert "33.333333" in expanded
+    rounded = (
+        expanded.replace("1/3", "1[^claim_1]/3[^claim_2]")
+        .replace("33.333333", "33.333[^claim_3]")
+    )
+
+    assert missing_scientific_claims_in_results(
+        rounded,
+        claims=[claim],
+    ) == ()

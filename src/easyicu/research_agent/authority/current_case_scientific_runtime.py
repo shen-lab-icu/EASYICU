@@ -843,13 +843,14 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         ]
         composite_inputs: tuple[str, ...] | None = None
         if (
-            "table:absolute_risk_context" in declared_products
+            self.adjusted_absolute_risk_product is not None
+            and self.adjusted_absolute_risk_product in declared_products
             and "table:robustness_summary" in declared_products
             and len(measurement_products) == 1
         ):
             composite_inputs = (
                 self.curve_product,
-                "table:absolute_risk_context",
+                self.adjusted_absolute_risk_product,
                 "table:robustness_summary",
                 measurement_products[0],
             )
@@ -887,9 +888,10 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         # Prefer the broad article display over a dedicated robustness figure.
         # Both consume ``table:robustness_summary`` and therefore used to make
         # the candidate set ambiguous.  The article display is the unique
-        # figure that also consumes the generic primary result and absolute-risk
+        # figure that also consumes the generic primary result and descriptive
         # context; after authority binding it can be mechanically upgraded to
-        # the exact four-panel signed renderer.  Preserve the historical
+        # the exact signed renderer with the model-standardised risk curve.
+        # Preserve the historical
         # single-figure fallback when no article display exists.
         composite_candidates = (
             exact_composite_candidates

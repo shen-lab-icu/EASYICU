@@ -100,7 +100,6 @@ ROBUSTNESS_FIGURE_KNOWN_INPUTS = frozenset(
 )
 LANDMARK_ASSOCIATION_COMPOSITE_INPUTS = frozenset(
     {
-        "table:absolute_risk_context",
         "table:robustness_summary",
     }
 )
@@ -338,16 +337,43 @@ def association_sensitivity_composite_panels(
 
 def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
     reserved = {
-        "table:absolute_risk_context",
         "table:robustness_summary",
     }
+    adjusted_risk = _landmark_adjusted_risk_product(source_products)
     matches = [
         value
         for value in source_products
         if value.startswith("table:")
         and value not in reserved
+        and value != adjusted_risk
         and value.partition(":")[2]
         not in {"measurement_process", "measurement_process_audit"}
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _landmark_adjusted_risk_product(
+    source_products: Sequence[str],
+) -> str | None:
+    """Return the unique model-standardised absolute-risk curve product.
+
+    The landmark runtime publishes this curve on the same exposure grid as the
+    ratio-scale primary result.  It is distinct from the generic
+    ``absolute_risk_context`` table, whose continuous-exposure rows describe
+    measurement availability rather than the scientific dose-response claim.
+    """
+
+    accepted_tokens = (
+        "adjusted_absolute_risk",
+        "standardized_absolute_risk",
+        "standardised_absolute_risk",
+        "absolute_risk_curve",
+    )
+    matches = [
+        value
+        for value in source_products
+        if value.startswith("table:")
+        and any(token in value.partition(":")[2] for token in accepted_tokens)
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -366,13 +392,15 @@ def _measurement_process_product(source_products: Sequence[str]) -> str | None:
 def landmark_association_composite_panels(
     source_products: Sequence[str],
 ) -> Tuple[DeterministicFigurePanelTemplate, ...]:
-    """Bind a four-panel landmark-association display to typed parents."""
+    """Bind a claim-led landmark-association display to typed parents."""
 
     cleaned = tuple(str(value or "").strip() for value in source_products)
     curve = _landmark_curve_product(cleaned)
+    adjusted_risk = _landmark_adjusted_risk_product(cleaned)
     measurement = _measurement_process_product(cleaned)
     if (
         curve is None
+        or adjusted_risk is None
         or measurement is None
         or len(cleaned) != 4
         or len(cleaned) != len(set(cleaned))
@@ -387,21 +415,23 @@ def landmark_association_composite_panels(
             source_products=(curve,),
         ),
         DeterministicFigurePanelTemplate(
-            panel_id="absolute_risk_context",
+            panel_id="absolute_risk_curve",
             article_role="descriptive_result",
-            chart_type="dot_interval_absolute_risk",
-            source_products=("table:absolute_risk_context",),
+            chart_type="absolute_risk_curve",
+            source_products=(adjusted_risk,),
         ),
         DeterministicFigurePanelTemplate(
             panel_id="robustness_summary",
             article_role="robustness",
             chart_type="sensitivity_coverage_matrix",
+            placement="supplementary",
             source_products=("table:robustness_summary",),
         ),
         DeterministicFigurePanelTemplate(
             panel_id="measurement_process",
             article_role="data_quality",
             chart_type="availability_panel",
+            placement="supplementary",
             source_products=(measurement,),
         ),
     )

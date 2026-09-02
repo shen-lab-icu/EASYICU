@@ -112,7 +112,7 @@ def _typed_trajectory_run_kwargs(tmp_path):
 
 def _trajectory_test_pipeline(ra, tmp_path, monkeypatch, *, runner_factory):
     import easyicu.research_agent.agents.core as agent_core
-    import easyicu.research_agent.pipeline as pipeline_module
+    import easyicu.research_agent.planning.final_plan_shape as final_plan_module
     from easyicu.research_agent.agents.core import PlannerAgent
 
     original_run = PlannerAgent.run
@@ -128,7 +128,7 @@ def _trajectory_test_pipeline(ra, tmp_path, monkeypatch, *, runner_factory):
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
-        pipeline_module,
+        final_plan_module,
         "_enforce_advanced_plan_contract",
         lambda *, plan, context, **_kwargs: (plan, []),
     )

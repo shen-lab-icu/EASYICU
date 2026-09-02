@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.reporting.latex import scaffold_to_latex
+from easyicu.research_agent.reporting.manuscript_quality import render_reader_manuscript
 from easyicu.research_agent.reporting.pdf_render import render_pdf_for_run
 from easyicu.research_agent.reporting.write_phase import _latex_figure_paths
 
@@ -154,6 +155,88 @@ def test_latex_figure_selection_reports_figures_without_a_safe_export() -> None:
 
     assert selected == []
     assert omitted == ("vector_only_svg",)
+
+
+def test_latex_reader_selection_uses_contract_labels_and_drops_primary_duplicate(
+    tmp_path,
+) -> None:
+    primary_dir = tmp_path / "publication_figures"
+    primary_dir.mkdir()
+    supporting_dir = tmp_path / "steps" / "descriptive" / "outputs"
+    supporting_dir.mkdir(parents=True)
+    cohort_dir = tmp_path / "steps" / "cohort" / "outputs"
+    cohort_dir.mkdir(parents=True)
+
+    def write_contract(path, figure_id, roles):
+        path.write_text(
+            json.dumps(
+                {
+                    "figure_id": figure_id,
+                    "panels": [
+                        {"panel_id": f"p{index}", "role": role}
+                        for index, role in enumerate(roles)
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    write_contract(
+        primary_dir / "easyicu_publication_figure.figure_contract.json",
+        "easyicu_publication_figure",
+        ["distribution", "descriptive_result"],
+    )
+    write_contract(
+        supporting_dir / "descriptive_context.figure_contract.json",
+        "figure:descriptive_context",
+        ["distribution", "descriptive_result"],
+    )
+    write_contract(
+        cohort_dir / "cohort_flow.figure_contract.json",
+        "figure:cohort_flow",
+        ["cohort_accounting"],
+    )
+    records = [
+        SimpleNamespace(
+            kind="figure",
+            evidence_id="step_descriptive_pdf",
+            relative_path="evidence/step_descriptive_pdf__descriptive_context.pdf",
+        ),
+        SimpleNamespace(
+            kind="figure",
+            evidence_id="step_cohort_pdf",
+            relative_path="evidence/step_cohort_pdf__cohort_flow.pdf",
+        ),
+        SimpleNamespace(
+            kind="figure",
+            evidence_id="publication_pdf",
+            relative_path="evidence/publication_pdf__easyicu_publication_figure.pdf",
+        ),
+    ]
+
+    selected, omitted = _latex_figure_paths(records, run_dir=tmp_path)
+
+    assert selected == [
+        (
+            "Primary publication figure",
+            "evidence/publication_pdf__easyicu_publication_figure.pdf",
+        ),
+        ("Cohort flow", "evidence/step_cohort_pdf__cohort_flow.pdf"),
+    ]
+    assert omitted == ()
+
+
+def test_reader_projection_removes_numeric_provenance_definitions_from_pdf_source() -> None:
+    bound = (
+        "# Study\n\n## Results\n\nThe observed risk was 8.21[^claim_1].\n\n"
+        "[^claim_1]: value=8.210047; step=analysis; field=estimate\n"
+    )
+
+    tex = scaffold_to_latex(markdown=render_reader_manuscript(bound))
+
+    assert "Numeric provenance" not in tex
+    assert "claim\\_1" not in tex
+    assert "The observed risk was 8.21" in tex
 
 
 @pytest.mark.skipif(

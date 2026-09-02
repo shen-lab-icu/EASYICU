@@ -21,6 +21,7 @@ from easyicu.research_agent.plan_utils import (
 from easyicu.research_agent.planning.figure_plan_shaping import (
     bind_deterministic_figure_panels,
     dedicated_renderer_consumes_typed_source,
+    ensure_absolute_risk_association_composite_figure_step,
     ensure_cohort_accounting_figure_step,
     ensure_data_quality_figure_step,
     ensure_descriptive_context_figure_step,
@@ -435,6 +436,65 @@ def test_association_gets_unique_descriptive_context_renderer() -> None:
     assert repeated == []
 
 
+def test_adjusted_association_gets_source_bound_absolute_risk_composite() -> None:
+    plan = AnalysisPlan(
+        research_question="Estimate an adjusted association with absolute context.",
+        steps=[
+            AnalysisStep(
+                step_id="absolute_risk_context",
+                planned_analysis_role="secondary",
+                intent="Report observed absolute risk.",
+                method="absolute_risk_context",
+                expected_outputs=["table:absolute_risk_context"],
+            ),
+            AnalysisStep(
+                step_id="adjusted_primary",
+                planned_analysis_role="primary",
+                intent="Estimate the adjusted association.",
+                method="adjusted_association_models",
+                expected_outputs=["table:adjusted_association_estimates"],
+            ),
+            AnalysisStep(
+                step_id="robustness_replay",
+                planned_analysis_role="sensitivity",
+                intent="Replay prespecified alternatives.",
+                method="robustness_sensitivity",
+                expected_outputs=[
+                    "table:robustness_matrix",
+                    "table:robustness_summary",
+                ],
+            ),
+        ],
+    )
+
+    shaped, findings = ensure_absolute_risk_association_composite_figure_step(
+        plan=plan
+    )
+
+    figure = shaped.steps[-1]
+    assert figure.inputs == [
+        "table:absolute_risk_context",
+        "table:adjusted_association_estimates",
+        "table:robustness_matrix",
+        "table:robustness_summary",
+    ]
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+        "robustness",
+    ]
+    assert findings[0].detail["reason_code"] == (
+        "absolute_risk_association_composite_figure_bound"
+    )
+
+    again, repeated = ensure_absolute_risk_association_composite_figure_step(
+        plan=shaped
+    )
+    assert again == shaped
+    assert repeated == []
+
+
 def test_signed_landmark_association_gets_source_bound_composite_renderer() -> None:
     steps = [
         AnalysisStep(
@@ -452,6 +512,7 @@ def test_signed_landmark_association_gets_source_bound_composite_renderer() -> N
             expected_outputs=[
                 "table:landmark_rcs_curve",
                 "table:landmark_rcs_contrasts",
+                "table:landmark_adjusted_absolute_risk",
             ],
         ),
         AnalysisStep(
@@ -479,7 +540,7 @@ def test_signed_landmark_association_gets_source_bound_composite_renderer() -> N
     figure = shaped.steps[-1]
     assert figure.inputs == [
         "table:landmark_rcs_curve",
-        "table:absolute_risk_context",
+        "table:landmark_adjusted_absolute_risk",
         "table:robustness_summary",
         "table:measurement_process_audit",
     ]
@@ -522,7 +583,10 @@ def test_signed_landmark_renderer_reuses_article_step_and_measurement_alias() ->
                 planned_analysis_role="primary",
                 intent="Estimate the signed landmark spline association.",
                 method="signed_landmark_restricted_cubic_spline",
-                expected_outputs=["table:landmark_rcs_curve"],
+                expected_outputs=[
+                    "table:landmark_rcs_curve",
+                    "table:landmark_adjusted_absolute_risk",
+                ],
             ),
             AnalysisStep(
                 step_id="absolute_risk_context",
@@ -572,7 +636,7 @@ def test_signed_landmark_renderer_reuses_article_step_and_measurement_alias() ->
     assert figure.expected_outputs == ["figure:assemble_article_displays"]
     assert figure.inputs == [
         "table:landmark_rcs_curve",
-        "table:absolute_risk_context",
+        "table:landmark_adjusted_absolute_risk",
         "table:robustness_summary",
         "table:measurement_process",
     ]
@@ -612,6 +676,7 @@ def test_result_renderer_selection_keeps_its_order_in_one_owner_call() -> None:
             expected_outputs=[
                 "table:landmark_rcs_curve",
                 "table:landmark_rcs_contrasts",
+                "table:landmark_adjusted_absolute_risk",
             ],
         ),
         AnalysisStep(
@@ -948,3 +1013,32 @@ def test_mixed_renderer_does_not_suppress_exact_article_role_renderers() -> None
     assert exact_renderers[
         ("table:exposure_outcome_distribution",)
     ].figure_panels[0].article_role == "distribution"
+
+
+def test_cohort_accounting_figure_prefers_unique_primary_population_flow() -> None:
+    cohort = AnalysisStep(
+        step_id="define_cohort",
+        planned_analysis_role="auxiliary",
+        intent="Publish the source cohort.",
+        method="cohort_definition_and_attrition",
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+    )
+    primary = AnalysisStep(
+        step_id="primary_model",
+        planned_analysis_role="primary",
+        intent="Estimate the prespecified landmark model.",
+        method="adjusted_association",
+        expected_outputs=[
+            "table:landmark_population_flow",
+            "table:landmark_rcs_contrasts",
+        ],
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[cohort, primary])
+
+    shaped, _ = ensure_cohort_accounting_figure_step(plan=plan)
+
+    renderer = shaped.steps[-1]
+    assert renderer.inputs == ["table:landmark_population_flow"]
+    assert renderer.input_consumption_contracts[0].input_key == (
+        "table:landmark_population_flow"
+    )

@@ -23,6 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..canonical_json import canonical_sha256
 from ..concept_availability import normalize_database_name
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
+from ..contracts.association_execution import (
+    ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
+)
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
 )
@@ -42,7 +45,10 @@ from .dependence_authority import (
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from .publication_readiness import build_publication_readiness_facts
-from .sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
+from .sensitivity_authority import (
+    EXECUTABLE_METHODS_BY_STRATEGY,
+    FUNCTIONAL_FORM_EXECUTABLE_METHODS,
+)
 from .capability_registry import assess_scientific_capability
 
 
@@ -76,8 +82,8 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/2"] = (
-        "easyicu.plan_scientific_review/2"
+    schema_version: Literal["easyicu.plan_scientific_review/4"] = (
+        "easyicu.plan_scientific_review/4"
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -804,6 +810,21 @@ def _sensitivity_facts(
         if executable_scientific_step(step):
             executable.update(axes)
             method = _method_head(step)
+            if (
+                step.planned_analysis_role == "sensitivity"
+                and method in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+                and step.scientific_capability
+                == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                and step.sensitivity_spec_ids
+                and len(step.expected_outputs) == 1
+                and str(step.expected_outputs[0]).startswith("table:")
+            ):
+                # The progressive compiler signs this exact custom-sensitivity
+                # shape against the primary adjusted-association product. It is
+                # plan-owned typed authority awaiting whole-plan approval, not
+                # a prose mention or an unregistered robustness-axis alias.
+                executable.add("functional_form")
+                typed_executable.add("functional_form")
             for spec_id in step.sensitivity_spec_ids:
                 spec = typed_specs.get(spec_id)
                 if (
@@ -924,9 +945,22 @@ def _continuous_linearity_facts(plan: AnalysisPlan) -> dict[str, Any]:
                     identity_terms.append(term.name)
     has_functional_form_sensitivity = any(
         executable_scientific_step(step)
-        and any(
-            token in " ".join([step.step_id, step.intent, step.method or "", *step.expected_outputs]).casefold()
-            for token in ("spline", "nonlinear", "non-linear", "functional form", "fractional polynomial")
+        and (
+            _method_head(step) in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+            or any(
+                token
+                in " ".join(
+                    [step.step_id, step.intent, step.method or "", *step.expected_outputs]
+                ).casefold()
+                for token in (
+                    "spline",
+                    "nonlinear",
+                    "non-linear",
+                    "functional form",
+                    "functional_form",
+                    "fractional polynomial",
+                )
+            )
         )
         for step in scientific_steps(plan)
     )

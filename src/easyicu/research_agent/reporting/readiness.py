@@ -79,6 +79,10 @@ from .completion import (
     run_completion_axes,
     step_completion_projection,
 )
+from .manuscript_gate_state import (
+    GATE_STATE_SUPERSESSION_PATTERNS,
+    current_manuscript_completion_state,
+)
 from ..authority.evidence_store import (
     EvidenceStore,
     sha256_of_file,
@@ -1026,71 +1030,6 @@ def _step_ids_in_records(per_step_records: Sequence[Dict[str, Any]]) -> set:
     }
 
 
-_GATE_STATE_SUPERSESSION_PATTERNS = (
-    # Common "we skipped X because gate Y did not pass" / "X was not
-    # produced because Y failed" findings emitted when a gate was
-    # transiently False during the run. If the gate is now True at
-    # report time, the finding is stale and should not count.
-    (
-        "manuscript_gate",
-        "execution gate did not pass",
-        "execution_complete",
-    ),
-    (
-        "manuscript_gate",
-        "manuscript generation skipped",
-        "execution_complete",
-    ),
-    (
-        "robustness_panel",
-        "locked robustness specifications that no step estimated",
-        "robustness_panel_complete",
-    ),
-    (
-        "evidence_bound_writer",
-        "strict evidence enforcement blocked manuscript generation",
-        "manuscript_bound_clean",
-    ),
-    (
-        "evidence_bound_writer",
-        "bound manuscript is empty or non-substantive",
-        "manuscript_bound_clean",
-    ),
-    (
-        "writer_agent",
-        "failed before producing a manuscript scaffold",
-        "manuscript_bound_clean",
-    ),
-    (
-        "manuscript_literature",
-        "manuscript literature authority is incomplete",
-        "manuscript_literature_complete",
-    ),
-    (
-        "manuscript_numeric_auditor",
-        "strict evidence enforcement blocked manuscript generation",
-        "manuscript_numeric_bound_clean",
-    ),
-    (
-        "critic_agent",
-        "criticagent marked manuscript",
-        "manuscript_critique_passed",
-    ),
-    # A caveat-count finding cannot tell which writer pass it came
-    # from, so an earlier pass's "cites records with unresolved
-    # manifest caveats" error survives a later clean rewrite (e.g. a
-    # resume whose new draft cites only caveat-free records). Gate it
-    # on the CURRENT bound text: if the latest manuscript carries no
-    # `<!-- warning|error: see manifest -->` comments, the finding is
-    # stale; if the latest text still has caveats, it stays active.
-    (
-        "evidence_bound_writer",
-        "unresolved manifest caveats",
-        "manuscript_manifest_caveats_clean",
-    ),
-)
-
-
 def _is_gate_state_superseded(
     finding: ValidationFinding,
     *,
@@ -1113,7 +1052,7 @@ def _is_gate_state_superseded(
         and gate_state.get("manuscript_numeric_audit_clean")
     ):
         return True
-    for v_match, msg_substr, gate_key in _GATE_STATE_SUPERSESSION_PATTERNS:
+    for v_match, msg_substr, gate_key in GATE_STATE_SUPERSESSION_PATTERNS:
         if v_match == validator and msg_substr.lower() in message:
             if gate_state.get(gate_key):
                 return True
@@ -1849,6 +1788,8 @@ def _compute_readiness_gates(
         ),
         "manuscript_critique_passed": False,
         "manuscript_literature_complete": False,
+        "manuscript_quality_complete": False,
+        "manuscript_result_claims_complete": False,
         "robustness_panel_complete": False,
     }
     if (
@@ -1872,6 +1813,16 @@ def _compute_readiness_gates(
     current_gate_state["robustness_panel_complete"] = bool(
         current_robustness_panel is not None
         and not unexecuted_locked_spec_ids(current_robustness_panel)
+    )
+    current_gate_state.update(
+        current_manuscript_completion_state(
+            run_dir=Path(run_dir),
+            manuscript_text=manuscript_text,
+            evidence=evidence,
+            per_step_records=per_step_records,
+            stop_after_analysis=stop_after_analysis,
+            writer_probe_mode=writer_probe_mode,
+        )
     )
     critique_path = run_dir / "manuscript_critique.json"
     if critique_path.exists():

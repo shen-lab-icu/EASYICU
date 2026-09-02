@@ -62,7 +62,7 @@ from easyicu.research_agent.execution.runners.typed_input_binding import (
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, EvidenceRef
 
-from .test_development_typed_binding_projection import (
+from tests.research_agent.core.test_development_typed_binding_projection import (
     _Lock,
     _arrange_projection,
     _register_full_universe_producer_output,

@@ -239,6 +239,62 @@ def test_grouped_table_one_matches_json_integer_levels_to_parquet_floats():
     assert table.loc[table["group"] == "1", "denominator_n"].eq(3).all()
 
 
+def test_grouped_table_one_restores_declared_boolean_from_float_zero_one():
+    frame = pd.DataFrame(
+        {
+            "exposed": [0.0, 0.0, 1.0, 1.0],
+            "readmitted": [0.0, 1.0, 0.0, 1.0],
+        }
+    )
+    spec = {
+        "group_by": "exposed",
+        "group_levels": [False, True],
+        "variables": [
+            {
+                "name": "readmitted",
+                "variable_kind": "categorical",
+                "summary": "count_percent",
+                "test": "chi_square_with_fisher_exact_for_sparse_2x2",
+                "levels": [False, True],
+            }
+        ],
+    }
+
+    table = build_grouped_table_one(frame, spec)
+
+    assert set(table["group"]) == {"Overall", "False", "True"}
+    assert set(table["category"]) == {"False", "True"}
+    assert frame.dtypes.to_dict() == {
+        "exposed": "float64",
+        "readmitted": "float64",
+    }
+
+
+def test_grouped_table_one_does_not_coerce_non_binary_numeric_to_boolean():
+    frame = pd.DataFrame(
+        {
+            "exposed": [0.0, 1.0, 2.0],
+            "readmitted": [0.0, 1.0, 0.0],
+        }
+    )
+    spec = {
+        "group_by": "exposed",
+        "group_levels": [False, True],
+        "variables": [
+            {
+                "name": "readmitted",
+                "variable_kind": "categorical",
+                "summary": "count_percent",
+                "test": "chi_square_with_fisher_exact_for_sparse_2x2",
+                "levels": [False, True],
+            }
+        ],
+    }
+
+    with pytest.raises(TableOneContractError, match="outside the Planner-declared"):
+        build_grouped_table_one(frame, spec)
+
+
 def test_grouped_table_one_rejects_missing_group_values():
     frame = _frame()
     frame.loc[0, "arm"] = None
