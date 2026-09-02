@@ -233,15 +233,24 @@ class ScientificConfiguration:
     def decision_is_resolved(self, decision_code: str) -> bool:
         confirmations = _mapping(self.study.get("confirmations"))
         code = str(decision_code or "").strip()
+        if code == "REPEATED_STAY_IDENTITY_UNAVAILABLE":
+            design = _mapping(self.study.get("analysis_design"))
+            cohort = _mapping(self.study.get("cohort"))
+            clustered = (
+                confirmations.get("plan_repeated_stays_clustered") is True
+                and design.get("variance_estimator") == "cluster_robust"
+                and design.get("cluster_unit") == "patient"
+            )
+            first_stay = (
+                confirmations.get("plan_repeated_stays_first") is True
+                and cohort.get("exclude_readmissions") is True
+            )
+            return clustered or first_stay
         keys = {
             "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED": (
                 "plan_timing_landmark_24h",
                 "plan_timing_descriptive_only",
                 "plan_timing_time_varying",
-            ),
-            "REPEATED_STAY_IDENTITY_UNAVAILABLE": (
-                "plan_repeated_stays_clustered",
-                "plan_repeated_stays_first",
             ),
             "ADJUSTMENT_SET_NOT_USER_CONFIRMED": ("plan_adjustment_set_confirmed",),
             "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY": (
