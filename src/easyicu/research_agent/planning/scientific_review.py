@@ -432,6 +432,7 @@ def repeated_unit_design_closed(
             model_requirements
             or distribution is not None
             or method in _EXECUTABLE_DEPENDENCE_METHODS
+            or method == "signed_landmark_restricted_cubic_spline"
             or signed_landmark_dependence
             or method == "non_readmission_restriction"
         ):
