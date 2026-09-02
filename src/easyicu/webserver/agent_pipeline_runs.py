@@ -106,6 +106,7 @@ from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     WebReviewRecoverySeed,
     get_record as get_review_recovery_record,
+    load_recovery_seed,
     pending_from_record,
     put_record as put_review_recovery_record,
     put_recovery_seed,
@@ -4113,6 +4114,51 @@ def make_research_pipeline_run_runner(
                 development_planner_efficiency_max_wall_seconds=None,
                 **profile_options,
             )
+            original_recovery_seed = (
+                load_recovery_seed(wrapper_dir)
+                if execution_resume_target is not None
+                else None
+            )
+            if execution_resume_target is not None:
+                if original_recovery_seed is None:
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_execution_retry_recovery_seed_missing",
+                        "The approved run's exact recovery configuration is missing; "
+                        "generate a new plan.",
+                    )
+                current_scientific_digest = (
+                    study_context_owner.scientific_configuration_sha256(study)
+                )
+                if (
+                    original_recovery_seed.scientific_configuration_sha256
+                    != current_scientific_digest
+                    or original_recovery_seed.prepared_package_binding
+                    != prepared_package_binding
+                ):
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_execution_retry_recovery_seed_superseded",
+                        "The approved run's recovery configuration no longer binds "
+                        "the current study and prepared package; generate a new plan.",
+                    )
+                try:
+                    config = PipelineConfig.from_recovery_payload(
+                        original_recovery_seed.pipeline_config,
+                        expected_digest=(
+                            original_recovery_seed.pipeline_config_sha256
+                        ),
+                    )
+                except ValueError as exc:
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_execution_retry_recovery_seed_invalid",
+                        "The approved run's exact recovery configuration is invalid; "
+                        "generate a new plan.",
+                    ) from exc
+                if Path(config.workdir).resolve() != (wrapper_dir / "pipeline").resolve():
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_execution_retry_recovery_seed_invalid",
+                        "The approved run's recovery configuration points outside "
+                        "the selected pipeline.",
+                    )
             pipeline = ResearchAgentPipeline.from_config(
                 config,
                 services=PipelineServices(
@@ -4132,32 +4178,38 @@ def make_research_pipeline_run_runner(
                     "research_pipeline_review_config_not_recoverable",
                     "The run configuration cannot be reconstructed safely.",
                 ) from exc
-            recovery_seed = WebReviewRecoverySeed.create(
-                wrapper_dir=str(wrapper_dir.resolve()),
-                study=study,
-                scientific_configuration_sha256=(
-                    study_context_owner.scientific_configuration_sha256(study)
-                ),
-                provider_meta=dict(provider),
-                provider_public=dict(provider_public),
-                credential_source=selected_credential_source,
-                budget_mode=selected_budget_mode,
-                prepared_package_binding=prepared_package_binding,
-                pipeline_config=config_payload,
-                pipeline_config_sha256=config.canonical_digest(),
-                acquisition_projection=_acquisition_recovery_projection(acquisition),
-                hard_stop_ledger_path=str(provider_hard_stop.ledger.path.resolve()),
-                hard_stop_task_id=str(provider_hard_stop.task_id),
-                hard_stop_declaration_sha256=(
-                    study_context_owner.scientific_configuration_sha256(study)
-                ),
-                created_at=time.time(),
-            )
-            # This local seed precedes Planner execution. If the process dies
-            # after the pipeline checkpoint but before the global index update,
-            # bounded reconciliation can still discover the exact pause.
-            register_pipeline_work_root(root)
-            put_recovery_seed(recovery_seed)
+            recovery_seed = original_recovery_seed
+            if recovery_seed is None:
+                recovery_seed = WebReviewRecoverySeed.create(
+                    wrapper_dir=str(wrapper_dir.resolve()),
+                    study=study,
+                    scientific_configuration_sha256=(
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                    provider_meta=dict(provider),
+                    provider_public=dict(provider_public),
+                    credential_source=selected_credential_source,
+                    budget_mode=selected_budget_mode,
+                    prepared_package_binding=prepared_package_binding,
+                    pipeline_config=config_payload,
+                    pipeline_config_sha256=config.canonical_digest(),
+                    acquisition_projection=(
+                        _acquisition_recovery_projection(acquisition)
+                    ),
+                    hard_stop_ledger_path=str(
+                        provider_hard_stop.ledger.path.resolve()
+                    ),
+                    hard_stop_task_id=str(provider_hard_stop.task_id),
+                    hard_stop_declaration_sha256=(
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                    created_at=time.time(),
+                )
+                # This local seed precedes Planner execution. If the process dies
+                # after the pipeline checkpoint but before the global index update,
+                # bounded reconciliation can still discover the exact pause.
+                register_pipeline_work_root(root)
+                put_recovery_seed(recovery_seed)
             preferences = _research_user_preferences(
                 candidate_planning_study,
                 patient_grouping=patient_grouping,

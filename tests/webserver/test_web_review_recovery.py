@@ -19,6 +19,7 @@ from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     WebReviewRecoveryRecord,
     WebReviewRecoverySeed,
+    load_recovery_seed,
     get_record,
     put_record,
     put_recovery_seed,
@@ -172,6 +173,30 @@ def test_planner_only_recovery_seed_does_not_claim_package_authority() -> None:
 
     assert seed.prepared_package_binding is None
     assert seed.budget_mode == "planner_canary"
+
+
+def test_local_recovery_seed_round_trips_without_overwrite(tmp_path) -> None:
+    wrapper = tmp_path / "run_job"
+    seed = WebReviewRecoverySeed.create(
+        wrapper_dir=str(wrapper.resolve()),
+        study={"id": "study_a", "question": "A question"},
+        scientific_configuration_sha256="a" * 64,
+        provider_meta={"provider": "openai", "external": True},
+        provider_public={"provider": "openai", "model": "model-a"},
+        credential_source="pi_verified",
+        budget_mode="planner_canary",
+        prepared_package_binding=None,
+        pipeline_config={"workdir": str(wrapper / "pipeline")},
+        pipeline_config_sha256="c" * 64,
+        acquisition_projection={"selected_concepts": ["lact", "death"]},
+        hard_stop_ledger_path=str(wrapper / ".runtime" / "ledger.json"),
+        hard_stop_task_id="web-job-a",
+        hard_stop_declaration_sha256="b" * 64,
+        created_at=1.0,
+    )
+    put_recovery_seed(seed)
+
+    assert load_recovery_seed(wrapper) == seed
 
 
 def test_reviewed_execution_recovery_seed_requires_package_authority() -> None:
