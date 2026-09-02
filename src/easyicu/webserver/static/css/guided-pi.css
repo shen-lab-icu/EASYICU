@@ -358,6 +358,9 @@
 .gpi-resource-link:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:2px;border-radius:2px}
 .gpi-resource-list{display:flex;flex-wrap:wrap;gap:5px 10px;margin:5px 0 3px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--wash) 72%,var(--paper))}
 .gpi-resource-list .gpi-resource-link{font-size:13px}
+.gpi-literature-resource-list{display:grid;gap:5px;margin:5px 0 3px;padding:7px 9px 7px 34px;list-style:decimal}
+.gpi-literature-resource-list li{min-width:0;padding-left:2px;color:var(--ink-3);font-size:13px;line-height:1.45}
+.gpi-literature-resource-list .gpi-resource-link{display:block;width:100%}
 .gpi-message-resources{margin-top:16px;padding-top:10px;border-top:1px solid var(--line)}
 .gpi-message-resources .gpi-resource-list{margin-top:6px}
 .gpi-resource-section+.gpi-resource-section{margin-top:10px}

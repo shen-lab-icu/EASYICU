@@ -6140,6 +6140,15 @@ def test_idea_resources_separate_topic_search_from_folded_method_references() ->
       const html = resources.renderForMessage({{
         resources: [
           {{kind: 'idea_plan', run_id: 'idea-1', artifact: 'idea_plan.json', label: 'raw plan'}},
+          {{kind: 'literature_source', authority_class: 'literature_retrieval_candidate', pmid: '101',
+            title: 'First topic paper', label: 'First topic paper',
+            url: 'https://pubmed.ncbi.nlm.nih.gov/101/'}},
+          {{kind: 'literature_source', authority_class: 'literature_retrieval_candidate', pmid: '102',
+            title: 'Second topic paper', label: 'Second topic paper',
+            url: 'https://pubmed.ncbi.nlm.nih.gov/102/'}},
+          {{kind: 'literature_source', authority_class: 'literature_retrieval_candidate', pmid: '103',
+            title: 'Third topic paper', label: 'Third topic paper',
+            url: 'https://pubmed.ncbi.nlm.nih.gov/103/'}},
           {{kind: 'literature_source', authority_class: 'literature_method', pmid: '12345',
             title: 'Generic method reference', label: 'Generic method reference',
             url: 'https://pubmed.ncbi.nlm.nih.gov/12345/'}},
@@ -6160,7 +6169,9 @@ def test_idea_resources_separate_topic_search_from_folded_method_references() ->
     assert "查看方案" in html
     assert "Idea Mining 方案预览" in html
     assert "本题文献检索" in html
-    assert "本轮没有可展示的本题检索候选" in html
+    assert '<ol class="gpi-resource-list gpi-literature-resource-list">' in html
+    assert html.count('<li><button class="gpi-resource-link"') == 3
+    assert html.index("First topic paper") < html.index("Second topic paper") < html.index("Third topic paper")
     assert "方法学参考（1）" in html
     assert "通用设计参考，不是本题检索结果" in html
     assert '<details class="gpi-method-literature">' in html
