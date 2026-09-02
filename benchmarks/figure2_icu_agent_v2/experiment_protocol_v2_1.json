@@ -47,7 +47,7 @@
     {
       "role": "heldout27_evaluation_rubric",
       "path": "benchmarks/figure2_icu_agent_v2/heldout27_evaluation_rubric_v2.json",
-      "sha256": "b8b1e033c03f2f9b82d25960756643ed294c9e9cb3a386e31681ef5c4f9963ac"
+      "sha256": "c69bc36f57d231b87ea52d13cb55078fea3ebb72924096da8ad70a9e584a79c6"
     },
     {
       "role": "statistical_analysis_plan",
@@ -82,17 +82,17 @@
     {
       "role": "review_bundle_contract",
       "path": "benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json",
-      "sha256": "c11d3daccae9483894e4e55adce9186e9b25aa216354e239a64db65220a9ba0e"
+      "sha256": "886aaf90f78a7f5da213e3bdfe4967946e337043b146ee67f6fb3bf2fe6335d8"
     },
     {
       "role": "preregistration_plan",
       "path": "benchmarks/figure2_icu_agent_v2/preregistration_plan_v1.json",
-      "sha256": "ed92e648a56e2db3db461347cb663973d56816b55e03d717a01296e4813dba1f"
+      "sha256": "80dfee31728993ed78d7381a14e89b84002d18518110b93dda34381434fd30ac"
     },
     {
       "role": "formal_launch_contract",
       "path": "benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json",
-      "sha256": "4490f37ecb09da5a91ae37335e0d86bb54109e808284b36075b7efb068a7be0f"
+      "sha256": "bf454a5233649c406a7209ae0dae4504519077bf6f9d8d8864d3b82c00dee2fe"
     },
     {
       "role": "idea_to_evidence_protocol",

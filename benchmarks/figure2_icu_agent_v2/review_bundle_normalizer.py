@@ -17,23 +17,17 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
+from .review_bundle_semantics import CANONICAL_FILES
 
-CANONICAL_FILES = (
-    "01_plan.json",
-    "02_cohort.json",
-    "03_results.json",
-    "04_diagnostics.json",
-    "05_evidence_manifest.json",
-    "06_report.md",
-    "07_run_receipt.json",
-)
+
 ACTION_SPACE_PATH = Path(__file__).resolve().parent / "action_space_v1.json"
 _SCIENTIFIC_JSON_FILES = frozenset(CANONICAL_FILES[:5])
 _RECEIPT_VISIBLE_FIELDS = (
     "terminal_status",
     "within_frozen_budget",
     "failure_category",
-    "mandatory_artifact_presence",
+    "agent_asserted_mandatory_artifact_presence",
+    "substantive_output_files",
 )
 _REDACTIONS = (
     ("easyicu_name", re.compile(r"\bEasyICU\b", re.IGNORECASE), "the producing workflow"),
@@ -392,7 +386,10 @@ def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
                     "REVIEW_BUNDLE_RECEIPT_FIELD_MISSING",
                     repr(missing),
                 )
-            artifact_presence = receipt["mandatory_artifact_presence"]
+            artifact_presence = receipt[
+                "agent_asserted_mandatory_artifact_presence"
+            ]
+            substantive_output_files = receipt["substantive_output_files"]
             if (
                 not isinstance(receipt["terminal_status"], str)
                 or not receipt["terminal_status"].strip()
@@ -408,6 +405,17 @@ def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
                     or not label.strip()
                     or not isinstance(present, bool)
                     for label, present in artifact_presence.items()
+                )
+                or set(substantive_output_files)
+                != {
+                    "02_cohort.json",
+                    "03_results.json",
+                    "04_diagnostics.json",
+                    "06_report.md",
+                }
+                or any(
+                    not isinstance(present, bool)
+                    for present in substantive_output_files.values()
                 )
             ):
                 raise ReviewBundleNormalizationError(

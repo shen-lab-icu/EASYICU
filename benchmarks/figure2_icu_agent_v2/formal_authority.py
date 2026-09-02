@@ -22,9 +22,39 @@ from .design_errors import DesignContractError
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = PACKAGE_ROOT.parents[1]
 PROTOCOL_PATH = PACKAGE_ROOT / "experiment_protocol_v2_1.json"
 LAUNCH_CONTRACT_PATH = PACKAGE_ROOT / "formal_launch_contract_v1.json"
 PREREGISTRATION_PLAN_PATH = PACKAGE_ROOT / "preregistration_plan_v1.json"
+REGISTERED_SOURCE_PATHS = {
+    "validator_sha256": PACKAGE_ROOT / "design_v2_1.py",
+    "validator_test_sha256": (
+        REPO_ROOT / "tests/benchmarks/figure2_icu_agent_v2/test_design_v2_1.py"
+    ),
+    "formal_authority_sha256": PACKAGE_ROOT / "formal_authority.py",
+    "formal_authority_test_sha256": (
+        REPO_ROOT
+        / "tests/benchmarks/figure2_icu_agent_v2/test_formal_runtime_v2_1.py"
+    ),
+    "formal_provider_gate_sha256": PACKAGE_ROOT / "formal_provider_gate.py",
+    "formal_easyicu_runner_sha256": PACKAGE_ROOT / "formal_easyicu_runner.py",
+    "formal_generic_runner_sha256": PACKAGE_ROOT / "formal_generic_runner.py",
+    "generic_harness_sha256": PACKAGE_ROOT / "generic_code_agent_harness.py",
+    "easyicu_review_adapter_sha256": (
+        PACKAGE_ROOT / "easyicu_review_bundle_adapter.py"
+    ),
+    "review_bundle_normalizer_sha256": (
+        PACKAGE_ROOT / "review_bundle_normalizer.py"
+    ),
+    "review_bundle_semantics_sha256": PACKAGE_ROOT / "review_bundle_semantics.py",
+    "formal_scheduler_sha256": PACKAGE_ROOT / "formal_scheduler.py",
+    "blinded_evaluator_sha256": PACKAGE_ROOT / "blinded_evaluator.py",
+    "formal_implementation_owner_test_sha256": (
+        REPO_ROOT
+        / "tests/benchmarks/figure2_icu_agent_v2/"
+        "test_formal_implementation_owners.py"
+    ),
+}
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SCOPE_RECEIPT_GROUPS = {
@@ -202,10 +232,27 @@ def _validate_registration_details(
         "validator_test_sha256",
         "formal_authority_sha256",
         "formal_authority_test_sha256",
+        "formal_provider_gate_sha256",
+        "formal_easyicu_runner_sha256",
+        "formal_generic_runner_sha256",
+        "generic_harness_sha256",
+        "easyicu_review_adapter_sha256",
+        "review_bundle_normalizer_sha256",
+        "review_bundle_semantics_sha256",
+        "formal_scheduler_sha256",
+        "blinded_evaluator_sha256",
+        "formal_implementation_owner_test_sha256",
     ):
         _require_sha256(registration[field], field=f"registration.{field}")
     if registration["protocol_sha256"] != binding["protocol_sha256"]:
         _fail("FORMAL_AUTHORITY_REGISTRATION_BINDING_MISMATCH", "protocol_sha256")
+    for field, path in REGISTERED_SOURCE_PATHS.items():
+        try:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            _fail("FORMAL_AUTHORITY_REGISTERED_SOURCE_UNREADABLE", str(path))
+        if registration[field] != actual:
+            _fail("FORMAL_AUTHORITY_REGISTERED_SOURCE_MISMATCH", field)
     if registration["design_commit"] != binding["design_commit"]:
         _fail("FORMAL_AUTHORITY_REGISTRATION_BINDING_MISMATCH", "design_commit")
     if registration["annotated_tag"] != binding["annotated_tag"]:
@@ -225,10 +272,10 @@ def _validate_receipt_payload(
     receipt: Mapping[str, Any],
     *,
     receipt_id: str,
-    description: str,
     binding: Mapping[str, str],
     signer_id: str,
     public_key_text: str,
+    registration_receipt_ids: frozenset[str],
 ) -> None:
     required = {
         "schema_version",
@@ -257,9 +304,7 @@ def _validate_receipt_payload(
     _require_utc_timestamp(
         receipt["issued_at_utc"], field=f"receipt_payloads.{receipt_id}.issued_at_utc"
     )
-    if "external registration receipt" in description or (
-        "external preregistration receipt" in description
-    ):
+    if receipt_id in registration_receipt_ids:
         _validate_registration_details(
             receipt.get("details"),
             binding=binding,
@@ -268,25 +313,17 @@ def _validate_receipt_payload(
         )
 
 
-def _validate_coordinate(value: Any, *, expected: Mapping[str, Any]) -> None:
+def _normalize_coordinate(value: Any, *, field: str) -> dict[str, str]:
     coordinate = _require_mapping(value, field="authorized_call_coordinate")
     required = {"scope", "task_id", "arm", "call_id"}
     _require_exact_keys(
-        coordinate, field="authorized_call_coordinate", expected=required
+        coordinate, field=field, expected=required
     )
     normalized = {
-        key: _require_nonempty_string(coordinate.get(key), field=f"coordinate.{key}")
+        key: _require_nonempty_string(coordinate.get(key), field=f"{field}.{key}")
         for key in sorted(required)
     }
-    expected_normalized = {
-        key: _require_nonempty_string(expected.get(key), field=f"requested.{key}")
-        for key in sorted(required)
-    }
-    if normalized != expected_normalized:
-        _fail(
-            "FORMAL_AUTHORITY_COORDINATE_MISMATCH",
-            f"requested={expected_normalized!r}",
-        )
+    return normalized
 
 
 def _verify_signature(
@@ -344,7 +381,7 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         field="authority_payload",
         expected={"receipts", "call_coordinate"},
     )
-    requested_coordinate = _require_mapping(
+    requested_coordinate = _normalize_coordinate(
         payload["call_coordinate"], field="call_coordinate"
     )
     envelope = _require_mapping(payload["receipts"], field="receipts")
@@ -405,25 +442,32 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
     coordinates = declaration["authorized_call_coordinates"]
     if not isinstance(coordinates, list) or not coordinates:
         _fail("FORMAL_AUTHORITY_FIELD_INVALID", "authorized_call_coordinates")
-    canonical_coordinates = [_canonical_json_bytes(item) for item in coordinates]
+    normalized_coordinates = [
+        _normalize_coordinate(item, field="authorized_call_coordinates[]")
+        for item in coordinates
+    ]
+    canonical_coordinates = [
+        _canonical_json_bytes(item) for item in normalized_coordinates
+    ]
     if len(canonical_coordinates) != len(set(canonical_coordinates)):
         _fail("FORMAL_AUTHORITY_COORDINATE_DUPLICATE", scope)
     if not any(
-        _canonical_json_bytes(item) == _canonical_json_bytes(requested_coordinate)
-        for item in coordinates
+        item == requested_coordinate for item in normalized_coordinates
     ):
         _fail("FORMAL_AUTHORITY_COORDINATE_NOT_DECLARED", repr(requested_coordinate))
-    for coordinate in coordinates:
-        coordinate_mapping = _require_mapping(
-            coordinate, field="authorized_call_coordinates[]"
-        )
-        _validate_coordinate(coordinate_mapping, expected=coordinate_mapping)
-        if coordinate_mapping.get("scope") != scope:
-            _fail("FORMAL_AUTHORITY_SCOPE_MISMATCH", repr(coordinate_mapping))
-    _validate_coordinate(requested_coordinate, expected=requested_coordinate)
+    for coordinate in normalized_coordinates:
+        if coordinate["scope"] != scope:
+            _fail("FORMAL_AUTHORITY_SCOPE_MISMATCH", repr(coordinate))
 
     expected_receipts = _expected_receipts(launch, scope)
     expected_receipt_ids = set(expected_receipts)
+    raw_registration_receipt_ids = launch.get("registration_receipt_ids")
+    if not isinstance(raw_registration_receipt_ids, list) or not all(
+        isinstance(receipt_id, str) and receipt_id
+        for receipt_id in raw_registration_receipt_ids
+    ):
+        _fail("FORMAL_AUTHORITY_CONTRACT_INVALID", "registration_receipt_ids")
+    registration_receipt_ids = frozenset(raw_registration_receipt_ids)
     signed_digests = _require_mapping(
         declaration["receipt_sha256"], field="receipt_sha256"
     )
@@ -450,10 +494,10 @@ def authorize_formal_provider_call(authority_payload: Mapping[str, Any]) -> dict
         _validate_receipt_payload(
             receipt,
             receipt_id=receipt_id,
-            description=expected_receipts[receipt_id],
             binding=expected_binding,
             signer_id=signer_id,
             public_key_text=public_key_text,
+            registration_receipt_ids=registration_receipt_ids,
         )
         actual_digest = _sha256_bytes(_canonical_json_bytes(receipt))
         if actual_digest != signed_digest:

@@ -2,6 +2,12 @@
   "schema_version": "easyicu.arm_neutral_review_bundle/1",
   "contract_ref": "easyicu.figure2_icu_agent_v2/review-bundle-20260901-v1-review",
   "status": "review_candidate_normalizer_implemented_no_formal_authority",
+  "implementation_owners": {
+    "easyicu_producer": "benchmarks/figure2_icu_agent_v2/easyicu_review_bundle_adapter.py",
+    "generic_producer": "benchmarks/figure2_icu_agent_v2/generic_code_agent_harness.py",
+    "shared_structural_semantics": "benchmarks/figure2_icu_agent_v2/review_bundle_semantics.py",
+    "arm_neutral_normalizer": "benchmarks/figure2_icu_agent_v2/review_bundle_normalizer.py"
+  },
   "applies_to": [
     "easyicu_full",
     "generic_code_agent"
@@ -37,7 +43,8 @@
         "neutral terminal status",
         "within every frozen budget: yes or no",
         "neutral failure category field always present and null when not applicable",
-        "mandatory artifact presence flags"
+        "agent-asserted mandatory-artifact presence flags, explicitly labeled as assertions",
+        "harness-computed substantive-output-file flags for cohort, results, diagnostics, and report"
       ],
       "reviewer_hidden_until_scores_lock": [
         "raw wall time",
