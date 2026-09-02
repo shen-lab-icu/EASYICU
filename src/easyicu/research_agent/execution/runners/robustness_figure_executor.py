@@ -160,6 +160,19 @@ _SIGNED_LANDMARK_PROJECTION_COLUMNS = frozenset(
         "notes",
     }
 )
+_SIGNED_LANDMARK_ODDS_RATIO_COLUMNS = frozenset(
+    {
+        "spec_id",
+        "axis",
+        "n",
+        "events",
+        "odds_ratio",
+        "ci_low",
+        "ci_high",
+        "converged",
+        "fit_method",
+    }
+)
 
 #: The same, for the specification grid: its guaranteed columns and the stem
 #: the producer writes it to.
@@ -190,6 +203,7 @@ def _binding_is_producer_contract(binding: Any) -> bool:
     return columns is not None and (
         _PRODUCER_CONTRACT_COLUMNS <= columns
         or _SIGNED_LANDMARK_PROJECTION_COLUMNS <= columns
+        or _SIGNED_LANDMARK_ODDS_RATIO_COLUMNS <= columns
     )
 
 
@@ -414,9 +428,15 @@ def _load_matrix(
 
     columns = product_contract.get("columns")
     row_count = product_contract.get("row_count")
+    declared_columns = (
+        {str(name) for name in columns} if isinstance(columns, list) else set()
+    )
+    normalized_columns = set(declared_columns)
+    if _SIGNED_LANDMARK_ODDS_RATIO_COLUMNS <= declared_columns:
+        normalized_columns.update({"point_estimate", "effect_scale"})
     if (
         not isinstance(columns, list)
-        or not set(_READ_COLUMNS).issubset({str(name) for name in columns})
+        or not set(_READ_COLUMNS).issubset(normalized_columns)
         or isinstance(row_count, bool)
         or not isinstance(row_count, int)
         or row_count < 1
@@ -425,6 +445,9 @@ def _load_matrix(
         raise ValueError("robustness matrix product contract is unsupported")
 
     frame = pd.read_csv(path)
+    if _SIGNED_LANDMARK_ODDS_RATIO_COLUMNS <= set(frame.columns):
+        frame = frame.rename(columns={"odds_ratio": "point_estimate"})
+        frame["effect_scale"] = "odds_ratio"
     if not set(_READ_COLUMNS).issubset(set(frame.columns)) or len(frame) != row_count:
         raise ValueError("robustness matrix bytes disagree with its product contract")
     if _canonical_sha256(path) != expected_sha256:
