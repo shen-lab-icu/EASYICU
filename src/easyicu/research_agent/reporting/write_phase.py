@@ -79,7 +79,6 @@ from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_k
 from ..orchestration.profiles import is_paper_facing_profile
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
-from ..providers.structured_retry import StructuredResponseFailure
 from .manuscript_post import (
     _apply_writer_evidence_repair_decisions,
     _writer_repair_target_span,
@@ -104,8 +103,8 @@ from .manuscript_state import (
     MANIFEST_COMMENT_RE as _MANIFEST_COMMENT_RE,
 )
 from .manuscript_state import ManuscriptState, render_not_generated
+from .manuscript_repair_pass import ManuscriptRepairPass
 from .writer_evidence_repair import decide_writer_evidence_repairs
-from .writer_repair_decision import drop_every_sentence
 from ..replication.notebook import (
     NotebookStep,
     build_notebook,
@@ -170,9 +169,7 @@ def _latex_figure_paths(
         if not relative_path:
             continue
         evidence_id = str(getattr(record, "evidence_id", "") or "")
-        logical_key = evidence_artifact_basename_stem(
-            Path(relative_path), evidence_id
-        )
+        logical_key = evidence_artifact_basename_stem(Path(relative_path), evidence_id)
         suffix = Path(relative_path).suffix.lower()
         if suffix not in priority:
             unrepresented.setdefault(logical_key, evidence_id or logical_key)
@@ -268,33 +265,14 @@ def _latex_figure_paths(
     return chosen, omitted
 
 
-def _deterministically_drop_rejected_writer_sentences(
-    scaffold: str,
-    rejected_sentences: Sequence[str],
-) -> tuple[str, List[Dict[str, object]]]:
-    """Remove STRICT-rejected prose without depending on mutable offsets.
+def _manuscript_repair_pass() -> ManuscriptRepairPass:
+    """Resolve collaborators at call time so tests and hosts may replace them."""
 
-    Rejected sentence strings can overlap (for example, a labelled sentence
-    and its unlabelled body) or repeat across manuscript sections. Applying
-    one indexed edit at a time can therefore remove the target of a later
-    edit. The fallback is intentionally more conservative: longest exact
-    rejected strings are removed first, and every remaining exact occurrence
-    of the same rejected prose is removed. The unchanged STRICT gate still
-    revalidates the result immediately afterwards.
-    """
-
-    sentences = [str(sentence).strip() for sentence in rejected_sentences]
-    repaired = scaffold
-    for sentence in sorted(set(sentences), key=lambda value: (-len(value), value)):
-        if not sentence:
-            continue
-        while (span := _writer_repair_target_span(repaired, sentence)) is not None:
-            repaired = repaired[: span[0]] + repaired[span[1] :]
-    applied = [
-        {**decision.as_dict(), "sentence": sentence[:500]}
-        for decision, sentence in zip(drop_every_sentence(len(sentences)), sentences)
-    ]
-    return repaired, applied
+    return ManuscriptRepairPass(
+        decision_provider=decide_writer_evidence_repairs,
+        decision_applier=_apply_writer_evidence_repair_decisions,
+        target_locator=_writer_repair_target_span,
+    )
 
 
 def _repair_rejected_writer_sentences(
@@ -309,53 +287,19 @@ def _repair_rejected_writer_sentences(
     allowed_claim_refs: Sequence[str],
     language: str,
 ) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
-    """Apply bounded model decisions or deterministically drop rejected prose.
+    """Compatibility seam for callers of the former write-phase helper."""
 
-    The optional model pass can only choose cite, exact host claim, or drop.
-    Invalid structured output or an internally inconsistent application must
-    never abort an otherwise valid analysis run. Dropping every sentence the
-    unchanged STRICT gate already rejected is the conservative host-owned
-    fallback: it cannot add a number, citation, or scientific interpretation.
-
-    Provider transport, refusal, and budget failures deliberately propagate;
-    they are not validation failures and must retain their owning boundary.
-    """
-
-    fallback_detail: Optional[Dict[str, Any]] = None
-    original_scaffold = scaffold
-    try:
-        repair_decisions = decide_writer_evidence_repairs(
-            llm,
-            evidence_ids=evidence_ids,
-            evidence_digest=evidence_digest,
-            missing_sentences=rejected_sentences,
-            scientific_claims=scientific_claims,
-            claim_required_sentences=claim_required_sentences,
-            language=language,
-        )
-        repaired, applied = _apply_writer_evidence_repair_decisions(
-            original_scaffold,
-            missing_sentences=rejected_sentences,
-            decisions=repair_decisions,
-            allowed_evidence_ids=evidence_ids,
-            allowed_claim_refs=allowed_claim_refs,
-        )
-    except (StructuredResponseFailure, ValueError) as exc:
-        repaired, applied = _deterministically_drop_rejected_writer_sentences(
-            original_scaffold,
-            rejected_sentences,
-        )
-        raw_attempts = getattr(exc, "easyicu_structured_attempt_metadata", [])
-        safe_attempts = [dict(item) for item in raw_attempts if isinstance(item, dict)][
-            :4
-        ]
-        fallback_detail = {
-            "reason_code": "writer_evidence_repair_deterministic_drop",
-            "exception_type": type(exc).__name__,
-            "rejected_sentence_count": len(rejected_sentences),
-            "structured_attempts": safe_attempts,
-        }
-    return repaired, applied, fallback_detail
+    return _manuscript_repair_pass().repair_rejected(
+        scaffold,
+        llm=llm,
+        evidence_ids=evidence_ids,
+        evidence_digest=evidence_digest,
+        rejected_sentences=rejected_sentences,
+        scientific_claims=scientific_claims,
+        claim_required_sentences=claim_required_sentences,
+        allowed_claim_refs=allowed_claim_refs,
+        language=language,
+    )
 
 
 def _drop_residual_strict_writer_sentences(
@@ -363,56 +307,12 @@ def _drop_residual_strict_writer_sentences(
     *,
     enforce_scaffold: Callable[[str], object],
 ) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
-    """Revalidate one bounded repair and drop any prose STRICT still rejects.
+    """Compatibility seam for callers of the former write-phase helper."""
 
-    A model-selected evidence citation is not scientific-claim authority.  In
-    particular, appending ``{evidence:*}`` to numeric or interpretive prose
-    does not make that sentence legal under the manuscript grammar.  Run the
-    unchanged owner gate immediately after the bounded repair and remove only
-    the exact residual sentences it names.  A second failure propagates, so
-    this helper cannot turn an unknown enforcement defect into a manuscript.
-    """
-
-    try:
-        enforce_scaffold(scaffold)
-    except EvidenceEnforcementError as exc:
-        detail = exc.detail or {}
-        raw_results = detail.get("removed_sentences", [])
-        raw_claims = detail.get("unsupported_scientific_claim_sentences", [])
-        result_sentences = (
-            [str(value).strip() for value in raw_results if str(value).strip()]
-            if isinstance(raw_results, list)
-            else []
-        )
-        claim_sentences = (
-            [str(value).strip() for value in raw_claims if str(value).strip()]
-            if isinstance(raw_claims, list)
-            else []
-        )
-        rejected = [*result_sentences, *claim_sentences]
-        if not rejected:
-            raise
-        cleaned, applied = _apply_writer_evidence_repair_decisions(
-            scaffold,
-            missing_sentences=rejected,
-            decisions=drop_every_sentence(len(rejected)),
-            allowed_claim_refs=(),
-        )
-        # Fail closed if anything outside the exact first-gate rejection set
-        # remains invalid.  The normal bind stage will enforce the same gate
-        # again, but this local check keeps the repair boundary attributable.
-        enforce_scaffold(cleaned)
-        return (
-            cleaned,
-            applied,
-            {
-                "reason_code": "writer_evidence_repair_residual_strict_drop",
-                "rejected_sentence_count": len(rejected),
-                "result_sentence_count": len(result_sentences),
-                "scientific_claim_sentence_count": len(claim_sentences),
-            },
-        )
-    return scaffold, [], None
+    return _manuscript_repair_pass().drop_residual(
+        scaffold,
+        enforce_scaffold=enforce_scaffold,
+    )
 
 
 _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
@@ -1864,11 +1764,7 @@ def _draft_manuscript(
             claim_text_by_ref = {
                 claim.claim_ref: claim.render_text() for claim in authoritative_claims
             }
-            (
-                scaffold,
-                applied_evidence_repairs,
-                repair_fallback_detail,
-            ) = _repair_rejected_writer_sentences(
+            repair_result = _manuscript_repair_pass().run(
                 scaffold,
                 llm=writer.llm,
                 evidence_ids=preferred_writer_evidence_names,
@@ -1878,27 +1774,22 @@ def _draft_manuscript(
                 claim_required_sentences=strict_scientific_claim_sentences,
                 allowed_claim_refs=tuple(claim_text_by_ref),
                 language=run_language,
-            )
-            (
-                scaffold,
-                residual_strict_drops,
-                residual_strict_drop_detail,
-            ) = _drop_residual_strict_writer_sentences(
-                scaffold,
                 enforce_scaffold=evidence.enforce_evidence_bound_scaffold,
             )
+            scaffold = repair_result.scaffold
             repair_message_prefix = (
                 "Applied deterministic drop fallback after an invalid bounded "
                 "writer evidence repair decision for "
-                if repair_fallback_detail is not None
+                if repair_result.fallback_detail is not None
                 else "Applied one bounded writer evidence repair pass to "
             )
             residual_message = (
                 " "
-                f"STRICT still rejected {len(residual_strict_drops)} cited or "
+                f"STRICT still rejected {len(repair_result.residual_strict_drops)} "
+                "cited or "
                 "unsupported sentence(s), which the host removed before "
                 "binding."
-                if residual_strict_drops
+                if repair_result.residual_strict_drops
                 else ""
             )
             findings.append(
@@ -1907,23 +1798,11 @@ def _draft_manuscript(
                     severity="warning",
                     message=(
                         repair_message_prefix
-                        + f"{len(applied_evidence_repairs)} sentence(s); the unchanged "
+                        + f"{len(repair_result.evidence_repairs)} sentence(s); "
+                        "the unchanged "
                         "STRICT gate revalidated the result." + residual_message
                     ),
-                    detail={
-                        "evidence_repairs": applied_evidence_repairs,
-                        "residual_strict_drops": residual_strict_drops,
-                        **(
-                            {"fallback": repair_fallback_detail}
-                            if repair_fallback_detail is not None
-                            else {}
-                        ),
-                        **(
-                            {"residual_drop": residual_strict_drop_detail}
-                            if residual_strict_drop_detail is not None
-                            else {}
-                        ),
-                    },
+                    detail=repair_result.finding_detail(),
                 )
             )
     authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
@@ -3048,8 +2927,7 @@ def _development_runtime_lineage_allowed(pipeline: Any) -> bool:
         getattr(pipeline, "_submission_profile_name", "") or ""
     ).strip()
     return bool(
-        submission_profile_name
-        and not is_paper_facing_profile(submission_profile_name)
+        submission_profile_name and not is_paper_facing_profile(submission_profile_name)
     )
 
 
@@ -3190,9 +3068,7 @@ def _write_reproducibility_artifacts(
                     "paper_authority": not development_lineage_allowed,
                     "diagnostic_only": development_lineage_allowed,
                 },
-                on_sha_change=(
-                    "new_id" if development_lineage_allowed else "raise"
-                ),
+                on_sha_change=("new_id" if development_lineage_allowed else "raise"),
             )
     except RuntimeProvenanceMismatchError:
         raise
