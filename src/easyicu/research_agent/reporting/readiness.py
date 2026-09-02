@@ -154,6 +154,12 @@ from ..authority.runtime_artifacts import (
     verified_run_evidence_path,
     write_json_artifact,
 )
+from .manuscript_state import (
+    MANIFEST_COMMENT_RE,
+    NOT_GENERATED_HEAD_CHARS,
+    is_not_generated,
+    read_manuscript_state,
+)
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
 
@@ -1065,12 +1071,12 @@ def _manuscript_numeric_bound_clean(manuscript_text: str) -> bool:
     """Return true when the latest bound manuscript has no numeric gap markers."""
     if not manuscript_text:
         return False
-    if "Manuscript scaffold not generated" in manuscript_text[:300]:
+    if is_not_generated(manuscript_text):
         return False
     return (
         "<!-- UNTRACED:" not in manuscript_text
         and "<!-- AMBIGUOUS:" not in manuscript_text
-        and not _MANIFEST_COMMENT_RE.search(manuscript_text)
+        and not MANIFEST_COMMENT_RE.search(manuscript_text)
     )
 
 
@@ -1079,12 +1085,6 @@ _WRITER_FAILURE_RE = re.compile(
     r"connection error|rate limit|authentication)\b",
     flags=re.IGNORECASE,
 )
-
-_MANIFEST_COMMENT_RE = re.compile(
-    r"<!--\s*(?P<level>warning|error)\s*:\s*see manifest\s*-->",
-    flags=re.IGNORECASE,
-)
-
 
 def _manuscript_text_status(manuscript_text: str) -> Dict[str, Any]:
     """Validate that a manuscript file contains a real evidence-bound draft.
@@ -1101,9 +1101,16 @@ def _manuscript_text_status(manuscript_text: str) -> Dict[str, Any]:
     errors: List[str] = []
     if not stripped:
         errors.append("manuscript draft is empty")
-    head = stripped[:600]
-    if "Manuscript scaffold not generated" in head:
-        errors.append("manuscript scaffold was not generated")
+    head = stripped[:NOT_GENERATED_HEAD_CHARS]
+    state = read_manuscript_state(stripped)
+    if state is not None:
+        # The reason code is what the write phase actually decided; the prose
+        # beside it is for the author and may be reworded without changing
+        # what this gate concludes.
+        errors.append(
+            "manuscript scaffold was not generated "
+            f"({state.kind}: {state.reason_code})"
+        )
     if _WRITER_FAILURE_RE.search(head):
         errors.append("manuscript draft contains a writer/runtime failure message")
     word_count = len(re.findall(r"[A-Za-z][A-Za-z0-9-]*", stripped))
@@ -1112,7 +1119,7 @@ def _manuscript_text_status(manuscript_text: str) -> Dict[str, Any]:
     if not re.search(r"(?:\]\(evidence/|\{evidence:|\[\^claim_)", stripped):
         errors.append("manuscript draft has no evidence-bound claim links")
     manifest_comment_counts = {"warning": 0, "error": 0}
-    for match in _MANIFEST_COMMENT_RE.finditer(stripped):
+    for match in MANIFEST_COMMENT_RE.finditer(stripped):
         level = match.group("level").lower()
         manifest_comment_counts[level] = manifest_comment_counts.get(level, 0) + 1
     if manifest_comment_counts["error"]:
@@ -1770,7 +1777,7 @@ def _compute_readiness_gates(
         "execution_complete": bool(execution.get("execution_complete")),
         "manuscript_bound_clean": bool(
             manuscript_text
-            and "Manuscript scaffold not generated" not in manuscript_text[:300]
+            and not is_not_generated(manuscript_text)
             and missing_evidence_count == 0
             and not stop_after_analysis
             and not writer_probe_mode
@@ -1784,8 +1791,8 @@ def _compute_readiness_gates(
         "manuscript_numeric_audit_clean": False,
         "manuscript_manifest_caveats_clean": bool(
             manuscript_text
-            and "Manuscript scaffold not generated" not in manuscript_text[:300]
-            and not _MANIFEST_COMMENT_RE.search(manuscript_text)
+            and not is_not_generated(manuscript_text)
+            and not MANIFEST_COMMENT_RE.search(manuscript_text)
             and not stop_after_analysis
             and not writer_probe_mode
         ),
@@ -1797,7 +1804,7 @@ def _compute_readiness_gates(
     }
     if (
         manuscript_text
-        and "Manuscript scaffold not generated" not in manuscript_text[:300]
+        and not is_not_generated(manuscript_text)
         and not writer_probe_mode
         and not stop_after_analysis
     ):
@@ -2688,14 +2695,18 @@ def _extract_claim_ledger_rows(
             }
         ]
     text = manuscript_path.read_text(encoding="utf-8", errors="replace")
-    if "Manuscript scaffold not generated" in text[:300]:
+    not_generated = read_manuscript_state(text)
+    if not_generated is not None:
         return [
             {
                 "claim_id": "claim_000",
                 "claim_text": "Formal manuscript was not generated.",
                 "evidence_refs": "",
                 "status": "diagnostic_only",
-                "note": "Strict fail-closed gate blocked writer output.",
+                "note": (
+                    "Manuscript was not generated "
+                    f"({not_generated.kind}: {not_generated.reason_code})."
+                ),
             }
         ]
     href_owners = _current_evidence_href_owners(
