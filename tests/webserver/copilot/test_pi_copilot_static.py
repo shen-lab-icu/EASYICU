@@ -4037,6 +4037,9 @@ def test_only_latest_successful_plan_action_is_projected_as_current_conversation
           {{ job_id: 'host-old', kind: 'host_action', action_code: 'generate_plan',
              child_job_id: 'child-old', status: 'done',
              started_at: '2026-09-01T10:00:00Z', ended_at: '2026-09-01T10:03:00Z' }},
+          {{ job_id: 'review-old', kind: 'host_action', action_code: 'review_scientific_review',
+             action_key: 'run_old:scientific_readiness.json', status: 'done',
+             started_at: '2026-09-01T10:03:30Z', ended_at: '2026-09-01T10:03:30Z' }},
           {{ job_id: 'host-new', kind: 'host_action', action_code: 'generate_plan',
              child_job_id: 'child-new', status: 'done',
              started_at: '2026-09-01T10:04:00Z', ended_at: '2026-09-01T10:07:00Z' }},
@@ -4044,10 +4047,10 @@ def test_only_latest_successful_plan_action_is_projected_as_current_conversation
         archived_child_jobs: [
           {{ job_id: 'child-failed', status: 'failed', run_id: 'run-failed',
              artifact_refs: [] }},
-          {{ job_id: 'child-old', status: 'done', run_id: 'run-old', artifact_refs: [
-             {{ artifact: 'agent_plan.json', run_id: 'run-old' }} ] }},
-          {{ job_id: 'child-new', status: 'done', run_id: 'run-new', artifact_refs: [
-             {{ artifact: 'agent_plan.json', run_id: 'run-new' }} ] }},
+          {{ job_id: 'child-old', status: 'done', run_id: 'run_old', artifact_refs: [
+             {{ artifact: 'agent_plan.json', run_id: 'run_old' }} ] }},
+          {{ job_id: 'child-new', status: 'done', run_id: 'run_new', artifact_refs: [
+             {{ artifact: 'agent_plan.json', run_id: 'run_new' }} ] }},
         ],
       }});
       process.stdout.write(JSON.stringify(rows.map(row => ({{
@@ -6110,8 +6113,8 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20260901-evidence-flow1" in index
-    assert "screens-guided-pi.js?v=20260901-composer-plus1" in index
+    assert "screens-guided-pi-transcript.js?v=20260902-active-branch1" in index
+    assert "screens-guided-pi.js?v=20260902-data-history1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

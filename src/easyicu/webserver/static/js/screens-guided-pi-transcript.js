@@ -464,6 +464,7 @@
       const archivedJobs = new Map(archivedJobRows.map(job => [String(job && job.job_id || ''), job]));
       const planTurnIndexes = [];
       const successfulPlanTurnIndexes = [];
+      const planRunIds = new Map();
       hostTurns.forEach((turn, turnIndex) => {
         if (String(turn && turn.action_code || '') !== 'generate_plan') return;
         planTurnIndexes.push(turnIndex);
@@ -473,6 +474,8 @@
         const status = String((job && job.status) || (turn && turn.status) || 'done');
         const refs = Array.isArray(sourceJob && sourceJob.artifact_refs)
           ? sourceJob.artifact_refs : [];
+        const planRunId = String(sourceJob && sourceJob.run_id || '');
+        if (planRunId) planRunIds.set(turnIndex, planRunId);
         if (status === 'done' && refs.some(ref => (
           ref && String(ref.artifact || '') === 'agent_plan.json'
         ))) successfulPlanTurnIndexes.push(turnIndex);
@@ -482,6 +485,9 @@
         latestSuccessfulPlanTurn == null
           ? []
           : planTurnIndexes.filter(turnIndex => turnIndex !== latestSuccessfulPlanTurn),
+      );
+      const supersededPlanRunIds = new Set(
+        Array.from(supersededPlanTurns).map(turnIndex => planRunIds.get(turnIndex)).filter(Boolean),
       );
       let previousPassiveReview = null;
       hostTurns.forEach((turn, turnIndex) => {
@@ -494,6 +500,12 @@
         const childJobId = String(turn && turn.child_job_id || '');
         const job = archivedJobs.get(childJobId) || null;
         const sourceJob = sourceJobForHostAction(turn, job, session, archivedJobRows);
+        const actionRunId = runIdFromActionKey(turn && turn.action_key);
+        if (
+          actionCode !== 'generate_plan'
+          && actionRunId && supersededPlanRunIds.has(actionRunId)
+          && !(sourceJob && sourceJob.analysis_results_available)
+        ) return;
         const status = String((job && job.status) || (turn && turn.status) || 'done');
         const copy = hostActionCopy(
           actionCode,
