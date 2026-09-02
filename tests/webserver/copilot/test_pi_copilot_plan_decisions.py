@@ -104,6 +104,32 @@ def test_landmark_choice_compiles_one_complete_typed_update() -> None:
     assert compiled.patch["confirmations"]["plan_timing_landmark_24h"] is True
 
 
+def test_landmark_choice_preserves_confirmed_patient_cluster_design() -> None:
+    study = _study()
+    study["analysis_design"] = {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+    }
+    study["confirmations"]["plan_repeated_stays_clustered"] = True
+
+    compiled = compile_plan_decision(
+        decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        option_id="landmark_24h",
+        study=study,
+        agent_plan=_plan(),
+    )
+
+    assert compiled.patch["analysis_design"] == {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+    }
+    assert compiled.patch["confirmations"]["plan_repeated_stays_clustered"] is True
+
+
 def test_landmark_choice_fails_closed_without_one_selected_design() -> None:
     plan = _plan()
     plan["design_selection"]["candidates"] = []
