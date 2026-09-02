@@ -397,6 +397,25 @@ def compile_plan_decision(
             "observation_duration_variable": coordinates["observation_duration"],
             "observation_duration_unit": "days",
         }
+        current_design = study.get("analysis_design")
+        current_design = (
+            current_design if isinstance(current_design, Mapping) else {}
+        )
+        association_design = {
+            "analysis_family": "association_study",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "model_based",
+        }
+        if (
+            current_design.get("variance_estimator") == "cluster_robust"
+            and current_design.get("cluster_unit") == "patient"
+        ):
+            association_design.update(
+                {
+                    "variance_estimator": "cluster_robust",
+                    "cluster_unit": "patient",
+                }
+            )
         return CompiledPlanDecision(
             patch={
                 "question": (
@@ -417,12 +436,11 @@ def compile_plan_decision(
                 # launch contract atomically so the next Planner run can
                 # consume the user's decision without asking the model to
                 # reconstruct it.  A later repeated-stay decision may upgrade
-                # the variance estimator while preserving this family.
-                "analysis_design": {
-                    "analysis_family": "association_study",
-                    "analysis_unit": "icu_stay",
-                    "variance_estimator": "model_based",
-                },
+                # the variance estimator while preserving this family.  When
+                # repeated-stay dependence was already confirmed, retain that
+                # compatible typed choice instead of silently downgrading it
+                # while leaving its confirmation receipt behind.
+                "analysis_design": association_design,
                 "export_format": "parquet",
                 "sensitivity_specs": configuration.replace_sensitivity(
                     axis="timing", replacement=sensitivity
