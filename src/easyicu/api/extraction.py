@@ -2119,6 +2119,21 @@ _NATIVE_EXPORT_ID_COLUMNS = (
 
 _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
 
+# The precise SOFA-2 CNS delirium-treatment receipt and its deprecated alias
+# are deterministic once the canonical CNS component is positive: the
+# delirium-treatment clause is then not used to assign the score. Grouped
+# extractors can still contribute sparse proxy-only rows at the same hour, so
+# native publication resolves only that clinically impossible conflict. All
+# other string conflicts, and CNS receipt conflicts without a positive owner-
+# available CNS component, remain fail-closed.
+_NATIVE_EXPORT_SOFA2_CNS_ASCERTAINMENT_CONCEPTS = frozenset(
+    {
+        "sofa2_cns_delirium_tx_ascertainment",
+        "sofa2_cns_ascertainment",
+    }
+)
+_NATIVE_EXPORT_SOFA2_CNS_NOT_SCORE_RELEVANT = "not_score_relevant"
+
 # Event status and event time are different physical claims.  The outcome
 # module is published at the stay-level ICU-admission coordinate (charttime=0),
 # but selected event concepts still carry an owner-authorized event timestamp
@@ -2365,6 +2380,9 @@ def _consolidate_native_export_row_grain(
     key collisions are consolidated by the physical type family: logical any,
     numeric median, and a single non-null string value. Conflicting strings are
     publication errors because silently choosing one would invent a category.
+    The sole semantic exception is a SOFA-2 CNS ascertainment receipt when the
+    owner-available median CNS score is positive; the delirium-treatment clause
+    is then definitionally not score-relevant.
     """
     import numpy as np
     import pandas as pd
@@ -2525,6 +2543,17 @@ def _consolidate_native_export_row_grain(
             sort=False,
             dropna=False,
         ):
+            positive_owner_available_sofa2_cns = False
+            if {"sofa2_cns", "sofa2_cns_available"}.issubset(group.columns):
+                cns_available = (
+                    group["sofa2_cns_available"].astype("boolean").fillna(False)
+                )
+                cns_values = pd.to_numeric(
+                    group.loc[cns_available, "sofa2_cns"], errors="coerce"
+                ).dropna()
+                positive_owner_available_sofa2_cns = bool(
+                    not cns_values.empty and float(cns_values.median()) > 0.0
+                )
             record = {
                 "stay_id": group["stay_id"].iloc[0],
                 "charttime": group["charttime"].iloc[0],
@@ -2544,7 +2573,14 @@ def _consolidate_native_export_row_grain(
                     values = group.loc[owner_available, concept].dropna()
                 else:
                     values = group[concept].dropna()
-                if values.empty:
+                if (
+                    kind == "string"
+                    and concept
+                    in _NATIVE_EXPORT_SOFA2_CNS_ASCERTAINMENT_CONCEPTS
+                    and positive_owner_available_sofa2_cns
+                ):
+                    record[concept] = _NATIVE_EXPORT_SOFA2_CNS_NOT_SCORE_RELEVANT
+                elif values.empty:
                     record[concept] = pd.NA if kind in {"boolean", "string"} else np.nan
                 elif kind == "boolean":
                     record[concept] = bool(values.astype("boolean").any())
@@ -2611,6 +2647,10 @@ def _consolidate_native_export_row_grain(
                 "median_owner_available_non_null_preserving_all_unavailable"
             ),
             "string": "single_non_null_value_or_fail_on_conflict",
+            "sofa2_cns_ascertainment": (
+                "not_score_relevant_when_owner_available_median_cns_positive;"
+                "otherwise_single_non_null_value_or_fail_on_conflict"
+            ),
         },
     }
     return consolidated, audit
@@ -2629,6 +2669,8 @@ def _native_export_file_sha256(path: Path) -> str:
 
 _NATIVE_EXPORT_ARROW_BATCH_ROWS = 262_144
 _NATIVE_EXPORT_DUCKDB_MEMORY_MB = 512
+_NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_ROW_TARGET = 1_000_000
+_NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_MAX = 64
 _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_ROWS = 1_000_000
 _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_BYTES = 512 * 1024 * 1024
 _NATIVE_EXPORT_PANDAS_FALLBACK_MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
@@ -2914,6 +2956,10 @@ def _native_export_arrow_row_grain_audit(
                 "median_owner_available_non_null_preserving_all_unavailable"
             ),
             "string": "single_non_null_value_or_fail_on_conflict",
+            "sofa2_cns_ascertainment": (
+                "not_score_relevant_when_owner_available_median_cns_positive;"
+                "otherwise_single_non_null_value_or_fail_on_conflict"
+            ),
         },
         "publication_backend": "pyarrow_record_batches",
         "uniqueness_backend": "duckdb_bounded_spillable_hash_aggregate",
@@ -2964,6 +3010,31 @@ def _native_export_duckdb_consolidate_row_grain(
         for concept in physical_values
         if _native_export_storage_kind(concept, dictionary) == "string"
     ]
+    has_sofa2_cns_context = {
+        "sofa2_cns",
+        "sofa2_cns_available",
+    }.issubset(physical_values)
+    semantic_cns_receipts = {
+        concept
+        for concept in string_concepts
+        if concept in _NATIVE_EXPORT_SOFA2_CNS_ASCERTAINMENT_CONCEPTS
+        and has_sofa2_cns_context
+    }
+    cns_score = quote_identifier("sofa2_cns")
+    cns_available = quote_identifier("sofa2_cns_available")
+    duplicate_key_rows = int(before_audit["duplicate_key_rows_before"])
+    conflict_partition_count = min(
+        _NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_MAX,
+        max(
+            1,
+            (
+                duplicate_key_rows
+                + _NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_ROW_TARGET
+                - 1
+            )
+            // _NATIVE_EXPORT_DUCKDB_CONFLICT_PARTITION_ROW_TARGET,
+        ),
+    )
     aggregate_expressions = []
     for concept in physical_values:
         column = quote_identifier(concept)
@@ -2971,6 +3042,14 @@ def _native_export_duckdb_consolidate_row_grain(
         kind = _native_export_storage_kind(concept, dictionary)
         if kind == "boolean":
             expression = f"bool_or({column})::BOOLEAN AS {alias}"
+        elif concept in semantic_cns_receipts:
+            expression = (
+                "(CASE WHEN "
+                f"(median({cns_score}) FILTER (WHERE {cns_available} IS TRUE)) > 0 "
+                f"THEN '{_NATIVE_EXPORT_SOFA2_CNS_NOT_SCORE_RELEVANT}' "
+                f"ELSE first({column} ORDER BY _row_order) "
+                f"FILTER (WHERE {column} IS NOT NULL) END)::VARCHAR AS {alias}"
+            )
         elif kind == "string":
             expression = (
                 f"first({column} ORDER BY _row_order) "
@@ -3013,39 +3092,53 @@ def _native_export_duckdb_consolidate_row_grain(
             try:
                 if string_concepts:
                     conflict_counts = ", ".join(
-                        f"count(DISTINCT s.{quote_identifier(concept)}) "
-                        f"AS {quote_identifier('_conflict_' + concept)}"
+                        (
+                            "CASE WHEN "
+                            f"(median(s.{cns_score}) FILTER "
+                            f"(WHERE s.{cns_available} IS TRUE)) > 0 "
+                            "THEN 1 ELSE "
+                            f"count(DISTINCT s.{quote_identifier(concept)}) END "
+                            f"AS {quote_identifier('_conflict_' + concept)}"
+                        )
+                        if concept in semantic_cns_receipts
+                        else (
+                            f"count(DISTINCT s.{quote_identifier(concept)}) "
+                            f"AS {quote_identifier('_conflict_' + concept)}"
+                        )
                         for concept in string_concepts
                     )
                     conflict_predicate = " OR ".join(
                         f"{quote_identifier('_conflict_' + concept)} > 1"
                         for concept in string_concepts
                     )
-                    conflict_row = connection.execute(
-                        f"""
-                        WITH duplicate_keys AS (
-                            SELECT stay_id, charttime
-                            FROM read_parquet(?)
-                            GROUP BY stay_id, charttime
-                            HAVING count(*) > 1
-                        ), conflicts AS (
-                            SELECT
-                                s.stay_id,
-                                s.charttime,
-                                {conflict_counts}
-                            FROM read_parquet(?) AS s
-                            JOIN duplicate_keys AS d
-                              ON s.stay_id IS NOT DISTINCT FROM d.stay_id
-                             AND s.charttime IS NOT DISTINCT FROM d.charttime
-                            GROUP BY s.stay_id, s.charttime
-                        )
-                        SELECT *
-                        FROM conflicts
-                        WHERE {conflict_predicate}
-                        LIMIT 1
-                        """,
-                        [str(path), str(path)],
-                    ).fetchone()
+                    conflict_row = None
+                    for conflict_partition in range(conflict_partition_count):
+                        conflict_row = connection.execute(
+                            f"""
+                            WITH conflicts AS (
+                                SELECT
+                                    s.stay_id,
+                                    s.charttime,
+                                    count(*)::BIGINT AS _key_rows,
+                                    {conflict_counts}
+                                FROM read_parquet(?) AS s
+                                WHERE hash(s.stay_id, s.charttime) % ? = ?
+                                GROUP BY s.stay_id, s.charttime
+                            )
+                            SELECT * EXCLUDE (_key_rows)
+                            FROM conflicts
+                            WHERE _key_rows > 1
+                              AND ({conflict_predicate})
+                            LIMIT 1
+                            """,
+                            [
+                                str(path),
+                                conflict_partition_count,
+                                conflict_partition,
+                            ],
+                        ).fetchone()
+                        if conflict_row is not None:
+                            break
                     if conflict_row is not None:
                         stay_id, charttime, *counts = conflict_row
                         conflict_index = next(
@@ -3160,6 +3253,7 @@ def _native_export_duckdb_consolidate_row_grain(
             "rows_consolidated": int(before_audit["duplicate_excess_rows_before"]),
             "publication_backend": ("duckdb_bounded_spillable_row_grain_consolidation"),
             "consolidation_memory_limit_mb": memory_mb,
+            "string_conflict_audit_partitions": conflict_partition_count,
         }
     )
     return after_audit, concept_non_null
