@@ -1801,7 +1801,12 @@ class DockerRunner:
     #: step (a Cox fit, a bootstrap, a figure render) with headroom, while
     #: keeping one runaway step from taking the host — or a sibling step —
     #: down with it.
-    DEFAULT_CPU_LIMIT = "4"
+    # Two CPUs fits the smallest supported Docker Desktop/Colima allocation
+    # used by the local Web workflow. A higher default makes Docker reject the
+    # container before Python starts on those hosts, which cannot be repaired
+    # by rewriting the generated analysis script. Callers may still widen this
+    # explicitly on larger runtimes.
+    DEFAULT_CPU_LIMIT = "2"
     DEFAULT_MEMORY_LIMIT = "8g"
     DEFAULT_PIDS_LIMIT = 256
     DEFAULT_OPEN_FILES_LIMIT = 4096
