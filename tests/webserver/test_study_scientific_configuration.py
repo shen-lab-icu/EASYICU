@@ -26,7 +26,24 @@ def test_execution_concepts_override_display_labels() -> None:
 
     assert configuration.target_outcome() == "death"
     assert configuration.primary_exposure() == "lact"
+    assert configuration.executable_target_outcome() == "death"
+    assert configuration.executable_primary_exposure() == "lact"
     assert configuration.primary_exposure_aggregation() == "max"
+
+
+def test_display_labels_do_not_become_executable_source_concepts() -> None:
+    configuration = ScientificConfiguration.inspect(
+        {
+            "outcome": "院内死亡",
+            "primary_exposure": "入 ICU 后前 24 小时峰值乳酸",
+            "execution_concepts": {"covariates": ["age", "sex"]},
+        }
+    )
+
+    assert configuration.target_outcome() == "院内死亡"
+    assert configuration.primary_exposure() == "入 ICU 后前 24 小时峰值乳酸"
+    assert configuration.executable_target_outcome() is None
+    assert configuration.executable_primary_exposure() is None
 
 
 def test_exact_covariate_binding_mismatch_fails_closed() -> None:

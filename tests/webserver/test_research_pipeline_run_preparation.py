@@ -76,14 +76,15 @@ def test_full_launch_materializes_planner_proposed_exposure_and_outcome(
             "study_context": {
                 "id": "study-1",
                 "question": "Is lactate associated with hospital mortality?",
+                "outcome": "In-hospital mortality",
+                "primary_exposure": "Peak lactate in the first 24 hours",
+                "execution_concepts": {"covariates": []},
                 "data_source": {"database": "miiv"},
             },
         }
     )
     captured: dict[str, object] = {}
     monkeypatch.setattr(preparation, "_neutral_materialization_scope", lambda study, **_kwargs: study)
-    monkeypatch.setattr(preparation, "_target_outcome", lambda _study: None)
-    monkeypatch.setattr(preparation, "_primary_exposure", lambda _study: None)
     monkeypatch.setattr(
         preparation,
         "_metadata_only_planning_coordinates",
@@ -126,6 +127,8 @@ def test_full_launch_materializes_planner_proposed_exposure_and_outcome(
 
     assert captured["target"] == "death"
     assert captured["primary_exposure"] == "lact"
+    assert captured["require_target"] is False
+    assert captured["require_primary_exposure"] is False
     assert scientific.foundation_profile["required_feature_concepts"] == ("lact",)
 
 
