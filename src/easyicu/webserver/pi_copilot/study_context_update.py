@@ -1404,14 +1404,16 @@ def update_study_context(
         "and projected the post-update workflow for the next scientific decision."
     )
     if omitted_unconfirmed_fields:
-        # A dropped scientific slot must never read as a clean success.  The
-        # model can only explain the gap to the user when the omission and its
-        # reason code travel in the same receipt as the write.
+        # Preserve the omission and reason, but let the workflow decide when
+        # a choice is needed. Execution requirements must not become an
+        # opening questionnaire ahead of the candidate Planner.
         summary += (
             " NOT saved this turn: "
             + ", ".join(omitted_unconfirmed_fields)
             + ". Those slots stay unset because the turn only mentions them as "
-            "candidate intent; ask the user to select each one explicitly."
+            "candidate intent, not approved design. Follow the returned "
+            "workflow next action: unresolved design belongs in the candidate "
+            "plan for review, not a pre-plan confirmation questionnaire."
         )
     result = _result(
         context,
