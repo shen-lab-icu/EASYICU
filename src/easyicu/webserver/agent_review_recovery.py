@@ -755,6 +755,28 @@ def put_recovery_seed(seed: WebReviewRecoverySeed) -> Path:
     return path
 
 
+def load_recovery_seed(wrapper_dir: Path) -> Optional[WebReviewRecoverySeed]:
+    """Load one digest-verified local seed without changing it."""
+
+    wrapper = Path(wrapper_dir).expanduser().resolve()
+    path = recovery_seed_path(wrapper)
+    if not path.exists():
+        return None
+    if path.is_symlink() or path.parent.is_symlink():
+        raise WebReviewRecoveryError("Web review recovery seed cannot be a symlink")
+    try:
+        seed = WebReviewRecoverySeed.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except Exception as exc:
+        raise WebReviewRecoveryError("Web review recovery seed is corrupt") from exc
+    if Path(seed.wrapper_dir).expanduser().resolve() != wrapper:
+        raise WebReviewRecoveryError(
+            "Web review recovery seed does not bind the selected wrapper"
+        )
+    return seed
+
+
 def remove_recovery_seed(wrapper_dir: Path) -> None:
     path = recovery_seed_path(wrapper_dir)
     if path.is_symlink():
