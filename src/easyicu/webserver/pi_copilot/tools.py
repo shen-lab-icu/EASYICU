@@ -2623,6 +2623,34 @@ def _idea_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
         )
     pre = payload.get("pre_experiment")
     pre = pre if isinstance(pre, Mapping) else {}
+    design_support = selected.get("design_support")
+    design_support = design_support if isinstance(design_support, Mapping) else {}
+    construct_answerability = [
+        {
+            key: row.get(key)
+            for key in (
+                "construct_id",
+                "label_zh",
+                "resolution_kind",
+                "source_state",
+                "verdict",
+                "required_primitives",
+                "available_primitives",
+                "missing_primitives",
+                "unresolved_requirements",
+                "supported_databases",
+                "materialized",
+                "requires_confirmation",
+                "recipe",
+                "rationale_zh",
+                "semantic_warning",
+                "user_facing",
+            )
+            if row.get(key) is not None
+        }
+        for row in list(selected.get("construct_answerability") or [])[:8]
+        if isinstance(row, Mapping)
+    ]
     return bounded_json_projection(
         {
             "run_id": payload.get("run_id"),
@@ -2644,7 +2672,39 @@ def _idea_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 )
                 if selected.get(key) is not None
             }
-            | {"mapped_concepts": concepts},
+            | {
+                "mapped_concepts": concepts,
+                "construct_answerability": construct_answerability,
+                "unresolved_slots": list(selected.get("unresolved_slots") or [])[:8],
+                "design_support": {
+                    key: design_support.get(key)
+                    for key in (
+                        "card_id",
+                        "version",
+                        "file_sha256",
+                        "trust_level",
+                        "review_status",
+                        "summary",
+                        "study_families",
+                        "topic_aliases",
+                        "population",
+                        "time_zero",
+                        "observation_window",
+                        "prediction_or_followup_window",
+                        "eligibility_candidates",
+                        "exposure_family",
+                        "outcome_family",
+                        "estimand_family",
+                        "recommended_methods",
+                        "sensitivity_analyses",
+                        "requires_confirmation",
+                        "stop_conditions",
+                        "citations",
+                        "authority",
+                    )
+                    if design_support.get(key) is not None
+                },
+            },
             "feasibility": {
                 "status": pre.get("status"),
                 "reason": pre.get("reason"),
@@ -2687,16 +2747,21 @@ def _mine_ideas(
             summary="Save a scientific question or provide a bounded idea topic first.",
             owner="easyicu.webserver.ideas.mining",
         )
+    source_seed = dict(context.idea_source or {})
     body = {
-        "source_type": "manual",
+        "source_type": str(source_seed.get("source_type") or "manual"),
+        "metadata_only": True,
         "topic": topic,
         "research_question": topic,
-        "title": str(params.get("title") or topic)[:220],
-        "excerpt": str(params.get("excerpt") or topic)[:1200],
-        "journal": params.get("journal"),
-        "year": params.get("year"),
-        "doi": params.get("doi"),
-        "pmid": params.get("pmid"),
+        "title": str(source_seed.get("title") or params.get("title") or topic)[:220],
+        "excerpt": str(source_seed.get("excerpt") or params.get("excerpt") or topic)[:1200],
+        "journal": source_seed.get("journal") or params.get("journal"),
+        "year": source_seed.get("year") or params.get("year"),
+        "doi": source_seed.get("doi") or params.get("doi"),
+        "pmid": source_seed.get("pmid") or params.get("pmid"),
+        "url": source_seed.get("url"),
+        "source_file_name": source_seed.get("source_file_name"),
+        "source_file_sha256": source_seed.get("source_file_sha256"),
     }
     try:
         mined = idea_mining.mine_ideas(body)
@@ -2728,7 +2793,10 @@ def _search_literature(
 ) -> Dict[str, Any]:
     """Run the existing PubMed Idea Mining owner after one-turn opt-in."""
 
-    _require_args(params, allowed=("topic", "journal", "limit"))
+    _require_args(
+        params,
+        allowed=("topic", "journal", "limit", "run_id", "idea_id"),
+    )
     try:
         requested_limit = max(1, min(int(params.get("limit") or 5), 8))
     except (TypeError, ValueError):
@@ -2755,7 +2823,19 @@ def _search_literature(
     )
     bound_idea_run = str(idea_handoff.get("run_id") or "").strip()
     bound_idea_id = str(idea_handoff.get("idea_id") or "").strip()
-    if not (bound_idea_run and bound_idea_id):
+    candidate_run = str(params.get("run_id") or "").strip()
+    candidate_idea = str(params.get("idea_id") or "").strip()
+    if bool(candidate_run) != bool(candidate_idea):
+        return _result(
+            context,
+            status="blocked",
+            code="idea_identity_incomplete",
+            summary="Both run_id and idea_id are required to search one mined candidate.",
+            owner="easyicu.webserver.ideas.mining",
+        )
+    if not (candidate_run and candidate_idea) and not (
+        bound_idea_run and bound_idea_id
+    ):
         missing_scope = [
             field
             for field, value in (
@@ -2818,6 +2898,8 @@ def _search_literature(
             bound_study_id=str(
                 context.session.binding.study_context_id or ""
             ).strip(),
+            candidate_run_id=candidate_run,
+            candidate_idea_id=candidate_idea,
         )
     except literature_search_transaction.LiteratureSearchTransactionError as exc:
         return _result(
@@ -2842,7 +2924,8 @@ def _search_literature(
             receipt_binding if isinstance(receipt_binding, Mapping) else None
         ),
         study_authority_binding=generic_authority_binding,
-        bound_idea_run_id=bound_idea_run,
+        bound_idea_run_id=transaction.bound_idea_run_id,
+        searched_idea_was_accepted=transaction.searched_idea_was_accepted,
     )
     if updated_study is not None:
         projection.update(
@@ -2871,8 +2954,13 @@ def _search_literature(
             + (
                 " The current Idea handoff must now be re-accepted so this "
                 "exact literature receipt becomes part of Plan authority."
-                if receipt_binding
-                else ""
+                if receipt_binding and transaction.searched_idea_was_accepted
+                else (
+                    " The exact receipt is attached to the mined candidate; "
+                    "prepare its Idea Plan next before accepting a handoff."
+                    if receipt_binding
+                    else ""
+                )
             )
             + (
                 " The exact Web search receipt is now digest-bound to this "
@@ -2894,16 +2982,50 @@ def _prepare_idea_handoff(
 ) -> Dict[str, Any]:
     _require_args(
         params,
-        allowed=("run_id", "idea_id", "plan_edits"),
+        allowed=("run_id", "idea_id", "plan_edits", "plan_fields"),
         required=("run_id",),
     )
+    run_id = str(params.get("run_id") or "").strip()
+    try:
+        prior_art_binding = idea_mining.prior_art_receipt_binding(run_id)
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_prior_art_receipt_invalid"),
+            summary=str(detail.get("reason") or "Idea literature receipt is invalid."),
+            owner="easyicu.webserver.ideas.mining",
+        )
+    if prior_art_binding and int(
+        prior_art_binding.get("prior_art_result_count") or 0
+    ) == 0:
+        return _result(
+            context,
+            status="blocked",
+            code="idea_literature_zero_results_requires_refinement",
+            summary=(
+                "The exact bounded topic search returned no retrieval candidates. "
+                "This does not establish novelty or absence of literature. Keep the "
+                "study in Idea Mining, refine or split the direction, and search the "
+                "new candidate before preparing a scientific-question handoff."
+            ),
+            owner="easyicu.webserver.ideas.mining",
+            details={
+                "run_id": run_id,
+                "prior_art_status": prior_art_binding.get("prior_art_status"),
+                "prior_art_result_count": 0,
+                "handoff_allowed": False,
+            },
+        )
     grant_block = _consume_action(context, "idea")
     if grant_block is not None:
         return grant_block
     body = {
-        "run_id": str(params.get("run_id") or "").strip(),
+        "run_id": run_id,
         "idea_id": str(params.get("idea_id") or "").strip(),
         "plan_edits": str(params.get("plan_edits") or "").strip()[:1200],
+        "plan_fields": params.get("plan_fields") or {},
     }
     try:
         plan = idea_mining.plan_idea(body)
@@ -2917,7 +3039,11 @@ def _prepare_idea_handoff(
             summary=str(detail.get("reason") or "Idea handoff preparation failed."),
             owner="easyicu.webserver.ideas.handoff",
         )
-    plan_body = plan.get("plan") if isinstance(plan.get("plan"), Mapping) else {}
+    plan_body = (
+        handoff.get("handoff_plan")
+        if isinstance(handoff.get("handoff_plan"), Mapping)
+        else (plan.get("plan") if isinstance(plan.get("plan"), Mapping) else {})
+    )
     agent_seed = (
         handoff.get("agent_seed")
         if isinstance(handoff.get("agent_seed"), Mapping)
@@ -2939,9 +3065,17 @@ def _prepare_idea_handoff(
                     "exposure",
                     "comparator",
                     "outcome",
+                    "time_zero",
                     "time_window",
                     "plan_status",
                     "selection_mode",
+                    "confirmed_plan_fields",
+                    "prior_art_review",
+                    "active_export_contract",
+                    "prior_art_adjudication",
+                    "source_feasibility_summary",
+                    "execution_readiness",
+                    "execution_gate",
                 )
                 if plan_body.get(key) is not None
             },
@@ -2965,7 +3099,216 @@ def _prepare_idea_handoff(
             "still requires user confirmation in the Copilot conversation."
         ),
         owner="easyicu.webserver.ideas.handoff",
-        details={"idea_handoff": details},
+        details={
+            "idea_handoff": details,
+            "resource": {
+                "kind": "idea_plan",
+                "run_id": handoff.get("run_id"),
+                "artifact": "idea_plan.json",
+                "label": "Idea Mining plan preview",
+                "media_type": "application/json",
+                "authority_class": "idea_mining_planning_only",
+            },
+        },
+    )
+
+
+def _adjudicate_idea_literature(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(
+        params,
+        allowed=("run_id", "idea_id", "decision", "rationale", "plan_fields"),
+        required=("run_id", "idea_id", "decision", "rationale", "plan_fields"),
+    )
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
+    body = {
+        "run_id": str(params.get("run_id") or "").strip(),
+        "idea_id": str(params.get("idea_id") or "").strip(),
+        "decision": str(params.get("decision") or "").strip(),
+        "rationale": str(params.get("rationale") or "").strip()[:1200],
+        "plan_fields": params.get("plan_fields") or {},
+    }
+    try:
+        idea_mining.plan_idea(body)
+        adjudication = idea_mining.adjudicate_prior_art(body)
+        binding = idea_mining.prior_art_adjudication_binding(
+            body["run_id"], body["idea_id"]
+        )
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_prior_art_adjudication_blocked"),
+            summary=str(detail.get("reason") or "Prior-art adjudication was blocked."),
+            owner="easyicu.webserver.ideas.mining",
+            details={key: value for key, value in detail.items() if key != "reason"},
+        )
+    decision = str(adjudication.get("decision") or "uncertain")
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_idea_literature_adjudicated",
+        summary=(
+            "Recorded a digest-bound differentiated prior-art decision; confirm a "
+            "real data source and run bounded feasibility next."
+            if decision == "differentiated"
+            else (
+                "Recorded that prior work already answers this direction; keep Idea "
+                "Mining open and reframe the candidate."
+                if decision == "already_answered"
+                else "Recorded an uncertain prior-art decision; execution remains blocked."
+            )
+        ),
+        owner="easyicu.webserver.ideas.mining",
+        details={
+            "prior_art_adjudication": bounded_json_projection(
+                {
+                    "run_id": adjudication.get("run_id"),
+                    "idea_id": adjudication.get("idea_id"),
+                    "decision": decision,
+                    "rationale": adjudication.get("rationale"),
+                    "screening": adjudication.get("screening"),
+                    "comparison_axes": adjudication.get("comparison_axes"),
+                    "authority": adjudication.get("authority"),
+                    "binding": binding,
+                }
+            ),
+            "execution_can_advance": decision == "differentiated",
+        },
+    )
+
+
+def _bound_registered_export(
+    context: ToolExecutionContext,
+) -> tuple[Dict[str, Any], Dict[str, Any]] | None:
+    study = _bound_context(context.session.binding)
+    study_source = study.get("data_source") if isinstance(study, Mapping) else None
+    study_source = study_source if isinstance(study_source, Mapping) else {}
+    source_path = str(study_source.get("path") or "").strip()
+    if not source_path:
+        return None
+    registry = sources.load_registry()
+    source = next(
+        (
+            dict(row)
+            for row in registry.get("sources") or []
+            if isinstance(row, Mapping)
+            and bool(row.get("ok"))
+            and str(row.get("path") or "").strip() == source_path
+        ),
+        None,
+    )
+    if source is None:
+        return None
+    desc = dataio.describe_export_source(source_path)
+    if not desc.get("ok"):
+        return None
+    return source, desc
+
+
+def _assess_idea_feasibility(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    _require_args(
+        params,
+        allowed=("run_id", "idea_id", "concept_bindings", "max_records"),
+        required=("run_id", "idea_id", "concept_bindings"),
+    )
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
+    export = _bound_registered_export(context)
+    if export is None:
+        return _result(
+            context,
+            status="blocked",
+            code="idea_bound_registered_source_required",
+            summary=(
+                "Confirm one validated registered EasyICU export in this project "
+                "before running Idea feasibility."
+            ),
+            owner="easyicu.webserver.study_contexts",
+        )
+    source, _desc = export
+    bindings = params.get("concept_bindings")
+    bindings = bindings if isinstance(bindings, Mapping) else {}
+    requested = [
+        str(bindings.get(key) or "").strip()
+        for key in ("primary_exposure", "outcome", "time_zero")
+    ] + [str(value or "").strip() for value in bindings.get("covariates") or []]
+    requested = list(dict.fromkeys(value for value in requested if value))
+    from easyicu.research_agent.acquisition.catalog import build_available_catalog
+
+    catalog = build_available_catalog(Path(str(source.get("path") or "")))
+    available = {str(item.concept_id) for item in catalog.concepts}
+    unknown = [value for value in requested if value not in available]
+    if unknown:
+        return _result(
+            context,
+            status="blocked",
+            code="idea_concept_bindings_not_in_source",
+            summary="One or more confirmed concepts are not present in the selected source.",
+            owner="easyicu.research_agent.acquisition.catalog",
+            details={"unknown_concepts": unknown},
+        )
+    body = {
+        "run_id": str(params.get("run_id") or "").strip(),
+        "idea_id": str(params.get("idea_id") or "").strip(),
+        "concept_bindings": dict(bindings),
+        "max_records": params.get("max_records"),
+        "require_adjudication": True,
+    }
+    try:
+        feasibility = idea_mining.bounded_sample_feasibility(body, export=export)
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_source_feasibility_blocked"),
+            summary=str(detail.get("reason") or "Source-bound Idea feasibility was blocked."),
+            owner="easyicu.webserver.ideas.mining",
+            details={key: value for key, value in detail.items() if key != "reason"},
+        )
+    projected = {
+        key: feasibility.get(key)
+        for key in (
+            "run_id",
+            "idea_id",
+            "status",
+            "claim_level",
+            "source",
+            "cohort",
+            "feature_statistics",
+            "concept_bindings",
+            "required_concepts",
+            "design_answerability",
+            "construct_answerability",
+            "missing_required_concepts",
+            "blockers",
+            "interpretation",
+            "privacy",
+        )
+    }
+    return _result(
+        context,
+        status="ok",
+        code="easyicu_idea_feasibility_assessed",
+        summary=(
+            "The selected real source passed bounded Idea feasibility and is ready "
+            "for an execution-plan preview."
+            if feasibility.get("status") == "ready"
+            else "Bounded source feasibility completed, but execution remains blocked or needs review."
+        ),
+        owner="easyicu.webserver.ideas.mining",
+        details={
+            "idea_feasibility": bounded_json_projection(projected),
+            "execution_ready_for_plan_preview": feasibility.get("status") == "ready",
+        },
     )
 
 
@@ -2998,6 +3341,27 @@ def _accept_idea_handoff(
             code="study_context_active_job_conflict",
             summary="An Idea Mining handoff cannot replace study setup while an authoritative job is active.",
             owner="easyicu.webserver.study_contexts",
+        )
+    current_source = current.get("data_source")
+    current_source = current_source if isinstance(current_source, Mapping) else {}
+    try:
+        readiness_binding = idea_mining.idea_execution_readiness_binding(
+            str(params.get("run_id") or "").strip(),
+            str(params.get("idea_id") or "").strip(),
+            source_path=current_source.get("path"),
+        )
+    except idea_mining.IdeaMiningWebError as exc:
+        detail = exc.detail
+        return _result(
+            context,
+            status="blocked",
+            code=str(detail.get("error") or "idea_execution_readiness_blocked"),
+            summary=str(
+                detail.get("reason")
+                or "The selected Idea has not passed the current literature and data gates."
+            ),
+            owner="easyicu.webserver.ideas.mining",
+            details={key: value for key, value in detail.items() if key != "reason"},
         )
     body = {
         "run_id": str(params.get("run_id") or "").strip(),
@@ -3041,6 +3405,7 @@ def _accept_idea_handoff(
                 if isinstance(prior_art_binding, Mapping)
                 else None
             ),
+            readiness_binding=readiness_binding,
         )
     except idea_handoff.CanonicalHandoffAcceptanceError as exc:
         return _result(
@@ -3346,6 +3711,7 @@ def _run(
     *,
     plan_revision_source_run_id: str = "",
     planner_start_mode: str = "auto",
+    run_intent: research_run_submission.RunIntent | None = None,
 ) -> Dict[str, Any]:
     _require_args(params, allowed=("run_type", "llm_provider"))
     planner_start_mode = str(planner_start_mode or "auto").strip().lower()
@@ -3478,12 +3844,23 @@ def _run(
                 }
             )
 
+        workflow = _workflow_snapshot(context, study_override=study)
+        effective_run_intent: research_run_submission.RunIntent = (
+            run_intent
+            if run_intent is not None
+            else (
+                "candidate_plan"
+                if str(workflow.get("next_action_code") or "").strip()
+                == "provider_ready_to_generate_plan"
+                else "reviewed_analysis"
+            )
+        )
         request = research_run_submission.ResearchRunSubmissionRequest(
             study_context_id=str(study["id"]),
             provider=provider,
             credential_source=research_provider.credential_source,
             external_llm_opt_in=context.session.external_llm_opt_in,
-            intent="reviewed_analysis",
+            intent=effective_run_intent,
             planner_start_mode=planner_start_mode,
             plan_revision_source_run_id=str(plan_revision_source_run_id),
             literature_search_authorized=literature_search_authorized,
@@ -3840,6 +4217,7 @@ def _request_replan(
             context,
             {"run_type": "full"},
             planner_start_mode=strategy,
+            run_intent="candidate_plan",
         )
     return _result(
         context,
@@ -4304,6 +4682,8 @@ _DISPATCH = {
     "easyicu_update_study_context": _update_study_context,
     "easyicu_mine_ideas": _mine_ideas,
     "easyicu_search_literature": _search_literature,
+    "easyicu_adjudicate_idea_literature": _adjudicate_idea_literature,
+    "easyicu_assess_idea_feasibility": _assess_idea_feasibility,
     "easyicu_prepare_idea_handoff": _prepare_idea_handoff,
     "easyicu_accept_idea_handoff": _accept_idea_handoff,
     "easyicu_prepare_demo_source": _prepare_demo_source,

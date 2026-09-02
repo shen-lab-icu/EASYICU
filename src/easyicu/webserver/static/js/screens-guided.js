@@ -1925,9 +1925,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderSessions();
       if (guidedFolderDialogMode) renderGuidedFolderDialog();
       const continuity = window.EU_GUIDED_PROJECT_CONTINUITY;
-      const rememberedId = !selectedGuidedDraft && continuity && continuity.remembered
-        ? continuity.remembered()
+      const piProjectOwner = window.EU_GUIDED_PI_PROJECT;
+      const requestedId = !selectedGuidedDraft && piProjectOwner
+        && typeof piProjectOwner.requestedProjectId === 'function'
+        ? piProjectOwner.requestedProjectId()
         : '';
+      const rememberedId = requestedId || (
+        !selectedGuidedDraft && continuity && continuity.remembered
+          ? continuity.remembered()
+          : ''
+      );
       if (rememberedId) {
         const rememberedRow = localDraftRows().find(row => row && row.id === rememberedId);
         if (rememberedRow) {

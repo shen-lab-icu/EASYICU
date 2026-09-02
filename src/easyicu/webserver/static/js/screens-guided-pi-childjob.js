@@ -32,7 +32,8 @@
       const value = String(code || '').toLowerCase();
       if (value.includes('extraction')) return tr('Extracting and validating study data', '正在提取并验证研究数据');
       if (value.includes('review')) return tr('Running the approved research plan', '正在执行已批准的研究计划');
-      if (value.includes('full_run_resume')) return tr('Reusing the existing plan and preparing analysis data', '正在复用已有计划并准备分析数据');
+      if (value.includes('full_run_report_resume')) return tr('Restoring the manuscript and evidence checks', '正在恢复稿件与证据校验');
+      if (value.includes('full_run_resume')) return tr('Resuming the approved research run', '正在续跑已批准的科研任务');
       if (value.includes('full_run')) return tr('Generating the research plan', '正在生成研究计划');
       return tr('EasyICU research task is running', 'EasyICU 科研任务正在运行');
     }
@@ -47,8 +48,10 @@
       const label = code === 'easyicu_extraction_submitted'
         ? tr('EasyICU data extraction submitted', 'EasyICU 数据提取任务已提交')
         : String(code || '').includes('easyicu_full_run')
-          ? String(code || '').includes('resume')
-            ? tr('Existing plan reuse and local data preparation started', '已开始复用已有计划并进行本地数据准备')
+          ? String(code || '').includes('report_resume')
+            ? tr('Manuscript and evidence validation resumed', '已恢复稿件与证据校验')
+            : String(code || '').includes('resume')
+            ? tr('Approved research run resumed', '已续跑获批的科研任务')
             : tr('Research Agent planning submitted', 'Research Agent 规划任务已提交')
           : code === 'easyicu_review_submitted'
             ? tr('Approved plan submitted for analysis', '已批准计划已提交分析')
@@ -88,6 +91,19 @@
     }
     function childEventLabel(event) {
       return ACTIVITY.pipelineEventLabel(event);
+    }
+    function childEventKind(event) {
+      const message = String(event && (event.message || event.label) || '').toLowerCase();
+      return String(event && event.step || '').toLowerCase() === 'planning'
+        && (String(event && event.retry_phase || '') === 'rejected'
+          || message.includes('did not satisfy the scientific contract'))
+        ? 'retry' : 'pipeline';
+    }
+    function childEventId(step, kind, event) {
+      if (kind !== 'retry') return 'pipeline-' + step;
+      const attempt = Number(event && event.current);
+      const unit = String(event && event.planning_unit || 'plan').replace(/[^a-z0-9_-]/gi, '').slice(0, 24) || 'plan';
+      return `pipeline-plan-retry-${unit}-${Number.isFinite(attempt) ? attempt : 'current'}`;
     }
     function handleChildJobEvent(jobId, code, event) {
       if (!event || typeof event !== 'object' || host.childJobId() !== jobId) return;
@@ -134,6 +150,9 @@
             if (host.session() && sessionIsStale()) await rebind();
             await loadWorkflow();
             render();
+            if (typeof host.continueSystemOwnedPlanRevision === 'function') {
+              await host.continueSystemOwnedPlanRevision();
+            }
           })
           .catch(() => render());
         return;
@@ -141,13 +160,14 @@
       if (!['start', 'progress', 'gate', 'artifact', 'cancel_requested'].includes(String(event.type || ''))) return;
       completeRunningPipelineSteps(activity);
       const step = String(event.step || event.type || 'pipeline').slice(0, 80);
+      const kind = childEventKind(event);
       upsertActivityStep(activity, {
         // One row per pipeline step, updated in place. Keying on `seq` gave a
         // fresh row for every event, so a single step reported four times
         // (started / generating / running / complete) and 13 steps filled the
         // timeline with 52 near-identical lines.
-        id: 'pipeline-' + step,
-        kind: 'pipeline', step, label: childEventLabel(event), status: 'running',
+        id: childEventId(step, kind, event),
+        kind, step, label: childEventLabel(event), status: 'running',
         at: Date.now(), code: step,
         owner: String(event.run_id || '').slice(0, 160),
       });
@@ -218,11 +238,12 @@
       progress.forEach(event => {
         if (String(event.type || '') === 'end') return;
         const step = String(event.step || event.type || 'pipeline').slice(0, 80);
+        const kind = childEventKind(event);
         const count = event.current != null && event.total != null ? `${event.current}/${event.total}` : '';
         const reason = String(event.reason_code || '');
         upsertActivityStep(activity, {
-          id: 'pipeline-' + step,
-          kind: 'pipeline', step,
+          id: childEventId(step, kind, event),
+          kind, step,
           // Replays must use the same safe public projection as live SSE.
           // Persisted runner prose is an audit receipt, not conversation copy.
           label: childEventLabel(event),

@@ -30,6 +30,7 @@
     const regeneration = host.regeneration;
     const nextActions = host.nextActions;
     const replay = host.replay;
+    let automaticScientificRevisionStarted = false;
 
     function unavailable() {
       return !host.session() || host.busy() || host.sessionIsStale();
@@ -47,10 +48,18 @@
 
     function generationRequest(reasonCode) {
       const retryExecution = reasonCode === 'failed_pipeline_execution_retry_available';
-      const fresh = reasonCode !== 'provider_ready_to_generate_plan' && !retryExecution;
+      const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
+      const resumeCheckpoint = reasonCode === 'planner_checkpoint_resume_available';
+      const fresh = reasonCode !== 'provider_ready_to_generate_plan'
+        && !resumeCheckpoint
+        && !retryExecution;
       return {
         text: retryExecution
           ? tr('Retry analysis from the failed step', '从失败步骤重试分析')
+          : executionUpgrade
+            ? tr('Confirm the plan and prepare analysis data', '确认方案并准备分析数据')
+          : resumeCheckpoint
+            ? tr('Continue generating the candidate research plan', '继续生成候选研究计划')
           : fresh
             ? tr('Generate a fresh research plan', '重新生成研究计划')
             : tr('Generate the candidate research plan', '生成候选研究计划'),
@@ -63,10 +72,102 @@
       };
     }
 
-    async function startFormalPlanGeneration(reasonCode) {
+    async function startFormalPlanGeneration(reasonCode, options = {}) {
       if (unavailable()) return;
+      const automatic = Boolean(options && options.automatic);
       const request = generationRequest(String(reasonCode || ''));
-      await host.sendText(request.text, request.grants, request.intent);
+      const session = host.session() || {};
+      const binding = session.binding || {};
+      const provider = session.research_provider || {};
+      const studyContextId = String(binding.study_context_id || '').trim();
+      const revisingScientificPlan = reasonCode === 'plan_scientific_changes_required';
+      const revisionSourceRunId = revisingScientificPlan
+        ? String(binding.run_id || '').trim()
+        : '';
+      const api = host.api();
+      if (
+        !studyContextId
+        || typeof api.loadStudyContext !== 'function'
+        || typeof api.startAgentRun !== 'function'
+      ) {
+        host.setError(tr(
+          'The prepared study is unavailable. Refresh this project and try again.',
+          '当前已准备研究不可用，请刷新项目后重试。',
+        ));
+        host.render();
+        return;
+      }
+      if (!automatic) {
+        host.appendMessage({
+          id: 'plan-generation-' + Date.now(), role: 'user', complete: true,
+          text: request.text,
+        });
+      }
+      setPending(true);
+      try {
+        const response = await api.loadStudyContext(studyContextId);
+        const study = response && (response.context || response.study || response);
+        const source = study && study.data_source;
+        const sourcePath = String((source && source.path) || '').trim();
+        if (!study || !sourcePath) throw new Error('prepared_data_source_unavailable');
+        const payload = await api.startAgentRun({
+          path: sourcePath,
+          study_id: studyContextId,
+          study_context_id: studyContextId,
+          question: study.question,
+          run_type: 'full',
+          llm_provider: String(provider.provider || ''),
+          credential_source: String(provider.credential_source || ''),
+          external_llm_opt_in: true,
+          // The visible planning confirmation authorizes literature support as
+          // well as the provider turn.  Dropping this flag made every Web
+          // revision repeat the same "no direct evidence search" finding.
+          literature_search_authorized: true,
+          engine: 'research_agent_pipeline',
+          // A scientific revision is not a fresh, context-free plan.  Bind the
+          // immutable review that requested changes so Planner can repair its
+          // own findings instead of rediscovering them on every user click.
+          planner_start_mode: reasonCode === 'planner_checkpoint_resume_available'
+            ? 'resume_checkpoint'
+            : revisingScientificPlan
+              ? 'auto'
+              : 'fresh',
+          plan_revision_source_run_id: revisionSourceRunId,
+        });
+        await host.recordHostAction(
+          automatic
+            ? 'auto_revise_plan'
+            : reasonCode === 'plan_execution_upgrade_required'
+            ? 'prepare_analysis_data'
+            : 'generate_plan',
+          String(payload.job_id || ''),
+          String(payload.job_id || ''),
+        );
+        host.setBusy(false);
+        host.watchChildJob(String(payload.job_id || ''), 'easyicu_full_run_submitted');
+      } catch (error) {
+        host.setBusy(false);
+        host.setError(host.errorText(error));
+        host.render();
+      }
+    }
+
+    async function continueSystemOwnedPlanRevision() {
+      const workflow = host.workflow() || {};
+      const questions = workflow.plan_review_summary
+        && Array.isArray(workflow.plan_review_summary.authorization_questions)
+        ? workflow.plan_review_summary.authorization_questions
+        : [];
+      if (
+        String(workflow.next_action_code || '') !== 'plan_scientific_changes_required'
+        || questions.length
+        || automaticScientificRevisionStarted
+      ) return false;
+      automaticScientificRevisionStarted = true;
+      await startFormalPlanGeneration(
+        'plan_scientific_changes_required', {automatic: true},
+      );
+      return true;
     }
 
     function regenerationAuthority(text, regenerationIntent) {
@@ -144,6 +245,9 @@
           decision,
           external_llm_opt_in: true,
         });
+        await host.recordHostAction(
+          'execute_plan', String(payload.job_id || ''), String(payload.job_id || ''),
+        );
         host.setBusy(false);
         host.watchChildJob(String(payload.job_id || ''), 'easyicu_review_submitted');
       } catch (error) {
@@ -175,8 +279,16 @@
         const payload = await replay.retryFailedExecution({
           api: host.api(), session: host.session(),
         });
+        await host.recordHostAction(
+          'retry_analysis', String(payload.job_id || ''), String(payload.job_id || ''),
+        );
         host.setBusy(false);
-        host.watchChildJob(String(payload.job_id || ''), 'easyicu_full_run_submitted');
+        host.watchChildJob(
+          String(payload.job_id || ''),
+          validationRepair
+            ? 'easyicu_full_run_report_resume_submitted'
+            : 'easyicu_full_run_resume_submitted',
+        );
       } catch (error) {
         host.setBusy(false);
         host.setError(host.errorText(error));
@@ -191,7 +303,7 @@
         return;
       }
       if (confirmation.code === 'plan_execution_upgrade_required') {
-        await host.sendText(confirmation.message, confirmation.grants);
+        await startFormalPlanGeneration(confirmation.code);
         return;
       }
       if (confirmation.code === 'failed_pipeline_execution_retry_available') {
@@ -202,13 +314,11 @@
         await startFormalPlanGeneration(confirmation.code);
         return;
       }
-      await host.sendText(
-        confirmation.message,
-        confirmation.grants,
-        confirmation.code === 'planner_checkpoint_resume_available'
-          ? 'confirm_planner_checkpoint_resume'
-          : '',
-      );
+      if (confirmation.code === 'planner_checkpoint_resume_available') {
+        await startFormalPlanGeneration(confirmation.code);
+        return;
+      }
+      await host.sendText(confirmation.message, confirmation.grants);
     }
 
     async function rejectWorkflow(confirmation) {
@@ -271,6 +381,7 @@
     return Object.freeze({
       confirmDecision,
       confirmWorkflow,
+      continueSystemOwnedPlanRevision,
       governedNextChoiceGrants,
       regenerationAuthority,
       rejectWorkflow,

@@ -6,7 +6,7 @@
 
   function create(options) {
     const {
-      state, RESOURCE_OWNER, MESSAGE_ACTIONS, STARTERS, COHORT_ELIGIBILITY,
+      state, RESOURCE_OWNER, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
       DATA_CONSENT, RUN_OUTCOME, render, projectId, previewWorkflowContext,
       openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
       openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
@@ -18,30 +18,60 @@
       confirmPlanDecision,
       authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
       governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
-      togglePresentationPin, configureProvider,
+      togglePresentationPin, configureProvider, rememberSession, recordHostAction,
     } = options;
 
     function dismissHeaderOverflow(event) {
       const menu = state.host && state.host.querySelector('.gpi-head-overflow[open]');
-      if (!menu) return;
-      const action = event.target && event.target.closest
-        ? event.target.closest('.gpi-head-overflow-menu button') : null;
-      if (!menu.contains(event.target) || action) menu.removeAttribute('open');
+      if (menu) {
+        const action = event.target && event.target.closest
+          ? event.target.closest('.gpi-head-overflow-menu button') : null;
+        if (!menu.contains(event.target) || action) menu.removeAttribute('open');
+      }
+      const sourceMenu = state.host && state.host.querySelector('.gpi-idea-source-menu[open]');
+      if (!sourceMenu) return;
+      const sourceAction = event.target && event.target.closest
+        ? event.target.closest('.gpi-idea-source-popover button') : null;
+      if (!sourceMenu.contains(event.target) || sourceAction) sourceMenu.removeAttribute('open');
+    }
+
+    function reviewActionCode(descriptor) {
+      const artifact = String((descriptor && descriptor.artifact) || '');
+      if (artifact === 'result_tables.json') return 'review_result_tables';
+      if (artifact === 'figure_gallery.json') return 'review_figures';
+      if (['manuscript_provenance.json', 'manuscript_scaffold.pdf', 'article_report.json'].includes(artifact)) {
+        return 'review_manuscript';
+      }
+      if (artifact === 'scientific_readiness.json') return 'review_scientific_review';
+      if (String((descriptor && descriptor.kind) || '') === 'research_report') return 'review_results';
+      return '';
     }
 
     function wire() {
       if (!state.host) return;
       state.host.addEventListener('click', event => {
+        if (IDEA_SOURCE && IDEA_SOURCE.handleClick(event, {
+          host: () => state.host, render, tr,
+        })) return;
         const session = event.target.closest('[data-gpi-session]');
         if (session) { openSession(session.dataset.gpiSession); return; }
         if (event.target.closest('[data-gpi-demo-exit]')) { closeDemo(); return; }
         if (event.target.closest('[data-gpi-demo]')) { openDemo(); return; }
         const resource = event.target.closest('[data-gpi-resource-kind]');
         if (resource) {
+          const descriptor = RESOURCE_OWNER.fromButton(resource);
           if (window.EU_GUIDED_PI_PREVIEW && window.EU_GUIDED_PI_PREVIEW.open) {
             window.EU_GUIDED_PI_PREVIEW.open(
-              RESOURCE_OWNER.fromButton(resource), projectId(), previewWorkflowContext(),
+              descriptor, projectId(), previewWorkflowContext(),
             );
+            const artifact = String((descriptor && descriptor.artifact) || '');
+            const actionCode = reviewActionCode(descriptor);
+            if (actionCode) {
+              void recordHostAction(
+                actionCode,
+                [String((descriptor && descriptor.run_id) || projectId()), artifact || 'report'].join(':'),
+              );
+            }
           }
           return;
         }
@@ -115,11 +145,12 @@
         if (MESSAGE_ACTIONS.handleClick(event)) return;
         const starterAction = STARTERS && STARTERS.actionFromEvent(event);
         if (starterAction && starterAction.kind === 'send') {
-          sendText(starterAction.text, []);
+          sendText(starterAction.text, [], starterAction.intent);
           return;
         }
         if (starterAction && starterAction.kind === 'compose') {
           state.draft = starterAction.text;
+          state.pendingEntryIntent = starterAction.intent;
           render();
           window.requestAnimationFrame(() => {
             const input = state.host && state.host.querySelector('[data-gpi-input]');
@@ -158,12 +189,35 @@
         if (event.target.closest('[data-gpi-presentation-pin]')) { togglePresentationPin(); return; }
         if (event.target.closest('[data-gpi-config]')) { state.showSetup = true; state.error = ''; render(); return; }
         if (event.target.closest('[data-gpi-cancel-setup]')) { state.showSetup = false; state.error = ''; render(); return; }
-        if (event.target.closest('[data-gpi-new]')) { state.sessionSelectionRevision += 1; state.session = null; state.messages = []; state.editingMessageId = ''; rememberSession(''); render(); }
+        if (event.target.closest('[data-gpi-new]')) {
+          state.sessionSelectionRevision += 1;
+          state.session = null;
+          state.messages = [];
+          state.editingMessageId = '';
+          state.pendingEntryIntent = '';
+          rememberSession('');
+          if (window.EU_GUIDED_PI_PROJECT && window.EU_GUIDED_PI_PROJECT.syncLocation) {
+            window.EU_GUIDED_PI_PROJECT.syncLocation(projectId(), '');
+          }
+          render();
+        }
       });
       state.host.addEventListener('input', event => {
         if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
       });
       state.host.addEventListener('change', event => {
+        if (IDEA_SOURCE && IDEA_SOURCE.handleChange(event, {
+          host: () => state.host, render, tr,
+          onReady: () => {
+            if (!String(state.draft || '').trim()) {
+              state.draft = tr(
+                'Mine candidate research innovations from this paper and review the supporting literature and EasyICU data boundary.',
+                '请从这篇文章中发掘候选创新点，并审阅支持文献和 EasyICU 数据边界。',
+              );
+              state.pendingEntryIntent = 'idea_mining_entry';
+            }
+          },
+        })) return;
         if (event.target.matches('[data-gpi-codex-model]')) {
           state.researchModel = String(event.target.value || '');
           state.error = ''; render(); return;
@@ -196,6 +250,13 @@
           if (menu) {
             menu.removeAttribute('open');
             const summary = menu.querySelector('summary');
+            if (summary) summary.focus();
+            return;
+          }
+          const sourceMenu = state.host.querySelector('.gpi-idea-source-menu[open]');
+          if (sourceMenu) {
+            sourceMenu.removeAttribute('open');
+            const summary = sourceMenu.querySelector('summary');
             if (summary) summary.focus();
             return;
           }

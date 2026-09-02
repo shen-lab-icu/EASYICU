@@ -147,7 +147,7 @@ def test_risk_table_widens_the_gutter_for_group_labels() -> None:
 
 
 def test_route_passes_the_reporting_fields_through() -> None:
-    viz = _asset("js", "screens-viz.js")
+    viz = _asset("js", "screens-viz-cohort-survival.js")
 
     assert "censorMarks: group.censor_marks" in viz
     assert "horizon: curve.display_horizon_days" in viz

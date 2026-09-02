@@ -93,7 +93,7 @@ def test_patient_browse_css_has_route_pure_owners_and_balanced_syntax() -> None:
 def test_patient_browse_owners_are_wired_before_the_host_screen() -> None:
     index = _read("index.html")
     api = _read("js/api.js")
-    host = _read("js/screens-viz.js")
+    host = _read("js/screens-viz-patient.js")
     navigation = _read("js/screens-viz-patient-navigation.js")
     tables = _read("js/screens-viz-patient-tables.js")
     feature_loader = _read("js/screens-viz-patient-feature-loader.js")
@@ -101,13 +101,13 @@ def test_patient_browse_owners_are_wired_before_the_host_screen() -> None:
     patient_series_css = _read("css/patient-series.css")
 
     assert index.index("js/screens-viz-patient-navigation.js?") < index.index(
-        "js/screens-viz.js?"
+        "js/screens-viz-patient.js?"
     )
     assert index.index("js/screens-viz-patient-tables.js?") < index.index(
-        "js/screens-viz.js?"
+        "js/screens-viz-patient.js?"
     )
     assert index.index("js/screens-viz-patient-feature-loader.js?") < index.index(
-        "js/screens-viz.js?"
+        "js/screens-viz-patient.js?"
     )
     for method, endpoint in (
         ("loadPatientReviewEntities", "/api/patient-review/entities"),

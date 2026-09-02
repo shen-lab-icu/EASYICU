@@ -371,7 +371,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260829-bilateral-collapse1" in index_html
+    assert "js/screens-guided.js?v=20260901-session-deeplink1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -656,7 +656,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260829-bilateral-collapse1" in index_html
+    assert "js/screens-guided.js?v=20260901-session-deeplink1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -933,7 +933,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260830-e2-report1" in index_html
+    assert "js/screens-agent-render.js?v=20260901-reference-aligned1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
 
@@ -1575,7 +1575,7 @@ def test_native_extraction_module_counts_match_backend_catalog() -> None:
     assert fallback_total != 219
 
 
-def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
+def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry() -> None:
     app_js = _static_js("app.js")
     api_js = _static_js("api.js")
     icons_js = _static_js("icons.js")
@@ -1589,14 +1589,15 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     shell_css = _static_css("shell.css")
     index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
-    assert 'data-nav="ideas"' in app_js
-    # One destination, one name: the sidebar carries the same label as the crumb
-    # and page title (Idea Mining / 想法挖掘), not a third alias.
+    assert 'data-nav="ideas"' not in app_js
+    # The legacy deep route and its owner remain available while Copilot becomes
+    # the single user-facing discovery entry.
     assert "Idea Mining" in app_js
     assert "Find a Study Idea" not in app_js
     assert "Discovery & Plan" in app_js
-    assert "ideas-entry" in app_js
-    assert "paper, PDF, or topic → feasible plan" in app_js
+    assert "ideas-entry" not in app_js
+    assert "paper, PDF, or topic → feasible plan" not in app_js
+    assert "研究主题、临床现象、文章链接或 PDF 都从 Copilot 开始" in app_js
     assert "Project Monitor" in app_js
     assert "runs · outputs · evidence · review" in app_js
     assert "Data & Review" in app_js
@@ -1619,11 +1620,11 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "window.__euRender = render;" not in app_js
     assert "Classic Workspace" not in app_js
     assert "Copilot and Classic share one study" not in app_js
-    assert "Already have data? Start with Extract Data." in app_js
+    assert "Evidence and literature open in its review panel" in app_js
     assert "wsi-sub" in app_js
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20260812-route-a11y1" in index_html
-    assert "js/icons.js?v=20260825-message-actions1" in index_html
+    assert "js/icons.js?v=20260901-composer-plus1" in index_html
     assert "js/app.js?v=20260826-copilot-home1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
@@ -2761,7 +2762,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260829-bilateral-collapse1" in index_html
+    assert "screens-guided.js?v=20260901-session-deeplink1" in index_html
     assert "guided.css?v=20260829-readability2" in index_html
     assert "guided-projects.css?v=20260829-horizontal-arrows1" in index_html
     assert "gd-rail-heading" in projects_js
@@ -3566,9 +3567,9 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
     assert "js/screens-extraction-embedded.js?v=20260829-data-scope1" in index_html
-    assert "js/screens-guided-pi-starters.js?v=20260827-independent-starters1" in index_html
-    assert "js/screens-guided-pi-header.js?v=20260827-type-scale1" in index_html
-    assert "js/screens-guided-pi.js?v=20260831-simple-flow3" in index_html
+    assert "js/screens-guided-pi-starters.js?" in index_html
+    assert "js/screens-guided-pi-header.js?" in index_html
+    assert "js/screens-guided-pi.js?" in index_html
     assert "/api/jobs/' + encodeURIComponent(jobId || '') + '/open-output" in api_js
     assert "window.EU_API.openExtractionOutput = openExtractionOutput" in api_js
     assert "data-ex-open-output" in extraction_js

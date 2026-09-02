@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from easyicu.webserver import (
     agent_pipeline_runs,
     guided_sessions,
+    research_launch_scientific,
     research_run_submission,
     settings,
 )
@@ -756,6 +757,11 @@ def test_new_research_session_allows_planning_but_blocks_data_tools_until_confir
             break
         time.sleep(0.01)
     assert job is not None and job.status == "done"
+    listed_session = service.list_sessions(
+        project_id="project-data-consent"
+    )["sessions"][0]
+    assert listed_session["title"].startswith("Help me refine the research question")
+    assert listed_session["title"].endswith("…")
     assert [call[0] for call in gateway.calls] == [
         "session.create",
         "session.state",
@@ -784,6 +790,86 @@ def test_new_research_session_allows_planning_but_blocks_data_tools_until_confir
         confirmed["session"]["data_source_authorization"]["extraction_scope"]
         == "reuse_prepared_full"
     )
+
+
+def test_blank_project_first_turn_gets_typed_entry_clarification(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        service_module,
+        "build_project_workflow_projection",
+        lambda **kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(current_stage="idea")
+        ),
+    )
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-entry-routing",
+        external_llm_opt_in=True,
+    )
+
+    submitted = service.send_message(
+        created["session"]["session_id"],
+        project_id="project-entry-routing",
+        message="液体平衡会不会影响撤机？",
+    )
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    prompt_call = next(call for call in gateway.calls if call[0] == "session.prompt")
+    assert prompt_call[1]["intent"] == "clarify_research_entry"
+
+
+def test_copilot_message_passes_bounded_idea_source_to_gateway_and_tool_context(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        service_module,
+        "build_project_workflow_projection",
+        lambda **kwargs: SimpleNamespace(
+            workflow=SimpleNamespace(current_stage="idea")
+        ),
+    )
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    session = service.create_session(
+        project_id="project-idea-source",
+        external_llm_opt_in=True,
+    )["session"]
+    source = {
+        "source_type": "pdf",
+        "title": "Attached article",
+        "excerpt": "Bounded excerpt",
+        "source_file_name": "article.pdf",
+        "source_file_sha256": "b" * 64,
+    }
+
+    submitted = service.send_message(
+        session["session_id"],
+        project_id="project-idea-source",
+        message="请从这篇文章发掘创新方向",
+        allowed_actions={"idea", "literature"},
+        message_intent="idea_mining_entry",
+        idea_source=source,
+    )
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+
+    prompt_call = next(call for call in gateway.calls if call[0] == "session.prompt")
+    assert prompt_call[1]["idea_source"] == source
 
 
 def test_data_preparation_choice_distinguishes_study_required_and_full_extract(
@@ -2343,6 +2429,7 @@ def test_pi_conversations_are_immutably_scoped_to_one_project(
     listed = service.list_sessions(project_id="project-alpha")
     assert [row["session_id"] for row in listed["sessions"]] == ["pi-alpha"]
     assert listed["sessions"][0]["project_id"] == "project-alpha"
+    assert listed["sessions"][0]["history_turn_count"] == 0
 
     with pytest.raises(PiCopilotError) as mismatch:
         service.get_session("pi-alpha", project_id="project-beta")
@@ -2829,6 +2916,44 @@ def test_pi_replay_survives_service_restart_and_archives_only_safe_child_job(
     assert len(public["conversation_replay"]["replay_sha256"]) == 64
 
 
+def test_service_restart_terminalizes_orphaned_host_child_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "load_settings", lambda: {"ai_enabled": True})
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    session_id = service.create_session(
+        project_id="project-replay-restart",
+        external_llm_opt_in=True,
+    )["session"]["session_id"]
+    service.replay_store.record_host_action(
+        session_id=session_id,
+        project_id="project-replay-restart",
+        action_id="host-plan-1",
+        action_code="generate_plan",
+        action_key="study-restart:4",
+        child_job_id="lost-child-job",
+    )
+
+    class EmptyManager:
+        def get(self, _job_id: str) -> None:
+            return None
+
+    monkeypatch.setattr(service_module.jobs, "MANAGER", EmptyManager())
+    public = service.get_session(
+        session_id,
+        project_id="project-replay-restart",
+    )["session"]
+
+    host_turn = public["conversation_replay"]["turns"][0]
+    assert host_turn["kind"] == "host_action"
+    assert host_turn["status"] == "interrupted"
+    assert host_turn["ended_at"]
+
+
 def test_presentation_pin_protects_conversation_from_retention_eviction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3010,7 +3135,7 @@ def test_superseded_plan_replan_starts_fresh_pipeline_run(
     assert result["code"] == "easyicu_full_run_submitted"
     assert result["details"]["job_id"] == "job-fresh-plan"
     assert submitted[0].study_context_id == study["id"]
-    assert submitted[0].intent == "reviewed_analysis"
+    assert submitted[0].intent == "candidate_plan"
     assert submitted[0].planner_start_mode == "fresh"
 
 
@@ -3160,7 +3285,7 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
     assert result["code"] == "easyicu_full_run_submitted"
     assert result["details"]["job_id"] == "job-fresh-after-bridge-failure"
     assert submitted[0].study_context_id == study["id"]
-    assert submitted[0].intent == "reviewed_analysis"
+    assert submitted[0].intent == "candidate_plan"
     assert submitted[0].planner_start_mode == "fresh"
 
 
@@ -5594,7 +5719,7 @@ def test_unsupported_runtime_design_does_not_consume_configure_grant(
     assert writes == []
 
     monkeypatch.setattr(
-        agent_pipeline_runs.source_identity_authority,
+        research_launch_scientific.source_identity_authority,
         "resolve_patient_grouping_authority",
         lambda **_kwargs: PatientGroupingBinding(
             mapping_path=Path("/private/mapping.parquet"),
@@ -5715,6 +5840,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
     assert full_result["details"]["run_id_status"] == "pending_pipeline_start"
     assert pipeline_requests[-1].study_context_id == "study-1"
     assert pipeline_requests[-1].provider == "openai"
+    assert pipeline_requests[-1].intent == "candidate_plan"
     assert pipeline_requests[-1].planner_start_mode == "auto"
     assert not hasattr(pipeline_requests[-1], "path")
 
@@ -5734,7 +5860,7 @@ def test_preflight_delegates_to_the_existing_agent_submission_owner(
 
     assert promoted_result["code"] == "easyicu_full_run_submitted"
     assert promoted_result["details"]["run_id_status"] == "pending_pipeline_start"
-    assert pipeline_requests[-1].intent == "reviewed_analysis"
+    assert pipeline_requests[-1].intent == "candidate_plan"
 
     literature_context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -6085,6 +6211,7 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
         project_id="project-a",
         run_id="run_20260808",
         artifact_name="table1_summary.json",
+        expected_sha256="c" * 64,
     )
     encoded = json.dumps(payload)
     assert payload["payload"]["source"] == {"database": "mimiciv"}
@@ -6101,6 +6228,15 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
     }
     assert "project_dir" not in encoded
     assert "/private/" not in encoded
+
+    with pytest.raises(PiCopilotError) as digest_mismatch:
+        service.get_research_artifact(
+            project_id="project-a",
+            run_id="run_20260808",
+            artifact_name="table1_summary.json",
+            expected_sha256="d" * 64,
+        )
+    assert digest_mismatch.value.code == "pi_research_artifact_digest_mismatch"
 
     with pytest.raises(PiCopilotError) as wrong_project:
         service.get_research_artifact(

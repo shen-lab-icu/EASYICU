@@ -24,3 +24,19 @@
 .gpi-run-outcome-copy small { display: block; margin-top: 10px; color: var(--muted, #66716f); }
 .gpi-run-outcome-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .gpi-run-outcome-actions .gpi-resource-link { margin: 0; }
+.gpi-run-outcome-more { margin-top: 10px; }
+.gpi-run-outcome-more > summary {
+  width: max-content;
+  max-width: 100%;
+  cursor: pointer;
+  color: var(--muted, #66716f);
+  font-size: 12px;
+  font-weight: 650;
+}
+.gpi-run-outcome-more > .gpi-run-outcome-actions {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line, #d8e3e1);
+  border-radius: 8px;
+  background: var(--paper, #fff);
+}

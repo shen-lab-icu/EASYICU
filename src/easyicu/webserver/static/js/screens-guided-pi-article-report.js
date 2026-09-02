@@ -6,14 +6,19 @@
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
 
-  async function load(api, projectId, runId) {
+  async function load(api, projectId, runId, resource) {
     if (!api || typeof api.loadPiCopilotResearchArtifact !== 'function') {
       throw new Error(tr('The research artifact API is unavailable.', '研究产物接口不可用。'));
     }
-    const [provenance, gallery] = await Promise.all([
-      api.loadPiCopilotResearchArtifact(projectId, runId, 'manuscript_provenance.json'),
-      api.loadPiCopilotResearchArtifact(projectId, runId, 'figure_gallery.json').catch(() => null),
-    ]);
+    const loader = window.EU_GUIDED_PI_REPORT_ARTIFACTS;
+    if (!loader || typeof loader.load !== 'function') throw new Error('The report artifact loader is unavailable.');
+    const rows = await loader.load(
+      api, projectId, runId,
+      ['manuscript_provenance.json', 'figure_gallery.json'],
+      resource, ['figure_gallery.json'],
+    );
+    const provenance = rows['manuscript_provenance.json'];
+    const gallery = rows['figure_gallery.json'];
     return {
       payload: {
         ...((provenance && provenance.payload) || {}),

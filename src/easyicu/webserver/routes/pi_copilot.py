@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
+from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.pi_copilot.contracts import (
     PiCopilotError,
     PiProjectBindingHandoffReceipt,
@@ -136,11 +137,31 @@ class PiPlanDecisionSelectionRequest(BaseModel):
     run_id: RunIdText
 
 
+class PiIdeaSourceRequest(BaseModel):
+    """One bounded source seed already parsed by the existing Idea owner."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal["pdf", "url", "manual"]
+    title: Annotated[str, StringConstraints(strip_whitespace=True, max_length=220)] = ""
+    excerpt: Annotated[str, StringConstraints(strip_whitespace=True, max_length=1200)] = ""
+    journal: Annotated[str, StringConstraints(strip_whitespace=True, max_length=160)] = ""
+    year: int | None = Field(default=None, ge=1800, le=2200)
+    doi: Annotated[str, StringConstraints(strip_whitespace=True, max_length=240)] = ""
+    pmid: Annotated[str, StringConstraints(strip_whitespace=True, max_length=80)] = ""
+    url: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2048)] = ""
+    source_file_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=240)
+    ] = ""
+    source_file_sha256: Sha256Text | None = None
+
+
 class PiMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: ShortText
     message: MessageText
+    idea_source: PiIdeaSourceRequest | None = None
     allowed_actions: list[
         Literal[
             "configure",
@@ -163,6 +184,11 @@ class PiMessageRequest(BaseModel):
             "confirm_fresh_plan_generation",
             "confirm_planner_checkpoint_resume",
             "advance_after_data_source_confirmation",
+            "idea_mining_entry",
+            "idea_mining_candidate_selection",
+            "implement_scientific_question",
+            "data_first_entry",
+            "clarify_research_entry",
         ]
         | None
     ) = None
@@ -201,6 +227,26 @@ class PiProjectRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: ShortText
+
+
+class PiHostActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    action_code: Literal[
+        "generate_plan",
+        "prepare_analysis_data",
+        "execute_plan",
+        "retry_analysis",
+        "review_prepared_data",
+        "review_results",
+        "review_result_tables",
+        "review_figures",
+        "review_manuscript",
+        "review_scientific_review",
+    ]
+    action_key: ShortText
+    child_job_id: ShortText | None = None
 
 
 class PiPresentationPinRequest(BaseModel):
@@ -283,6 +329,18 @@ def _workspace_preview_document(*, file_name: str, artifact_html: str) -> str:
 @router.get("/api/copilot/pi/status")
 def get_pi_copilot_status() -> dict:
     return get_pi_copilot_service().runtime_status()
+
+
+@router.get("/api/copilot/pi/literature/sources/{pmid}")
+def get_pi_copilot_literature_source(pmid: ShortText) -> dict:
+    """Read one researcher-selected PubMed source with bounded PMC enrichment."""
+
+    try:
+        return idea_mining.review_literature_source(pmid)
+    except idea_mining.IdeaMiningWebError as exc:
+        code = str(exc.detail.get("error") or "literature_source_unavailable")
+        status = 422 if code == "literature_source_pmid_invalid" else 404 if code == "literature_source_not_found" else 502
+        raise HTTPException(status_code=status, detail=exc.detail) from exc
 
 
 @router.post("/api/copilot/pi/provider-config")
@@ -465,12 +523,14 @@ def get_pi_copilot_research_artifact(
     project_id: ShortText,
     run_id: RunIdText,
     artifact_name: ArtifactNameText,
+    expected_sha256: Sha256Text | None = None,
 ) -> dict:
     try:
         return get_pi_copilot_service().get_research_artifact(
             project_id=project_id,
             run_id=run_id,
             artifact_name=artifact_name,
+            expected_sha256=expected_sha256,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -629,6 +689,7 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
             message=body.message,
             allowed_actions=body.allowed_actions,
             message_intent=body.turn_intent,
+            idea_source=(body.idea_source.model_dump() if body.idea_source else None),
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -690,6 +751,7 @@ def post_pi_copilot_regenerate(
             regenerate_user_entry_id=body.user_entry_id,
             regeneration_intent=body.regeneration_intent,
             message_intent=body.turn_intent,
+            idea_source=(body.idea_source.model_dump() if body.idea_source else None),
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -748,6 +810,23 @@ def post_pi_copilot_child_job_archive(
             session_id,
             project_id=body.project_id,
             job_id=job_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/host-actions")
+def post_pi_copilot_host_action(
+    session_id: ShortText,
+    body: PiHostActionRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().record_host_action(
+            session_id,
+            project_id=body.project_id,
+            action_code=body.action_code,
+            action_key=body.action_key,
+            child_job_id=body.child_job_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

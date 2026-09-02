@@ -29,7 +29,12 @@ from easyicu.webserver.pi_copilot.contracts import (
     plan_approval_allowed,
 )
 from easyicu.webserver.pi_copilot.run_authority import (
+    list_bound_run_history,
+    research_pipeline_project_root,
     research_pipeline_workspace,
+)
+from easyicu.webserver.pi_copilot.workflow import (
+    build_project_workflow_projection,
 )
 from easyicu.webserver.routes.jobs import submit_job
 from easyicu.webserver.routes.request_parsing import body_bool, body_int
@@ -39,6 +44,74 @@ artifact_router = APIRouter()
 # Compatibility export for focused tests and older local integrations. The
 # class object is shared with the deep submission owner; no policy lives here.
 PiProviderConfigStore = research_run_submission.PiProviderConfigStore
+
+_CANDIDATE_PLAN_WORKFLOW_CODES = frozenset(
+    {
+        "provider_ready_to_generate_plan",
+        "plan_scientific_changes_required",
+        "failed_pipeline_requires_fresh_plan",
+        "plan_configuration_superseded",
+        "plan_review_not_resumable",
+        "scientific_plan_review_policy_stale",
+    }
+)
+
+
+def _package_bound_plan_history_present(study_context_id: str) -> bool:
+    """Return whether this study already crossed the patient-data boundary."""
+
+    for row in list_bound_run_history(
+        study_context_id=study_context_id,
+        project_root=research_pipeline_project_root(study_context_id),
+        limit=50,
+    ):
+        project_dir = Path(str(row.get("project_dir") or "")).expanduser()
+        provenance = project_dir / "pipeline_input" / "web_research_universe_provenance.json"
+        if provenance.is_file() and not provenance.is_symlink():
+            return True
+    return False
+
+
+def _candidate_plan_only_authorized(body: Mapping[str, Any]) -> bool:
+    """Resolve candidate-plan authority from the server-owned workflow.
+
+    The Guided host control deliberately does not send a client-selected
+    budget.  Its visible action is projected from the current workflow, so the
+    HTTP adapter must recover that same authority before submitting the run.
+    Otherwise a candidate-plan click is silently promoted to reviewed analysis
+    and reads patient rows before plan review.
+    """
+
+    if body_bool(body, "candidate_plan_only"):
+        return True
+    planner_start_mode = str(
+        body.get("planner_start_mode") or ""
+    ).strip().lower()
+    plan_revision_source_run_id = str(
+        body.get("plan_revision_source_run_id") or ""
+    ).strip()
+    candidate_launch_shape = planner_start_mode == "fresh" or (
+        planner_start_mode == "auto" and bool(plan_revision_source_run_id)
+    )
+    if not candidate_launch_shape:
+        return False
+    study_context_id = str(body.get("study_context_id") or "").strip()
+    if not study_context_id:
+        return False
+    try:
+        projection = build_project_workflow_projection(
+            study_context_id=study_context_id,
+        )
+    except Exception:
+        return False
+    action_code = projection.workflow.next_action_code
+    if action_code not in _CANDIDATE_PLAN_WORKFLOW_CODES:
+        return False
+    if action_code != "provider_ready_to_generate_plan" and (
+        _package_bound_plan_history_present(study_context_id)
+    ):
+        return False
+    return True
 
 
 def _server_research_pipeline_budget_mode() -> str:
@@ -412,9 +485,10 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
     return submit_agent_run(
         body,
         account_environment=account_environment,
-        # This client coordinate can only narrow the run to a zero-row Planner
-        # canary; it cannot grant execution or select a more permissive budget.
-        metadata_only_planning_authorized=body_bool(body, "candidate_plan_only"),
+        # The browser cannot grant execution or select a permissive budget.
+        # Candidate-plan authority is recovered from the current server-owned
+        # workflow; the legacy boolean can only narrow to a zero-row canary.
+        metadata_only_planning_authorized=_candidate_plan_only_authorized(body),
     )
 
 

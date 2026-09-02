@@ -35,6 +35,7 @@ from .projections import (
 from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
+    workflow_authoritative_run,
 )
 
 WorkflowStatus = Literal[
@@ -222,7 +223,7 @@ def build_research_workflow_snapshot(
             "figure_gallery.json",
         }
     )
-    has_manuscript = "manuscript_draft.json" in artifact_names
+    manuscript_artifact_present = "manuscript_draft.json" in artifact_names
     full_run = run_type == "full"
     pipeline_run = run_engine == "easyicu.research_agent.pipeline"
     pipeline_receipt = "source_run_manifest.json" in artifact_names
@@ -230,10 +231,16 @@ def build_research_workflow_snapshot(
     run_blocked = gate_status == "blocked"
     raw_gate_checks = run_row.get("gate_checks")
     gate_checks = dict(raw_gate_checks) if isinstance(raw_gate_checks, Mapping) else {}
+    # The projection always writes a bounded manuscript_draft.json, including
+    # a diagnostic explanation when Writer fails closed.  Only the Research
+    # Agent's manuscript_ready gate proves that the file contains a real,
+    # evidence-bound draft suitable for human review.
+    has_manuscript = bool(
+        manuscript_artifact_present and gate_checks.get("manuscript_ready") is True
+    )
     executed_analysis_validated = bool(
         gate_checks.get("execution_complete") is True
         and gate_checks.get("analysis_validated") is True
-        and gate_checks.get("numeric_verified") is True
     )
     analysis_outputs_available = bool(
         full_run
@@ -243,8 +250,13 @@ def build_research_workflow_snapshot(
         and has_evidence
         and has_outputs
         and gate_checks.get("execution_complete") is True
-        and gate_checks.get("evidence_complete") is True
-        and gate_checks.get("numeric_verified") is True
+        and (
+            gate_checks.get("analysis_validated") is True
+            or (
+                gate_checks.get("evidence_complete") is True
+                and gate_checks.get("numeric_verified") is True
+            )
+        )
     )
     preflight_complete = bool(
         run_type == "preflight"
@@ -266,7 +278,13 @@ def build_research_workflow_snapshot(
         prepared_export_receipted or _identified_data_source(study_row)
     )
     eligibility_confirmation_required = bool(
-        "cohort_eligibility" in planning_prerequisites_missing
+        (
+            "cohort_eligibility" in planning_prerequisites_missing
+            # Initial planning may propose eligibility. Once a plan exists, a
+            # StudyContext change invalidates that receipt and must be
+            # reconfirmed before regenerating or executing the old plan.
+            or (has_plan and "cohort_eligibility" in missing)
+        )
         and question_ready
         and planning_data_ready
     )
@@ -535,13 +553,6 @@ def build_research_workflow_snapshot(
 
     stages = [
         ResearchWorkflowStage(
-            id="question",
-            label="Scientific question",
-            status="complete" if question_ready else "ready",
-            owner="easyicu.webserver.study_contexts",
-            reason_code=("question_bound" if question_ready else "question_required"),
-        ),
-        ResearchWorkflowStage(
             id="idea",
             label="Idea mining",
             status=(
@@ -551,7 +562,7 @@ def build_research_workflow_snapshot(
                 if idea_accepted
                 else "optional"
                 if question_ready
-                else "blocked"
+                else "ready"
             ),
             owner="easyicu.webserver.ideas.mining",
             reason_code=(
@@ -560,9 +571,14 @@ def build_research_workflow_snapshot(
                 else "idea_handoff_accepted"
                 if idea_accepted
                 else "idea_mining_available"
-                if question_ready
-                else "question_required"
             ),
+        ),
+        ResearchWorkflowStage(
+            id="question",
+            label="Scientific question",
+            status="complete" if question_ready else "ready",
+            owner="easyicu.webserver.study_contexts",
+            reason_code=("question_bound" if question_ready else "question_required"),
         ),
         ResearchWorkflowStage(
             id="setup",
@@ -725,11 +741,26 @@ def build_research_workflow_snapshot(
     # though their interpretation and manuscript were still awaiting review.
     completed = sum(1 for row in required if row.status == "complete")
     if (
+        eligibility_confirmation_required
+        and not analysis_complete
+        and not analysis_outputs_available
+    ):
+        # A StudyContext change invalidates its cohort receipt by design.  The
+        # new population must be confirmed before a stale-plan regeneration
+        # action can be offered; otherwise the visible button only submits a
+        # run that the launch owner must reject.
+        next_stage = next(row for row in required if row.id == "setup")
+    elif (
         plan_attention_required
         or plan_regeneration_required
         or (plan_generation_ready and not idea_blocks_execution)
     ):
         next_stage = next(row for row in required if row.id == "plan")
+    elif not question_ready and not idea_accepted:
+        # A blank project starts in divergent Idea Mining. The researcher may
+        # still state a complete scientific question directly, but the progress
+        # rail must not imply that question construction precedes exploration.
+        next_stage = next(row for row in stages if row.id == "idea")
     else:
         next_stage = next(
             (row for row in required if row.status != "complete"),
@@ -764,7 +795,15 @@ def _enrich_plan_review(
     payloads = payloads if isinstance(payloads, Mapping) else {}
     agent_plan = payloads.get("agent_plan.json")
     review_summary = snapshot.plan_review_summary
-    if isinstance(review_summary, Mapping) and isinstance(agent_plan, Mapping):
+    if (
+        isinstance(review_summary, Mapping)
+        and isinstance(agent_plan, Mapping)
+        # Once StudyContext changes, the immutable review is historical
+        # evidence.  Its old authorization questions must not replace the
+        # host-owned ``plan_configuration_superseded`` action or ask the user
+        # to answer a decision that no longer exists in current authority.
+        and snapshot.next_action_code == "plan_scientific_changes_required"
+    ):
         questions = plan_decisions.pending_authorization_questions(
             study,
             review_summary.get("authorization_questions"),
@@ -772,6 +811,11 @@ def _enrich_plan_review(
         enriched_questions = []
         for question in questions:
             item = dict(question) if isinstance(question, Mapping) else {}
+            decision_context = plan_decisions.plan_decision_context(
+                agent_plan, str(item.get("code") or "")
+            )
+            if decision_context:
+                item["decision_context"] = decision_context
             if item.get("code") == "ADJUSTMENT_SET_NOT_USER_CONFIRMED":
                 item["proposed_covariates"] = plan_decisions.proposed_adjustment_set(
                     agent_plan
@@ -824,9 +868,9 @@ def build_project_workflow_projection(
     rows = list_bound_run_history(
         study_context_id=clean_study_id or None,
         project_root=research_pipeline_project_root(clean_study_id or None),
-        limit=1,
+        limit=10,
     )
-    latest_run = rows[0] if rows else None
+    latest_run = workflow_authoritative_run(rows)
     plan_review_authority = (
         agent_pipeline_runs.pending_review(str(latest_run.get("run_id") or ""))
         if latest_run

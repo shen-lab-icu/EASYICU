@@ -157,6 +157,9 @@ class FakeService:
     def archive_child_job(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
+    def record_host_action(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
     def abort_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
@@ -603,6 +606,31 @@ def test_message_route_rejects_unknown_actions_and_fields(monkeypatch) -> None:
         == "confirm_fresh_plan_generation"
     )
 
+    idea_entry = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "请用 Idea Mining 帮我发掘这个想法",
+            "turn_intent": "idea_mining_entry",
+        },
+    )
+    assert idea_entry.status_code == 200
+    assert idea_entry.json()["received"]["message_intent"] == "idea_mining_entry"
+
+    idea_selection = client.post(
+        "/api/copilot/pi/sessions/pi-test/message",
+        json={
+            "project_id": "guided-project-1",
+            "message": "选择方向1：组织结构差异",
+            "turn_intent": "idea_mining_candidate_selection",
+        },
+    )
+    assert idea_selection.status_code == 200
+    assert (
+        idea_selection.json()["received"]["message_intent"]
+        == "idea_mining_candidate_selection"
+    )
+
     assert (
         client.post(
             "/api/copilot/pi/sessions/pi-test/message",
@@ -728,8 +756,10 @@ def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) ->
 
     pin_path = "/api/copilot/pi/sessions/pi-test/presentation"
     child_path = "/api/copilot/pi/sessions/pi-test/child-jobs/job-child-1/archive"
+    action_path = "/api/copilot/pi/sessions/pi-test/host-actions"
     assert client.post(pin_path, json={"pinned": True}).status_code == 422
     assert client.post(child_path, json={}).status_code == 422
+    assert client.post(action_path, json={}).status_code == 422
 
     pinned = client.post(
         pin_path,
@@ -738,6 +768,15 @@ def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) ->
     archived = client.post(
         child_path,
         json={"project_id": "guided-project-2"},
+    )
+    action = client.post(
+        action_path,
+        json={
+            "project_id": "guided-project-2",
+            "action_code": "generate_plan",
+            "action_key": "job-child-1",
+            "child_job_id": "job-child-1",
+        },
     )
     assert pinned.status_code == 200
     assert pinned.json()["received"] == {
@@ -749,6 +788,28 @@ def test_presentation_and_child_replay_routes_are_project_scoped(monkeypatch) ->
         "project_id": "guided-project-2",
         "job_id": "job-child-1",
     }
+    assert action.status_code == 200
+    assert action.json()["received"] == {
+        "project_id": "guided-project-2",
+        "action_code": "generate_plan",
+        "action_key": "job-child-1",
+        "child_job_id": "job-child-1",
+    }
+    for action_code in (
+        "review_result_tables",
+        "review_figures",
+        "review_manuscript",
+        "review_scientific_review",
+    ):
+        response = client.post(
+            action_path,
+            json={
+                "project_id": "guided-project-2",
+                "action_code": action_code,
+                "action_key": f"run-1:{action_code}",
+            },
+        )
+        assert response.status_code == 200
 
 
 def test_owner_error_keeps_stable_code_and_owner(monkeypatch) -> None:

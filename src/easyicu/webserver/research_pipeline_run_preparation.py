@@ -210,14 +210,22 @@ def _prepare_scientific_launch(
     covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
     window = _cohort_window(materialization_study)
-    validated_analysis_design = _validate_analysis_design(study)
+    metadata_only_planning = budget_mode == "planner_canary"
+    # A candidate-plan run is the owner that proposes unresolved scientific
+    # design choices for human review.  Requiring an execution-ready analysis
+    # unit and variance estimator before that run creates a circular gate and
+    # contradicts the metadata-only Planner contract.  The package-bound/full
+    # launch below remains fail-closed through the same validator.
+    validated_analysis_design = (
+        {} if metadata_only_planning else _validate_analysis_design(study)
+    )
     patient_grouping = (
         _patient_grouping_for_analysis_design(study)
-        if validated_analysis_design.get("variance_estimator") == "cluster_robust"
+        if metadata_only_planning
+        or validated_analysis_design.get("variance_estimator") == "cluster_robust"
         else None
     )
 
-    metadata_only_planning = budget_mode == "planner_canary"
     metadata_planning_coordinates: Dict[str, Any] = dict(planning_coordinates)
     execution_concepts_raw = study.get("execution_concepts")
     execution_concepts = (
@@ -260,8 +268,10 @@ def _prepare_scientific_launch(
         foundation_profile = _data_foundation_profile(
             export_path=request.export_path,
             study=materialization_study,
-            target=configured_target,
-            primary_exposure=configured_primary_exposure,
+            target=target,
+            primary_exposure=primary_exposure,
+            require_target=bool(configured_target),
+            require_primary_exposure=bool(configured_primary_exposure),
             covariates=covariates,
             sensitivity_specs=sensitivity_specs,
         )

@@ -304,20 +304,45 @@
     if (!visible.length) return '';
     return `
       <div class="ag-figure-gallery">
-        ${visible.map(({ row, source }) => `
-          <figure>
+        ${visible.map(({ row, source }, index) => `
+          <figure class="${index === 0 || row.tier === 'primary_publication' || row.status === 'canonical_main' ? 'is-primary' : 'is-supporting'}">
             <img src="${escAttr(source)}" alt="${escAttr(row.label || row.relative_path || 'figure')}" />
             <figcaption><strong>${esc(row.label || 'figure')}</strong><span class="mono">${esc(row.relative_path || row.name || '')}</span></figcaption>
           </figure>`).join('')}
       </div>`;
   }
-  function artifactScalar(value) {
+  function artifactNumber(value, key) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '—';
+    const token = String(key || '').toLowerCase();
+    if (/^(?:n|count|events?|total|denominator|numerator|row_count|standardization_n)$/.test(token)
+      || /(?:^|_)(?:n|count|events?|rows?|specs)$/.test(token)
+      || Number.isInteger(numeric)) {
+      return numeric.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    }
+    if (/p(?:_|-)?value|probability/.test(token) && Math.abs(numeric) > 0 && Math.abs(numeric) < 0.001) {
+      return '<0.001';
+    }
+    if (/sha(?:256)?|digest|hash/.test(token)) return String(value);
+    const magnitude = Math.abs(numeric);
+    const maximumFractionDigits = magnitude >= 100 ? 0 : magnitude >= 10 ? 1 : magnitude >= 1 ? 2 : 3;
+    return numeric.toLocaleString(undefined, {
+      maximumFractionDigits,
+      minimumFractionDigits: 0,
+      useGrouping: magnitude >= 1000,
+    });
+  }
+  function artifactScalar(value, key) {
     if (value === null || value === undefined || value === '') return '—';
     if (typeof value === 'boolean') return value ? t('yes', '是') : t('no', '否');
-    if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : '—';
+    if (typeof value === 'number') return artifactNumber(value, key);
     if (Array.isArray(value)) return `${value.length.toLocaleString()} ${t('items', '项')}`;
     if (typeof value === 'object') return `${Object.keys(value).length.toLocaleString()} ${t('fields', '字段')}`;
-    return readableArtifactText(String(value));
+    const text = readableArtifactText(String(value));
+    if (/sha(?:256)?|digest|hash/i.test(String(key || '')) && /^[a-f0-9]{32,}$/i.test(text)) {
+      return `${text.slice(0, 10)}…${text.slice(-6)}`;
+    }
+    return text;
   }
   function artifactKeyLabel(key) {
     const labels = {
@@ -334,6 +359,23 @@
       signed: t('Signed', '已签署'),
       provider: t('Provider', 'Provider'),
       database_scope: t('Database scope', '数据库范围'),
+      stage: t('Stage', '阶段'),
+      population_rule: t('Population rule', '人群规则'),
+      excluded_from_previous: t('Excluded', '上一步排除'),
+      exposure_value: t('Exposure', '暴露值'),
+      reference_exposure_value: t('Reference', '参考值'),
+      adjusted_absolute_risk: t('Adjusted risk', '校正后风险'),
+      adjusted_odds_ratio: t('Adjusted OR', '校正后 OR'),
+      ci_low: t('95% CI low', '95% CI 下限'),
+      ci_high: t('95% CI high', '95% CI 上限'),
+      standardization_n: t('Standardized N', '标准化样本量'),
+      standardization_method: t('Standardization', '标准化方法'),
+      estimate_type: t('Estimate', '估计类型'),
+      point_estimate: t('Estimate', '估计值'),
+      effect_scale: t('Scale', '效应尺度'),
+      converged: t('Converged', '已收敛'),
+      model_id: t('Model', '模型'),
+      spec_id: t('Specification', '规格'),
     };
     return labels[key] || String(key || '').replace(/_/g, ' ');
   }
@@ -343,26 +385,33 @@
     return keys
       .filter(key => Object.prototype.hasOwnProperty.call(source, key))
       .filter(key => !/data_url|image_data_url/i.test(key))
-      .map(key => [artifactKeyLabel(key), artifactScalar(source[key])])
+      .map(key => [artifactKeyLabel(key), artifactScalar(source[key], key)])
       .filter(row => row[1] !== '—')
       .slice(0, 10);
   }
-  function artifactTable(title, headers, rows, emptyText) {
+  function artifactTable(title, headers, rows, emptyText, options) {
     const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    const opts = options && typeof options === 'object' ? options : {};
     if (!safeRows.length) {
       return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(title)}</div><div class="ag-artifact-empty">${esc(emptyText || t('No table rows in this artifact.', '这个产物没有可展示的表格行。'))}</div></div>`;
+    }
+    const labels = headers.map(artifactKeyLabel);
+    const body = `<div class="ag-artifact-table-wrap">
+          <table class="ag-artifact-table${opts.compact ? ' is-compact' : ''}">
+            <thead><tr>${labels.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+            <tbody>
+              ${safeRows.map(row => `<tr>${row.map((cell, index) => `<td>${esc(artifactScalar(cell, headers[index]))}</td>`).join('')}</tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    if (opts.disclosure) {
+      const meta = opts.meta ? `<small>${esc(opts.meta)}</small>` : '';
+      return `<details class="ag-artifact-section ag-artifact-disclosure"${opts.open ? ' open' : ''}><summary><span>${esc(title)}</span>${meta}</summary>${body}</details>`;
     }
     return `
       <div class="ag-artifact-section">
         <div class="ag-artifact-section-title">${esc(title)}</div>
-        <div class="ag-artifact-table-wrap">
-          <table class="ag-artifact-table">
-            <thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
-            <tbody>
-              ${safeRows.map(row => `<tr>${row.map(cell => `<td>${esc(artifactScalar(cell))}</td>`).join('')}</tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
+        ${body}
       </div>`;
   }
   /* A long readable artifact is a stack of ag-artifact-section blocks. Once
@@ -971,6 +1020,9 @@
       ? selected.reviewable_plan : null;
     const steps = Array.isArray(p.steps) ? p.steps : [];
     const robustness = Array.isArray(p.robustness_specs) ? p.robustness_specs : [];
+    const selectedAnalysisType = String(selected.analysis_type || p.analysis_type || '').toLowerCase();
+    const descriptiveCountsOnly = ['descriptive', 'descriptive_epidemiology'].includes(selectedAnalysisType)
+      && String(designSelection.claim_ceiling || '') === 'analysis_only';
     const endpoint = p.endpoint && typeof p.endpoint === 'object' ? p.endpoint : null;
     const required = Array.isArray(selected.required_variables) ? selected.required_variables : [];
     const visibleVariables = required.filter(value => !/(?:^|_)id$/i.test(String(value || ''))).slice(0, 10);
@@ -981,7 +1033,7 @@
     const gaps = [];
     if (!recommendation) gaps.push(t('The Planner has not yet produced a complete reviewable recommendation.', 'Planner 尚未给出完整、可审阅的推荐方案。'));
     if (!endpoint) gaps.push(t('The primary outcome still lacks an executable definition and observation horizon.', '主要结局尚缺可执行定义和观察时间范围。'));
-    if (!robustness.length) gaps.push(t('The sensitivity-analysis proposal has not yet been formed.', '敏感性分析方案尚未形成。'));
+    if (!robustness.length && !descriptiveCountsOnly) gaps.push(t('The sensitivity-analysis proposal has not yet been formed.', '敏感性分析方案尚未形成。'));
     if (String(p.analysis_type || '') === 'data_quality_audit') gaps.push(t('This version answers data readiness only; it does not yet answer the stated association question.', '这一版只能回答数据是否可用，还不能回答原研究问题中的关联。'));
     const planReady = gaps.length === 0;
     const flowStages = agentPlanFlowStages(steps);
@@ -1022,6 +1074,91 @@
       <p class="ag-plan-audit">${esc(t('Internal ids, methods, inputs, outputs, and the full immutable payload remain in the JSON audit view.', '内部标识、方法、输入输出及完整不可变内容仍保留在 JSON 审计视图中。'))}</p>
     </div>`;
   }
+  function resultTableToken(table, index) {
+    const label = String(table && table.label || '');
+    const match = /^Table\s+(.+?)\s+from\s+step\s+/i.exec(label);
+    if (match) return match[1];
+    if (/copied beside a promoted publication figure/i.test(label)) return `publication_figure_source_${index + 1}`;
+    return label || `result_table_${index + 1}`;
+  }
+  function resultTableTitle(table, index) {
+    const rawToken = resultTableToken(table, index);
+    const token = rawToken.toLowerCase();
+    const labels = [
+      [/population_flow|cohort_flow/, t('Population flow and denominators', '研究人群流程与分母')],
+      [/adjusted_absolute_risk/, t('Adjusted absolute risk', '校正后绝对风险')],
+      [/rcs_contrasts/, t('Primary spline contrasts', '主要样条对比')],
+      [/rcs_curve/, t('Primary association curve values', '主要关联曲线数据')],
+      [/linear_sensitivity/, t('Functional-form sensitivity', '函数形式敏感性分析')],
+      [/variable_opportunity/, t('Measurement-opportunity sensitivity', '测量机会敏感性分析')],
+      [/robustness_(?:matrix|summary)/, t('Robustness specifications', '稳健性分析规格')],
+      [/absolute_risk_context/, t('Absolute-risk context', '绝对风险背景')],
+      [/measurement|missing/, t('Measurement coverage and missingness', '测量覆盖与缺失情况')],
+    ];
+    const found = labels.find(([pattern]) => pattern.test(token));
+    return found ? found[1] : artifactKeyLabel(rawToken);
+  }
+  function resultTableRank(table, index) {
+    const token = resultTableToken(table, index).toLowerCase();
+    const patterns = [
+      /population_flow|cohort_flow/,
+      /adjusted_absolute_risk/,
+      /rcs_contrasts/,
+      /linear_sensitivity/,
+      /variable_opportunity/,
+      /robustness_(?:matrix|summary)/,
+      /absolute_risk_context/,
+      /rcs_curve/,
+    ];
+    const rank = patterns.findIndex(pattern => pattern.test(token));
+    return rank < 0 ? 50 : rank;
+  }
+  function resultTablesView(payload) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const all = Array.isArray(p.tables) ? p.tables : [];
+    const sourceCopies = all.filter(table => /source_data|copied beside a promoted publication figure/i.test(String(table && table.label || '')));
+    const readable = all
+      .map((table, index) => ({ table, index, rank: resultTableRank(table, index) }))
+      .filter(({ table }) => !/source_data|copied beside a promoted publication figure/i.test(String(table && table.label || '')))
+      .sort((left, right) => left.rank - right.rank || left.index - right.index);
+    const core = readable.filter(row => row.rank <= 4);
+    const supporting = readable.filter(row => row.rank > 4);
+    const contents = artifactContentsStrip([
+      `<div class="ag-artifact-section-title">${esc(t('Result overview', '结果概览'))}</div>`,
+      ...readable.map(entry => `<div class="ag-artifact-section-title">${esc(resultTableTitle(entry.table, entry.index))}</div>`),
+    ]);
+    const tableCard = (entry, open) => {
+      const table = entry.table || {};
+      const headers = Array.isArray(table.headers) ? table.headers.slice(0, 12) : [];
+      const rows = Array.isArray(table.rows) ? table.rows.slice(0, 30) : [];
+      const meta = t(
+        `${rows.length} rows · ${headers.length} columns`,
+        `${rows.length} 行 · ${headers.length} 列`,
+      );
+      return artifactTable(
+        resultTableTitle(table, entry.index),
+        headers,
+        rows,
+        t('No aggregate rows are available.', '没有可展示的聚合行。'),
+        { disclosure: true, open, compact: rows.length <= 8, meta },
+      );
+    };
+    return `<div class="ag-artifact-readable ag-result-reader">
+      <header class="ag-result-reader-head">
+        <div><div class="eyebrow">${esc(t('Reader view', '阅读视图'))}</div><h2>${esc(t('Results, ordered by the research question', '按研究问题排序的结果'))}</h2><p>${esc(t('Core estimates come first. Audit and source-copy tables stay available without competing for attention.', '先看核心估计；审计表和图件源数据仍保留，但不再与主要结果争夺注意力。'))}</p></div>
+        <span>${esc(t('Exact values remain in JSON', 'JSON 保留完整精度'))}</span>
+      </header>
+      <div class="ag-result-glance">
+        <article><b>${core.length}</b><span>${esc(t('core tables', '张核心表'))}</span></article>
+        <article><b>${supporting.length}</b><span>${esc(t('supporting tables', '张支持表'))}</span></article>
+        <article><b>${sourceCopies.length}</b><span>${esc(t('source copies kept for audit', '份图件源数据留作审计'))}</span></article>
+      </div>
+      ${contents}
+      <section class="ag-result-group"><div><small>01</small><h3>${esc(t('Core results', '核心结果'))}</h3></div>${core.map((row, index) => tableCard(row, index === 0)).join('') || `<p>${esc(t('No core result table passed the preview policy.', '没有核心结果表通过预览策略。'))}</p>`}</section>
+      <section class="ag-result-group is-supporting"><div><small>02</small><h3>${esc(t('Supporting and audit tables', '支持与审计结果'))}</h3></div>${supporting.map(row => tableCard(row, false)).join('') || `<p>${esc(t('No supporting table is present.', '没有支持性结果表。'))}</p>`}</section>
+      <p class="ag-result-reader-note">${esc(t('Readable numbers are rounded only for display. The immutable JSON and registered source tables retain the original precision and lineage.', '可读视图只改变显示精度；不可变 JSON 与登记源表仍保留原始数值和完整溯源。'))}</p>
+    </div>`;
+  }
   function artifactStructuredView(name, payload) {
     const n = String(name || '').toLowerCase();
     const p = payload && typeof payload === 'object' ? payload : {};
@@ -1031,6 +1168,7 @@
     }
     if (n === 'agent_plan.json') return agentPlanView(p);
     if (n === 'scientific_plan_review.json') return scientificPlanReviewView(p);
+    if (n.includes('result_tables')) return resultTablesView(p);
     const sections = [];
     const summary = artifactSummaryRows(
       p,
@@ -1099,27 +1237,6 @@
         t('No figures were embedded in this artifact.', '这个产物没有嵌入图件。')
       ));
     }
-    if (n.includes('result_tables')) {
-      const tables = Array.isArray(p.tables) ? p.tables.slice(0, 8) : [];
-      tables.forEach((table, index) => {
-        const headers = Array.isArray(table.headers) ? table.headers.slice(0, 12) : [];
-        const rows = Array.isArray(table.rows) ? table.rows.slice(0, 30) : [];
-        sections.push(artifactTable(
-          table.label || `${t('Result table', '结果表')} ${index + 1}`,
-          headers,
-          rows,
-          t('This evidence table has no previewable aggregate rows.', '这个证据表没有可预览的聚合行。')
-        ));
-      });
-      if (!tables.length) {
-        sections.push(artifactTable(
-          t('Research result tables', '科研结果表'),
-          [t('Status', '状态')],
-          [],
-          t('No aggregate result tables passed the bounded preview policy.', '没有聚合结果表通过有界预览策略。')
-        ));
-      }
-    }
     if (n.includes('scorecard')) {
       const dims =
         (Array.isArray(p.dimensions) && p.dimensions)
@@ -1161,7 +1278,11 @@
         t('Evidence artifact registry', '证据产物登记表'),
         [t('Artifact', '产物'), t('Category', '类别'), t('SHA-256', 'SHA-256'), t('Size', '大小')],
         artifacts.map(row => [row.name || row.relative_path || '', artifactCategory(row.name || row.relative_path || ''), row.sha256 || '', row.bytes == null ? '' : `${Number(row.bytes || 0).toLocaleString()} B`]),
-        t('No artifact registry is present.', '没有产物登记表。')
+        t('No artifact registry is present.', '没有产物登记表。'),
+        {
+          disclosure: true,
+          meta: t(`${artifacts.length} registered artifacts`, `${artifacts.length} 个登记产物`),
+        },
       ));
     }
     if (n.includes('draft')) {

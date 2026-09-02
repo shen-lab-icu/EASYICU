@@ -7,6 +7,8 @@ import pytest
 from easyicu.webserver.pi_copilot.turn_authority import (
     explicitly_confirms_easyicu_registered_source,
     infer_explicit_turn_actions,
+    infer_idea_mining_followup_intent,
+    infer_research_entry_intent,
 )
 
 
@@ -94,3 +96,45 @@ def test_database_mention_or_local_choice_does_not_confirm_prepared_source(
     message: str,
 ) -> None:
     assert explicitly_confirms_easyicu_registered_source(message) is False
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("请用 Idea Mining 帮我发掘这个模糊想法：液体平衡与撤机", "idea_mining_entry"),
+        ("请帮我评估并比较这个已有想法", "idea_mining_entry"),
+        ("这是我已经明确的研究问题，请进入研究方案", "implement_scientific_question"),
+        ("不要进行 Idea Mining，直接进入数据准备", "implement_scientific_question"),
+        ("我想从现有 ICU 数据开始", "data_first_entry"),
+        ("液体平衡会不会影响撤机？", "clarify_research_entry"),
+        (
+            "研究成人 ICU 早期液体平衡与拔管失败的关系",
+            "clarify_research_entry",
+        ),
+    ],
+)
+def test_first_turn_research_entry_intent_requires_explicit_user_direction(
+    message: str,
+    expected: str,
+) -> None:
+    assert infer_research_entry_intent(message) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("选择方向1：组织结构或 staffing 模式差异", "idea_mining_candidate_selection"),
+        ("我选择方向1：早期乳酸清除轨迹与新发AKI", "idea_mining_candidate_selection"),
+        ("我更想研究方向2：持续性AKI或增量预测", "idea_mining_candidate_selection"),
+        ("继续方向3：研究 ICU 组织结构是否改变夜间处置差异", "idea_mining_candidate_selection"),
+        ("Select direction 2: treatment choice", "idea_mining_candidate_selection"),
+        ("Continue direction 1: external validation", "idea_mining_candidate_selection"),
+        ("我想修改组织结构的定义", None),
+        ("方向1听起来不错", None),
+    ],
+)
+def test_idea_mining_followup_intent_only_recognizes_displayed_selection(
+    message: str,
+    expected: str | None,
+) -> None:
+    assert infer_idea_mining_followup_intent(message) == expected

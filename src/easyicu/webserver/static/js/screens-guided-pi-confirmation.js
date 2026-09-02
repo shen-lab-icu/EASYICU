@@ -394,7 +394,71 @@
 
     function localizedAuthorizationDecisionCopy(item) {
       const code = String((item && item.code) || '');
-      if (code === 'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED') return {
+      if (code === 'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED') {
+        const context = item && item.decision_context && typeof item.decision_context === 'object'
+          ? item.decision_context : {};
+        const isFixed24hLactate = String(context.timing_profile || '') === 'fixed_24h_lactate';
+        if (!isFixed24hLactate) {
+          const exposureLabel = String(
+            window.EU_LANG === 'zh'
+              ? context.exposure_label_zh || context.primary_exposure_materialized || tr('the exposure', '当前暴露')
+              : context.exposure_label_en || context.primary_exposure_materialized || tr('the exposure', '当前暴露')
+          );
+          const selectedTimeZero = String(context.time_zero || '').trim();
+          return {
+            cardTitle: tr(
+              `Choose how ${exposureLabel} should align with mortality follow-up`,
+              `请选择 ${exposureLabel} 与死亡随访的时间对齐方式`,
+            ),
+            context: tr(
+              `The reviewed plan classifies ${exposureLabel} after ICU admission but does not bind an executable fixed landmark. Analysis remains paused.`,
+              `当前计划在入 ICU 后判定 ${exposureLabel}，但尚未绑定可执行的固定 landmark；分析仍处于暂停状态。`,
+            ),
+            evidenceLabel: tr('Current plan evidence', '当前计划证据'),
+            evidenceStatus: selectedTimeZero || tr(
+              'Post-admission exposure classification',
+              '暴露在入 ICU 后完成判定',
+            ),
+            evidenceDetail: tr(
+              'Starting mortality follow-up at ICU admission would give patients unequal opportunity to be classified as exposed.',
+              '若死亡随访从入 ICU 当刻开始，不同患者获得暴露判定的机会并不相同。',
+            ),
+            guidance: tr(
+              'Recommended for the current package: keep the analysis descriptive. This preserves prevalence and absolute mortality-risk results without claiming a time-aligned adjusted association. A time-varying analysis requires a newly governed timestamped extraction.',
+              '对当前数据包，建议先保留描述性分析：仍可报告患病率和分组后的绝对死亡风险，但不声称已完成时间对齐的调整关联。若采用时变分析，需要重新准备受治理的带时间戳数据。',
+            ),
+            technicalEvidence: String((item && item.evidence) || ''),
+            technicalRemediation: String((item && item.remediation) || ''),
+            allowEdit: true,
+            options: [
+              {
+                optionId: 'descriptive_only',
+                label: tr('Keep this version descriptive (recommended)', '当前版本仅保留描述性分析（推荐）'),
+                effect: tr(
+                  `Report ${exposureLabel} prevalence and mortality risk by exposure group.`,
+                  `报告 ${exposureLabel} 的比例及按暴露分组的死亡绝对风险。`,
+                ),
+                requirement: tr(
+                  'Does not claim a time-aligned adjusted association.',
+                  '不声称已得到时间对齐后的调整关联。',
+                ),
+              },
+              {
+                optionId: 'time_varying_reextract',
+                label: tr('Re-extract for a time-varying analysis', '重新提取并采用时变分析'),
+                effect: tr(
+                  `Update ${exposureLabel} status over time and retain early events.`,
+                  `随时间更新 ${exposureLabel}，并保留早期事件。`,
+                ),
+                requirement: tr(
+                  'Requires a new governed extraction with verified timestamps.',
+                  '需要重新提取并核验带时间戳的数据。',
+                ),
+              },
+            ],
+          };
+        }
+        return {
         cardTitle: tr(
           'Choose how the first-24-hour lactate window should align with mortality follow-up',
           '请选择首 24 小时乳酸窗如何与死亡随访对齐',
@@ -444,7 +508,8 @@
             requirement: tr('Requires a new extraction with timestamped lactate measurements; lact_max alone is insufficient.', '需重新提取带时间戳的乳酸测量；仅有 lact_max 摘要不足。'),
           },
         ],
-      };
+        };
+      }
       if (code === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED') {
         const rawCovariates = Array.isArray(item && item.proposed_covariates)
           ? item.proposed_covariates.map(value => String(value || '').trim()).filter(Boolean)
@@ -500,8 +565,8 @@
           '候选计划只有 ICU stay 标识，尚无获授权的患者标识，因此现在不能计算重复患者数量。',
         ),
         guidance: tr(
-          'There is no unconditional default. To study each patient\'s first ICU stay, change the cohort rules. To study every ICU stay, keep the saved cohort and use patient-clustered uncertainty.',
-          '这里没有无条件默认答案。若研究首次 ICU 入住，请修改队列规则；若研究每次 ICU 入住，则保留当前队列并按患者聚类。',
+          'There is no unconditional default. A first-stay study needs a newly prepared package with verified patient or first-stay coordinates. To continue with every ICU stay, switch the cohort and use patient-clustered uncertainty.',
+          '这里没有无条件默认答案。若研究首次 ICU 入住，需要重新准备带有已核验患者／首次入住坐标的数据包；若研究每次 ICU 入住，则切换队列并按患者聚类。',
         ),
         technicalEvidence: tr(
           'Research Agent blocked the plan because repeated ICU stays cannot be ruled out or handled from the current stay-only identity.',
@@ -515,7 +580,7 @@
         options: [
           {
             optionId: 'all_icu_stays_clustered',
-            label: tr('Keep every ICU stay (recommended for the saved cohort)', '保留每次 ICU 入住（与已保存队列一致）'),
+            label: tr('Use every ICU stay with patient clustering', '采用每次 ICU 入住并按患者聚类'),
             effect: tr('Retains later stays; the model must address within-patient dependence.', '保留后续入住；模型必须处理患者内相关性。'),
             requirement: tr('EasyICU will materialize verified patient grouping and use patient-clustered uncertainty.', 'EasyICU 将核验患者分组，并采用按患者聚类的稳健方差。'),
           },
