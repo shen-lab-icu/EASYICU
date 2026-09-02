@@ -76,7 +76,6 @@ def test_report_names_every_owner_the_selector_consults() -> None:
 
     # If a new executor is wired into the selector without a report entry, its
     # decline becomes invisible again — which is the whole defect being fixed.
-    selector_source = inspect.getsource(selection_module.select_standard_executor)
     reported = set(
         _kinds(
             _report(
@@ -91,34 +90,16 @@ def test_report_names_every_owner_the_selector_consults() -> None:
         )
     )
     selected_kinds = {
-        line.split('analysis_kind="', 1)[1].split('"', 1)[0]
-        for line in selector_source.splitlines()
-        if 'analysis_kind="' in line
+        executor.key
+        for executor in selection_module.STANDARD_EXECUTORS.executors
+        if executor.applicable is None
     }
 
-    # WHAT THIS SCRAPE DOES AND DOES NOT COVER (recorded 2026-08-22, after a
-    # new executor tripped it): it enumerates the `analysis_kind="..."` STRING
-    # LITERALS in the selector, so it sees exactly the owners that a step with
-    # no sealed authority can reach. The six owners inside the selector's
-    # `isinstance(sealed_current, ...)` chain cannot appear in this step's trace
-    # at all -- their whole branch is skipped without an authority -- and every
-    # one of them names its kind through a module constant, so they fall outside
-    # this scrape by construction rather than by exemption.
-    #
-    # That is a real limit, not a loophole: an authority-gated owner's decline
-    # is only observable on a step that carries the matching authority, and
-    # this test builds one that carries none. Covering those owners needs a
-    # different fixture, not a wider scrape here. What this test still catches
-    # -- and what it was written for -- is an unconditionally reachable owner
-    # wired into the selector with no report entry.
+    # Authority-gated owners are inapplicable without their matching sealed
+    # authority. Every unconditional registry declaration must still produce a
+    # report entry when it declines this unclaimed step.
     assert selected_kinds
-    missing = {
-        kind
-        for kind in selected_kinds
-        # The missingness family is reported through one base entry plus its
-        # three closed contracts; the selector spells its three variants out.
-        if not kind.startswith("missingness_")
-    } - reported
+    missing = selected_kinds - reported
     assert missing == set()
 
 
