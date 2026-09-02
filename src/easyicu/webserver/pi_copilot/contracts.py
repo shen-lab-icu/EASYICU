@@ -79,11 +79,15 @@ PLAN_RESUME_OFFER_GATE_REASONS: frozenset[str] = frozenset(
 #: owns a failed, approved execution checkpoint.  The Web wrapper may record a
 #: transient retry-bridge failure after the original execution failure; that
 #: wrapper error must not erase the operator's route back to the same immutable
-#: plan.  Configuration, path and checkpoint errors are deliberately absent.
+#: plan. A missing legacy seed remains replayable because the retry owner now
+#: reconstructs only bounded historical profile variants and requires an exact
+#: checkpoint digest match before execution. Path, supersession, invalid-seed,
+#: and checkpoint errors remain deliberately absent.
 EXECUTION_RETRY_REPLAYABLE_GATE_REASONS: frozenset[str] = frozenset(
     {
         "research_agent_pipeline_failed_closed",
         "research_pipeline_execution_failed",
+        "research_pipeline_execution_retry_recovery_seed_missing",
         "research_pipeline_execution_retry_unexpected_plan_review",
     }
 )
