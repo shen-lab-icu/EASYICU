@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from threading import Lock
 from typing import Any, Iterator, Mapping
 
@@ -10,6 +11,12 @@ from easyicu.research_agent.authority.provider_hard_stop import TaskProviderHard
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
+from easyicu.research_agent.schema import PipelineResult
+
+from .easyicu_review_bundle_adapter import (
+    EasyICUReviewMaterial,
+    write_easyicu_review_bundle,
+)
 
 from .formal_provider_gate import (
     FormalAuthorizedHardStopClient,
@@ -146,6 +153,7 @@ class FormalEasyICURunner:
             config=config,
             services=formal_services,
         )
+        self._provider_hard_stop = provider_hard_stop
 
     def run(self, **kwargs: Any) -> Any:
         if kwargs.get("resume_run_id") is not None or kwargs.get(
@@ -153,6 +161,38 @@ class FormalEasyICURunner:
         ) is not None:
             raise ValueError("formal Figure 2 runs cannot resume")
         return self._pipeline.run(**kwargs)
+
+    def run_and_write_review_bundle(
+        self,
+        *,
+        output_dir: Path,
+        mandatory_artifacts: tuple[str, ...],
+        artifact_inventory: Mapping[str, Any],
+        **run_kwargs: Any,
+    ) -> PipelineResult:
+        """Run once and immediately project fixed native outputs for review."""
+
+        result = self.run(**run_kwargs)
+        if not isinstance(result, PipelineResult):
+            raise ValueError(
+                "formal review projection requires a terminal PipelineResult"
+            )
+        material = EasyICUReviewMaterial.from_pipeline_result(
+            result,
+            artifact_inventory=artifact_inventory,
+        )
+        self._provider_hard_stop.assert_active()
+        accounting = self._provider_hard_stop.accounting_summary()
+        write_easyicu_review_bundle(
+            material,
+            output_dir=output_dir,
+            mandatory_artifacts=mandatory_artifacts,
+            resource_receipt={
+                "within_frozen_budget": True,
+                "provider_accounting": accounting,
+            },
+        )
+        return result
 
 
 __all__ = ["FormalEasyICUModelRouter", "FormalEasyICURunner"]
