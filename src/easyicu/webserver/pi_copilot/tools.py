@@ -75,6 +75,7 @@ from .tool_catalog import (
     DATA_SOURCE_REQUIRED_TOOLS,
     MUTATING_HOST_TOOLS as MUTATING_HOST_TOOLS,
     READ_TOOLS,
+    TOOL_ARGUMENTS,
     WORKSPACE_TOOLS,
 )
 from .workspace import WORKSPACE_ARTIFACT_AUTHORITY, ProjectWorkspace
@@ -199,6 +200,19 @@ def _consume_action(
         summary=f"This action requires a one-use {action} grant for the current message.",
         owner="easyicu.webserver.pi_copilot",
     )
+
+
+def _require_catalog_args(tool_name: str, params: Mapping[str, Any]) -> None:
+    """Enforce the catalog's argument declaration for one tool."""
+
+    declared = TOOL_ARGUMENTS.get(tool_name)
+    if declared is None:  # pragma: no cover - execute_tool checks dispatch first
+        raise PiCopilotError(
+            "pi_tool_unknown",
+            "The Pi sidecar requested an unregistered EasyICU tool.",
+            details={"tool": tool_name},
+        )
+    _require_args(params, allowed=declared.allowed, required=declared.required)
 
 
 def _require_args(
@@ -471,7 +485,6 @@ def _plan_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
 def _workspace_status(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=())
     study = _bound_context(context.session.binding)
     registry = sources.load_registry()
     active_path = registry.get("active_path")
@@ -613,7 +626,6 @@ def _list_data_sources(
 ) -> Dict[str, Any]:
     """List source families first, then exact exports for one selected family."""
 
-    _require_args(params, allowed=("database",))
     requested_database = str(params.get("database") or "").strip()
     user_message = str(context.user_message or "").casefold()
     explicit_database = _database_named_in_message(user_message)
@@ -803,7 +815,6 @@ def _list_source_concepts(
 ) -> Dict[str, Any]:
     """List path-free concept identifiers from one validated registered export."""
 
-    _require_args(params, allowed=("source_id", "modules", "query", "limit"))
     source_id = str(params.get("source_id") or "").strip()
     if not source_id:
         raise PiCopilotError(
@@ -946,7 +957,6 @@ def _inspect_data_package(
 ) -> Dict[str, Any]:
     """Review the bound registered export before a scientific Plan is made."""
 
-    _require_args(params, allowed=())
     study = _bound_context(context.session.binding)
     if not study or not study.get("id"):
         return _result(
@@ -1156,7 +1166,6 @@ def _review_cohort(
 ) -> Dict[str, Any]:
     """Open cohort attrition and selected-feature distributions in Copilot."""
 
-    _require_args(params, allowed=("source_id", "features"))
     source = _registered_source_choice(context, params.get("source_id"))
     if not source:
         return _result(
@@ -1250,7 +1259,6 @@ def _open_data_download(
 ) -> Dict[str, Any]:
     """Open a browser-controlled download for one registered export."""
 
-    _require_args(params, allowed=("source_id",))
     source = _registered_source_choice(context, params.get("source_id"))
     if not source:
         return _result(
@@ -1330,11 +1338,6 @@ def _preview_icd_cohort(
 ) -> Dict[str, Any]:
     """Preview an ICD-filtered extraction cohort without exposing its ids."""
 
-    _require_args(
-        params,
-        allowed=("source_id", "include_codes", "exclude_codes"),
-        required=("include_codes",),
-    )
     include_codes = _bounded_icd_codes(
         params.get("include_codes"), field="include_codes", required=True
     )
@@ -1435,7 +1438,6 @@ def _review_patient_timeline(
 ) -> Dict[str, Any]:
     """Open one bounded pseudonymous patient timeline without model-visible rows."""
 
-    _require_args(params, allowed=("source_id", "entity_ordinal", "features"))
     source = _registered_source_choice(context, params.get("source_id"))
     if not source:
         return _result(
@@ -1581,7 +1583,6 @@ def _compare_data_sources(
 ) -> Dict[str, Any]:
     """Open an aggregate Cross-DB comparison using exact registered source ids."""
 
-    _require_args(params, allowed=("source_ids", "features"), required=("source_ids",))
     raw_ids = params.get("source_ids")
     if not isinstance(raw_ids, list):
         raise PiCopilotError(
@@ -1717,7 +1718,6 @@ def _prepare_demo_source(
 ) -> Dict[str, Any]:
     """Start the existing official download -> convert -> export -> register owner."""
 
-    _require_args(params, allowed=("source_id",), required=("source_id",))
     source_id = str(params.get("source_id") or "").strip()
     try:
         source = demo_sources.get_source(source_id)
@@ -1779,7 +1779,6 @@ def _workflow_snapshot(
 def _inspect_workflow(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=())
     workflow = _workflow_snapshot(context)
     return _result(
         context,
@@ -1797,7 +1796,6 @@ def _inspect_workflow(
 def _inspect_context(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=())
     study = _bound_context(context.session.binding)
     if not study:
         return _result(
@@ -1820,7 +1818,6 @@ def _inspect_context(
 def _inspect_capability(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=())
     return _result(
         context,
         status="ok",
@@ -1834,7 +1831,6 @@ def _inspect_capability(
 def _inspect_run(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id", "job_id"))
     job_id = str(
         params.get("job_id") or context.session.binding.active_job_id or ""
     ).strip()
@@ -1880,7 +1876,6 @@ def _inspect_run(
 def _inspect_plan(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id",))
     row = _select_run(context, params.get("run_id"))
     if not row:
         return _result(
@@ -1931,7 +1926,6 @@ def _inspect_plan(
 def _inspect_literature(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id",))
     row = _select_run(context, params.get("run_id"))
     if not row:
         return _result(
@@ -1997,7 +1991,6 @@ def _inspect_literature(
 def _inspect_step(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id", "step_id"), required=("step_id",))
     plan_result = _inspect_plan(
         context, {"run_id": params.get("run_id")} if params.get("run_id") else {}
     )
@@ -2092,7 +2085,6 @@ def _validated_operational_mappings(
 def _inspect_validation(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id",))
     row = _select_run(context, params.get("run_id"))
     if not row:
         return _result(
@@ -2238,7 +2230,6 @@ def _inspect_validation(
 def _list_artifacts(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id",))
     row = _select_run(context, params.get("run_id"))
     if not row:
         return _result(
@@ -2267,7 +2258,6 @@ def _list_artifacts(
 def _inspect_evidence(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id",))
     row = _select_run(context, params.get("run_id"))
     if not row:
         return _result(
@@ -2353,7 +2343,6 @@ def _inspect_evidence(
 def _inspect_interpretation(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id",))
     row = _select_run(context, params.get("run_id"))
     if not row:
         return _result(
@@ -2425,7 +2414,6 @@ def _inspect_interpretation(
 def _inspect_manuscript(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id",))
     row = _select_run(context, params.get("run_id"))
     if not row:
         return _result(
@@ -2527,7 +2515,6 @@ def _inspect_manuscript(
 def _explain_blocker(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_id", "job_id"))
     run_or_job = _inspect_run(context, params)
     details = run_or_job.get("details") or {}
     job = details.get("job") if isinstance(details.get("job"), Mapping) else {}
@@ -2722,18 +2709,6 @@ def _idea_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
 def _mine_ideas(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=(
-            "topic",
-            "title",
-            "excerpt",
-            "journal",
-            "year",
-            "doi",
-            "pmid",
-        ),
-    )
     grant_block = _consume_action(context, "idea")
     if grant_block is not None:
         return grant_block
@@ -2793,10 +2768,6 @@ def _search_literature(
 ) -> Dict[str, Any]:
     """Run the existing PubMed Idea Mining owner after one-turn opt-in."""
 
-    _require_args(
-        params,
-        allowed=("topic", "journal", "limit", "run_id", "idea_id"),
-    )
     try:
         requested_limit = max(1, min(int(params.get("limit") or 5), 8))
     except (TypeError, ValueError):
@@ -2980,11 +2951,6 @@ def _search_literature(
 def _prepare_idea_handoff(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("run_id", "idea_id", "plan_edits", "plan_fields"),
-        required=("run_id",),
-    )
     run_id = str(params.get("run_id") or "").strip()
     try:
         prior_art_binding = idea_mining.prior_art_receipt_binding(run_id)
@@ -3116,11 +3082,6 @@ def _prepare_idea_handoff(
 def _adjudicate_idea_literature(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("run_id", "idea_id", "decision", "rationale", "plan_fields"),
-        required=("run_id", "idea_id", "decision", "rationale", "plan_fields"),
-    )
     grant_block = _consume_action(context, "idea")
     if grant_block is not None:
         return grant_block
@@ -3213,11 +3174,6 @@ def _bound_registered_export(
 def _assess_idea_feasibility(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("run_id", "idea_id", "concept_bindings", "max_records"),
-        required=("run_id", "idea_id", "concept_bindings"),
-    )
     grant_block = _consume_action(context, "idea")
     if grant_block is not None:
         return grant_block
@@ -3317,11 +3273,6 @@ def _accept_idea_handoff(
 ) -> Dict[str, Any]:
     """Bind one canonical Idea Mining handoff to the current StudyContext."""
 
-    _require_args(
-        params,
-        allowed=("run_id", "idea_id", "plan_edits"),
-        required=("run_id", "idea_id"),
-    )
     grant_block = _consume_action(context, "idea")
     if grant_block is not None:
         return grant_block
@@ -3440,7 +3391,6 @@ def _accept_idea_handoff(
 def _start_extraction(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("source_mode", "database"))
     grant_block = _consume_action(context, "extract")
     if grant_block is not None:
         return grant_block
@@ -3713,7 +3663,6 @@ def _run(
     planner_start_mode: str = "auto",
     run_intent: research_run_submission.RunIntent | None = None,
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("run_type", "llm_provider"))
     planner_start_mode = str(planner_start_mode or "auto").strip().lower()
     if planner_start_mode not in {"auto", "fresh", "resume_checkpoint"}:
         return _result(
@@ -3943,10 +3892,6 @@ def _run(
 
 
 def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("job_id", "run_id", "decision", "reviewer", "note"),
-    )
     decision = str(params.get("decision") or "").strip().lower()
     if decision:
         if decision not in {"approved", "rejected"}:
@@ -4085,7 +4030,6 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
 
 
 def _cancel(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
-    _require_args(params, allowed=("job_id",))
     job_id = str(
         params.get("job_id") or context.session.binding.active_job_id or ""
     ).strip()
@@ -4126,11 +4070,6 @@ def _cancel(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
 def _request_replan(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("reason", "strategy"),
-        required=("reason",),
-    )
     strategy = str(params.get("strategy") or "fresh").strip().lower()
     if strategy not in {"fresh", "resume_checkpoint"}:
         return _result(
@@ -4287,7 +4226,6 @@ def _workspace_resource(
 def _load_skill(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("name",), required=("name",))
     name = str(params.get("name") or "").strip()
     if name == "web-prototype":
         _, blocked = _workspace_access(context)
@@ -4366,7 +4304,6 @@ def _load_skill(
 def _list_extensions(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=())
     activation = context.session.extension_activation
     return _extension_result(
         context,
@@ -4405,11 +4342,6 @@ def _list_extensions(
 def _call_mcp_extension_tool(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("server", "tool", "arguments"),
-        required=("server", "tool"),
-    )
     if not bool(settings.load_settings().get("mcp_tools_enabled", False)):
         return _result(
             context,
@@ -4485,7 +4417,6 @@ def _call_mcp_extension_tool(
 def _list_project_files(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=())
     workspace, blocked = _workspace_access(context)
     if blocked:
         return blocked
@@ -4503,11 +4434,6 @@ def _list_project_files(
 def _read_project_file(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("file", "start_line", "end_line"),
-        required=("file",),
-    )
     workspace, blocked = _workspace_access(context)
     if blocked:
         return blocked
@@ -4530,11 +4456,6 @@ def _read_project_file(
 def _write_project_file(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("file", "content"),
-        required=("file", "content"),
-    )
     workspace, blocked = _workspace_access(context, require_write=True)
     if blocked:
         return blocked
@@ -4569,11 +4490,6 @@ def _write_project_file(
 def _edit_project_file(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("file", "old_text", "new_text", "expected_sha256"),
-        required=("file", "old_text", "expected_sha256"),
-    )
     workspace, blocked = _workspace_access(context, require_write=True)
     if blocked:
         return blocked
@@ -4610,7 +4526,6 @@ def _edit_project_file(
 def _check_project_file(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(params, allowed=("file",), required=("file",))
     workspace, blocked = _workspace_access(context)
     if blocked:
         return blocked
@@ -4628,11 +4543,6 @@ def _check_project_file(
 def _preview_project_file(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    _require_args(
-        params,
-        allowed=("file", "checked_sha256"),
-        required=("file", "checked_sha256"),
-    )
     workspace, blocked = _workspace_access(context)
     if blocked:
         return blocked
@@ -4732,6 +4642,11 @@ def execute_tool(
             "pi_tool_arguments_invalid",
             "EasyICU tool arguments must be an object.",
         )
+    # One argument gate, read from the catalog that also declares the tool to
+    # the JavaScript side. Each handler used to restate its own `allowed`
+    # tuple, which meant 42 tools carried the same contract in three files in
+    # two languages with nothing checking that they agreed.
+    _require_catalog_args(tool_name, arguments)
     authorization = context.session.data_source_authorization
     if (
         tool_name in DATA_SOURCE_REQUIRED_TOOLS

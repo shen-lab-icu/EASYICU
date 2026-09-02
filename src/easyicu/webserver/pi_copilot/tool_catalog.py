@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
-_SCHEMA_VERSION = "easyicu.pi-tool-catalog/1"
-_ROOT_FIELDS = frozenset({"schema_version", "tools"})
+_SCHEMA_VERSION = "easyicu.pi-tool-catalog/2"
+# ``_arguments`` is a prose note in the file, addressed to whoever edits it.
+_ROOT_FIELDS = frozenset({"schema_version", "_arguments", "tools"})
+_ARGUMENT_FIELDS = frozenset({"model", "host", "required"})
 _TOOL_FIELDS = frozenset(
     {
         "name",
@@ -18,8 +20,35 @@ _TOOL_FIELDS = frozenset(
         "execution_mode",
         "host_mutating",
         "data_source_required",
+        "arguments",
     }
 )
+
+
+@dataclass(frozen=True)
+class ToolArguments:
+    """The one declaration of what a host tool accepts.
+
+    ``model`` is what the language model may send, and must equal the TypeBox
+    property names declared for this tool in ``node_app/src/main.mjs``; a
+    contract test fails the build when the two drift. ``host`` are keys only
+    the host injects and the model never sees — ``easyicu_run``'s
+    ``llm_provider`` is one, which is why the JavaScript schema deliberately
+    omits it. ``required`` must be present and non-empty.
+
+    Before this existed a tool's identity was split across three files in two
+    languages, with the argument names written out twice and no gate between
+    them, kept aligned by hand across 42 tools.
+    """
+
+    model: tuple[str, ...]
+    host: tuple[str, ...]
+    required: tuple[str, ...]
+
+    @property
+    def allowed(self) -> frozenset[str]:
+        """Every key the host will accept: what the model may send, plus its own."""
+        return frozenset(self.model) | frozenset(self.host)
 
 
 @dataclass(frozen=True)
@@ -30,6 +59,29 @@ class ToolCatalogEntry:
     execution_mode: str
     host_mutating: bool
     data_source_required: bool
+    arguments: ToolArguments
+
+
+def _parse_arguments(raw: object) -> ToolArguments:
+    """Read one tool's argument declaration, fail closed on anything unexpected."""
+
+    if not isinstance(raw, Mapping) or set(raw) != _ARGUMENT_FIELDS:
+        raise RuntimeError("pi_tool_catalog_arguments_invalid")
+    parsed: dict[str, tuple[str, ...]] = {}
+    for field in ("model", "host", "required"):
+        values = raw.get(field)
+        if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+            raise RuntimeError("pi_tool_catalog_arguments_invalid")
+        names = [str(value) for value in values]
+        if any(not value.strip() for value in names) or len(set(names)) != len(names):
+            raise RuntimeError("pi_tool_catalog_arguments_invalid")
+        parsed[field] = tuple(names)
+    if set(parsed["model"]) & set(parsed["host"]):
+        raise RuntimeError("pi_tool_catalog_arguments_overlap")
+    accepted = set(parsed["model"]) | set(parsed["host"])
+    if not set(parsed["required"]) <= accepted:
+        raise RuntimeError("pi_tool_catalog_arguments_required_unknown")
+    return ToolArguments(**parsed)
 
 
 def load_tool_catalog(path: Path | None = None) -> tuple[ToolCatalogEntry, ...]:
@@ -70,6 +122,7 @@ def load_tool_catalog(path: Path | None = None) -> tuple[ToolCatalogEntry, ...]:
             row.get("data_source_required"), bool
         ):
             raise RuntimeError("pi_tool_catalog_boolean_invalid")
+        arguments = _parse_arguments(row.get("arguments"))
         names.add(name)
         entries.append(
             ToolCatalogEntry(
@@ -79,6 +132,7 @@ def load_tool_catalog(path: Path | None = None) -> tuple[ToolCatalogEntry, ...]:
                 execution_mode=execution_mode,
                 host_mutating=row["host_mutating"],
                 data_source_required=row["data_source_required"],
+                arguments=arguments,
             )
         )
     if not entries:
@@ -103,6 +157,7 @@ RESEARCH_TOOL_NAMES = tuple(
     row.name for row in TOOL_CATALOG if row.surface == "research"
 )
 ALL_TOOL_NAMES = tuple(row.name for row in TOOL_CATALOG)
+TOOL_ARGUMENTS = {row.name: row.arguments for row in TOOL_CATALOG}
 
 
 __all__ = [
@@ -113,7 +168,9 @@ __all__ = [
     "MUTATING_HOST_TOOLS",
     "READ_TOOLS",
     "RESEARCH_TOOL_NAMES",
+    "TOOL_ARGUMENTS",
     "TOOL_CATALOG",
+    "ToolArguments",
     "ToolCatalogEntry",
     "WORKSPACE_TOOLS",
     "load_tool_catalog",

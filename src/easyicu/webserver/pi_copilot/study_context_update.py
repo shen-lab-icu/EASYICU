@@ -645,7 +645,10 @@ def update_study_context(
 ) -> Dict[str, Any]:
     """Persist conversational setup through the existing typed owner."""
 
-    _require_args(params, allowed=_STUDY_SETUP_FIELDS)
+    # Argument names are the catalog's to declare; execute_tool has already
+    # enforced them for this tool. _STUDY_SETUP_FIELDS below stays as the
+    # *patch* vocabulary, which is a different question from what the
+    # model may send.
     binding = context.session.binding
     current = load_context(binding)
     if binding.study_context_id and current is None:
