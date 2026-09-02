@@ -272,7 +272,7 @@ class RicuPyricuComparator:
         file_name = module.ricu_file.format(db=self.database)
         file_path = self.easyicu_data_path / file_name
         if not file_path.exists():
-            print(f"⚠️  Missing ricu file: {file_path}")
+            logger.warning(f"Missing ricu file: {file_path}")
             return {}
         
         # 🚀 OPTIMIZATION: Load only header first to detect columns, then filter during read
@@ -432,7 +432,7 @@ class RicuPyricuComparator:
                         frames[name] = series
                 
                 except Exception as exc:
-                    print(f"   ⚠️  concept {name} failed in module {module.name}: {exc}")
+                    logger.warning(f"concept {name} failed in module {module.name}: {exc}")
                     continue
 
         # 批量加载后不需要再次对齐，因为已经在共同的时间网格上了

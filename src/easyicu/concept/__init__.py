@@ -2076,7 +2076,7 @@ class ConceptResolver:
                                 tables[sub_name] = sub_result
                         except Exception as e:
                             if DEBUG_MODE:
-                                print(f"   DEBUG: Failed to load sub-concept {sub_name}: {e}")
+                                logger.debug(f"Failed to load sub-concept {sub_name}: {e}")
                             continue
                 
                 callback_context = ConceptCallbackContext(
@@ -3604,7 +3604,7 @@ class ConceptResolver:
                     )
                 except Exception as e:
                     if DEBUG_MODE:
-                        print(f"   ⚠️  patients 表关联失败: {e}")
+                        logger.warning(f"patients 表关联失败: {e}")
             
             # MIMIC-IV特殊处理：若表为labevents/microbiologyevents/inputevents，仅有subject_id，按时间窗口映射到对应ICU stay
             if DEBUG_MODE:
@@ -3869,7 +3869,7 @@ class ConceptResolver:
                             # 这是正常的数据过滤行为（例如实验室结果在ICU出院后采集，或在miiv中是ICU入院前的数据）
                             if DEBUG_MODE:
                                 reason = "ricu.R-style时间过滤" if before_filter > 0 else "ICU住院匹配"
-                                print(f"   ⚠️  [{concept_name}] MIMIC {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
+                                logger.warning(f"[{concept_name}] MIMIC {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
                             frame = pd.DataFrame(columns=frame.columns)
                             
                         # 🔗 关键修复：如果用户提供了特定的 stay_id/icustay_id，在映射后再次过滤
@@ -3899,7 +3899,7 @@ class ConceptResolver:
                                 id_columns = [actual_stay_col]
                                 if DEBUG_MODE: print(f"   🔄 MIMIC特殊处理(无时间列): {source.table} ID列从 subject_id → {actual_stay_col} (行数: {len(frame)})")
                 except Exception as ex:
-                    print(f"⚠️  Warning: Failed to time-map labevents to icu stays: {ex}")
+                    logger.warning(f"Failed to time-map labevents to icu stays: {ex}")
                     if verbose:
                         import traceback
                         traceback.print_exc()
@@ -4063,7 +4063,7 @@ class ConceptResolver:
                             id_columns = ['stay_id']
                             if DEBUG_MODE: print("   🔄 MIMIC-IV特殊处理: admissions ID列从 subject_id → stay_id")
                 except Exception as ex:
-                    print(f"⚠️  Warning: Failed to map admissions to icu stays: {ex}")
+                    logger.warning(f"Failed to map admissions to icu stays: {ex}")
                     if verbose:
                         import traceback
                         traceback.print_exc()
@@ -4276,7 +4276,7 @@ class ConceptResolver:
                 elif value_column not in frame.columns:
                     # 如果仍然不存在，跳过这个源
                     if DEBUG_MODE:
-                        print(f"   ⚠️  value_column '{value_column}' 不存在，跳过此源")
+                        logger.warning(f"value_column '{value_column}' 不存在，跳过此源")
                     frame = pd.DataFrame()
                     continue
 
@@ -4332,7 +4332,7 @@ class ConceptResolver:
                 if regex_column not in frame.columns:
                     # 如果目标列不存在，跳过这个源
                     if DEBUG_MODE:
-                        print(f"   ⚠️ regex 列 '{regex_column}' 不存在，跳过此源")
+                        logger.warning(f"regex 列 '{regex_column}' 不存在，跳过此源")
                     frame = pd.DataFrame()
                     continue
                 # 使用 regex=True 并抑制 UserWarning
@@ -4453,7 +4453,7 @@ class ConceptResolver:
                 if mismatched and (DEBUG_MODE or len(frame) > 0):
                     # 只在调试模式或有数据时记录
                     if DEBUG_MODE:
-                        print(f"   ⚠️ 单位警告 (允许{definition.units}): 发现不匹配单位 {mismatched}")
+                        logger.warning(f"单位警告 (允许{definition.units}): 发现不匹配单位 {mismatched}")
                     # 发出Python警告供日志记录
                     import warnings
                     warnings.warn(
@@ -4493,7 +4493,7 @@ class ConceptResolver:
                         frame = frame.drop(columns=['intime'], errors='ignore')
                 except Exception as e:
                     if DEBUG_MODE:
-                        print(f"   ⚠️ [MIMIC-III] source级时间标准化失败: {e}")
+                        logger.warning(f"[MIMIC-III] source级时间标准化失败: {e}")
                 
                 # 🔧 以下是被禁用的严格过滤逻辑（保留作为参考）
                 skip_unit_filter = True  # 与 R ricu 一致，不过滤数据
@@ -4981,7 +4981,7 @@ class ConceptResolver:
                                     combined = combined.drop(columns=['intime'])
                     except Exception as e:
                         if DEBUG_MODE:
-                            print(f"   ⚠️ [MIMIC-III] datetime→numeric 转换失败: {e}")
+                            logger.warning(f"[MIMIC-III] datetime→numeric 转换失败: {e}")
                 
                 # 优先使用 charttime，如果不存在则创建
                 if 'charttime' not in combined.columns:
@@ -5064,7 +5064,7 @@ class ConceptResolver:
                                 combined.loc[remaining_mask, 'charttime'] = rel_minutes / 60.0
                         except Exception as e:
                             if DEBUG_MODE:
-                                print(f"   ⚠️ [MIMIC-III] charttime mixed-type 规范化失败: {e}")
+                                logger.warning(f"[MIMIC-III] charttime mixed-type 规范化失败: {e}")
 
                 combined['charttime'] = pd.to_numeric(combined['charttime'], errors='coerce') if not pd.api.types.is_numeric_dtype(combined['charttime']) else combined['charttime']
 
@@ -5102,7 +5102,7 @@ class ConceptResolver:
                             combined.loc[_epoch_mask, 'charttime'] = rel_hours.values
                     except Exception as e:
                         if DEBUG_MODE:
-                            print(f"   ⚠️ [MIMIC-III] epoch charttime 规范化失败: {e}")
+                            logger.warning(f"[MIMIC-III] epoch charttime 规范化失败: {e}")
 
         # 🔧 CRITICAL FIX 2026-03-10: Multi-source concat produces object dtype for value column
         # When frames from different sources (e.g., respiratorycharting + lab) are concatenated,
@@ -6267,7 +6267,7 @@ class ConceptResolver:
             try:
                 data[index_column] = pd.to_datetime(data[index_column], errors='coerce', utc=True).dt.tz_localize(None)
             except Exception as e:
-                print(f"  ⚠️  警告: 无法将时间列 {index_column} 转换为datetime: {e}")
+                logger.warning(f"无法将时间列 {index_column} 转换为datetime: {e}")
                 return data
         
         try:
@@ -6590,7 +6590,7 @@ class ConceptResolver:
                             table.data[dur_col] = table.data[dur_col].dt.total_seconds() / 3600.0
                         elif pd.api.types.is_datetime64_any_dtype(table.data[dur_col]):
                             # If dur_var is datetime (shouldn't happen), warn
-                            logger.warning("⚠️  WinTbl '%s' 的 dur_var '%s' 是 datetime 类型，预期是 timedelta", name, dur_col)
+                            logger.warning("WinTbl '%s' 的 dur_var '%s' 是 datetime 类型，预期是 timedelta", name, dur_col)
                 
                 aligned_sub_tables[name] = table
             sub_tables = aligned_sub_tables
@@ -6772,7 +6772,7 @@ class ConceptResolver:
                             _declare_dur_var_hours(result.data)
                         elif pd.api.types.is_datetime64_any_dtype(result.data[dur_col]):
                             # 如果是 datetime（不应该，但保险起见），记录警告
-                            print(f"   ⚠️  警告: WinTbl 的 dur_var '{dur_col}' 是 datetime 类型，预期是 timedelta")
+                            logger.warning(f"WinTbl 的 dur_var '{dur_col}' 是 datetime 类型，预期是 timedelta")
             
             # Align time to ICU admission if requested
             if align_to_admission and not result.data.empty:
@@ -7888,7 +7888,7 @@ class ConceptResolver:
             missing_key_cols = [col for col in key_cols if col not in frame.columns]
             if missing_key_cols:
                 # 如果缺少关键列，跳过这个表
-                print(f"⚠️  警告: 表 '{name}' 缺少关键列 {missing_key_cols}，跳过合并")
+                logger.warning(f"表 '{name}' 缺少关键列 {missing_key_cols}，跳过合并")
                 continue
             
             if name not in frame.columns:
@@ -7896,7 +7896,7 @@ class ConceptResolver:
                 # 这种情况可能发生在keep_components=True时，回调返回了组件列而不是概念名称列
                 value_cols = [col for col in frame.columns if col not in key_cols]
                 if not value_cols:
-                    print(f"⚠️  警告: 表 '{name}' 没有值列，跳过合并")
+                    logger.warning(f"表 '{name}' 没有值列，跳过合并")
                     continue
             
             # 选择要保留的列：ID列 + 时间列 + 所有非关键列（包括概念值列和组件列）

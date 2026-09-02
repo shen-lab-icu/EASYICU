@@ -6,6 +6,7 @@ EasyICU Demo Data Generator
 数据完全合成，不包含任何真实患者信息。
 """
 
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -15,6 +16,8 @@ import json
 
 
 # 演示数据配置
+
+logger = logging.getLogger(__name__)
 DEMO_CONFIG = {
     'num_patients': 100,  # 患者数量
     'hours_per_patient': 72,  # 每个患者的ICU住院小时数
@@ -185,7 +188,7 @@ def generate_demo_data(
     
     for concept in concepts:
         if concept not in CONCEPT_DISTRIBUTIONS:
-            print(f"⚠️ Unknown concept: {concept}, skipping")
+            logger.warning(f"Unknown concept: {concept}, skipping")
             continue
         
         config = CONCEPT_DISTRIBUTIONS[concept]
@@ -503,7 +506,7 @@ def load_demo_data(
             df = pd.read_parquet(file_path)
             dfs.append(df)
         else:
-            print(f"⚠️ Demo data for '{concept}' not found")
+            logger.warning(f"Demo data for '{concept}' not found")
     
     if not dfs:
         return pd.DataFrame()

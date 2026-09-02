@@ -4,12 +4,15 @@ Functions for file and directory operations, configuration management,
 and data directory handling.
 """
 
+import logging
 import os
 import json
 from typing import Any, Callable, List, Optional, Union, Generator
 import platform
 
 # ============================================================================
+
+logger = logging.getLogger(__name__)
 # System utilities
 # ============================================================================
 
@@ -325,7 +328,7 @@ def get_config(name: str, cfg_dirs: Optional[List[str]] = None,
                     data = json.load(f, **kwargs)
                     results.append(data)
             except Exception as e:
-                print(f"Warning: Could not read {file_path}: {e}")
+                logger.warning(f"Could not read {file_path}: {e}")
     
     if not results:
         return None

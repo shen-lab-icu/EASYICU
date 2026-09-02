@@ -718,13 +718,13 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
                 return mapping
         else:
             if os.environ.get('DEBUG'):
-                print("   ⚠️  icustays 表为空或未加载")
+                logger.warning("icustays 表为空或未加载")
     except Exception as e:
         # Mapping table not available - this is OK, not all concepts need it
         # Only print error in debug mode to avoid spam
         if os.environ.get('DEBUG'):
             import traceback
-            print(f"   ⚠️  无法加载 icustays 进行 ID 转换 ({from_col} → {to_col}): {e}")
+            logger.warning(f"无法加载 icustays 进行 ID 转换 ({from_col} → {to_col}): {e}")
             traceback.print_exc()
     return None
 
@@ -941,7 +941,7 @@ def _assert_shared_schema(
                         # 如果转换后数据为空，标记要移除这个表（而不是报错）
                         if converted_data.empty:
                             if os.environ.get('DEBUG'):
-                                print(f"      ⚠️  跳过空表 '{name}'（ID 转换后无匹配数据）")
+                                logger.warning(f"跳过空表 '{name}'（ID 转换后无匹配数据）")
                             # 标记要从原始tables中移除
                             tables_to_remove.append(name)
                             continue
@@ -965,7 +965,7 @@ def _assert_shared_schema(
                 id_columns = ['stay_id']
             else:
                 if os.environ.get('DEBUG'):
-                    print("   ⚠️  ID映射表加载失败: hadm_id → stay_id")
+                    logger.warning("ID映射表加载失败: hadm_id → stay_id")
         
         # Handle subject_id ↔ stay_id conversion
         if 'subject_id' in all_id_types and 'stay_id' in all_id_types:
@@ -992,7 +992,7 @@ def _assert_shared_schema(
                         # 如果转换后数据为空，标记要移除这个表（而不是报错）
                         if converted_data.empty:
                             if os.environ.get('DEBUG'):
-                                print(f"      ⚠️  跳过空表 '{name}'（ID 转换后无匹配数据）")
+                                logger.warning(f"跳过空表 '{name}'（ID 转换后无匹配数据）")
                             # 标记要从原始tables中移除
                             tables_to_remove.append(name)
                             continue
@@ -1023,7 +1023,7 @@ def _assert_shared_schema(
         if ids != id_columns:
             # 如果还有 ID 不匹配的表，说明转换失败
             if os.environ.get('DEBUG'):
-                print(f"   ⚠️  表 '{name}' ID 不匹配: {ids} vs {id_columns}")
+                logger.warning(f"表 '{name}' ID 不匹配: {ids} vs {id_columns}")
             raise ValueError(
                 f"Concept component '{name}' has identifier columns {ids}, "
                 f"expected {id_columns}. Automatic ID conversion failed."
@@ -1267,7 +1267,7 @@ def _merge_tables(
 
                     merged = merged.merge(frame, on=actual_key_cols, how=how)
                 except (ValueError, KeyError) as e:
-                    print(f"   ⚠️  跳过 '{name}': merge失败 - {e}")
+                    logger.warning(f"跳过 '{name}': merge失败 - {e}")
                 continue
 
     if merged is None:
@@ -6015,7 +6015,7 @@ def _callback_vaso60(
         # Duration column is datetime type (probably a bug from calc_dur)
         # This shouldn't happen, but if it does, try to detect if it's actually timedelta stored as datetime
         # For now, skip conversion and let it fail gracefully
-        print(f"⚠️  Warning: {dur_col} has datetime dtype instead of timedelta, attempting conversion...")
+        logger.warning(f"{dur_col} has datetime dtype instead of timedelta, attempting conversion...")
         # Just set durations to NaN to avoid crash
         durations = pd.Series([pd.NaT] * len(durations), index=durations.index, dtype='timedelta64[ns]')
     else:
@@ -6846,7 +6846,7 @@ def _callback_rrt_criteria(
                 tables[missing_direct[0]] = loaded
         except (KeyError, ValueError) as e:
             if os.environ.get('DEBUG'):
-                print(f"   ⚠️  无法加载部分RRT依赖概念: {e}")
+                logger.warning(f"无法加载部分RRT依赖概念: {e}")
     
     # 手动计算缺失的 UO 概念，避免递归调用 load_concepts
     if missing_uo and "urine" in tables and "weight" in tables:

@@ -2422,7 +2422,7 @@ def _apply_callback(
             except Exception as e:
                 # 如果获取体重失败，使用默认值
                 if DEBUG_MODE:
-                    print(f"   ⚠️  获取体重失败: {e}")
+                    logger.warning(f"获取体重失败: {e}")
                 pass
 
         return aumc_rate_kg(
@@ -2600,7 +2600,7 @@ def _apply_callback(
                         frame = frame.merge(weight_per_patient, on=id_col, how='left')
             except Exception as e:
                 if DEBUG_MODE:
-                    print(f"   ⚠️  获取体重失败: {e}")
+                    logger.warning(f"获取体重失败: {e}")
                 pass
 
         # 🔧 FIX: Calculate interval_minutes from concept's interval
@@ -2859,7 +2859,7 @@ def _apply_callback(
                         frame = frame.merge(icustays[['icustay_id', 'intime']], on=merge_col, how='left')
                         
                         if len(frame) == 0:
-                            print("⚠️ [mimic_age] MERGE PRODUCED 0 ROWS!")
+                            logger.warning("[mimic_age] MERGE PRODUCED 0 ROWS!")
                             return frame
                         
                         # 2026-05-19 fix: MIMIC-III shifts dob to year 2300+
@@ -2905,7 +2905,7 @@ def _apply_callback(
                 except Exception as e:
                     # If loading fails, try simpler approach
                     import traceback
-                    print(f"⚠️ mimic_age callback failed: {e}")
+                    logger.warning(f"mimic_age callback failed: {e}")
                     traceback.print_exc()
                     if concept_name in frame.columns:
                         frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
