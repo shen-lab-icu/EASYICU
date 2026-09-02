@@ -22,7 +22,10 @@ from .formal_provider_gate import (
     FormalAuthorizedHardStopClient,
     FormalCallCoordinate,
 )
-from .formal_scheduler import consume_trajectory_lease
+from .formal_scheduler import (
+    consume_trajectory_lease,
+    signed_site_assignment_sha256,
+)
 
 
 class _FormalCallSequence:
@@ -140,13 +143,15 @@ class FormalEasyICURunner:
             raise ValueError(
                 "PipelineServices must carry the same formal provider hard stop"
             )
-        consume_trajectory_lease(
+        lease = consume_trajectory_lease(
             trajectory_lease_path,
             scope=scope,
             task_id=task_id,
             arm="easyicu_full",
             execution_site=execution_site,
+            site_assignment_sha256=signed_site_assignment_sha256(receipts),
         )
+        self._leased_output_dir = Path(lease["output_dir"]).resolve()
         router = FormalEasyICUModelRouter(
             services.llm,
             receipts=receipts,
@@ -224,6 +229,8 @@ class FormalEasyICURunner:
     ) -> PipelineResult:
         """Run once and immediately project fixed native outputs for review."""
 
+        if Path(output_dir).resolve() != self._leased_output_dir:
+            raise ValueError("formal output directory does not match the consumed lease")
         try:
             result = self.run(**run_kwargs)
             if not isinstance(result, PipelineResult):

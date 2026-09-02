@@ -82,7 +82,7 @@
     {
       "role": "review_bundle_contract",
       "path": "benchmarks/figure2_icu_agent_v2/review_bundle_contract_v1.json",
-      "sha256": "2fd1db1eb12cc3528825c4a5a781519a791c1998397822d111f1ac58f85e6f74"
+      "sha256": "68ecc7fc83032a77f858ca5fa60f6cdd426edb2a5cc90fb30eebdd4bcc4d84fd"
     },
     {
       "role": "preregistration_plan",
@@ -92,12 +92,12 @@
     {
       "role": "formal_launch_contract",
       "path": "benchmarks/figure2_icu_agent_v2/formal_launch_contract_v1.json",
-      "sha256": "5f9803278ed2c2f72d1cf0bb71990426af98df6d589e7c7ea86f78f58c20c2fb"
+      "sha256": "418d9310a53cfce022c62bcfdcde1d7a81e6aa99eabdb69b481981b6e14accfc"
     },
     {
       "role": "execution_acceptance_contract",
       "path": "benchmarks/figure2_icu_agent_v2/execution_acceptance_contract_v1.json",
-      "sha256": "1fbb9252c91c5498d9ff40e6e51ff72ee35d16361cbc18c5c6afb36ba0c35283"
+      "sha256": "c17ca8d739b9b4009e8834af57bf7842d9c7bc0ff72682c60f700c027f99c8c7"
     },
     {
       "role": "idea_to_evidence_protocol",

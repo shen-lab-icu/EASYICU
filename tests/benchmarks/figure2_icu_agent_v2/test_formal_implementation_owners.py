@@ -20,11 +20,18 @@ from benchmarks.figure2_icu_agent_v2.formal_scheduler import (
     build_qualification_schedule_dry_run,
     claim_trajectory_lease,
     consume_trajectory_lease,
+    expected_site_assignment,
+    expected_site_assignment_sha256,
+    validate_authorized_site_coordinates,
     validate_trajectory_lease,
 )
 from benchmarks.figure2_icu_agent_v2.formal_easyicu_runner import FormalEasyICURunner
+from benchmarks.figure2_icu_agent_v2.formal_generic_runner import (
+    FormalGenericCodeAgentRunner,
+)
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     CANONICAL_FILES,
+    ReviewBlindingContext,
     normalize_review_bundle,
 )
 from easyicu.research_agent.schema import PipelineResult
@@ -32,6 +39,19 @@ from benchmarks.figure2_icu_agent_v2.multi_host_acceptance import (
     MultiHostAcceptanceError,
     validate_two_host_preflight,
 )
+
+
+_BLINDING_CONTEXT = ReviewBlindingContext(
+    host_markers=("fig2-server-01", "fig2-laptop-01"),
+    output_roots=("/formal/server", "/formal/laptop"),
+)
+
+
+def _normalize(source_dir: Path):
+    return normalize_review_bundle(
+        source_dir,
+        blinding_context=_BLINDING_CONTEXT,
+    )
 
 
 def _native_pipeline_result(root: Path) -> PipelineResult:
@@ -78,7 +98,7 @@ def test_easyicu_adapter_emits_normalizable_arm_neutral_bundle(tmp_path: Path) -
     )
 
     assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
-    normalized = normalize_review_bundle(output)
+    normalized = _normalize(output)
     receipt = json.loads(normalized.files["07_run_receipt.json"])
     assert receipt["substantive_output_files"]["03_results.json"] is True
     assert "provider_tokens" not in receipt
@@ -105,6 +125,7 @@ def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
     runner._pipeline = _Pipeline()
     runner._provider_hard_stop = _HardStop()
     output = tmp_path / "review-bundle"
+    runner._leased_output_dir = output.resolve()
 
     returned = runner.run_and_write_review_bundle(
         output_dir=output,
@@ -117,7 +138,7 @@ def test_easyicu_runner_projects_native_terminal_outputs_without_postrun_seam(
 
     assert returned is result
     assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
-    normalized = normalize_review_bundle(output)
+    normalized = _normalize(output)
     assert json.loads(normalized.files["03_results.json"])["evidence"][0][
         "evidence_id"
     ] == "result-1"
@@ -138,6 +159,7 @@ def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
     runner._pipeline = _Pipeline()
     runner._provider_hard_stop = _HardStop()
     output = tmp_path / "failed-review-bundle"
+    runner._leased_output_dir = output.resolve()
 
     with pytest.raises(RuntimeError, match="private implementation detail"):
         runner.run_and_write_review_bundle(
@@ -147,13 +169,40 @@ def test_easyicu_runner_writes_neutral_terminal_bundle_on_execution_failure(
         )
 
     assert {path.name for path in output.iterdir()} == set(CANONICAL_FILES)
-    normalized = normalize_review_bundle(output)
+    normalized = _normalize(output)
     receipt = json.loads(normalized.files["07_run_receipt.json"])
     assert receipt["terminal_status"] == "failed"
     assert receipt["failure_category"] == "execution_failure"
     assert b"private implementation detail" not in b"".join(
         normalized.files.values()
     )
+
+
+def test_formal_runners_reject_output_directory_outside_consumed_lease(
+    tmp_path: Path,
+) -> None:
+    leased = (tmp_path / "leased-output").resolve()
+    wrong = tmp_path / "wrong-output"
+
+    easyicu = object.__new__(FormalEasyICURunner)
+    easyicu._leased_output_dir = leased
+    with pytest.raises(ValueError, match="consumed lease"):
+        easyicu.run_and_write_review_bundle(
+            output_dir=wrong,
+            mandatory_artifacts=("result",),
+            artifact_inventory={"result": ["03_results.json"]},
+        )
+
+    generic = object.__new__(FormalGenericCodeAgentRunner)
+    generic._leased_output_dir = leased
+    with pytest.raises(ValueError, match="consumed lease"):
+        generic.run(
+            task_prompt="offline",
+            neutral_input_description="offline",
+            mandatory_artifacts=("result",),
+            output_dir=wrong,
+            review_plan=lambda _plan: None,  # type: ignore[arg-type,return-value]
+        )
 
 
 def test_core_scheduler_projects_78_unique_trajectories_without_writes(
@@ -222,6 +271,7 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
 
     first_lease = claim_trajectory_lease(
         first,
+        schedule=dry_run,
         logical_site="server",
         lease_root=lease_root,
     )
@@ -232,16 +282,19 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
         task_id=first.task_id,
         arm=first.arm,
         execution_site=first.execution_site,
+        site_assignment_sha256=dry_run.site_assignment_sha256,
     )
     assert validated["output_dir"] == first.output_dir
-    started = consume_trajectory_lease(
+    consumed = consume_trajectory_lease(
         first_lease,
         scope=first.scope,
         task_id=first.task_id,
         arm=first.arm,
         execution_site=first.execution_site,
+        site_assignment_sha256=dry_run.site_assignment_sha256,
     )
-    assert started.is_file()
+    assert consumed["output_dir"] == first.output_dir
+    assert Path(f"{first_lease}.started").is_file()
     with pytest.raises(FileExistsError):
         consume_trajectory_lease(
             first_lease,
@@ -249,6 +302,7 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
             task_id=first.task_id,
             arm=first.arm,
             execution_site=first.execution_site,
+            site_assignment_sha256=dry_run.site_assignment_sha256,
         )
     with pytest.raises(FormalScheduleError, match="execution_site mismatch"):
         validate_trajectory_lease(
@@ -257,22 +311,26 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
             task_id=first.task_id,
             arm=first.arm,
             execution_site="laptop",
+            site_assignment_sha256=dry_run.site_assignment_sha256,
         )
     with pytest.raises(FileExistsError):
         claim_trajectory_lease(
             first,
+            schedule=dry_run,
             logical_site="server",
             lease_root=lease_root,
         )
     with pytest.raises(FormalScheduleError, match="first arm"):
         claim_trajectory_lease(
             second,
+            schedule=dry_run,
             logical_site="server",
             lease_root=lease_root,
         )
     with pytest.raises(FormalScheduleError, match="another logical site"):
         claim_trajectory_lease(
             first,
+            schedule=dry_run,
             logical_site="laptop",
             lease_root=lease_root,
         )
@@ -284,10 +342,96 @@ def test_site_assignment_lease_is_single_use_and_pair_ordered(tmp_path: Path) ->
         (predecessor / name).write_text(json.dumps(payload), encoding="utf-8")
     second_lease = claim_trajectory_lease(
         second,
+        schedule=dry_run,
         logical_site="server",
         lease_root=lease_root,
     )
     assert second_lease.is_file()
+
+
+def test_manual_lease_cannot_override_frozen_core_assignment(tmp_path: Path) -> None:
+    roots = {
+        "server": tmp_path / "server-output",
+        "laptop": tmp_path / "laptop-output",
+    }
+    dry_run = build_core_schedule_dry_run(roots)
+    trajectory = dry_run.trajectories[0]
+    lease_root = tmp_path / "leases"
+    lease_root.mkdir()
+    legitimate = claim_trajectory_lease(
+        trajectory,
+        schedule=dry_run,
+        logical_site=trajectory.execution_site,
+        lease_root=lease_root,
+    )
+    payload = json.loads(legitimate.read_text(encoding="utf-8"))
+
+    payload["execution_site"] = "laptop"
+    forged_site = lease_root / "forged-site.lease.json"
+    forged_site.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(FormalScheduleError, match="frozen site mismatch"):
+        validate_trajectory_lease(
+            forged_site,
+            scope=trajectory.scope,
+            task_id=trajectory.task_id,
+            arm=trajectory.arm,
+            execution_site="laptop",
+            site_assignment_sha256=dry_run.site_assignment_sha256,
+        )
+
+    payload["task_id"] = "not_a_registered_core_task"
+    payload["output_dir"] = "/dev/null"
+    forged_task = lease_root / "forged-task.lease.json"
+    forged_task.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(FormalScheduleError, match="absent from core assignment"):
+        validate_trajectory_lease(
+            forged_task,
+            scope=trajectory.scope,
+            task_id="not_a_registered_core_task",
+            arm=trajectory.arm,
+            execution_site="laptop",
+            site_assignment_sha256=dry_run.site_assignment_sha256,
+        )
+
+
+def test_signed_core_coordinates_must_match_every_frozen_task_site_and_arm() -> None:
+    assignment = expected_site_assignment("core_wp2_wp3")
+    digest = expected_site_assignment_sha256("core_wp2_wp3")
+    coordinates = [
+        {
+            "scope": "core_wp2_wp3",
+            "task_id": item["task_id"],
+            "arm": arm,
+            "execution_site": item["execution_site"],
+            "call_id": f"{item['task_id']}_{arm}",
+        }
+        for item in assignment
+        for arm in ("easyicu_full", "generic_code_agent")
+    ]
+
+    assert validate_authorized_site_coordinates(
+        "core_wp2_wp3",
+        coordinates,
+        declared_site_assignment_sha256=digest,
+    ) == digest
+
+    wrong_site = [dict(coordinate) for coordinate in coordinates]
+    wrong_site[0]["execution_site"] = (
+        "laptop" if wrong_site[0]["execution_site"] == "server" else "server"
+    )
+    with pytest.raises(FormalScheduleError, match="site assignment mismatch"):
+        validate_authorized_site_coordinates(
+            "core_wp2_wp3",
+            wrong_site,
+            declared_site_assignment_sha256=digest,
+        )
+
+    with pytest.raises(FormalScheduleError, match="both arms"):
+        validate_authorized_site_coordinates(
+            "core_wp2_wp3",
+            coordinates[1:],
+            declared_site_assignment_sha256=digest,
+        )
 
 
 def _site_receipt(site: str) -> dict:
@@ -319,8 +463,21 @@ def _site_receipt(site: str) -> dict:
     }
 
 
+def _receipt_bytes(receipt: dict) -> bytes:
+    return json.dumps(
+        receipt,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def test_two_host_preflight_requires_exact_runtime_parity() -> None:
-    receipts = [_site_receipt("server"), _site_receipt("laptop")]
+    receipts = [
+        _receipt_bytes(_site_receipt("server")),
+        _receipt_bytes(_site_receipt("laptop")),
+    ]
 
     result = validate_two_host_preflight(
         receipts,
@@ -338,7 +495,7 @@ def test_two_host_preflight_fails_on_resource_or_provider_drift() -> None:
     resource_drift[1]["cpu_limit"] = 4
     with pytest.raises(MultiHostAcceptanceError, match="cpu_limit"):
         validate_two_host_preflight(
-            resource_drift,
+            [_receipt_bytes(receipt) for receipt in resource_drift],
             expected_design_commit="c" * 40,
             expected_annotated_tag="figure2-v2.1-test",
         )
@@ -347,7 +504,34 @@ def test_two_host_preflight_fails_on_resource_or_provider_drift() -> None:
     provider_access[0]["provider_accessed"] = True
     with pytest.raises(MultiHostAcceptanceError, match="provider_accessed"):
         validate_two_host_preflight(
-            provider_access,
+            [_receipt_bytes(receipt) for receipt in provider_access],
+            expected_design_commit="c" * 40,
+            expected_annotated_tag="figure2-v2.1-test",
+        )
+
+
+def test_two_host_preflight_parses_raw_json_and_rejects_duplicate_keys() -> None:
+    server = _receipt_bytes(_site_receipt("server"))
+    laptop = _receipt_bytes(_site_receipt("laptop"))
+    duplicate = server[:-1] + b',"logical_site":"laptop"}'
+
+    with pytest.raises(MultiHostAcceptanceError, match="duplicate"):
+        validate_two_host_preflight(
+            [duplicate, laptop],
+            expected_design_commit="c" * 40,
+            expected_annotated_tag="figure2-v2.1-test",
+        )
+    with pytest.raises(MultiHostAcceptanceError, match="unparsed JSON bytes"):
+        validate_two_host_preflight(
+            [_site_receipt("server"), laptop],  # type: ignore[list-item]
+            expected_design_commit="c" * 40,
+            expected_annotated_tag="figure2-v2.1-test",
+        )
+
+    nonfinite = server.replace(b'"clock_offset_ms":25', b'"clock_offset_ms":NaN')
+    with pytest.raises(MultiHostAcceptanceError, match="nonfinite"):
+        validate_two_host_preflight(
+            [nonfinite, laptop],
             expected_design_commit="c" * 40,
             expected_annotated_tag="figure2-v2.1-test",
         )

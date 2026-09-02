@@ -77,11 +77,19 @@ arm-neutral reviewer projection without repairing scientific content.
 `formal_scheduler.py` reproduces all 78 core task-arm trajectories, creates the
 post-unsealing Qualification12 assignment deterministically, rejects nonempty
 per-site output roots, and issues single-use site-bound leases without Provider
-access. A formal runner requires the matching lease before construction.
+access. The same `site_assignment_sha256` is bound into the dry run, lease,
+runner, every launch receipt, and the signed atomic declaration; qualification
+and core authority reject an unknown task, split pair, wrong site, missing arm,
+or mismatched assignment digest before transport. A formal runner requires the
+matching lease before construction and may write only to its leased output
+directory.
 `multi_host_acceptance.py` accepts exactly one server and one laptop preflight
-receipt only when the frozen release, model route, input set, budgets, container
-limits, and network policy match exactly; a warning, drift, Provider access, or
-missing field is a hard NO-GO. `blinded_evaluator.py`
+receipt as unparsed JSON bytes only when the frozen release, model route, input
+set, budgets, container limits, and network policy match exactly; duplicate
+keys, nonfinite values, a warning, drift, Provider access, or missing field are
+a hard NO-GO. The normalizer also requires both exact host markers and both
+formal output roots on every call, and hides generic POSIX/Windows paths and
+registered site identifiers before scoring. `blinded_evaluator.py`
 mechanically instantiates Heldout27 sheets from the frozen rubric and taskbank,
 then atomically locks two eligible reviewers' scores and arm guesses before
 unblinding. `formal_authority.py` verifies an Ed25519-signed atomic declaration,

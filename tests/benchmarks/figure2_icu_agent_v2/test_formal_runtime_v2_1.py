@@ -16,6 +16,10 @@ from benchmarks.figure2_icu_agent_v2.formal_provider_gate import (
     FormalProviderBudgetMissingError,
     complete_formal_provider_call,
 )
+from benchmarks.figure2_icu_agent_v2.formal_scheduler import (
+    expected_site_assignment,
+    expected_site_assignment_sha256,
+)
 from benchmarks.figure2_icu_agent_v2.formal_easyicu_runner import (
     FormalEasyICUModelRouter,
 )
@@ -27,6 +31,7 @@ from easyicu.research_agent.authority.provider_hard_stop import (
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from benchmarks.figure2_icu_agent_v2.review_bundle_normalizer import (
     CANONICAL_FILES,
+    ReviewBlindingContext,
     ReviewBundleNormalizationError,
     normalize_review_bundle,
 )
@@ -47,6 +52,17 @@ _INTERNAL_MARKERS = sorted(
         for reason in stage["failure_reason_codes"]
     }
 )
+_BLINDING_CONTEXT = ReviewBlindingContext(
+    host_markers=("srv-01", "MacBook"),
+    output_roots=("/Volumes/ext/easyicu_data/fig2_core/server", r"D:\figure2\laptop"),
+)
+
+
+def _normalize(source_dir: Path):
+    return normalize_review_bundle(
+        source_dir,
+        blinding_context=_BLINDING_CONTEXT,
+    )
 
 
 class _TransportSpy:
@@ -113,6 +129,8 @@ def _signed_qualification_authority(
     *,
     arm: str = "generic_code_agent",
     call_id: str = "generic_0001",
+    wrong_site_for_requested_task: bool = False,
+    wrong_assignment_digest: bool = False,
 ) -> tuple[dict[str, object], dict[str, str]]:
     launch = json.loads(formal_authority.LAUNCH_CONTRACT_PATH.read_text())
     private_key = Ed25519PrivateKey.generate()
@@ -130,15 +148,42 @@ def _signed_qualification_authority(
     monkeypatch.setattr(formal_authority, "LAUNCH_CONTRACT_PATH", launch_path)
     monkeypatch.setattr(formal_authority, "PROTOCOL_PATH", protocol_path)
 
+    task_ids = tuple(f"qualification12_a_{index:02d}" for index in range(1, 13))
+    assignment = expected_site_assignment("qualification12", task_ids=task_ids)
+    site_by_task = {item["task_id"]: item["execution_site"] for item in assignment}
+    requested_task = task_ids[0]
+    requested_site = site_by_task[requested_task]
+    if wrong_site_for_requested_task:
+        requested_site = "laptop" if requested_site == "server" else "server"
     coordinate = {
         "scope": "qualification12",
-        "task_id": "qualification12_a_01",
+        "task_id": requested_task,
         "arm": arm,
-        "execution_site": "server",
+        "execution_site": requested_site,
         "call_id": call_id,
     }
+    coordinates = []
+    for task_id in task_ids:
+        for task_arm in ("easyicu_full", "generic_code_agent"):
+            item = {
+                "scope": "qualification12",
+                "task_id": task_id,
+                "arm": task_arm,
+                "execution_site": site_by_task[task_id],
+                "call_id": f"{task_arm}_{task_id}",
+            }
+            if task_id == requested_task and task_arm == arm:
+                item = coordinate
+            coordinates.append(item)
+    site_assignment_sha256 = expected_site_assignment_sha256(
+        "qualification12",
+        task_ids=task_ids,
+    )
+    if wrong_assignment_digest:
+        site_assignment_sha256 = "0" * 64
     binding = {
         "protocol_sha256": hashlib.sha256(protocol_path.read_bytes()).hexdigest(),
+        "site_assignment_sha256": site_assignment_sha256,
         "design_commit": "a" * 40,
         "annotated_tag": "figure2-v2.1-test",
     }
@@ -176,7 +221,7 @@ def _signed_qualification_authority(
         "amendment_policy_acknowledged": True,
     }
     declaration = {
-        "schema_version": "easyicu.figure2_atomic_declaration/1",
+        "schema_version": "easyicu.figure2_atomic_declaration/2",
         "signer_id": "external-custodian-1",
         "scope": "qualification12",
         **binding,
@@ -184,7 +229,7 @@ def _signed_qualification_authority(
             receipt_id: hashlib.sha256(_canonical_json(payload)).hexdigest()
             for receipt_id, payload in receipt_payloads.items()
         },
-        "authorized_call_coordinates": [coordinate],
+        "authorized_call_coordinates": coordinates,
     }
     envelope: dict[str, object] = {
         "atomic_declaration": declaration,
@@ -245,6 +290,42 @@ def test_formal_authority_accepts_only_exact_signed_coordinate(
             }
         )
     assert site_exc_info.value.reason_code == "FORMAL_AUTHORITY_COORDINATE_NOT_DECLARED"
+
+
+def test_formal_authority_rejects_signed_coordinate_on_wrong_frozen_site(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope, coordinate = _signed_qualification_authority(
+        tmp_path,
+        monkeypatch,
+        wrong_site_for_requested_task=True,
+    )
+
+    with pytest.raises(DesignContractError) as exc_info:
+        formal_authority.authorize_formal_provider_call(
+            {"receipts": envelope, "call_coordinate": coordinate}
+        )
+
+    assert exc_info.value.reason_code == "FORMAL_AUTHORITY_SITE_ASSIGNMENT_INVALID"
+
+
+def test_formal_authority_rejects_signed_wrong_assignment_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope, coordinate = _signed_qualification_authority(
+        tmp_path,
+        monkeypatch,
+        wrong_assignment_digest=True,
+    )
+
+    with pytest.raises(DesignContractError) as exc_info:
+        formal_authority.authorize_formal_provider_call(
+            {"receipts": envelope, "call_coordinate": coordinate}
+        )
+
+    assert exc_info.value.reason_code == "FORMAL_AUTHORITY_SITE_ASSIGNMENT_INVALID"
 
 
 def test_signed_authority_and_budget_gate_reach_only_offline_mock(
@@ -553,7 +634,7 @@ def test_normalizer_preserves_science_and_hides_arm_resource_fingerprints(
 ) -> None:
     _write_bundle(tmp_path)
 
-    result = normalize_review_bundle(tmp_path)
+    result = _normalize(tmp_path)
 
     assert tuple(result.files) == CANONICAL_FILES
     normalized_results = json.loads(result.files["03_results.json"])
@@ -577,6 +658,24 @@ def test_normalizer_preserves_science_and_hides_arm_resource_fingerprints(
     }
 
 
+def test_normalizer_requires_explicit_runtime_blinding_context(tmp_path: Path) -> None:
+    _write_bundle(tmp_path)
+
+    with pytest.raises(TypeError, match="blinding_context"):
+        normalize_review_bundle(tmp_path)  # type: ignore[call-arg]
+
+    with pytest.raises(ValueError, match="host markers"):
+        ReviewBlindingContext(
+            host_markers=(" srv-01", "MacBook"),
+            output_roots=_BLINDING_CONTEXT.output_roots,
+        )
+    with pytest.raises(ValueError, match="absolute roots"):
+        ReviewBlindingContext(
+            host_markers=_BLINDING_CONTEXT.host_markers,
+            output_roots=("/formal/server ", "/formal/laptop"),
+        )
+
+
 @pytest.mark.parametrize("marker", _INTERNAL_MARKERS)
 def test_normalizer_rejects_every_frozen_internal_marker(
     tmp_path: Path,
@@ -589,7 +688,7 @@ def test_normalizer_rejects_every_frozen_internal_marker(
     )
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:
-        normalize_review_bundle(tmp_path)
+        _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_UNSAFE_MARKER"
 
@@ -602,6 +701,8 @@ def test_normalizer_redacts_container_and_repository_paths(tmp_path: Path) -> No
             "/home/agent/plan.py",
             "benchmarks/figure2_icu_agent_v2/heldout27_taskbank_v1.jsonl",
             "/Users/example/out.csv.",
+            "/Volumes/ext/easyicu_data/fig2_core/server/task/result.csv",
+            r"D:\figure2\laptop\task\result.csv",
         ]
     }
     (tmp_path / "05_evidence_manifest.json").write_text(
@@ -609,7 +710,7 @@ def test_normalizer_redacts_container_and_repository_paths(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    result = normalize_review_bundle(tmp_path)
+    result = _normalize(tmp_path)
     normalized = json.loads(result.files["05_evidence_manifest.json"])
 
     assert normalized["paths"] == [
@@ -617,7 +718,34 @@ def test_normalizer_redacts_container_and_repository_paths(tmp_path: Path) -> No
         "<redacted-path>",
         "<redacted-path>",
         "<redacted-path>.",
+        "<redacted-path>",
+        "<redacted-path>",
     ]
+
+
+@pytest.mark.parametrize(
+    "site_marker",
+    (
+        "Executed on srv-01 with the registered limits.",
+        "Executed on the MacBook overnight.",
+        "The run_host was retained.",
+        "laptop_runtime_seconds was 20.",
+    ),
+)
+def test_normalizer_rejects_registered_site_and_host_markers(
+    tmp_path: Path,
+    site_marker: str,
+) -> None:
+    _write_bundle(tmp_path)
+    (tmp_path / "06_report.md").write_text(site_marker, encoding="utf-8")
+
+    with pytest.raises(ReviewBundleNormalizationError) as exc_info:
+        _normalize(tmp_path)
+
+    assert exc_info.value.reason_code in {
+        "REVIEW_BUNDLE_EXECUTION_SITE_MARKER",
+        "REVIEW_BUNDLE_RESOURCE_FINGERPRINT",
+    }
 
 
 @pytest.mark.parametrize(
@@ -643,7 +771,7 @@ def test_normalizer_rejects_resource_fingerprints_outside_raw_receipt(
     )
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:
-        normalize_review_bundle(tmp_path)
+        _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_RESOURCE_FINGERPRINT"
 
@@ -655,11 +783,12 @@ def test_normalizer_detects_numeric_content_change(
     _write_bundle(tmp_path)
     original = review_bundle_normalizer._normalize_value
 
-    def corrupt_numeric_content(value, *, file_name, location):
+    def corrupt_numeric_content(value, *, file_name, location, blinding_context):
         normalized, findings = original(
             value,
             file_name=file_name,
             location=location,
+            blinding_context=blinding_context,
         )
         if file_name == "03_results.json" and location == "":
             normalized["estimate"] = 9.99
@@ -672,7 +801,7 @@ def test_normalizer_detects_numeric_content_change(
     )
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:
-        normalize_review_bundle(tmp_path)
+        _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_NUMERIC_CONTENT_CHANGED"
 
@@ -687,7 +816,7 @@ def test_normalizer_rejects_overflowed_json_number_with_typed_reason(
     )
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:
-        normalize_review_bundle(tmp_path)
+        _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_NONFINITE_JSON"
 
@@ -700,7 +829,7 @@ def test_normalizer_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:
-        normalize_review_bundle(tmp_path)
+        _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_JSON_KEY_DUPLICATE"
 
@@ -713,7 +842,7 @@ def test_normalizer_rejects_unknown_internal_marker(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:
-        normalize_review_bundle(tmp_path)
+        _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_UNSAFE_MARKER"
 
@@ -728,7 +857,7 @@ def test_normalizer_preserves_legitimate_screaming_case_clinical_field(
         encoding="utf-8",
     )
 
-    result = normalize_review_bundle(tmp_path)
+    result = _normalize(tmp_path)
 
     assert json.loads(result.files["03_results.json"])["field"] == (
         "ICU_FREE_DAYS_28"
@@ -740,7 +869,7 @@ def test_normalizer_rejects_noncanonical_file_set(tmp_path: Path) -> None:
     (tmp_path / "debug.log").write_text("hidden fingerprint", encoding="utf-8")
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:
-        normalize_review_bundle(tmp_path)
+        _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_FILE_SET_INVALID"
 
@@ -755,6 +884,6 @@ def test_normalizer_rejects_nonboolean_artifact_presence(tmp_path: Path) -> None
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
 
     with pytest.raises(ReviewBundleNormalizationError) as exc_info:
-        normalize_review_bundle(tmp_path)
+        _normalize(tmp_path)
 
     assert exc_info.value.reason_code == "REVIEW_BUNDLE_RECEIPT_FIELD_INVALID"

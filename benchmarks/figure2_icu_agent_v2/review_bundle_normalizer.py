@@ -45,8 +45,8 @@ _STATIC_REJECTED_MARKERS = (
     re.compile(r"\bI\d{2}_[A-Z][A-Z0-9_]+\b"),
 )
 _PATH_MARKER = re.compile(
-    r"(?<![:\w])/(?:Users|home|workspace|workspaces|tmp|var/tmp|mnt|opt|app)/"
-    r"[^\s\]\[(){}<>'\"]+"
+    r"(?<![:/\w])/(?:[^/\s\]\[(){}<>'\"]+/)+[^/\s\]\[(){}<>'\"]+"
+    r"|\b[A-Za-z]:\\(?:[^\\\s\]\[(){}<>'\"]+\\)+[^\\\s\]\[(){}<>'\"]+"
     r"|\b(?:src/easyicu|benchmarks/figure2_icu_agent_v2)/[^\s\]\[(){}<>'\"]+"
 )
 _RESOURCE_FINGERPRINTS = (
@@ -54,7 +54,8 @@ _RESOURCE_FINGERPRINTS = (
         r"\b(?:model[ _-]?turns?|provider[ _-]?calls?|tool[ _-]?calls?|"
         r"provider[ _-]?tokens?|billed[ _-]?cost|per[ _-]?tool[ _-]?latency|"
         r"stage[ _-]?shaped[ _-]?timing|execution[ _-]?site|logical[ _-]?site|"
-        r"host[ _-]?fingerprint|machine[ _-]?name)\b",
+        r"host[ _-]?fingerprint|machine[ _-]?name|run[ _-]?host|"
+        r"execution[ _-]?host|(?:server|laptop)[ _-]?runtime)\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -69,6 +70,36 @@ class ReviewBundleNormalizationError(ValueError):
         self.reason_code = reason_code
         self.detail = detail
         super().__init__(f"{reason_code}: {detail}")
+
+
+@dataclass(frozen=True)
+class ReviewBlindingContext:
+    """Exact runtime identifiers that must not reach a scoring reviewer."""
+
+    host_markers: tuple[str, str]
+    output_roots: tuple[str, str]
+
+    def __post_init__(self) -> None:
+        hosts = tuple(marker.strip() for marker in self.host_markers)
+        roots = tuple(root.strip() for root in self.output_roots)
+        if (
+            hosts != self.host_markers
+            or len(set(marker.casefold() for marker in hosts)) != 2
+            or any(len(marker) < 3 for marker in hosts)
+        ):
+            raise ValueError("blinding context requires two distinct host markers")
+        if (
+            roots != self.output_roots
+            or len(set(root.casefold() for root in roots)) != 2
+            or any(
+                not (
+                    Path(root).is_absolute()
+                    or re.fullmatch(r"[A-Za-z]:\\.+", root)
+                )
+                for root in roots
+            )
+        ):
+            raise ValueError("blinding context requires two distinct absolute roots")
 
 
 @lru_cache(maxsize=1)
@@ -180,7 +211,13 @@ def _contains_exact_marker(text: str, marker: str) -> bool:
     return bool(re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", text))
 
 
-def _reject_forbidden_markers(text: str, *, file_name: str, location: str) -> None:
+def _reject_forbidden_markers(
+    text: str,
+    *,
+    file_name: str,
+    location: str,
+    blinding_context: ReviewBlindingContext,
+) -> None:
     stage_ids, reason_codes = _internal_markers()
     for marker in sorted(stage_ids | reason_codes):
         if _contains_exact_marker(text, marker):
@@ -199,9 +236,26 @@ def _reject_forbidden_markers(text: str, *, file_name: str, location: str) -> No
             "REVIEW_BUNDLE_RESOURCE_FINGERPRINT",
             f"{file_name}:{location}",
         )
+    runtime_markers = ("server", "laptop", *blinding_context.host_markers)
+    for marker in runtime_markers:
+        if re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(marker)}(?![A-Za-z0-9])",
+            text,
+            re.IGNORECASE,
+        ):
+            raise ReviewBundleNormalizationError(
+                "REVIEW_BUNDLE_EXECUTION_SITE_MARKER",
+                f"{file_name}:{location}",
+            )
 
 
-def _redact_text(text: str, *, file_name: str, location: str) -> tuple[str, list[dict[str, str]]]:
+def _redact_text(
+    text: str,
+    *,
+    file_name: str,
+    location: str,
+    blinding_context: ReviewBlindingContext,
+) -> tuple[str, list[dict[str, str]]]:
     output = text
     findings: list[dict[str, str]] = []
     for rule, pattern, replacement in _REDACTIONS:
@@ -225,10 +279,27 @@ def _redact_text(text: str, *, file_name: str, location: str) -> tuple[str, list
                 "replacement_count": str(path_count),
             }
         )
+    for root in sorted(blinding_context.output_roots, key=len, reverse=True):
+        output, exact_count = re.subn(
+            re.escape(root) + r"[^\s\]\[(){}<>'\"]*",
+            "<redacted-path>",
+            output,
+            flags=re.IGNORECASE,
+        )
+        if exact_count:
+            findings.append(
+                {
+                    "file": file_name,
+                    "location": location,
+                    "rule": "registered_output_root",
+                    "replacement_count": str(exact_count),
+                }
+            )
     _reject_forbidden_markers(
         output,
         file_name=file_name,
         location=location,
+        blinding_context=blinding_context,
     )
     return output, findings
 
@@ -268,9 +339,15 @@ def _normalize_value(
     *,
     file_name: str,
     location: str,
+    blinding_context: ReviewBlindingContext,
 ) -> tuple[Any, list[dict[str, str]]]:
     if isinstance(value, str):
-        return _redact_text(value, file_name=file_name, location=location)
+        return _redact_text(
+            value,
+            file_name=file_name,
+            location=location,
+            blinding_context=blinding_context,
+        )
     if isinstance(value, list):
         normalized: list[Any] = []
         findings: list[dict[str, str]] = []
@@ -279,6 +356,7 @@ def _normalize_value(
                 item,
                 file_name=file_name,
                 location=f"{location}/{index}",
+                blinding_context=blinding_context,
             )
             normalized.append(result)
             findings.extend(item_findings)
@@ -296,6 +374,7 @@ def _normalize_value(
                 key,
                 file_name=file_name,
                 location=f"{location}/<key>",
+                blinding_context=blinding_context,
             )
             if normalized_key in normalized_dict:
                 raise ReviewBundleNormalizationError(
@@ -306,6 +385,7 @@ def _normalize_value(
                 item,
                 file_name=file_name,
                 location=f"{location}/{normalized_key}",
+                blinding_context=blinding_context,
             )
             normalized_dict[normalized_key] = normalized_item
             findings.extend(key_findings)
@@ -327,7 +407,11 @@ def _canonical_json(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
+def normalize_review_bundle(
+    source_dir: Path,
+    *,
+    blinding_context: ReviewBlindingContext,
+) -> NormalizedReviewBundle:
     """Return a deterministic reviewer projection without writing files."""
 
     source_dir = Path(source_dir).resolve()
@@ -362,6 +446,7 @@ def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
                 value,
                 file_name=name,
                 location="",
+                blinding_context=blinding_context,
             )
             _assert_numeric_content_preserved(value, normalized, file_name=name)
             output = _canonical_json(normalized)
@@ -377,6 +462,7 @@ def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
                 report,
                 file_name=name,
                 location="",
+                blinding_context=blinding_context,
             )
             output = normalized_report.replace("\r\n", "\n").encode("utf-8")
         else:
@@ -428,6 +514,7 @@ def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
                 projected,
                 file_name=name,
                 location="",
+                blinding_context=blinding_context,
             )
             output = _canonical_json(normalized)
         normalized_files[name] = output
@@ -445,6 +532,7 @@ def normalize_review_bundle(source_dir: Path) -> NormalizedReviewBundle:
 __all__ = [
     "CANONICAL_FILES",
     "NormalizedReviewBundle",
+    "ReviewBlindingContext",
     "ReviewBundleNormalizationError",
     "normalize_review_bundle",
 ]
