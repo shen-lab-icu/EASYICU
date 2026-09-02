@@ -19,6 +19,8 @@ from benchmarks.figure2_icu_agent_v2.formal_provider_gate import (
 from benchmarks.figure2_icu_agent_v2.formal_scheduler import (
     expected_site_assignment,
     expected_site_assignment_sha256,
+    signed_output_root,
+    signed_site_assignment,
 )
 from benchmarks.figure2_icu_agent_v2.formal_easyicu_runner import (
     FormalEasyICUModelRouter,
@@ -131,6 +133,7 @@ def _signed_qualification_authority(
     call_id: str = "generic_0001",
     wrong_site_for_requested_task: bool = False,
     wrong_assignment_digest: bool = False,
+    duplicate_output_roots: bool = False,
 ) -> tuple[dict[str, object], dict[str, str]]:
     launch = json.loads(formal_authority.LAUNCH_CONTRACT_PATH.read_text())
     private_key = Ed25519PrivateKey.generate()
@@ -220,11 +223,18 @@ def _signed_qualification_authority(
         "trusted_authority_ed25519_public_key_base64": public_key_text,
         "amendment_policy_acknowledged": True,
     }
+    output_root_by_site = {
+        "server": str((tmp_path / "server-output").resolve()),
+        "laptop": str((tmp_path / "laptop-output").resolve()),
+    }
+    if duplicate_output_roots:
+        output_root_by_site["laptop"] = output_root_by_site["server"]
     declaration = {
-        "schema_version": "easyicu.figure2_atomic_declaration/2",
+        "schema_version": "easyicu.figure2_atomic_declaration/3",
         "signer_id": "external-custodian-1",
         "scope": "qualification12",
         **binding,
+        "output_root_by_site": output_root_by_site,
         "receipt_sha256": {
             receipt_id: hashlib.sha256(_canonical_json(payload)).hexdigest()
             for receipt_id, payload in receipt_payloads.items()
@@ -274,6 +284,16 @@ def test_formal_authority_accepts_only_exact_signed_coordinate(
 
     assert receipt["authorized"] is True
     assert receipt["call_coordinate"] == coordinate
+    declaration = envelope["atomic_declaration"]
+    assert isinstance(declaration, dict)
+    assert receipt["output_root"] == declaration["output_root_by_site"][
+        coordinate["execution_site"]
+    ]
+    assert len(signed_site_assignment(envelope, scope="qualification12")) == 12
+    assert signed_output_root(
+        envelope,
+        execution_site=coordinate["execution_site"],
+    ) == receipt["output_root"]
     with pytest.raises(DesignContractError) as exc_info:
         formal_authority.authorize_formal_provider_call(
             {
@@ -326,6 +346,24 @@ def test_formal_authority_rejects_signed_wrong_assignment_digest(
         )
 
     assert exc_info.value.reason_code == "FORMAL_AUTHORITY_SITE_ASSIGNMENT_INVALID"
+
+
+def test_formal_authority_rejects_invalid_signed_output_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope, coordinate = _signed_qualification_authority(
+        tmp_path,
+        monkeypatch,
+        duplicate_output_roots=True,
+    )
+
+    with pytest.raises(DesignContractError) as exc_info:
+        formal_authority.authorize_formal_provider_call(
+            {"receipts": envelope, "call_coordinate": coordinate}
+        )
+
+    assert exc_info.value.reason_code == "FORMAL_AUTHORITY_OUTPUT_ROOT_INVALID"
 
 
 def test_signed_authority_and_budget_gate_reach_only_offline_mock(
@@ -723,6 +761,25 @@ def test_normalizer_redacts_container_and_repository_paths(tmp_path: Path) -> No
     ]
 
 
+def test_normalizer_preserves_clinical_units_and_redacts_full_runtime_path(
+    tmp_path: Path,
+) -> None:
+    _write_bundle(tmp_path)
+    report = (
+        "Dose 5 mg /kg/day and rate 90 /min/m2. "
+        "Wrote /srv/fig2core/server/icu27_t09/easyicu_full/03_results.json."
+    )
+    (tmp_path / "06_report.md").write_text(report, encoding="utf-8")
+
+    result = _normalize(tmp_path)
+
+    normalized = result.files["06_report.md"].decode("utf-8")
+    assert "5 mg /kg/day" in normalized
+    assert "90 /min/m2" in normalized
+    assert normalized.endswith("Wrote <redacted-path>.")
+    assert "03_results.json" not in normalized
+
+
 @pytest.mark.parametrize(
     "site_marker",
     (
@@ -730,6 +787,8 @@ def test_normalizer_redacts_container_and_repository_paths(tmp_path: Path) -> No
         "Executed on the MacBook overnight.",
         "The run_host was retained.",
         "laptop_runtime_seconds was 20.",
+        "Both servers were idle.",
+        "Both laptops were idle.",
     ),
 )
 def test_normalizer_rejects_registered_site_and_host_markers(

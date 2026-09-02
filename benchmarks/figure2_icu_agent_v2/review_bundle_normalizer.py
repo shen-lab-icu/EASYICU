@@ -45,7 +45,8 @@ _STATIC_REJECTED_MARKERS = (
     re.compile(r"\bI\d{2}_[A-Z][A-Z0-9_]+\b"),
 )
 _PATH_MARKER = re.compile(
-    r"(?<![:/\w])/(?:[^/\s\]\[(){}<>'\"]+/)+[^/\s\]\[(){}<>'\"]+"
+    r"(?<![:\w])/(?:Users|home|private|var|tmp|mnt|opt|app|workspace|"
+    r"workspaces|srv|data|Volumes)/[^\s\]\[(){}<>'\"]+"
     r"|\b[A-Za-z]:\\(?:[^\\\s\]\[(){}<>'\"]+\\)+[^\\\s\]\[(){}<>'\"]+"
     r"|\b(?:src/easyicu|benchmarks/figure2_icu_agent_v2)/[^\s\]\[(){}<>'\"]+"
 )
@@ -236,10 +237,14 @@ def _reject_forbidden_markers(
             "REVIEW_BUNDLE_RESOURCE_FINGERPRINT",
             f"{file_name}:{location}",
         )
-    runtime_markers = ("server", "laptop", *blinding_context.host_markers)
-    for marker in runtime_markers:
+    runtime_markers = (
+        ("server", r"servers?"),
+        ("laptop", r"laptops?"),
+        *((marker, re.escape(marker)) for marker in blinding_context.host_markers),
+    )
+    for marker, marker_pattern in runtime_markers:
         if re.search(
-            rf"(?<![A-Za-z0-9]){re.escape(marker)}(?![A-Za-z0-9])",
+            rf"(?<![A-Za-z0-9]){marker_pattern}(?![A-Za-z0-9])",
             text,
             re.IGNORECASE,
         ):
@@ -258,17 +263,6 @@ def _redact_text(
 ) -> tuple[str, list[dict[str, str]]]:
     output = text
     findings: list[dict[str, str]] = []
-    for rule, pattern, replacement in _REDACTIONS:
-        output, count = pattern.subn(replacement, output)
-        if count:
-            findings.append(
-                {
-                    "file": file_name,
-                    "location": location,
-                    "rule": rule,
-                    "replacement_count": str(count),
-                }
-            )
     output, path_count = _PATH_MARKER.subn(_redact_path, output)
     if path_count:
         findings.append(
@@ -293,6 +287,17 @@ def _redact_text(
                     "location": location,
                     "rule": "registered_output_root",
                     "replacement_count": str(exact_count),
+                }
+            )
+    for rule, pattern, replacement in _REDACTIONS:
+        output, count = pattern.subn(replacement, output)
+        if count:
+            findings.append(
+                {
+                    "file": file_name,
+                    "location": location,
+                    "rule": rule,
+                    "replacement_count": str(count),
                 }
             )
     _reject_forbidden_markers(
