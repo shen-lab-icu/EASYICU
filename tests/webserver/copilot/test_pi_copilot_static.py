@@ -76,12 +76,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
     assert "js/screens-guided-pi-events.js?v=20260901-composer-plus1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20260829-data-scope1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20260902-data-history1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260831-simple-decision4" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260901-report-resume1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260901-plan-retries2" in index
-    assert "js/screens-guided-pi.js?v=20260901-composer-plus1" in index
+    assert "js/screens-guided-pi.js?v=20260902-data-history1" in index
     assert "js/screens-guided.js?v=20260901-session-deeplink1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -674,6 +674,54 @@ def test_pending_data_source_status_is_hidden_until_selection_starts() -> None:
         [node, "--eval", script], check=True, capture_output=True, text=True
     )
     assert completed.stdout.strip() == "ok"
+
+
+def test_confirmed_data_scope_replays_its_original_choices_on_the_source_turn() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-data-consent.js")
+    shell = _read("js/screens-guided-pi.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const ctx = {{
+        tr: (en) => en,
+        esc: value => String(value),
+        icon: () => '',
+      }};
+      const session = {{data_source_authorization: {{
+        status: 'confirmed',
+        confirmation_mode: 'reuse_project_source',
+        extraction_scope: 'study_required',
+        source: {{label: 'MIMIC-IV', reference_release: '3.1'}},
+      }}}};
+      const history = window.EU_GUIDED_PI_DATA_CONSENT.renderPast(session, ctx);
+      console.log(JSON.stringify({{
+        matches: window.EU_GUIDED_PI_DATA_CONSENT.matchesSourceSelection(
+          session, 'MIMIC-IV v3.1'
+        ),
+        rejectsLaterMessage: window.EU_GUIDED_PI_DATA_CONSENT.matchesSourceSelection(
+          session, '查看科学审阅'
+        ),
+        history,
+      }}));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["matches"] is True
+    assert payload["rejectsLaterMessage"] is False
+    assert "Options provided at the time" in payload["history"]
+    assert "Prepare only study-required data (recommended)" in payload["history"]
+    assert "Extract all supported data" in payload["history"]
+    assert "Reuse the previous complete package" in payload["history"]
+    assert "Selected" in payload["history"]
+    assert "data-gpi-data-source-action" not in payload["history"]
+    assert "historicalDataConsent" in shell
+    assert "DATA_CONSENT.renderPast" in shell
 
 
 def test_local_source_picker_activates_the_sessions_bound_study_context() -> None:

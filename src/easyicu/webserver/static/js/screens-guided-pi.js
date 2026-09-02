@@ -578,6 +578,10 @@
     }
     const cls = row.role === 'user' ? 'user' : 'assistant';
     const messageResourcesHtml = RESOURCE_OWNER.renderForMessage(row, 8);
+    const historicalDataConsentHtml = options && options.historicalDataConsent
+      && DATA_CONSENT && typeof DATA_CONSENT.renderPast === 'function'
+      ? DATA_CONSENT.renderPast(state.session, { tr, esc, icon: iconHtml })
+      : '';
     const publicRow = row.role === 'assistant' ? { ...row, text: publicAssistantText(row.text) } : row;
     const nextOwner = window.EU_GUIDED_PI_NEXT_ACTIONS;
     // Project every assistant turn, not only the newest one. Projecting only
@@ -614,6 +618,7 @@
       <div class="gpi-message-body">
         ${contentHtml}
         ${messageResourcesHtml}
+        ${historicalDataConsentHtml}
         ${nextStepHtml}
         ${messageActions.actionsHtml}
       </div>
@@ -675,9 +680,14 @@
     const latestAssistant = timeline.slice().reverse().find(row => ['assistant', 'activity'].includes(row.role));
     let precedingUserText = '';
     let precedingUserEntryId = '';
+    let historicalDataConsentProjected = false;
     const messages = timeline.map(row => {
       const displayRow = state.regenerating && REGENERATION
         ? REGENERATION.project(row, state.regeneration) : row;
+      const historicalDataConsent = !historicalDataConsentProjected
+        && row.role === 'assistant'
+        && DATA_CONSENT && typeof DATA_CONSENT.matchesSourceSelection === 'function'
+        && DATA_CONSENT.matchesSourceSelection(state.session, precedingUserText);
       const html = messageHtml(displayRow, {
         interactive: row === latestAssistant && !interactionLocked && !stale,
         allowEdit: true,
@@ -685,7 +695,9 @@
         canRetry: row.role === 'assistant' && !interactionLocked && !stale,
         retryText: row.role === 'assistant' ? precedingUserText : '',
         retryUserEntryId: row.role === 'assistant' ? precedingUserEntryId : '',
+        historicalDataConsent,
       });
+      if (historicalDataConsent) historicalDataConsentProjected = true;
       if (row.role === 'user') {
         precedingUserText = String(row.text || '');
         precedingUserEntryId = String(row.entryId || '');
