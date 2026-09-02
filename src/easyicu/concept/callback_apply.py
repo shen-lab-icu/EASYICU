@@ -497,6 +497,140 @@ def _apply_callback(
     if expr == "identity_callback":
         return frame
 
+    if expr == "mimiciii_explicit_ventilation_interval":
+        # MIMIC-III MetaVision records delivered invasive/non-invasive
+        # ventilation as explicit procedure intervals (ITEMID 225792/225794).
+        # Cancelled orders and zero-length rows do not establish exposure.
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else source.sub_var
+            if source.sub_var and source.sub_var in frame.columns
+            else None
+        )
+        if value_column is None:
+            raise KeyError(
+                "mimiciii_explicit_ventilation_interval requires an ITEMID value column"
+            )
+
+        itemids = pd.to_numeric(frame[value_column], errors="coerce")
+        valid = itemids.isin({225792, 225794})
+        cancel_var = str(source.params.get("cancel_var", "cancelreason"))
+        if cancel_var in frame.columns:
+            cancelled = (
+                pd.to_numeric(frame[cancel_var], errors="coerce")
+                .fillna(0)
+                .ne(0)
+            )
+            valid &= ~cancelled
+        if "dur_var" in frame.columns:
+            valid &= pd.to_numeric(
+                frame["dur_var"], errors="coerce"
+            ).gt(0)
+
+        out = frame.loc[valid].copy()
+        out[value_column] = pd.to_numeric(
+            out[value_column], errors="coerce"
+        ).map({225792: "invasive", 225794: "noninvasive"})
+        if "dur_var" in out.columns:
+            from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+            set_dur_var_unit(out, UNIT_MINUTES)
+        return out
+
+    if expr == "eicu_confirmed_invasive_airway_interval":
+        # eICU ventendoffset is commonly the zero sentinel, so it cannot be
+        # treated as extubation.  An explicit invasive airway nevertheless
+        # confirms IMV from the recorded start through the status timestamp.
+        # Starts before ICU admission are left-censored at hour zero; a zero
+        # start is valid ICU-entry support according to the source data
+        # dictionary and must not be discarded as a false-y sentinel.
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else source.sub_var
+            if source.sub_var and source.sub_var in frame.columns
+            else None
+        )
+        if value_column is None:
+            raise KeyError(
+                "eicu_confirmed_invasive_airway_interval requires an airway value column"
+            )
+        start_column = source.index_var or "ventstartoffset"
+        if start_column not in frame.columns or "dur_var" not in frame.columns:
+            raise KeyError(
+                "eicu_confirmed_invasive_airway_interval requires vent start and duration"
+            )
+
+        start = pd.to_numeric(frame[start_column], errors="coerce")
+        duration = pd.to_numeric(frame["dur_var"], errors="coerce")
+        confirmed_end = start + duration
+
+        id_column = next(
+            (
+                candidate
+                for candidate in ("patientunitstayid", "stay_id")
+                if candidate in frame.columns
+            ),
+            None,
+        )
+        if id_column and data_source is not None:
+            try:
+                patient = data_source.load_table(
+                    "patient",
+                    columns=[id_column, "unitdischargeoffset"],
+                    verbose=False,
+                )
+                patient_frame = (
+                    patient.data if hasattr(patient, "data") else patient
+                )
+                discharge = (
+                    patient_frame[[id_column, "unitdischargeoffset"]]
+                    .drop_duplicates(subset=[id_column], keep="last")
+                    .set_index(id_column)["unitdischargeoffset"]
+                )
+                discharge_for_row = pd.to_numeric(
+                    frame[id_column].map(discharge), errors="coerce"
+                )
+                confirmed_end = confirmed_end.where(
+                    discharge_for_row.isna(),
+                    confirmed_end.clip(upper=discharge_for_row),
+                )
+            except Exception:
+                # Custom/demo data sources may not expose patient discharge.
+                # The respiratory status timestamp remains a valid confirmed
+                # right edge; the generic expansion cap still applies.
+                pass
+
+        effective_start = start.clip(lower=0)
+        effective_duration = confirmed_end - effective_start
+        valid = start.notna() & effective_duration.gt(0)
+        out = frame.loc[valid].copy()
+        out[start_column] = effective_start.loc[valid]
+        out["dur_var"] = effective_duration.loc[valid]
+        out[value_column] = "invasive"
+
+        # respiratoryCare is a history table and repeats the same start in
+        # successive status records.  Retain the longest confirmed interval
+        # for each ICU stay/start rather than expanding every historical copy.
+        if id_column and id_column in out.columns:
+            out = (
+                out.sort_values("dur_var", ascending=False, kind="mergesort")
+                .drop_duplicates(
+                    subset=[id_column, start_column, value_column],
+                    keep="first",
+                )
+                .sort_index()
+            )
+        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+        set_dur_var_unit(out, UNIT_MINUTES)
+        return out
+
     if expr in {
         "eicu_tidal_volume_mixed_scale",
         "eicu_tidal_volume_drager_l_to_ml",
