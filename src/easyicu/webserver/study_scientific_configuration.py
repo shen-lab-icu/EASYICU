@@ -75,6 +75,13 @@ class ScientificConfiguration:
         value = _clean(execution.get("outcome") or self.study.get("outcome"), 160)
         return None if value.casefold() in _NOT_APPLICABLE_OUTCOMES else value or None
 
+    def executable_target_outcome(self) -> Optional[str]:
+        """Return only the typed source concept, never its reader-facing label."""
+
+        execution = _mapping(self.study.get("execution_concepts"))
+        value = _clean(execution.get("outcome"), 160)
+        return None if value.casefold() in _NOT_APPLICABLE_OUTCOMES else value or None
+
     def primary_exposure(self) -> Optional[str]:
         execution = _mapping(self.study.get("execution_concepts"))
         return (
@@ -84,6 +91,12 @@ class ScientificConfiguration:
             )
             or None
         )
+
+    def executable_primary_exposure(self) -> Optional[str]:
+        """Return only the typed source concept, never its reader-facing label."""
+
+        execution = _mapping(self.study.get("execution_concepts"))
+        return _clean(execution.get("primary_exposure"), 160) or None
 
     def primary_exposure_aggregation(self) -> Optional[str]:
         execution = _mapping(self.study.get("execution_concepts"))

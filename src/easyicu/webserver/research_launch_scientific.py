@@ -38,11 +38,11 @@ def _clean_text(value: Any, limit: int = 1_200) -> str:
 
 
 def _target_outcome(study: Mapping[str, Any]) -> Optional[str]:
-    return ScientificConfiguration.inspect(study).target_outcome()
+    return ScientificConfiguration.inspect(study).executable_target_outcome()
 
 
 def _primary_exposure(study: Mapping[str, Any]) -> Optional[str]:
-    return ScientificConfiguration.inspect(study).primary_exposure()
+    return ScientificConfiguration.inspect(study).executable_primary_exposure()
 
 
 def _primary_exposure_aggregation(study: Mapping[str, Any]) -> Optional[str]:
