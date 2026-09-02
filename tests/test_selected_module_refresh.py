@@ -69,6 +69,18 @@ def test_selected_module_refresh_rejects_duplicate_data_path_overrides() -> None
         refresher._parse_data_path_overrides(["miiv=/tmp/one", "miiv=/tmp/two"])
 
 
+def test_selected_database_refresh_defaults_to_all_and_preserves_canonical_order() -> None:
+    refresher = _load_refresher()
+
+    assert refresher._validate_databases([]) == refresher.DATABASES
+    assert refresher._validate_databases(["mimic", "eicu", "mimic"]) == (
+        "eicu",
+        "mimic",
+    )
+    with pytest.raises(refresher.ModuleRefreshError, match="Unknown databases"):
+        refresher._validate_databases(["unknown"])
+
+
 def test_new_candidate_never_reuses_source_module_just_because_schema_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

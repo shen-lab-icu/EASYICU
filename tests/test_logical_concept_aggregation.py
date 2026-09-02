@@ -13,6 +13,7 @@ from easyicu.concept.parser import default_aggregator_for_dtype
 from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, ConceptSource
 from easyicu.resources import load_data_sources
 from easyicu.table import ICUTable
+from easyicu.table.duration import UNIT_HOURS, get_dur_var_unit
 from easyicu.io.ts_utils import change_interval
 from easyicu.utils import compat
 
@@ -183,6 +184,106 @@ def test_miiv_rrt_keeps_charted_points_and_expands_procedure_windows() -> None:
 
     assert result["charttime"].tolist() == [2.0, 4.0, 5.0, 6.0]
     assert result["rrt"].tolist() == [True, True, True, True]
+
+
+def test_true_window_concept_restores_duration_unit_before_alignment() -> None:
+    """A fct win_tbl must keep its duration contract on the no-resample path."""
+
+    class DataSource:
+        config = load_data_sources().get("mimic")
+        base_path = None
+
+        def __init__(self) -> None:
+            intime = pd.Timestamp("2180-01-01 00:00:00")
+            self.frames = {
+                "procedureevents_mv": pd.DataFrame(
+                    {
+                        "icustay_id": [1, 1],
+                        "starttime": [
+                            intime + pd.Timedelta(hours=2),
+                            intime + pd.Timedelta(hours=5),
+                        ],
+                        "endtime": [
+                            intime + pd.Timedelta(hours=4),
+                            intime + pd.Timedelta(hours=6),
+                        ],
+                        "itemid": [225792, 225794],
+                        "cancelreason": [0, 0],
+                    }
+                ),
+                "icustays": pd.DataFrame(
+                    {
+                        "icustay_id": [1],
+                        "intime": [intime],
+                        "outtime": [intime + pd.Timedelta(days=1)],
+                        "los": [1.0],
+                    }
+                ),
+            }
+
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            del columns, verbose
+            frame = self.frames[table_name].copy()
+            for filter_spec in filters or []:
+                frame = filter_spec.apply(frame)
+            defaults = self.config.get_table(table_name).defaults
+            return ICUTable(
+                data=frame,
+                id_columns=[defaults.id_var],
+                index_column=defaults.index_var,
+                value_column=(
+                    defaults.val_var if defaults.val_var in frame.columns else None
+                ),
+                time_columns=[
+                    column
+                    for column in defaults.time_vars or []
+                    if column in frame.columns
+                ],
+            )
+
+    dictionary = ConceptDictionary(
+        {
+            "mech_vent": ConceptDefinition(
+                name="mech_vent",
+                class_name="fct_cncpt",
+                target="win_tbl",
+                levels=["invasive", "noninvasive"],
+                sources={
+                    "mimic": [
+                        ConceptSource.from_mapping(
+                            {
+                                "table": "procedureevents_mv",
+                                "sub_var": "itemid",
+                                "value_var": "itemid",
+                                "ids": [225792, 225794],
+                                "dur_var": "endtime",
+                                "extra_vars": ["cancelreason"],
+                                "cancel_var": "cancelreason",
+                                "callback": "mimiciii_explicit_ventilation_interval",
+                            }
+                        )
+                    ]
+                },
+            )
+        }
+    )
+
+    loaded = ConceptResolver(dictionary).load_concepts(
+        ["mech_vent"],
+        DataSource(),
+        merge=False,
+        interval=pd.Timedelta(hours=1),
+        r_compatible=False,
+        verbose=False,
+        concept_workers=1,
+    )
+    result = loaded["mech_vent"]
+
+    assert result.index_column in result.data.columns
+    assert result.data[result.index_column].tolist() == [2.0, 5.0]
+    assert result.data["dur_var"].tolist() == [2.0, 1.0]
+    assert result.data["mech_vent"].tolist() == ["invasive", "noninvasive"]
+    assert get_dur_var_unit(result.data) == UNIT_HOURS
 
 
 def test_eicu_rrt_coalesces_treatment_and_intake_output_offsets() -> None:

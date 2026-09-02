@@ -497,6 +497,82 @@ def _apply_callback(
     if expr == "identity_callback":
         return frame
 
+    if expr == "mimiciii_explicit_ventilation_interval":
+        # MIMIC-III MetaVision records invasive/non-invasive ventilation as
+        # explicit procedure intervals (ITEMID 225792/225794).  Cancelled
+        # procedures are orders, not delivered ventilation, and zero-length
+        # rows cannot establish exposure over any analysis window.
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else source.sub_var
+            if source.sub_var and source.sub_var in frame.columns
+            else None
+        )
+        if value_column is None:
+            raise KeyError(
+                "mimiciii_explicit_ventilation_interval requires an ITEMID value column"
+            )
+
+        itemids = pd.to_numeric(frame[value_column], errors="coerce")
+        valid = itemids.isin({225792, 225794})
+        cancel_var = str(source.params.get("cancel_var", "cancelreason"))
+        if cancel_var in frame.columns:
+            cancelled = pd.to_numeric(frame[cancel_var], errors="coerce").fillna(0).ne(0)
+            valid &= ~cancelled
+        if "dur_var" in frame.columns:
+            duration = pd.to_numeric(frame["dur_var"], errors="coerce")
+            valid &= duration.gt(0)
+
+        out = frame.loc[valid].copy()
+        mapped = pd.to_numeric(out[value_column], errors="coerce").map(
+            {225792: "invasive", 225794: "noninvasive"}
+        )
+        out[value_column] = mapped
+        if "dur_var" in out.columns:
+            from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+            set_dur_var_unit(out, UNIT_MINUTES)
+        return out
+
+    if expr == "eicu_confirmed_invasive_airway_interval":
+        # eICU's ventendoffset uses 0 as a sentinel and therefore cannot be
+        # interpreted as extubation.  A respiratoryCare row with an explicit
+        # invasive airway does, however, confirm invasive support from the
+        # non-zero ventstartoffset through that row's status timestamp.  This
+        # is deliberately a conservative confirmed span, not a reconstructed
+        # extubation interval.
+        value_column = (
+            concept_name
+            if concept_name in frame.columns
+            else source.value_var
+            if source.value_var and source.value_var in frame.columns
+            else source.sub_var
+            if source.sub_var and source.sub_var in frame.columns
+            else None
+        )
+        if value_column is None:
+            raise KeyError(
+                "eicu_confirmed_invasive_airway_interval requires an airway value column"
+            )
+        start_column = source.index_var or "ventstartoffset"
+        if start_column not in frame.columns or "dur_var" not in frame.columns:
+            raise KeyError(
+                "eicu_confirmed_invasive_airway_interval requires vent start and duration"
+            )
+
+        start = pd.to_numeric(frame[start_column], errors="coerce")
+        duration = pd.to_numeric(frame["dur_var"], errors="coerce")
+        valid = start.notna() & start.ne(0) & duration.gt(0)
+        out = frame.loc[valid].copy()
+        out[value_column] = "invasive"
+        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+        set_dur_var_unit(out, UNIT_MINUTES)
+        return out
+
     if expr in {
         "eicu_tidal_volume_mixed_scale",
         "eicu_tidal_volume_drager_l_to_ml",

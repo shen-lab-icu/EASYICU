@@ -731,6 +731,33 @@ def test_mimic_legacy_vital_channels_keep_semantic_boundaries() -> None:
         assert {226860, 226861, 226862, 226863, 226865}.isdisjoint(o2sat_ids)
 
 
+def test_mech_vent_has_explicit_mimiciii_and_conservative_eicu_intervals() -> None:
+    concept = _load_json("concept-dict.json")
+    sources = concept["mech_vent"]["sources"]
+
+    for dataset in ("mimic", "mimic_demo"):
+        source = sources[dataset][0]
+        assert source["table"] == "procedureevents_mv"
+        assert set(source["ids"]) == {225792, 225794}
+        assert source["dur_var"] == "endtime"
+        assert source["cancel_var"] == "cancelreason"
+        assert source["callback"] == "mimiciii_explicit_ventilation_interval"
+
+    eicu = sources["eicu"][0]
+    assert eicu["table"] == "respiratorycare"
+    assert eicu["index_var"] == "ventstartoffset"
+    assert eicu["dur_var"] == "respcarestatusoffset"
+    assert eicu["dur_is_end"] is True
+    assert set(eicu["ids"]) == {
+        "Oral ETT",
+        "Nasal ETT",
+        "Tracheostomy",
+        "Double-Lumen Tube",
+        "Cricothyrotomy",
+    }
+    assert eicu["callback"] == "eicu_confirmed_invasive_airway_interval"
+
+
 def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
     concept = _load_json("concept-dict.json")
     sofa2 = _load_json("sofa2-dict.json")
