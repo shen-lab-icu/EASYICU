@@ -3,6 +3,8 @@
 (function () {
   'use strict';
 
+  const { esc, escAttr: attr } = window.EU_HTML;
+
   function createState(overrides) {
     return Object.assign({
       provider: 'openai',
@@ -41,15 +43,6 @@
 
   function translate(ctx, en, zh) {
     return ctx.t ? ctx.t(en, zh) : en;
-  }
-
-  function escapeHtml(ctx, value) {
-    return ctx.esc ? ctx.esc(value) : String(value == null ? '' : value)
-      .replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-  }
-
-  function attr(ctx, value) {
-    return ctx.attr ? ctx.attr(value) : escapeHtml(ctx, value);
   }
 
   function icon(ctx, name, size) {
@@ -207,7 +200,7 @@
         </div>
       </div>
       <div class="gdx-actions">
-        ${providers.map(([p, label]) => `<button type="button" class="btn sm ${current.provider === p ? 'primary' : ''}" data-gi-provider="${p}">${escapeHtml(ctx, label)}</button>`).join('')}
+        ${providers.map(([p, label]) => `<button type="button" class="btn sm ${current.provider === p ? 'primary' : ''}" data-gi-provider="${p}">${esc(label)}</button>`).join('')}
         <button type="button" class="btn sm" data-gi-provider-refresh>${icon(ctx, 'refresh', 12)} ${translate(ctx, 'Check API status', '检查 API 状态')}</button>
         ${canEnableSaved ? `<button type="button" class="btn sm primary" data-gi-enable-ai>${translate(ctx, 'Enable configured API', '启用已配置 API')}</button>` : ''}
         <button type="button" class="btn sm" data-gi-provider-config-toggle>${icon(ctx, 'gear', 12)} ${showConfig ? translate(ctx, 'Hide setup', '收起配置') : translate(ctx, 'Configure API here', '在这里配置 API')}</button>
@@ -220,7 +213,7 @@
           </div>
           <label class="gdi-field wide">
             <span>${translate(ctx, 'API key', 'API key')}</span>
-            <input type="password" autocomplete="off" data-gi-provider-key placeholder="${attr(ctx, translate(ctx, 'Paste provider key; it will not be echoed back', '粘贴 provider key；不会回显'))}">
+            <input type="password" autocomplete="off" data-gi-provider-key placeholder="${attr(translate(ctx, 'Paste provider key; it will not be echoed back', '粘贴 provider key；不会回显'))}">
           </label>
           <div class="gdi-field-grid">
             <label class="gdi-field">
@@ -241,7 +234,7 @@
             <span class="muted">${translate(ctx, 'Use this for local OpenAI-compatible endpoints, OpenAI, OpenRouter, DeepSeek, or Custom/local.', '可用于本地 OpenAI-compatible 端点、OpenAI、OpenRouter、DeepSeek 或 Custom/local。')}</span>
           </div>
           ${current.saved ? `<div class="gdx-status ok"><span>${icon(ctx, 'check', 12)}</span><div><strong>${translate(ctx, 'Provider config saved', 'Provider 配置已保存')}</strong><small>${translate(ctx, 'Secrets were not returned to the browser response.', '响应没有返回密钥。')}</small></div></div>` : ''}
-          ${current.saveError ? `<div class="gdx-status bad"><span>${icon(ctx, 'x', 12)}</span><div><strong>${translate(ctx, 'Could not save provider config', 'Provider 配置保存失败')}</strong><small>${escapeHtml(ctx, current.saveError)}</small></div></div>` : ''}
+          ${current.saveError ? `<div class="gdx-status bad"><span>${icon(ctx, 'x', 12)}</span><div><strong>${translate(ctx, 'Could not save provider config', 'Provider 配置保存失败')}</strong><small>${esc(current.saveError)}</small></div></div>` : ''}
         </div>` : ''}
       <div class="gdi-feature-list">
         <div class="gdi-feature-row">
@@ -254,10 +247,10 @@
         </div>
         <div class="gdi-feature-row">
           <div><strong>${translate(ctx, 'AI synthesis / full Agent provider', 'AI 综合 / full Agent provider')}</strong><small>${ready ? translate(ctx, 'Provider readiness passed. A later Agent run still needs per-run confirmation and evidence checks.', 'provider 已就绪。后续 Agent run 仍需要逐次确认和证据核验。') : translate(ctx, 'Blocked: configure AI opt-in, API key, model, and endpoint before any provider call.', '已阻断：需要配置 AI opt-in、API key、模型和端点后才允许 provider 调用。')}</small></div>
-          <span class="pill ${ready ? 'ok' : 'warn'}">${ready ? translate(ctx, 'ready', '就绪') : escapeHtml(ctx, blocked)}</span>
+          <span class="pill ${ready ? 'ok' : 'warn'}">${ready ? translate(ctx, 'ready', '就绪') : esc(blocked)}</span>
         </div>
         <div class="gdi-feature-row">
-          <div><strong>${translate(ctx, 'Provider status', 'Provider 状态')}</strong><small>${escapeHtml(ctx, current.provider || st.provider || 'openai')} · ${translate(ctx, 'sanitized flags only', '只显示脱敏标记')}</small></div>
+          <div><strong>${translate(ctx, 'Provider status', 'Provider 状态')}</strong><small>${esc(current.provider || st.provider || 'openai')} · ${translate(ctx, 'sanitized flags only', '只显示脱敏标记')}</small></div>
           <span>${current.loading ? translate(ctx, 'checking...', '检查中...') : ready ? translate(ctx, 'ready', '就绪') : translate(ctx, 'blocked', '受阻')}</span>
         </div>
         <div class="gdi-feature-row">
@@ -271,13 +264,13 @@
         <div class="gdi-feature-row">
           <div><strong>${translate(ctx, 'Env sources', '环境变量来源')}</strong><small>${translate(ctx, 'Sanitized provider status from Agent provider readiness.', '来自 Agent provider readiness 的脱敏状态。')}</small></div>
           <span class="gdi-tags">
-            <code>${escapeHtml(ctx, st.credential_source || (st.credential_env_candidates || [])[0] || 'credential env')}</code>
-            <code>${escapeHtml(ctx, st.model_source || (st.model_env_candidates || [])[0] || 'model env')}</code>
-            <code>${escapeHtml(ctx, st.base_url_source || (st.base_url_env_candidates || [])[0] || 'base_url env')}</code>
-            <code>${escapeHtml(ctx, envStatus)}</code>
+            <code>${esc(st.credential_source || (st.credential_env_candidates || [])[0] || 'credential env')}</code>
+            <code>${esc(st.model_source || (st.model_env_candidates || [])[0] || 'model env')}</code>
+            <code>${esc(st.base_url_source || (st.base_url_env_candidates || [])[0] || 'base_url env')}</code>
+            <code>${esc(envStatus)}</code>
           </span>
         </div>
-        ${current.error ? `<div class="gdi-feature-row"><div><strong>${translate(ctx, 'Provider status unavailable', 'provider 状态不可用')}</strong><small>${escapeHtml(ctx, current.error)}</small></div><span class="pill warn">error</span></div>` : ''}
+        ${current.error ? `<div class="gdi-feature-row"><div><strong>${translate(ctx, 'Provider status unavailable', 'provider 状态不可用')}</strong><small>${esc(current.error)}</small></div><span class="pill warn">error</span></div>` : ''}
       </div>
       `;
   }
@@ -317,7 +310,7 @@
           </div>
         </div>
         <div class="gdx-actions">
-          ${providers.map(([p, label]) => `<button type="button" class="btn sm ${current.provider === p ? 'primary' : ''}" data-gi-provider="${p}">${escapeHtml(ctx, label)}</button>`).join('')}
+          ${providers.map(([p, label]) => `<button type="button" class="btn sm ${current.provider === p ? 'primary' : ''}" data-gi-provider="${p}">${esc(label)}</button>`).join('')}
           <button type="button" class="btn sm" data-gi-provider-refresh>${icon(ctx, 'refresh', 12)} ${translate(ctx, 'Check status', '检查状态')}</button>
           ${canEnableSaved ? `<button type="button" class="btn sm primary" data-gi-enable-ai>${translate(ctx, 'Enable configured API', '启用已配置 API')}</button>` : ''}
           <button type="button" class="btn sm" data-gi-provider-config-toggle>${icon(ctx, 'gear', 12)} ${showConfig ? translate(ctx, 'Hide setup', '收起配置') : translate(ctx, 'Show setup', '展开配置')}</button>
@@ -326,7 +319,7 @@
           <div class="gdi-feature-list">
             <label class="gdi-field wide">
               <span>${translate(ctx, 'API key', 'API key')}</span>
-              <input type="password" autocomplete="off" data-gi-provider-key placeholder="${attr(ctx, translate(ctx, 'Paste provider key; it will be saved only on this machine', '粘贴 provider key；只保存到本机'))}">
+              <input type="password" autocomplete="off" data-gi-provider-key placeholder="${attr(translate(ctx, 'Paste provider key; it will be saved only on this machine', '粘贴 provider key；只保存到本机'))}">
             </label>
             <div class="gdi-field-grid">
               <label class="gdi-field">
@@ -347,7 +340,7 @@
               <span class="muted">${translate(ctx, 'Secrets are written to a local private env file and are never echoed back.', '密钥写入本机私有 env 文件，不会回显。')}</span>
             </div>
             ${current.saved ? `<div class="gdx-status ok"><span>${icon(ctx, 'check', 12)}</span><div><strong>${translate(ctx, 'API config saved', 'API 配置已保存')}</strong><small>${translate(ctx, 'You can continue to source selection.', '现在可以继续选择来源。')}</small></div></div>` : ''}
-            ${current.saveError ? `<div class="gdx-status bad"><span>${icon(ctx, 'x', 12)}</span><div><strong>${translate(ctx, 'Could not save API config', 'API 配置保存失败')}</strong><small>${escapeHtml(ctx, current.saveError)}</small></div></div>` : ''}
+            ${current.saveError ? `<div class="gdx-status bad"><span>${icon(ctx, 'x', 12)}</span><div><strong>${translate(ctx, 'Could not save API config', 'API 配置保存失败')}</strong><small>${esc(current.saveError)}</small></div></div>` : ''}
           </div>` : ''}
         <div class="gdx-actions">
           <button type="button" class="btn primary" data-gi-api-continue>${continueLabel}</button>
@@ -363,7 +356,7 @@
     const missing = Array.isArray(st.missing) ? st.missing : [];
     const detail = ready
       ? translate(ctx, 'API-ready; provider calls still require explicit action opt-in.', 'API 已就绪；provider 调用仍需要逐步显式确认。')
-      : `${translate(ctx, 'Local-only mode is active. Configure API before AI synthesis or full Agent provider calls.', '当前为本地模式。AI 综合或 full Agent provider 调用前再配置 API。')}${missing.length ? ' · ' + escapeHtml(ctx, missing.join(', ')) : ''}`;
+      : `${translate(ctx, 'Local-only mode is active. Configure API before AI synthesis or full Agent provider calls.', '当前为本地模式。AI 综合或 full Agent provider 调用前再配置 API。')}${missing.length ? ' · ' + esc(missing.join(', ')) : ''}`;
     return `
       <div class="gdx-status ${ready ? 'ok' : 'warn'}">
         <span>${icon(ctx, ready ? 'check' : 'shield', 12)}</span>

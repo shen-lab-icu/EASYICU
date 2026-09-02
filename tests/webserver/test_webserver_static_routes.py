@@ -1368,7 +1368,10 @@ def test_native_extraction_custom_modules_default_empty_with_bulk_actions() -> N
     assert "custom.querySelector('[data-ex-run=\"custom\"]')" in embedded_js
     assert 'data-ex-run="custom"' in embedded_js
     assert 'data-ex-run="recommended"' not in embedded_js
-    assert "function escapeHtml(value)" in embedded_js
+    assert "const { esc } = window.EU_HTML;" in embedded_js, (
+        "the embedded adapter must destructure the shared escaping owner "
+        "instead of re-rolling a local escapeHtml()"
+    )
     assert "escHtml(" not in embedded_js
     assert "data-ex-selectall" in extraction_js
     assert "Select all" in extraction_js
