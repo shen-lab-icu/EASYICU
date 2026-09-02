@@ -71,13 +71,15 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
 
 def test_plan_first_copy_stays_in_the_guided_copilot_owner() -> None:
     confirmation = _read("js/screens-guided-pi-confirmation.js")
+    plan_actions = _read("js/screens-guided-pi-plan-actions.js")
     shell = _read("js/screens-guided-pi.js")
     regeneration = _read("js/screens-guided-pi-regeneration.js")
     child_job = _read("js/screens-guided-pi-childjob.js")
     css = _read("css/guided-pi.css")
 
     assert "计划与分析前数据检查已准备好" in confirmation
-    assert "生成候选研究计划" in shell
+    assert "生成候选研究计划" in plan_actions
+    assert "生成候选研究计划" not in shell
     # Legacy persisted action text remains replayable in the dedicated branch
     # classifier rather than inflating the main Copilot screen owner.
     assert "生成正式研究计划" in regeneration
@@ -89,7 +91,7 @@ def test_plan_first_copy_stays_in_the_guided_copilot_owner() -> None:
     assert ".gpi-confirmation-more" in css
     assert ".gpi-plan-conversation" in css
     assert ".gpi-plan-conversation-more" in css
-    assert "正在复用已有计划并准备分析数据" in child_job
+    assert "按计划准备或复用数据" in confirmation
     for non_owner in ("css/agent.css", "css/agent-plan.css", "css/guided.css"):
         assert ".gpi-confirmation-flow" not in _read(non_owner)
         assert ".gpi-confirmation-more" not in _read(non_owner)

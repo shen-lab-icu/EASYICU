@@ -79,6 +79,86 @@ def test_newer_nontransparent_failure_still_blocks_older_checkpoint(
     ) == ""
 
 
+def test_failed_preparation_keeps_unchanged_candidate_plan_authoritative() -> None:
+    digest = "a" * 64
+    candidate = {
+        "run_id": "run_candidate",
+        "run_type": "full",
+        "run_status": "human_review_pending",
+        "gate_reason": "human_plan_review_required",
+        "scientific_configuration_sha256": digest,
+        "pending_review_reason_codes": ["operator_plan_approval_required"],
+        "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+    }
+    failed_preparation = {
+        "run_id": "run_failed-preparation",
+        "run_type": "full",
+        "run_status": "failed",
+        "gate_reason": "research_pipeline_data_foundation_failed",
+        "scientific_configuration_sha256": digest,
+        "artifact_names": ["source_run_manifest.json", "evidence_ledger.json"],
+    }
+
+    assert (
+        run_authority.workflow_authoritative_run([failed_preparation, candidate])
+        is candidate
+    )
+
+
+def test_failed_preparation_does_not_restore_stale_candidate_plan() -> None:
+    failed_preparation = {
+        "run_id": "run_failed-preparation",
+        "run_type": "full",
+        "run_status": "failed",
+        "scientific_configuration_sha256": "b" * 64,
+        "artifact_names": ["source_run_manifest.json"],
+    }
+    stale_candidate = {
+        "run_id": "run_stale-candidate",
+        "run_type": "full",
+        "run_status": "human_review_pending",
+        "gate_reason": "human_plan_review_required",
+        "scientific_configuration_sha256": "a" * 64,
+        "pending_review_reason_codes": ["operator_plan_approval_required"],
+        "artifact_names": ["agent_plan.json"],
+    }
+
+    assert (
+        run_authority.workflow_authoritative_run(
+            [failed_preparation, stale_candidate]
+        )
+        is failed_preparation
+    )
+
+
+def test_consecutive_failed_preparations_keep_candidate_plan_authoritative() -> None:
+    digest = "a" * 64
+    failed_attempts = [
+        {
+            "run_id": f"run_failed-{index}",
+            "run_type": "full",
+            "run_status": "failed",
+            "scientific_configuration_sha256": digest,
+            "artifact_names": ["source_run_manifest.json"],
+        }
+        for index in range(2)
+    ]
+    candidate = {
+        "run_id": "run_candidate",
+        "run_type": "full",
+        "run_status": "human_review_pending",
+        "gate_reason": "human_plan_review_required",
+        "scientific_configuration_sha256": digest,
+        "pending_review_reason_codes": ["operator_plan_approval_required"],
+        "artifact_names": ["agent_plan.json"],
+    }
+
+    assert (
+        run_authority.workflow_authoritative_run([*failed_attempts, candidate])
+        is candidate
+    )
+
+
 def test_checkpoint_seeding_is_wider_than_the_plan_resume_offer() -> None:
     """These two sets differ on purpose; do not collapse them.
 
@@ -92,7 +172,8 @@ def test_checkpoint_seeding_is_wider_than_the_plan_resume_offer() -> None:
     """
 
     assert contracts.PLAN_RESUME_OFFER_GATE_REASONS == {
-        "research_pipeline_planner_efficiency_budget_exhausted"
+        "research_pipeline_planner_efficiency_budget_exhausted",
+        "research_pipeline_planner_provider_unavailable",
     }
     assert (
         contracts.PLAN_RESUME_OFFER_GATE_REASONS
@@ -102,4 +183,53 @@ def test_checkpoint_seeding_is_wider_than_the_plan_resume_offer() -> None:
         "research_pipeline_planner_efficiency_budget_exhausted",
         "research_pipeline_plan_contract_exhausted",
         "research_pipeline_progressive_compile_failed",
+        "research_pipeline_planner_provider_unavailable",
     }
+
+
+def test_legacy_planner_provider_http_projection_recovers_resume_reason(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "run-provider-http"
+    project_dir.mkdir()
+    (project_dir / "source_run_manifest.json").write_text(
+        """{
+  "analysis_started": false,
+  "failure_code": "research_pipeline_execution_failed",
+  "failure_type": "provider_http",
+  "schema_version": "easyicu.web-research-pipeline-projection/1",
+  "status": "failed"
+}""",
+        encoding="utf-8",
+    )
+
+    assert run_authority._normalized_planner_gate_reason(
+        {
+            "gate_reason": "research_pipeline_execution_failed",
+            "project_dir": str(project_dir),
+        }
+    ) == "research_pipeline_planner_provider_unavailable"
+
+
+def test_legacy_execution_failure_is_not_upgraded_after_analysis_started(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "run-provider-http"
+    project_dir.mkdir()
+    (project_dir / "source_run_manifest.json").write_text(
+        """{
+  "analysis_started": true,
+  "failure_code": "research_pipeline_execution_failed",
+  "failure_type": "provider_http",
+  "schema_version": "easyicu.web-research-pipeline-projection/1",
+  "status": "failed"
+}""",
+        encoding="utf-8",
+    )
+
+    assert run_authority._normalized_planner_gate_reason(
+        {
+            "gate_reason": "research_pipeline_execution_failed",
+            "project_dir": str(project_dir),
+        }
+    ) == "research_pipeline_execution_failed"

@@ -104,6 +104,86 @@ function completedStream(message) {
   return stream;
 }
 
+function messageText(message) {
+  if (typeof message?.content === "string") return message.content;
+  if (!Array.isArray(message?.content)) return "";
+  return message.content
+    .filter((item) => item?.type === "text")
+    .map((item) => String(item.text || ""))
+    .join("");
+}
+
+function latestUserPrompt(context) {
+  const messages = Array.isArray(context?.messages) ? context.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return messageText(messages[index]);
+  }
+  return "";
+}
+
+function mandatoryIdeaLiteratureSearch(context) {
+  const messages = Array.isArray(context?.messages) ? context.messages : [];
+  const result = messages.at(-1);
+  if (
+    result?.role !== "toolResult"
+    || result.toolName !== "easyicu_mine_ideas"
+    || result.isError === true
+  ) return null;
+  const receipt = result.details && typeof result.details === "object"
+    ? result.details
+    : {};
+  if (receipt.status !== "ok" || receipt.code !== "easyicu_idea_mined") return null;
+  const ownerDetails = receipt.details && typeof receipt.details === "object"
+    ? receipt.details
+    : {};
+  const mining = ownerDetails.idea_mining && typeof ownerDetails.idea_mining === "object"
+    ? ownerDetails.idea_mining
+    : {};
+  const runId = boundedLabel(mining.run_id);
+  const ideaId = boundedLabel(mining.selected_idea_id);
+  const prompt = latestUserPrompt(context);
+  const internalMarker = "\n\n[EASYICU_INTERNAL_RESPONSE_LANGUAGE_V1]\n";
+  const topic = boundedLabel(
+    prompt.includes(internalMarker)
+      ? prompt.slice(0, prompt.indexOf(internalMarker))
+      : prompt,
+  ) || boundedLabel(mining?.idea?.idea_title);
+  return runId && ideaId && topic
+    ? { topic, run_id: runId, idea_id: ideaId }
+    : null;
+}
+
+function toolCallStream(model, name, arguments_) {
+  const toolCall = {
+    type: "toolCall",
+    id: `call_easyicu_host_${Date.now().toString(36)}`,
+    name,
+    arguments: arguments_,
+  };
+  const message = {
+    role: "assistant",
+    content: [toolCall],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: ZERO_USAGE,
+    stopReason: "toolUse",
+    timestamp: Date.now(),
+  };
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: "start", partial: message });
+  stream.push({ type: "toolcall_start", contentIndex: 0, partial: message });
+  stream.push({
+    type: "toolcall_delta",
+    contentIndex: 0,
+    delta: JSON.stringify(arguments_),
+    partial: message,
+  });
+  stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: message });
+  stream.push({ type: "done", reason: "toolUse", message });
+  return stream;
+}
+
 function boundedLabel(value) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, 120);
 }
@@ -143,6 +223,10 @@ function dataSourceSelectionText(language, catalog) {
  * already owns the confirmed-source transition and data-preparation review.
  */
 export function hostPostToolFinalization(model, context, language) {
+  const literatureSearch = mandatoryIdeaLiteratureSearch(context);
+  if (literatureSearch) {
+    return toolCallStream(model, "easyicu_search_literature", literatureSearch);
+  }
   const update = latestStudyContextUpdate(context);
   if (initialQuestionSaveNeedsDataSourceSelection(update)) {
     return completedStream(finalizedMessage(

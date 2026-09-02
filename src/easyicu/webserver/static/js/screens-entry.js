@@ -63,12 +63,12 @@
       const inner = `
         <div class="home-inner" style="max-width:1180px;">
           <h1 class="home-h1">${t('Welcome to EasyICU', '欢迎使用 EasyICU')}</h1>
-          <p class="home-sub">${t('Start from what you already have: a paper or topic, a clear research question, or local ICU data. EasyICU keeps the study local and carries its context between modules.', '从你已有的内容开始：文章或主题、明确的研究问题，或本地 ICU 数据。EasyICU 全程在本地运行，并在模块之间延续同一研究上下文。')}</p>
+          <p class="home-sub">${t('Start in Copilot with one sentence, a paper URL, or a PDF. It mines candidate ideas, reviews literature, and carries a selected direction into governed research.', '从一句话、文章链接或 PDF 开始与 Copilot 对话；它会发掘候选想法、审阅文献，并把选中的方向带入受治理的研究流程。')}</p>
           <div class="home-split">
             <div class="home-col col-copilot">
-              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('I have a clear research question', '我有明确的研究问题')}</div><div class="col-sub">${t('Guided Copilot · describe it in one sentence', '研究引导 · 用一句话描述')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
+              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('Start with EasyICU Copilot', '从 EasyICU Copilot 开始')}</div><div class="col-sub">${t('one sentence, article URL, or PDF', '一句话、文章链接或 PDF')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
               <div class="col-body">
-                <p class="col-lead">${t('Guided Copilot collects the cohort, outcome, time window, modules, and export settings in the conversation before anything runs.', '研究引导会先在对话中收集队列、结局、时间窗、模块和导出设置，再开始运行。')}</p>
+                <p class="col-lead">${t('Copilot first returns candidate innovation directions with literature and data boundaries, then asks only for choices that materially change the study.', 'Copilot 会先给出带文献和数据边界的候选创新方向，之后只询问真正会改变研究的问题。')}</p>
                 <div class="col-prompt">
                   <textarea class="hp-input" id="homeInput" rows="3" placeholder="${t('e.g. Among Sepsis-3 patients, does early lactate predict in-hospital mortality, and does adding it to SOFA improve the model?', '例如:在脓毒症(Sepsis-3)患者中,早期乳酸能否预测院内死亡?把它加入 SOFA 是否提升模型?')}" autocomplete="off" aria-label="${t('Describe your study', '描述你的研究')}">${escHtml(homeQuestionDraft)}</textarea>
                   <div class="hp-bar">
@@ -90,7 +90,6 @@
                 <p class="col-lead">${t('Choose the entry that matches what you already have.', '按照你已经拥有的材料选择入口。')}</p>
                 <div class="col-entries">
                   ${[
-                    ['ideas', 'target', t('I have a paper or topic', '我有文章或研究主题'), t('Mine a feasible question in Idea Mining', '在想法挖掘中形成可行问题'), 'ideas'],
                     ['extraction', 'extract', t('I have local ICU data', '我有本地 ICU 数据'), t('Validate and extract analysis-ready tables', '校验并抽取可分析数据表'), 'extraction'],
                     ['patient', 'viz', t('Patient Review', '患者审阅'), t('Review patients, tables, and trends from an export', '审阅导出中的患者、表格与趋势'), ''],
                     ['agent', 'agent', t('Project Monitor', '项目监控'), t('Review runs, outputs, evidence, and sign-off', '查看运行、产出、证据与签署'), ''],

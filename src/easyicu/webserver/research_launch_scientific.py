@@ -71,9 +71,37 @@ def _configured_sensitivity_specs(study: Mapping[str, Any]) -> tuple[Any, ...]:
     """Load only the typed sensitivity authority owned by StudyContext."""
 
     try:
-        return ScientificConfiguration.inspect(study).sensitivity_specs()
+        specs = ScientificConfiguration.inspect(study).sensitivity_specs()
     except ScientificConfigurationError as exc:
         raise ResearchPipelineRunError(exc.code, str(exc), details=exc.details) from exc
+
+    analysis_design = study.get("analysis_design")
+    if not isinstance(analysis_design, Mapping):
+        return specs
+    primary_is_patient_clustered = (
+        str(analysis_design.get("analysis_unit") or "").strip().lower()
+        == "icu_stay"
+        and str(analysis_design.get("variance_estimator") or "").strip().lower()
+        == "cluster_robust"
+        and str(analysis_design.get("cluster_unit") or "").strip().lower()
+        == "patient"
+    )
+    if not primary_is_patient_clustered:
+        return specs
+
+    # Older Copilot builds recorded the primary dependence model a second
+    # time as a requested sensitivity.  The Research Agent then correctly
+    # asked for a separate execution that has no distinct estimand.  Normalize
+    # that legacy state at the host boundary while preserving real repeated-
+    # stay sensitivities such as first-stay or non-readmission restrictions.
+    return tuple(
+        spec
+        for spec in specs
+        if not (
+            str(getattr(spec, "axis", "") or "") == "repeated_stays"
+            and str(getattr(spec, "strategy", "") or "") == "cluster_robust"
+        )
+    )
 
 
 def _runtime_projection_sensitivity_specs(
@@ -157,6 +185,22 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     """
 
     raw = study.get("analysis_design")
+    confirmations = study.get("confirmations")
+    if (
+        not raw
+        and isinstance(confirmations, Mapping)
+        and confirmations.get("plan_timing_descriptive_only") is True
+    ):
+        # Compatibility for a decision receipt written by hosts that saved the
+        # descriptive ceiling before ``analysis_design`` became part of the
+        # same atomic patch.  The confirmation is a typed, host-issued record
+        # of the user's exact choice, not free-text inference.  Future clicks
+        # persist this design directly in ``compile_plan_decision``.
+        raw = {
+            "analysis_family": "descriptive_epidemiology",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "none_counts_only",
+        }
     if not raw:
         if _primary_exposure(study) and _target_outcome(study):
             raise ResearchPipelineRunError(
@@ -573,6 +617,8 @@ def _data_foundation_profile(
     study: Mapping[str, Any],
     target: Optional[str],
     primary_exposure: Optional[str] = None,
+    require_target: bool = True,
+    require_primary_exposure: bool = True,
     covariates: tuple[str, ...] = (),
     sensitivity_specs: tuple[Any, ...] = (),
 ) -> Dict[str, Any]:
@@ -657,19 +703,27 @@ def _data_foundation_profile(
     if target:
         target_meta = by_id.get(target)
         if target_meta is None:
-            raise ResearchPipelineRunError(
-                "research_pipeline_target_outside_configured_modules",
-                "The configured outcome is not available in the selected feature modules.",
-                details={"field": "execution_concepts.outcome", "concept_id": target},
-            )
-        target_module = Path(target_meta.file_name).stem.lower()
-        if target_meta.column_role == "event_status":
-            outcome_concepts.append(target)
-            require_outcome = True
-        elif target_module in {"demographics", "outcome"}:
-            static_concepts.append(target)
+            if require_target:
+                raise ResearchPipelineRunError(
+                    "research_pipeline_target_outside_configured_modules",
+                    (
+                        "The configured outcome is not available in the "
+                        "selected feature modules."
+                    ),
+                    details={
+                        "field": "execution_concepts.outcome",
+                        "concept_id": target,
+                    },
+                )
         else:
-            required_feature_concepts.append(target)
+            target_module = Path(target_meta.file_name).stem.lower()
+            if target_meta.column_role == "event_status":
+                outcome_concepts.append(target)
+                require_outcome = True
+            elif target_module in {"demographics", "outcome"}:
+                static_concepts.append(target)
+            else:
+                required_feature_concepts.append(target)
 
     sensitivity_variables = tuple(
         dict.fromkeys(
@@ -692,6 +746,8 @@ def _data_foundation_profile(
             by_id=by_id,
         )
         if source_concept is None:
+            if concept_id == primary_exposure and not require_primary_exposure:
+                continue
             role = (
                 "primary_exposure"
                 if concept_id == primary_exposure

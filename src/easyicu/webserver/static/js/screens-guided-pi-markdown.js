@@ -5,9 +5,41 @@
   'use strict';
   const { esc } = window.EU_HTML;
 
-  const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
-  const BULLET = /^\s{0,3}[-*]\s+(.+)$/;
-  const ORDERED = /^\s{0,3}\d{1,3}[.)]\s+(.+)$/;
+  // Copilot occasionally omits the Markdown space before Chinese text. Treat
+  // that bounded display variation as structure instead of leaking "###" or
+  // a leading dash into the conversation.
+  const HEADING = /^\s{0,3}(#{1,6})(?:\s+|(?=[\u3400-\u9fff]))(.*)$/;
+  const BULLET = /^\s{0,3}[-*](?:\s+|(?=[\u3400-\u9fff]))(.+)$/;
+  const ORDERED = /^\s{0,3}(\d{1,3})[.)]\s+(.+)$/;
+  const IDEA_MINING_LEAD_INS = new Set([
+    '我理解的想法', '已经明确', 'EasyICU 目前能做', '还需要文献回答',
+    '我听到的现象', '可以探索的方向', '当前证据边界', '先选哪条路',
+    '检索地图', '候选路线比较', '优先验证', '还不能证明',
+    '我理解的起点', '值得继续验证的创新方向', '证据与数据边界', '建议先做什么',
+  ]);
+  const IDEA_MINING_INLINE = /^\s*(?:\*\*|__)?(我理解的想法|已经明确|EasyICU\s*目前能做|还需要文献回答|我听到的现象|可以探索的方向|当前证据边界|先选哪条路|检索地图|候选路线比较|优先验证|还不能证明|我理解的起点|值得继续验证的创新方向|证据与数据边界|建议先做什么)\s*[：:](?:\*\*|__)?\s*(.*)$/i;
+
+  function ideaMiningLeadIn(value) {
+    let text = String(value == null ? '' : value).trim();
+    if ((text.startsWith('**') && text.endsWith('**'))
+      || (text.startsWith('__') && text.endsWith('__'))) {
+      text = text.slice(2, -2).trim();
+    }
+    text = text.replace(/[：:]$/, '').trim();
+    return IDEA_MINING_LEAD_INS.has(text) ? text : '';
+  }
+
+  function ideaMiningBlock(value) {
+    const leadIn = ideaMiningLeadIn(value);
+    if (leadIn) return { leadIn, body: '' };
+    const match = String(value == null ? '' : value).match(IDEA_MINING_INLINE);
+    if (!match) return null;
+    const compact = match[1].replace(/^EasyICU\s*/i, 'EasyICU ');
+    const canonical = Array.from(IDEA_MINING_LEAD_INS).find(row => (
+      row.toLowerCase() === compact.toLowerCase()
+    ));
+    return canonical ? { leadIn: canonical, body: String(match[2] || '').trim() } : null;
+  }
 
   function safeUrl(value) {
     const literature = window.EU_GUIDED_PI_LITERATURE;
@@ -72,10 +104,11 @@
       out.push(`</${listTag}>`);
       listTag = '';
     }
-    function openList(tag) {
+    function openList(tag, start = 1) {
       if (listTag === tag) return;
       flushList();
-      out.push(`<${tag} class="gpi-md-list">`);
+      const startAttribute = tag === 'ol' && start > 1 ? ` start="${start}"` : '';
+      out.push(`<${tag} class="gpi-md-list"${startAttribute}>`);
       listTag = tag;
     }
 
@@ -84,7 +117,21 @@
       if (heading) {
         flushParagraph();
         flushList();
-        out.push(`<p class="gpi-md-heading">${inlineWithLinks(heading[2])}</p>`);
+        const ideaBlock = ideaMiningBlock(heading[2]);
+        if (ideaBlock) {
+          out.push(`<h3 class="gpi-md-heading gpi-idea-heading">${inlineWithLinks(ideaBlock.leadIn)}</h3>`);
+          if (ideaBlock.body) out.push(`<p>${inlineWithLinks(ideaBlock.body)}</p>`);
+        } else {
+          out.push(`<p class="gpi-md-heading">${inlineWithLinks(heading[2])}</p>`);
+        }
+        continue;
+      }
+      const ideaBlock = ideaMiningBlock(line);
+      if (ideaBlock) {
+        flushParagraph();
+        flushList();
+        out.push(`<h3 class="gpi-md-heading gpi-idea-heading">${inlineWithLinks(ideaBlock.leadIn)}</h3>`);
+        if (ideaBlock.body) out.push(`<p>${inlineWithLinks(ideaBlock.body)}</p>`);
         continue;
       }
       const bullet = line.match(BULLET);
@@ -97,8 +144,8 @@
       const ordered = line.match(ORDERED);
       if (ordered) {
         flushParagraph();
-        openList('ol');
-        out.push(`<li>${inlineWithLinks(ordered[1])}</li>`);
+        openList('ol', Number(ordered[1]));
+        out.push(`<li>${inlineWithLinks(ordered[2])}</li>`);
         continue;
       }
       if (!line.trim()) {

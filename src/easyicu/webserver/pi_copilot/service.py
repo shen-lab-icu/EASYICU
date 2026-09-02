@@ -76,6 +76,8 @@ from .run_authority import (
 from .turn_authority import (
     explicitly_confirms_easyicu_registered_source,
     infer_explicit_turn_actions,
+    infer_idea_mining_followup_intent,
+    infer_research_entry_intent,
 )
 from .tools import extraction_workspace_resource
 from .workspace import ProjectWorkspace
@@ -99,6 +101,22 @@ ALLOWED_TURN_ACTIONS = frozenset(
         "mcp_read",
     }
 )
+HOST_ACTION_JOB_KINDS = {
+    "generate_plan": frozenset({"agent-run"}),
+    "prepare_analysis_data": frozenset({"agent-run"}),
+    "execute_plan": frozenset({"agent-run"}),
+    "retry_analysis": frozenset({"agent-run"}),
+}
+HOST_ACTIONS_WITHOUT_JOBS = frozenset(
+    {
+        "review_prepared_data",
+        "review_results",
+        "review_result_tables",
+        "review_figures",
+        "review_manuscript",
+        "review_scientific_review",
+    }
+)
 _RETIRED_SESSION_METADATA_FIELDS = frozenset(
     {
         "canonical_task_id",
@@ -107,6 +125,27 @@ _RETIRED_SESSION_METADATA_FIELDS = frozenset(
         "last_turn_events",
     }
 )
+
+_AUTO_SESSION_TITLE_SUFFIXES = (
+    " · Research",
+    " · 研究",
+    " · Workspace",
+    " · 工作区",
+)
+
+
+def _first_message_session_title(message: str) -> str:
+    """Create a short local conversation label from the researcher's first turn."""
+
+    compact = " ".join(str(message or "").split())
+    if len(compact) <= 52:
+        return compact
+    return compact[:51].rstrip() + "…"
+
+
+def _session_title_is_automatic(title: str) -> bool:
+    value = str(title or "").strip()
+    return value == "EasyICU Copilot" or value.endswith(_AUTO_SESSION_TITLE_SUFFIXES)
 
 
 class PiCopilotService:
@@ -1727,6 +1766,7 @@ class PiCopilotService:
         regenerate_user_entry_id: Optional[str] = None,
         regeneration_intent: Optional[str] = None,
         message_intent: Optional[str] = None,
+        idea_source: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         record = self._scoped_record(session_id, project_id=project_id)
         self._provider_gate(
@@ -1782,7 +1822,30 @@ class PiCopilotService:
                 "The message requested an unknown host action capability.",
                 details={"actions": unknown_actions},
             )
-        self._ensure_open(record)
+        opened_state = self._ensure_open(record)
+        if not regenerate_user_entry_id and not message_intent:
+            workflow = build_project_workflow_projection(
+                study_context_id=record.binding.study_context_id,
+            )
+            if workflow.workflow.current_stage == "idea":
+                message_intent = infer_idea_mining_followup_intent(text)
+        if (
+            not regenerate_user_entry_id
+            and not message_intent
+            and int(opened_state.get("message_count") or 0) == 0
+        ):
+            workflow = build_project_workflow_projection(
+                study_context_id=record.binding.study_context_id,
+            )
+            if workflow.workflow.current_stage == "idea":
+                message_intent = infer_research_entry_intent(text)
+        if (
+            not regenerate_user_entry_id
+            and int(opened_state.get("message_count") or 0) == 0
+            and _session_title_is_automatic(record.title)
+        ):
+            record.title = _first_message_session_title(text)
+            self._save_record(record)
         regenerate_target: Optional[Dict[str, Any]] = None
         if regenerate_user_entry_id:
             regenerate_target = self._conversation_gateway(
@@ -1921,6 +1984,8 @@ class PiCopilotService:
                 )
                 method = "session.regenerate" if regenerate_target is not None else "session.prompt"
                 params = {"session_id": record.session_id, "message": text}
+                if idea_source:
+                    params["idea_source"] = dict(idea_source)
                 if message_intent:
                     params[
                         "turn_intent" if regenerate_target is not None else "intent"
@@ -2042,6 +2107,7 @@ class PiCopilotService:
             tool_context = ToolExecutionContext(
                 session=record.model_copy(deep=True),
                 user_message=text,
+                idea_source=idea_source,
                 allowed_actions=requested_actions,
                 authority_validator=lambda binding: self._binding_stale_details(
                     binding,
@@ -2093,6 +2159,12 @@ class PiCopilotService:
                         time.sleep(0.1)
                         continue
                     if child.status in {"done", "failed", "cancelled"}:
+                        self.replay_store.finish_host_actions_for_child_job(
+                            session_id=session_id,
+                            project_id=project_id,
+                            child_job_id=job_id,
+                            status=child.status,
+                        )
                         self.replay_store.archive_child_job(
                             session_id=session_id,
                             project_id=project_id,
@@ -2111,6 +2183,84 @@ class PiCopilotService:
             name=f"pi-replay-{job_id[:24]}",
             daemon=True,
         ).start()
+
+    def record_host_action(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        action_code: str,
+        action_key: str,
+        child_job_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Bind one explicit host-UI action to the durable conversation replay."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        action = str(action_code or "").strip()
+        key = str(action_key or "").strip()
+        child_id = str(child_job_id or "").strip()
+        expected_kinds = HOST_ACTION_JOB_KINDS.get(action)
+        if expected_kinds is None and action not in HOST_ACTIONS_WITHOUT_JOBS:
+            raise PiCopilotError(
+                "pi_host_action_unsupported",
+                "This host conversation action is not supported.",
+                status_code=400,
+            )
+        if not key:
+            raise PiCopilotError(
+                "pi_host_action_key_required",
+                "The host conversation action is missing its stable key.",
+                status_code=400,
+            )
+        child = None
+        if expected_kinds is not None:
+            if not child_id:
+                raise PiCopilotError(
+                    "pi_host_action_child_job_required",
+                    "This host conversation action requires its child job.",
+                    status_code=400,
+                )
+            child = jobs.MANAGER.get(child_id)
+            if child is None or child.kind not in expected_kinds:
+                raise PiCopilotError(
+                    "pi_host_action_child_job_invalid",
+                    "The host conversation action does not match this child job.",
+                    status_code=409,
+                )
+        elif child_id:
+            raise PiCopilotError(
+                "pi_host_action_child_job_forbidden",
+                "This host conversation action must not bind a child job.",
+                status_code=400,
+            )
+        action_id = "host_" + hashlib.sha256(
+            f"{record.session_id}\0{action}\0{key}".encode("utf-8")
+        ).hexdigest()[:24]
+        child_status = str(child.status) if child is not None else "done"
+        status = child_status if child_status in {"done", "failed", "cancelled"} else "running"
+        turn = self.replay_store.record_host_action(
+            session_id=record.session_id,
+            project_id=str(record.project_id),
+            action_id=action_id,
+            action_code=action,
+            action_key=key,
+            child_job_id=child_id or None,
+            status=status,
+        )
+        if child is not None:
+            if status == "running":
+                self._watch_child_job_for_replay(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=child_id,
+                )
+            else:
+                self.replay_store.archive_child_job(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job=project_job(child.snapshot()),
+                )
+        return {"ok": True, "host_action": turn}
 
     def archive_child_job(
         self,
@@ -2144,6 +2294,13 @@ class PiCopilotService:
                 status_code=404,
             )
         projected = project_job(child.snapshot())
+        if child.status in {"done", "failed", "cancelled"}:
+            self.replay_store.finish_host_actions_for_child_job(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+                child_job_id=job_id,
+                status=child.status,
+            )
         saved = self.replay_store.archive_child_job(
             session_id=record.session_id,
             project_id=str(record.project_id),
@@ -2233,12 +2390,21 @@ class PiCopilotService:
             )
             for row in records
         ]
+        sessions: list[Dict[str, Any]] = []
+        for row in records:
+            public = self._public_session(row, include_replay=False)
+            replay = self.replay_store.snapshot(
+                session_id=row.session_id,
+                project_id=clean_project_id,
+                limit=1,
+            )
+            turn_page = replay.get("turn_page") or {}
+            public["history_turn_count"] = int(turn_page.get("total") or 0)
+            sessions.append(public)
         return {
             "ok": True,
-            "count": len(records),
-            "sessions": [
-                self._public_session(row, include_replay=False) for row in records
-            ],
+            "count": len(sessions),
+            "sessions": sessions,
         }
 
     def get_session(
@@ -3092,6 +3258,7 @@ class PiCopilotService:
         project_id: str,
         run_id: str,
         artifact_name: str,
+        expected_sha256: str | None = None,
     ) -> Dict[str, Any]:
         """Resolve a run artefact through project authority without exposing paths."""
 
@@ -3122,6 +3289,19 @@ class PiCopilotService:
             raise PiCopilotError(
                 "pi_research_artifact_privacy_blocked",
                 "The artefact preview was withheld by the EasyICU privacy scan.",
+                status_code=409,
+                details={"artifact": clean_artifact},
+            )
+        metadata = loaded.get("artifact") or {}
+        clean_expected = str(expected_sha256 or "").strip().lower()
+        observed_sha256 = str(metadata.get("sha256") or "").strip().lower()
+        if clean_expected and (
+            re.fullmatch(r"[a-f0-9]{64}", clean_expected) is None
+            or observed_sha256 != clean_expected
+        ):
+            raise PiCopilotError(
+                "pi_research_artifact_digest_mismatch",
+                "The EasyICU run artefact changed after its reference was issued.",
                 status_code=409,
                 details={"artifact": clean_artifact},
             )
@@ -3165,7 +3345,6 @@ class PiCopilotService:
                 status_code=409,
                 details={"artifact": clean_artifact},
             )
-        metadata = loaded.get("artifact") or {}
         return {
             "ok": True,
             "run_id": clean_run,
@@ -3491,27 +3670,60 @@ class PiCopilotService:
         """Reconcile persisted UX continuity with the process-local JobManager."""
 
         active_job_id = str(record.active_message_job_id or "").strip()
-        if not active_job_id or record.last_turn_status != "running":
-            return record
-        job = jobs.MANAGER.get(active_job_id)
-        if job is not None and job.status == "running":
-            return record
-        record.active_message_job_id = None
-        if job is not None and job.status in {"done", "failed", "cancelled"}:
-            record.last_turn_status = job.status
-        else:
-            # The generic JobManager is intentionally process-local. A persisted
-            # running pointer with no matching job therefore means the Web
-            # process restarted; never leave the presentation showing "running".
-            record.last_turn_status = "interrupted"
-        saved = self._save_record(record)
-        self.replay_store.finish_turn(
+        if active_job_id and record.last_turn_status == "running":
+            job = jobs.MANAGER.get(active_job_id)
+            if job is None or job.status != "running":
+                record.active_message_job_id = None
+                if job is not None and job.status in {"done", "failed", "cancelled"}:
+                    record.last_turn_status = job.status
+                else:
+                    # The generic JobManager is intentionally process-local. A
+                    # persisted running pointer with no matching job therefore
+                    # means the Web process restarted; never leave the
+                    # presentation showing "running".
+                    record.last_turn_status = "interrupted"
+                record = self._save_record(record)
+                self.replay_store.finish_turn(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=active_job_id,
+                    status=str(record.last_turn_status),
+                )
+
+        # Host-owned buttons launch separate child jobs and are intentionally
+        # not represented by active_message_job_id. Reconcile them as well, or
+        # a process restart leaves historical plan/extraction actions looking
+        # live forever and blocks the next real action in the browser.
+        for child_job_id in self.replay_store.running_host_action_child_job_ids(
             session_id=record.session_id,
             project_id=str(record.project_id),
-            job_id=active_job_id,
-            status=str(record.last_turn_status),
-        )
-        return saved
+        ):
+            child = jobs.MANAGER.get(child_job_id)
+            if child is not None and child.status == "running":
+                self._watch_child_job_for_replay(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=child_job_id,
+                )
+                continue
+            terminal_status = (
+                child.status
+                if child is not None and child.status in {"done", "failed", "cancelled"}
+                else "interrupted"
+            )
+            self.replay_store.finish_host_actions_for_child_job(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+                child_job_id=child_job_id,
+                status=terminal_status,
+            )
+            if child is not None:
+                self.replay_store.archive_child_job(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job=project_job(child.snapshot()),
+                )
+        return record
 
     def close(self) -> None:
         self.gateway.close()

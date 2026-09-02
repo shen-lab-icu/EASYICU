@@ -37,6 +37,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
+import pytest
+
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.reporting.readiness import (
     _compute_readiness_gates,
@@ -335,6 +337,57 @@ def test_gate_state_supersession_does_not_match_unrelated_findings() -> None:
         [f], success_step_ids=set(), gate_state={"execution_complete": True}
     )
     assert active == [f]
+
+
+@pytest.mark.parametrize(
+    ("validator", "message", "gate_key"),
+    [
+        (
+            "manuscript_quality",
+            "Deterministic manuscript quality audit requires changes: "
+            "MANUSCRIPT_SECTION_MISSING (Results)",
+            "manuscript_quality_complete",
+        ),
+        (
+            "manuscript_result_sufficiency",
+            "The manuscript has no Results section in which to place "
+            "host-authorized scientific claims.",
+            "manuscript_result_claims_complete",
+        ),
+        (
+            "manuscript_result_sufficiency",
+            "Final evidence/numeric filtering removed or failed to bind "
+            "host-authorized scientific claim(s) from the Results section.",
+            "manuscript_result_claims_complete",
+        ),
+    ],
+)
+def test_stale_manuscript_findings_require_current_deterministic_success(
+    validator: str,
+    message: str,
+    gate_key: str,
+) -> None:
+    finding = ValidationFinding(
+        validator=validator,
+        severity="error",
+        message=message,
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids=set(),
+        gate_state={gate_key: True},
+    )
+    assert active == []
+    assert superseded == [finding]
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids=set(),
+        gate_state={gate_key: False},
+    )
+    assert active == [finding]
+    assert superseded == []
 
 
 def test_finding_for_replanned_away_step_is_superseded() -> None:

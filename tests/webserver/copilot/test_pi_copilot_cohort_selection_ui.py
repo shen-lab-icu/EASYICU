@@ -18,7 +18,7 @@ def test_cohort_selection_owner_is_wired_before_guided_pi_shell() -> None:
 
     assert "css/guided-pi-cohort-eligibility.css" in index
     assert "js/screens-guided-pi-cohort-eligibility.js" in index
-    assert "js/screens-guided-pi-cohort-eligibility.js?v=20260831-simple-choice1" in index
+    assert "js/screens-guided-pi-cohort-eligibility.js?" in index
     assert index.index("js/screens-guided-pi-cohort-eligibility.js") < index.index(
         "js/screens-guided-pi.js"
     )

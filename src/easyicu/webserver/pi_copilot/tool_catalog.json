@@ -26,6 +26,8 @@
     {"name": "easyicu_update_study_context", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false},
     {"name": "easyicu_mine_ideas", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false},
     {"name": "easyicu_search_literature", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false},
+    {"name": "easyicu_adjudicate_idea_literature", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false},
+    {"name": "easyicu_assess_idea_feasibility", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": true},
     {"name": "easyicu_prepare_idea_handoff", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false},
     {"name": "easyicu_accept_idea_handoff", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false},
     {"name": "easyicu_prepare_demo_source", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false},

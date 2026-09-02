@@ -125,6 +125,102 @@ def test_replay_store_pages_from_latest_without_dropping_earlier_turns(
     ]
 
 
+def test_host_action_persists_with_its_child_job_and_terminal_status(
+    tmp_path: Path,
+) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    turn = store.record_host_action(
+        session_id="pi-demo",
+        project_id="project-demo",
+        action_id="host-plan-1",
+        action_code="generate_plan",
+        action_key="study-demo:7",
+        child_job_id="child-plan-1",
+    )
+    assert turn["kind"] == "host_action"
+    store.finish_host_actions_for_child_job(
+        session_id="pi-demo",
+        project_id="project-demo",
+        child_job_id="child-plan-1",
+        status="done",
+    )
+    store.archive_child_job(
+        session_id="pi-demo",
+        project_id="project-demo",
+        job={"job_id": "child-plan-1", "kind": "agent-run", "status": "done"},
+    )
+
+    public = store.snapshot(
+        session_id="pi-demo",
+        project_id="project-demo",
+    )
+    assert public["turns"][0]["status"] == "done"
+    assert public["turns"][0]["action_code"] == "generate_plan"
+    assert public["turns"][0]["action_key"] == "study-demo:7"
+    assert public["child_jobs"] == [
+        {"job_id": "child-plan-1", "kind": "agent-run", "status": "done"}
+    ]
+
+
+def test_running_host_action_can_be_terminalized_as_interrupted(
+    tmp_path: Path,
+) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    store.record_host_action(
+        session_id="pi-demo",
+        project_id="project-demo",
+        action_id="host-plan-1",
+        action_code="generate_plan",
+        action_key="study-demo:7",
+        child_job_id="child-plan-1",
+    )
+
+    assert store.running_host_action_child_job_ids(
+        session_id="pi-demo",
+        project_id="project-demo",
+    ) == ["child-plan-1"]
+    store.finish_host_actions_for_child_job(
+        session_id="pi-demo",
+        project_id="project-demo",
+        child_job_id="child-plan-1",
+        status="interrupted",
+    )
+
+    public = store.snapshot(session_id="pi-demo", project_id="project-demo")
+    assert public["turns"][0]["status"] == "interrupted"
+    assert store.running_host_action_child_job_ids(
+        session_id="pi-demo",
+        project_id="project-demo",
+    ) == []
+
+
+def test_existing_host_action_backfills_its_stable_action_key(tmp_path: Path) -> None:
+    store = PiConversationReplayStore(tmp_path / "replay")
+    store.record_host_action(
+        session_id="pi-demo",
+        project_id="project-demo",
+        action_id="host-review-1",
+        action_code="review_figures",
+        status="done",
+    )
+
+    updated = store.record_host_action(
+        session_id="pi-demo",
+        project_id="project-demo",
+        action_id="host-review-1",
+        action_code="review_figures",
+        action_key="run_20260901T143019_25f13c:figure_gallery.json",
+        status="done",
+    )
+
+    assert updated["action_key"] == (
+        "run_20260901T143019_25f13c:figure_gallery.json"
+    )
+    assert store.snapshot(session_id="pi-demo", project_id="project-demo")[
+        "turns"
+    ][0]["action_key"] == updated["action_key"]
+
+
 def test_replay_store_hides_superseded_branch_without_deleting_audit_rows(
     tmp_path: Path,
 ) -> None:
@@ -225,6 +321,41 @@ def test_replay_event_keeps_only_reopenable_resource_identity_and_digest() -> No
         "sha256": digest,
     }
     assert "/private" not in json.dumps(projected)
+
+
+def test_replay_event_keeps_bounded_idea_mining_preview() -> None:
+    projected = project_pi_replay_event(
+        {
+            "type": "tool_end",
+            "at": "2026-08-31T00:00:00Z",
+            "tool_call_id": "idea-1",
+            "tool_name": "easyicu_mine_ideas",
+            "status": "ok",
+            "code": "easyicu_idea_mined",
+            "idea_mining": {
+                "run_id": "idea_123",
+                "selected_idea_id": "idea_candidate",
+                "idea": {
+                    "idea_title": "Fluid balance and ventilator liberation",
+                    "population": "Adult ventilated ICU patients",
+                    "outcome": None,
+                    "go_no_go": "hold",
+                    "mapped_concepts": [
+                        {"concept_id": "fluid_balance_cumulative", "module": "renal"}
+                    ],
+                },
+                "feasibility": {"status": "design_incomplete", "reportable": False},
+                "private_path": "/must/not/leak",
+            },
+        }
+    )
+
+    assert projected is not None
+    assert projected["idea_mining"]["idea"]["go_no_go"] == "hold"
+    assert projected["idea_mining"]["idea"]["mapped_concepts"] == [
+        {"concept_id": "fluid_balance_cumulative", "module": "renal"}
+    ]
+    assert "private_path" not in json.dumps(projected)
 
 
 def test_replay_keeps_system_validation_document_as_a_distinct_authority_kind() -> None:

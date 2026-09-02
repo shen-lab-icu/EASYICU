@@ -21,7 +21,7 @@ def _static_html(name: str) -> str:
 
 
 def test_demo_cohort_profile_has_clinical_domains() -> None:
-    viz_js = _static_js("screens-viz.js")
+    viz_js = _static_js("screens-viz-cohort-view.js")
     cohort_css = _static_css("cohort.css")
     index_html = _static_html("index.html")
 
@@ -39,4 +39,4 @@ def test_demo_cohort_profile_has_clinical_domains() -> None:
 
     assert ".cprof-spark-grid" in cohort_css
     assert "css/cohort.css?" in index_html
-    assert "js/screens-viz.js?" in index_html
+    assert "js/screens-viz-cohort-view.js?" in index_html

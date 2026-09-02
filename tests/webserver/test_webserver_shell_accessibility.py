@@ -56,7 +56,6 @@ def test_nav_entries_separate_their_title_from_their_sublabel() -> None:
     # Every sidebar entry that renders a sublabel must supply the joined name.
     assert 'data-nav="${c.id}" aria-label="${navLabel(c.label, c.sub)}"' in app_js
     assert 'data-nav="guided" aria-label="${navLabel(' in app_js
-    assert 'data-nav="ideas" aria-label="${navLabel(' in app_js
     assert 'data-nav="agent" aria-label="${navLabel(' in app_js
 
 
@@ -102,11 +101,15 @@ ROUTE_HEADINGS = {
     "screens-extraction.js": [
         "<h1>${t('Data Extraction', '数据抽取')}</h1>",
     ],
-    "screens-viz.js": [
+    "screens-viz-patient.js": [
         # Dense workspace: the visible title lives in the card eyebrow and the
         # loaded bar, so the route heading is screen-reader-only.
         '<h1 class="shell-sr-only" tabindex="-1">${t(\'Patient Review\', \'患者审阅\')}</h1>',
+    ],
+    "screens-viz-cohort.js": [
         "<h1 style=\"margin-top:0;\">${t('Cohort Statistics', '队列统计')}</h1>",
+    ],
+    "screens-viz.js": [
         "<h1 style=\"margin-top:0;\">${t('Cross-database comparison', '跨库对比')}</h1>",
     ],
     "screens-ideas.js": ["<h1"],
@@ -131,7 +134,7 @@ def test_every_route_owner_renders_its_own_page_heading() -> None:
 def test_patient_review_sections_sit_under_the_route_heading() -> None:
     """Loaded and idle Patient Review both had zero headings at any level."""
 
-    viz = _asset("js", "screens-viz.js")
+    viz = _asset("js", "screens-viz-patient.js")
 
     assert '<h2 class="patient-flow-title">' in viz
     assert '<div class="patient-flow-title">' not in viz

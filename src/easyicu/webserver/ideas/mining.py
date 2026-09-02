@@ -24,17 +24,21 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib import parse, request
 from xml.etree import ElementTree as ET
 
 from easyicu.concept import catalog as concept_catalog
 from easyicu.research_agent.discovery.discovery_handoff import DiscoveryHandoffPacket
+from easyicu.research_agent.discovery.idea_mining_construct_answerability import (
+    assess_idea_constructs,
+)
 from easyicu.research_agent.literature_excerpt import select_source_backed_excerpt
 from easyicu.research_agent.literature_concepts import (
     concept_id as literature_concept_id,
     literature_concept_phrase,
 )
+from easyicu.research_agent.know_how.registry import KnowHowRegistry
 from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
@@ -52,6 +56,7 @@ from easyicu.webserver.ideas.prior_art_receipt import (
     load_bound_prior_art_literature as _load_bound_prior_art_literature,
 )
 from easyicu.webserver.input_validation import parse_bool
+
 # Aliased: `entity_ids` is also a local variable name in this module.
 from easyicu.webserver import entity_ids as entity_id_contract
 
@@ -61,11 +66,31 @@ _HISTORY_PATH = _CONFIG_DIR / "webserver_idea_mining_runs.json"
 _AGENT_PROJECTS_ROOT = _CONFIG_DIR / "agent_project_seeds"
 _AGENT_PROJECTS_PATH = _CONFIG_DIR / "webserver_agent_project_seeds.json"
 
+_PRIOR_ART_ADJUDICATION_FILENAME = "idea_prior_art_adjudication.json"
+_BOUNDED_FEASIBILITY_FILENAME = "bounded_sample_feasibility.json"
+_PRIOR_ART_DECISIONS = frozenset(
+    {"already_answered", "differentiated", "uncertain"}
+)
+_CONFIRMED_DEFINITION_FIELDS = (
+    "research_question",
+    "population",
+    "exposure",
+    "outcome",
+    "time_zero",
+    "time_window",
+)
+_CONCEPT_BINDING_ROLES = (
+    "primary_exposure",
+    "outcome",
+    "time_zero",
+)
+
 _MAX_SOURCE_QUOTE = 420
 _MAX_DESIGN_EXCERPT = 1_200
 _MAX_FEATURE_STATS = 24
 _MAX_FETCH_BYTES = 256_000
 _MAX_PUBMED_FETCH_BYTES = 1_000_000
+_MAX_PMC_FETCH_BYTES = 2_000_000
 _MAX_PDF_BYTES = 20 * 1024 * 1024
 _MAX_PDF_BASE64_CHARS = 4 * ((_MAX_PDF_BYTES + 2) // 3)
 _MAX_PDF_EXTRACT_PAGES = 8
@@ -86,6 +111,18 @@ _TIME_COLUMNS = {
     "measuredat_minutes",
     "observationoffset",
 }
+
+_VENTILATION_EPISODE_CONCEPTS = frozenset(
+    {
+        "mech_vent",
+        "vent_ind",
+        "vent_mode",
+        "vent_breath_seq",
+        "vent_start",
+        "vent_end",
+        "ett_gcs",
+    }
+)
 _DIRECT_ID_MARKERS = {"stay_id", "subject_id", "hadm_id", "tableRows"}
 _INTERVENTION_PRIORITY = (
     "vaso_ind",
@@ -126,6 +163,13 @@ _DISCOVERY_QUERY_STRATA = (
     "concept_definition_or_validation",
     "direct_observational_comparator_all_years",
     "direct_observational_comparator_recent",
+    "review_or_guideline",
+    "critical_care_database",
+)
+_PRIOR_ART_QUERY_STRATA = (
+    "clinical_landscape",
+    "candidate_topic",
+    "direct_observational_candidates",
     "review_or_guideline",
     "critical_care_database",
 )
@@ -317,7 +361,11 @@ def mine_ideas(body: Dict[str, Any]) -> Dict[str, Any]:
     source = _source_record(body)
     text = _source_text(body)
     concept_hits = _match_concepts(text)
-    export = _active_export()
+    # Conversational Idea Mining is allowed before a project binds any data.
+    # In that mode, do not inherit the legacy Web workspace's global active
+    # export: it may belong to another project and would make a metadata-only
+    # conversation claim source-specific feasibility it never established.
+    export = None if _request_bool(body, "metadata_only") else _active_export()
     export_index = _export_index(export)
     idea = _idea_from_source(source, text, concept_hits, export_index)
     pre_experiment = _pre_experiment(idea, export, export_index)
@@ -558,9 +606,8 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         direct_evidence_search.screen_article(article, typed_search_scope)
         for article in articles
     ]
-    if (
-        direct_evidence_search.scope_complete(typed_search_scope)
-        and not any(row.get("disposition") == "include" for row in preliminary)
+    if direct_evidence_search.scope_complete(typed_search_scope) and not any(
+        row.get("disposition") == "include" for row in preliminary
     ):
         fallback_query = direct_evidence_search.build_query(typed_search_scope)
         fallback_ids: List[str] = []
@@ -605,9 +652,9 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         # is only related context and must not erase the prespecified stratum
         # sample (definition, recent, review and database evidence) merely
         # because it came from the last query.
-        articles = _dedupe_articles(
-            [*included_fallback, *articles, *related_fallback]
-        )[:limit]
+        articles = _dedupe_articles([*included_fallback, *articles, *related_fallback])[
+            :limit
+        ]
         fallback_retained = {
             str(row.get("pmid") or "")
             for row in articles
@@ -620,7 +667,10 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
             )
             if fallback_query not in receipt["queries"]:
                 receipt["queries"].append(fallback_query)
-            if direct_evidence_search.DIRECT_COMPARATOR_FALLBACK_STRATUM not in receipt["strata"]:
+            if (
+                direct_evidence_search.DIRECT_COMPARATOR_FALLBACK_STRATUM
+                not in receipt["strata"]
+            ):
                 receipt["strata"].append(
                     direct_evidence_search.DIRECT_COMPARATOR_FALLBACK_STRATUM
                 )
@@ -684,8 +734,8 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         source["pubmed_metadata_only"] = True
         source["matched_queries"] = list(retrieval["queries"])
         source["matched_query_strata"] = list(retrieval["strata"])
-        source["direct_comparator_screen"] = (
-            direct_evidence_search.screen_article(article, typed_search_scope)
+        source["direct_comparator_screen"] = direct_evidence_search.screen_article(
+            article, typed_search_scope
         )
         source_candidates.append(source)
         idea_candidates.append(
@@ -758,17 +808,10 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
         # persisted receipt proves the exact requested run/idea identity.
         legacy_prior = _load_prior_art(run_id)
         if legacy_prior is None:
-            raise IdeaMiningWebError(
-                {"error": "idea_run_not_found", "run_id": run_id}
-            )
+            raise IdeaMiningWebError({"error": "idea_run_not_found", "run_id": run_id})
         if str(legacy_prior.get("run_id") or "").strip() != run_id:
-            raise IdeaMiningWebError(
-                {"error": "idea_run_not_found", "run_id": run_id}
-            )
-        if (
-            not idea_id
-            or str(legacy_prior.get("idea_id") or "").strip() != idea_id
-        ):
+            raise IdeaMiningWebError({"error": "idea_run_not_found", "run_id": run_id})
+        if not idea_id or str(legacy_prior.get("idea_id") or "").strip() != idea_id:
             raise IdeaMiningWebError(
                 {"error": "idea_not_found", "idea_id": idea_id, "run_id": run_id}
             )
@@ -821,7 +864,7 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
     # Mine once, execute exactly what was shown to the user. Re-inferring the
     # topic from an Idea title can select a secondary/descriptive concept and
     # silently search a different scientific question.
-    queries = prespecified_queries[:4] or _prior_art_queries(
+    queries = prespecified_queries[:_MAX_DISCOVERY_QUERIES] or _prior_art_queries(
         source,
         str(idea.get("idea_title") or "ICU idea"),
         exposure=idea.get("exposure_or_predictor"),
@@ -839,7 +882,7 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
         }
         network_calls = 0
     else:
-        prior = _pubmed_prior_art(queries)
+        prior = _pubmed_prior_art(queries, source=source)
         network_calls = int(prior.get("network_calls") or 0)
     out = {
         "ok": True,
@@ -933,11 +976,61 @@ def plan_idea(body: Dict[str, Any]) -> Dict[str, Any]:
     if not idea:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
     edits = str(body.get("plan_edits") or "").strip()
+    plan_fields = _confirmed_plan_fields(body.get("plan_fields"))
+    if not plan_fields:
+        existing_plan = _plan_payload(_load_plan(run_id))
+        existing_confirmed = existing_plan.get("confirmed_plan_fields")
+        plan_fields = _confirmed_plan_fields(existing_confirmed)
     mode = str(body.get("mode") or ("replan" if edits else "plan")).strip().lower()
     source = ((payload.get("source_evidence") or [{}])[0]) or {}
     pre = payload.get("pre_experiment") or {}
     prior = _load_prior_art(run_id)
-    plan = _analysis_plan_draft(source, idea, pre, prior, edits=edits, mode=mode)
+    plan = _analysis_plan_draft(
+        source,
+        idea,
+        pre,
+        prior,
+        edits=edits,
+        mode=mode,
+        plan_fields=plan_fields,
+    )
+    try:
+        readiness = idea_execution_readiness_binding(run_id, idea_id)
+    except IdeaMiningWebError:
+        readiness = {}
+    if readiness:
+        selected = _idea_with_readiness_overlay(idea, readiness)
+        plan["active_export_contract"] = {
+            "status": "ready",
+            "source_id": readiness.get("source_id"),
+            "source_path_hash": readiness.get("source_path_hash"),
+            "feature_count": len(readiness.get("concept_modules") or {}),
+            "reportable": False,
+        }
+        plan["execution_gate"] = _execution_gate(
+            selected,
+            pre,
+            prior,
+            readiness,
+        )
+        plan["execution_readiness"] = {
+            key: readiness.get(key)
+            for key in (
+                "prior_art_decision",
+                "source_feasibility_status",
+                "idea_definition_sha256",
+                "prior_art_adjudication_sha256",
+                "source_feasibility_sha256",
+                "execution_ready_for_confirmation",
+            )
+            if readiness.get(key) is not None
+        }
+        plan["prior_art_adjudication"] = readiness.get(
+            "prior_art_adjudication_summary"
+        ) or {}
+        plan["source_feasibility_summary"] = readiness.get(
+            "source_feasibility_summary"
+        ) or {}
     out = {
         "ok": True,
         "schema_version": "easyicu.web_idea_plan/1",
@@ -978,7 +1071,431 @@ def plan_idea(body: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
+def _confirmed_plan_fields(value: Any) -> Dict[str, str]:
+    """Validate bounded, researcher-confirmed fields for one Idea Plan."""
+
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_plan_fields_invalid",
+                "reason": "Confirmed Idea Plan fields must be a JSON object.",
+            }
+        )
+    limits = {
+        "research_question": 1200,
+        "population": 500,
+        "exposure": 500,
+        "outcome": 800,
+        "time_zero": 500,
+        "time_window": 500,
+    }
+    unexpected = sorted(set(value) - set(limits))
+    if unexpected:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_plan_fields_invalid",
+                "reason": "Confirmed Idea Plan fields contain unsupported keys.",
+                "fields": unexpected,
+            }
+        )
+    return {
+        key: _clean(raw, limits[key])
+        for key, raw in value.items()
+        if str(raw or "").strip()
+    }
+
+
+def _canonical_payload_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _confirmed_definition(run_id: str, idea_id: str) -> Dict[str, Any]:
+    payload = _load_run(run_id)
+    if not payload:
+        raise IdeaMiningWebError({"error": "idea_run_not_found", "run_id": run_id})
+    idea = _selected_idea(payload, idea_id)
+    if not idea:
+        raise IdeaMiningWebError(
+            {"error": "idea_not_found", "run_id": run_id, "idea_id": idea_id}
+        )
+    plan = _plan_payload(_load_plan(run_id))
+    confirmed = plan.get("confirmed_plan_fields")
+    confirmed = confirmed if isinstance(confirmed, Mapping) else {}
+    fields = {
+        key: str(confirmed.get(key) or "").strip()
+        for key in _CONFIRMED_DEFINITION_FIELDS
+    }
+    missing = [key for key, value in fields.items() if not value]
+    if missing:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_definition_confirmation_required",
+                "reason": (
+                    "Confirm the research question, population, exposure, outcome, "
+                    "time zero, and observation window before adjudicating literature."
+                ),
+                "missing_fields": missing,
+            }
+        )
+    snapshot = {
+        "run_id": run_id,
+        "idea_id": str(idea.get("idea_id") or ""),
+        "fields": fields,
+    }
+    return {**snapshot, "definition_sha256": _canonical_payload_sha256(snapshot)}
+
+
+def adjudicate_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist one human-confirmed, digest-bound prior-art decision.
+
+    Retrieval remains owned by ``check_prior_art`` and direct-comparator
+    eligibility remains owned by ``direct_evidence_search``.  This function
+    records only the researcher's top-level decision against those exact
+    artifacts; it does not infer novelty from result counts.
+    """
+
+    run_id = str(body.get("run_id") or "").strip()
+    idea_id = str(body.get("idea_id") or "").strip()
+    decision = str(body.get("decision") or "").strip().lower()
+    rationale = _clean(body.get("rationale"), 1200)
+    if decision not in _PRIOR_ART_DECISIONS:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_prior_art_decision_invalid",
+                "allowed": sorted(_PRIOR_ART_DECISIONS),
+            }
+        )
+    if not rationale:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_prior_art_rationale_required",
+                "reason": "A bounded researcher rationale is required for prior-art adjudication.",
+            }
+        )
+    definition = _confirmed_definition(run_id, idea_id)
+    prior_binding = prior_art_receipt_binding(run_id)
+    if not prior_binding:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_prior_art_receipt_required",
+                "reason": "Run a completed, dated literature search before adjudication.",
+            }
+        )
+    prior_art = _load_prior_art(run_id) or {}
+    prior = prior_art.get("prior_art")
+    prior = prior if isinstance(prior, Mapping) else {}
+    results = [
+        row for row in list(prior.get("results") or []) if isinstance(row, Mapping)
+    ][:20]
+    if decision == "differentiated" and not results:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_prior_art_differentiation_unsubstantiated",
+                "reason": (
+                    "A zero-result metadata search cannot establish differentiation. "
+                    "Refine or broaden the search and adjudicate again."
+                ),
+            }
+        )
+    screened = []
+    for row in results:
+        screen = row.get("direct_comparator_screen")
+        screen = screen if isinstance(screen, Mapping) else {}
+        screened.append(
+            {
+                "pmid": str(row.get("pmid") or "")[:32] or None,
+                "title": _clean(row.get("title"), 500),
+                "disposition": str(screen.get("disposition") or "exclude")[:24],
+                "evidence_role": str(
+                    screen.get("evidence_role") or "related_context"
+                )[:48],
+                "rationale": _clean(screen.get("rationale"), 500),
+                "population_match": bool(screen.get("population_match")),
+                "exposure_match": bool(screen.get("exposure_match")),
+                "outcome_match": bool(screen.get("outcome_match")),
+                "publication_type_eligible": bool(
+                    screen.get("publication_type_eligible", True)
+                ),
+            }
+        )
+    direct = [row for row in screened if row["disposition"] == "include"]
+    axes = [
+        {
+            "axis": "population_and_setting",
+            "matched_record_count": sum(
+                1 for row in screened if row["population_match"]
+            ),
+        },
+        {
+            "axis": "exposure_and_time_zero",
+            "matched_record_count": sum(1 for row in screened if row["exposure_match"]),
+        },
+        {
+            "axis": "outcome_and_estimand",
+            "matched_record_count": sum(1 for row in screened if row["outcome_match"]),
+        },
+        {
+            "axis": "analysis_and_robustness",
+            "status": "requires_full_text_or_human_review",
+        },
+        {
+            "axis": "data_source_and_transportability",
+            "status": "requires_full_text_or_human_review",
+        },
+        {
+            "axis": "clinical_contribution",
+            "status": "researcher_adjudicated",
+        },
+    ]
+    out = {
+        "ok": True,
+        "schema_version": "easyicu.web_idea_prior_art_adjudication/1",
+        "created_at": _now(),
+        "run_id": run_id,
+        "idea_id": idea_id,
+        "decision": decision,
+        "rationale": rationale,
+        "definition_sha256": definition["definition_sha256"],
+        "confirmed_definition": definition["fields"],
+        "prior_art_binding": prior_binding,
+        "screening": {
+            "retrieval_candidate_count": len(results),
+            "direct_comparator_count": len(direct),
+            "records": screened,
+        },
+        "comparison_axes": axes,
+        "authority": {
+            "human_confirmed": True,
+            "retrieval_is_not_evidence": True,
+            "full_text_screening_complete": False,
+            "paper_authorized": False,
+        },
+    }
+    _assert_no_row_payload(out)
+    run_dir = _run_dir(run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / _PRIOR_ART_ADJUDICATION_FILENAME
+    path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    return out
+
+
+def prior_art_adjudication_binding(run_id: str, idea_id: str) -> Dict[str, Any]:
+    path = _run_dir(run_id) / _PRIOR_ART_ADJUDICATION_FILENAME
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw.decode("utf-8"))
+    except FileNotFoundError as exc:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_prior_art_adjudication_required",
+                "reason": "A current typed prior-art adjudication is required.",
+            }
+        ) from exc
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise IdeaMiningWebError(
+            {"error": "idea_prior_art_adjudication_invalid"}
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise IdeaMiningWebError({"error": "idea_prior_art_adjudication_invalid"})
+    if str(payload.get("run_id") or "") != run_id or str(
+        payload.get("idea_id") or ""
+    ) != idea_id:
+        raise IdeaMiningWebError({"error": "idea_prior_art_adjudication_identity_mismatch"})
+    current_definition = _confirmed_definition(run_id, idea_id)
+    if payload.get("definition_sha256") != current_definition["definition_sha256"]:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_prior_art_adjudication_stale_definition",
+                "reason": "The confirmed study definition changed after adjudication.",
+            }
+        )
+    current_prior = prior_art_receipt_binding(run_id)
+    if not current_prior or payload.get("prior_art_binding") != current_prior:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_prior_art_adjudication_stale_literature",
+                "reason": "The literature receipt changed after adjudication.",
+            }
+        )
+    decision = str(payload.get("decision") or "")
+    if decision not in _PRIOR_ART_DECISIONS:
+        raise IdeaMiningWebError({"error": "idea_prior_art_adjudication_invalid"})
+    return {
+        "prior_art_adjudication_schema_version": str(payload.get("schema_version")),
+        "prior_art_adjudication_sha256": hashlib.sha256(raw).hexdigest(),
+        "prior_art_decision": decision,
+        "prior_art_adjudicated_at": str(payload.get("created_at") or ""),
+        "idea_definition_sha256": str(payload.get("definition_sha256") or ""),
+        "prior_art_adjudication_summary": {
+            "decision": decision,
+            "rationale": str(payload.get("rationale") or "")[:1200],
+            "screening": payload.get("screening")
+            if isinstance(payload.get("screening"), Mapping)
+            else {},
+            "comparison_axes": list(payload.get("comparison_axes") or [])[:6],
+            "authority": payload.get("authority")
+            if isinstance(payload.get("authority"), Mapping)
+            else {},
+        },
+    }
+
+
+def _validated_concept_bindings(value: Any) -> Dict[str, Any]:
+    if value in (None, {}):
+        return {}
+    if not isinstance(value, Mapping):
+        raise IdeaMiningWebError({"error": "idea_concept_bindings_invalid"})
+    allowed = {*_CONCEPT_BINDING_ROLES, "covariates"}
+    unexpected = sorted(set(value) - allowed)
+    if unexpected:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_concept_bindings_invalid",
+                "fields": unexpected,
+            }
+        )
+
+    def concept_id(raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", text):
+            raise IdeaMiningWebError({"error": "idea_concept_binding_invalid"})
+        return text
+
+    out = {
+        role: concept_id(value.get(role))
+        for role in _CONCEPT_BINDING_ROLES
+        if str(value.get(role) or "").strip()
+    }
+    raw_covariates = value.get("covariates") or []
+    if not isinstance(raw_covariates, list) or len(raw_covariates) > 32:
+        raise IdeaMiningWebError({"error": "idea_concept_bindings_invalid"})
+    out["covariates"] = list(
+        dict.fromkeys(concept_id(item) for item in raw_covariates)
+    )
+    return out
+
+
+def _temporal_answerability(
+    stats: List[Dict[str, Any]], bindings: Mapping[str, Any]
+) -> Dict[str, bool]:
+    by_concept = {
+        str(row.get("concept_id") or ""): row for row in stats if row.get("concept_id")
+    }
+    time_zero = str(bindings.get("time_zero") or "")
+    exposure = str(bindings.get("primary_exposure") or "")
+    outcome = str(bindings.get("outcome") or "")
+    time_zero_ready = bool(
+        time_zero
+        and time_zero in by_concept
+        and by_concept[time_zero].get("status") == "ready"
+        and by_concept[time_zero].get("time_orderable")
+    )
+    ordering_ready = bool(
+        exposure
+        and outcome
+        and exposure in by_concept
+        and outcome in by_concept
+        and by_concept[exposure].get("time_orderable")
+        and by_concept[outcome].get("time_orderable")
+    )
+    return {
+        "time_zero_reconstructable": time_zero_ready,
+        "temporal_ordering_reconstructable": ordering_ready,
+    }
+
+
+def _bounded_joint_observed_entities(
+    root: Path,
+    *,
+    concept_to_file: Mapping[str, Any],
+    concept_ids: List[str],
+    max_records: int,
+) -> Optional[int]:
+    if len(concept_ids) != 2:
+        return None
+    entity_sets: List[set[str]] = []
+    for concept_id in concept_ids:
+        item = concept_to_file.get(concept_id)
+        if not isinstance(item, Mapping):
+            return None
+        file_name = str(item.get("file") or "")
+        columns = [str(value) for value in item.get("columns") or []]
+        selected = _selected_feature_columns(columns, concept_id)
+        if not file_name or "stay_id" not in selected or concept_id not in selected:
+            return None
+        try:
+            frame = _read_bounded_feature_frame(root / file_name, selected, max_records)
+        except Exception:
+            return None
+        if frame.empty:
+            entity_sets.append(set())
+            continue
+        if _is_event_rate_concept(concept_id):
+            observed = frame["stay_id"]
+        else:
+            observed = frame.loc[frame[concept_id].notna(), "stay_id"]
+        entity_sets.append(
+            {
+                entity_id_contract.normalize_entity_id(value)
+                for value in observed
+                if entity_id_contract.normalize_entity_id(value)
+            }
+        )
+    return len(entity_sets[0] & entity_sets[1])
+
+
+def _bounded_feasibility_blockers(
+    *,
+    status: str,
+    missing_required: List[str],
+    unavailable: List[Dict[str, Any]],
+    low: List[Dict[str, Any]],
+    demo_like: bool,
+    temporal: Mapping[str, bool],
+    joint_observed: Optional[int],
+    construct_answerability: List[Dict[str, Any]],
+) -> List[str]:
+    blockers: List[str] = []
+    if demo_like:
+        blockers.append("demo_source_not_execution_authority")
+    if missing_required:
+        blockers.append("required_concepts_missing")
+    if unavailable:
+        blockers.append("bounded_sample_unavailable")
+    if low:
+        blockers.append("low_concept_coverage")
+    if not temporal.get("time_zero_reconstructable"):
+        blockers.append("time_zero_not_reconstructable")
+    if not temporal.get("temporal_ordering_reconstructable"):
+        blockers.append("temporal_ordering_not_reconstructable")
+    if joint_observed is None:
+        blockers.append("joint_coverage_not_resolved")
+    elif joint_observed == 0:
+        blockers.append("no_jointly_observed_entities")
+    if any(row.get("verdict") == "blocked" for row in construct_answerability):
+        blockers.append("research_construct_unavailable")
+    if any(row.get("verdict") == "needs_review" for row in construct_answerability):
+        blockers.append("research_construct_requires_definition_or_materialization")
+    if status == "ready":
+        return []
+    return list(dict.fromkeys(blockers))
+
+
+def bounded_sample_feasibility(
+    body: Dict[str, Any],
+    *,
+    export: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Run a bounded row-level feasibility pass for one mined idea.
 
     This upgrades metadata-only concept presence into a capped local sample
@@ -994,7 +1511,21 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
     idea = _selected_idea(payload, idea_id)
     if not idea:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
-    export = _active_export()
+    adjudication_binding: Optional[Dict[str, Any]] = None
+    if _request_bool(body, "require_adjudication"):
+        adjudication_binding = prior_art_adjudication_binding(run_id, idea_id)
+        if adjudication_binding.get("prior_art_decision") != "differentiated":
+            raise IdeaMiningWebError(
+                {
+                    "error": "idea_prior_art_not_differentiated",
+                    "reason": (
+                        "Only a current differentiated prior-art adjudication can "
+                        "advance to real-data feasibility."
+                    ),
+                    "decision": adjudication_binding.get("prior_art_decision"),
+                }
+            )
+    export = export or _active_export()
     if not export:
         raise IdeaMiningWebError(
             {
@@ -1006,11 +1537,25 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
     source, desc = export
     export_index = _export_index(export)
     concept_to_file = export_index.get("concept_to_file") or {}
-    required = [
-        str(row.get("concept_id") or "")
-        for row in idea.get("mapped_concepts") or []
-        if row.get("concept_id")
+    bindings = _validated_concept_bindings(body.get("concept_bindings"))
+    bound_concepts = [
+        bindings.get(role) for role in _CONCEPT_BINDING_ROLES if bindings.get(role)
     ]
+    bound_concepts.extend(bindings.get("covariates") or [])
+    required = list(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in (
+                bound_concepts
+                or [
+                    row.get("concept_id")
+                    for row in idea.get("mapped_concepts") or []
+                    if isinstance(row, Mapping)
+                ]
+            )
+            if str(value or "").strip()
+        )
+    )
     concepts = [cid for cid in required if cid in concept_to_file]
     max_records = _sample_record_limit(body.get("max_records"))
     root = Path(str(desc.get("path") or source.get("path") or ""))
@@ -1046,7 +1591,42 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
     ]
     # Schema-only rows are not a row-level sample: their presence must never
     # produce an aggregate "ready" verdict.
-    if not stats or missing_required:
+    temporal = _temporal_answerability(stats, bindings)
+    joint_observed = _bounded_joint_observed_entities(
+        root,
+        concept_to_file=concept_to_file,
+        concept_ids=[
+            value
+            for value in (bindings.get("primary_exposure"), bindings.get("outcome"))
+            if value
+        ],
+        max_records=max_records,
+    )
+    construct_text = " ".join(
+        str(value or "")
+        for value in (
+            idea.get("idea_title"),
+            idea.get("exposure_or_predictor"),
+            idea.get("outcome"),
+            idea.get("rationale"),
+            idea.get("source_quote"),
+        )
+    )
+    construct_answerability = assess_idea_constructs(
+        construct_text,
+        mapped_concepts=tuple(required),
+        database=str(desc.get("database") or "") or None,
+        available_concepts=set(concept_to_file),
+    )
+    construct_blocked = any(
+        row.get("verdict") == "blocked" for row in construct_answerability
+    )
+    construct_needs_review = any(
+        row.get("verdict") == "needs_review" for row in construct_answerability
+    )
+    if not stats or missing_required or bool(export_index.get("demo_like")):
+        status = "blocked"
+    elif construct_blocked:
         status = "blocked"
     elif unavailable:
         status = "needs_review"
@@ -1054,12 +1634,20 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
         status = "ready"
     if status == "ready" and low:
         status = "needs_review"
+    if status == "ready" and construct_needs_review:
+        status = "needs_review"
     if not denominator_resolved and status == "ready":
+        status = "needs_review"
+    if status == "ready" and (
+        not temporal["time_zero_reconstructable"]
+        or not temporal["temporal_ordering_reconstructable"]
+        or joint_observed in (None, 0)
+    ):
         status = "needs_review"
 
     out = {
         "ok": True,
-        "schema_version": "easyicu.web_idea_bounded_sample_feasibility/1",
+        "schema_version": "easyicu.web_idea_bounded_sample_feasibility/2",
         "created_at": _now(),
         "run_id": run_id,
         "idea_id": idea.get("idea_id"),
@@ -1072,6 +1660,7 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
             "scope": "first available records only; use as feasibility evidence, not as a clinical result",
         },
         "source": {
+            "source_id": str(source.get("id") or "")[:80] or None,
             "label": source.get("label") or desc.get("label") or "Local export",
             "path_hash": _sha256(str(source.get("path") or desc.get("path") or ""))[
                 :16
@@ -1089,7 +1678,37 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
             "total_records": (desc.get("summary") or {}).get("total_rows"),
         },
         "feature_statistics": stats,
+        "concept_bindings": bindings,
+        "required_concepts": required,
+        "design_answerability": {
+            **temporal,
+            "joint_observed_entities": joint_observed,
+            "repeated_measure_density": {
+                str(row.get("concept_id")): (
+                    round(
+                        int(row.get("records") or 0)
+                        / max(int(row.get("observed_entities") or 0), 1),
+                        2,
+                    )
+                    if row.get("records") is not None
+                    else None
+                )
+                for row in stats
+            },
+        },
+        "construct_answerability": construct_answerability,
         "missing_required_concepts": missing_required,
+        "blockers": _bounded_feasibility_blockers(
+            status=status,
+            missing_required=missing_required,
+            unavailable=unavailable,
+            low=low,
+            demo_like=bool(export_index.get("demo_like")),
+            temporal=temporal,
+            joint_observed=joint_observed,
+            construct_answerability=construct_answerability,
+        ),
+        "prior_art_adjudication_binding": adjudication_binding,
         "interpretation": _bounded_sample_interpretation(
             stats,
             missing_required=missing_required,
@@ -1107,10 +1726,65 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
     _assert_no_row_payload(out)
     run_dir = _run_dir(run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "bounded_sample_feasibility.json").write_text(
+    (run_dir / _BOUNDED_FEASIBILITY_FILENAME).write_text(
         json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     return out
+
+
+def _idea_with_readiness_overlay(
+    idea: Mapping[str, Any], readiness: Mapping[str, Any]
+) -> Dict[str, Any]:
+    selected = dict(idea)
+    if not readiness.get("execution_ready_for_confirmation"):
+        return selected
+    bindings = readiness.get("concept_bindings")
+    bindings = bindings if isinstance(bindings, Mapping) else {}
+    modules = readiness.get("concept_modules")
+    modules = modules if isinstance(modules, Mapping) else {}
+    role_by_concept = {
+        str(bindings.get("primary_exposure") or ""): "predictor",
+        str(bindings.get("outcome") or ""): "outcome",
+        str(bindings.get("time_zero") or ""): "time_zero",
+        **{
+            str(value): "adjustment"
+            for value in bindings.get("covariates") or []
+            if str(value).strip()
+        },
+    }
+    mapped = [
+        {
+            "concept_id": concept_id,
+            "label": _concept_label(concept_id),
+            "module": str(modules.get(concept_id) or ""),
+            "role": role,
+            "status": "source_bound_feasibility_ready",
+            "available": True,
+        }
+        for concept_id, role in role_by_concept.items()
+        if concept_id and modules.get(concept_id)
+    ]
+    selected.update(
+        {
+            "mapped_concepts": mapped,
+            "requested_adjustment_concepts": list(bindings.get("covariates") or []),
+            "resolved_analysis_concepts": [
+                row["concept_id"] for row in mapped if row["role"] != "outcome"
+            ],
+            "feasibility": {
+                "tier": "executable",
+                "label": "Source-bound feasibility ready",
+                "reason": "Exact concepts passed bounded source feasibility.",
+            },
+            "go_no_go": "recommend",
+            "go_no_go_reason": (
+                "Differentiated prior art and source-bound feasibility are current; "
+                "the plan is ready for researcher confirmation."
+            ),
+            "next_action": "Review and accept the execution-ready Idea Plan.",
+        }
+    )
+    return selected
 
 
 def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -1127,6 +1801,14 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not idea:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
+    readiness: Dict[str, Any] = {}
+    try:
+        readiness = idea_execution_readiness_binding(run_id, idea_id)
+    except IdeaMiningWebError:
+        # A plan preview remains useful while a gate is unresolved. Acceptance
+        # revalidates and requires the exact readiness binding fail-closed.
+        readiness = {}
+    selected_idea = _idea_with_readiness_overlay(idea, readiness)
     edits = str(body.get("plan_edits") or "").strip()
     plan_artifact = _load_plan(run_id)
     plan = dict(_plan_payload(plan_artifact) or payload.get("handoff_plan") or {})
@@ -1148,10 +1830,29 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     ) or _active_export_contract(pre_experiment)
     plan["prior_art_review"] = _prior_art_review(prior_art_check)
     plan["execution_gate"] = _execution_gate(
-        idea,
+        selected_idea,
         pre_experiment,
         prior_art_check,
+        readiness,
     )
+    plan["execution_readiness"] = {
+        key: readiness.get(key)
+        for key in (
+            "prior_art_decision",
+            "source_feasibility_status",
+            "idea_definition_sha256",
+            "prior_art_adjudication_sha256",
+            "source_feasibility_sha256",
+            "execution_ready_for_confirmation",
+        )
+        if readiness.get(key) is not None
+    }
+    plan["prior_art_adjudication"] = readiness.get(
+        "prior_art_adjudication_summary"
+    ) or {}
+    plan["source_feasibility_summary"] = readiness.get(
+        "source_feasibility_summary"
+    ) or {}
     handoff = {
         "ok": True,
         "schema_version": "easyicu.web_idea_handoff/1",
@@ -1159,9 +1860,9 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
         "run_id": run_id,
         "idea_id": idea.get("idea_id"),
         "candidate_topic": idea.get("idea_title"),
-        "go_no_go": idea.get("go_no_go"),
-        "go_no_go_reason": idea.get("go_no_go_reason"),
-        "selected_ledger_row": idea,
+        "go_no_go": selected_idea.get("go_no_go"),
+        "go_no_go_reason": selected_idea.get("go_no_go_reason"),
+        "selected_ledger_row": selected_idea,
         "source_evidence": payload.get("source_evidence") or [],
         "pre_experiment": pre_experiment,
         "prior_art_check": prior_art_check,
@@ -1186,7 +1887,7 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     source = ((payload.get("source_evidence") or [{}])[0]) or {}
     try:
         canonical_packet = build_web_handoff_packet(
-            idea=idea,
+            idea=selected_idea,
             source=source,
             plan=plan,
             pre_experiment=pre_experiment,
@@ -1718,33 +2419,185 @@ def _requested_exposure_concepts(
     return selected
 
 
+def _idea_design_support(
+    text: str,
+    hits: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Project one existing reviewed know-how card into Idea Mining.
+
+    This is advisory design context, not a second planner. The registry remains
+    the sole owner of topic matching and card content; Idea Mining only exposes
+    the bounded fields needed to ask the next scientific question and compile
+    a literature query.
+    """
+
+    registry = KnowHowRegistry.load()
+    matches = registry.retrieve(
+        query=text,
+        available_concepts=[
+            str(row.get("concept_id") or "") for row in hits if row.get("concept_id")
+        ],
+        top_k=1,
+    )
+    if not matches:
+        return None
+    match = matches[0]
+    registry.verify_hit_source(match)
+    card = registry.get(match.card_id)
+    design = card.design_candidates
+    return {
+        "card_id": card.card_id,
+        "version": card.version,
+        "file_sha256": match.file_sha256,
+        "trust_level": card.trust_level,
+        "review_status": card.review_status,
+        "summary": card.summary,
+        "study_families": list(card.study_families)[:6],
+        "topic_aliases": list(card.topic_aliases)[:12],
+        "population": design.population,
+        "time_zero": design.time_zero,
+        "observation_window": design.observation_window,
+        "prediction_or_followup_window": design.prediction_or_followup_window,
+        "eligibility_candidates": list(design.eligibility_candidates)[:6],
+        "exposure_family": design.exposure,
+        "outcome_family": design.outcome,
+        "estimand_family": design.estimand,
+        "recommended_methods": list(design.recommended_methods)[:6],
+        "sensitivity_analyses": list(design.sensitivity_analyses)[:6],
+        "literature_outcome": card.title,
+        "requires_confirmation": list(card.requires_confirmation)[:6],
+        "stop_conditions": list(card.stop_conditions)[:6],
+        "citations": [
+            {
+                "citation_id": row.citation_id,
+                "title": row.title,
+                "year": row.year,
+                "url": row.url,
+                "supports": list(row.supports)[:4],
+            }
+            for row in card.citations[:4]
+        ],
+        "authority": "advisory_design_support_only",
+    }
+
+
+def _idea_population(text: str, design_support: Optional[Dict[str, Any]]) -> str:
+    low = str(text or "").lower()
+    if (
+        design_support
+        and design_support.get("card_id") == "mechanical_ventilation_liberation"
+    ):
+        if any(token in low for token in ("adult", "adults", "成人")):
+            return (
+                "Adult ICU patients with an identifiable invasive-ventilation episode"
+            )
+        if any(
+            token in low
+            for token in ("pediatric", "paediatric", "child", "儿童", "儿科")
+        ):
+            return "Pediatric ICU patients with an identifiable invasive-ventilation episode"
+        return "ICU patients with an identifiable invasive-ventilation episode (age scope pending)"
+    if any(token in low for token in ("adult", "adults", "成人")):
+        return "Adult ICU cohort"
+    if any(
+        token in low for token in ("pediatric", "paediatric", "child", "儿童", "儿科")
+    ):
+        return "Pediatric ICU cohort"
+    return "ICU cohort (population pending)"
+
+
 def _idea_from_source(
     source: Dict[str, Any],
     text: str,
     hits: List[Dict[str, Any]],
     export_index: Dict[str, Any],
 ) -> Dict[str, Any]:
+    family = _analysis_family(text)
     outcome = _pick_outcome(text, hits)
     concepts = _select_idea_concepts(text, hits, outcome)
     predictor = _primary_predictor(concepts)
     if predictor is None:
         predictor = _pick_predictor(hits, outcome)
-        if predictor is None and hits:
-            predictor = hits[0]
-        concepts = [row for row in [predictor, outcome] if row]
+        if predictor is not None:
+            predictor_id = str(predictor.get("concept_id") or "")
+            concepts = [
+                (
+                    {**row, "role": "predictor"}
+                    if str(row.get("concept_id") or "") == predictor_id
+                    else row
+                )
+                for row in concepts
+            ]
+            if not any(
+                str(row.get("concept_id") or "") == predictor_id for row in concepts
+            ):
+                concepts.insert(0, {**predictor, "role": "predictor"})
     if not concepts and hits:
         concepts = _dedupe_concepts(hits[:3])
+    design_support = _idea_design_support(text, hits)
     title = _idea_title(source, predictor, outcome, concepts)
     concept_rows = [_concept_feasibility(row, export_index) for row in concepts]
     overall = _overall_feasibility(concept_rows, export_index)
-    novelty = _prior_art(source, title, predictor=predictor, outcome=outcome)
+    design_blockers: List[str] = []
+    if family != "trajectory":
+        if predictor is None:
+            design_blockers.append("predictor_or_exposure_not_mapped")
+        if outcome is None:
+            design_blockers.append("outcome_not_mapped")
+    if design_blockers:
+        missing_labels = []
+        if "predictor_or_exposure_not_mapped" in design_blockers:
+            missing_labels.append("a primary exposure or predictor")
+        if "outcome_not_mapped" in design_blockers:
+            missing_labels.append("an explicit outcome")
+        overall = {
+            **overall,
+            "tier": "design_incomplete",
+            "label": "Research design incomplete",
+            "reason": (
+                "The source does not identify "
+                + " and ".join(missing_labels)
+                + "; confirm the estimand before Agent execution."
+            ),
+            "design_blockers": design_blockers,
+        }
+    literature_outcome = (
+        {"label": design_support.get("literature_outcome")}
+        if design_support and design_support.get("literature_outcome")
+        else None
+    )
+    novelty = _prior_art(
+        source,
+        title,
+        predictor=predictor,
+        outcome=outcome or literature_outcome,
+        topic_aliases=(design_support or {}).get("topic_aliases") or [],
+    )
+    construct_answerability = assess_idea_constructs(
+        text,
+        mapped_concepts=tuple(
+            str(row.get("concept_id") or "")
+            for row in concept_rows
+            if str(row.get("concept_id") or "")
+        ),
+        database=str(export_index.get("database") or "") or None,
+        available_concepts=(
+            set(export_index.get("concept_to_file") or {})
+            if export_index.get("source_selected")
+            else None
+        ),
+    )
     go_no_go = (
-        "recommend"
-        if overall["tier"] == "executable"
+        "hold"
+        if design_blockers
         else (
-            "hold"
-            if overall["tier"].startswith("T1") or overall["tier"] == "demo_only"
-            else "db-cannot-do"
+            "recommend"
+            if overall["tier"] == "executable"
+            else (
+                "hold"
+                if overall["tier"].startswith("T1") or overall["tier"] == "demo_only"
+                else "db-cannot-do"
+            )
         )
     )
     idea_payload = {
@@ -1753,11 +2606,13 @@ def _idea_from_source(
             :12
         ],
         "idea_title": title,
-        "population": "adult ICU cohort",
+        "population": _idea_population(text, design_support),
         "exposure_or_predictor": _concept_set_label(concepts)
         or (predictor["label"] if predictor else _clean(text, 90)),
-        "outcome": outcome["label"] if outcome else "In-hospital mortality",
-        "analysis_family": _analysis_family(text),
+        "outcome": outcome["label"] if outcome else None,
+        "design_support": design_support,
+        "unresolved_slots": design_blockers,
+        "analysis_family": family,
         "source_id": source.get("source_id"),
         "source_title": source.get("title"),
         "source_year": source.get("year"),
@@ -1765,6 +2620,7 @@ def _idea_from_source(
         "source_quote": source.get("evidence_quote"),
         "rationale": _rationale(text, predictor, outcome, concepts),
         "mapped_concepts": concept_rows,
+        "construct_answerability": construct_answerability,
         "requested_adjustment_concepts": _requested_adjustment_concepts(text, hits),
         "feasibility": overall,
         "prior_art": novelty,
@@ -1865,7 +2721,14 @@ def _handoff_plan(
 ) -> Dict[str, Any]:
     predictor = idea.get("exposure_or_predictor") or "the candidate predictor"
     outcome = idea.get("outcome") or "the selected outcome"
-    question = f"Evaluate whether {predictor} is associated with {outcome} in an adult ICU cohort."
+    population = idea.get("population") or "the selected ICU population"
+    if idea.get("analysis_family") == "trajectory" and not idea.get("outcome"):
+        question = (
+            f"Characterize {predictor} trajectories in {population}, with "
+            "time zero, observation window, and transportability checks confirmed before execution."
+        )
+    else:
+        question = f"Evaluate whether {predictor} is associated with {outcome} in {population}."
     mapped = idea.get("mapped_concepts") or []
     return {
         "selection_mode": "human_confirm_before_agent_run",
@@ -1885,9 +2748,10 @@ def _handoff_plan(
             "source_text_hash": source.get("source_text_sha256"),
         },
         "cohort": {
-            "default": "adult ICU cohort from active EasyICU export",
+            "default": population,
             "requires_user_confirmation": True,
         },
+        "design_support": idea.get("design_support"),
         "variables": [
             {
                 "role": row.get("role")
@@ -1935,6 +2799,7 @@ def _analysis_plan_draft(
     *,
     edits: str = "",
     mode: str = "plan",
+    plan_fields: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     base = _handoff_plan(source, idea, pre_experiment)
     family = str(idea.get("analysis_family") or "association")
@@ -1978,6 +2843,30 @@ def _analysis_plan_draft(
         }
     )
     plan["analysis_plan"] = _agent_style_steps(family, concepts)
+    confirmed = dict(plan_fields or {})
+    if confirmed:
+        for key in (
+            "research_question",
+            "population",
+            "exposure",
+            "outcome",
+            "time_zero",
+            "time_window",
+        ):
+            if confirmed.get(key):
+                plan[key] = confirmed[key]
+        if confirmed.get("population"):
+            plan["cohort"] = {
+                **(plan.get("cohort") or {}),
+                "default": confirmed["population"],
+            }
+        plan["confirmed_plan_fields"] = confirmed
+        if confirmed.get("outcome") and confirmed.get("time_window"):
+            plan["required_user_confirmations"] = [
+                row
+                for row in plan.get("required_user_confirmations") or []
+                if row != "outcome and time window"
+            ]
     if edits:
         plan["human_plan_notes"] = _clean(edits, 1200)
         plan["replan_summary"] = (
@@ -2233,7 +3122,13 @@ def _export_index(
     export: Optional[Tuple[Dict[str, Any], Dict[str, Any]]],
 ) -> Dict[str, Any]:
     if not export:
-        return {"concept_to_file": {}, "entity_ids": set(), "demo_like": False}
+        return {
+            "concept_to_file": {},
+            "entity_ids": set(),
+            "demo_like": False,
+            "database": None,
+            "source_selected": False,
+        }
     source, desc = export
     concept_to_file: Dict[str, Dict[str, Any]] = {}
     concepts = set(concept_catalog.CONCEPT_DICTIONARY)
@@ -2253,6 +3148,8 @@ def _export_index(
         "concept_to_file": concept_to_file,
         "entity_ids": entity_ids,
         "demo_like": _export_is_demo_like(source, desc),
+        "database": desc.get("database"),
+        "source_selected": True,
     }
 
 
@@ -2469,6 +3366,8 @@ def _bounded_feature_sample_stat(
             "missing_pct": 100.0,
             "low_coverage": True,
             "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
+            "time_orderable": False,
+            "time_value_count": 0,
             "coverage_basis": "bounded_file_head_sample",
             "sample_limit_records": max_records,
             "numeric_summary": {"available": False, "kind": "empty_sample"},
@@ -2476,6 +3375,7 @@ def _bounded_feature_sample_stat(
             "status": "missing",
         }
     entity_col = frame["stay_id"].map(entity_id_contract.normalize_entity_id)
+    time_answerability = _bounded_time_answerability(frame)
     sample_entities = max(int(entity_col.nunique()), 1)
     is_event_rate = _is_event_rate_concept(concept_id)
     if is_event_rate:
@@ -2501,6 +3401,7 @@ def _bounded_feature_sample_stat(
             "missing_pct": None,
             "low_coverage": False,
             "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
+            **time_answerability,
             "coverage_basis": "bounded_file_head_sample",
             "sample_limit_records": max_records,
             "numeric_summary": {"available": False, "kind": "event_indicator"},
@@ -2528,11 +3429,44 @@ def _bounded_feature_sample_stat(
         "missing_pct": round(100 - coverage, 1),
         "low_coverage": coverage < 50,
         "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
+        **time_answerability,
         "coverage_basis": "bounded_file_head_sample",
         "sample_limit_records": max_records,
         "numeric_summary": _numeric_summary(nums),
         "summary_label": "Coverage is computed inside the bounded sample only.",
         "status": "ready" if records else "missing",
+    }
+
+
+def _bounded_time_answerability(frame: Any) -> Dict[str, Any]:
+    import pandas as pd
+
+    for column in _TIME_COLUMNS:
+        if column not in frame.columns:
+            continue
+        values = frame[column].dropna()
+        if values.empty:
+            continue
+        numeric = pd.to_numeric(values, errors="coerce")
+        numeric_count = int(numeric.notna().sum())
+        if numeric_count:
+            return {
+                "time_orderable": True,
+                "time_value_count": numeric_count,
+                "time_value_kind": "numeric_offset",
+            }
+        datetimes = pd.to_datetime(values, errors="coerce", utc=True)
+        datetime_count = int(datetimes.notna().sum())
+        if datetime_count:
+            return {
+                "time_orderable": True,
+                "time_value_count": datetime_count,
+                "time_value_kind": "timestamp",
+            }
+    return {
+        "time_orderable": False,
+        "time_value_count": 0,
+        "time_value_kind": "unavailable",
     }
 
 
@@ -2761,6 +3695,7 @@ def _prior_art(
     *,
     predictor: Optional[Dict[str, Any]] = None,
     outcome: Optional[Dict[str, Any]] = None,
+    topic_aliases: Iterable[str] = (),
 ) -> Dict[str, Any]:
     return {
         "status": "not_checked_external_search_required",
@@ -2776,6 +3711,7 @@ def _prior_art(
             exposure=(predictor or {}).get("concept_id")
             or (predictor or {}).get("label"),
             outcome=(outcome or {}).get("concept_id") or (outcome or {}).get("label"),
+            topic_aliases=topic_aliases,
         ),
     }
 
@@ -2884,10 +3820,173 @@ def _plan_payload(artifact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def _load_bounded_sample(run_id: str) -> Optional[Dict[str, Any]]:
     if not run_id:
         return None
-    path = _run_dir(run_id) / "bounded_sample_feasibility.json"
+    path = _run_dir(run_id) / _BOUNDED_FEASIBILITY_FILENAME
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def idea_execution_readiness_binding(
+    run_id: str,
+    idea_id: str,
+    *,
+    source_path: Any = None,
+) -> Dict[str, Any]:
+    """Validate the exact literature + data receipts required for handoff."""
+
+    adjudication = prior_art_adjudication_binding(run_id, idea_id)
+    if adjudication.get("prior_art_decision") != "differentiated":
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_prior_art_not_differentiated",
+                "decision": adjudication.get("prior_art_decision"),
+            }
+        )
+    path = _run_dir(run_id) / _BOUNDED_FEASIBILITY_FILENAME
+    try:
+        raw = path.read_bytes()
+        feasibility = json.loads(raw.decode("utf-8"))
+    except FileNotFoundError as exc:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_source_feasibility_required",
+                "reason": "Run source-bound Idea feasibility before accepting the handoff.",
+            }
+        ) from exc
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise IdeaMiningWebError({"error": "idea_source_feasibility_invalid"}) from exc
+    if not isinstance(feasibility, Mapping):
+        raise IdeaMiningWebError({"error": "idea_source_feasibility_invalid"})
+    if str(feasibility.get("schema_version") or "") != (
+        "easyicu.web_idea_bounded_sample_feasibility/2"
+    ):
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_source_feasibility_schema_outdated",
+                "reason": (
+                    "Re-run source feasibility so the receipt includes typed "
+                    "clinical-construct answerability."
+                ),
+            }
+        )
+    if str(feasibility.get("run_id") or "") != run_id or str(
+        feasibility.get("idea_id") or ""
+    ) != idea_id:
+        raise IdeaMiningWebError({"error": "idea_source_feasibility_identity_mismatch"})
+    if feasibility.get("prior_art_adjudication_binding") != adjudication:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_source_feasibility_stale_adjudication",
+                "reason": "The prior-art adjudication changed after data feasibility.",
+            }
+        )
+    if str(feasibility.get("status") or "") != "ready":
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_source_feasibility_not_ready",
+                "status": feasibility.get("status"),
+                "blockers": list(feasibility.get("blockers") or [])[:12],
+            }
+        )
+    construct_answerability = feasibility.get("construct_answerability")
+    if not isinstance(construct_answerability, list) or not construct_answerability:
+        raise IdeaMiningWebError(
+            {"error": "idea_construct_answerability_required"}
+        )
+    unresolved_constructs = [
+        (
+            str(row.get("construct_id") or "unknown_construct")
+            if isinstance(row, Mapping)
+            else "invalid_construct"
+        )
+        for row in construct_answerability
+        if not isinstance(row, Mapping) or row.get("verdict") != "ready"
+    ]
+    if unresolved_constructs:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_construct_answerability_not_ready",
+                "constructs": unresolved_constructs[:12],
+            }
+        )
+    source = feasibility.get("source")
+    source = source if isinstance(source, Mapping) else {}
+    if bool(source.get("demo_like")):
+        raise IdeaMiningWebError({"error": "idea_source_feasibility_demo_only"})
+    clean_source_path = str(source_path or "").strip()
+    if clean_source_path:
+        expected_path_hash = _sha256(clean_source_path)[:16]
+        if str(source.get("path_hash") or "") != expected_path_hash:
+            raise IdeaMiningWebError(
+                {
+                    "error": "idea_source_feasibility_source_mismatch",
+                    "reason": "The bound StudyContext source changed after feasibility.",
+                }
+            )
+    bindings = feasibility.get("concept_bindings")
+    bindings = _validated_concept_bindings(bindings)
+    if not all(bindings.get(role) for role in _CONCEPT_BINDING_ROLES):
+        raise IdeaMiningWebError(
+            {"error": "idea_source_feasibility_concept_contract_incomplete"}
+        )
+    modules = {
+        str(row.get("concept_id") or ""): str(row.get("module") or "")
+        for row in feasibility.get("feature_statistics") or []
+        if isinstance(row, Mapping)
+        and str(row.get("concept_id") or "")
+        and str(row.get("module") or "")
+    }
+    required = list(
+        dict.fromkeys(
+            [
+                bindings[role]
+                for role in _CONCEPT_BINDING_ROLES
+                if bindings.get(role)
+            ]
+            + list(bindings.get("covariates") or [])
+        )
+    )
+    missing_modules = [value for value in required if value not in modules]
+    if missing_modules:
+        raise IdeaMiningWebError(
+            {
+                "error": "idea_source_feasibility_concept_contract_incomplete",
+                "missing_concept_modules": missing_modules,
+            }
+        )
+    return {
+        **adjudication,
+        "source_feasibility_schema_version": str(feasibility.get("schema_version")),
+        "source_feasibility_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_feasibility_status": "ready",
+        "source_feasibility_created_at": str(feasibility.get("created_at") or ""),
+        "source_id": source.get("source_id"),
+        "source_path_hash": source.get("path_hash"),
+        "concept_bindings": bindings,
+        "concept_modules": modules,
+        "source_feasibility_summary": {
+            "status": feasibility.get("status"),
+            "source": {
+                key: source.get(key)
+                for key in ("source_id", "label", "database", "demo_like")
+                if source.get(key) is not None
+            },
+            "cohort": feasibility.get("cohort")
+            if isinstance(feasibility.get("cohort"), Mapping)
+            else {},
+            "feature_statistics": list(feasibility.get("feature_statistics") or [])[:12],
+            "design_answerability": feasibility.get("design_answerability")
+            if isinstance(feasibility.get("design_answerability"), Mapping)
+            else {},
+            "construct_answerability": construct_answerability[:12],
+            "missing_required_concepts": list(
+                feasibility.get("missing_required_concepts") or []
+            )[:24],
+            "blockers": list(feasibility.get("blockers") or [])[:12],
+            "interpretation": list(feasibility.get("interpretation") or [])[:8],
+        },
+        "execution_ready_for_confirmation": True,
+    }
 
 
 def _load_prior_art(run_id: str) -> Optional[Dict[str, Any]]:
@@ -3175,6 +4274,9 @@ EXECUTION_GATE_BLOCKERS: Dict[str, str] = {
     "required_concepts_missing": "re-extract or confirm missing required concepts",
     "prior_art_not_reviewed": "run prior-art review before Agent execution",
     "idea_not_recommended": "resolve idea feasibility before Agent execution",
+    "prior_art_not_differentiated": "complete a differentiated typed prior-art adjudication",
+    "source_feasibility_not_ready": "complete source-bound data feasibility",
+    "study_definition_not_confirmed": "confirm the complete study definition",
 }
 
 
@@ -3182,6 +4284,7 @@ def _execution_gate(
     idea: Dict[str, Any],
     pre_experiment: Dict[str, Any],
     prior_art_check: Optional[Dict[str, Any]],
+    readiness: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     export_status = str(pre_experiment.get("status") or "blocked").lower()
     missing = [
@@ -3204,6 +4307,14 @@ def _execution_gate(
         codes.append("prior_art_not_reviewed")
     if idea.get("go_no_go") != "recommend":
         codes.append("idea_not_recommended")
+    readiness = readiness if isinstance(readiness, Mapping) else {}
+    if readiness.get("prior_art_decision") != "differentiated":
+        codes.append("prior_art_not_differentiated")
+    if readiness.get("source_feasibility_status") != "ready":
+        codes.append("source_feasibility_not_ready")
+    if not readiness.get("idea_definition_sha256"):
+        codes.append("study_definition_not_confirmed")
+    codes = list(dict.fromkeys(codes))
     blockers = [EXECUTION_GATE_BLOCKERS[code] for code in codes]
     return {
         "project_seed_allowed": True,
@@ -3215,6 +4326,9 @@ def _execution_gate(
         "export_status": pre_experiment.get("status") or "blocked",
         "prior_art_status": prior.get("status") or "not_checked",
         "go_no_go": idea.get("go_no_go"),
+        "prior_art_decision": readiness.get("prior_art_decision"),
+        "source_feasibility_status": readiness.get("source_feasibility_status"),
+        "execution_ready_for_confirmation": not codes,
     }
 
 
@@ -3275,21 +4389,318 @@ def _prior_art_queries(
     *,
     exposure: Any = None,
     outcome: Any = None,
+    topic_aliases: Iterable[str] = (),
 ) -> List[str]:
     title = _clean(title or source.get("title") or "ICU idea", 180)
-    scope = _discovery_topic_clause(
+    candidate_scope = _discovery_topic_clause(
         title,
         {"exposure": exposure, "outcome": outcome},
     )
+    exposure_phrase = _literature_concept_phrase(exposure)
+    alias_terms = [
+        _clean(value, 120)
+        for value in topic_aliases
+        if _clean(value, 120) and re.search(r"[A-Za-z]", str(value))
+    ][:8]
+    topic_clause = " OR ".join(
+        _pubmed_title_abstract_clause(value) for value in alias_terms
+    )
+    if topic_clause:
+        topic_clause = f"({topic_clause})"
+    clinical_scope = (
+        " AND ".join(
+            value
+            for value in (
+                _pubmed_title_abstract_clause(exposure_phrase),
+                topic_clause,
+            )
+            if value
+        )
+        if topic_clause
+        else candidate_scope
+    )
+    conversational_scope = _conversational_literature_scope(source)
+    population_filter = ""
+    review_scope = clinical_scope
+    if conversational_scope:
+        candidate_scope = _conversational_candidate_scope(
+            source,
+            base_scope=conversational_scope,
+        )
+        clinical_scope = _conversational_variation_scope(
+            source,
+            base_scope=conversational_scope,
+        )
+        review_scope = conversational_scope
+        population_filter = _conversational_population_filter(source)
+    icu_clause = (
+        '(ICU[Title/Abstract] OR "critical care"[Title/Abstract] OR '
+        '"intensive care"[Title/Abstract])'
+    )
     queries = [
-        f'({scope}) AND (ICU[Title/Abstract] OR "critical care"[Title/Abstract] OR "intensive care"[Title/Abstract])',
-        f'({scope}) AND (MIMIC[Title/Abstract] OR eICU[Title/Abstract] OR "public database"[Title/Abstract])',
-        f"({scope}) AND (cohort[Title/Abstract] OR observational[Title/Abstract] OR prognosis[Title/Abstract])",
+        f"({clinical_scope}) AND {icu_clause}{population_filter}",
+        f"({candidate_scope}) AND {icu_clause}{population_filter}",
+        f"({clinical_scope}) AND {icu_clause} AND "
+        "(cohort[Title/Abstract] OR observational[Title/Abstract] OR "
+        "retrospective[Title/Abstract] OR prospective[Title/Abstract] OR "
+        f"multicenter[Title/Abstract]){population_filter}",
+        f"({review_scope}) AND {icu_clause} AND "
+        "(review[Publication Type] OR systematic review[Title/Abstract] OR "
+        f"guideline[Title/Abstract]){population_filter}",
+        f"({review_scope}) AND {icu_clause} AND "
+        "(MIMIC[Title/Abstract] OR eICU[Title/Abstract] OR "
+        f'"critical care database"[Title/Abstract]){population_filter}',
     ]
     doi = _clean(source.get("doi") or "", 120)
     if doi:
         queries.insert(0, f'"{doi}"[DOI]')
-    return queries[:4]
+    return queries[:_MAX_DISCOVERY_QUERIES]
+
+
+_CONVERSATIONAL_PAIR_PROFILES = (
+    (
+        "lactate_aki",
+        (
+            (r"lactate|lactic|乳酸", ("lactate", "lactate clearance"), r"\blactat(?:e|ic|emia)\b"),
+            (
+                r"aki|acute kidney injury|急性肾损伤",
+                ("acute kidney injury", "AKI"),
+                r"\bAKI\b|acute kidney injury",
+            ),
+        ),
+    ),
+    (
+        "fluid_liberation",
+        (
+            (
+                r"fluid balance|fluid overload|液体平衡|液体超负荷",
+                ("cumulative fluid balance", "fluid balance", "fluid overload"),
+                r"fluid balance|fluid overload",
+            ),
+            (
+                r"ventilator liberation|weaning|extubation|撤机|脱机|拔管",
+                (
+                    "extubation failure",
+                    "ventilator liberation",
+                    "weaning",
+                    "extubation",
+                ),
+                r"ventilator liberation|\bwean(?:ing|ed)?\b|\bextubat(?:e|ion|ed)\b",
+            ),
+        ),
+    ),
+    (
+        "sedation_awakening",
+        (
+            (
+                r"sedation|sedative|镇静|镇静药",
+                ("sedation interruption", "sedative discontinuation", "sedation weaning"),
+                r"sedat(?:ion|ive)|sedative discontinuation|sedation interruption",
+            ),
+            (
+                r"awakening|wakefulness|delayed awakening|coma|unconscious|清醒|昏迷",
+                ("awakening", "delayed awakening", "coma"),
+                r"awakening|wakefulness|delayed awakening|\bcoma\b|unconscious",
+            ),
+        ),
+    ),
+)
+
+
+def _conversational_pair_profile(
+    text: str,
+) -> Optional[Tuple[str, Tuple[Tuple[str, Tuple[str, ...], str], ...]]]:
+    for profile_name, dimensions in _CONVERSATIONAL_PAIR_PROFILES:
+        if all(re.search(pattern, text, re.I) for pattern, _, _ in dimensions):
+            return profile_name, dimensions
+    return None
+
+
+def _conversational_literature_scope(source: Dict[str, Any]) -> str:
+    """Preserve a bounded bilingual clinical phenomenon in PubMed queries.
+
+    Idea Mining deliberately accepts an informal Chinese sentence.  When that
+    sentence has no complete PICO, the dictionary-derived candidate title can
+    collapse to a generic token such as ``ICU``.  This helper does not translate
+    arbitrary prose or invent a study design; it only projects a few explicit,
+    literature-bearing clinical/action phrases that the researcher actually
+    supplied.  Returning an empty string leaves the existing query compiler in
+    full control.
+    """
+
+    text = _norm_text(
+        " ".join(str(source.get(key) or "") for key in ("title", "evidence_quote"))
+    )
+    pair_profile = _conversational_pair_profile(text)
+    if pair_profile:
+        _, dimensions = pair_profile
+        clauses = []
+        for _, aliases, _ in dimensions:
+            clauses.append(
+                "(" + " OR ".join(
+                    _pubmed_title_abstract_clause(value) for value in aliases
+                ) + ")"
+            )
+        return " AND ".join(clauses)
+
+    clinical_aliases: List[str] = []
+    for pattern, aliases in (
+        (
+            r"hypotension|低血压",
+            ("hypotension", "shock"),
+        ),
+        (r"blood pressure|血压", ("blood pressure",)),
+        (r"delirium|谵妄", ("delirium",)),
+        (r"fluid balance|液体平衡", ("fluid balance",)),
+        (
+            r"ventilator liberation|weaning|extubation|撤机|脱机|拔管",
+            ("ventilator liberation", "extubation"),
+        ),
+    ):
+        if re.search(pattern, text, re.I):
+            clinical_aliases.extend(aliases)
+            break
+    if not clinical_aliases:
+        return ""
+
+    action_aliases: List[str] = []
+    for pattern, aliases in (
+        (
+            r"management|treatment|intervention|处理|治疗|干预",
+            ("management", "treatment"),
+        ),
+        (r"strategy|strategies|策略|方案", ("strategy", "management")),
+        (
+            r"variation|variability|difference|差异|不一致",
+            ("practice variation", "variability"),
+        ),
+    ):
+        if re.search(pattern, text, re.I):
+            action_aliases.extend(aliases)
+            break
+    if not action_aliases:
+        return ""
+
+    clinical = " OR ".join(
+        _pubmed_title_abstract_clause(value)
+        for value in _dedupe_strings(clinical_aliases)[:3]
+    )
+    action = " OR ".join(
+        _pubmed_title_abstract_clause(value)
+        for value in _dedupe_strings(action_aliases)[:3]
+    )
+    return f"({clinical}) AND ({action})"
+
+
+def _conversational_candidate_scope(source: Dict[str, Any], *, base_scope: str) -> str:
+    """Make the candidate-topic stratum narrower than the clinical landscape."""
+
+    text = _norm_text(
+        " ".join(str(source.get(key) or "") for key in ("title", "evidence_quote"))
+    )
+    pair_profile = _conversational_pair_profile(text)
+    if pair_profile:
+        _, dimensions = pair_profile
+        return " AND ".join(
+            "(" + " OR ".join(
+                _pubmed_title_abstract_clause(alias) for alias in aliases[:2]
+            ) + ")"
+            for _, aliases, _ in dimensions
+        )
+    if re.search(r"nighttime|nocturnal|overnight|夜间|夜班", text, re.I):
+        precise_scope = base_scope
+        if re.search(r"hypotension|低血压", text, re.I):
+            precise_scope = (
+                f"({_pubmed_title_abstract_clause('hypotension')}) AND "
+                f"({_pubmed_title_abstract_clause('management')} OR "
+                f"{_pubmed_title_abstract_clause('treatment')})"
+            )
+        temporal = " OR ".join(
+            _pubmed_title_abstract_clause(value)
+            for value in (
+                "nighttime",
+                "nocturnal",
+                "overnight",
+                "after-hours",
+                "out-of-hours",
+                "night shift",
+            )
+        )
+        return f"({precise_scope}) AND ({temporal})"
+    if _asks_about_practice_variation(text):
+        variation = " OR ".join(
+            _pubmed_title_abstract_clause(value)
+            for value in ("practice variation", "variability")
+        )
+        return f"({base_scope}) AND ({variation})"
+    return base_scope
+
+
+def _conversational_variation_scope(source: Dict[str, Any], *, base_scope: str) -> str:
+    """Retain an explicitly observed practice difference in the broad stratum."""
+
+    text = _norm_text(
+        " ".join(str(source.get(key) or "") for key in ("title", "evidence_quote"))
+    )
+    if not _asks_about_practice_variation(text):
+        return base_scope
+    variation = " OR ".join(
+        _pubmed_title_abstract_clause(value)
+        for value in (
+            "practice variation",
+            "practice pattern",
+            "practice patterns",
+            "treatment variation",
+            "management variation",
+            "physician variation",
+            "clinician variation",
+            "organizational structure",
+        )
+    )
+    return f"({base_scope}) AND ({variation})"
+
+
+def _asks_about_practice_variation(text: str) -> bool:
+    difference = re.search(
+        r"variation|variability|difference|heterogeneity|差异|不一致|不同|差别",
+        text,
+        re.I,
+    )
+    practice_context = re.search(
+        r"management|treatment|intervention|physician|clinician|doctor|staffing|"
+        r"organization|team|hospital|unit|医生|医师|处理|处置|治疗|干预|值班|"
+        r"排班|组织|团队|医院|科室",
+        text,
+        re.I,
+    )
+    return bool(difference and practice_context)
+
+
+def _conversational_population_filter(source: Dict[str, Any]) -> str:
+    """Keep a plain general-ICU prompt from silently becoming NICU/PICU evidence."""
+
+    text = _norm_text(
+        " ".join(str(source.get(key) or "") for key in ("title", "evidence_quote"))
+    )
+    if re.search(
+        r"neonatal|newborn|preterm|pediatric|paediatric|child|infant|"
+        r"新生儿|早产儿|儿科|儿童|婴儿",
+        text,
+        re.I,
+    ):
+        return ""
+    # Chinese prose commonly joins the ASCII acronym directly to Han text
+    # (for example ``ICU患者``), so word boundaries would silently miss the
+    # same general-ICU population that ``ICU patients`` correctly detects.
+    if not re.search(r"ICU|critical care|intensive care|重症", text, re.I):
+        return ""
+    return (
+        " NOT (neonat*[Title/Abstract] OR newborn*[Title/Abstract] OR "
+        "preterm[Title/Abstract] OR pediatric[Title/Abstract] OR "
+        "paediatric[Title/Abstract] OR child*[Title/Abstract] OR "
+        '"Intensive Care, Neonatal"[MeSH Terms] OR '
+        '"Intensive Care Units, Pediatric"[MeSH Terms])'
+    )
 
 
 def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[str]:
@@ -3347,7 +4758,7 @@ def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[s
         "(cohort[Title/Abstract] OR observational[Title/Abstract] OR "
         "retrospective[Title/Abstract] OR prospective[Title/Abstract] OR "
         '"cross-sectional"[Title/Abstract]) '
-        "AND (ICU[Title/Abstract] OR \"critical care\"[Title/Abstract] OR "
+        'AND (ICU[Title/Abstract] OR "critical care"[Title/Abstract] OR '
         '"intensive care"[Title/Abstract])'
         + population_filter
         + comparator_intent_filter
@@ -3355,7 +4766,7 @@ def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[s
     )
     review = f"({scope}) AND (review[Publication Type] OR systematic review[Title/Abstract] OR guideline[Title/Abstract])"
     db = (
-        f'({scope}) AND (MIMIC[Title/Abstract] OR eICU[Title/Abstract] OR '
+        f"({scope}) AND (MIMIC[Title/Abstract] OR eICU[Title/Abstract] OR "
         '"critical care database"[Title/Abstract]) AND '
         "(cohort[Title/Abstract] OR observational[Title/Abstract] OR "
         "retrospective[Title/Abstract] OR prospective[Title/Abstract])"
@@ -3507,9 +4918,7 @@ def _discovery_topic_clause(topic: str, body: Dict[str, Any]) -> str:
     predictor_hit = _pick_predictor(hits, outcome_hit)
     inferred = [
         _pubmed_title_abstract_clause(
-            _literature_concept_phrase(
-                row.get("concept_id") or row.get("label")
-            )
+            _literature_concept_phrase(row.get("concept_id") or row.get("label"))
         )
         for row in (predictor_hit, outcome_hit)
         if row and (row.get("concept_id") or row.get("label"))
@@ -3610,6 +5019,7 @@ def _pubmed_article_records(
         )
         year = _pubmed_year(article)
         doi = _pubmed_article_id(article_node, "doi")
+        pmcid = _pubmed_article_id(article_node, "pmc")
         abstract = _clean(
             " ".join(
                 _node_text(node)
@@ -3640,6 +5050,7 @@ def _pubmed_article_records(
                 "journal": journal,
                 "year": year,
                 "doi": doi,
+                "pmcid": pmcid,
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
                 "abstract_excerpt": _clean(abstract, _MAX_PDF_EXCERPT),
                 "evidence_sentence": evidence,
@@ -3651,6 +5062,147 @@ def _pubmed_article_records(
     order = {str(pmid): i for i, pmid in enumerate(ids)}
     rows.sort(key=lambda row: order.get(str(row.get("pmid") or ""), 9999))
     return rows
+
+
+def _literature_article_kind(publication_types: Iterable[str]) -> str:
+    labels = {str(value or "").strip().lower() for value in publication_types}
+    if labels & {"meta-analysis", "systematic review"}:
+        return "systematic_review"
+    if labels & {"editorial", "comment", "letter", "news"}:
+        return "editorial_commentary"
+    if labels & {"guideline", "practice guideline", "consensus development conference"}:
+        return "guideline_consensus"
+    if labels & {"clinical trial protocol", "research support, non-u.s. gov't"} and any(
+        "protocol" in value for value in labels
+    ):
+        return "protocol"
+    if "review" in labels:
+        return "narrative_review"
+    if labels & {
+        "clinical trial",
+        "randomized controlled trial",
+        "observational study",
+        "comparative study",
+        "evaluation study",
+        "multicenter study",
+    }:
+        return "original_research"
+    return "other"
+
+
+def _pmc_full_text_evidence(pmcid: str) -> Dict[str, Any]:
+    """Return bounded section excerpts from one NCBI-hosted PMC article.
+
+    This is an on-demand reading aid, not a full-text library.  It keeps at
+    most three short section excerpts and never persists the fetched XML.
+    """
+
+    normalized = str(pmcid or "").strip().upper()
+    if not re.fullmatch(r"PMC[0-9]{1,12}", normalized):
+        return {"status": "unavailable", "reason": "no_pmc_full_text_link"}
+    params = parse.urlencode(
+        {"db": "pmc", "id": normalized[3:], "retmode": "xml"}
+    )
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?" + params
+    try:
+        with request.urlopen(url, timeout=_NETWORK_TIMEOUT_SEC) as resp:
+            raw = resp.read(_MAX_PMC_FETCH_BYTES + 1)
+        if len(raw) > _MAX_PMC_FETCH_BYTES:
+            return {"status": "unavailable", "reason": "pmc_response_too_large"}
+        root = ET.fromstring(raw)
+    except Exception:
+        return {"status": "unavailable", "reason": "pmc_fetch_failed"}
+
+    preferred = (
+        ("methods", ("method", "materials", "study design", "patients")),
+        ("results", ("result", "finding")),
+        ("discussion", ("discussion", "conclusion")),
+    )
+    sections: List[Dict[str, str]] = []
+    used_nodes: set[int] = set()
+    section_nodes = list(root.findall(".//body//sec"))
+    for role, markers in preferred:
+        for node in section_nodes:
+            title = _clean(_node_text(node.find("./title")), 160)
+            if not title or not any(marker in title.lower() for marker in markers):
+                continue
+            paragraphs = [
+                _node_text(paragraph)
+                for paragraph in node.findall("./p")
+                if _node_text(paragraph)
+            ]
+            excerpt = _clean(" ".join(paragraphs), 800)
+            if excerpt:
+                sections.append({"section": role, "label": title, "excerpt": excerpt})
+                used_nodes.add(id(node))
+                break
+
+    if len(sections) < 3:
+        for node in section_nodes:
+            if id(node) in used_nodes:
+                continue
+            title = _clean(_node_text(node.find("./title")), 160) or "Article body"
+            paragraphs = [
+                _node_text(paragraph)
+                for paragraph in node.findall("./p")
+                if _node_text(paragraph)
+            ]
+            excerpt = _clean(" ".join(paragraphs), 800)
+            if not excerpt:
+                continue
+            sections.append({"section": "other", "label": title, "excerpt": excerpt})
+            if len(sections) == 3:
+                break
+
+    if not sections:
+        return {"status": "unavailable", "reason": "pmc_sections_not_extractable"}
+    return {
+        "status": "reviewed",
+        "pmcid": normalized,
+        "url": f"https://pmc.ncbi.nlm.nih.gov/articles/{normalized}/",
+        "evidence_spans": sections,
+        "full_text_stored": False,
+    }
+
+
+def review_literature_source(pmid: str) -> Dict[str, Any]:
+    """Read one selected PubMed record and attempt bounded PMC enrichment."""
+
+    normalized = str(pmid or "").strip()
+    if not re.fullmatch(r"[0-9]{1,12}", normalized):
+        raise IdeaMiningWebError({"error": "literature_source_pmid_invalid"})
+    try:
+        records = _pubmed_article_records([normalized])
+    except Exception as exc:
+        raise IdeaMiningWebError(
+            {
+                "error": "literature_source_unavailable",
+                "reason": "PubMed metadata could not be retrieved.",
+            }
+        ) from exc
+    if not records:
+        raise IdeaMiningWebError({"error": "literature_source_not_found"})
+    article = records[0]
+    publication_types = list(article.get("publication_types") or [])[:12]
+    full_text = _pmc_full_text_evidence(str(article.get("pmcid") or ""))
+    return {
+        "ok": True,
+        "schema_version": "easyicu.literature_source_review/1",
+        "pmid": normalized,
+        "title": _clean(article.get("title"), 500),
+        "journal": _clean(article.get("journal"), 240),
+        "year": article.get("year"),
+        "doi": _clean(article.get("doi"), 240) or None,
+        "publication_types": publication_types,
+        "article_kind": _literature_article_kind(publication_types),
+        "abstract_excerpt": _clean(article.get("abstract_excerpt"), 1_200),
+        "full_text": full_text,
+        "authority": {
+            "retrieval_candidate_only": True,
+            "scientific_adjudication_required": True,
+            "full_text_stored": False,
+        },
+    }
 
 
 def _node_text(node: Any) -> str:
@@ -4116,33 +5668,360 @@ def _doi_from_text(text: str) -> Optional[str]:
     return _clean(match.group(0), 180) if match else None
 
 
-def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
-    results: List[Dict[str, Any]] = []
+def _conversational_prior_art_screen(
+    row: Dict[str, Any], source: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Rank retrieval fit without upgrading a paper to scientific evidence."""
+
+    if not source or not _conversational_literature_scope(source):
+        return {
+            "disposition": "include",
+            "fit": "unclassified",
+            "score": 0,
+            "matched_dimensions": [],
+            "rationale": "Prespecified PubMed retrieval candidate; scientific screening is pending.",
+        }
+
+    source_text = _norm_text(
+        " ".join(str(source.get(key) or "") for key in ("title", "evidence_quote"))
+    )
+    title = _norm_text(str(row.get("title") or ""))
+    text = _norm_text(
+        " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "title",
+                "abstract_excerpt",
+                "evidence_sentence",
+                "design_excerpt",
+            )
+        )
+    )
+    population_mismatch = bool(
+        _conversational_population_filter(source)
+        and re.search(
+            r"neonatal|newborn|preterm|pediatric|paediatric|\bchild(?:ren)?\b|\binfant",
+            text,
+            re.I,
+        )
+    )
+    care_setting_mismatch = bool(
+        re.search(
+            r"neuroanesthes|neurosurg|intraoperativ|permissive hypotension|"
+            r"induced hypotension|prehospital|helicopter emergency medical|"
+            r"nonintensive care unit admission|veterinary|\bdogs?\b|\bcats?\b",
+            text,
+            re.I,
+        )
+    )
+    case_report_mismatch = bool(
+        re.search(r"\bcase report\b", title, re.I)
+        or any(
+            "case report" in str(value or "").lower()
+            for value in row.get("publication_types") or []
+        )
+    )
+    pair_profile = _conversational_pair_profile(source_text)
+    if pair_profile:
+        profile_name, dimensions = pair_profile
+        dimension_matches = [
+            bool(re.search(match_pattern, text, re.I))
+            for _, _, match_pattern in dimensions
+        ]
+        title_matches = [
+            bool(re.search(match_pattern, title, re.I))
+            for _, _, match_pattern in dimensions
+        ]
+        icu = bool(re.search(r"\bICU\b|critical care|intensive care", text, re.I))
+        strata = list(row.get("matched_query_strata") or [])
+        stratum_score = max(
+            (
+                {
+                    "candidate_topic": 3,
+                    "direct_observational_candidates": 2,
+                    "clinical_landscape": 1,
+                    "critical_care_database": 1,
+                }.get(str(value), 0)
+                for value in strata
+            ),
+            default=0,
+        )
+        score = 4 * sum(dimension_matches) + 3 * sum(title_matches) + int(icu) + stratum_score
+        matched_dimensions = [
+            f"{profile_name}_{index + 1}"
+            for index, matched in enumerate(dimension_matches)
+            if matched
+        ]
+        if population_mismatch or care_setting_mismatch or case_report_mismatch:
+            return {
+                "disposition": "exclude",
+                "fit": (
+                    "population_mismatch"
+                    if population_mismatch
+                    else (
+                        "care_setting_mismatch"
+                        if care_setting_mismatch
+                        else "design_mismatch"
+                    )
+                ),
+                "score": -100,
+                "matched_dimensions": matched_dimensions,
+                "rationale": "Excluded because the population, care setting, or publication design does not match the selected ICU candidate.",
+            }
+        if not (all(dimension_matches) and icu):
+            return {
+                "disposition": "exclude",
+                "fit": "topic_mismatch",
+                "score": score,
+                "matched_dimensions": matched_dimensions,
+                "rationale": "Excluded because the metadata did not jointly match both selected scientific concepts in an ICU setting.",
+            }
+        direct = all(title_matches)
+        return {
+            "disposition": "include",
+            "fit": "direct_retrieval_fit" if direct else "adjacent_retrieval_fit",
+            "score": score,
+            "matched_dimensions": matched_dimensions,
+            "rationale": (
+                "Direct retrieval fit for both selected scientific concepts in an ICU setting; full scientific screening is still required."
+                if direct
+                else "Adjacent retrieval fit for both selected scientific concepts in an ICU setting; it does not establish novelty or causal support."
+            ),
+        }
+    core = bool(re.search(r"hypotension|\bshock\b|hemodynamic", text, re.I))
+    title_core = bool(re.search(r"hypotension|\bshock\b|hemodynamic", title, re.I))
+    icu = bool(re.search(r"\bICU\b|critical care|intensive care", text, re.I))
+    practice = bool(
+        re.search(
+            r"practice (?:variation|pattern)|variation in [^.]{0,80}"
+            r"(?:treatment|management|use|administration)|"
+            r"(?:physician|clinician|hospital|ICU)[^.]{0,50}"
+            r"(?:variation|variability|practice pattern)|"
+            r"organizational structure|staffing level",
+            text,
+            re.I,
+        )
+    )
+    temporal = bool(
+        re.search(
+            r"nighttime|nocturnal|overnight|after-hours|out-of-hours|"
+            r"night shift|weekend|weekday nighttime",
+            text,
+            re.I,
+        )
+    )
+    strategy = bool(
+        re.search(
+            r"vasopressor|vasoactive|norepinephrine|noradrenaline|vasopressin|"
+            r"fluid resuscitation|fluid administration|fluid bolus|"
+            r"resuscitation strateg",
+            text,
+            re.I,
+        )
+    )
+    explicit_treatment_modality = bool(
+        strategy
+        or re.search(
+            r"shock team|mechanical circulatory support|vasoactive|vasopressor|"
+            r"fluid resuscitation|fluid administration",
+            title,
+            re.I,
+        )
+    )
+    asks_variation = bool(
+        re.search(
+            r"variation|variability|difference|heterogeneity|差异|不一致|不同",
+            source_text,
+            re.I,
+        )
+    )
+    dimensions = [
+        label
+        for label, matched in (
+            ("hypotension_or_shock", core),
+            ("general_icu", icu),
+            ("practice_difference", practice),
+            ("night_or_staffing", temporal),
+            ("fluid_or_vasopressor_strategy", strategy),
+        )
+        if matched
+    ]
+    strata = list(row.get("matched_query_strata") or [])
+    stratum_score = max(
+        (
+            {
+                "candidate_topic": 3,
+                "direct_observational_candidates": 2,
+                "clinical_landscape": 1,
+                "critical_care_database": 1,
+            }.get(str(value), 0)
+            for value in strata
+        ),
+        default=0,
+    )
+    score = (
+        (6 if title_core else 0)
+        + (2 if core else 0)
+        + (1 if icu else 0)
+        + (6 if practice else 0)
+        + (4 if temporal else 0)
+        + (3 if strategy else 0)
+        + stratum_score
+    )
+    if population_mismatch or care_setting_mismatch or case_report_mismatch:
+        return {
+            "disposition": "exclude",
+            "fit": (
+                "population_mismatch"
+                if population_mismatch
+                else (
+                    "care_setting_mismatch"
+                    if care_setting_mismatch
+                    else "design_mismatch"
+                )
+            ),
+            "score": -100,
+            "matched_dimensions": dimensions,
+            "rationale": (
+                "Excluded from the main retrieval set because it is neonatal or pediatric while the prompt described a general ICU population."
+                if population_mismatch
+                else (
+                    "Excluded from the main retrieval set because it concerns perioperative, prehospital, veterinary, or non-ICU care rather than treatment after hypotension in the ICU."
+                    if care_setting_mismatch
+                    else "Excluded from the main retrieval set because a single case report cannot establish the observed ICU practice variation."
+                )
+            ),
+        }
+    if (
+        not core
+        or not icu
+        or (
+            asks_variation
+            and not (practice and (temporal or explicit_treatment_modality))
+        )
+    ):
+        return {
+            "disposition": "exclude",
+            "fit": "topic_mismatch",
+            "score": score,
+            "matched_dimensions": dimensions,
+            "rationale": "Excluded from the main retrieval set because the metadata did not jointly match the ICU hypotension/shock phenomenon and its observed practice difference.",
+        }
+    direct = bool(
+        practice
+        and (
+            temporal
+            or re.search(
+                r"organizational structure|staffing level|nighttime|weekend",
+                title,
+                re.I,
+            )
+        )
+    )
+    return {
+        "disposition": "include",
+        "fit": "direct_retrieval_fit" if direct else "adjacent_retrieval_fit",
+        "score": score,
+        "matched_dimensions": dimensions,
+        "rationale": (
+            "Direct retrieval fit for the observed ICU hypotension treatment difference; full scientific screening is still required."
+            if direct
+            else "Adjacent retrieval fit for ICU hypotension/shock management; it informs a candidate direction but does not establish novelty or causal support."
+        ),
+    }
+
+
+def _pubmed_prior_art(
+    queries: List[str], *, source: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    results_by_pmid: Dict[str, Dict[str, Any]] = {}
+    retrieval_by_pmid: Dict[str, Dict[str, List[str]]] = {}
+    query_strata: List[Dict[str, Any]] = []
     calls = 0
     errors: List[str] = []
-    for query in queries[:_MAX_DISCOVERY_QUERIES]:
+    scientific_index = 0
+    for index, query in enumerate(queries[:_MAX_DISCOVERY_QUERIES]):
+        if "[DOI]" in query:
+            stratum = "source_doi"
+        else:
+            stratum = (
+                _PRIOR_ART_QUERY_STRATA[scientific_index]
+                if scientific_index < len(_PRIOR_ART_QUERY_STRATA)
+                else f"prespecified_{index + 1}"
+            )
+            scientific_index += 1
+        ids: List[str] = []
+        rows: List[Dict[str, Any]] = []
         try:
-            ids = _pubmed_esearch(query, limit=5)
+            ids = _pubmed_esearch(query, limit=10)
             calls += 1
             if ids:
                 rows = _pubmed_article_records(ids)
                 calls += 1
                 for row in rows:
-                    row["query"] = query
-                results.extend(rows)
+                    pmid = str(row.get("pmid") or "").strip()
+                    if not pmid:
+                        continue
+                    results_by_pmid.setdefault(pmid, row)
+                    receipt = retrieval_by_pmid.setdefault(
+                        pmid, {"queries": [], "strata": []}
+                    )
+                    if query not in receipt["queries"]:
+                        receipt["queries"].append(query)
+                    if stratum not in receipt["strata"]:
+                        receipt["strata"].append(stratum)
         except Exception as exc:
             errors.append(str(exc)[:240])
+        query_strata.append(
+            {
+                "id": stratum,
+                "query": query,
+                "returned_count": len(ids),
+                "retained_count": sum(
+                    1 for row in rows if str(row.get("pmid") or "").strip()
+                ),
+            }
+        )
     deduped: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in results:
-        pmid = str(row.get("pmid") or "")
-        if not pmid or pmid in seen:
-            continue
-        seen.add(pmid)
-        deduped.append(row)
+    for pmid, row in results_by_pmid.items():
+        retrieval = retrieval_by_pmid.get(pmid) or {"queries": [], "strata": []}
+        deduped.append(
+            {
+                **row,
+                "query": (retrieval["queries"] or [""])[0],
+                "matched_queries": list(retrieval["queries"]),
+                "matched_query_strata": list(retrieval["strata"]),
+            }
+        )
+    screened = [
+        {
+            **row,
+            "retrieval_screen": _conversational_prior_art_screen(row, source),
+            "_retrieval_order": index,
+        }
+        for index, row in enumerate(deduped)
+    ]
+    included = sorted(
+        (
+            row
+            for row in screened
+            if (row.get("retrieval_screen") or {}).get("disposition") != "exclude"
+        ),
+        key=lambda row: (
+            -int((row.get("retrieval_screen") or {}).get("score") or 0),
+            int(row.get("_retrieval_order") or 0),
+        ),
+    )
+    excluded = [
+        row
+        for row in screened
+        if (row.get("retrieval_screen") or {}).get("disposition") == "exclude"
+    ]
+    for row in [*included, *excluded]:
+        row.pop("_retrieval_order", None)
     public_hits = [
         row
-        for row in deduped
+        for row in included
         if re.search(
             r"\b(MIMIC|eICU|HiRID|AUMC|SICdb|public database)\b",
             json.dumps(row, ensure_ascii=False),
@@ -4152,10 +6031,15 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
     status = (
         "searched" if deduped else ("search_failed" if errors else "searched_no_hits")
     )
-    if deduped:
+    if included:
         interpretation = (
-            f"Found {len(deduped)} metadata hit(s). Treat them as a map of what has been tried: "
+            f"Found {len(included)} retrieval-fit metadata hit(s) after excluding {len(excluded)} population/topic mismatch(es). Treat them as a map of what has been tried: "
             "which comparator, cohort, database, endpoint, and time window they used. This does not automatically kill the idea; it tells the planner how to refine the new ICU exploration."
+        )
+    elif deduped:
+        interpretation = (
+            f"PubMed returned {len(deduped)} metadata hit(s), but all failed the bounded population/topic retrieval screen. "
+            "This is not evidence of novelty; refine or broaden the candidate and search again."
         )
     elif errors:
         interpretation = "The metadata search failed or was incomplete. Do not claim novelty; keep the idea as a planning draft until prior art can be reviewed."
@@ -4167,12 +6051,20 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
         "searched_at": _now(),
         "network_calls": calls,
         "queries_to_run": queries,
-        "result_count": len(deduped),
-        "results": deduped[:12],
+        "query_strata": query_strata,
+        "result_count": len(included),
+        "retrieved_result_count": len(deduped),
+        "excluded_result_count": len(excluded),
+        "results": included[:12],
+        "excluded_results": excluded[:12],
         "public_database_used_by_prior_work": (
             "possible" if public_hits else "not_detected_in_metadata"
         ),
-        "direct_same_topic_hits": deduped[:5],
+        "direct_same_topic_hits": [
+            row
+            for row in included
+            if (row.get("retrieval_screen") or {}).get("fit") == "direct_retrieval_fit"
+        ][:5],
         "errors": errors,
         "reason": "PubMed metadata search only; full text and external LLM review were not used.",
         "opportunity_frame": interpretation,
@@ -4242,12 +6134,54 @@ def _assert_no_row_payload(payload: Dict[str, Any]) -> None:
         )
 
 
+def _outcome_evidence_text(text: str) -> str:
+    """Remove bounded negative instructions before outcome detection.
+
+    Idea-mining prompts often say "do not default to mortality". The word
+    mortality is then a rejected option, not source evidence for an outcome.
+    """
+
+    value = str(text or "")
+    competing_event_patterns = (
+        r"(?:死亡|病死率)[^。；;\n]{0,32}(?:如何)?(?:处理|竞争事件|纳入|排除)",
+        r"\b(?:death|mortality)\b[^.;\n]{0,64}\b(?:handling|handled|competing event|included|excluded)\b",
+        r"\b(?:handling|treat|treated|consider)\b[^.;\n]{0,48}\b(?:death|mortality)\b",
+    )
+    for pattern in competing_event_patterns:
+        value = re.sub(pattern, " ", value, flags=re.I)
+    mortality_rejection_patterns = (
+        r"(?:不|不要|不得|不能|并非|不是)[^。；;\n]{0,32}(?:院内)?(?:死亡|病死率)",
+        r"\b(?:do not|don't|must not|should not|not)\b[^.;\n]{0,48}\b(?:death|mortality|survival)\b",
+    )
+    mortality_rejected = any(
+        re.search(pattern, value, flags=re.I)
+        for pattern in mortality_rejection_patterns
+    )
+    for pattern in mortality_rejection_patterns:
+        value = re.sub(pattern, " ", value, flags=re.I)
+    if mortality_rejected:
+        # A model may synthesize a positive-looking title such as
+        # ``fluid balance and mortality`` even when another source field
+        # contains the user's explicit "do not default to mortality"
+        # instruction.  The rejection must dominate across the bounded source
+        # bundle; otherwise a generated title silently reverses user intent.
+        value = re.sub(
+            r"\b(?:in[- ]hospital\s+)?(?:death|mortality|survival)\b|(?:院内)?(?:死亡|病死率)",
+            " ",
+            value,
+            flags=re.I,
+        )
+    return value
+
+
 def _pick_outcome(text: str, hits: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    low = text.lower()
+    low = _outcome_evidence_text(text).lower()
     if any(tok in low for tok in ["death", "mortality", "survival", "死亡", "病死"]):
         return _concept_hit("death")
     for row in hits:
-        if row.get("concept_id") in {"death", "los_icu", "aki"}:
+        if row.get("concept_id") == "death":
+            continue
+        if row.get("concept_id") in {"los_icu", "aki"}:
             return row
     # No outcome evidence in the source text: leave the outcome unassigned
     # instead of fabricating "death" for every idea.
@@ -4262,6 +6196,7 @@ def _pick_predictor(
         if row.get("concept_id") != outcome_id and row.get("concept_id") not in {
             "death",
             "los_icu",
+            *_VENTILATION_EPISODE_CONCEPTS,
         }:
             return row
     return None
@@ -4301,7 +6236,16 @@ def _select_idea_concepts(
             if concept_id in by_id:
                 add(concept_id, "exposure")
                 break
-    if any(
+    if any(tok in low for tok in ("fluid balance", "液体平衡")):
+        for concept_id in (
+            "fluid_balance_cumulative",
+            "fluid_balance",
+            "total_input_ml",
+        ):
+            if concept_id in by_id:
+                add(concept_id, "exposure")
+                break
+    elif any(
         tok in low
         for tok in (
             "fluid",
@@ -4309,18 +6253,20 @@ def _select_idea_concepts(
             "intravenous volume",
             "fluid-sparing",
             "resuscitation",
+            "液体",
+            "补液",
         )
     ):
         for concept_id in (
             "total_input_ml",
-            "fluid_balance_cumulative",
             "fluid_balance",
+            "fluid_balance_cumulative",
         ):
             if concept_id in by_id:
                 add(concept_id, "exposure")
                 break
     for concept_id in _SEVERITY_PRIORITY:
-        if concept_id in by_id:
+        if concept_id in by_id and concept_id not in _VENTILATION_EPISODE_CONCEPTS:
             add(concept_id, "covariate_or_subgroup")
     if outcome:
         selected.append({**outcome, "role": "outcome"})
@@ -4330,7 +6276,12 @@ def _select_idea_concepts(
         concept_id = str(row.get("concept_id"))
         if concept_id in {"death", "los_icu"}:
             continue
-        selected.append({**row, "role": "feature"})
+        role = (
+            "eligibility_or_episode"
+            if concept_id in _VENTILATION_EPISODE_CONCEPTS
+            else "feature"
+        )
+        selected.append({**row, "role": role})
     return _dedupe_concepts(selected)[:10]
 
 
@@ -4347,7 +6298,7 @@ def _dedupe_concepts(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _primary_predictor(concepts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    for role in ("exposure", "predictor", "covariate_or_subgroup", "feature"):
+    for role in ("exposure", "predictor"):
         for row in concepts:
             if row.get("role") == role and row.get("concept_id") not in {
                 "death",
@@ -4415,12 +6366,12 @@ def _concept_set_label(concepts: List[Dict[str, Any]]) -> str:
     ]
     if exposures:
         return " + ".join(exposures[:3])
-    features = [
+    predictors = [
         str(row.get("label"))
         for row in concepts
-        if row.get("role") not in {"outcome"} and row.get("label")
+        if row.get("role") == "predictor" and row.get("label")
     ]
-    return " + ".join(features[:3])
+    return " + ".join(predictors[:3])
 
 
 def _rationale(
@@ -4464,6 +6415,8 @@ def _go_reason(go: str, feasibility: Dict[str, Any], prior_art: Dict[str, Any]) 
     if go == "recommend":
         return "Mapped concepts are present in the active export; prior-art search still needs explicit review before reporting novelty."
     if go == "hold":
+        if feasibility.get("tier") == "design_incomplete":
+            return "Confirm the primary exposure or predictor and explicit outcome, then repeat the feasibility assessment."
         if feasibility.get("tier") == "demo_only":
             return (
                 feasibility.get("reason")
@@ -4483,6 +6436,8 @@ def _next_action(go: str, feasibility: Dict[str, Any]) -> str:
     if go == "recommend":
         return "Review feasibility statistics, interpret prior art, edit the plan, then hand off to Agent Projects."
     if go == "hold":
+        if feasibility.get("tier") == "design_incomplete":
+            return "Confirm the primary exposure or predictor and explicit outcome, then repeat the feasibility assessment."
         if feasibility.get("tier") == "demo_only":
             return "Select a real EasyICU export, rerun feasibility assessment, then generate the plan."
         # A held idea has the concept in the dictionary but needs more data:
@@ -4580,6 +6535,10 @@ def _extra_aliases(concept_id: str, label: str) -> set[str]:
                 "fluid-sparing",
                 "restricted fluid",
                 "fluid resuscitation",
+                "液体",
+                "液体平衡",
+                "累计液体平衡",
+                "液体复苏",
             }
         )
     if concept_id in {
@@ -4601,6 +6560,9 @@ def _extra_aliases(concept_id: str, label: str) -> set[str]:
                 "noninvasive ventilation",
                 "non-invasive ventilation",
                 "机械通气",
+                "撤机",
+                "脱机",
+                "呼吸机脱离",
             }
         )
     if concept_id == "death":

@@ -64,6 +64,145 @@ def _scientific() -> PreparedScientificLaunch:
     )
 
 
+def test_full_launch_materializes_planner_proposed_exposure_and_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    request = ResearchPipelineLaunchRequest(
+        **{
+            **_request().__dict__,
+            "budget_mode": "full_reviewed",
+            "study_context": {
+                "id": "study-1",
+                "question": "Is lactate associated with hospital mortality?",
+                "data_source": {"database": "miiv"},
+            },
+        }
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(preparation, "_neutral_materialization_scope", lambda study, **_kwargs: study)
+    monkeypatch.setattr(preparation, "_target_outcome", lambda _study: None)
+    monkeypatch.setattr(preparation, "_primary_exposure", lambda _study: None)
+    monkeypatch.setattr(
+        preparation,
+        "_metadata_only_planning_coordinates",
+        lambda **_kwargs: {
+            "target_outcome": "death",
+            "primary_exposure": "lact",
+            "endpoint": None,
+        },
+    )
+    monkeypatch.setattr(preparation, "_validate_primary_concept_selection", lambda *_args: None)
+    monkeypatch.setattr(preparation, "_configured_covariates", lambda _study: ())
+    monkeypatch.setattr(preparation, "_configured_covariate_selection", lambda _study: "planner_selectable")
+    monkeypatch.setattr(preparation, "_configured_sensitivity_specs", lambda _study: ())
+    monkeypatch.setattr(preparation, "_cohort_window", lambda _study: (0.0, 24.0))
+    monkeypatch.setattr(
+        preparation,
+        "_validate_analysis_design",
+        lambda _study: {"variance_estimator": "model_based"},
+    )
+
+    def foundation(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "allowed_modules": ("labevents", "outcome", "demographics"),
+            "static_concepts": ("age",),
+            "outcome_concepts": ("death",),
+            "required_feature_concepts": ("lact",),
+            "require_outcome": True,
+            "primary_exposure_source_concept": "lact",
+        }
+
+    monkeypatch.setattr(preparation, "_data_foundation_profile", foundation)
+    monkeypatch.setattr(
+        preparation.dataio,
+        "validate_research_pipeline_source",
+        lambda *_args, **_kwargs: {"binding": {"sha256": "a" * 64}},
+    )
+
+    scientific = preparation._prepare_scientific_launch(request)
+
+    assert captured["target"] == "death"
+    assert captured["primary_exposure"] == "lact"
+    assert scientific.foundation_profile["required_feature_concepts"] == ("lact",)
+
+
+def test_candidate_plan_defers_unresolved_analysis_design_to_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    request = ResearchPipelineLaunchRequest(
+        **{
+            **_request().__dict__,
+            "study_context": {
+                "id": "study-1",
+                "question": "Is lactate associated with hospital mortality?",
+                "primary_exposure": "24-hour maximum lactate",
+                "outcome": "hospital mortality",
+                "analysis_design": {},
+                "data_source": {"database": "miiv"},
+            },
+        }
+    )
+    monkeypatch.setattr(
+        preparation,
+        "_validate_analysis_design",
+        lambda _study: (_ for _ in ()).throw(
+            AssertionError("candidate planning must not require execution design")
+        ),
+    )
+
+    scientific = preparation._prepare_scientific_launch(request)
+
+    assert scientific.metadata_only_planning is True
+    assert scientific.validated_analysis_design == {}
+    assert scientific.patient_grouping is None
+
+
+def test_candidate_plan_projects_preconfirmed_patient_grouping_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    grouping = object()
+    request = ResearchPipelineLaunchRequest(
+        **{
+            **_request().__dict__,
+            "study_context": {
+                "id": "study-1",
+                "question": "Is lactate associated with hospital mortality?",
+                "analysis_design": {
+                    "analysis_unit": "icu_stay",
+                    "variance_estimator": "cluster_robust",
+                    "cluster_unit": "patient",
+                },
+                "data_source": {"database": "miiv"},
+            },
+        }
+    )
+    monkeypatch.setattr(
+        preparation,
+        "_validate_analysis_design",
+        lambda _study: (_ for _ in ()).throw(
+            AssertionError("candidate planning must remain metadata-only")
+        ),
+    )
+    monkeypatch.setattr(
+        preparation,
+        "_patient_grouping_for_analysis_design",
+        lambda _study: grouping,
+    )
+
+    scientific = preparation._prepare_scientific_launch(request)
+
+    assert scientific.metadata_only_planning is True
+    assert scientific.validated_analysis_design == {}
+    assert scientific.patient_grouping is grouping
+
+
 def test_preparation_compiles_three_frozen_states_in_authority_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
