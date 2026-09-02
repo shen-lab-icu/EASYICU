@@ -352,7 +352,9 @@
         host.setBusy(false);
         host.render();
         if (payload && payload.next_action === 'replan') {
-          await startFormalPlanGeneration('plan_configuration_superseded');
+          await startFormalPlanGeneration(
+            'plan_configuration_superseded', {automatic: true},
+          );
         } else if (payload && payload.next_action === 'reextract') {
           host.setError(tr(
             'This option needs a new timestamped extraction. EasyICU has saved the choice and kept analysis paused.',
