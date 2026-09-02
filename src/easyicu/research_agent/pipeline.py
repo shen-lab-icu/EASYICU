@@ -2606,6 +2606,19 @@ class ResearchAgentPipeline:
                 self._scientific_runtime_authorities.bind_plan(plan)
             )
             findings.extend(scientific_runtime_compile_findings)
+            # A signed runtime may replace one generic primary product with a
+            # richer, exact result family (for example an effect curve plus an
+            # aligned standardised-risk curve).  The earlier renderer pass
+            # cannot select a contract for products that do not exist yet.
+            # Re-run the generic renderer owner after that late binding so the
+            # human-reviewed plan, not just Execute, carries the exact figure
+            # sources and panel roles.  The selection helpers are idempotent,
+            # so ordinary plans already closed by the first pass are unchanged.
+            plan, post_runtime_renderer_findings = (
+                _figure_plan.select_deterministic_result_renderers(plan=plan)
+            )
+            findings.extend(post_runtime_renderer_findings)
+            plan = _figure_plan.apply_deterministic_figure_panels(plan, findings)
         # The endpoint half of the same declaration, checked for every plan
         # rather than only inside the cohort branch above: a family can require
         # a typed endpoint whether or not it also defines an analysis cohort.

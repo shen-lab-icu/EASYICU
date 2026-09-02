@@ -21,7 +21,7 @@ def _errors(findings):
 
 
 def test_accepts_statistic_adjusted_sofa2_odds_ratio_dict(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_association_step(ra, step_id="03b_event_count_check"),
@@ -40,7 +40,7 @@ def test_accepts_statistic_adjusted_sofa2_odds_ratio_dict(ra):
 
 
 def test_accepts_primary_estimates_list_first_finite_or(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_association_step(ra),
@@ -60,7 +60,7 @@ def test_accepts_primary_estimates_list_first_finite_or(ra):
 
 
 def test_accepts_generic_primary_statistic_value_with_ci(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_association_step(ra),
@@ -77,7 +77,7 @@ def test_accepts_generic_primary_statistic_value_with_ci(ra):
 
 
 def test_primary_step_cannot_borrow_a_sibling_effect_estimate(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_association_step(ra),
@@ -112,7 +112,7 @@ def test_primary_step_cannot_borrow_a_sibling_effect_estimate(ra):
 
 
 def test_missing_exposure_or_outcome_count_is_not_primary_or(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_association_step(ra),
@@ -130,7 +130,7 @@ def test_missing_exposure_or_outcome_count_is_not_primary_or(ra):
 
 
 def test_table_prevalence_step_does_not_satisfy_later_primary_model(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_association_step(ra, step_id="04_primary_adjusted_association_model"),
@@ -179,7 +179,7 @@ def test_prediction_auroc_satisfied_by_sibling_training_step(ra):
     """A figure step that renders an upstream training step's metrics must not
     fail when its own summary lacks the metric under a recognised key but the
     training step genuinely produced and bound it (M2 regression)."""
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_prediction_figure_step(ra),
@@ -223,7 +223,7 @@ def test_prediction_auroc_satisfied_by_sibling_training_step(ra):
 def test_prediction_auroc_missing_everywhere_still_errors(ra):
     """The fallback only credits a genuinely-bound sibling metric — when no step
     produced an AUROC, the requirement must still fail (no silent pass)."""
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_prediction_figure_step(ra),
@@ -265,7 +265,7 @@ def test_feature_freeze_prep_step_not_subject_to_clustering_contract(ra):
     clustering must not be forced to report a silhouette/cluster count. It
     self-declared it "froze the feature set but did not fit clusters" yet its
     null placeholder metrics fail-closed the entire run."""
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_feature_freeze_prep_step(ra),
@@ -305,7 +305,7 @@ def test_clustering_metric_satisfied_by_sibling_clustering_step(ra):
     """A clustering figure/render step whose own summary lacks the metric under a
     recognised key must not fail when the dedicated clustering step genuinely
     produced and bound it (M3 cross-step analogue of the AUROC fallback)."""
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=_clustering_figure_step(ra),
@@ -352,7 +352,7 @@ def test_clustering_metric_missing_everywhere_still_errors(ra):
     """The clustering fallback only credits a genuinely-bound sibling metric —
     when no step produced a silhouette/cluster count, the requirement must still
     fail (no silent pass)."""
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=ra.AnalysisStep(
@@ -375,7 +375,7 @@ def test_clustering_metric_missing_everywhere_still_errors(ra):
 
 
 def test_rejects_nonfinite_primary_effect_values(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     for value in (math.nan, math.inf, -math.inf):
         findings = _step_contract_findings(

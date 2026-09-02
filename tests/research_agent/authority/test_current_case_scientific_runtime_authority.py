@@ -1045,7 +1045,7 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     figure = bound.steps[5]
     assert figure.inputs == [
         authority.curve_product,
-        "table:absolute_risk_context",
+        authority.adjusted_absolute_risk_product,
         "table:robustness_summary",
         "table:measurement_process",
     ]
@@ -1302,7 +1302,7 @@ def test_landmark_authority_prefers_four_table_hero_over_robustness_figure() -> 
     assert robustness_figure.inputs == ["table:robustness_summary"]
     assert publication_figure.inputs == [
         authority.curve_product,
-        "table:absolute_risk_context",
+        authority.adjusted_absolute_risk_product,
         "table:robustness_summary",
         "table:measurement_process_audit",
     ]

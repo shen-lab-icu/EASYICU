@@ -1,8 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/cohort_contract.py",
-      "src/easyicu/research_agent/schema.py"
+      "src/easyicu/research_agent/agents/core.py"
     ],
     "summary_changes": {}
   },
@@ -387,15 +386,46 @@
       "summary_changes": {}
     },
     {
-      "reason": "Refresh deterministic source hashes after the test-owner directory migration; provider calls and patient-data reads remain zero.",
+      "reason": "Re-adjudicate the provider-free, patient-data-free Canonical9 envelope after current typed planning, reporting, resource-owner, and dictionary changes. Both measured Planner maxima decrease (61,262 to 60,841 bytes with resources; 56,622 to 56,201 without), coder prompt size and selected-resource count remain unchanged, and provider calls and patient-data reads remain zero.",
       "source_digest_changes": [
         "src/easyicu/research_agent/planning/cohort_contract.py",
+        "src/easyicu/research_agent/reporting/article_contract.py",
         "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 60841,
+          "was": 61262
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 56201,
+          "was": 56622
+        }
+      }
+    },
+    {
+      "reason": "Correct the immediately prior snapshot to measure the live src checkout, matching pytest and production source resolution rather than an older installed package. The provider-free, patient-data-free Canonical9 maxima remain at 61,262 bytes with resources and 56,622 without; coder size, selected resources, provider calls, and patient-data reads are unchanged.",
+      "source_digest_changes": [],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 61262,
+          "was": 60841
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 56622,
+          "was": 56201
+        }
+      }
+    },
+    {
+      "reason": "Refresh deterministic prompt-resource hashes after extracting planner and manuscript prompt owners; provider and patient-data counts remain zero.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/agents/core.py"
       ],
       "summary_changes": {}
     }
   ],
-  "baseline_reason": "Refresh deterministic source hashes after the test-owner directory migration; provider calls and patient-data reads remain zero.",
+  "baseline_reason": "Refresh deterministic prompt-resource hashes after extracting planner and manuscript prompt owners; provider and patient-data counts remain zero.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -407,7 +437,7 @@
   "source_sha256": {
     "src/easyicu/data/concept-dict.json": "e3fd2fcb9d4a65fdaa58c5bc1edece0b1d8e7c685c13310bedef86fdd7138b00",
     "src/easyicu/data/sofa2-dict.json": "71d67c479dfef8d0aad1f6fb02d1ca9dbc4243ea4f10b84e33ba8c9ced0cbbc3",
-    "src/easyicu/research_agent/agents/core.py": "ebae8debffb032db058440ca42c230bd9bb5d1b2e046779927f5e492b7880448",
+    "src/easyicu/research_agent/agents/core.py": "801fb1fe2a11b3cadc49e79389164f1dbad3477e1e7a8f3e3907a7d5fa06688d",
     "src/easyicu/research_agent/agents/planner.py": "eaf03b422afabec41388e0400aae7566e9b407d883a3d0551c3c54736aa7bbb7",
     "src/easyicu/research_agent/graph.py": "7582775c2f126b72ef6b444edcbe35750c3c309c1e459b878e12bba9eb9933b5",
     "src/easyicu/research_agent/know_how/registry.py": "d0e0f233d8f22e76351da6057adde8ca6b87ebdc2ca7c703224716c18c6a72ee",
@@ -420,7 +450,7 @@
     "src/easyicu/research_agent/planning/study_design.py": "8c26e3d42c1397839e3347317b90ceadab56beee58a500170cb182535aca7a3c",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "c8312eb455d0a65d8c3936bbf8f770cb15a64925923e679cc2509bcf5036d649",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "f4d94f95b595926cf22c68612f64bc1e56c024f793234c5857e1abb2933dbb73",
+    "src/easyicu/research_agent/reporting/article_contract.py": "11fcb41202300b3729a8db063fa0aac5eb2e2fb4a05bdc72a323f213b3d571a6",
     "src/easyicu/research_agent/research_context/outbound.py": "0a33010d53ddbb34c954162e15a68e4f4bb2893780451ad8b1a8d216c16b66b9",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",

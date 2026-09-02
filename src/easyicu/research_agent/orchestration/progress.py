@@ -101,6 +101,17 @@ def planner_retry_progress_callback(
     def callback(event: StructuredRetryProgress) -> None:
         attempt = int(event.attempt or 0)
         total = int(event.total_attempts or 0)
+        planning_unit = {
+            "progressive_planner_outline": "structure",
+            "progressive_planner_foundation": "rules",
+            "progressive_planner_step_materialization": "step",
+        }.get(str(event.role or "").strip(), "plan")
+        unit_label = {
+            "structure": "Study structure",
+            "rules": "Cohort and analysis rules",
+            "step": "Current executable plan step",
+            "plan": "Plan draft",
+        }[planning_unit]
         diagnostic: dict[str, Any] = {}
         validation_stage = safe_validation_stage(event.validation_stage)
         if validation_stage:
@@ -120,16 +131,16 @@ def planner_retry_progress_callback(
         if re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
             diagnostic["reason_code"] = reason_code
         if event.phase == "started":
-            label = f"Generating plan draft {attempt}/{total}."
+            label = f"{unit_label} validation attempt {attempt}/{total} started."
             status = "running"
         elif event.phase == "rejected":
             label = (
-                f"Plan draft {attempt}/{total} did not satisfy the scientific "
+                f"{unit_label} attempt {attempt}/{total} did not satisfy its "
                 + ("contract; retrying." if attempt < total else "contract.")
             )
             status = "running" if attempt < total else "error"
         elif event.phase == "accepted":
-            label = f"Plan draft {attempt}/{total} passed contract validation."
+            label = f"{unit_label} attempt {attempt}/{total} passed validation."
             status = "complete"
         else:  # pragma: no cover - Literal contract guards this path
             return
@@ -140,6 +151,8 @@ def planner_retry_progress_callback(
             total=total,
             status=status,
             run_id=run_id,
+            planning_unit=planning_unit,
+            retry_phase=event.phase,
             **diagnostic,
         )
 

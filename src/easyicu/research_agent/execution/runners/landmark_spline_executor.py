@@ -286,6 +286,25 @@ def run_landmark_spline_association(
         raise ValueError("signed landmark spline model did not converge")
 
     curve_values = np.linspace(lower, upper, sealed.curve_points)
+    # Publish the displayed complete-case exposure distribution on the same
+    # grid as both model curves.  This lets the figure show where the cohort
+    # actually contributes information without reopening patient rows or
+    # inventing density from the fitted curve.  Values outside the prespecified
+    # 10th--90th percentile display range remain outside the strip and the
+    # denominator is recorded explicitly.
+    density_edges = np.empty(len(curve_values) + 1, dtype=float)
+    density_edges[1:-1] = (curve_values[:-1] + curve_values[1:]) / 2.0
+    density_edges[0] = curve_values[0]
+    density_edges[-1] = curve_values[-1]
+    displayed_exposure = model_frame.loc[
+        model_frame["__exposure"].between(lower, upper, inclusive="both"),
+        "__exposure",
+    ].to_numpy(dtype=float)
+    density_counts, _ = np.histogram(displayed_exposure, bins=density_edges)
+    density_display_n = int(density_counts.sum())
+    if density_display_n <= 0:
+        raise ValueError("signed landmark curve range has no exposure observations")
+    density_fractions = density_counts.astype(float) / density_display_n
     curve_basis = patsy.build_design_matrices(
         [spline.design_info],
         {
@@ -315,18 +334,30 @@ def run_landmark_spline_association(
     fit_parameters = fit.params.to_numpy(dtype=float)
     fit_covariance = fit.cov_params().to_numpy(dtype=float)
     standardized_design = design.to_numpy(dtype=float, copy=True)
-    for x_value, basis_row in zip(curve_values, np.asarray(curve_basis)):
+    for grid_index, (x_value, basis_row) in enumerate(
+        zip(curve_values, np.asarray(curve_basis))
+    ):
         delta = np.asarray(basis_row, dtype=float) - reference_basis
         log_or = float(delta @ beta)
         variance = max(float(delta @ covariance @ delta), 0.0)
         se = math.sqrt(variance)
         curve_rows.append(
             {
+                "exposure": sealed.exposure_column,
                 "exposure_value": _finite(x_value),
                 "reference_exposure_value": _finite(reference),
                 "adjusted_odds_ratio": _finite(math.exp(log_or)),
                 "ci_low": _finite(math.exp(log_or - 1.96 * se)),
                 "ci_high": _finite(math.exp(log_or + 1.96 * se)),
+                "exposure_density_n": int(density_counts[grid_index]),
+                "exposure_density_fraction": _finite(
+                    density_fractions[grid_index]
+                ),
+                "exposure_density_display_n": density_display_n,
+                "exposure_density_population_n": int(len(model_frame)),
+                "exposure_density_scope": (
+                    "primary_complete_case_within_curve_range"
+                ),
             }
         )
         standardized_design[:, 1 : 1 + spline.shape[1]] = np.asarray(
@@ -351,6 +382,7 @@ def run_landmark_spline_association(
         logit_se = risk_se / (bounded_risk * (1.0 - bounded_risk))
         absolute_risk_rows.append(
             {
+                "exposure": sealed.exposure_column,
                 "exposure_value": _finite(x_value),
                 "reference_exposure_value": _finite(reference),
                 "adjusted_absolute_risk": _finite(standardized_risk),
@@ -359,6 +391,15 @@ def run_landmark_spline_association(
                 "standardization_n": int(len(model_frame)),
                 "events": int(model_frame["__outcome"].sum()),
                 "standardization_method": "marginal_over_primary_complete_case_covariates",
+                "exposure_density_n": int(density_counts[grid_index]),
+                "exposure_density_fraction": _finite(
+                    density_fractions[grid_index]
+                ),
+                "exposure_density_display_n": density_display_n,
+                "exposure_density_population_n": int(len(model_frame)),
+                "exposure_density_scope": (
+                    "primary_complete_case_within_curve_range"
+                ),
             }
         )
 

@@ -6,11 +6,10 @@ import math
 from typing import Any
 
 
-def coerce_optional_finite_float(value: Any) -> float | None:
+def coerce_optional_finite_float(value: Any, *, allow_bool: bool = True) -> float | None:
     """Return a coercible finite float, or ``None`` for invalid/non-finite input."""
-
     try:
-        number = float(value)
+        number = float(value) if allow_bool or not isinstance(value, bool) else math.nan
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None

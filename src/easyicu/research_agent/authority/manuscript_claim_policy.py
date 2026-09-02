@@ -12,10 +12,13 @@ from dataclasses import dataclass
 import re
 from typing import Callable, Optional, Sequence
 
+from .reader_numeric_display import round_reader_numeric_display
 from .scientific_claims import ScientificClaim
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
 EvidenceResolver = Callable[[str], bool]
+
+_NUMERIC_PROVENANCE_FOOTNOTE_RE = re.compile(r"\[\^claim_\d+\]")
 
 
 @dataclass(frozen=True)
@@ -379,11 +382,16 @@ def missing_scientific_claims_in_results(
     if span is None:
         return tuple(claim.claim_ref for claim in claims)
     start, end = span
-    normalized_results = " ".join(manuscript[start:end].split())
+    normalized_results = " ".join(
+        _NUMERIC_PROVENANCE_FOOTNOTE_RE.sub("", manuscript[start:end]).split()
+    )
     return tuple(
         claim.claim_ref
         for claim in claims
-        if " ".join(claim.render_reader_text().split()) not in normalized_results
+        if " ".join(
+            round_reader_numeric_display(claim.render_reader_text())[0].split()
+        )
+        not in normalized_results
     )
 
 

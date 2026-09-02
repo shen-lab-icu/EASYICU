@@ -43,6 +43,7 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
 
     import easyicu.research_agent.agents.core as agent_core
     import easyicu.research_agent.pipeline as pipeline_module
+    import easyicu.research_agent.planning.final_plan_shape as final_plan_module
     from easyicu.research_agent.agents.core import PlannerAgent
 
     original_run = PlannerAgent.run
@@ -58,12 +59,12 @@ def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
-        pipeline_module,
+        final_plan_module,
         "_enforce_advanced_plan_contract",
         lambda *, plan, context, **_kwargs: (plan, []),
     )
     monkeypatch.setattr(
-        pipeline_module,
+        final_plan_module,
         "_ensure_publication_figure_step_in_plan",
         lambda *, plan, context, force: (plan, []),
     )
@@ -2313,7 +2314,7 @@ def test_pipeline_replicate_writes_cross_database_comparison(ra, tmp_path: Path)
 
 
 def test_plan_contract_does_not_relabel_covariate_as_primary_bias_audit(ra):
-    from easyicu.research_agent import pipeline as pipeline_mod
+    from easyicu.research_agent.planning import advanced_plan_contract as plan_contract_mod
 
     ctx = ra.build_research_context(
         research_question=(
@@ -2349,7 +2350,7 @@ def test_plan_contract_does_not_relabel_covariate_as_primary_bias_audit(ra):
         ],
     )
 
-    revised, findings = pipeline_mod._enforce_advanced_plan_contract(
+    revised, findings = plan_contract_mod._enforce_advanced_plan_contract(
         plan=plan,
         context=ctx,
     )
@@ -2360,7 +2361,7 @@ def test_plan_contract_does_not_relabel_covariate_as_primary_bias_audit(ra):
 
 def test_survival_analysis_type_drives_km_figure_contract(ra):
     """A declared Cox owner receives contracts without losing agent ownership."""
-    from easyicu.research_agent import pipeline as pipeline_mod
+    from easyicu.research_agent.planning import advanced_plan_contract as plan_contract_mod
 
     ctx = ra.build_research_context(
         research_question=(
@@ -2393,7 +2394,7 @@ def test_survival_analysis_type_drives_km_figure_contract(ra):
         ],
     )
 
-    revised, findings = pipeline_mod._enforce_advanced_plan_contract(
+    revised, findings = plan_contract_mod._enforce_advanced_plan_contract(
         plan=plan,
         context=ctx,
     )
@@ -2404,32 +2405,6 @@ def test_survival_analysis_type_drives_km_figure_contract(ra):
     assert surv_step.method == "cox_proportional_hazards"
     assert "figure:survival_curves" in surv_step.expected_outputs
     assert "table:cox_summary" in surv_step.expected_outputs
-
-
-def test_normalise_contract_family_bridges_registry_keys(ra):
-    """The alias layer must map registry analysis_type keys onto contract
-    buckets so the stamped plan.analysis_type drives figure enforcement."""
-    from easyicu.research_agent import plan_utils
-
-    assert plan_utils._normalise_contract_family("survival") == "survival"
-    assert (
-        plan_utils._normalise_contract_family("trajectory_clustering") == "clustering"
-    )
-    # Result-bearing families that own their bucket pass through identically.
-    for key in (
-        "dynamic_prediction",
-        "causal_inference",
-        "treatment_response",
-        "validation",
-    ):
-        assert plan_utils._normalise_contract_family(key) == key
-    # Families without a figure/metric contract fall back to the heuristic.
-    assert plan_utils._normalise_contract_family("association_study") == ""
-    assert plan_utils._normalise_contract_family("descriptive_epidemiology") == ""
-    assert plan_utils._normalise_contract_family("multimodal") == ""
-    assert plan_utils._normalise_contract_family(None) == ""
-    # Legacy contract-bucket words still pass through unchanged.
-    assert plan_utils._normalise_contract_family("clustering") == "clustering"
 
 
 @pytest.mark.parametrize(
@@ -2469,7 +2444,7 @@ def test_specific_analysis_types_drive_their_own_figure_contract(
     ra, analysis_type, question, step_intent, method, figure_tag
 ):
     """A family label cannot synthesize a missing scientific method owner."""
-    from easyicu.research_agent import pipeline as pipeline_mod
+    from easyicu.research_agent.planning import advanced_plan_contract as plan_contract_mod
 
     ctx = ra.build_research_context(
         research_question=question,
@@ -2498,7 +2473,7 @@ def test_specific_analysis_types_drive_their_own_figure_contract(
         ],
     )
 
-    revised, findings = pipeline_mod._enforce_advanced_plan_contract(
+    revised, findings = plan_contract_mod._enforce_advanced_plan_contract(
         plan=plan, context=ctx
     )
 
@@ -4115,7 +4090,7 @@ with open("step_summary.json", "w") as f:
 
 
 def test_step_contract_accepts_figure_file_dicts(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.schema.AnalysisStep(
         step_id="02_mortality_figure",
@@ -4132,7 +4107,7 @@ def test_step_contract_accepts_figure_file_dicts(ra):
 
 
 def test_step_contract_blocks_unauthorized_cohort_redefinition_in_qc_step(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.schema.AnalysisStep(
         step_id="04_exposure_derivation_qc",
@@ -4159,7 +4134,7 @@ def test_step_contract_blocks_unauthorized_cohort_redefinition_in_qc_step(ra):
 
 
 def test_step_contract_allows_declared_primary_cohort_definition(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.schema.AnalysisStep(
         step_id="01_primary_cohort_flow",
@@ -4184,7 +4159,7 @@ def test_step_contract_allows_declared_primary_cohort_definition(ra):
 
 
 def test_step_contract_does_not_duplicate_host_measurement_provenance_gate(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.schema.AnalysisStep(
         step_id="04_exposure_derivation_qc",
@@ -4298,7 +4273,7 @@ table_one_data.append({"variable": "30-day readmission", "type": "binary", "coun
 
 
 def test_step_contract_findings_flag_missing_primary_association_estimate(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_primary_association_model",
@@ -4325,7 +4300,7 @@ def test_step_contract_findings_flag_missing_primary_association_estimate(ra):
 
 
 def test_step_contract_findings_accepts_nested_primary_association_estimate(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_primary_association_model",
@@ -4350,7 +4325,7 @@ def test_step_contract_findings_accepts_nested_primary_association_estimate(ra):
 
 
 def test_step_contract_findings_accepts_nested_primary_association_or(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
@@ -4375,7 +4350,7 @@ def test_step_contract_findings_accepts_nested_primary_association_or(ra):
 
 
 def test_step_contract_findings_accepts_nested_adjusted_sofa_odds_ratio_dict(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="04_association_model",
@@ -4412,7 +4387,7 @@ def test_step_contract_findings_accepts_nested_adjusted_sofa_odds_ratio_dict(ra)
 
 
 def test_step_contract_rejects_blocked_step_summary(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     findings = _step_contract_findings(
         step=ra.AnalysisStep(
@@ -4434,7 +4409,7 @@ def test_step_contract_rejects_blocked_step_summary(ra):
 
 
 def test_step_contract_findings_rejects_nested_ci_without_effect_value(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="04_association_model",
@@ -4463,7 +4438,7 @@ def test_step_contract_findings_rejects_nested_ci_without_effect_value(ra):
 
 
 def test_step_contract_findings_accepts_predictor_named_or_key(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
@@ -4481,7 +4456,7 @@ def test_step_contract_findings_accepts_predictor_named_or_key(ra):
 
 
 def test_step_contract_findings_accepts_primary_association_estimate_key(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="02_lactate_map_vaso_mortality_association",
@@ -4501,7 +4476,7 @@ def test_step_contract_findings_accepts_primary_association_estimate_key(ra):
 def test_step_contract_findings_does_not_require_or_for_data_quality_association_table(
     ra,
 ):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="01_component_completeness_qc",
@@ -4528,7 +4503,7 @@ def test_step_contract_findings_does_not_require_or_for_data_quality_association
 def test_step_contract_findings_does_not_treat_association_calibration_as_prediction(
     ra,
 ):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
@@ -4626,7 +4601,7 @@ def test_render_writer_evidence_digest_withholds_ambiguous_nested_p_values(ra):
 
 
 def test_step_contract_repair_guidance_flags_missing_primary_predictor_in_x(ra):
-    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+    from easyicu.research_agent.gates.step_repair import _step_contract_repair_guidance
 
     step = ra.AnalysisStep(
         step_id="04_primary_association_model",
@@ -4652,7 +4627,7 @@ coef = result.params['lactate_max_24h']
 
 
 def test_step_contract_findings_accepts_cv_prediction_metrics(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_model_training",
@@ -4670,7 +4645,7 @@ def test_step_contract_findings_accepts_cv_prediction_metrics(ra):
 
 
 def test_step_contract_findings_accepts_suffixed_prediction_metrics(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_model_evaluation",
@@ -4693,7 +4668,7 @@ def test_step_contract_findings_accepts_suffixed_prediction_metrics(ra):
 
 
 def test_step_contract_findings_requires_declared_prediction_metrics(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_model_training",
@@ -4720,7 +4695,7 @@ def test_step_contract_findings_requires_declared_prediction_metrics(ra):
 
 
 def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="01_trajectory_clustering",
@@ -4757,7 +4732,7 @@ def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
 
 
 def test_step_contract_findings_accepts_complete_case_primary_or_alias(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_complete_case_robustness",
@@ -4784,7 +4759,7 @@ def test_step_contract_findings_accepts_complete_case_primary_or_alias(ra):
 
 
 def test_step_contract_findings_requires_figure_path_for_figure_output(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
@@ -4808,7 +4783,7 @@ def test_step_contract_findings_requires_figure_path_for_figure_output(ra):
 
 
 def test_step_contract_findings_accepts_figure_path_for_figure_output(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
@@ -4841,7 +4816,7 @@ def test_step_contract_findings_accepts_figure_files_list_for_figure_output(ra):
     used to ignore well-formed list-valued figure manifests and falsely flag
     ``contract_failed`` even when the agent had produced PNG/SVG outputs.
     """
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="01_table_one",
@@ -4869,7 +4844,7 @@ def test_step_contract_findings_accepts_figure_files_list_for_figure_output(ra):
 
 def test_step_contract_findings_rejects_empty_figure_files_list(ra):
     """An empty figure list must still trigger the missing-figure contract."""
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="01_table_one",
@@ -4893,7 +4868,7 @@ def test_split_table_and_figure_outputs_in_plan_splits_mixed_step(ra):
     into a table-only step and an appended figure-only follow-up so that the
     coder can target each artefact independently.
     """
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -4940,7 +4915,7 @@ def test_split_table_and_figure_outputs_in_plan_splits_mixed_step(ra):
 
 
 def test_split_rehomes_figure_to_sole_exact_typed_source_producer(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -4985,7 +4960,7 @@ def test_split_rehomes_figure_to_sole_exact_typed_source_producer(ra):
 
 
 def test_split_preserves_dedicated_renderer_bound_to_exact_source(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5026,7 +5001,7 @@ def test_split_preserves_dedicated_renderer_bound_to_exact_source(ra):
 
 
 def test_split_deduplicates_mixed_figure_in_favor_of_dedicated_renderer(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5132,7 +5107,7 @@ def test_final_plan_shape_rejects_duplicate_figure_owners(ra):
 
 def test_split_table_and_figure_outputs_in_plan_no_op_when_pure_steps(ra):
     """Steps that are figure-only or table-only are left untouched."""
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5158,7 +5133,7 @@ def test_split_table_and_figure_outputs_in_plan_no_op_when_pure_steps(ra):
 
 
 def test_split_table_and_figure_outputs_keeps_figure_with_log_sidecar(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5198,7 +5173,7 @@ def test_split_table_and_figure_outputs_requires_replayable_parent_table(
     ra,
     source_output,
 ):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5222,7 +5197,7 @@ def test_split_table_and_figure_outputs_requires_replayable_parent_table(
 
 
 def test_split_effect_figure_requires_effect_bearing_parent_table(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5250,7 +5225,7 @@ def test_split_effect_figure_requires_effect_bearing_parent_table(ra):
 
 
 def test_split_effect_figure_requires_bound_table_to_prove_figure_scale(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5277,7 +5252,7 @@ def test_split_effect_figure_requires_bound_table_to_prove_figure_scale(ra):
 
 
 def test_split_effect_figure_when_exact_bound_table_proves_figure_scale(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5308,7 +5283,7 @@ def test_split_effect_figure_when_exact_bound_table_proves_figure_scale(ra):
 
 
 def test_split_generic_primary_adjusted_effect_from_planner_model_roster(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5362,7 +5337,7 @@ def test_split_generic_primary_adjusted_effect_from_planner_model_roster(ra):
     ],
 )
 def test_splitter_respects_non_primary_method_head_with_rider(ra, method):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5386,7 +5361,7 @@ def test_splitter_respects_non_primary_method_head_with_rider(ra, method):
 
 
 def test_split_table_and_figure_requires_unique_typed_parent_product(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5417,7 +5392,7 @@ def test_split_table_and_figure_requires_unique_typed_parent_product(ra):
 
 
 def test_split_table_and_figure_does_not_create_duplicate_child_id(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5456,7 +5431,7 @@ def test_split_table_and_figure_does_not_create_duplicate_child_id(ra):
 def test_split_table_and_figure_outputs_in_plan_no_op_for_advanced_self_contained_step(
     ra,
 ):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _split_table_and_figure_outputs_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5488,7 +5463,7 @@ def test_ensure_publication_figure_step_appends_when_missing(ra):
     though the research question asks for a publication-ready figure. The
     plan-contract guard appends a fallback step in that case.
     """
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _ensure_publication_figure_step_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5525,7 +5500,7 @@ def test_ensure_publication_figure_step_appends_when_missing(ra):
 
 def test_ensure_publication_figure_step_no_op_when_figure_exists(ra):
     """If the plan already produces a figure, the guard is a no-op."""
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _ensure_publication_figure_step_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5558,7 +5533,7 @@ def test_ensure_publication_figure_step_no_op_when_figure_exists(ra):
 
 def test_ensure_publication_figure_step_no_op_when_question_does_not_request_figure(ra):
     """If the question doesn't ask for a figure, the guard stays out of the way."""
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _ensure_publication_figure_step_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5585,8 +5560,10 @@ def test_ensure_publication_figure_step_no_op_when_question_does_not_request_fig
 
 
 def test_plan_cap_drops_figure_when_its_typed_source_closure_exceeds_cap(ra):
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.plan_graph import (
         _cap_plan_preserving_figure_steps,
+    )
+    from easyicu.research_agent.planning.figure_plan_mutation import (
         _ensure_publication_figure_step_in_plan,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -5634,7 +5611,7 @@ def test_plan_cap_preserves_figure_source_parent_pair(ra):
     ``05_sensitivity_comparison``, leaving a rendering-only step with no
     upstream source table.
     """
-    from easyicu.research_agent.pipeline import _cap_plan_preserving_figure_steps
+    from easyicu.research_agent.planning.plan_graph import _cap_plan_preserving_figure_steps
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     plan = AnalysisPlan(
@@ -5698,7 +5675,7 @@ def test_plan_cap_preserves_figure_source_parent_pair(ra):
 
 
 def test_plan_cap_does_not_displace_protected_completed_steps(ra):
-    from easyicu.research_agent.pipeline import _cap_plan_preserving_figure_steps
+    from easyicu.research_agent.planning.plan_graph import _cap_plan_preserving_figure_steps
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     plan = AnalysisPlan(
@@ -5766,7 +5743,7 @@ def test_plan_cap_does_not_displace_protected_completed_steps(ra):
 
 
 def test_plan_cap_makes_room_for_late_primary_anchor_without_exceeding_cap(ra):
-    from easyicu.research_agent.pipeline import _cap_plan_preserving_figure_steps
+    from easyicu.research_agent.planning.plan_graph import _cap_plan_preserving_figure_steps
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     plan = AnalysisPlan(
@@ -6639,8 +6616,10 @@ def test_apply_writer_evidence_repair_handles_each_repeated_occurrence(ra):
 
 
 def test_execution_gate_and_parent_figure_dependency_helpers(ra):
-    from easyicu.research_agent.pipeline import (
-        _execution_gate_status,
+    from easyicu.research_agent.reporting.readiness import (
+        execution_gate_status,
+    )
+    from easyicu.research_agent.planning.figure_step_contract import (
         _parent_step_id_for_figure_step,
     )
 
@@ -6661,7 +6640,7 @@ def test_execution_gate_and_parent_figure_dependency_helpers(ra):
     )
 
     assert _parent_step_id_for_figure_step(plan.steps[1]) == "01_model_training"
-    gate = _execution_gate_status(
+    gate = execution_gate_status(
         plan=plan,
         per_step_records=[
             {"step_id": "01_model_training", "status": "execution_failed"},
@@ -9578,8 +9557,9 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     run_status = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
     filtered = (run_dir / "manuscript_scaffold_filtered.md").read_text(encoding="utf-8")
 
-    assert critique["status"] == "pass"
+    assert critique["status"] == "blocked"
     assert critique["unsupported_claims"] == []
+    assert critique["suggested_repairs"]
     assert "performance was consistent" not in filtered
     # Filtering the unsupported result sentence succeeds, but a deliberately
     # citation-free mock manuscript must still fail the independent literature
@@ -9589,8 +9569,8 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
         "Manuscript literature authority is incomplete" in error
         for error in run_status["gates"]["evidence_errors"]
     )
-    assert not any(
-        finding["validator"] == "critic_agent" and "manuscript" in finding["message"]
+    assert any(
+        finding["validator"] == "manuscript_quality"
         for finding in manifest["findings"]
     )
 
@@ -9747,7 +9727,7 @@ def test_preserve_figure_steps_after_replan_re_attaches_dropped_figure_step(ra):
     pipeline must re-attach any dropped step whose ``expected_outputs``
     declare a figure/plot output.
     """
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_step_contract import (
         _preserve_figure_steps_after_replan,
         _step_produces_figure,
     )
@@ -9792,7 +9772,7 @@ def test_preserve_figure_steps_after_replan_re_attaches_dropped_figure_step(ra):
 
 def test_preserve_figure_steps_after_replan_no_op_when_figure_kept(ra):
     """No-op when the replanner kept all figure steps."""
-    from easyicu.research_agent.pipeline import _preserve_figure_steps_after_replan
+    from easyicu.research_agent.planning.figure_step_contract import _preserve_figure_steps_after_replan
 
     fig_step = ra.AnalysisStep(
         step_id="02_summary_figure",
@@ -9828,7 +9808,7 @@ def test_preserve_figure_steps_after_replan_no_op_when_figure_kept(ra):
 
 def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
     """An echoed pre-split parent must not strand the preserved render child."""
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_step_contract import (
         _preserve_figure_steps_after_replan,
     )
 
@@ -9884,7 +9864,7 @@ def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
 
 def test_preserved_robustness_parent_outputs_update_the_owner_spec(ra):
     """Restoring a render edge must keep the deterministic owner in sync."""
-    from easyicu.research_agent.pipeline import _preserve_figure_steps_after_replan
+    from easyicu.research_agent.planning.figure_step_contract import _preserve_figure_steps_after_replan
     from easyicu.research_agent.schema import RobustnessReplaySpec
 
     base_spec = RobustnessReplaySpec.model_validate(
@@ -9969,7 +9949,7 @@ def test_preserved_robustness_parent_outputs_update_the_owner_spec(ra):
 
 def test_preserve_figure_steps_after_replan_does_not_invent_missing_parent(ra):
     """A dropped producer remains a typed-DAG error; preservation cannot guess."""
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.planning.figure_step_contract import (
         _preserve_figure_steps_after_replan,
     )
 
@@ -10018,7 +9998,7 @@ def test_preserve_figure_steps_after_replan_does_not_invent_missing_parent(ra):
 
 
 def test_step_contract_repair_guidance_for_prediction_categorical_passthrough(ra):
-    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+    from easyicu.research_agent.gates.step_repair import _step_contract_repair_guidance
 
     step = ra.AnalysisStep(
         step_id="03_model_training",
@@ -10042,7 +10022,7 @@ def test_step_contract_repair_guidance_for_prediction_categorical_passthrough(ra
 
 
 def test_step_contract_repair_guidance_for_empty_sex_coercion(ra):
-    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+    from easyicu.research_agent.gates.step_repair import _step_contract_repair_guidance
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
@@ -10066,7 +10046,7 @@ def test_step_contract_repair_guidance_for_empty_sex_coercion(ra):
 
 
 def test_step_contract_repair_guidance_for_object_dtype_logit(ra):
-    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+    from easyicu.research_agent.gates.step_repair import _step_contract_repair_guidance
 
     step = ra.AnalysisStep(
         step_id="04_primary_association_model",
@@ -10090,7 +10070,7 @@ def test_step_contract_repair_guidance_for_object_dtype_logit(ra):
 
 
 def test_step_contract_repair_guidance_requires_figure_recording(ra):
-    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+    from easyicu.research_agent.gates.step_repair import _step_contract_repair_guidance
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
@@ -10115,7 +10095,7 @@ def test_step_contract_repair_guidance_requires_figure_recording(ra):
 
 
 def test_step_contract_repair_guidance_for_clustering_contract(ra):
-    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+    from easyicu.research_agent.gates.step_repair import _step_contract_repair_guidance
 
     step = ra.AnalysisStep(
         step_id="01_trajectory_clustering",
@@ -10140,7 +10120,7 @@ def test_step_contract_repair_guidance_for_clustering_contract(ra):
 
 
 def test_step_contract_repair_guidance_preserves_assignment_model_roster(ra):
-    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+    from easyicu.research_agent.gates.step_repair import _step_contract_repair_guidance
 
     step = ra.AnalysisStep(
         step_id="balance",
@@ -10400,48 +10380,6 @@ def test_semantic_aliases_bind_report_mortality_rate_to_outcome_rate(
     assert "cohort_summary" in aliases
 
 
-def test_advanced_plan_contract_preserves_prediction_evaluation_boundary(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import UserPreferences
-
-    ctx = ra.ResearchContext(
-        research_question="Build a mortality prediction model.",
-        cohort=ra.CohortDescriptor(
-            cohort_name="demo",
-            database="synthetic",
-            n_stays=10,
-            n_patients=10,
-        ),
-        variables=[],
-        user_preferences=UserPreferences(inferred_analysis_family="prediction_model"),
-    )
-    plan = ra.AnalysisPlan(
-        research_question=ctx.research_question,
-        steps=[
-            ra.AnalysisStep(
-                step_id="01_train_model",
-                intent="Train model.",
-                inputs=["age", "sex"],
-                expected_outputs=["model:trained_model"],
-            ),
-            ra.AnalysisStep(
-                step_id="02_evaluate_auroc",
-                intent="Evaluate AUROC from prior predictions.",
-                inputs=["01_train_model"],
-                expected_outputs=["statistic:auroc"],
-            ),
-        ],
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=ctx)
-
-    assert [step.step_id for step in revised.steps] == [
-        "01_train_model",
-        "02_evaluate_auroc",
-    ]
-    assert revised == plan
-    assert findings and findings[0].validator == "plan_contract"
-    assert findings[0].detail.get("missing_structured_owner") is True
 
 
 def test_figure_detection_uses_structured_artifacts_and_word_boundaries(ra):
@@ -11307,7 +11245,7 @@ model_df_subset = model_df[[outcome_col] + x_cols].copy()
 
 
 def test_step_contract_findings_accepts_textual_or_summary(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.gates.step_contract import _step_contract_findings
     from easyicu.research_agent.schema import AnalysisStep
 
     step = AnalysisStep(
@@ -11332,371 +11270,6 @@ def test_step_contract_findings_accepts_textual_or_summary(ra):
     assert [f for f in findings if f.severity == "error"] == []
 
 
-def test_advanced_plan_contract_normalizes_robustness_steps(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        AnalysisStep,
-        CohortDescriptor,
-        ResearchContext,
-        UserPreferences,
-    )
-
-    plan = AnalysisPlan(
-        research_question="Compare lactate missing-data strategies.",
-        steps=[
-            AnalysisStep(
-                step_id="01_missingness",
-                intent="Summarize missingness.",
-                expected_outputs=["table:missingness"],
-            ),
-            AnalysisStep(
-                step_id="03_model_fitting_complete_case",
-                intent="Fit complete-case logistic regression.",
-                expected_outputs=["model:complete_case_model"],
-            ),
-            AnalysisStep(
-                step_id="04_robustness_figure",
-                intent="Generate robustness figure from model outputs.",
-                expected_outputs=["figure:robustness_plot"],
-            ),
-        ],
-    )
-    context = ResearchContext(
-        research_question="Compare lactate missing-data strategies.",
-        cohort=CohortDescriptor(
-            cohort_name="cohort",
-            database="synthetic",
-            n_patients=10,
-            n_stays=10,
-        ),
-        variables=[],
-        target_outcome="death",
-        user_preferences=UserPreferences(inferred_analysis_family="robustness"),
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert [step.step_id for step in revised.steps] == [
-        "01_missingness",
-        "03_model_fitting_complete_case",
-        "04_robustness_figure",
-    ]
-    assert revised == plan
-    assert findings[0].detail.get("missing_structured_owner") is True
-
-
-def _survival_plan_with_only_association_steps(AnalysisPlan, AnalysisStep):
-    """A locked-survival plan the LLM wrote as a pure association study."""
-    return AnalysisPlan(
-        research_question=(
-            "Estimate the association between mechanical ventilation and 28-day "
-            "mortality respecting exposure timing and censoring."
-        ),
-        analysis_type="survival",
-        steps=[
-            AnalysisStep(
-                step_id="01_cohort_timezero_attrition",
-                intent="Define time zero, follow-up, and cohort attrition.",
-                method="descriptive",
-                expected_outputs=["table:cohort_attrition"],
-            ),
-            AnalysisStep(
-                step_id="03_table_one",
-                intent="Baseline characteristics.",
-                method="descriptive",
-                expected_outputs=["table:table_one"],
-            ),
-            AnalysisStep(
-                step_id="05_primary_landmark_association_model",
-                intent="Fit adjusted association model for the landmark outcome.",
-                method="association_study",
-                expected_outputs=["table:adjusted_association_estimates"],
-            ),
-            AnalysisStep(
-                step_id="05_primary_landmark_association_model_figure",
-                intent="Forest plot of adjusted effects.",
-                method="association_study",
-                expected_outputs=["figure:effect_forest"],
-            ),
-            AnalysisStep(
-                step_id="06_sensitivity_and_diagnostics",
-                intent="Sensitivity and model diagnostics.",
-                method="association_study",
-                expected_outputs=["table:robustness_results"],
-            ),
-        ],
-    )
-
-
-def test_advanced_plan_contract_does_not_choose_survival_method_for_agent(ra):
-    """A family mismatch is surfaced without rewriting the agent's science."""
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        AnalysisStep,
-        CohortDescriptor,
-        ResearchContext,
-    )
-
-    plan = _survival_plan_with_only_association_steps(AnalysisPlan, AnalysisStep)
-    context = ResearchContext(
-        research_question=plan.research_question,
-        cohort=CohortDescriptor(
-            cohort_name="cohort", database="synthetic", n_patients=10, n_stays=10
-        ),
-        variables=[],
-        target_outcome="death",
-        primary_exposure="vent",
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert revised == plan
-    assert findings and findings[0].validator == "plan_contract"
-    assert findings[0].detail.get("missing_structured_owner") is True
-    assert findings[0].detail.get("preserved_step_ids") == [
-        step.step_id for step in plan.steps
-    ]
-
-
-def test_advanced_plan_contract_never_converts_primary_model_cohort(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-
-    context = ra.ResearchContext(
-        research_question="Estimate survival while preserving the planned owners.",
-        cohort=ra.CohortDescriptor(
-            cohort_name="cohort", database="synthetic", n_patients=50, n_stays=50
-        ),
-        variables=[],
-        primary_exposure="exposure",
-        target_outcome="death",
-    )
-    plan = ra.AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="survival",
-        steps=[
-            ra.AnalysisStep(
-                step_id="01_primary_model_cohort",
-                intent=(
-                    "Prepare the primary model cohort for survival analysis and "
-                    "report attrition."
-                ),
-                method="cohort_definition",
-                expected_outputs=["table:cohort_attrition"],
-            ),
-            ra.AnalysisStep(
-                step_id="05_primary_association",
-                intent="Estimate the prespecified adjusted association.",
-                method="mixed_effects_regression",
-                expected_outputs=["table:association_estimates"],
-            ),
-        ],
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert revised == plan
-    assert [step.method for step in revised.steps] == [
-        "cohort_definition",
-        "mixed_effects_regression",
-    ]
-    assert findings[0].detail.get("missing_structured_owner") is True
-
-
-def test_advanced_plan_contract_preserves_survival_cohort_owner_boundary(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-
-    context = ra.ResearchContext(
-        research_question="Estimate time-to-event survival with Cox regression.",
-        cohort=ra.CohortDescriptor(
-            cohort_name="cohort", database="synthetic", n_patients=20, n_stays=20
-        ),
-        variables=[],
-        primary_exposure="exposure",
-        target_outcome="death",
-    )
-    plan = ra.AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="survival",
-        steps=[
-            ra.AnalysisStep(
-                step_id="01_survival_cohort",
-                intent="Define the survival cohort and report attrition.",
-                method="cohort_definition",
-                expected_outputs=["table:cohort_attrition"],
-            ),
-            ra.AnalysisStep(
-                step_id="05_primary_cox",
-                intent="Fit the prespecified Cox proportional-hazards model.",
-                method="cox_proportional_hazards",
-                expected_outputs=["table:hr"],
-            ),
-        ],
-    )
-
-    revised, _findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert [step.step_id for step in revised.steps] == [
-        "01_survival_cohort",
-        "05_primary_cox",
-    ]
-    assert revised.steps[0].method == "cohort_definition"
-    assert revised.steps[0].expected_outputs == ["table:cohort_attrition"]
-    assert revised.steps[1].method == "cox_proportional_hazards"
-    assert "table:cox_summary" in revised.steps[1].expected_outputs
-
-
-def test_advanced_plan_contract_preserves_explicit_kmeans_method(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-
-    context = ra.ResearchContext(
-        research_question="Discover longitudinal phenotypes with KMeans clustering.",
-        cohort=ra.CohortDescriptor(
-            cohort_name="cohort", database="synthetic", n_patients=20, n_stays=20
-        ),
-        variables=[],
-        target_outcome="death",
-    )
-    plan = ra.AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="trajectory_clustering",
-        steps=[
-            ra.AnalysisStep(
-                step_id="05_kmeans_phenotyping",
-                intent="Discover trajectory phenotypes with KMeans.",
-                method="kmeans_clustering",
-                expected_outputs=[
-                    "table:cluster_assignments",
-                    "table:cluster_characteristics",
-                ],
-            )
-        ],
-    )
-
-    revised, _findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert [step.step_id for step in revised.steps] == ["05_kmeans_phenotyping"]
-    assert revised.steps[0].method == "kmeans_clustering"
-    assert "manifest:cluster_selection" in revised.steps[0].expected_outputs
-    assert "statistic:silhouette_score" not in revised.steps[0].expected_outputs
-
-
-def test_clustering_contract_does_not_invent_mortality_characterization(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-
-    context = ra.ResearchContext(
-        research_question="Discover longitudinal phenotypes without outcome analysis.",
-        cohort=ra.CohortDescriptor(
-            cohort_name="cohort", database="synthetic", n_patients=20, n_stays=20
-        ),
-        variables=[],
-    )
-    plan = ra.AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="trajectory_clustering",
-        steps=[
-            ra.AnalysisStep(
-                step_id="05_gmm_phenotyping",
-                intent="Discover trajectory phenotypes with a Gaussian mixture model.",
-                method="gaussian_mixture_model",
-                expected_outputs=[
-                    "table:cluster_assignments",
-                    "statistic:cluster_count",
-                ],
-            )
-        ],
-    )
-
-    revised, _findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    outputs = revised.steps[0].expected_outputs
-    assert "table:cluster_mortality" not in outputs
-    assert "table:outcome_by_cluster" not in outputs
-
-
-def test_advanced_plan_contract_leaves_pure_association_family_alone(ra):
-    """A genuine association study is NOT force-converted (upgrade-only guard)."""
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        AnalysisStep,
-        CohortDescriptor,
-        ResearchContext,
-        UserPreferences,
-    )
-
-    plan = AnalysisPlan(
-        research_question="Is Sepsis-3 associated with mortality after adjustment?",
-        steps=[
-            AnalysisStep(
-                step_id="01_cohort",
-                intent="Cohort attrition.",
-                method="descriptive",
-                expected_outputs=["table:cohort_attrition"],
-            ),
-            AnalysisStep(
-                step_id="02_primary_association_model",
-                intent="Adjusted logistic association.",
-                method="association_study",
-                expected_outputs=["table:adjusted_association_estimates"],
-            ),
-        ],
-    )
-    context = ResearchContext(
-        research_question=plan.research_question,
-        cohort=CohortDescriptor(
-            cohort_name="cohort", database="synthetic", n_patients=10, n_stays=10
-        ),
-        variables=[],
-        target_outcome="death",
-        primary_exposure="sepsis3",
-        user_preferences=UserPreferences(inferred_analysis_family="association_study"),
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    step_ids = [s.step_id for s in revised.steps]
-    assert "01_survival_analysis" not in step_ids
-    assert step_ids == ["01_cohort", "02_primary_association_model"]
-    assert not any(
-        f.detail and f.detail.get("converted_from_association") for f in findings
-    )
-
-
-def test_advanced_plan_contract_does_not_rewrite_cluster_robust_association(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-
-    context = ra.ResearchContext(
-        research_question=(
-            "Estimate the mortality association using mixed effects with "
-            "cluster-robust SE and hospital-level clustering."
-        ),
-        cohort=ra.CohortDescriptor(
-            cohort_name="cohort", database="synthetic", n_patients=50, n_stays=50
-        ),
-        variables=[],
-        primary_exposure="exposure",
-        target_outcome="death",
-    )
-    plan = ra.AnalysisPlan(
-        research_question=context.research_question,
-        analysis_type="association_study",
-        steps=[
-            ra.AnalysisStep(
-                step_id="05_primary_association",
-                intent=context.research_question,
-                method="mixed_effects_regression",
-                expected_outputs=["table:association_estimates"],
-            )
-        ],
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert [step.step_id for step in revised.steps] == ["05_primary_association"]
-    assert revised.steps[0].method == "mixed_effects_regression"
-    assert not any(item.detail.get("family") == "clustering" for item in findings)
 
 
 def test_terminal_publication_repair_replan_skip_requires_satisfied_bundle(
@@ -11781,338 +11354,6 @@ def test_terminal_publication_repair_replan_skip_requires_satisfied_bundle(
     )
 
 
-def test_advanced_plan_contract_preserves_article_level_robustness_suite(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        AnalysisStep,
-        CohortDescriptor,
-        ResearchContext,
-        UserPreferences,
-    )
-
-    plan = AnalysisPlan(
-        research_question=(
-            "Estimate Sepsis-3 prevalence and adjusted mortality association "
-            "with visible attrition, missingness, and robustness."
-        ),
-        steps=[
-            AnalysisStep(
-                step_id="01_primary_cohort_and_exposure_definition",
-                intent="Define cohort eligibility, attrition, and Sepsis-3 exposure.",
-                expected_outputs=["table:cohort_attrition", "derived_variable:sepsis3"],
-            ),
-            AnalysisStep(
-                step_id="02_table_one_and_missingness",
-                intent="Render Table 1 baseline characteristics and missingness audit.",
-                expected_outputs=[
-                    "table:table_one",
-                    "table:missingness_measurement_audit",
-                ],
-            ),
-            AnalysisStep(
-                step_id="03_primary_adjusted_association",
-                intent="Fit adjusted association model and report odds ratio.",
-                expected_outputs=["table:adjusted_association_primary"],
-            ),
-            AnalysisStep(
-                step_id="04_robustness_grid",
-                intent="Run complete-case and alternative-definition sensitivity analyses.",
-                expected_outputs=["figure:robustness_grid"],
-            ),
-        ],
-    )
-    context = ResearchContext(
-        research_question=plan.research_question,
-        cohort=CohortDescriptor(
-            cohort_name="cohort",
-            database="synthetic",
-            n_patients=10,
-            n_stays=10,
-        ),
-        variables=[],
-        target_outcome="death",
-        primary_exposure="sepsis3",
-        user_preferences=UserPreferences(inferred_analysis_family="robustness"),
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert [step.step_id for step in revised.steps] == [
-        "01_primary_cohort_and_exposure_definition",
-        "02_table_one_and_missingness",
-        "03_primary_adjusted_association",
-        "04_robustness_grid",
-    ]
-    robustness_step = revised.steps[-1]
-    assert robustness_step.expected_outputs == ["figure:robustness_grid"]
-    assert revised == plan
-    assert findings[0].detail.get("missing_structured_owner") is True
-
-
-def test_advanced_plan_contract_does_not_duplicate_dedicated_robustness_renderer(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        AnalysisStep,
-        CohortDescriptor,
-        ResearchContext,
-        UserPreferences,
-    )
-
-    plan = AnalysisPlan(
-        research_question="Estimate an association with a complete-case sensitivity.",
-        steps=[
-            AnalysisStep(
-                step_id="01_cohort",
-                intent="Define and account for the analysis cohort.",
-                method="cohort_definition_and_attrition",
-                expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
-            ),
-            AnalysisStep(
-                step_id="02_table_one",
-                intent="Describe baseline characteristics.",
-                method="descriptive",
-                expected_outputs=["table:table_one"],
-            ),
-            AnalysisStep(
-                step_id="03_measurement_audit",
-                intent="Audit measurement availability.",
-                method="missingness_measurement_audit",
-                expected_outputs=["table:missingness_measurement_audit"],
-            ),
-            AnalysisStep(
-                step_id="04_primary_model",
-                planned_analysis_role="primary",
-                intent="Estimate the prespecified association.",
-                method="adjusted_association_models",
-                expected_outputs=["table:adjusted_association_estimates"],
-                model_requirements=[
-                    {
-                        "requirement_id": "primary_model",
-                        "outcome": "death",
-                        "outcome_type": "binary",
-                        "method_family": "statsmodels_logit_mle",
-                        "exposure_source": "exposure",
-                        "analysis_role": "primary",
-                        "analysis_set": "source_aware",
-                        "required_for_step_success": True,
-                        "covariates": [],
-                        "model_terms": [
-                            {
-                                "name": "exposure",
-                                "role": "exposure",
-                                "coding": "binary",
-                                "levels": ["0", "1"],
-                                "reference_level": "0",
-                                "transform": "treatment_contrast",
-                            }
-                        ],
-                        "exposure_levels": ["0", "1"],
-                        "exposure_reference_level": "0",
-                        "primary_contrast_level": "1",
-                    }
-                ],
-            ),
-            AnalysisStep(
-                step_id="05_robustness",
-                planned_analysis_role="sensitivity",
-                intent="Replay the primary model in the complete-case set.",
-                method="robustness_sensitivity",
-                expected_outputs=[
-                    "statistic:primary_or",
-                    "statistic:complete_case_n",
-                    "table:robustness_summary",
-                    "table:robustness_matrix",
-                    "statistic:robustness_summary",
-                    "log:missingness_strategy_notes",
-                ],
-            ),
-            AnalysisStep(
-                step_id="06_robustness_figure",
-                planned_analysis_role="auxiliary",
-                intent="Render the verified robustness matrix.",
-                method="visualization",
-                inputs=["table:robustness_matrix"],
-                expected_outputs=["figure:robustness"],
-                input_consumption_contracts=[
-                    {
-                        "input_key": "table:robustness_matrix",
-                        "mode": "all_rows",
-                    }
-                ],
-            ),
-        ],
-    )
-    context = ResearchContext(
-        research_question=plan.research_question,
-        cohort=CohortDescriptor(
-            cohort_name="cohort",
-            database="synthetic",
-            n_patients=10,
-            n_stays=10,
-        ),
-        variables=[],
-        target_outcome="death",
-        primary_exposure="exposure",
-        user_preferences=UserPreferences(inferred_analysis_family="robustness"),
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert revised == plan
-    assert findings == []
-    figure_outputs = [
-        output
-        for step in revised.steps
-        for output in step.expected_outputs
-        if output.startswith("figure:")
-    ]
-    assert figure_outputs == ["figure:robustness"]
-
-
-def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        AnalysisStep,
-        CohortDescriptor,
-        ResearchContext,
-        UserPreferences,
-    )
-
-    plan = AnalysisPlan(
-        research_question="Estimate vasopressor association with mortality and audit selection bias.",
-        steps=[
-            AnalysisStep(
-                step_id="01_cohort_summary",
-                intent="Summarize cohort and vasopressor exposure.",
-                expected_outputs=["table:cohort_summary"],
-            ),
-            AnalysisStep(
-                step_id="02_outcome_incidence",
-                intent="Report mortality incidence.",
-                expected_outputs=["statistic:mortality_rate"],
-            ),
-            AnalysisStep(
-                step_id="03_missingness_audit",
-                intent="Audit norepinephrine-equivalent missingness.",
-                expected_outputs=["table:missingness_profile"],
-            ),
-        ],
-    )
-    context = ResearchContext(
-        research_question="Estimate vasopressor association with mortality and audit selection bias.",
-        cohort=CohortDescriptor(
-            cohort_name="cohort",
-            database="synthetic",
-            n_patients=10,
-            n_stays=10,
-        ),
-        variables=[],
-        target_outcome="death",
-        user_preferences=UserPreferences(inferred_analysis_family="bias_audit"),
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert [step.step_id for step in revised.steps] == [
-        "01_cohort_summary",
-        "02_outcome_incidence",
-        "03_missingness_audit",
-    ]
-    assert revised == plan
-    assert findings[0].detail.get("missing_structured_owner") is True
-
-
-def test_advanced_plan_contract_does_not_rewrite_component_data_quality_audit(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        AnalysisStep,
-        CohortDescriptor,
-        ResearchContext,
-        UserPreferences,
-    )
-
-    plan = AnalysisPlan(
-        research_question=(
-            "Audit whether composite-score rows have enough measured components "
-            "before any outcome model is fit."
-        ),
-        steps=[
-            AnalysisStep(
-                step_id="01_component_completeness_qc",
-                intent="Check composite-score component completeness.",
-                expected_outputs=[
-                    "statistic:low_completeness_count",
-                    "table:component_completeness",
-                ],
-            )
-        ],
-    )
-    context = ResearchContext(
-        research_question=plan.research_question,
-        cohort=CohortDescriptor(
-            cohort_name="cohort",
-            database="synthetic",
-            n_patients=10,
-            n_stays=10,
-        ),
-        variables=[],
-        target_outcome="death",
-        user_preferences=UserPreferences(inferred_analysis_family="data_quality_audit"),
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert [step.step_id for step in revised.steps] == ["01_component_completeness_qc"]
-    assert findings == []
-
-
-def test_advanced_plan_contract_infers_robustness_without_user_preferences(ra):
-    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
-    from easyicu.research_agent.schema import (
-        AnalysisPlan,
-        AnalysisStep,
-        CohortDescriptor,
-        ResearchContext,
-    )
-
-    plan = AnalysisPlan(
-        research_question="Compare complete-case, missing-indicator, and reduced-variable lactate models.",
-        steps=[
-            AnalysisStep(
-                step_id="01_robustness_analysis",
-                intent="Compare complete-case and missing-indicator robustness strategies.",
-                expected_outputs=[
-                    "table:robustness_summary",
-                    "figure:robustness_figure",
-                ],
-            ),
-        ],
-    )
-    context = ResearchContext(
-        research_question="Compare complete-case, missing-indicator, and reduced-variable lactate models.",
-        cohort=CohortDescriptor(
-            cohort_name="cohort",
-            database="synthetic",
-            n_patients=10,
-            n_stays=10,
-        ),
-        variables=[],
-        target_outcome="death",
-        user_preferences=None,
-    )
-
-    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
-
-    assert [step.step_id for step in revised.steps] == ["01_robustness_analysis"]
-    assert revised.steps[0].expected_outputs == [
-        "table:robustness_summary",
-        "figure:robustness_figure",
-    ]
-    assert findings == []
 
 
 def test_salvage_stdout_json_step_summary(ra, tmp_path: Path):

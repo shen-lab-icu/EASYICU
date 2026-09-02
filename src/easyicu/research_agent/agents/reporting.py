@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
@@ -34,6 +34,7 @@ from ._support import (
     _strip_code_fence,
 )
 from .coder import _coder_prompt_payload_bytes
+from . import writer_display_labels as _writer_display
 
 # ---------------------------------------------------------------------------
 # Analyzer (interpretation)
@@ -202,16 +203,19 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str],
         literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
+        language: Optional[str] = None,
         max_tokens: int = 2048,
     ) -> str:
-        lang_inst = _writer_language_instruction(self.language)
-        evidence_list = (
-            ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
-        )
+        lang_inst = _writer_display.writer_language_instruction(language or self.language)
+        evidence_list = ", ".join(str(eid) for eid in evidence_ids) or "(none)"
         reporting_context = scoped_reporting_context(context)
         section_evidence_digest = _project_writer_evidence_digest(
             section_name,
             evidence_digest,
+        )
+        display_labels = _writer_display.normalise_reader_display_labels(
+            reader_display_labels
         )
         messages = [
             LLMMessage(
@@ -341,7 +345,8 @@ class WriterAgent:
                     "- When the primary clinical contrast is unavailable or blocked, "
                     "state the scientific boundary once, explain its consequence, and "
                     "do not repeat the same refusal throughout the section.\n\n"
-                    "LANGUAGE POLICY:\n"
+                    + _writer_display.reader_display_label_instruction(display_labels)
+                    + "LANGUAGE POLICY:\n"
                     "- Use ONLY associational phrasing. Forbidden: 'caused by', 'causal', "
                     "'attributable to', 'effect of', 'due to', 'leads to', 'drives'.\n"
                     "- Allowed: 'was associated with', 'correlated with', 'observed alongside', "
@@ -377,6 +382,7 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> str:
         return render_manuscript_sections(
@@ -386,6 +392,8 @@ class WriterAgent:
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
+                "reader_display_labels": reader_display_labels or {},
+                "language": self.language,
             },
             administrative_authority=administrative_authority,
         )
@@ -398,6 +406,7 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         return repair_existing_manuscript_sections(
@@ -408,6 +417,8 @@ class WriterAgent:
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
+                "reader_display_labels": reader_display_labels or {},
+                "language": self.language,
             },
             administrative_authority=administrative_authority,
         )
@@ -421,6 +432,7 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
         literature_digest: Optional[str] = None,
+        reader_display_labels: Optional[Mapping[str, str]] = None,
         administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         """Repair section owners rejected by an adjacent deterministic gate."""
@@ -434,21 +446,8 @@ class WriterAgent:
                 "evidence_ids": evidence_ids,
                 "evidence_digest": evidence_digest,
                 "literature_digest": literature_digest,
+                "reader_display_labels": reader_display_labels or {},
+                "language": self.language,
             },
             administrative_authority=administrative_authority,
         )
-
-
-def _writer_language_instruction(language: str) -> str:
-    if language == "zh":
-        return (
-            "OUTPUT LANGUAGE: zh / Simplified Chinese. Keep section headings "
-            "as markdown headings. Preserve every `{evidence:<id>}` placeholder "
-            "and `{claim:<step>.<claim>}` token exactly as ASCII; do not translate "
-            "evidence ids, claim refs, filenames, variable "
-            "names, or code-like tokens."
-        )
-    return (
-        "OUTPUT LANGUAGE: en / English. Preserve every `{evidence:<id>}` "
-        "placeholder and `{claim:<step>.<claim>}` token exactly as ASCII."
-    )

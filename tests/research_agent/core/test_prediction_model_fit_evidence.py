@@ -38,7 +38,7 @@ from easyicu.research_agent.prediction_model_fit_owner import (
     fit_binary_prediction_model,
 )
 
-from .test_prediction_model_fit_owner import _loaded_input, _source_frame, _spec
+from tests.research_agent.core.test_prediction_model_fit_owner import _loaded_input, _source_frame, _spec
 
 
 RUN_ID = "prediction_fit_validation_v5"

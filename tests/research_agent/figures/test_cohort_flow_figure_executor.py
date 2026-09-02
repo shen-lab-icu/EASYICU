@@ -149,6 +149,96 @@ def test_exact_cohort_flow_selects_and_renders_without_llm(tmp_path: Path) -> No
     assert (out_dir / "cohort_accounting.figure_contract.json").is_file()
 
 
+def test_primary_population_flow_selects_and_renders_without_llm(
+    tmp_path: Path,
+) -> None:
+    source_input = "table:landmark_population_flow"
+    frame = pd.DataFrame(
+        [
+            ["source_cohort", 100, 0, "source"],
+            ["alive_at_landmark", 80, 20, "alive"],
+            ["complete_case_model_population", 60, 20, "complete"],
+        ],
+        columns=["stage", "n", "excluded_from_previous", "population_rule"],
+    )
+    step = _step(
+        inputs=[source_input],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=source_input, mode="all_rows")
+        ],
+    )
+    run_dir = tmp_path / "run"
+    source = run_dir / "steps" / "primary_model" / "outputs" / "flow.csv"
+    source.parent.mkdir(parents=True)
+    frame.to_csv(source, index=False)
+    record = EvidenceStore(run_dir).register_file(
+        kind="table",
+        description="Primary model population flow.",
+        source_path=source,
+        evidence_id="primary_population_flow",
+        produced_by_step="primary_model",
+        producer="deterministic_test",
+        generation_mode="deterministic_standard",
+    )
+    evidence_path = run_dir / record.relative_path
+    digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    product = source_input.partition(":")[2]
+    identity = {
+        "declared_kind": "table",
+        "evidence_id": record.evidence_id,
+        "input_key": source_input,
+        "produced_by_step": "primary_model",
+        "product": product,
+        "sha256": digest,
+    }
+    binding = {
+        "relative_path": str(evidence_path.relative_to(run_dir)),
+        "sha256": digest,
+        "declared_kind": "table",
+        "evidence_kind": "table",
+        "evidence_id": record.evidence_id,
+        "produced_by_step": "primary_model",
+        "product": product,
+        "identity_row": identity,
+        "product_contract": {
+            "schema_version": "easyicu.host_typed_product.v4",
+            "tabular_format": "csv",
+            "columns": list(frame.columns),
+            "row_count": len(frame),
+        },
+        "consumption_contract": {
+            "schema_version": "easyicu.verified_artifact_consumption/1",
+            "input_key": source_input,
+            "mode": "all_rows",
+            "artifact_sha256": digest,
+            "verified_row_count": len(frame),
+        },
+    }
+    manifest = {
+        "schema_version": "2.1",
+        "step_id": step.step_id,
+        "inputs": {source_input: binding},
+    }
+
+    assert cohort_flow_figure_executor_owns_step(
+        step, resolved_bindings={source_input: binding}
+    )
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+    summary = run_cohort_flow_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=step.step_id,
+        figure_product="cohort_accounting",
+        source_input=source_input,
+    )
+
+    source_data = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
+    assert source_data["n_remaining"].tolist() == [100, 80, 60]
+    assert summary["source_input"] == source_input
+    assert summary["paper_grade_cohort_accounting"] is True
+
+
 def test_a_single_stage_that_is_not_the_universe_still_reports_the_gap(
     tmp_path: Path,
 ) -> None:
