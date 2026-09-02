@@ -93,7 +93,7 @@ def _positive_only_event_updates(
             observed_levels = set(representative.dropna().unique().tolist())
             if (
                 not observed_levels
-                or not observed_levels.issubset({0, 0.0, 1, 1.0})
+                or not observed_levels.issubset({0, 1})
             ):
                 continue
             try:

@@ -269,7 +269,7 @@ def llm_supports_vision(client: Any) -> bool:
     if client is None:
         return False
     if hasattr(client, "supports_vision"):
-        advertised = getattr(client, "supports_vision")
+        advertised = client.supports_vision
         try:
             return bool(advertised() if callable(advertised) else advertised)
         except Exception:
@@ -306,7 +306,7 @@ def llm_supports_strict_json_schema(client: Any) -> bool:
     if client is None:
         return False
     if hasattr(client, "supports_strict_json_schema"):
-        advertised = getattr(client, "supports_strict_json_schema")
+        advertised = client.supports_strict_json_schema
         try:
             return bool(advertised() if callable(advertised) else advertised)
         except Exception:

@@ -395,7 +395,9 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
 
         wheel_extract_dir = tmp_path / "installed-wheel"
         with zipfile.ZipFile(wheel_path) as archive:
-            archive.extractall(wheel_extract_dir)
+            # noqa justification: the archive is the wheel this test just
+            # built, extracted into pytest tmp_path.
+            archive.extractall(wheel_extract_dir)  # noqa: S202
         smoke_env = env.copy()
         smoke_env["PYTHONPATH"] = str(wheel_extract_dir)
         smoke_code = """

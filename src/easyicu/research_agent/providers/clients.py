@@ -894,7 +894,7 @@ class OpenAIClient:
             # The structured-retry owner may receive this exception instead of
             # a response.  Attach only a count -- never request/response data.
             try:
-                setattr(exc, "easyicu_transport_attempts", int(attempts))
+                exc.easyicu_transport_attempts = int(attempts)
             except Exception:
                 pass
 
@@ -1462,7 +1462,7 @@ class AnthropicMessagesClient:
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 try:
-                    setattr(exc, "easyicu_transport_attempts", attempt + 1)
+                    exc.easyicu_transport_attempts = attempt + 1
                 except Exception:
                     pass
                 status = _structured_provider_http_status_code(exc)
@@ -1521,7 +1521,7 @@ class AnthropicMessagesClient:
             )
         if not text:
             error = RuntimeError("Anthropic provider returned no text content")
-            setattr(error, "easyicu_transport_attempts", self.last_transport_attempts)
+            error.easyicu_transport_attempts = self.last_transport_attempts
             raise error
         return text, call_usage
 

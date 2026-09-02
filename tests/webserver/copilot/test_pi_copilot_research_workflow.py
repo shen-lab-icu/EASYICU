@@ -8094,7 +8094,7 @@ def test_pi_verified_provider_environment_is_full_pipeline_only(
             run_type="full",
             external_llm_opt_in=True,
         )
-    assert getattr(wrong_engine.value, "detail") == {
+    assert wrong_engine.value.detail == {
         "error": "pi_provider_research_pipeline_only"
     }
 
@@ -8105,7 +8105,7 @@ def test_pi_verified_provider_environment_is_full_pipeline_only(
             run_type="full",
             external_llm_opt_in=True,
         )
-    assert getattr(direct_fallback.value, "detail") == {
+    assert direct_fallback.value.detail == {
         "error": "research_pipeline_pi_verified_credentials_required"
     }
 
@@ -8153,7 +8153,7 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
             request=_request(),
         )
 
-    assert getattr(raised.value, "detail")["error"] in {
+    assert raised.value.detail["error"] in {
         "research_pipeline_manifest_required",
         "no_export_files",
     }
@@ -8347,7 +8347,7 @@ def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
             request=_request(),
         )
 
-    assert getattr(raised.value, "detail") == {
+    assert raised.value.detail == {
         "error": "research_pipeline_budget_mode_server_owned"
     }
 
@@ -8366,7 +8366,7 @@ def test_pipeline_development_execution_mode_is_server_owned(
     monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "true")
     with pytest.raises(Exception) as raised:
         agent_route._server_research_pipeline_budget_mode()
-    assert getattr(raised.value, "detail") == {
+    assert raised.value.detail == {
         "error": "research_pipeline_development_mode_invalid"
     }
 
@@ -8496,7 +8496,7 @@ def test_planner_canary_cannot_be_approved_into_execution(
             request=_request(),
         )
 
-    assert getattr(raised.value, "detail") == {
+    assert raised.value.detail == {
         "error": "research_pipeline_planner_canary_execution_blocked"
     }
 

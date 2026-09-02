@@ -246,7 +246,7 @@ def pipeline_instance_lifecycle(
                 else:
                     lease.release(token)
 
-        setattr(wrapper, "__easyicu_instance_lifecycle__", operation)
+        wrapper.__easyicu_instance_lifecycle__ = operation
         return wrapper
 
     return decorate

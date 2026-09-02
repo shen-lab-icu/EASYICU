@@ -177,7 +177,7 @@ class FeatureComparison:
             return SeriesStats(rows=0, non_null=0, mean=None, maximum=None, first_signal=None)
 
         values = df["value"]
-        if isinstance(values, pd.DataFrame) or (hasattr(values, "ndim") and getattr(values, "ndim") > 1):
+        if isinstance(values, pd.DataFrame) or (hasattr(values, "ndim") and values.ndim > 1):
             return SeriesStats(rows=len(df), non_null=0, mean=None, maximum=None, first_signal=None)
         if not isinstance(values, pd.Series):
             values = pd.Series(values)

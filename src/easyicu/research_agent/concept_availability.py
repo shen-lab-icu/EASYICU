@@ -105,13 +105,13 @@ def concept_database_availability_from_load_record(
 ) -> ConceptDatabaseAvailability:
     """Map a runtime load availability record onto the RA availability model."""
 
-    reason = str(getattr(record, "reason"))
-    status = str(getattr(record, "status"))
+    reason = str(record.reason)
+    status = str(record.status)
     structural = reason in {"unmapped", "source_unavailable"}
     return ConceptDatabaseAvailability(
-        concept=str(getattr(record, "concept")),
-        requested_concept=str(requested_concept or getattr(record, "concept")),
-        database=str(getattr(record, "database")),
+        concept=str(record.concept),
+        requested_concept=str(requested_concept or record.concept),
+        database=str(record.database),
         status=status,
         available=status != "blocked",
         direct_source=reason in {"mapped_present", "data_missing"},

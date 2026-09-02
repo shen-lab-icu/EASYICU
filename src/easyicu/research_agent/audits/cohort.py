@@ -86,7 +86,7 @@ class CohortAuditor:
                 v = context.variable(outcome)
                 if v and v.role == VariableRole.OUTCOME:
                     s = df[outcome].dropna()
-                    if not s.empty and set(s.unique()) - {0, 1, True, False, 0.0, 1.0}:
+                    if not s.empty and set(s.unique()) - {0, 1}:
                         findings.append(
                             ValidationFinding(
                                 validator=self.name,
