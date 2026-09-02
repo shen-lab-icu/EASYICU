@@ -26,7 +26,7 @@ easyicu 高层API - 提供简单易用的接口，同时支持高级自定义
     >>> vitals = load_vitals(patient_ids=[123, 456])
 """
 
-from typing import List, Union, Optional, Dict
+from typing import Dict, List, Optional, Union, cast
 from pathlib import Path
 import os
 import re
@@ -38,6 +38,7 @@ import pandas as pd
 import logging
 
 from ..base import BaseICULoader
+from ..concept.data_source_contract import ConceptDataSourceStorage
 from ..databases.profiles import get_database_profile, public_database_keys
 from ..table.duration import (
     get_dur_var_unit,
@@ -331,10 +332,11 @@ def _expand_public_numeric_win_tbl_output(
 def _build_fast_scan_expr(loader: "BaseICULoader", table_name: str) -> Optional[str]:
     """Build a DuckDB scan expression for a table without materializing it in pandas."""
     data_source = getattr(loader, "datasource", None)
-    if data_source is None or not hasattr(data_source, "_resolve_loader_from_disk"):
+    if data_source is None or not hasattr(data_source, "resolve_loader_from_disk"):
         return None
 
-    source = data_source._resolve_loader_from_disk(table_name)
+    storage = cast(ConceptDataSourceStorage, data_source)
+    source = storage.resolve_loader_from_disk(table_name)
     if not isinstance(source, Path):
         return None
 
