@@ -532,8 +532,14 @@
             'For this prepared dataset, use the compact baseline set unless the research question requires another prespecified confounder.',
             '对当前已准备数据，建议采用这组精简基线变量；若研究问题需要其他预设混杂因素，可另行调整。',
           ),
-          technicalEvidence: String((item && item.evidence) || ''),
-          technicalRemediation: String((item && item.remediation) || ''),
+          technicalEvidence: tr(
+            'The plan selected an exact adjustment set from candidate variables, but that set was not yet confirmed as the prespecified model input.',
+            '计划已从候选变量中选出明确的调整集，但这组变量尚未被确认为预设模型输入。',
+          ),
+          technicalRemediation: tr(
+            'Confirm the proposed baseline variables or choose a different prespecified set; EasyICU will save the decision in a new StudyContext revision before analysis.',
+            '请确认建议的基线变量，或选择另一组预设变量；EasyICU 会先把决定保存到新的 StudyContext 修订版，再进入分析。',
+          ),
           allowEdit: true,
           options: rawCovariates.length ? [{
             optionId: 'accept_proposed_adjustment',

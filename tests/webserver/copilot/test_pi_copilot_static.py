@@ -66,7 +66,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-preview.js?v=20260901-literature-fit1" in index
     assert "js/screens-guided-pi-replay.js?v=20260901-project-restore1" in index
-    assert "js/screens-guided-pi-resources.js?v=20260901-evidence-flow1" in index
+    assert "js/screens-guided-pi-resources.js?v=20260902-plan-flow1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260901-evidence-flow1" in index
     assert "js/screens-guided-pi-activity.js?v=20260901-plan-retries2" in index
     assert (
@@ -78,10 +78,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260902-data-history1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260829-data-scope1" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20260831-simple-decision4" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20260901-report-resume1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20260902-plan-flow1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20260902-plan-flow1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260901-plan-retries2" in index
-    assert "js/screens-guided-pi.js?v=20260902-data-history1" in index
+    assert "js/screens-guided-pi.js?v=20260902-plan-flow1" in index
     assert "js/screens-guided.js?v=20260901-session-deeplink1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -257,6 +257,7 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
 def test_formal_plan_buttons_append_one_concise_governed_action() -> None:
     owner = _read("js/screens-guided-pi-plan-actions.js")
     shell = _read("js/screens-guided-pi.js")
+    resources = _read("js/screens-guided-pi-resources.js")
 
     assert "async function startFormalPlanGeneration(reasonCode, options = {})" in owner
     assert "text: request.text" in owner
@@ -270,6 +271,65 @@ def test_formal_plan_buttons_append_one_concise_governed_action() -> None:
     assert "host.sendText(" not in approval
     assert "window.EU_GUIDED_PI_PLAN_ACTIONS.create({" in shell
     assert "async function submitCurrentPlanReview" not in shell
+    assert "row.hostActionCode !== 'generate_plan'" in shell
+    assert "String(row && row.hostActionCode || '') === 'generate_plan'" in resources
+    decision = owner.split("async function confirmDecision", 1)[1].split(
+        "function governedNextChoiceGrants", 1
+    )[0]
+    assert "'plan_configuration_superseded'" in decision
+    assert "{automatic: true}" in decision
+
+
+def test_confirmed_plan_choice_revises_in_place_without_a_fake_user_message() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    owner = _read("js/screens-guided-pi-plan-actions.js")
+    script = f"""
+      global.window = {{}};
+      eval({owner!r});
+      const calls = [];
+      let busy = false;
+      const host = {{
+        tr: (en, zh) => zh,
+        errorText: error => String(error && error.message || error),
+        regeneration: {{}}, nextActions: {{}}, replay: {{}},
+        session: () => ({{
+          session_id: 's1',
+          binding: {{run_id: 'run_old', study_context_id: 'study1', study_revision: 7}},
+          research_provider: {{provider: 'openai', credential_source: 'pi_verified'}},
+        }}),
+        workflow: () => ({{next_action_code: 'plan_configuration_superseded'}}),
+        busy: () => busy,
+        sessionIsStale: () => false,
+        api: () => ({{
+          confirmPiCopilotPlanDecision: async () => ({{next_action: 'replan'}}),
+          loadStudyContext: async id => ({{context: {{
+            id, question: 'E2 question', data_source: {{path: '/prepared/miiv'}},
+          }}}}),
+          startAgentRun: async body => {{calls.push(['plan', body]); return {{job_id: 'plan-new'}};}},
+        }}),
+        projectId: () => 'p1', turnGrants: () => [],
+        render: () => {{}},
+        recordHostAction: async (...args) => calls.push(['host-action', ...args]),
+        watchChildJob: (...args) => calls.push(['child', ...args]),
+        refreshSession: async () => {{}}, loadWorkflow: async () => {{}},
+        setBusy: value => {{busy = value;}}, setError: () => {{}},
+        appendMessage: value => calls.push(['message', value.text]),
+      }};
+      const actions = window.EU_GUIDED_PI_PLAN_ACTIONS.create(host);
+      actions.confirmDecision({{
+        decision_code: 'ADJUSTMENT_SET_NOT_USER_CONFIRMED',
+        option_id: 'accept_proposed_adjustment',
+      }}).then(() => process.stdout.write(JSON.stringify(calls)));
+    """
+    completed = subprocess.run(
+        [node, "--eval", script], check=True, capture_output=True, text=True
+    )
+    calls = json.loads(completed.stdout)
+    assert not any(call[0] == "message" for call in calls)
+    assert ["host-action", "auto_revise_plan", "plan-new", "plan-new"] in calls
+    assert any(call[0] == "plan" for call in calls)
 
 
 def test_governed_plan_action_owner_executes_generation_review_and_retry() -> None:
@@ -5302,6 +5362,8 @@ def test_preview_plan_confirmation_routes_to_data_preparation_not_same_plan_runn
     assert "候选研究计划已生成，请确认数据准备" in confirmation
     assert "并不代表数据包已经准备好" in confirmation
     assert "确认方案并准备数据" in confirmation
+    assert "计划已从候选变量中选出明确的调整集" in confirmation
+    assert "先把决定保存到新的 StudyContext 修订版" in confirmation
 
 
 def test_copilot_public_projection_hides_internal_pi_codes_and_owner_paths() -> None:
@@ -6114,7 +6176,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260902-active-branch1" in index
-    assert "screens-guided-pi.js?v=20260902-data-history1" in index
+    assert "screens-guided-pi.js?v=20260902-plan-flow1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

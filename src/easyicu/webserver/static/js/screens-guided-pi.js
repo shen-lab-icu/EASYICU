@@ -589,6 +589,7 @@
     // markdown -- four bullet lists that read as offers but could not be
     // clicked, beside the one live card.
     const nextStep = row.role === 'assistant' && row.complete !== false
+      && row.hostActionCode !== 'generate_plan'
       && nextOwner && typeof nextOwner.project === 'function'
       ? nextOwner.project(publicRow.text) : null;
     const interactive = Boolean(options && options.interactive);
